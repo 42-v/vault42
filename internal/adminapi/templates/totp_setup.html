@@ -1,0 +1,33 @@
+{{define "page-content"}}
+<h1>Two-Factor Authentication Setup</h1>
+<div class="detail-view" id="totpSetup">
+    <p>Two-factor authentication is required for all admin accounts.</p>
+    <div id="totpStep1">
+        <p>Click below to generate your TOTP secret.</p>
+        <button class="btn btn-primary" data-action="generate-totp">Generate Secret</button>
+    </div>
+    <div id="totpStep2" style="display:none">
+        <p>Add this secret to your authenticator app:</p>
+        <div class="totp-secret-box">
+            <code id="totpSecret"></code>
+            <button class="btn btn-sm copy-btn" data-action="copy" data-copy-target="totpSecret">Copy</button>
+        </div>
+        <p class="text-dim">Or use this URI:</p>
+        <div class="totp-secret-box">
+            <code id="totpUri" class="totp-uri"></code>
+        </div>
+        <div class="form-group" style="margin-top:1.5rem">
+            <label for="totpVerifyCode">Enter the 6-digit code from your app to verify:</label>
+            <div class="toolbar">
+                <input type="text" id="totpVerifyCode" pattern="[0-9]{6}" maxlength="6" inputmode="numeric" placeholder="000000" class="search-input" style="max-width:160px">
+                <button class="btn btn-primary" data-action="verify-totp">Verify</button>
+            </div>
+        </div>
+    </div>
+    <div id="totpStep3" style="display:none">
+        <p class="text-success">Two-factor authentication has been configured successfully.</p>
+        <a href="/admin/" class="btn btn-primary">Continue to Dashboard</a>
+    </div>
+</div>
+{{end}}
+{{template "layout" .}}

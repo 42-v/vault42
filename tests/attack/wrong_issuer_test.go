@@ -1,0 +1,33 @@
+package attack
+
+import (
+	"testing"
+	"time"
+
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	vjwt "github.com/42-v/vault42/internal/jwt"
+)
+
+// TestWrongIssuer verifies that tokens with wrong issuer are rejected.
+func TestWrongIssuer(t *testing.T) {
+	key, _ := vaultcrypto.GenerateRSAKeyPair()
+	kid, _ := vaultcrypto.RandomUUID()
+	keyFunc := func(t *vjwt.Token) (any, error) {
+		return &key.PublicKey, nil
+	}
+
+	tokenStr, _ := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
+		RegisteredClaims: vjwt.RegisteredClaims{
+			Subject:   "user-123",
+			Issuer:    "evil-issuer",
+			Audience:  vjwt.ClaimStrings{"test"},
+			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  vjwt.NewNumericDate(time.Now()),
+		},
+	}, key, kid)
+
+	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
+	if err == nil {
+		t.Fatal("Token with wrong issuer was NOT rejected")
+	}
+}

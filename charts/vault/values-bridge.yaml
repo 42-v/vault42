@@ -1,0 +1,87 @@
+# values-bridge.yaml — Bridge deployment mode: dual vaults (real + honeypot), bridge proxy.
+# Use with: helm install vault charts/vault -f charts/vault/values-bridge.yaml
+
+replicaCount: 1
+
+profile: production
+autoMigrate: true
+
+# TLS terminated at Cloudflare Tunnel / ingress
+tls:
+  enabled: false
+
+forceSecureCookies: true
+
+database:
+  host: vault-postgres
+  port: "5432"
+  name: vault
+  sslmode: disable
+  maxConns: "25"
+
+cache:
+  backend: redis
+
+redis:
+  addr: "vault-redis:6379"
+  enabled: true
+
+postgres:
+  enabled: true
+  storage: 5Gi
+
+# Serve the embedded frontend on the real vault
+serveFrontend: true
+
+# --- Bridge ---
+bridge:
+  enabled: true
+  listenAddr: ":8080"
+  rateThreshold: 60
+  loginFailThreshold: 5
+  flagTTL: "24h"
+  flagThreshold: 100
+  logLevel: "info"
+  trustedProxies: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  redis:
+    enabled: true
+    addr: "vault-redis:6379"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+# --- Honeypot Instance ---
+honeypotInstance:
+  database:
+    name: vault_honeypot
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  postgres:
+    storage: 1Gi
+
+networkPolicy:
+  enabled: true
+  postgresSelector:
+    app: postgres
+  redisSelector:
+    app: redis
+
+# Single replicas for bridge deployment — no HPA/PDB
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+
+# Cloudflare Tunnel — point at bridge service
+cloudflared:
+  enabled: false
+  # tunnelToken: ""  # Set via --set or existingSecret

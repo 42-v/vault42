@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - web
+  - tests/e2e-browser
+
+ignoredBuiltDependencies:
+  - esbuild

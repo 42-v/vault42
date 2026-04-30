@@ -1,0 +1,58 @@
+root = false
+
+# Style/file-header rules we don't enforce — too noisy for an OSS MIT project
+# whose root LICENSE covers all files.
+[*.cs]
+dotnet_diagnostic.SA1633.severity = none      # File header (we use the root LICENSE)
+dotnet_diagnostic.SA1652.severity = none      # XML doc compatibility — we don't ship docfx
+dotnet_diagnostic.SA0001.severity = none      # XML comment analysis disabled
+dotnet_diagnostic.CS1591.severity = none      # Missing XML comment for publicly visible type/member
+
+# Prefer braces but don't FAIL the build if an early-return uses a single
+# statement form — common in our auth handler short-circuits.
+dotnet_diagnostic.SA1503.severity = suggestion
+
+# StyleCop tabs-vs-spaces and braces are opinionated; we prefer SA defaults
+# but suggest, not error, on a few cosmetic ones:
+dotnet_diagnostic.SA1124.severity = suggestion   # Do not use regions
+dotnet_diagnostic.SA1101.severity = none         # Prefix local calls with this. — not idiomatic in modern C#
+dotnet_diagnostic.SA1309.severity = none         # Field names should not begin with underscore — we use _camel for private fields
+dotnet_diagnostic.SA1413.severity = none         # Use trailing comma in multi-line initializers — sometimes off-style
+dotnet_diagnostic.SA1009.severity = suggestion   # Closing parenthesis spacing — we let the formatter own it
+dotnet_diagnostic.SA1010.severity = none         # Opening square brackets must be spaced correctly — collection-expression false-positives in net10
+dotnet_diagnostic.SA1011.severity = none         # Closing square brackets — same
+dotnet_diagnostic.SA1300.severity = none         # Element should begin with upper-case letter — clashes with i18n / Vue interop names
+
+# StyleCop strict member ordering — noisy and doesn't catch bugs;
+# we order members logically (constructor first, public API, then implementation).
+dotnet_diagnostic.SA1201.severity = none         # Element ordering: prop after method etc.
+dotnet_diagnostic.SA1202.severity = none         # public before private
+dotnet_diagnostic.SA1203.severity = none         # const fields before non-const
+dotnet_diagnostic.SA1204.severity = none         # static members before instance
+dotnet_diagnostic.SA1117.severity = suggestion   # parameter line layout — formatter handles it
+dotnet_diagnostic.SA1413.severity = none         # already off but keep explicit
+
+# Sonar perf/refactor hints we don't enforce
+dotnet_diagnostic.S3267.severity = none          # foreach+if -> Where; often less readable for security flow
+dotnet_diagnostic.S1066.severity = none          # collapsible if; sometimes nested form is intentional
+dotnet_diagnostic.CA1848.severity = none         # LoggerMessage delegate; perf micro-opt unjustified for auth flow
+dotnet_diagnostic.S3459.severity = none          # auto-property never set — false positive on deserialization targets
+
+# Sonar rule overrides
+dotnet_diagnostic.S101.severity = none           # Class names PascalCase — covered by SA1300/SA1303
+dotnet_diagnostic.S1075.severity = none          # URI hard-coded — we have well-known endpoint constants
+dotnet_diagnostic.S2629.severity = none          # ILogger format string — we use structured logging in callers, format is fine here
+
+# Prefer file-scoped namespaces (modern C#)
+dotnet_diagnostic.IDE0161.severity = warning
+csharp_style_namespace_declarations = file_scoped:warning
+
+# Tests use xUnit's <Method>_<Scenario>_<Expectation> naming convention.
+# Disable the underscore-in-member-name rule for the tests assembly only.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1707.severity = none      # xUnit test_method_naming convention
+dotnet_diagnostic.SA1600.severity = none      # documentation not required for test methods
+dotnet_diagnostic.S2699.severity = none       # tests sometimes assert via Theory data, not Assert.X
+dotnet_diagnostic.CA1861.severity = none      # constant arrays in test data are fine
+dotnet_diagnostic.CA1852.severity = none      # internal test fixture types don't need 'sealed'
+dotnet_diagnostic.S3267.severity = none       # LINQ replacement for foreach-with-if; tests can be explicit

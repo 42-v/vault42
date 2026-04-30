@@ -1,0 +1,152 @@
+# Dev overlay — use with: helm install vault charts/vault -f charts/vault/values-dev.yaml
+fullnameOverride: vault
+replicaCount: 1
+
+image:
+  repository: vault
+  tag: dev
+  pullPolicy: Never
+
+profile: dev
+listenAddr: ":8443"
+origin: "https://vault.localhost"
+autoMigrate: true
+rateLimitEnabled: false
+
+# Declarative seeding of dev clients and users
+seed:
+  enabled: true
+  clients:
+    - name: frontend
+      role: frontend
+      scopes: ["user:read", "user:write", "token:refresh"]
+    - name: backend
+      role: service
+      scopes: ["user:read"]
+  users:
+    - email: dev@vault.localhost
+      password: "DevPassword12345678!"
+      display_name: Dev User
+      email_verified: true
+
+# Trust the ingress controller pod network for X-Forwarded-For
+trustedProxies: "10.0.0.0/8"
+
+# Serve the embedded Vue SPA from the Go binary
+serveFrontend: true
+
+# Enable Prometheus metrics endpoint
+metrics:
+  enabled: true
+
+tls:
+  enabled: true
+  certFile: /etc/vault-tls/tls.crt
+  keyFile: /etc/vault-tls/tls.key
+  secretName: vault-tls
+
+database:
+  host: vault-postgres
+  sslmode: disable
+  maxConns: "10"
+
+cache:
+  backend: redis
+
+redis:
+  addr: "vault-redis:6379"
+  enabled: true
+
+smtp:
+  host: vault-mailpit
+  port: "1025"
+
+emailFrom: "vault@localhost"
+
+hibpCheck: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+  hosts:
+    - host: vault.localhost
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: vault-tls
+      hosts:
+        - vault.localhost
+
+# No separate frontend container — embedded in Go binary
+frontend:
+  enabled: false
+
+postgres:
+  enabled: true
+
+mailpit:
+  enabled: true
+  ingress:
+    enabled: true
+    className: nginx
+    host: "mail.localhost"
+
+networkPolicy:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+service:
+  port: 8443
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+    scheme: HTTPS
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+    scheme: HTTPS
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+secrets:
+  existingSecret: vault-secrets
+
+# Admin gateway — enabled in dev for local testing
+adminGateway:
+  enabled: true
+  hostNetwork: false
+  listenAddr: "0.0.0.0:9443"
+  image:
+    repository: vault-admin-gateway
+    tag: dev
+    pullPolicy: Never
+  autoMigrate: true
+  tls:
+    secretName: vault-admin-tls
+  ingress:
+    enabled: true
+    className: nginx
+    host: admin.localhost

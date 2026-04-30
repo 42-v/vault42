@@ -1,0 +1,33 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.Subject}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#111111;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#111111">
+<tr><td align="center" style="padding:24px 0">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#000000;border:1px solid #222222;border-radius:8px;overflow:hidden">
+
+<!-- Header -->
+<tr><td style="background-color:#000000;padding:24px 32px;text-align:center;border-bottom:2px solid {{.PrimaryColor}}">
+{{if .LogoURL}}<img src="{{.LogoURL | safeURL}}" alt="{{.AppName}}" style="max-height:40px;margin-bottom:8px" />{{end}}
+<h1 style="margin:0;color:{{.PrimaryColor}};font-size:20px;font-weight:600">{{.AppName}}</h1>
+</td></tr>
+
+<!-- Content -->
+<tr><td style="padding:32px;color:#e0e0e0">
+{{template "content" .}}
+</td></tr>
+
+<!-- Footer -->
+<tr><td style="padding:16px 32px;background-color:#0a0a0a;text-align:center;font-size:12px;color:#666666;border-top:1px solid #222222">
+<p style="margin:0">This is an automated message from {{.AppName}}. Please do not reply.</p>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>{{end}}

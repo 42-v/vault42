@@ -1,0 +1,178 @@
+{{- if .Values.adminGateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "vault.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: admin-gateway
+    spec:
+      {{- if .Values.adminGateway.hostNetwork }}
+      # hostNetwork: true binds to the node's loopback, not pod loopback.
+      # Combined with 127.0.0.1 bind, only local connections reach the gateway.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: admin-gateway
+          image: "{{ .Values.adminGateway.image.repository }}:{{ .Values.adminGateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.adminGateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- if not .Values.adminGateway.hostNetwork }}
+            - name: ADMIN_GW_DEV_MODE
+              value: "true"
+            {{- end }}
+            - name: ADMIN_GW_LISTEN_ADDR
+              value: {{ .Values.adminGateway.listenAddr | quote }}
+            - name: ADMIN_GW_TLS_CERT_FILE
+              value: /run/tls/tls.crt
+            - name: ADMIN_GW_TLS_KEY_FILE
+              value: /run/tls/tls.key
+            - name: ADMIN_GW_CLIENT_CA_FILE
+              value: /run/tls/ca.crt
+            - name: ADMIN_GW_SESSION_TTL
+              value: {{ .Values.adminGateway.sessionTTL | quote }}
+            - name: ADMIN_GW_MAX_FAILED_LOGINS
+              value: {{ .Values.adminGateway.maxFailedLogins | quote }}
+            - name: ADMIN_GW_LOCKOUT_DURATION
+              value: {{ .Values.adminGateway.lockoutDuration | quote }}
+            - name: ADMIN_GW_AUTO_MIGRATE
+              value: {{ .Values.adminGateway.autoMigrate | quote }}
+            - name: DB_HOST
+              value: {{ .Values.database.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: DB_SSLMODE
+              value: {{ .Values.database.sslmode | quote }}
+            - name: MASTER_KEY_FILE
+              value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.masterKey }}
+            - name: DB_ADMIN_PASSWORD_FILE
+              value: {{ .Values.secrets.mountPath }}/{{ .Values.adminGateway.dbAdminPasswordKey }}
+            - name: DB_MIG_PASSWORD_FILE
+              value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.dbMigPassword }}
+          volumeMounts:
+            - name: secrets
+              mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+            - name: tls
+              mountPath: /run/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.adminGateway.resources | nindent 12 }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ include "vault.secretName" . }}
+        - name: tls
+          secret:
+            secretName: {{ required "adminGateway.tls.secretName is required when adminGateway is enabled" .Values.adminGateway.tls.secretName }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.adminGateway.hostNetwork }}
+---
+# NetworkPolicy: deny ALL ingress to admin-gateway.
+# This is layer 5 of the 6-layer local-only enforcement.
+# The admin gateway is accessed only via localhost (hostNetwork + loopback bind),
+# so it needs no network ingress at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway-deny-all
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-gateway
+  policyTypes:
+    - Ingress
+  # Empty ingress = deny all inbound traffic
+  ingress: []
+{{- end }}
+{{- if not .Values.adminGateway.hostNetwork }}
+---
+# Service for admin-gateway (dev/non-hostNetwork mode only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-gateway
+spec:
+  selector:
+    {{- include "vault.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-gateway
+  ports:
+    - port: 9443
+      targetPort: 9443
+      name: https
+{{- if .Values.adminGateway.ingress.enabled }}
+---
+# Ingress for admin-gateway (SSL passthrough — mTLS handled by the gateway)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-gateway
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  {{- if .Values.adminGateway.ingress.className }}
+  ingressClassName: {{ .Values.adminGateway.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.adminGateway.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vault.fullname" . }}-admin-gateway
+                port:
+                  number: 9443
+{{- end }}
+{{- end }}
+{{- end }}

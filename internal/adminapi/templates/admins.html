@@ -1,0 +1,35 @@
+{{define "page-content"}}
+<h1>Admin Accounts</h1>
+<div class="toolbar">
+    <button class="btn btn-primary" data-action="show-create-admin" aria-label="Create a new admin account">Create Admin</button>
+    <button class="btn" data-action="refresh-admins" aria-label="Refresh admin list">Refresh</button>
+</div>
+<div id="createAdminForm" class="form-inline" style="display:none">
+    <label for="adminUsername" class="sr-only">Admin username</label>
+    <input type="text" id="adminUsername" placeholder="Username" class="search-input">
+    <label for="adminPassword" class="sr-only">Admin password</label>
+    <input type="password" id="adminPassword" placeholder="Password (20+ chars)" class="search-input">
+    <label for="adminRole" class="sr-only">Admin role</label>
+    <select id="adminRole" class="select-input">
+        <option value="viewer">Viewer</option>
+        <option value="operator">Operator</option>
+        <option value="super_admin">Super Admin</option>
+    </select>
+    <button class="btn btn-primary" data-action="create-admin" aria-label="Create admin account">Create</button>
+    <button class="btn" data-action="hide-create-admin">Cancel</button>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="username">Username</th>
+            <th data-sort="role">Role</th>
+            <th data-sort="totp_configured">TOTP</th>
+            <th>Locked</th>
+            <th data-sort="last_login_at">Last Login</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody id="adminsBody"><tr><td colspan="6">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

@@ -1,0 +1,49 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} — Vault Admin</title>
+    <link rel="stylesheet" href="/admin/static/style.css">
+</head>
+<body data-page="{{.Page}}">
+{{if .Admin}}
+<nav class="sidebar" id="sidebar" role="navigation" aria-label="Admin navigation">
+    <div class="sidebar-header">
+        <div class="logo">VAULT<span class="accent">ADMIN</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">&#9776;</button>
+    </div>
+    <div class="nav-section">
+        <a href="/admin/" class="nav-link{{if eq .Page "dashboard"}} active{{end}}">Dashboard</a>
+        <a href="/admin/ui/users" class="nav-link{{if eq .Page "users"}} active{{end}}">Users</a>
+        <a href="/admin/ui/keys" class="nav-link{{if eq .Page "keys"}} active{{end}}">Keys</a>
+        <a href="/admin/ui/sessions" class="nav-link{{if eq .Page "sessions"}} active{{end}}">Sessions</a>
+        <a href="/admin/ui/audit" class="nav-link{{if eq .Page "audit"}} active{{end}}">Audit</a>
+        <a href="/admin/ui/clients" class="nav-link{{if eq .Page "clients"}} active{{end}}">Clients</a>
+        <a href="/admin/ui/admins" class="nav-link{{if eq .Page "admins"}} active{{end}}">Admins</a>
+        <a href="/admin/ui/config" class="nav-link{{if eq .Page "config"}} active{{end}}">Config</a>
+    </div>
+    <div class="nav-footer">
+        <div class="admin-info">{{.Admin.Username}} <span class="role-badge">{{.Admin.Role}}</span></div>
+        <button class="btn btn-sm" data-action="logout" aria-label="Log out">Logout</button>
+    </div>
+</nav>
+{{end}}
+<main class="content{{if not .Admin}} full-width{{end}}" role="main">
+    {{template "page-content" .}}
+</main>
+<div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+<div id="modalOverlay" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+        <div class="modal-header" id="modalTitle"></div>
+        <div class="modal-body" id="modalBody"></div>
+        <div class="modal-footer">
+            <button class="btn" id="modalCancel">Cancel</button>
+            <button class="btn btn-danger" id="modalConfirm">Confirm</button>
+        </div>
+    </div>
+</div>
+<script src="/admin/static/admin.js"></script>
+</body>
+</html>
+{{end}}

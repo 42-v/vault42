@@ -1,0 +1,14 @@
+{{define "page-content"}}
+<h1>User Detail</h1>
+<div class="toolbar">
+    <a href="/admin/ui/users" class="btn">&larr; Back to Users</a>
+</div>
+<div id="userDetail" class="detail-view">
+    <div class="detail-grid" id="userFields">Loading...</div>
+    <div class="toolbar" id="userActions" style="display:none;margin-top:1rem">
+        <button class="btn" data-action="lock-user-detail">Lock</button>
+        <button class="btn" data-action="unlock-user-detail">Unlock</button>
+    </div>
+</div>
+{{end}}
+{{template "layout" .}}

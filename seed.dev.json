@@ -1,0 +1,23 @@
+{
+  "clients": [
+    {
+      "name": "frontend",
+      "role": "frontend",
+      "scopes": ["user:read", "user:write", "token:refresh"]
+    },
+    {
+      "name": "backend",
+      "role": "service",
+      "scopes": ["user:read"]
+    }
+  ],
+  "users": [
+    {
+      "email": "dev@vault.localhost",
+      "password": "DevPassword12345678!",
+      "display_name": "Dev User",
+      "locale": "en",
+      "email_verified": true
+    }
+  ]
+}

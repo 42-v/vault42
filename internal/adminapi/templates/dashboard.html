@@ -1,0 +1,33 @@
+{{define "page-content"}}
+<h1>Dashboard</h1>
+<div class="grid">
+    <div class="card" id="card-keys">
+        <h3>Signing Keys</h3>
+        <div class="card-value skeleton" id="keyCount">&mdash;</div>
+        <a href="/admin/ui/keys">Manage</a>
+    </div>
+    <div class="card" id="card-sessions">
+        <h3>Active Sessions</h3>
+        <div class="card-value skeleton" id="sessionCount">&mdash;</div>
+        <a href="/admin/ui/sessions">View</a>
+    </div>
+    <div class="card" id="card-admins">
+        <h3>Admin Accounts</h3>
+        <div class="card-value skeleton" id="adminCount">&mdash;</div>
+        <a href="/admin/ui/admins">Manage</a>
+    </div>
+    <div class="card" id="card-clients">
+        <h3>Service Clients</h3>
+        <div class="card-value skeleton" id="clientCount">&mdash;</div>
+        <a href="/admin/ui/clients">Manage</a>
+    </div>
+</div>
+<h2>Recent Audit Events</h2>
+<div id="recentAudit" class="table-container">
+    <table>
+        <thead><tr><th>Time</th><th>Event</th><th>User</th><th>IP</th></tr></thead>
+        <tbody id="auditBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

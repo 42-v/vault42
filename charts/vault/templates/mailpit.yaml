@@ -1,0 +1,77 @@
+{{- if .Values.mailpit.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vault.fullname" . }}-mailpit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app: mailpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: mailpit
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: mailpit
+          image: "{{ .Values.mailpit.image.repository | default "axllent/mailpit" }}:{{ .Values.mailpit.image.tag | default "latest" }}"
+          ports:
+            - containerPort: 1025
+              name: smtp
+            - containerPort: 8025
+              name: web
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vault.fullname" . }}-mailpit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: mailpit
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+    - name: web
+      port: 8025
+      targetPort: 8025
+{{- if .Values.mailpit.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vault.fullname" . }}-mailpit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  {{- if .Values.mailpit.ingress.className }}
+  ingressClassName: {{ .Values.mailpit.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.mailpit.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vault.fullname" . }}-mailpit
+                port:
+                  number: 8025
+{{- end }}
+{{- end }}

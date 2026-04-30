@@ -1,0 +1,26 @@
+{{define "page-content"}}
+<h1>Configuration</h1>
+<div class="toolbar">
+    <button class="btn btn-primary" data-action="show-add-config" aria-label="Add a configuration entry">Add Entry</button>
+    <button class="btn" data-action="refresh-config" aria-label="Refresh configuration">Refresh</button>
+</div>
+<div id="addConfigForm" class="form-inline" style="display:none">
+    <label for="configKey" class="sr-only">Configuration key</label>
+    <input type="text" id="configKey" placeholder="Key" class="search-input">
+    <label for="configValue" class="sr-only">Configuration value</label>
+    <input type="text" id="configValue" placeholder="Value" class="search-input">
+    <button class="btn btn-primary" data-action="add-config" aria-label="Save configuration entry">Save</button>
+    <button class="btn" data-action="hide-add-config">Cancel</button>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="key">Key</th>
+            <th>Value</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody id="configBody"><tr><td colspan="3">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vault.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+data:
+  VAULT_PROFILE: {{ .Values.profile | quote }}
+  LISTEN_ADDR: {{ .Values.listenAddr | quote }}
+  VAULT_ORIGIN: {{ .Values.origin | quote }}
+  VAULT_APP_NAME: {{ .Values.appName | quote }}
+  VAULT_AUTO_MIGRATE: {{ .Values.autoMigrate | quote }}
+  VAULT_TLS_ENABLED: {{ .Values.tls.enabled | quote }}
+  {{- if and .Values.tls.enabled .Values.tls.certFile }}
+  VAULT_TLS_CERT_FILE: {{ .Values.tls.certFile | quote }}
+  VAULT_TLS_KEY_FILE: {{ .Values.tls.keyFile | quote }}
+  {{- end }}
+  VAULT_PASSWORD_MIN_LENGTH: {{ .Values.passwordMinLength | quote }}
+  VAULT_HIBP_CHECK: {{ .Values.hibpCheck | quote }}
+  VAULT_EMAIL_FROM: {{ .Values.emailFrom | quote }}
+  DB_HOST: {{ .Values.database.host | quote }}
+  DB_PORT: {{ .Values.database.port | quote }}
+  DB_NAME: {{ .Values.database.name | quote }}
+  DB_SSLMODE: {{ .Values.database.sslmode | quote }}
+  DB_MAX_CONNS: {{ .Values.database.maxConns | quote }}
+  VAULT_RATE_LIMIT_ENABLED: {{ .Values.rateLimitEnabled | quote }}
+  CACHE_BACKEND: {{ .Values.cache.backend | quote }}
+  REDIS_ADDR: {{ .Values.redis.addr | quote }}
+  {{- if .Values.serveFrontend }}
+  VAULT_SERVE_FRONTEND: {{ .Values.serveFrontend | quote }}
+  {{- end }}
+  {{- if .Values.forceSecureCookies }}
+  VAULT_FORCE_SECURE_COOKIES: {{ .Values.forceSecureCookies | quote }}
+  {{- end }}
+  {{- if .Values.trustedProxies }}
+  TRUSTED_PROXIES: {{ .Values.trustedProxies | quote }}
+  {{- end }}
+  {{- if .Values.tlsFingerprintHeader }}
+  VAULT_TLS_FINGERPRINT_HEADER: {{ .Values.tlsFingerprintHeader | quote }}
+  {{- end }}
+  {{- if .Values.blob }}
+  {{- if .Values.blob.minSize }}
+  VAULT_BLOB_MIN_SIZE: {{ .Values.blob.minSize | quote }}
+  {{- end }}
+  {{- if .Values.blob.maxSize }}
+  VAULT_BLOB_MAX_SIZE: {{ .Values.blob.maxSize | quote }}
+  {{- end }}
+  {{- if .Values.blob.maxPerUser }}
+  VAULT_BLOB_MAX_PER_USER: {{ .Values.blob.maxPerUser | quote }}
+  {{- end }}
+  {{- if .Values.blob.quotaBytes }}
+  VAULT_BLOB_QUOTA_BYTES: {{ .Values.blob.quotaBytes | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.metrics.enabled }}
+  VAULT_METRICS_ENABLED: {{ .Values.metrics.enabled | quote }}
+  {{- end }}
+  {{- if .Values.keyRotation.enabled }}
+  VAULT_KEY_ROTATION_DB: {{ .Values.keyRotation.enabled | quote }}
+  VAULT_KEY_RETENTION_PERIOD: {{ .Values.keyRotation.retentionPeriod | quote }}
+  VAULT_KEY_REFRESH_INTERVAL: {{ .Values.keyRotation.refreshInterval | quote }}
+  {{- end }}
+  {{- if .Values.seed.enabled }}
+  VAULT_SEED_FILE: "/etc/vault/seed.json"
+  {{- end }}
+  {{- if .Values.smtp.host }}
+  SMTP_HOST: {{ .Values.smtp.host | quote }}
+  SMTP_PORT: {{ .Values.smtp.port | quote }}
+  {{- end }}

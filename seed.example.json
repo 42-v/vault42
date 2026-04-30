@@ -1,0 +1,31 @@
+{
+  "clients": [
+    {
+      "name": "frontend",
+      "role": "frontend",
+      "scopes": ["user:read", "user:write", "token:refresh"],
+      "redirect_uris": ["https://app.example.com/callback"]
+    },
+    {
+      "name": "backend-worker",
+      "role": "service",
+      "scopes": ["user:read", "audit:read"]
+    }
+  ],
+  "users": [
+    {
+      "email": "admin@example.com",
+      "password": "CHANGE-ME-use-15-chars-minimum!",
+      "display_name": "Admin User",
+      "locale": "en",
+      "email_verified": true
+    }
+  ],
+  "admins": [
+    {
+      "username": "admin",
+      "password": "CHANGE-ME-use-15-chars-minimum!",
+      "role": "super_admin"
+    }
+  ]
+}

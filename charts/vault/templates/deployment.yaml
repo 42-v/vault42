@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vault.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "vault.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ if and .Values.tls.enabled .Values.tls.certFile }}8443{{ else }}8080{{ end }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "vault.fullname" . }}
+          env:
+            - name: MASTER_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.masterKey }}"
+            - name: DB_MIG_PASSWORD_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.dbMigPassword }}"
+            - name: DB_APP_PASSWORD_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.dbAppPassword }}"
+            - name: HMAC_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.hmacSecret }}"
+            {{- if .Values.secrets.keys.adminToken }}
+            - name: ADMIN_TOKEN_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.adminToken }}"
+            {{- end }}
+            {{- if and (eq .Values.cache.backend "redis") .Values.secrets.keys.redisPassword }}
+            - name: REDIS_PASS_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.redisPassword }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.signingKey }}
+            - name: SIGNING_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.signingKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.pepper }}
+            - name: VAULT_PEPPER_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.pepper }}"
+            {{- end }}
+            {{- if and .Values.tls.enabled .Values.tls.certFile }}
+            - name: VAULT_TLS_CERT_FILE
+              value: {{ .Values.tls.certFile | quote }}
+            - name: VAULT_TLS_KEY_FILE
+              value: {{ .Values.tls.keyFile | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: secrets
+              mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+            {{- if and .Values.tls.enabled .Values.tls.secretName }}
+            - name: tls
+              mountPath: /etc/vault-tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.seed.enabled }}
+            - name: seed
+              mountPath: /etc/vault/seed.json
+              subPath: seed.json
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ include "vault.secretName" . }}
+        {{- if and .Values.tls.enabled .Values.tls.secretName }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.seed.enabled }}
+        - name: seed
+          configMap:
+            name: {{ include "vault.fullname" . }}-seed
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

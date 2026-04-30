@@ -1,0 +1,11 @@
+{{define "subject"}}Account Locked - {{.AppName}}{{end}}
+{{define "content"}}
+<h2 style="margin:0 0 16px;color:#ffffff;font-size:22px">Account Locked</h2>
+<p style="margin:0 0 16px;color:#cccccc;font-size:15px;line-height:1.5">Your account has been temporarily locked due to too many failed login attempts.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;width:100%">
+<tr><td style="padding:12px 16px;background-color:#111111;border:1px solid #222222;border-radius:6px">
+<p style="margin:0;color:#cccccc;font-size:14px"><strong style="color:#ffffff">Source IP:</strong> {{.IP}}</p>
+</td></tr>
+</table>
+<p style="margin:0;color:#888888;font-size:13px">If this was not you, contact support.</p>
+{{end}}

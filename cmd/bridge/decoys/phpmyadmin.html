@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>phpMyAdmin</title>
+<style>
+body{background:#e7e7e7;font-family:sans-serif;margin:0}
+.container{width:500px;margin:80px auto;background:#fff;border:1px solid #ccc;border-radius:4px;padding:30px}
+h1{font-size:18px;color:#333;margin:0 0 20px}
+fieldset{border:1px solid #ddd;padding:20px;margin-bottom:20px;border-radius:3px}
+legend{font-size:14px;color:#555;padding:0 8px}
+label{display:block;margin-bottom:4px;font-size:13px;color:#333}
+input[type=text],input[type=password]{width:100%;padding:6px 8px;border:1px solid #bbb;border-radius:3px;margin-bottom:12px;box-sizing:border-box;font-size:14px}
+select{width:100%;padding:6px 8px;border:1px solid #bbb;border-radius:3px;margin-bottom:12px;font-size:14px}
+.btn{background:#f5932c;color:#fff;border:1px solid #c77816;padding:6px 16px;cursor:pointer;font-size:13px;border-radius:3px}
+</style></head>
+<body>
+<div class="container">
+<h1>Welcome to phpMyAdmin</h1>
+<form method="post">
+<fieldset><legend>Log in</legend>
+<label>Username:</label><input type="text" name="pma_username" autocomplete="username" />
+<label>Password:</label><input type="password" name="pma_password" autocomplete="current-password" />
+<label>Server Choice:</label><select name="server"><option>localhost</option></select>
+</fieldset>
+<input type="submit" class="btn" value="Go" />
+</form>
+</div></body></html>

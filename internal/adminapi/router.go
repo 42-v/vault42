@@ -1,0 +1,125 @@
+package adminapi
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/42-v/vault42/internal/rbac"
+	"github.com/42-v/vault42/internal/repository"
+)
+
+// RouterOpts configures the admin gateway router.
+type RouterOpts struct {
+	// DevMode disables LocalOnly and RejectProxyHeaders middleware
+	// for development behind ingress controllers.
+	DevMode bool
+
+	// Killswitch enables the killswitch panic on non-loopback requests (default: true).
+	// When enabled, the pod crashes on breach attempts. When disabled, returns 403.
+	Killswitch bool
+
+	// AuditRepo is used by the killswitch to log breach attempts before crashing.
+	AuditRepo repository.AuditRepository
+}
+
+// NewRouter creates the admin gateway HTTP mux with all routes and middleware.
+func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler {
+	mux := http.NewServeMux()
+
+	sessionAuth := SessionAuth(auth.sessions, auth.admins)
+
+	// Public: login (rate-limited — 10 attempts per minute per IP)
+	loginRL := NewLoginRateLimit(10, time.Minute)
+	mux.HandleFunc("POST /admin/auth/login", loginRL.Wrap(auth.Login))
+
+	// Authenticated (session only, no RBAC)
+	mux.Handle("POST /admin/auth/logout", sessionAuth(http.HandlerFunc(auth.Logout)))
+	mux.Handle("GET /admin/status", sessionAuth(http.HandlerFunc(auth.Status)))
+
+	// TOTP setup (allowed without 2FA being verified — that's the point)
+	mux.Handle("POST /admin/admins/me/totp/setup", sessionAuth(http.HandlerFunc(auth.TOTPSetup)))
+	mux.Handle("POST /admin/admins/me/totp/verify", sessionAuth(http.HandlerFunc(auth.TOTPVerify)))
+
+	// Key management
+	mux.Handle("GET /admin/keys", withPerm(sessionAuth, rbac.KeysList, api.ListKeys))
+	mux.Handle("POST /admin/keys/rotate", withPerm(sessionAuth, rbac.KeysRotate, api.RotateKey))
+	mux.Handle("DELETE /admin/keys/{kid}", withPerm(sessionAuth, rbac.KeysRevoke, api.RevokeKey))
+
+	// User management
+	mux.Handle("GET /admin/users", withPerm(sessionAuth, rbac.UsersList, api.ListUsers))
+	mux.Handle("GET /admin/users/{id}", withPerm(sessionAuth, rbac.UsersRead, api.GetUser))
+	mux.Handle("POST /admin/users/{id}/lock", withPerm(sessionAuth, rbac.UsersLock, api.LockUser))
+	mux.Handle("POST /admin/users/{id}/unlock", withPerm(sessionAuth, rbac.UsersUnlock, api.UnlockUser))
+
+	// Session management
+	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.SessionsList, api.ListSessions))
+	mux.Handle("POST /admin/sessions/revoke-all", withPerm(sessionAuth, rbac.SessionsRevoke, api.RevokeAllSessions))
+
+	// Audit log
+	mux.Handle("GET /admin/audit", withPerm(sessionAuth, rbac.AuditRead, api.QueryAudit))
+
+	// Client management
+	mux.Handle("GET /admin/clients", withPerm(sessionAuth, rbac.ClientsList, api.ListClients))
+	mux.Handle("GET /admin/clients/{id}", withPerm(sessionAuth, rbac.ClientsRead, api.GetClient))
+	mux.Handle("POST /admin/clients", withPerm(sessionAuth, rbac.ClientsCreate, api.CreateClient))
+	mux.Handle("POST /admin/clients/{id}/revoke", withPerm(sessionAuth, rbac.ClientsRevoke, api.RevokeClient))
+	mux.Handle("POST /admin/clients/{id}/rotate", withPerm(sessionAuth, rbac.ClientsRotate, api.RotateClientSecret))
+
+	// Config management
+	mux.Handle("GET /admin/config", withPerm(sessionAuth, rbac.ConfigRead, api.GetConfig))
+	mux.Handle("PUT /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.UpdateConfig))
+	mux.Handle("DELETE /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.DeleteConfig))
+
+	// Metrics
+	mux.Handle("GET /admin/metrics", withPerm(sessionAuth, rbac.MetricsRead, api.GetMetrics))
+
+	// Admin user management
+	mux.Handle("GET /admin/admins", withPerm(sessionAuth, rbac.AdminsManage, api.ListAdmins))
+	mux.Handle("POST /admin/admins", withPerm(sessionAuth, rbac.AdminsCreate, api.CreateAdmin))
+	mux.Handle("POST /admin/admins/{id}/revoke", withPerm(sessionAuth, rbac.AdminsRevoke, api.RevokeAdmin))
+
+	// HTML frontend routes — no server-side auth on page routes.
+	// Browsers send GET without Authorization header, so sessionAuth would block
+	// page loads with a JSON 401. Client-side JS handles auth redirection.
+	// Security: admin gateway runs behind mTLS + loopback-only; pages are static
+	// shells with no secrets. All data comes from auth-protected API endpoints.
+	frontend := NewFrontendHandler()
+	mux.HandleFunc("GET /admin/", frontend.Dashboard)
+	mux.HandleFunc("GET /admin/login", frontend.LoginPage)
+	mux.HandleFunc("GET /admin/ui/users", frontend.UsersPage)
+	mux.HandleFunc("GET /admin/ui/keys", frontend.KeysPage)
+	mux.HandleFunc("GET /admin/ui/sessions", frontend.SessionsPage)
+	mux.HandleFunc("GET /admin/ui/audit", frontend.AuditPage)
+	mux.HandleFunc("GET /admin/ui/clients", frontend.ClientsPage)
+	mux.HandleFunc("GET /admin/ui/admins", frontend.AdminsPage)
+	mux.HandleFunc("GET /admin/ui/config", frontend.ConfigPage)
+	mux.HandleFunc("GET /admin/ui/users/{id}", frontend.UserDetailPage)
+	mux.HandleFunc("GET /admin/ui/totp-setup", frontend.TOTPSetupPage)
+
+	// Static assets
+	mux.Handle("GET /admin/static/", http.HandlerFunc(frontend.ServeStatic))
+
+	// Apply global middleware chain.
+	// Production: LocalOnly → RejectProxyHeaders → SecurityHeaders → RequestID → Recovery → MaxBody(64KB)
+	// Dev mode:   SecurityHeaders → RequestID → Recovery → MaxBody(64KB) (loopback checks skipped)
+	var o RouterOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	var handler http.Handler = mux
+	handler = MaxBody(64 * 1024)(handler)
+	handler = Recovery(handler)
+	handler = RequestID(handler)
+	handler = SecurityHeaders(handler)
+	if !o.DevMode {
+		handler = RejectProxyHeaders(handler)
+		handler = LocalOnly(o.Killswitch, o.AuditRepo)(handler)
+	}
+
+	return handler
+}
+
+// withPerm applies SessionAuth + RBACCheck middleware to a handler.
+func withPerm(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
+	return sessionAuth(RBACCheck(perm)(h))
+}

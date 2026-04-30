@@ -1,0 +1,119 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - exhaustive
+    - gocognit
+    - gocritic
+    - gocyclo
+    - misspell
+    - nilerr
+    - prealloc
+    - revive
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - wastedassign
+
+  settings:
+    gocyclo:
+      min-complexity: 25
+    gocognit:
+      min-complexity: 35
+    errcheck:
+      # Calls whose error return is intentionally discarded across the codebase.
+      # Documented as best-effort in spec.md (audit) or as cleanup paths whose
+      # failure does not affect correctness.
+      exclude-functions:
+        # Audit + cache best-effort
+        - (*github.com/42-v/vault42/internal/audit.Logger).Log
+        - (*github.com/42-v/vault42/internal/audit.Logger).Close
+        - (github.com/42-v/vault42/internal/cache.Cache).Delete
+        - (github.com/42-v/vault42/internal/cache.Cache).Set
+        - (github.com/42-v/vault42/internal/cache.Cache).Increment
+        - (github.com/42-v/vault42/internal/repository.PasswordHistoryRepository).Create
+        - (github.com/42-v/vault42/internal/repository.RefreshTokenRepository).RevokeFamily
+        # stdlib best-effort writers
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+        - (net/http.ResponseWriter).Write
+        - (*hash.Hash).Write
+        # Connection cleanup paths (Redis client + HTTP)
+        - (*net.TCPConn).SetDeadline
+        - (*net.TCPConn).SetReadDeadline
+        - (*net.TCPConn).SetWriteDeadline
+        - (net.Conn).SetDeadline
+        - (net.Conn).Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (io.ReadCloser).Close
+        # JSON best-effort encode (response already partially written / test scaffolding)
+        - (*encoding/json.Encoder).Encode
+        - (*encoding/json.Decoder).Decode
+        # Database transaction Rollback (defer cleanup)
+        - (*github.com/jackc/pgx/v5.Tx).Rollback
+        - (pgx.Tx).Rollback
+
+    revive:
+      rules:
+        - name: var-naming   # default; "crypto" package name conflict is intentional (imports use vaultcrypto alias)
+        - name: exported
+          disabled: true     # spec.md docs the API; not every internal exported type needs a doc
+        - name: unused-parameter
+          disabled: true     # HTTP handler / middleware signatures intentionally name unused params; unparam covers the real cases
+        - name: redefines-builtin-id
+        - name: empty-block
+        - name: superfluous-else
+        - name: increment-decrement
+        - name: range-val-in-closure
+    gocritic:
+      disabled-checks:
+        - ifElseChain      # often clearer than switch in our auth flow code
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - all
+        - "-QF1001"   # whitelist-style negation in our validators is intentional
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gocognit
+          - gocritic
+          - errcheck
+          - unparam
+      - path: tests/fuzz/
+        linters:
+          - errcheck
+      - path: tests/e2e/
+        linters:
+          - bodyclose      # short-lived e2e test process; body leaks bounded by test runtime
+      - path: internal/crypto/
+        linters:
+          - revive         # package name 'crypto' shadows stdlib; imports project-wide use the vaultcrypto alias
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/42-v/vault42
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

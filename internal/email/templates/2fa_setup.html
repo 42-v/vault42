@@ -1,0 +1,12 @@
+{{define "subject"}}Two-Factor Authentication - {{.AppName}}{{end}}
+{{define "content"}}
+<h2 style="margin:0 0 16px;color:#ffffff;font-size:22px">2FA Enabled</h2>
+<p style="margin:0 0 16px;color:#cccccc;font-size:15px;line-height:1.5">Two-factor authentication has been set up on your account.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;width:100%">
+<tr><td style="padding:12px 16px;background-color:#111111;border:1px solid #222222;border-radius:6px">
+<p style="margin:0 0 4px;color:#cccccc;font-size:14px"><strong style="color:#ffffff">Backup codes:</strong></p>
+<p style="margin:0;color:{{.PrimaryColor}};font-size:14px;font-family:monospace">{{.Code}}</p>
+</td></tr>
+</table>
+<p style="margin:0;color:#888888;font-size:13px">Save these backup codes in a secure location.</p>
+{{end}}

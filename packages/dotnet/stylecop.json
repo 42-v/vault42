@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DotNetAnalyzers/StyleCopAnalyzers/master/StyleCop.Analyzers/StyleCop.Analyzers/Settings/stylecop.schema.json",
+  "settings": {
+    "documentationRules": {
+      "companyName": "42-v",
+      "copyrightText": "// Copyright (c) 42-v. All rights reserved.\n// Licensed under the MIT License.",
+      "xmlHeader": false,
+      "fileNamingConvention": "metadata",
+      "documentationCulture": "en-US",
+      "documentExposedElements": false,
+      "documentInternalElements": false,
+      "documentInterfaces": false,
+      "documentPrivateElements": false,
+      "documentPrivateFields": false
+    },
+    "orderingRules": {
+      "usingDirectivesPlacement": "outsideNamespace",
+      "systemUsingDirectivesFirst": true
+    },
+    "layoutRules": {
+      "newlineAtEndOfFile": "require"
+    }
+  }
+}

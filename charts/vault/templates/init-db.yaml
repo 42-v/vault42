@@ -1,0 +1,33 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vault.fullname" . }}-postgres-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+data:
+  01-roles.sh: |
+    #!/bin/bash
+    set -e
+    APP_PASS=$(cat /run/secrets/db-app-password)
+    ADMIN_PASS=$(cat /run/secrets/db-admin-password 2>/dev/null || echo "")
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      DO \$\$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vault_app') THEN
+          CREATE ROLE vault_app WITH LOGIN PASSWORD '${APP_PASS}';
+        END IF;
+      END \$\$;
+      GRANT CONNECT ON DATABASE {{ .Values.database.name }} TO vault_app;
+    EOSQL
+    if [ -n "$ADMIN_PASS" ]; then
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        DO \$\$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vault_admin') THEN
+            CREATE ROLE vault_admin WITH LOGIN PASSWORD '${ADMIN_PASS}';
+          END IF;
+        END \$\$;
+        GRANT CONNECT ON DATABASE {{ .Values.database.name }} TO vault_admin;
+      EOSQL
+    fi
+{{- end }}

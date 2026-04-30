@@ -1,0 +1,126 @@
+{{- if .Values.bridge.enabled }}
+---
+# Bridge ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vault.fullname" . }}-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bridge
+data:
+  BRIDGE_LISTEN_ADDR: {{ .Values.bridge.listenAddr | quote }}
+  BRIDGE_REAL_UPSTREAM: "http://{{ include "vault.fullname" . }}:{{ .Values.service.port }}"
+  BRIDGE_HONEYPOT_UPSTREAM: "http://{{ include "vault.fullname" . }}-honeypot:{{ .Values.service.port }}"
+  BRIDGE_RATE_THRESHOLD: {{ .Values.bridge.rateThreshold | quote }}
+  BRIDGE_LOGIN_FAIL_THRESHOLD: {{ .Values.bridge.loginFailThreshold | quote }}
+  BRIDGE_FLAG_TTL: {{ .Values.bridge.flagTTL | quote }}
+  BRIDGE_FLAG_THRESHOLD: {{ .Values.bridge.flagThreshold | quote }}
+  BRIDGE_LOG_LEVEL: {{ .Values.bridge.logLevel | quote }}
+  {{- if .Values.bridge.webhookURL }}
+  BRIDGE_WEBHOOK_URL: {{ .Values.bridge.webhookURL | quote }}
+  {{- end }}
+  {{- if .Values.bridge.trustedProxies }}
+  BRIDGE_TRUSTED_PROXIES: {{ .Values.bridge.trustedProxies | quote }}
+  {{- end }}
+  {{- if .Values.bridge.realIPHeader }}
+  BRIDGE_REAL_IP_HEADER: {{ .Values.bridge.realIPHeader | quote }}
+  {{- end }}
+  {{- if .Values.bridge.redis.enabled }}
+  BRIDGE_REDIS_ADDR: {{ .Values.bridge.redis.addr | quote }}
+  {{- end }}
+---
+# Bridge Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vault.fullname" . }}-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bridge
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson .Values.bridge | sha256sum }}
+      labels:
+        {{- include "vault.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bridge
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: bridge
+          image: "{{ .Values.bridge.image.repository }}:{{ .Values.bridge.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.bridge.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "vault.fullname" . }}-bridge
+          {{- if .Values.bridge.adminTokenKey }}
+          env:
+            - name: BRIDGE_ADMIN_TOKEN_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.bridge.adminTokenKey }}"
+          volumeMounts:
+            - name: secrets
+              mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.bridge.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /bridge/healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /bridge/readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      {{- if .Values.bridge.adminTokenKey }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ include "vault.secretName" . }}
+      {{- end }}
+---
+# Bridge Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vault.fullname" . }}-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bridge
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "vault.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: bridge
+{{- end }}

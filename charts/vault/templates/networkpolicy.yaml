@@ -1,0 +1,252 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# Vault: allow ingress on 8080, egress to postgres + redis + DNS only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.postgresSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.database.port | int }}
+          protocol: TCP
+    {{- if eq .Values.cache.backend "redis" }}
+    # Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.redisSelector | nindent 14 }}
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- end }}
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # SMTP (if configured, allow outbound)
+    {{- if .Values.smtp.host }}
+    - to:
+        {{- if .Values.networkPolicy.smtpCIDR }}
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.smtpCIDR }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.smtp.port | int }}
+          protocol: TCP
+    {{- end }}
+---
+# PostgreSQL: only accept from vault
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.networkPolicy.postgresSelector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+        {{- if .Values.adminGateway.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: admin-gateway
+        {{- end }}
+      ports:
+        - port: {{ .Values.database.port | int }}
+          protocol: TCP
+{{- if eq .Values.cache.backend "redis" }}
+---
+# Redis: only accept from vault
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.networkPolicy.redisSelector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+      {{- if and .Values.bridge.enabled .Values.bridge.redis.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: bridge
+      {{- end }}
+      ports:
+        - port: 6379
+          protocol: TCP
+{{- end }}
+{{- if .Values.bridge.enabled }}
+---
+# Bridge: allow ingress on 8080, egress to real vault + honeypot vault + redis + DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bridge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Real Vault
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.service.port | int }}
+          protocol: TCP
+    # Honeypot Vault
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: honeypot
+      ports:
+        - port: {{ .Values.service.port | int }}
+          protocol: TCP
+    {{- if .Values.bridge.redis.enabled }}
+    # Redis (for persistent flags)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.redisSelector | nindent 14 }}
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- end }}
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Webhook (external)
+    {{- if .Values.bridge.webhookURL }}
+    - ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+---
+# Honeypot Vault: allow ingress from bridge only, egress to honeypot PG + DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: honeypot
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: bridge
+      ports:
+        - port: {{ .Values.service.port | int }}
+          protocol: TCP
+  egress:
+    # Honeypot PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: honeypot-postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # SMTP (if configured)
+    {{- if .Values.smtp.host }}
+    - ports:
+        - port: {{ .Values.smtp.port | int }}
+          protocol: TCP
+    {{- end }}
+---
+# Honeypot PostgreSQL: only accept from honeypot vault
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: honeypot-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: honeypot
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}
+{{- end }}

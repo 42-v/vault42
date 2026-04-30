@@ -1,0 +1,36 @@
+{{define "page-content"}}
+<h1>Audit Log</h1>
+<div class="toolbar">
+    <label for="auditEventType" class="sr-only">Filter by event type</label>
+    <select id="auditEventType" class="select-input" aria-label="Filter by event type">
+        <option value="">All events</option>
+        <option value="login_success">Login Success</option>
+        <option value="login_failure">Login Failure</option>
+        <option value="admin_login">Admin Login</option>
+        <option value="admin_login_failure">Admin Login Failure</option>
+        <option value="token_refresh">Token Refresh</option>
+        <option value="password_change">Password Change</option>
+        <option value="2fa_setup">2FA Setup</option>
+        <option value="admin_key_rotate">Key Rotation</option>
+        <option value="admin_config_change">Config Change</option>
+    </select>
+    <label for="auditUserId" class="sr-only">Filter by User ID</label>
+    <input type="text" id="auditUserId" placeholder="User ID..." class="search-input" aria-label="Filter by user ID">
+    <button class="btn" data-action="query-audit" aria-label="Query audit log">Query</button>
+    <span id="auditResultCount" class="result-count"></span>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="timestamp">Time</th>
+            <th data-sort="event_type">Event</th>
+            <th>User</th>
+            <th data-sort="ip">IP</th>
+            <th data-sort="risk_score">Risk</th>
+            <th>Details</th>
+        </tr></thead>
+        <tbody id="auditBody"><tr><td colspan="6">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

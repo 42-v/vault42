@@ -1,0 +1,113 @@
+name: Nightly Security Scan
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 3 AM UTC daily
+  workflow_dispatch: # manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Go Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  gosec:
+    name: Static Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: gosec -fmt json -out gosec-results.json ./... || true
+
+      - name: Check findings
+        run: |
+          if [ -s gosec-results.json ]; then
+            cat gosec-results.json | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          issues = data.get('Issues', [])
+          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
+          if high:
+              for i in high:
+                  print(f\"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}\")
+              sys.exit(1)
+          print(f'No HIGH/CRITICAL findings ({len(issues)} total issues)')
+          "
+          fi
+
+  trivy-source:
+    name: Trivy Source Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy (filesystem)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  trivy-image:
+    name: Trivy Image Scan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: vault
+            dockerfile: Dockerfile
+            tag: vault:scan
+          - name: admin-gateway
+            dockerfile: Dockerfile.admin-gateway
+            tag: vault-admin-gateway:scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.name }} image for scanning
+        run: docker build -t ${{ matrix.tag }} -f ${{ matrix.dockerfile }} .
+
+      - name: Run Trivy (${{ matrix.name }})
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  attack-suite:
+    name: Attack Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run attack tests
+        run: go test ./tests/attack/... -count=1 -v -timeout 300s

@@ -1,0 +1,38 @@
+.git/
+.github/
+.gitignore
+.gitlab-ci.yml
+.idea/
+.vscode/
+
+# Node artifacts (source dirs are needed for multi-stage frontend build)
+node_modules/
+web/node_modules/
+packages/vue/node_modules/
+packages/csharp/
+web/dist/
+
+# K8s / Docker
+k8s/
+charts/
+docker-compose*.yml
+
+# Tests (not needed in image)
+tests/
+coverage.out
+
+# Docs
+docs/
+*.md
+LICENSE
+ROADMAP.md
+
+# Secrets
+secrets/
+*.pem
+*.key
+.env
+.env.*
+
+# Scripts
+scripts/

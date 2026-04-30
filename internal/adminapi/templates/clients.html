@@ -1,0 +1,29 @@
+{{define "page-content"}}
+<h1>Service Clients</h1>
+<div class="toolbar">
+    <button class="btn btn-primary" data-action="show-create-client" aria-label="Create a new service client">Create Client</button>
+    <button class="btn" data-action="refresh-clients" aria-label="Refresh client list">Refresh</button>
+</div>
+<div id="createClientForm" class="form-inline" style="display:none">
+    <label for="clientName" class="sr-only">Client name</label>
+    <input type="text" id="clientName" placeholder="Client name" class="search-input">
+    <label for="clientRole" class="sr-only">Client role</label>
+    <input type="text" id="clientRole" placeholder="Role" class="search-input">
+    <button class="btn btn-primary" data-action="create-client" aria-label="Create client">Create</button>
+    <button class="btn" data-action="hide-create-client">Cancel</button>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="name">Name</th>
+            <th>ID</th>
+            <th data-sort="role">Role</th>
+            <th data-sort="active">Active</th>
+            <th data-sort="created_at">Created</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody id="clientsBody"><tr><td colspan="6">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

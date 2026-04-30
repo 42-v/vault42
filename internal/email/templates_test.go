@@ -1,0 +1,273 @@
+package email
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestRenderVerification(t *testing.T) {
+	subject, html, text := RenderTemplate(TemplateVerification, TemplateData{
+		AppName:      "TestApp",
+		URL:          "https://example.com/verify?token=abc",
+		PrimaryColor: "#1a1a2e",
+	})
+
+	if !strings.Contains(subject, "Verify") {
+		t.Errorf("subject should mention verify: %s", subject)
+	}
+	if !strings.Contains(html, "https://example.com/verify?token=abc") {
+		t.Error("HTML should contain verification URL")
+	}
+	if !strings.Contains(text, "https://example.com/verify?token=abc") {
+		t.Error("text should contain verification URL")
+	}
+	if !strings.Contains(html, "TestApp") {
+		t.Error("HTML should contain app name")
+	}
+}
+
+func TestRenderPasswordReset(t *testing.T) {
+	subject, html, text := RenderTemplate(TemplatePasswordReset, TemplateData{
+		AppName:      "TestApp",
+		URL:          "https://example.com/reset?token=xyz",
+		PrimaryColor: "#1a1a2e",
+	})
+
+	if !strings.Contains(subject, "Reset") {
+		t.Error("subject should mention reset")
+	}
+	if !strings.Contains(html, "https://example.com/reset?token=xyz") {
+		t.Error("HTML should contain reset URL")
+	}
+	if !strings.Contains(text, "1 hour") {
+		t.Error("text should mention expiry")
+	}
+}
+
+func TestRenderNewDevice(t *testing.T) {
+	_, html, text := RenderTemplate(TemplateNewDevice, TemplateData{
+		AppName:      "TestApp",
+		IP:           "1.2.3.4",
+		Device:       "Chrome on Windows",
+		PrimaryColor: "#1a1a2e",
+	})
+
+	if !strings.Contains(html, "1.2.3.4") {
+		t.Error("HTML should contain IP")
+	}
+	if !strings.Contains(text, "Chrome on Windows") {
+		t.Error("text should contain device info")
+	}
+}
+
+func TestRenderAccountLocked(t *testing.T) {
+	_, html, _ := RenderTemplate(TemplateAccountLocked, TemplateData{
+		AppName:      "TestApp",
+		IP:           "5.6.7.8",
+		PrimaryColor: "#1a1a2e",
+	})
+
+	if !strings.Contains(html, "5.6.7.8") {
+		t.Error("HTML should contain the offending IP")
+	}
+}
+
+func TestAllTemplatesNonEmpty(t *testing.T) {
+	templates := []string{
+		TemplateVerification, TemplatePasswordReset, TemplateNewDevice,
+		TemplateAccountLocked, Template2FASetup, TemplateSuspiciousActivity,
+	}
+
+	for _, tmpl := range templates {
+		subject, html, text := RenderTemplate(tmpl, TemplateData{AppName: "Test", PrimaryColor: "#1a1a2e"})
+		if subject == "" {
+			t.Errorf("template %s: empty subject", tmpl)
+		}
+		if html == "" {
+			t.Errorf("template %s: empty HTML", tmpl)
+		}
+		if text == "" {
+			t.Errorf("template %s: empty text", tmpl)
+		}
+	}
+}
+
+func TestNewTemplateRendererDefault(t *testing.T) {
+	r, err := NewTemplateRenderer("")
+	if err != nil {
+		t.Fatalf("NewTemplateRenderer: %v", err)
+	}
+	subject, html, _ := r.Render(TemplateVerification, TemplateData{
+		AppName:      "Vault",
+		URL:          "https://vault.test/verify",
+		PrimaryColor: "#1a1a2e",
+	})
+	if !strings.Contains(subject, "Verify") {
+		t.Errorf("subject = %q, want verify mention", subject)
+	}
+	if !strings.Contains(html, "<!DOCTYPE html>") {
+		t.Error("HTML should contain DOCTYPE from base template")
+	}
+	if !strings.Contains(html, "vault.test/verify") {
+		t.Error("HTML should contain verification URL")
+	}
+}
+
+func TestTemplateRendererWithLogoURL(t *testing.T) {
+	_, html, _ := RenderTemplate(TemplateVerification, TemplateData{
+		AppName:      "Vault",
+		URL:          "https://vault.test/verify",
+		LogoURL:      "https://vault.test/logo.png",
+		PrimaryColor: "#ff0000",
+	})
+	if !strings.Contains(html, "vault.test/logo.png") {
+		t.Error("HTML should contain logo URL when set")
+	}
+	if !strings.Contains(html, "#ff0000") {
+		t.Error("HTML should use primary color")
+	}
+}
+
+func TestTemplateRendererUnknownTemplate(t *testing.T) {
+	subject, html, text := RenderTemplate("nonexistent", TemplateData{AppName: "TestApp"})
+	if subject != "Notification" {
+		t.Errorf("unknown template subject = %q, want Notification", subject)
+	}
+	if !strings.Contains(html, "TestApp") {
+		t.Error("unknown template HTML should contain app name")
+	}
+	if !strings.Contains(text, "TestApp") {
+		t.Error("unknown template text should contain app name")
+	}
+}
+
+func TestTemplateRendererOverride(t *testing.T) {
+	dir := t.TempDir()
+	// Write a custom verification template
+	custom := `{{define "subject"}}Custom Subject - {{.AppName}}{{end}}
+{{define "content"}}
+<p>Custom content for {{.AppName}}</p>
+{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
+
+	r, err := NewTemplateRenderer(dir)
+	if err != nil {
+		t.Fatalf("NewTemplateRenderer with override: %v", err)
+	}
+	subject, html, _ := r.Render(TemplateVerification, TemplateData{
+		AppName:      "Vault",
+		PrimaryColor: "#1a1a2e",
+	})
+	if !strings.Contains(subject, "Custom Subject") {
+		t.Errorf("subject = %q, want custom subject", subject)
+	}
+	if !strings.Contains(html, "Custom content") {
+		t.Error("HTML should contain custom content from override")
+	}
+}
+
+func TestTemplateRendererRejectsUnsafeScript(t *testing.T) {
+	dir := t.TempDir()
+	unsafe := `{{define "subject"}}Bad{{end}}
+{{define "content"}}<script>alert('xss')</script>{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
+
+	_, err := NewTemplateRenderer(dir)
+	if err == nil {
+		t.Error("should reject template with <script> tag")
+	}
+}
+
+func TestTemplateRendererRejectsUnsafeEventHandler(t *testing.T) {
+	dir := t.TempDir()
+	unsafe := `{{define "subject"}}Bad{{end}}
+{{define "content"}}<img onerror="alert(1)" src="x">{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
+
+	_, err := NewTemplateRenderer(dir)
+	if err == nil {
+		t.Error("should reject template with event handlers")
+	}
+}
+
+func TestTemplateRendererRejectsUnsafeIframe(t *testing.T) {
+	dir := t.TempDir()
+	unsafe := `{{define "subject"}}Bad{{end}}
+{{define "content"}}<iframe src="https://evil.com"></iframe>{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
+
+	_, err := NewTemplateRenderer(dir)
+	if err == nil {
+		t.Error("should reject template with <iframe>")
+	}
+}
+
+func TestTemplateRendererRejectsCallDirective(t *testing.T) {
+	dir := t.TempDir()
+	unsafe := `{{define "subject"}}Bad{{end}}
+{{define "content"}}{{call .URL}}{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
+
+	_, err := NewTemplateRenderer(dir)
+	if err == nil {
+		t.Error("should reject template with {{call}}")
+	}
+}
+
+func TestValidateTemplateSafeContent(t *testing.T) {
+	safe := []byte(`{{define "subject"}}Hi{{end}}{{define "content"}}<p>Hello {{.AppName}}</p>{{end}}`)
+	if err := validateTemplate(safe); err != nil {
+		t.Errorf("safe template should pass validation: %v", err)
+	}
+}
+
+func TestStripHTML(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"simple", "<p>Hello</p>", "Hello"},
+		{"nested", "<div><p>Hello <b>World</b></p></div>", "Hello World"},
+		{"entities", "&amp; &lt; &gt;", "& < >"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripHTML(tt.in)
+			if got != tt.want {
+				t.Errorf("stripHTML(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAllTemplatesProduceValidHTML(t *testing.T) {
+	templates := []string{
+		TemplateVerification, TemplatePasswordReset, TemplateNewDevice,
+		TemplateAccountLocked, Template2FASetup, TemplateSuspiciousActivity,
+	}
+	for _, name := range templates {
+		t.Run(name, func(t *testing.T) {
+			_, html, _ := RenderTemplate(name, TemplateData{
+				AppName:      "Vault",
+				URL:          "https://vault.test/action",
+				IP:           "1.2.3.4",
+				Device:       "Chrome",
+				Code:         "ABC-123",
+				PrimaryColor: "#1a1a2e",
+			})
+			if !strings.Contains(html, "<!DOCTYPE html>") {
+				t.Error("should contain DOCTYPE")
+			}
+			if !strings.Contains(html, "</html>") {
+				t.Error("should contain closing html tag")
+			}
+			if !strings.Contains(html, "Vault") {
+				t.Error("should contain app name")
+			}
+		})
+	}
+}

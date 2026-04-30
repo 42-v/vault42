@@ -1,0 +1,21 @@
+{{define "page-content"}}
+<h1>Signing Keys</h1>
+<div class="toolbar">
+    <button class="btn btn-primary" data-action="rotate-key" aria-label="Generate a new signing key">Rotate Key</button>
+    <button class="btn" data-action="refresh-keys" aria-label="Refresh key list">Refresh</button>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="kid">KID</th>
+            <th>Algorithm</th>
+            <th data-sort="status">Status</th>
+            <th data-sort="created_at">Created</th>
+            <th>Expires</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody id="keysBody"><tr><td colspan="6">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

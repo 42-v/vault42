@@ -1,0 +1,89 @@
+# Local production overlay — Cloudflare Tunnel for real HTTPS.
+# Usage: helm install vault charts/vault -f charts/vault/values-local.yaml --set cloudflared.existingSecret=cloudflared-token
+fullnameOverride: vault
+replicaCount: 1
+
+image:
+  repository: vault
+  tag: dev
+  pullPolicy: Never
+
+profile: production
+listenAddr: ":8080"
+origin: "https://vault.42-v.net"
+autoMigrate: true
+rateLimitEnabled: true
+
+# TLS terminated at Cloudflare — not needed locally
+tls:
+  enabled: false
+
+# Cookies must still be Secure (browser sees HTTPS via CF)
+forceSecureCookies: true
+
+# Serve the embedded Vue SPA from the Go binary
+serveFrontend: true
+
+# Trust pod CIDR for X-Forwarded-For from cloudflared
+trustedProxies: "10.0.0.0/8"
+
+database:
+  host: vault-postgres
+  sslmode: disable
+  maxConns: "10"
+
+cache:
+  backend: redis
+
+redis:
+  addr: "vault-redis:6379"
+  enabled: true
+
+smtp:
+  host: vault-mailpit
+  port: "1025"
+
+emailFrom: "vault@42-v.net"
+
+passwordMinLength: 15
+hibpCheck: true
+
+# No ingress — cloudflared routes traffic directly to the service
+ingress:
+  enabled: false
+
+# No separate frontend container — embedded in Go binary
+frontend:
+  enabled: false
+
+# Cloudflare Tunnel
+cloudflared:
+  enabled: true
+  # Token provided via --set or existingSecret
+
+postgres:
+  enabled: true
+  appPassword: "local-app-password"
+
+mailpit:
+  enabled: true
+
+networkPolicy:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+secrets:
+  existingSecret: vault-secrets

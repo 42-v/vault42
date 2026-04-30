@@ -1,0 +1,121 @@
+{{- if .Values.bridge.enabled }}
+---
+# Honeypot PostgreSQL PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot-postgres-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: honeypot-postgres
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.honeypotInstance.postgres.storage | default "1Gi" }}
+---
+# Honeypot PostgreSQL Init ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot-postgres-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: honeypot-postgres
+data:
+  01-roles.sh: |
+    #!/bin/bash
+    set -e
+    APP_PASS=$(cat /run/secrets/db-app-password)
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      DO \$\$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vault_app') THEN
+          CREATE ROLE vault_app WITH LOGIN PASSWORD '${APP_PASS}';
+        END IF;
+      END \$\$;
+      GRANT CONNECT ON DATABASE {{ .Values.honeypotInstance.database.name }} TO vault_app;
+    EOSQL
+---
+# Honeypot PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app: honeypot-postgres
+    app.kubernetes.io/component: honeypot-postgres
+spec:
+  serviceName: {{ include "vault.fullname" . }}-honeypot-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: honeypot-postgres
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: honeypot-postgres
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository | default "postgres" }}:{{ .Values.postgres.image.tag | default "17-alpine" }}"
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.honeypotInstance.database.name | quote }}
+            - name: POSTGRES_USER
+              value: vault_mig
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vault.secretName" . }}
+                  key: {{ .Values.secrets.keys.dbMigPassword }}
+            - name: POSTGRES_INITDB_ARGS
+              value: "--auth-host=scram-sha-256"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "vault.fullname" . }}-honeypot-postgres-data
+        - name: init
+          configMap:
+            name: {{ include "vault.fullname" . }}-honeypot-postgres-init
+            defaultMode: 0755
+        - name: secrets
+          secret:
+            secretName: {{ include "vault.secretName" . }}
+            items:
+              - key: {{ .Values.secrets.keys.dbAppPassword }}
+                path: db-app-password
+---
+# Honeypot PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vault.fullname" . }}-honeypot-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app.kubernetes.io/component: honeypot-postgres
+spec:
+  selector:
+    app: honeypot-postgres
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}

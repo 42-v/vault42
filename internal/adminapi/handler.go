@@ -1,0 +1,807 @@
+package adminapi
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/42-v/vault42/internal/audit"
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/keystore"
+	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/rbac"
+	"github.com/42-v/vault42/internal/repository"
+)
+
+// Handler handles admin API endpoints.
+type Handler struct {
+	users       repository.UserRepository
+	clients     repository.ClientRepository
+	tokens      repository.RefreshTokenRepository
+	auditRepo   repository.AuditRepository
+	admins      repository.AdminUserRepository
+	sessions    repository.AdminSessionRepository
+	adminConfig repository.AdminConfigRepository
+	keyStore    *keystore.KeyStore
+	auditLog    *audit.Logger
+	masterKey   []byte
+	pepper      string
+}
+
+// NewHandler creates a new admin API handler.
+// pepper is the optional HMAC-pepper applied to admin password hashes
+// (must match the user-side service for hash-format parity; empty = none).
+func NewHandler(
+	users repository.UserRepository,
+	clients repository.ClientRepository,
+	tokens repository.RefreshTokenRepository,
+	auditRepo repository.AuditRepository,
+	admins repository.AdminUserRepository,
+	sessions repository.AdminSessionRepository,
+	adminConfig repository.AdminConfigRepository,
+	ks *keystore.KeyStore,
+	auditLog *audit.Logger,
+	masterKey []byte,
+	pepper string,
+) *Handler {
+	return &Handler{
+		users:       users,
+		clients:     clients,
+		tokens:      tokens,
+		auditRepo:   auditRepo,
+		admins:      admins,
+		sessions:    sessions,
+		adminConfig: adminConfig,
+		keyStore:    ks,
+		auditLog:    auditLog,
+		masterKey:   masterKey,
+		pepper:      pepper,
+	}
+}
+
+// ========== Key Management ==========
+
+// ListKeys handles GET /admin/keys.
+func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
+	if h.keyStore == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "keystore_not_configured")
+		return
+	}
+	keys, err := h.keyStore.ListKeys(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if keys == nil {
+		keys = []keystore.KeyInfo{}
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"keys": keys})
+}
+
+// RotateKey handles POST /admin/keys/rotate.
+func (h *Handler) RotateKey(w http.ResponseWriter, r *http.Request) {
+	if h.keyStore == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "keystore_not_configured")
+		return
+	}
+	kid, err := h.keyStore.Rotate(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "key_rotation_failed")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRotate, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"kid": kid,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "rotated", "kid": kid})
+}
+
+// RevokeKey handles DELETE /admin/keys/{kid}.
+func (h *Handler) RevokeKey(w http.ResponseWriter, r *http.Request) {
+	if h.keyStore == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "keystore_not_configured")
+		return
+	}
+	kid := r.PathValue("kid")
+	if kid == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_kid")
+		return
+	}
+	if err := h.keyStore.Revoke(r.Context(), kid); err != nil {
+		httputil.WriteError(w, http.StatusNotFound, "key_not_found")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"kid": kid,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// ========== User Management ==========
+
+// listUsersResponse wraps paginated user list.
+type listUsersResponse struct {
+	Users  []userSummary `json:"users"`
+	Total  int           `json:"total,omitempty"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
+type userSummary struct {
+	ID            string     `json:"id"`
+	Email         string     `json:"email"`
+	EmailVerified bool       `json:"email_verified"`
+	DisplayName   string     `json:"display_name,omitempty"`
+	MFARequired   bool       `json:"mfa_required"`
+	LockedUntil   *time.Time `json:"locked_until,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// ListUsers handles GET /admin/users.
+// Accepts ?q= query param: UUID format → lookup by ID, contains @ → lookup by email.
+func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
+			Users: []userSummary{},
+		})
+		return
+	}
+
+	var users []userSummary
+
+	// UUID pattern: 8-4-4-4-12 hex digits
+	uuidPattern := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	if uuidPattern.MatchString(q) {
+		user, err := h.users.GetByID(r.Context(), q)
+		if err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		if user != nil {
+			users = append(users, userSummary{
+				ID:            user.ID,
+				Email:         user.Email,
+				EmailVerified: user.EmailVerified,
+				DisplayName:   user.DisplayName,
+				MFARequired:   user.MFARequired,
+				LockedUntil:   user.LockedUntil,
+				CreatedAt:     user.CreatedAt,
+			})
+		}
+	} else if strings.Contains(q, "@") {
+		user, err := h.users.GetByEmail(r.Context(), q)
+		if err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		if user != nil {
+			users = append(users, userSummary{
+				ID:            user.ID,
+				Email:         user.Email,
+				EmailVerified: user.EmailVerified,
+				DisplayName:   user.DisplayName,
+				MFARequired:   user.MFARequired,
+				LockedUntil:   user.LockedUntil,
+				CreatedAt:     user.CreatedAt,
+			})
+		}
+	}
+
+	if users == nil {
+		users = []userSummary{}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
+		Users: users,
+		Total: len(users),
+		Limit: len(users),
+	})
+}
+
+// GetUser handles GET /admin/users/{id}.
+func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	user, err := h.users.GetByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if user == nil {
+		httputil.WriteError(w, http.StatusNotFound, "user_not_found")
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, userSummary{
+		ID:            user.ID,
+		Email:         user.Email,
+		EmailVerified: user.EmailVerified,
+		DisplayName:   user.DisplayName,
+		MFARequired:   user.MFARequired,
+		LockedUntil:   user.LockedUntil,
+		CreatedAt:     user.CreatedAt,
+	})
+}
+
+// LockUser handles POST /admin/users/{id}/lock.
+func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	var req struct {
+		Duration string `json:"duration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Duration = "24h"
+	}
+	dur, err := time.ParseDuration(req.Duration)
+	if err != nil {
+		dur = 24 * time.Hour
+	}
+
+	until := time.Now().Add(dur)
+	if err := h.users.LockUntil(r.Context(), id, until); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminUserLock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"target_user": id,
+		"until":       until.Format(time.RFC3339),
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "locked", "until": until.Format(time.RFC3339)})
+}
+
+// UnlockUser handles POST /admin/users/{id}/unlock.
+func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	if err := h.users.Unlock(r.Context(), id); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminUserUnlock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"target_user": id,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+// ========== Session Management ==========
+
+// ListSessions handles GET /admin/sessions.
+func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := h.sessions.ListActive(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if sessions == nil {
+		sessions = []*model.AdminSession{}
+	}
+
+	type sessionView struct {
+		ID        string    `json:"id"`
+		AdminID   string    `json:"admin_id"`
+		IP        string    `json:"ip"`
+		UserAgent string    `json:"user_agent,omitempty"`
+		CreatedAt time.Time `json:"created_at"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+
+	views := make([]sessionView, 0, len(sessions))
+	for _, s := range sessions {
+		views = append(views, sessionView{
+			ID:        s.ID,
+			AdminID:   s.AdminID,
+			IP:        s.IP,
+			UserAgent: s.UserAgent,
+			CreatedAt: s.CreatedAt,
+			ExpiresAt: s.ExpiresAt,
+		})
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"sessions": views})
+}
+
+// RevokeAllSessions handles POST /admin/sessions/revoke-all.
+func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
+	if err := h.sessions.RevokeAll(r.Context()); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminSessionRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"scope": "all",
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "all_sessions_revoked"})
+}
+
+// ========== Audit Log ==========
+
+// QueryAudit handles GET /admin/audit.
+func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := repository.AuditFilter{
+		UserID:    q.Get("user_id"),
+		EventType: q.Get("event_type"),
+		Limit:     50,
+	}
+
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			filter.Limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			filter.Offset = n
+		}
+	}
+	if v := q.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.Since = &t
+		}
+	}
+	if v := q.Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.Until = &t
+		}
+	}
+
+	entries, err := h.auditRepo.Query(r.Context(), filter)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if entries == nil {
+		entries = []*model.AuditEntry{}
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		"count":   len(entries),
+		"filter":  filter,
+	})
+}
+
+// ========== Client Management ==========
+
+// ListClients handles GET /admin/clients.
+func (h *Handler) ListClients(w http.ResponseWriter, r *http.Request) {
+	clients, err := h.clients.List(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	type clientView struct {
+		ID           string    `json:"id"`
+		Name         string    `json:"name"`
+		Role         string    `json:"role"`
+		Scopes       []string  `json:"scopes"`
+		RedirectURIs []string  `json:"redirect_uris"`
+		Active       bool      `json:"active"`
+		CreatedAt    time.Time `json:"created_at"`
+	}
+
+	views := make([]clientView, 0, len(clients))
+	for _, c := range clients {
+		views = append(views, clientView{
+			ID:           c.ID,
+			Name:         c.Name,
+			Role:         c.Role,
+			Scopes:       c.Scopes,
+			RedirectURIs: c.RedirectURIs,
+			Active:       c.Active,
+			CreatedAt:    c.CreatedAt,
+		})
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"clients": views})
+}
+
+// GetClient handles GET /admin/clients/{id}.
+func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	client, err := h.clients.GetByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if client == nil {
+		httputil.WriteError(w, http.StatusNotFound, "client_not_found")
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, client)
+}
+
+// CreateClient handles POST /admin/clients.
+func (h *Handler) CreateClient(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name         string   `json:"name"`
+		Role         string   `json:"role"`
+		Scopes       []string `json:"scopes"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if req.Name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_name")
+		return
+	}
+
+	id, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	secretBytes, err := vaultcrypto.RandomBytes(32)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	secret := hex.EncodeToString(secretBytes)
+	secretHash, err := vaultcrypto.HashPassword(secret)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	now := time.Now()
+	client := &model.Client{
+		ID:           id,
+		Name:         req.Name,
+		SecretHash:   secretHash,
+		Role:         req.Role,
+		Scopes:       req.Scopes,
+		RedirectURIs: req.RedirectURIs,
+		Active:       true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	if err := h.clients.Create(r.Context(), client); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientCreate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"client_name": req.Name,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+		"id":     id,
+		"name":   req.Name,
+		"secret": secret,
+	})
+}
+
+// RevokeClient handles POST /admin/clients/{id}/revoke.
+func (h *Handler) RevokeClient(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	if err := h.clients.Deactivate(r.Context(), id); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRevoke, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// RotateClientSecret handles POST /admin/clients/{id}/rotate.
+func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	client, err := h.clients.GetByID(r.Context(), id)
+	if err != nil || client == nil {
+		httputil.WriteError(w, http.StatusNotFound, "client_not_found")
+		return
+	}
+
+	secretBytes, err := vaultcrypto.RandomBytes(32)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	secret := hex.EncodeToString(secretBytes)
+	secretHash, err := vaultcrypto.HashPassword(secret)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	client.SecretHash = secretHash
+	client.UpdatedAt = time.Now()
+	if err := h.clients.Update(r.Context(), client); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRotate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{
+		"status": "rotated",
+		"secret": secret,
+	})
+}
+
+// ========== Config Management ==========
+
+// GetConfig handles GET /admin/config.
+func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.adminConfig.List(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// UpdateConfig handles PUT /admin/config/{key}.
+func (h *Handler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_key")
+		return
+	}
+
+	// Validate config key name — alphanumeric, underscores, dots only
+	if !configKeyPattern.MatchString(key) {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_key_format")
+		return
+	}
+
+	var req struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if err := h.adminConfig.Set(r.Context(), key, req.Value); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"config_key": key,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated", "key": key})
+}
+
+// DeleteConfig handles DELETE /admin/config/{key}.
+func (h *Handler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if key == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_key")
+		return
+	}
+
+	if err := h.adminConfig.Delete(r.Context(), key); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"config_key": key,
+		"action":     "delete",
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted", "key": key})
+}
+
+// ========== Metrics ==========
+
+// GetMetrics handles GET /admin/metrics.
+func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request) {
+	// Proxy to the main vault's metrics if available, or expose admin-specific metrics
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"note":   "Admin-specific metrics not yet implemented",
+	})
+}
+
+// ========== Admin User Management ==========
+
+// ListAdmins handles GET /admin/admins.
+func (h *Handler) ListAdmins(w http.ResponseWriter, r *http.Request) {
+	admins, err := h.admins.List(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	type adminView struct {
+		ID          string     `json:"id"`
+		Username    string     `json:"username"`
+		Role        string     `json:"role"`
+		TOTP        bool       `json:"totp_configured"`
+		LockedUntil *time.Time `json:"locked_until,omitempty"`
+		LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+		CreatedAt   time.Time  `json:"created_at"`
+		CreatedBy   string     `json:"created_by,omitempty"`
+	}
+
+	views := make([]adminView, 0, len(admins))
+	for _, a := range admins {
+		views = append(views, adminView{
+			ID:          a.ID,
+			Username:    a.Username,
+			Role:        a.Role,
+			TOTP:        a.TOTPVerified,
+			LockedUntil: a.LockedUntil,
+			LastLoginAt: a.LastLoginAt,
+			CreatedAt:   a.CreatedAt,
+			CreatedBy:   a.CreatedBy,
+		})
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"admins": views})
+}
+
+// CreateAdmin handles POST /admin/admins.
+func (h *Handler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if req.Username == "" || req.Password == "" || req.Role == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_fields")
+		return
+	}
+
+	if !rbac.IsValidRole(req.Role) {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_role")
+		return
+	}
+
+	// Password minimum length for admin accounts
+	if len(req.Password) < 20 {
+		httputil.WriteError(w, http.StatusBadRequest, "password_too_short")
+		return
+	}
+
+	// Check for existing username
+	existing, err := h.admins.GetByUsername(r.Context(), req.Username)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if existing != nil {
+		httputil.WriteError(w, http.StatusConflict, "username_exists")
+		return
+	}
+
+	id, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	hash, err := vaultcrypto.HashPassword(req.Password, h.pepper)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	creator := GetAdmin(r.Context())
+	now := time.Now()
+	admin := &model.AdminUser{
+		ID:           id,
+		Username:     req.Username,
+		PasswordHash: hash,
+		Role:         req.Role,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		CreatedBy:    creator.ID,
+	}
+
+	if err := h.admins.Create(r.Context(), admin); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountCreate, creator.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"new_admin_id":       id,
+		"new_admin_username": req.Username,
+		"new_admin_role":     req.Role,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+		"id":       id,
+		"username": req.Username,
+		"role":     req.Role,
+	})
+}
+
+// RevokeAdmin handles POST /admin/admins/{id}/revoke.
+func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+
+	actor := GetAdmin(r.Context())
+
+	// Prevent self-revocation
+	if actor.ID == id {
+		httputil.WriteError(w, http.StatusBadRequest, "cannot_revoke_self")
+		return
+	}
+
+	// Revoke admin first — sessions CASCADE delete via FK.
+	// This eliminates the race window where an in-flight request could
+	// pass SessionAuth between session revoke and admin revoke.
+	if err := h.admins.Revoke(r.Context(), id); err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"revoked_admin_id": id,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}

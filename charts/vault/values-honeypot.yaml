@@ -1,0 +1,64 @@
+# values-honeypot.yaml — Honeypot profile for threat observation deployments.
+# Single replica, embedded frontend, trap user detection, webhook alerts.
+
+replicaCount: 1
+
+profile: honeypot
+
+listenAddr: ":8080"
+
+autoMigrate: true
+
+# Honeypot serves the embedded frontend to capture full interaction
+serveFrontend: true
+
+tls:
+  enabled: false
+
+database:
+  host: vault-postgres
+  port: "5432"
+  name: vault
+  sslmode: disable
+  maxConns: "10"
+
+cache:
+  backend: memory
+
+redis:
+  enabled: false
+
+postgres:
+  enabled: true
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Frontend is embedded in the Go binary (honeypot profile enables it)
+frontend:
+  enabled: false
+
+# Single replica — no HPA or PDB
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: true
+  postgresSelector:
+    app: vault-postgres

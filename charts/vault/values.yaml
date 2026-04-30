@@ -1,0 +1,481 @@
+# -- Number of Vault replicas
+replicaCount: 3
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/42-v/vault
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (default: Chart appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount
+  create: true
+  # -- Annotations for the ServiceAccount
+  annotations: {}
+  # -- ServiceAccount name (generated if not set)
+  name: ""
+  # -- Disable automounting the service account token
+  automountServiceAccountToken: false
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Vault profile: production | embedded | dev
+profile: production
+
+# -- Listen address
+listenAddr: ":8080"
+
+# -- Origin URL for CORS and issuer (required)
+origin: "https://auth.example.com"
+
+# -- Application display name
+appName: "The Vault"
+
+# -- Enable auto-migration at startup
+autoMigrate: true
+
+# -- Enable rate limiting
+rateLimitEnabled: true
+
+# -- Serve embedded Vue SPA from Go binary (VAULT_SERVE_FRONTEND)
+serveFrontend: false
+
+# ---- Metrics ----
+metrics:
+  # -- Enable Prometheus-compatible /metrics endpoint (VAULT_METRICS_ENABLED)
+  enabled: false
+  serviceMonitor:
+    # -- Deploy a Prometheus ServiceMonitor (requires prometheus-operator CRDs)
+    enabled: false
+    # -- Scrape interval
+    interval: 30s
+    # -- Scrape timeout (must be less than interval)
+    scrapeTimeout: 10s
+    # -- Extra labels to add to the ServiceMonitor (e.g. for Prometheus selector matching)
+    labels: {}
+    # -- Namespace selector — empty scrapes from the release namespace only
+    namespaceSelector: {}
+  prometheusRule:
+    # -- Deploy PrometheusRule with alerting rules (requires prometheus-operator CRDs)
+    enabled: false
+    # -- Extra labels to add to the PrometheusRule
+    labels: {}
+
+# ---- Key Rotation ----
+keyRotation:
+  # -- Enable database-backed key storage and rotation (VAULT_KEY_ROTATION_DB)
+  enabled: false
+  # -- How long retired keys remain in JWKS after rotation (VAULT_KEY_RETENTION_PERIOD)
+  retentionPeriod: "1h"
+  # -- How often pods refresh keys from the database (VAULT_KEY_REFRESH_INTERVAL)
+  refreshInterval: "60s"
+
+# -- Force Secure flag on cookies even without local TLS (VAULT_FORCE_SECURE_COOKIES)
+# Useful behind TLS-terminating proxies like Cloudflare Tunnel.
+forceSecureCookies: false
+
+# -- Trusted proxy CIDR ranges for X-Forwarded-For (TRUSTED_PROXIES)
+trustedProxies: ""
+
+# -- TLS fingerprint header from proxy (VAULT_TLS_FINGERPRINT_HEADER)
+# Requires a proxy that extracts JA4 during TLS handshake. Example: "X-TLS-Fingerprint"
+tlsFingerprintHeader: ""
+
+tls:
+  # -- Enable built-in TLS (typically false behind ingress)
+  enabled: false
+  # -- Path to TLS certificate file inside the container
+  certFile: ""
+  # -- Path to TLS key file inside the container
+  keyFile: ""
+  # -- Kubernetes Secret containing tls.crt and tls.key
+  secretName: ""
+
+# -- Password minimum length (NIST SP 800-63B Rev 4)
+passwordMinLength: 15
+
+# -- Enable HIBP breach check on password set
+hibpCheck: true
+
+# -- Email sender address
+emailFrom: "noreply@example.com"
+
+# ---- Blob Storage ----
+blob:
+  # -- Min single blob size in bytes (default: 512KB)
+  minSize: "524288"
+  # -- Max single blob size in bytes (default: 10MB)
+  maxSize: "10485760"
+  # -- Max number of blobs per user (default: 50)
+  maxPerUser: "50"
+  # -- Total storage quota per user in bytes (default: 10MB). Set to "0" to disable blob storage.
+  quotaBytes: "10485760"
+
+# ---- Seed ----
+# Declarative seeding of clients and users at startup. Data is stored in a
+# ConfigMap and mounted as /etc/vault/seed.json. Seeding is idempotent.
+seed:
+  # -- Enable declarative seeding from JSON
+  enabled: false
+  # -- Client definitions to seed
+  clients: []
+  # -- User definitions to seed
+  users: []
+
+# ---- Secrets ----
+# All secrets use _FILE convention — mount a Secret as a volume and reference file paths.
+secrets:
+  # -- Name of the existing Kubernetes Secret containing all credentials
+  existingSecret: ""
+  # -- Key mappings inside the Secret
+  keys:
+    masterKey: master-key
+    dbMigPassword: db-mig-password
+    dbAppPassword: db-app-password
+    hmacSecret: hmac-secret
+    adminToken: admin-token
+    redisPassword: redis-password
+    signingKey: signing-key
+    pepper: pepper
+  # -- Mount path for secret files
+  mountPath: /run/secrets
+
+# ---- Database ----
+database:
+  # -- PostgreSQL host
+  host: postgres
+  # -- PostgreSQL port
+  port: "5432"
+  # -- Database name
+  name: vault
+  # -- SSL mode (require | verify-full | disable)
+  sslmode: require
+  # -- Max connections
+  maxConns: "25"
+
+# ---- Cache ----
+cache:
+  # -- Cache backend: redis | memory | postgres
+  backend: redis
+
+# ---- Redis ----
+redis:
+  # -- Redis address (host:port)
+  addr: "redis:6379"
+  # -- Deploy an in-cluster Redis instance
+  enabled: false
+  image:
+    # -- Redis image repository
+    repository: redis
+    # -- Redis image tag
+    tag: "7-alpine"
+  # -- Redis maxmemory setting
+  maxMemory: "64mb"
+
+# ---- SMTP ----
+smtp:
+  # -- SMTP host
+  host: ""
+  # -- SMTP port
+  port: "587"
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port
+  port: 8080
+  # -- NodePort (only when type=NodePort)
+  nodePort: ""
+
+ingress:
+  # -- Enable ingress
+  enabled: false
+  # -- Ingress class name
+  className: ""
+  # -- Ingress annotations
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  # -- Ingress hosts
+  hosts:
+    - host: auth.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  tls: []
+  #  - secretName: vault-tls
+  #    hosts:
+  #      - auth.example.com
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# -- Liveness probe configuration
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# -- Readiness probe configuration
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+autoscaling:
+  # -- Enable HPA
+  enabled: false
+  # -- Minimum replicas
+  minReplicas: 3
+  # -- Maximum replicas
+  maxReplicas: 10
+  # -- Target CPU utilization percentage (argon2id is CPU+memory bound; scale early)
+  targetCPUUtilizationPercentage: 60
+  # -- Target memory utilization percentage (argon2id allocates ~46 MiB per op)
+  targetMemoryUtilizationPercentage: 70
+
+# -- Pod disruption budget
+podDisruptionBudget:
+  # -- Enable PDB
+  enabled: true
+  # -- Minimum available pods
+  minAvailable: 2
+
+networkPolicy:
+  # -- Enable network policies
+  enabled: true
+  # -- Postgres pod selector label
+  postgresSelector:
+    app: postgres
+  # -- Redis pod selector label
+  redisSelector:
+    app: redis
+  # -- SMTP destination selector (empty = allow external). For production,
+  # restrict to specific SMTP server IPs via ipBlock CIDR.
+  smtpCIDR: ""
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# ---- Frontend ----
+frontend:
+  # -- Deploy the Vue frontend
+  enabled: false
+  image:
+    # -- Frontend image repository
+    repository: vault-frontend
+    # -- Frontend image tag
+    tag: latest
+    # -- Frontend image pull policy
+    pullPolicy: IfNotPresent
+  # -- Number of frontend replicas
+  replicaCount: 1
+  # -- Frontend resource requests/limits
+  resources: {}
+
+# ---- PostgreSQL (dev/embedded only) ----
+postgres:
+  # -- Deploy an in-cluster PostgreSQL instance
+  enabled: false
+  image:
+    # -- PostgreSQL image repository
+    repository: postgres
+    # -- PostgreSQL image tag
+    tag: "17-alpine"
+  # -- PVC storage size
+  storage: 1Gi
+  # -- Password for the vault_app role (set via init SQL)
+  appPassword: ""
+
+# ---- Mailpit (dev only) ----
+mailpit:
+  # -- Deploy Mailpit for local email testing
+  enabled: false
+  image:
+    # -- Mailpit image repository
+    repository: axllent/mailpit
+    # -- Mailpit image tag
+    tag: latest
+  ingress:
+    # -- Expose Mailpit web UI via ingress
+    enabled: false
+    # -- Ingress class name
+    className: ""
+    # -- Hostname for Mailpit web UI
+    host: "mail.localhost"
+
+# ---- Honeypot Bridge ----
+# Transparent reverse proxy that routes attackers to a honeypot Vault instance.
+bridge:
+  # -- Enable the honeypot bridge deployment mode
+  enabled: false
+  image:
+    # -- Bridge image repository
+    repository: ghcr.io/42-v/vault-bridge
+    # -- Bridge image tag (default: Chart appVersion)
+    tag: ""
+    # -- Bridge image pull policy
+    pullPolicy: IfNotPresent
+  # -- Bridge listen address
+  listenAddr: ":8080"
+  # -- Requests per window before scoring
+  rateThreshold: 60
+  # -- Login failures before scoring
+  loginFailThreshold: 5
+  # -- How long an IP stays flagged
+  flagTTL: "24h"
+  # -- Score threshold to trigger flag
+  flagThreshold: 100
+  # -- Optional webhook URL for flag events
+  webhookURL: ""
+  # -- Key in secrets for bridge admin token
+  adminTokenKey: "bridge-admin-token"
+  # -- CIDR list for proxy IP detection
+  trustedProxies: ""
+  # -- Header from proxy (e.g. CF-Connecting-IP)
+  realIPHeader: ""
+  # -- Log level (info, debug)
+  logLevel: "info"
+  redis:
+    # -- Enable Redis for persistent bridge flags
+    enabled: false
+    # -- Redis address for bridge flag persistence
+    addr: ""
+  # -- Bridge resource requests/limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+# ---- Honeypot Instance (bridge mode only) ----
+honeypotInstance:
+  database:
+    # -- Honeypot database name (separate from real)
+    name: vault_honeypot
+  # -- Honeypot vault resource requests/limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  postgres:
+    # -- Honeypot PostgreSQL PVC storage size
+    storage: 1Gi
+
+# ---- Admin Gateway ----
+# Local-only mTLS admin gateway with RBAC for operator access.
+adminGateway:
+  # -- Enable the admin gateway deployment
+  enabled: false
+  image:
+    # -- Admin gateway image repository
+    repository: ghcr.io/42-v/vault-admin-gateway
+    # -- Admin gateway image tag (default: Chart appVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+  # -- Use host network (binds to node loopback for production local-only access)
+  hostNetwork: true
+  # -- Listen address (127.0.0.1 for prod, 0.0.0.0 for dev behind ingress)
+  listenAddr: "127.0.0.1:9443"
+  # -- Session token TTL
+  sessionTTL: "1h"
+  # -- Max failed login attempts before lockout
+  maxFailedLogins: 5
+  # -- Lockout duration after exceeding max failed logins
+  lockoutDuration: "30m"
+  # -- Enable auto-migration (create admin tables on first boot)
+  autoMigrate: true
+  # -- Key in secrets for admin DB password
+  dbAdminPasswordKey: "db-admin-password"
+  # -- TLS certificate for the admin gateway mTLS server
+  tls:
+    # -- Name of the Kubernetes Secret containing server cert, key, and client CA
+    secretName: ""
+    # -- Key in the Secret for the server certificate
+    certKey: "tls.crt"
+    # -- Key in the Secret for the server private key
+    keyKey: "tls.key"
+    # -- Key in the Secret for the client CA certificate
+    clientCAKey: "ca.crt"
+  # -- Admin gateway ingress (only used when hostNetwork is false)
+  ingress:
+    # -- Enable ingress for admin gateway
+    enabled: false
+    # -- Ingress class name
+    className: ""
+    # -- Host for the admin gateway ingress
+    host: ""
+  # -- Admin gateway resource requests/limits
+  # Memory must accommodate Argon2id hashing (46 MiB per operation) + Go runtime
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ---- Cloudflare Tunnel ----
+cloudflared:
+  # -- Deploy cloudflared tunnel sidecar
+  enabled: false
+  image:
+    # -- cloudflared image repository
+    repository: cloudflare/cloudflared
+    # -- cloudflared image tag
+    tag: latest
+  # -- Tunnel token from `cloudflared tunnel token <name>`
+  tunnelToken: ""
+  # -- Use an existing Kubernetes Secret for tunnel token
+  existingSecret: ""
+  # -- Key within the Secret containing the tunnel token
+  secretKey: "tunnel-token"

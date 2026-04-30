@@ -1,0 +1,62 @@
+# values-embedded.yaml — Embedded profile for RPi5 / MicroK8s / Ubuntu Core.
+# Single replica, in-memory cache, minimal resources, embedded frontend in binary.
+
+replicaCount: 1
+
+profile: embedded
+
+listenAddr: ":8080"
+
+autoMigrate: true
+
+tls:
+  enabled: false
+
+database:
+  host: vault-postgres
+  port: "5432"
+  name: vault
+  sslmode: disable
+  maxConns: "5"
+
+cache:
+  backend: memory
+
+redis:
+  enabled: false
+
+postgres:
+  enabled: true
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Frontend is embedded in the Go binary — no separate container needed
+frontend:
+  enabled: false
+
+# Single replica — no HPA or PDB
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+# Minimal network policy
+networkPolicy:
+  enabled: true
+  postgresSelector:
+    app: vault-postgres

@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e1e2e;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2e2e3e;
+  }
+
+  ::selection {
+    background: rgba(0, 255, 66, 0.2);
+  }
+}
+
+@layer components {
+  /* Shared card style */
+  .vault42-card {
+    @apply bg-vault42-surface border border-vault42-border rounded-xl p-6;
+  }
+
+  /* Primary button */
+  .vault42-btn {
+    @apply px-4 py-2.5 bg-vault42-primary text-white font-medium rounded-lg
+           hover:bg-vault42-accent transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-vault42-primary/50;
+  }
+
+  .vault42-btn-outline {
+    @apply px-4 py-2.5 border border-vault42-border text-vault42-text font-medium rounded-lg
+           hover:border-vault42-primary hover:text-vault42-primary transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-vault42-primary/50;
+  }
+
+  /* Aliases for semantic naming */
+  .vault42-btn-primary {
+    @apply vault42-btn;
+  }
+
+  .vault42-btn-secondary {
+    @apply vault42-btn-outline;
+  }
+
+  .vault42-btn-danger {
+    @apply px-4 py-2.5 bg-vault42-error/10 text-vault42-error font-medium rounded-lg
+           hover:bg-vault42-error/20 transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-vault42-error/50;
+  }
+
+  .vault42-btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
+  /* Input */
+  .vault42-input {
+    @apply w-full px-3 py-2.5 bg-vault42-bg border border-vault42-border rounded-lg
+           text-vault42-text placeholder-vault42-muted/50
+           focus:outline-none focus:border-vault42-primary focus:ring-1 focus:ring-vault42-primary/50
+           transition-colors duration-200;
+  }
+
+  .vault42-label {
+    @apply block text-sm font-medium text-vault42-muted mb-1.5;
+  }
+
+  /* Alert banners */
+  .vault42-alert-success {
+    @apply p-4 bg-vault42-success/10 border border-vault42-success/20 rounded-lg text-vault42-success text-sm;
+  }
+  .vault42-alert-error {
+    @apply p-4 bg-vault42-error/10 border border-vault42-error/20 rounded-lg text-vault42-error text-sm;
+  }
+  .vault42-alert-info {
+    @apply p-4 bg-vault42-primary/10 border border-vault42-primary/20 rounded-lg text-vault42-accent text-sm;
+  }
+
+  /* Badge */
+  .vault42-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .vault42-badge-success {
+    @apply vault42-badge bg-vault42-success/15 text-vault42-success;
+  }
+  .vault42-badge-error {
+    @apply vault42-badge bg-vault42-error/15 text-vault42-error;
+  }
+  .vault42-badge-muted {
+    @apply vault42-badge bg-vault42-border text-vault42-muted;
+  }
+
+  /* Modal overlay & container */
+  .vault42-modal-overlay {
+    @apply fixed inset-0 z-50 flex items-center justify-center;
+    background: rgba(0, 0, 0, 0.7);
+  }
+
+  .vault42-modal {
+    @apply bg-vault42-surface border border-vault42-border rounded-xl p-6
+           max-w-md w-full mx-4 shadow-lg;
+  }
+
+  /* Small spinner variant */
+  .vault42-spinner-sm {
+    @apply w-4 h-4;
+  }
+}
+
+@layer utilities {
+}
+
+/* Vault42 form styling (applies to @vault42/vue unstyled components) */
+.vault42-login-form,
+.vault42-register-form {
+  @apply w-full;
+}
+
+.vault42-login-form h2,
+.vault42-register-form h2 {
+  @apply text-2xl font-bold mb-6 text-center;
+}
+
+.vault42-login-form__field,
+.vault42-register-form__field {
+  @apply mb-4;
+}
+
+.vault42-login-form__field label,
+.vault42-register-form__field label {
+  @apply vault42-label;
+}
+
+.vault42-login-form__field input[type="email"],
+.vault42-login-form__field input[type="password"],
+.vault42-login-form__field input[type="text"],
+.vault42-register-form__field input[type="email"],
+.vault42-register-form__field input[type="password"],
+.vault42-register-form__field input[type="text"] {
+  @apply vault42-input;
+}
+
+.vault42-login-form__field--checkbox label {
+  @apply flex items-center gap-2.5 text-sm text-vault42-muted cursor-pointer select-none;
+}
+
+.vault42-login-form__field--checkbox input[type="checkbox"] {
+  @apply w-4 h-4 rounded border-vault42-border bg-vault42-bg text-vault42-primary
+         focus:ring-vault42-primary/50 focus:ring-offset-0;
+}
+
+.vault42-login-form button[type="submit"],
+.vault42-register-form button[type="submit"] {
+  @apply vault42-btn w-full mt-2;
+}
+
+.vault42-login-form__error,
+.vault42-register-form__error {
+  @apply vault42-alert-error mb-4;
+}
+
+.vault42-register-form__hint--error {
+  @apply text-vault42-error text-xs mt-1;
+}
+
+.vault42-login-form__register-link {
+  @apply text-center mt-6 text-sm text-vault42-muted;
+}
+
+.vault42-login-form__register-link a {
+  @apply text-vault42-primary hover:text-vault42-accent transition-colors;
+}
+
+/* Token debug panel */
+.vault42-token-debug {
+  @apply vault42-card text-sm font-mono;
+}
+
+.vault42-token-debug h3 {
+  @apply text-lg font-bold mb-3;
+}
+
+.vault42-token-debug__section {
+  @apply mb-3;
+}
+
+.vault42-token-debug__section strong {
+  @apply block text-vault42-muted text-xs uppercase tracking-wider mb-1 font-sans;
+}
+
+.vault42-token-debug__section code,
+.vault42-token-debug__section pre {
+  @apply block bg-vault42-bg p-2.5 rounded-lg text-xs overflow-x-auto whitespace-pre-wrap break-all;
+}
+
+.vault42-token-debug--expired {
+  @apply text-vault42-error font-bold;
+}
+
+/* Loading spinner */
+@keyframes vault42-spin {
+  to { transform: rotate(360deg); }
+}
+.vault42-spinner {
+  @apply inline-block w-5 h-5 border-2 border-vault42-border border-t-vault42-primary rounded-full;
+  animation: vault42-spin 0.6s linear infinite;
+}
+.vault42-spinner-lg {
+  @apply w-8 h-8;
+}
+
+/* Pulse glow for active indicators */
+@keyframes vault42-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.vault42-pulse {
+  animation: vault42-pulse 2s ease-in-out infinite;
+}

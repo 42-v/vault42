@@ -1,0 +1,39 @@
+# Vault Admin Gateway — multi-stage build
+# Local-only mTLS binary for RBAC-protected admin operations.
+#
+# Pin the builder to $BUILDPLATFORM so `go mod download` runs natively
+# (not under QEMU, which crashes 5.x and earlier on the alpine
+# musl/Go networking path); cross-compile to $TARGETARCH instead.
+
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:80fbb8f9b2fa541a7d34378f1ad10f4f1c433817c4ed39ddb3e2f3ec3e961271 AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=gobuild-${TARGETARCH},target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+        -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
+        -o /vault-admin-gateway ./cmd/admin-gateway
+
+# Runtime image — minimal, distroless
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:5074667eecabac8ac5c5d395100a153a7b4e8426181cca36181cd019530f00c8
+
+WORKDIR /app
+COPY --from=builder /vault-admin-gateway /app/vault-admin-gateway
+COPY --from=builder /src/migrations /app/migrations
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/app/vault-admin-gateway"]

@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit + handler + middleware + service tests
+        run: go test ./internal/... -count=1 -race -v -coverprofile=coverage.out 2>&1 | tee test-output.txt
+
+      - name: Attack tests
+        run: go test ./tests/attack/... -count=1 -v -timeout 300s 2>&1 | tee -a test-output.txt
+
+      - name: Compliance tests
+        run: go test ./tests/compliance/... -count=1 -v 2>&1 | tee -a test-output.txt
+
+      - name: E2E tests (skipped if no server)
+        run: go test ./tests/e2e/... -count=1 -v 2>&1 | tee -a test-output.txt
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+      - name: Upload test output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-output
+          path: test-output.txt
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @vault/vue
+        run: pnpm -C packages/vue build
+
+      - name: Build web frontend
+        run: pnpm -C web build
+
+      - name: Test @vault/vue
+        run: pnpm -C packages/vue test
+
+      - name: Test web
+        run: pnpm -C web test
+
+  changes:
+    name: Detect Go changes
+    runs-on: ubuntu-latest
+    outputs:
+      go_changed: ${{ steps.filter.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+
+  fuzz:
+    name: Fuzz Tests
+    runs-on: ubuntu-latest
+    needs: [test, changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Fuzz JWT parser
+        run: go test -fuzz=FuzzParseToken -fuzztime=1m ./tests/fuzz/...
+      - name: Fuzz Argon2
+        run: go test -fuzz=FuzzArgon2Verify -fuzztime=1m ./tests/fuzz/...
+      - name: Fuzz TOTP
+        run: go test -fuzz=FuzzValidateTOTP -fuzztime=1m ./tests/fuzz/...
+      - name: Fuzz email
+        run: go test -fuzz=FuzzEmailValidation -fuzztime=1m ./tests/fuzz/...
+      - name: Fuzz DPoP
+        run: go test -fuzz=FuzzDPoPProof -fuzztime=1m ./tests/fuzz/...
+
+  build-binaries:
+    name: Build All Binaries
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build vault
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/vault
+
+      - name: Build bridge
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/bridge
+
+      - name: Build admin-gateway
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/admin-gateway
+
+  lint:
+    name: Hadolint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile:
+          - Dockerfile
+          - Dockerfile.bridge
+          - Dockerfile.admin-gateway
+          - Dockerfile.goreleaser
+          - Dockerfile.goreleaser.bridge
+          - Dockerfile.goreleaser.admin-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}

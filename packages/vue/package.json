@@ -1,0 +1,51 @@
+{
+  "name": "@vault42/vue",
+  "version": "0.1.0",
+  "description": "Vue 3 composables and i18n plugin for Vault42 authentication service",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/42-v/vault42.git",
+    "directory": "packages/vue"
+  },
+  "homepage": "https://github.com/42-v/vault42",
+  "main": "./dist/vault42-vue.umd.cjs",
+  "module": "./dist/vault42-vue.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/vault42-vue.js",
+      "require": "./dist/vault42-vue.umd.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^20.8.9",
+    "typescript": "^5.7.0",
+    "vite": "^6.4.2",
+    "vite-plugin-dts": "^4.3.0",
+    "vitest": "^4.0.18",
+    "vue": "^3.5.0",
+    "vue-tsc": "^2.2.0"
+  }
+}

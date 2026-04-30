@@ -1,0 +1,68 @@
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "vault.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: vault.rules
+      rules:
+        # Argon2 semaphore full — all hashing slots occupied, new requests will be rejected
+        - alert: VaultArgon2SemaphoreSaturated
+          expr: vault_argon2_active == vault_argon2_max
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Vault argon2 semaphore saturated"
+            description: "All {{ "{{ $value }}" }} argon2id slots are occupied for >1m. New auth requests receive 503."
+
+        # Argon2 rejections — users are being turned away
+        - alert: VaultArgon2Rejections
+          expr: rate(vault_argon2_rejected_total[5m]) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Vault rejecting auth requests (argon2 overload)"
+            description: "Argon2id semaphore rejections detected ({{ "{{ $value | humanize }}" }}/s). Scale up replicas or increase semaphore capacity."
+
+        # High login failure rate — possible brute-force or credential stuffing
+        - alert: VaultHighLoginFailureRate
+          expr: >
+            rate(vault_login_failed_total[5m])
+            / (rate(vault_login_attempts_total[5m]) > 0)
+            > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Vault login failure rate >80%"
+            description: "{{ "{{ $value | humanizePercentage }}" }} of login attempts are failing over 5m. Possible brute-force or misconfigured client."
+
+        # Pod down — no Vault instances responding
+        - alert: VaultDown
+          expr: up{job=~".*vault.*"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Vault instance down"
+            description: "Vault target {{ "{{ $labels.instance }}" }} has been unreachable for >1m."
+
+        # No tokens issued — service might be broken
+        - alert: VaultNoTokensIssued
+          expr: rate(vault_tokens_issued_total[15m]) == 0 and rate(vault_login_attempts_total[15m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Vault not issuing tokens despite login attempts"
+            description: "Login attempts are occurring but no tokens have been issued in 15m. Check service health."
+{{- end }}

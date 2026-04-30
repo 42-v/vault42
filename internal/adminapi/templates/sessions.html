@@ -1,0 +1,20 @@
+{{define "page-content"}}
+<h1>Admin Sessions</h1>
+<div class="toolbar">
+    <button class="btn btn-danger" data-action="revoke-all-sessions" aria-label="Revoke all admin sessions">Revoke All</button>
+    <button class="btn" data-action="refresh-sessions" aria-label="Refresh session list">Refresh</button>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="id">ID</th>
+            <th data-sort="admin_id">Admin</th>
+            <th data-sort="ip">IP</th>
+            <th data-sort="created_at">Created</th>
+            <th>Expires</th>
+        </tr></thead>
+        <tbody id="sessionsBody"><tr><td colspan="5">Loading...</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

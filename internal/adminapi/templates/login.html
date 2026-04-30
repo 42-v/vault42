@@ -1,0 +1,24 @@
+{{define "page-content"}}
+<div class="login-container">
+    <div class="login-box">
+        <div class="login-logo">VAULT<span class="accent">ADMIN</span></div>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required autocomplete="current-password">
+            </div>
+            <div class="form-group" id="totpGroup">
+                <label for="totp_code">TOTP Code (if configured)</label>
+                <input type="text" id="totp_code" name="totp_code" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" inputmode="numeric" placeholder="6-digit code">
+            </div>
+            <div id="loginError" class="error-msg" style="display:none"></div>
+            <button type="submit" class="btn btn-primary btn-full">Sign In</button>
+        </form>
+    </div>
+</div>
+{{end}}
+{{template "layout" .}}

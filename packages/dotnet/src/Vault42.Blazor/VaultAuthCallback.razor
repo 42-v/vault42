@@ -1,0 +1,79 @@
+@using Microsoft.AspNetCore.Components
+@inject VaultAuthService AuthService
+@inject NavigationManager Navigation
+
+@if (_processing)
+{
+    @if (Loading is not null)
+    {
+        @Loading
+    }
+    else
+    {
+        <p>Completing authentication...</p>
+    }
+}
+else if (_error)
+{
+    @if (Error is not null)
+    {
+        @Error
+    }
+    else
+    {
+        <p>Authentication failed.</p>
+    }
+}
+
+@code {
+    /// <summary>
+    /// URI to navigate to after successful authentication.
+    /// Default: "/" (application root).
+    /// </summary>
+    [Parameter] public string RedirectTo { get; set; } = "/";
+
+    /// <summary>
+    /// Optional loading content to display while processing the callback.
+    /// </summary>
+    [Parameter] public RenderFragment? Loading { get; set; }
+
+    /// <summary>
+    /// Optional error content to display when authentication fails.
+    /// </summary>
+    [Parameter] public RenderFragment? Error { get; set; }
+
+    /// <summary>
+    /// Callback invoked when authentication succeeds.
+    /// </summary>
+    [Parameter] public EventCallback OnSuccess { get; set; }
+
+    /// <summary>
+    /// Callback invoked when authentication fails.
+    /// </summary>
+    [Parameter] public EventCallback<string> OnError { get; set; }
+
+    private bool _processing = true;
+    private bool _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var currentUri = Navigation.Uri;
+        var success = await AuthService.HandleCallbackAsync(currentUri);
+
+        _processing = false;
+
+        if (success)
+        {
+            if (OnSuccess.HasDelegate)
+                await OnSuccess.InvokeAsync();
+
+            Navigation.NavigateTo(RedirectTo);
+        }
+        else
+        {
+            _error = true;
+            if (OnError.HasDelegate)
+                await OnError.InvokeAsync("Authentication failed");
+        }
+    }
+}

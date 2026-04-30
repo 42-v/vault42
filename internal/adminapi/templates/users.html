@@ -1,0 +1,24 @@
+{{define "page-content"}}
+<h1>Users</h1>
+<div class="toolbar">
+    <label for="userSearch" class="sr-only">Search by email or UUID</label>
+    <input type="text" id="userSearch" placeholder="Search by email or UUID..." class="search-input">
+    <button class="btn" data-action="search-user" aria-label="Search users">Search</button>
+    <span id="userResultCount" class="result-count"></span>
+</div>
+<div class="table-container">
+    <table>
+        <thead><tr>
+            <th data-sort="id">ID</th>
+            <th data-sort="email">Email</th>
+            <th data-sort="email_verified">Verified</th>
+            <th>MFA</th>
+            <th data-sort="locked">Locked</th>
+            <th data-sort="created_at">Created</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody id="usersBody"><tr><td colspan="7" class="empty-state">Search by email or UUID</td></tr></tbody>
+    </table>
+</div>
+{{end}}
+{{template "layout" .}}

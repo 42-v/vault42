@@ -1,0 +1,192 @@
+name: Release
+
+# Releases are commit-message-driven. The head commit of each push to
+# main is inspected; if its first line begins with a semantic version
+# (e.g. `0.4.2 …` or `v0.4.2 …`, optionally with a `-prerelease`
+# suffix), every artifact is built and published at that version.
+# Pushes whose head commit does not start with a version are no-ops.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write # cosign keyless signing
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.parse.outputs.tag }}
+    steps:
+      - id: parse
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -eu
+          first=$(printf '%s' "$COMMIT_MESSAGE" | head -n1 | sed -E 's/^[[:space:]]+//')
+          if version=$(printf '%s' "$first" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' | head -n1); then
+            version=${version#v}
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "tag=v$version"   >> "$GITHUB_OUTPUT"
+            echo "Detected release version: $version"
+          else
+            echo "Head commit does not start with a version; skipping release."
+          fi
+
+  images:
+    name: Build & push images (${{ needs.detect.outputs.version }})
+    needs: detect
+    if: needs.detect.outputs.version != ''
+    runs-on: ubuntu-latest
+    outputs:
+      vault_digest: ${{ steps.build_vault.outputs.digest }}
+      admin_digest: ${{ steps.build_admin.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push vault42
+        id: build_vault
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
+            ghcr.io/42-v/vault42:latest
+            ghcr.io/42-v/vault42:sha-${{ github.sha }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Build and push admin-gateway
+        id: build_admin
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.admin-gateway
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
+            ghcr.io/42-v/vault42-admin-gateway:latest
+            ghcr.io/42-v/vault42-admin-gateway:sha-${{ github.sha }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign images (keyless)
+        env:
+          VAULT_DIGEST: ${{ steps.build_vault.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.build_admin.outputs.digest }}
+        run: |
+          cosign sign --yes ghcr.io/42-v/vault42@${VAULT_DIGEST}
+          cosign sign --yes ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}
+
+  nuget:
+    name: NuGet (${{ needs.detect.outputs.version }})
+    needs: detect
+    if: needs.detect.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: preview
+
+      - name: Pack
+        run: |
+          dotnet pack packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj \
+            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+          dotnet pack packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj \
+            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+
+      - name: Authenticate to NuGet (trusted publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: 42-vault
+
+      - name: Push to nuget.org
+        run: |
+          dotnet nuget push "nupkgs/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --skip-duplicate
+
+  github-release:
+    name: GitHub release & tag
+    needs: [detect, images, nuget]
+    if: needs.detect.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag commit
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                ref:   `refs/tags/${{ needs.detect.outputs.tag }}`,
+                sha:   context.sha,
+              })
+            } catch (e) {
+              if (e.status === 422) {
+                core.info('Tag already exists, continuing')
+              } else {
+                throw e
+              }
+            }
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name:    ${{ needs.detect.outputs.tag }}
+          name:        Vault42 ${{ needs.detect.outputs.version }}
+          prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
+          generate_release_notes: true
+          body: |
+            **Commit:** ${{ github.sha }}
+
+            ```
+            docker pull ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
+            docker pull ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
+            ```
