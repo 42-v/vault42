@@ -856,7 +856,7 @@ func (s *AuthService) isIPLocked(ctx context.Context, ip string) bool {
 			window := time.Now().Truncate(lockoutDuration)
 			count, err := s.rateLimits.Get(ctx, "lockout_ip:"+ip, window)
 			if err != nil {
-				log.Printf("auth: IP lockout DB fallback failed for %s: %v", httputil.SafeLogValue(ip), err)
+				log.Printf("auth: IP lockout DB fallback failed for %s: %v", httputil.ObfuscatedIP(ip), err)
 				return false
 			}
 			return count >= ipLockoutThreshold
@@ -884,11 +884,11 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 		if s.rateLimits != nil {
 			window := time.Now().Truncate(lockoutDuration)
 			if _, err := s.rateLimits.Increment(ctx, "lockout_ip:"+ip, window); err != nil {
-				log.Printf("auth: IP lockout DB fallback increment failed for %s: %v", httputil.SafeLogValue(ip), err)
+				log.Printf("auth: IP lockout DB fallback increment failed for %s: %v", httputil.ObfuscatedIP(ip), err)
 			}
 			return
 		}
-		log.Printf("auth: WARNING: IP lockout unavailable (cache nil), brute-force protection degraded for IP %s", httputil.SafeLogValue(ip))
+		log.Printf("auth: WARNING: IP lockout unavailable (cache nil), brute-force protection degraded for IP %s", httputil.ObfuscatedIP(ip))
 		return
 	}
 	key := "lockout_ip:" + ip
