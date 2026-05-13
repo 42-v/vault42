@@ -50,7 +50,7 @@ jobs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
       admin_digest: ${{ steps.build_admin.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -120,9 +120,9 @@ jobs:
     if: needs.detect.outputs.version != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: |
             8.0.x
@@ -138,7 +138,7 @@ jobs:
 
       - name: Authenticate to NuGet (trusted publishing)
         id: nuget-login
-        uses: NuGet/login@v1
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
         with:
           user: 42-vault
 
@@ -155,7 +155,7 @@ jobs:
     if: needs.detect.outputs.version != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Tag commit
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7

@@ -1,0 +1,14 @@
+# Codeowners for vault42.
+# Owners listed here are auto-requested for review on PRs touching the path.
+# Pairs with "Require review from Code Owners" in branch protection to enforce.
+
+* @42-v
+
+/.github/                @42-v
+/Dockerfile*             @42-v
+/charts/                 @42-v
+/migrations/             @42-v
+/internal/jwt/           @42-v
+/internal/auth/          @42-v
+/internal/crypto/        @42-v
+/cmd/                    @42-v
