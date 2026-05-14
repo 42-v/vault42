@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
+Generated: 2026-05-14 | Tests: 1968 | Total: 69.42% statement coverage
 
 ## Package Summary
 
@@ -22,9 +22,9 @@ Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
 | `internal/seed` | 85.38% |
 | `internal/config` | 83.02% |
 | `internal/audit` | 82.76% |
+| `internal/handler` | 82.40% |
 | `internal/redis` | 79.59% |
-| `internal/handler` | 75.04% |
-| `internal/service` | 72.46% |
+| `internal/service` | 75.26% |
 | `internal/cli` | 63.56% |
 | `internal/adminapi` | 62.98% |
 | `internal/server` | 60.00% |
@@ -55,8 +55,6 @@ Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
 | `runSeed` | internal/cli/cli.go:350 |
 | `cleanupAudit` | internal/cli/cli.go:372 |
 | `exportAudit` | internal/cli/cli.go:397 |
-| `DownloadNamed` | internal/handler/blob.go:182 |
-| `DeleteNamed` | internal/handler/blob.go:223 |
 | `Import` | internal/keystore/keystore.go:105 |
 | `Rotate` | internal/keystore/keystore.go:170 |
 | `Revoke` | internal/keystore/keystore.go:180 |
@@ -192,10 +190,6 @@ Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
 | `RevokeAllTokensForUser` | internal/service/auth.go:643 |
 | `CompleteMFALogin` | internal/service/auth.go:650 |
 | `sendEmailOTP` | internal/service/auth.go:715 |
-| `refHash` | internal/service/blob.go:55 |
-| `UploadNamed` | internal/service/blob.go:66 |
-| `DownloadNamed` | internal/service/blob.go:176 |
-| `DeleteNamed` | internal/service/blob.go:280 |
 
 ## Low Coverage (1-74%)
 
@@ -237,8 +231,8 @@ Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
 | `acquireArgon2` | internal/crypto/argon2.go:53 | 70.0% |
 | `init` | internal/crypto/argon2.go:97 | 60.0% |
 | `safeFuncMap` | internal/email/templates.go:78 | 57.1% |
-| `ConfirmPassword` | internal/handler/auth.go:207 | 10.8% |
-| `UploadNamed` | internal/handler/blob.go:122 | 13.8% |
+| `ConfirmPassword` | internal/handler/auth.go:207 | 32.4% |
+| `DownloadNamed` | internal/handler/blob.go:182 | 54.2% |
 | `writeUploadError` | internal/handler/blob.go:351 | 60.0% |
 | `Capabilities` | internal/handler/capabilities.go:14 | 60.0% |
 | `Verify` | internal/handler/email_otp.go:24 | 57.1% |
@@ -246,11 +240,8 @@ Generated: 2026-05-14 | Tests: 1940 | Total: 67.69% statement coverage
 | `completeMFAIfChallenge` | internal/handler/mfa_helper.go:16 | 11.1% |
 | `Authorize` | internal/handler/oauth.go:68 | 73.1% |
 | `NewPasswordHandler` | internal/handler/password.go:55 | 50.0% |
-| `Disable` | internal/handler/totp.go:159 | 33.3% |
-| `UpdateProfile` | internal/handler/user.go:65 | 14.3% |
+| `UpdateProfile` | internal/handler/user.go:65 | 42.9% |
 | `VerifyFinish` | internal/handler/webauthn.go:197 | 65.1% |
-| `ListCredentials` | internal/handler/webauthn.go:272 | 33.3% |
-| `DeleteCredential` | internal/handler/webauthn.go:299 | 16.7% |
 | `Alert` | internal/honeypot/honeypot.go:75 | 72.7% |
 | `DPoP` | internal/middleware/dpop.go:18 | 56.5% |
 | `MaxBodyWithExemptions` | internal/middleware/maxbody.go:18 | 72.7% |

@@ -27,7 +27,10 @@ else
   # tests/compliance and tests/e2e need a live Postgres and are skipped
   # here; coverage.sh runs purely in-process.
   echo "Running tests with coverage (cross-pkg, ryuk disabled)..."
-  go test -v -coverprofile="$COVER_FILE" -coverpkg=./internal/... \
+  # -count=1 disables Go's test cache. Without it, cached tests are skipped
+  # but produce no coverage on rerun, so a second invocation reports lower
+  # coverage than the first — making the number non-deterministic.
+  go test -v -count=1 -coverprofile="$COVER_FILE" -coverpkg=./internal/... \
       ./internal/... ./tests/unit/... ./tests/attack/... ./tests/fuzz/... \
       > "$TEST_OUT" 2>&1 || true
 fi
