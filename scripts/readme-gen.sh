@@ -23,14 +23,40 @@ if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
   cp "$COVERAGE_FILE" "$COVER_FILE"
 else
   echo "Running tests..."
-  go test -v -count=1 -coverprofile="$COVER_FILE" ./internal/... > "$TEST_OUT" 2>&1 || true
-  go test -v -count=1 ./tests/... >> "$TEST_OUT" 2>&1 || true
+  # -coverpkg=./internal/... attributes tests/unit/* coverage back to the
+  # internal packages they exercise. Without it the badge undercounts by ~8pp
+  # because handler/service tests live under tests/unit/ and their coverage
+  # contributions get filtered out. Mirrors scripts/coverage.sh.
+  export TESTCONTAINERS_RYUK_DISABLED=true
+  go test -v -count=1 -coverprofile="$COVER_FILE" -coverpkg=./internal/... \
+      ./internal/... ./tests/unit/... ./tests/attack/... ./tests/fuzz/... \
+      > "$TEST_OUT" 2>&1 || true
 fi
 
 PASSED=$(grep -c '^--- PASS' "$TEST_OUT" || true)
 FAILED=$(grep -c '^--- FAIL' "$TEST_OUT" || true)
 PKGS=$(grep -c '^ok\s' "$TEST_OUT" || true)
-TOTAL_COV=$(go tool cover -func="$COVER_FILE" 2>/dev/null | tail -1 | awk '{print $NF}' || echo "0%")
+# Two-decimal coverage from the raw profile — `go tool cover -func` rounds to
+# one decimal which loses the bullseye targets (e.g. 69.42 vs 69.4).
+TOTAL_COV=$(python3 - "$COVER_FILE" <<'PY'
+import sys
+seen = {}
+with open(sys.argv[1]) as fh:
+    next(fh)
+    for line in fh:
+        p = line.split()
+        if len(p) < 3:
+            continue
+        k, s, c = p[0], int(p[1]), int(p[2])
+        seen[k] = (s, seen.get(k, (s, False))[1] or c > 0)
+total = sum(s for s, _ in seen.values())
+if total == 0:
+    print("0.0%")
+else:
+    covered = sum(s for s, c in seen.values() if c)
+    print(f"{100.0 * covered / total:.2f}%")
+PY
+)
 
 # ═══════════════════════════════════════════════════════════════
 # 2. Code metrics (no tests needed — fast)
