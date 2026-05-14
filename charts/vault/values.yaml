@@ -3,7 +3,7 @@ replicaCount: 3
 
 image:
   # -- Container image repository
-  repository: ghcr.io/42-v/vault
+  repository: ghcr.io/42-v/vault42
   # -- Image pull policy
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default: Chart appVersion)
@@ -354,7 +354,7 @@ bridge:
   enabled: false
   image:
     # -- Bridge image repository
-    repository: ghcr.io/42-v/vault-bridge
+    repository: ghcr.io/42-v/vault42-bridge
     # -- Bridge image tag (default: Chart appVersion)
     tag: ""
     # -- Bridge image pull policy
@@ -417,7 +417,7 @@ adminGateway:
   enabled: false
   image:
     # -- Admin gateway image repository
-    repository: ghcr.io/42-v/vault-admin-gateway
+    repository: ghcr.io/42-v/vault42-admin-gateway
     # -- Admin gateway image tag (default: Chart appVersion)
     tag: ""
     # -- Image pull policy

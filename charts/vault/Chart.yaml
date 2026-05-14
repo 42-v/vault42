@@ -10,9 +10,9 @@ keywords:
   - security
   - oauth2
   - totp
-home: https://github.com/42-v/vault
+home: https://github.com/42-v/vault42
 sources:
-  - https://github.com/42-v/vault
+  - https://github.com/42-v/vault42
 maintainers:
   - name: V
     email: vault@42-v.com

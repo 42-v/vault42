@@ -513,12 +513,22 @@ func (c *Config) RPHost() string {
 }
 
 // String returns a redacted config summary (safe for logging).
+// String renders a configuration summary suitable for boot-time logging.
+// Every secret-bearing field is explicitly routed through redact()/redactStr()
+// so static analyzers can see the sanitizer; new secret fields added to Config
+// MUST also be added here with an explicit redactor, never printed raw.
 func (c *Config) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "profile=%s listen=%s origin=%s\n", c.Profile, c.ListenAddr, c.Origin)
 	fmt.Fprintf(&b, "tls=%v db=%s:%s/%s cache=%s\n", c.TLSEnabled, c.DBHost, c.DBPort, c.DBName, c.CacheBackend)
 	fmt.Fprintf(&b, "master_key=%s admin_token=%s pepper=%s hmac=%s\n",
 		redact(c.MasterKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret))
+	fmt.Fprintf(&b, "db_mig_pass=%s db_app_pass=%s redis_pass=%s\n",
+		redactStr(c.DBMigPassword), redactStr(c.DBAppPassword), redactStr(c.RedisPass))
+	fmt.Fprintf(&b, "sendgrid_key=%s smtp_user=%s smtp_pass=%s\n",
+		redactStr(c.SendGridAPIKey), redactStr(c.SMTPUser), redactStr(c.SMTPPass))
+	fmt.Fprintf(&b, "oauth_secrets=google:%s github:%s facebook:%s\n",
+		redactStr(c.OAuthGoogleClientSecret), redactStr(c.OAuthGitHubClientSecret), redactStr(c.OAuthFacebookClientSecret))
 	fmt.Fprintf(&b, "access_ttl=%s refresh_ttl=%s remember_ttl=%s\n",
 		c.AccessTokenTTL, c.RefreshTokenTTL, c.RememberMeTTL)
 	return b.String()

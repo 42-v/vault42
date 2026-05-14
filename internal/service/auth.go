@@ -21,6 +21,7 @@ import (
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vaultemail "github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/honeypot"
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -855,7 +856,7 @@ func (s *AuthService) isIPLocked(ctx context.Context, ip string) bool {
 			window := time.Now().Truncate(lockoutDuration)
 			count, err := s.rateLimits.Get(ctx, "lockout_ip:"+ip, window)
 			if err != nil {
-				log.Printf("auth: IP lockout DB fallback failed for %s: %v", ip, err)
+				log.Printf("auth: IP lockout DB fallback failed for %s: %v", httputil.ObfuscatedIP(ip), err)
 				return false
 			}
 			return count >= ipLockoutThreshold
@@ -883,11 +884,11 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 		if s.rateLimits != nil {
 			window := time.Now().Truncate(lockoutDuration)
 			if _, err := s.rateLimits.Increment(ctx, "lockout_ip:"+ip, window); err != nil {
-				log.Printf("auth: IP lockout DB fallback increment failed for %s: %v", ip, err)
+				log.Printf("auth: IP lockout DB fallback increment failed for %s: %v", httputil.ObfuscatedIP(ip), err)
 			}
 			return
 		}
-		log.Printf("auth: WARNING: IP lockout unavailable (cache nil), brute-force protection degraded for IP %s", ip)
+		log.Printf("auth: WARNING: IP lockout unavailable (cache nil), brute-force protection degraded for IP %s", httputil.ObfuscatedIP(ip))
 		return
 	}
 	key := "lockout_ip:" + ip

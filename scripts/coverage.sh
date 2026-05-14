@@ -4,6 +4,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Disable Testcontainers' Ryuk reaper. Ryuk needs write access to docker.sock,
+# which triggers SELinux AVC denials on Fedora hosts every time a test that
+# uses testcontainers-go starts up. We don't need the reaper for short test
+# runs — containers are torn down by the test code's defer/cleanup anyway.
+export TESTCONTAINERS_RYUK_DISABLED=true
+
 COVER_FILE=$(mktemp)
 TEST_OUT=$(mktemp)
 trap 'rm -f "$COVER_FILE" "$TEST_OUT"' EXIT
@@ -15,19 +21,52 @@ if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
   cp "$TEST_OUTPUT_FILE" "$TEST_OUT"
   cp "$COVERAGE_FILE" "$COVER_FILE"
 else
-  # Run tests with coverage (non-verbose for clean package lines)
-  echo "Running tests with coverage..."
-  go test -coverprofile="$COVER_FILE" ./internal/... > "$TEST_OUT" 2>&1 || true
+  # Run tests with coverage. -coverpkg=./internal/... makes tests under
+  # tests/ (unit, attack, compliance) contribute to the internal-package
+  # coverage profile too, instead of being a silent no-op for the report.
+  # tests/compliance and tests/e2e need a live Postgres and are skipped
+  # here; coverage.sh runs purely in-process.
+  echo "Running tests with coverage (cross-pkg, ryuk disabled)..."
+  go test -v -coverprofile="$COVER_FILE" -coverpkg=./internal/... \
+      ./internal/... ./tests/unit/... ./tests/attack/... ./tests/fuzz/... \
+      > "$TEST_OUT" 2>&1 || true
 fi
 
-# Get full test count — from verbose artifact if available, otherwise run tests
+# Count passes from the test output we just generated (or the CI-provided one).
+# We avoid a second `go test ./...` run because (a) it duplicates work and
+# (b) it would sweep tests/compliance and tests/integration, both of which
+# require a live Postgres via testcontainers.
 if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ]; then
-  TESTS=$(grep -c '^--- PASS:' "$TEST_OUTPUT_FILE" || echo 0)
+  TESTS=$(grep -c '^--- PASS:' "$TEST_OUTPUT_FILE" || true)
 else
-  TESTS=$(go test -v ./... 2>&1 | grep -c '^--- PASS:' || echo 0)
+  TESTS=$(grep -c '^--- PASS:' "$TEST_OUT" || true)
 fi
-TOTAL=$(go tool cover -func="$COVER_FILE" | tail -1 | awk '{print $NF}')
+TESTS=${TESTS:-0}
 DATE=$(date +%Y-%m-%d)
+
+# Compute precise total and per-package coverage directly from the profile.
+# go tool cover -func only reports 1 decimal; we want 2 (it matters for
+# bullseye targets like 67.69%). Per-package stats come from the same source
+# so they reflect actual coverage of each internal package — NOT the
+# misleading "X% of statements in ./internal/..." each test pkg reports under
+# -coverpkg, which is the per-test-package contribution, not the package's
+# own coverage.
+TOTAL=$(python3 - "$COVER_FILE" <<'PY'
+import sys
+seen = {}
+with open(sys.argv[1]) as fh:
+    next(fh)
+    for line in fh:
+        p = line.split()
+        if len(p) < 3:
+            continue
+        k, s, c = p[0], int(p[1]), int(p[2])
+        seen[k] = (s, seen.get(k, (s, False))[1] or c > 0)
+total = sum(s for s, _ in seen.values())
+covered = sum(s for s, c in seen.values() if c)
+print(f"{100.0 * covered / total:.2f}%")
+PY
+)
 
 # Generate markdown
 {
@@ -40,17 +79,37 @@ DATE=$(date +%Y-%m-%d)
   echo "| Package | Coverage |"
   echo "|---------|----------|"
 
-  # Parse summary lines (^ok) — works with both verbose and non-verbose output
-  while IFS= read -r line; do
-    if echo "$line" | grep -q 'no test files'; then
-      pkg=$(echo "$line" | grep -oP 'github\.com/42-v/vault/\S+' | sed 's|github.com/42-v/vault/||' || true)
-      [ -n "$pkg" ] && echo "| \`$pkg\` | — |"
-    elif echo "$line" | grep -qP 'coverage: [0-9.]+%'; then
-      pkg=$(echo "$line" | grep -oP 'github\.com/42-v/vault/\S+' | sed 's|github.com/42-v/vault/||' || true)
-      pct=$(echo "$line" | grep -oP 'coverage: [0-9.]+%' | grep -oP '[0-9.]+%' || true)
-      [ -n "$pkg" ] && [ -n "$pct" ] && echo "| \`$pkg\` | $pct |"
-    fi
-  done < <(grep -P '^(ok\s|\?)\s' "$TEST_OUT") | sort -t'|' -k3 -rn
+  python3 - "$COVER_FILE" <<'PY'
+import sys, re
+from collections import defaultdict
+pkg_re = re.compile(r'^(github\.com/42-v/vault42/[^/]+(?:/[^/]+)*)/[^/]+\.go:')
+seen = {}
+with open(sys.argv[1]) as fh:
+    next(fh)
+    for line in fh:
+        p = line.split()
+        if len(p) < 3:
+            continue
+        k, s, c = p[0], int(p[1]), int(p[2])
+        seen[k] = (s, seen.get(k, (s, False))[1] or c > 0)
+pkg_stmts = defaultdict(lambda: [0, 0])
+for k, (s, c) in seen.items():
+    m = pkg_re.match(k)
+    if not m:
+        continue
+    pkg = m.group(1).replace("github.com/42-v/vault42/", "")
+    pkg_stmts[pkg][0] += s
+    if c:
+        pkg_stmts[pkg][1] += s
+rows = []
+for pkg, (total, covered) in pkg_stmts.items():
+    if total == 0:
+        continue
+    rows.append((covered / total, pkg, f"{100.0 * covered / total:.2f}%"))
+rows.sort(reverse=True)
+for _, pkg, pct in rows:
+    print(f"| `{pkg}` | {pct} |")
+PY
 
   echo ""
   echo "## Uncovered Functions"
@@ -59,7 +118,7 @@ DATE=$(date +%Y-%m-%d)
   echo "|----------|------|"
 
   go tool cover -func="$COVER_FILE" | awk '$NF == "0.0%" {print}' | while IFS= read -r line; do
-    file=$(echo "$line" | awk '{print $1}' | sed 's|github.com/42-v/vault/||; s/:$//')
+    file=$(echo "$line" | awk '{print $1}' | sed 's|github.com/42-v/vault42/||; s/:$//')
     func_name=$(echo "$line" | awk '{print $2}')
     echo "| \`$func_name\` | $file |"
   done
@@ -75,7 +134,7 @@ DATE=$(date +%Y-%m-%d)
     pct=$(echo "$pct_str" | tr -d '%')
     is_low=$(awk "BEGIN {print ($pct < 75) ? 1 : 0}")
     if [ "$is_low" = "1" ]; then
-      file=$(echo "$line" | awk '{print $1}' | sed 's|github.com/42-v/vault/||; s/:$//')
+      file=$(echo "$line" | awk '{print $1}' | sed 's|github.com/42-v/vault42/||; s/:$//')
       func_name=$(echo "$line" | awk '{print $2}')
       echo "| \`$func_name\` | $file | $pct_str |"
     fi
