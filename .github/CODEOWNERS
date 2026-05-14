@@ -1,14 +1,64 @@
 # Codeowners for vault42.
 # Owners listed here are auto-requested for review on PRs touching the path.
 # Pairs with "Require review from Code Owners" in branch protection to enforce.
+#
+# Order matters: last-match wins. The wildcard line below puts v on every PR
+# by default; the explicit blocks afterwards exist so the Files Changed view
+# in a PR shows clearly that the path is owner-gated.
 
 * @42-v
 
-/.github/                @42-v
-/Dockerfile*             @42-v
-/charts/                 @42-v
-/migrations/             @42-v
-/internal/jwt/           @42-v
-/internal/auth/          @42-v
-/internal/crypto/        @42-v
-/cmd/                    @42-v
+# Supply chain — anything that pulls third-party code into a build
+/go.mod                   @42-v
+/go.sum                   @42-v
+/package.json             @42-v
+/pnpm-lock.yaml           @42-v
+/pnpm-workspace.yaml      @42-v
+/web/package.json         @42-v
+/packages/**/package.json @42-v
+
+# CI, release, security policy — anything that runs with secrets or
+# decides what gets published
+/.github/                 @42-v
+/scripts/                 @42-v
+/Dockerfile*              @42-v
+/SECURITY.md              @42-v
+/commitlint.config.js     @42-v
+/eslint.config.mjs        @42-v
+
+# Deployment surface — chart values control prod image refs, secret
+# names, network policy
+/charts/                  @42-v
+/k8s/                     @42-v
+/admin-gateway/           @42-v
+
+# Cryptographic core — JWT signing, AES-256-GCM for TOTP secrets,
+# Argon2 password hashing, JWKS rotation
+/internal/jwt/            @42-v
+/internal/crypto/         @42-v
+/internal/keystore/       @42-v
+
+# Auth surface — login, refresh, MFA, OAuth, password reset, admin
+# session lifecycle
+/internal/service/        @42-v
+/internal/handler/        @42-v
+/internal/middleware/     @42-v
+/internal/adminapi/       @42-v
+/internal/oauth2/         @42-v
+/internal/rbac/           @42-v
+
+# Data shape, secret loading, schema migrations
+/internal/config/         @42-v
+/internal/repository/     @42-v
+/migrations/              @42-v
+
+# Defensive perimeter — audit logging, input sanitizers, honeypot,
+# bridge proxy
+/internal/audit/          @42-v
+/internal/sanitize/       @42-v
+/internal/honeypot/       @42-v
+/internal/httputil/       @42-v
+/cmd/                     @42-v
+
+# Tests can change auth behavior just as easily as code can
+/tests/                   @42-v
