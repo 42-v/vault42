@@ -10,7 +10,7 @@ RELEASE="vault"
 CHART="$PROJECT_ROOT/charts/vault"
 VALUES="$CHART/values-local.yaml"
 TUNNEL_NAME="vault-local"
-DOMAIN="vault.42-v.net"
+DOMAIN="vault.42-v.com"
 
 echo "=== Vault Local Production Deployment (Cloudflare Tunnel) ==="
 
@@ -39,7 +39,7 @@ fi
 # Step 1: Build Docker image (multi-stage, includes frontend)
 echo ""
 echo "--- Step 1: Build Docker Image ---"
-docker build -t vault:dev "$PROJECT_ROOT"
+docker build -t vault42:dev "$PROJECT_ROOT"
 
 # Step 2: Create namespace
 echo ""

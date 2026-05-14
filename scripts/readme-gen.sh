@@ -299,7 +299,7 @@ import json
 web = json.load(open('web/package.json'))
 vue = json.load(open('packages/vue/package.json'))
 deps = set(list(web.get('dependencies',{}).keys()) + list(vue.get('peerDependencies',{}).keys()))
-deps.discard('@vault/vue')
+deps.discard('@vault42/vue')
 print(len(deps))
 ")
 

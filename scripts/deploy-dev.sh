@@ -27,8 +27,8 @@ ADMIN_CERT_DIR="$PROJECT_ROOT/k8s/dev/admin-certs"
 # Step 2: Build Docker images (frontend embedded in Go binary via go:embed)
 echo ""
 echo "--- Step 2: Build Docker Images ---"
-docker build -t vault:dev "$PROJECT_ROOT"
-docker build -t vault-admin-gateway:dev -f "$PROJECT_ROOT/Dockerfile.admin-gateway" "$PROJECT_ROOT"
+docker build -t vault42:dev "$PROJECT_ROOT"
+docker build -t vault42-admin-gateway:dev -f "$PROJECT_ROOT/Dockerfile.admin-gateway" "$PROJECT_ROOT"
 
 # Step 3: Create namespace
 echo ""
