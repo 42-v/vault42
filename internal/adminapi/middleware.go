@@ -217,6 +217,19 @@ func GetAdmin(ctx context.Context) *model.AdminUser {
 	return u
 }
 
+// WithAdmin attaches an admin user to the context. Used by middleware after
+// session verification, and by tests that drive handlers directly with a
+// pre-authenticated admin.
+func WithAdmin(ctx context.Context, admin *model.AdminUser) context.Context {
+	return context.WithValue(ctx, adminUserKey, admin)
+}
+
+// WithSession attaches an admin session to the context. Same role as
+// [WithAdmin] but for the session value handlers read via [GetSession].
+func WithSession(ctx context.Context, session *model.AdminSession) context.Context {
+	return context.WithValue(ctx, adminSessionKey, session)
+}
+
 // MaxBody limits request body size.
 func MaxBody(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

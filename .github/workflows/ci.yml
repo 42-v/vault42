@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Disable Testcontainers' Ryuk reaper across all jobs. Ryuk's docker.sock
+# writes trip SELinux AVC denials on hardened hosts (rootless podman + Fedora);
+# tests clean up their own containers via defer, so the reaper is redundant.
+env:
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

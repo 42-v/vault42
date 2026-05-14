@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "=== @vault/vue package ==="
+echo "=== @vault42/vue package ==="
 pnpm -C packages/vue build
 
 echo "=== Web frontend ==="
@@ -23,10 +23,10 @@ echo "=== Admin Gateway binary ==="
 CGO_ENABLED=0 go build -ldflags="-s -w" -o admin-gateway ./cmd/admin-gateway
 
 echo "=== Docker images ==="
-docker build -t vault:dev .
-docker build -t vault-bridge:dev -f Dockerfile.bridge .
-docker build -t vault-admin-gateway:dev -f Dockerfile.admin-gateway .
+docker build -t vault42:dev .
+docker build -t vault42-bridge:dev -f Dockerfile.bridge .
+docker build -t vault42-admin-gateway:dev -f Dockerfile.admin-gateway .
 
 echo ""
 echo "All builds OK. To deploy:"
-echo "  kubectl -n vault-dev rollout restart deploy/vault"
+echo "  kubectl -n vault42-dev rollout restart deploy/vault42"

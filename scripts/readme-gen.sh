@@ -174,7 +174,7 @@ done < go.mod
 COVERAGE_ROWS=""
 if [ -s "$COVER_FILE" ]; then
   while IFS= read -r line; do
-    pkg=$(echo "$line" | awk '{print $2}' | sed 's|github.com/42-v/vault/||')
+    pkg=$(echo "$line" | awk '{print $2}' | sed 's|github.com/42-v/vault42/||')
     pct=$(echo "$line" | grep -oP '[0-9.]+% of statements' | grep -oP '[0-9.]+%' || true)
     [ -n "$pkg" ] && [ -n "$pct" ] && COVERAGE_ROWS="${COVERAGE_ROWS}| \`${pkg}\` | ${pct} |
 "
