@@ -37,7 +37,7 @@
 
 | Package | Coverage |
 |---|---|
-| `tests/unit` | 25.6% |
+| `tests/unit` | 27.3% |
 | `internal/handler` | 24.4% |
 | `tests/attack` | 14.4% |
 | `internal/service` | 11.8% |
@@ -78,7 +78,7 @@
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
 | [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2869 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2873 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
 | [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 188 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |

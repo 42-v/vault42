@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 (2026-05-18)
+
+
+### Bug Fixes
+
+* bump Go builder image to golang:1.26-alpine (Go 1.26.3), clearing 5 HIGH stdlib CVEs flagged nightly by the Trivy image scan (CVE-2026-33811, CVE-2026-33814, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499)
+
+
+### Tests
+
+* add admin/user handler coverage tests; statement coverage 69.42% → 70.69%
+
 ## [1.1.0](https://github.com/42-v/vault42/compare/v1.0.0...v1.1.0) (2026-02-21)
 
 
