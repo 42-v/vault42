@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-05-14 | Tests: 1968 | Total: 69.42% statement coverage
+Generated: 2026-05-18 | Tests: 1985 | Total: 70.69% statement coverage
 
 ## Package Summary
 
@@ -20,13 +20,13 @@ Generated: 2026-05-14 | Tests: 1968 | Total: 69.42% statement coverage
 | `internal/middleware` | 87.38% |
 | `internal/honeypot` | 87.13% |
 | `internal/seed` | 85.38% |
+| `internal/handler` | 84.19% |
 | `internal/config` | 83.02% |
 | `internal/audit` | 82.76% |
-| `internal/handler` | 82.40% |
 | `internal/redis` | 79.59% |
 | `internal/service` | 75.26% |
+| `internal/adminapi` | 71.04% |
 | `internal/cli` | 63.56% |
-| `internal/adminapi` | 62.98% |
 | `internal/server` | 60.00% |
 | `internal/cache` | 51.95% |
 | `internal/keystore` | 12.77% |
@@ -210,15 +210,14 @@ Generated: 2026-05-14 | Tests: 1968 | Total: 69.42% statement coverage
 | `RevokeAllSessions` | internal/adminapi/handler.go:334 | 66.7% |
 | `QueryAudit` | internal/adminapi/handler.go:351 | 52.4% |
 | `ListClients` | internal/adminapi/handler.go:399 | 66.7% |
-| `GetClient` | internal/adminapi/handler.go:433 | 58.3% |
-| `CreateClient` | internal/adminapi/handler.go:454 | 14.3% |
+| `GetClient` | internal/adminapi/handler.go:433 | 66.7% |
+| `CreateClient` | internal/adminapi/handler.go:454 | 71.4% |
 | `RevokeClient` | internal/adminapi/handler.go:519 | 60.0% |
-| `RotateClientSecret` | internal/adminapi/handler.go:538 | 24.0% |
+| `RotateClientSecret` | internal/adminapi/handler.go:538 | 68.0% |
 | `GetConfig` | internal/adminapi/handler.go:582 | 60.0% |
-| `UpdateConfig` | internal/adminapi/handler.go:592 | 23.5% |
 | `DeleteConfig` | internal/adminapi/handler.go:627 | 60.0% |
 | `ListAdmins` | internal/adminapi/handler.go:662 | 66.7% |
-| `CreateAdmin` | internal/adminapi/handler.go:698 | 11.1% |
+| `CreateAdmin` | internal/adminapi/handler.go:698 | 72.2% |
 | `LocalOnly` | internal/adminapi/middleware.go:51 | 68.4% |
 | `SessionAuth` | internal/adminapi/middleware.go:117 | 48.7% |
 | `Log` | internal/audit/audit.go:164 | 52.6% |
@@ -234,13 +233,11 @@ Generated: 2026-05-14 | Tests: 1968 | Total: 69.42% statement coverage
 | `ConfirmPassword` | internal/handler/auth.go:207 | 32.4% |
 | `DownloadNamed` | internal/handler/blob.go:182 | 54.2% |
 | `writeUploadError` | internal/handler/blob.go:351 | 60.0% |
-| `Capabilities` | internal/handler/capabilities.go:14 | 60.0% |
 | `Verify` | internal/handler/email_otp.go:24 | 57.1% |
-| `Resend` | internal/handler/email_otp.go:53 | 33.3% |
+| `Resend` | internal/handler/email_otp.go:53 | 66.7% |
 | `completeMFAIfChallenge` | internal/handler/mfa_helper.go:16 | 11.1% |
 | `Authorize` | internal/handler/oauth.go:68 | 73.1% |
 | `NewPasswordHandler` | internal/handler/password.go:55 | 50.0% |
-| `UpdateProfile` | internal/handler/user.go:65 | 42.9% |
 | `VerifyFinish` | internal/handler/webauthn.go:197 | 65.1% |
 | `Alert` | internal/honeypot/honeypot.go:75 | 72.7% |
 | `DPoP` | internal/middleware/dpop.go:18 | 56.5% |
