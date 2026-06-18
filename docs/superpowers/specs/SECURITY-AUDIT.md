@@ -45,7 +45,7 @@
 
 **Fix.** Add a per-userID failed-MFA counter analogous to the password lockout: in each MFA verify handler (or in `CompleteMFALogin`'s caller path), on a wrong code increment a cache counter `mfa_fail:<userID>` and reject (and ideally revoke the challenge) once it exceeds a small threshold (e.g. 5) within the lockout window — reuse `recordFailedAttempt`/`isAccountLocked` or the existing `CheckAccountLockout` helper. Also invalidate the challenge token (mark its jti consumed) after N failed attempts so a new password authentication is required.
 
-- [ ] fixed
+- [x] fixed — per-account MFA lockout (commit) 
 
 ---
 
