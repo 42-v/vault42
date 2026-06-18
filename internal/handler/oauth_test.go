@@ -240,7 +240,6 @@ func TestOAuth_Callback_UnknownProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/facebook", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "facebook")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -266,7 +265,6 @@ func TestOAuth_Callback_MissingState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -292,7 +290,6 @@ func TestOAuth_Callback_InvalidState_NoSignature(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=no-dots-in-state", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -313,7 +310,6 @@ func TestOAuth_Callback_InvalidState_BadHMAC(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=google.nonce.12345.badsignature", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -346,7 +342,6 @@ func TestOAuth_Callback_InvalidState_WrongProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -372,7 +367,6 @@ func TestOAuth_Callback_ExpiredState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -410,7 +404,6 @@ func TestOAuth_Callback_InvalidOrReusedState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -448,7 +441,6 @@ func TestOAuth_Callback_MissingCode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state, nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -489,7 +481,6 @@ func TestOAuth_Callback_ExchangeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -530,7 +521,6 @@ func TestOAuth_Callback_UserInfoError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -569,7 +559,6 @@ func TestOAuth_Callback_ExistingSocialAccount(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -617,7 +606,6 @@ func TestOAuth_Callback_ExistingEmailUser(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -663,7 +651,6 @@ func TestOAuth_Callback_NewUser(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -708,7 +695,6 @@ func TestOAuth_Callback_UnableToIdentifyUser_NoEmail(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -759,7 +745,6 @@ func TestOAuth_Callback_UserCreateError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -843,7 +828,6 @@ func TestOAuth_Callback_MFARequired(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -895,7 +879,6 @@ func TestOAuth_Callback_NilSocialRepo(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1057,7 +1040,6 @@ func TestOAuth_Callback_PKCE_VerifierPassedToExchange(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1098,7 +1080,6 @@ func TestOAuth_Callback_RedirectAlwaysToOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1146,7 +1127,6 @@ func TestOAuth_Callback_CrossProviderStateRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -1176,7 +1156,6 @@ func TestOAuth_Callback_ProviderError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?error=access_denied&error_description=user+denied", nil)
 	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
-	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
