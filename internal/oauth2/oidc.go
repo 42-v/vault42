@@ -27,6 +27,7 @@ type OIDCProvider struct {
 
 	mu         sync.RWMutex
 	discovered *oidcDiscovery
+	jwks       jwksCache
 }
 
 // oidcDiscovery is the subset of the discovery document vault42 consumes.
