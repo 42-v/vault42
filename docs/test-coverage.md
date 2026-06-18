@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-06-19 | Tests: 2249 | Total: 77.36% statement coverage
+Generated: 2026-06-19 | Tests: 2292 | Total: 78.02% statement coverage
 
 ## Package Summary
 
@@ -16,15 +16,15 @@ Generated: 2026-06-19 | Tests: 2249 | Total: 77.36% statement coverage
 | `internal/config` | 98.37% |
 | `internal/jwt` | 96.81% |
 | `internal/audit` | 96.55% |
-| `internal/middleware` | 93.18% |
+| `internal/middleware` | 93.76% |
+| `internal/oauth2` | 93.37% |
 | `internal/crypto` | 91.44% |
 | `internal/email` | 90.91% |
-| `internal/handler` | 89.56% |
+| `internal/service` | 90.31% |
+| `internal/handler` | 90.15% |
 | `internal/seed` | 89.23% |
 | `internal/honeypot` | 89.11% |
-| `internal/service` | 88.89% |
 | `internal/adminapi` | 86.64% |
-| `internal/oauth2` | 86.17% |
 | `internal/redis` | 84.91% |
 | `internal/cache` | 82.47% |
 | `internal/server` | 76.02% |
@@ -180,8 +180,6 @@ Generated: 2026-06-19 | Tests: 2249 | Total: 77.36% statement coverage
 | `UpdateSignCount` | internal/repository/postgres/webauthn.go:72 |
 | `Delete` | internal/repository/postgres/webauthn.go:81 |
 | `Start` | internal/server/server.go:106 |
-| `SetRoleCatalog` | internal/service/auth.go:174 |
-| `RevokeAllTokensForUser` | internal/service/auth.go:766 |
 
 ## Low Coverage (1-74%)
 
@@ -206,11 +204,7 @@ Generated: 2026-06-19 | Tests: 2249 | Total: 77.36% statement coverage
 | `rotateAdminToken` | internal/cli/cli.go:267 | 69.2% |
 | `acquireArgon2` | internal/crypto/argon2.go:53 | 70.0% |
 | `init` | internal/crypto/argon2.go:97 | 60.0% |
-| `writeUploadError` | internal/handler/blob.go:351 | 60.0% |
-| `Resend` | internal/handler/email_otp.go:60 | 66.7% |
-| `NewPasswordHandler` | internal/handler/password.go:55 | 50.0% |
 | `VerifyFinish` | internal/handler/webauthn.go:197 | 65.1% |
-| `MaxBodyWithExemptions` | internal/middleware/maxbody.go:18 | 72.7% |
 | `addLimiter` | internal/middleware/ratelimit.go:143 | 47.1% |
 | `RequestID` | internal/middleware/requestid.go:19 | 66.7% |
 | `Run` | internal/migrate/migrate.go:17 | 2.5% |
@@ -218,16 +212,9 @@ Generated: 2026-06-19 | Tests: 2249 | Total: 77.36% statement coverage
 | `httpClient` | internal/oauth2/github.go:26 | 66.7% |
 | `httpClient` | internal/oauth2/google.go:26 | 66.7% |
 | `httpClient` | internal/oauth2/oidc.go:59 | 66.7% |
-| `UserInfo` | internal/oauth2/oidc.go:185 | 68.4% |
-| `signingKey` | internal/oauth2/oidc_idtoken.go:86 | 66.7% |
-| `refreshJWKS` | internal/oauth2/oidc_idtoken.go:109 | 71.0% |
-| `rsaPublicKeyFromJWK` | internal/oauth2/oidc_idtoken.go:163 | 69.2% |
 | `Expire` | internal/redis/client.go:187 | 71.4% |
 | `exec` | internal/redis/client.go:240 | 72.0% |
 | `put` | internal/redis/pool.go:130 | 72.2% |
 | `initSelect` | internal/redis/pool.go:248 | 72.7% |
 | `writeCommand` | internal/redis/resp.go:22 | 61.1% |
-| `sendImportClaimLink` | internal/service/auth.go:338 | 64.7% |
-| `sendEmailOTP` | internal/service/auth.go:844 | 66.7% |
-| `recordFailedIP` | internal/service/auth.go:1056 | 58.3% |
-| `NewRoleCatalog` | internal/service/role_catalog.go:27 | 66.7% |
+| `sendImportClaimLink` | internal/service/auth.go:338 | 70.6% |
