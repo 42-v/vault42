@@ -1,6 +1,9 @@
 package handler
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // StatusResponse is returned by endpoints that indicate success/failure with a single status field.
 type StatusResponse struct {
@@ -140,11 +143,15 @@ type CredentialListResponse struct {
 
 // IdentityResponse is returned by GET /user/identity.
 type IdentityResponse struct {
-	GivenName   string `json:"given_name"`
-	FamilyName  string `json:"family_name"`
-	Country     string `json:"country"`
-	DateOfBirth string `json:"date_of_birth"`
-	Sex         string `json:"sex"`
-	UpdatedAt   string `json:"updated_at"`
-	Billing     any    `json:"billing,omitempty"`
+	GivenName       string                     `json:"given_name"`
+	FamilyName      string                     `json:"family_name"`
+	Username        string                     `json:"username,omitempty"`
+	Country         string                     `json:"country"`
+	State           string                     `json:"state,omitempty"`
+	DateOfBirth     string                     `json:"date_of_birth"`
+	Sex             string                     `json:"sex"`
+	MarketingEmails *bool                      `json:"marketing_emails,omitempty"`
+	UpdatedAt       string                     `json:"updated_at"`
+	Billing         any                        `json:"billing,omitempty"`
+	Dynamic         map[string]json.RawMessage `json:"dynamic,omitempty"`
 }
