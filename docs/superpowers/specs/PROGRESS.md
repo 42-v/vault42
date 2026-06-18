@@ -4,6 +4,8 @@
 **Spec:** `2026-06-18-vault42-beon3-parity-design.md`
 **Hard rules:** local only — NEVER push, NEVER touch `main`; no sudo; no destructive ops;
 never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` is green.
+**Loop:** 5-min session cron job id `24acf589` — after 04:00 run CronList+CronDelete it.
+**Test env:** `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock TESTCONTAINERS_RYUK_DISABLED=true GOTOOLCHAIN=auto GOFLAGS=-mod=mod`
 
 ## Metrics (update each cycle)
 - Coverage: baseline ~70.7% → **target ≥89%** → current: _measuring_
@@ -31,7 +33,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [ ] CHANGELOG + version bump to 0.8.9
 
 ### WS1 — BeOn3 profile/user parity (hybrid)
-- [ ] Extend `IdentityData` (Username, State, MarketingEmails, Dynamic map) + validation + tests
+- [x] Extend `IdentityData` (Username, State, MarketingEmails, Dynamic map) + validation + tests
 - [ ] Migration `004_user_account_flags.sql` (disabled, banned, ban_reason, last_login_at, deleted, deleted_at) + vault_app grants
 - [ ] User model + repo: scan/write new columns; login gate (banned/disabled/deleted); set last_login_at
 - [ ] Identity handler accepts/returns new fields; dynamic-JSON size/shape guard
@@ -56,4 +58,5 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [ ] Reach ≥89% statement coverage; final hardening pass + CHANGELOG
 
 ## Cycle log
-- C0 (22:15) — WS0: go1.26.4 + all deps updated; govulncheck clean; frontend green; spec+progress written. (pre-commit)
+- C0 (22:15) — WS0: go1.26.4 + all deps updated; govulncheck clean; frontend green; spec+progress written. Committed 86f2cb9/2b3b4bf/9fb3162.
+- C1 (22:55) — WS1.1: extended IdentityData (Username/State/MarketingEmails/Dynamic) + Validate() + 15 test cases; service pkg green. Committed 75c4404. Mark TODO: identity HANDLER must call Validate() + accept/return new fields (next WS1 slice).
