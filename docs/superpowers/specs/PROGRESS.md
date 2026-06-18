@@ -42,7 +42,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 
 ### WS2 — custom roles catalog
 - [x] Migration `005_app_roles.sql` + seed (moderator, premium_user, business, creator, user, viewer, operator)
-- [ ] `app_roles` repo + catalog cache; catalog-aware `FilterUserRoles`
+- [x] `app_roles` repo + catalog cache; catalog-aware `FilterUserRoles`
 - [ ] Admin-gateway endpoints: list/create/delete app_roles (super_admin; can't delete reserved)
 - [ ] Tests: catalog validation, reserved rejection, JWT roles path, escalation attack
 
@@ -92,3 +92,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C7 (23:01) — WS1.4 (completes WS1): identity API exposes username/state/marketing_emails/dynamic; Validate() rejections → 400; round-trip + dynamic-abuse tests. handler pkg green. Committed. WS1 DONE. NEXT: WS2 (roles catalog, migration 005).
 - C8 (23:05) — WS2.1: migration 005 app_roles catalog + seed (3 core reserved + 4 beon3); vault_app SELECT grant; TestMigrateRun green. Committed. NEXT WS2.2: app_roles repo + catalog cache + catalog-aware FilterUserRoles.
 - C9 (23:10) — WS2.2a: model.AppRole + AppRoleRepository + postgres AppRoleRepo (List/ListNames/Get/Create/Delete, reserved-protected, idempotent) + integration test (6 cases) green. Committed. NEXT WS2.2b: catalog cache + catalog-aware FilterUserRoles at JWT issuance.
+- C10 (23:20) — WS2.2b: RoleCatalog (TTL cache, fail-open) + effectiveRoles (admin-filter ∩ catalog, [user] fallback); centralized 3 JWT role sites; wired SetRoleCatalog in cmd/vault; MockAppRoleRepo + 5 tests; service green. GROK task 001 (multireplica e2e) still running. NEXT WS2.3: admin-gateway app_roles CRUD endpoints.
