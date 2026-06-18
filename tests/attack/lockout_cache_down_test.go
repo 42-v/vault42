@@ -90,6 +90,10 @@ func (r *stubUserRepo) VerifyEmail(_ context.Context, id string) error {
 	return nil
 }
 
+func (r *stubUserRepo) SetLastLogin(_ context.Context, _ string) error      { return nil }
+func (r *stubUserRepo) CreateImported(_ context.Context, _ *model.User) error { return nil }
+func (r *stubUserRepo) ClearImportPending(_ context.Context, _ string) error { return nil }
+
 // Verify interface compliance at compile time.
 var _ repository.UserRepository = (*stubUserRepo)(nil)
 
