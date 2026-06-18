@@ -146,6 +146,7 @@ func main() {
 		adminUserRepo, adminSessionRepo, adminConfigRepo,
 		ks, auditLogger, cfg.MasterKey, cfg.Pepper,
 	)
+	apiHandler.SetAppRoleRepo(postgres.NewAppRoleRepo(db))
 
 	router := adminapi.NewRouter(authHandler, apiHandler, adminapi.RouterOpts{
 		DevMode:    cfg.DevMode,

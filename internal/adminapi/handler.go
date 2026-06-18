@@ -27,10 +27,17 @@ type Handler struct {
 	admins      repository.AdminUserRepository
 	sessions    repository.AdminSessionRepository
 	adminConfig repository.AdminConfigRepository
+	appRoles    repository.AppRoleRepository
 	keyStore    *keystore.KeyStore
 	auditLog    *audit.Logger
 	masterKey   []byte
 	pepper      string
+}
+
+// SetAppRoleRepo wires the custom-roles catalog repository, enabling the
+// /admin/roles endpoints. Optional (nil → those handlers return 503).
+func (h *Handler) SetAppRoleRepo(r repository.AppRoleRepository) {
+	h.appRoles = r
 }
 
 // NewHandler creates a new admin API handler.

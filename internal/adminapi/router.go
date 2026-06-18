@@ -65,6 +65,11 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("POST /admin/clients/{id}/revoke", withPerm(sessionAuth, rbac.ClientsRevoke, api.RevokeClient))
 	mux.Handle("POST /admin/clients/{id}/rotate", withPerm(sessionAuth, rbac.ClientsRotate, api.RotateClientSecret))
 
+	// Custom roles catalog
+	mux.Handle("GET /admin/roles", withPerm(sessionAuth, rbac.RolesList, api.ListRoles))
+	mux.Handle("POST /admin/roles", withPerm(sessionAuth, rbac.RolesCreate, api.CreateRole))
+	mux.Handle("DELETE /admin/roles/{name}", withPerm(sessionAuth, rbac.RolesDelete, api.DeleteRole))
+
 	// Config management
 	mux.Handle("GET /admin/config", withPerm(sessionAuth, rbac.ConfigRead, api.GetConfig))
 	mux.Handle("PUT /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.UpdateConfig))

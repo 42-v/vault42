@@ -29,6 +29,9 @@ const (
 	AdminsManage   Permission = "admins:manage"
 	AdminsCreate   Permission = "admins:create"
 	AdminsRevoke   Permission = "admins:revoke"
+	RolesList      Permission = "roles:list"
+	RolesCreate    Permission = "roles:create"
+	RolesDelete    Permission = "roles:delete"
 )
 
 // Role represents an admin role. Roles are strictly hierarchical:
@@ -62,6 +65,7 @@ var viewerPerms = map[Permission]bool{
 	SessionsList: true,
 	ConfigRead:   true,
 	MetricsRead:  true,
+	RolesList:    true,
 }
 
 // operatorPerms are additional permissions granted to the operator role (on top of viewer).
@@ -85,6 +89,8 @@ var superAdminPerms = map[Permission]bool{
 	AdminsManage:  true,
 	AdminsCreate:  true,
 	AdminsRevoke:  true,
+	RolesCreate:   true,
+	RolesDelete:   true,
 }
 
 // HasPermission checks whether the given role has the specified permission.
