@@ -31,7 +31,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [x] frontend `pnpm update -r` + audit clean + builds/tests green
 - [x] govulncheck CLEAN, build, vet pass
 - [x] gosec G710 open-redirect guard in `internal/handler/oauth.go`
-- [ ] CHANGELOG + version bump to 0.8.9
+- [x] CHANGELOG + version bump to 0.8.9
 
 ### WS1 — BeOn3 profile/user parity (hybrid)
 - [x] Extend `IdentityData` (Username, State, MarketingEmails, Dynamic map) + validation + tests
@@ -109,3 +109,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C24 (00:45) — AUDIT L1: opt-in VAULT_STRICT_SESSION_LIMIT fail-closed on session-count error (default preserved) + test; service/config green. 11/14 audit fixed. Remaining: M3 (CSRF, grok-delegate after coverage), L4 (rate-limit FailClosed), L5 (LoadSecret zeroing opt-in). grok coverage round3=73.4%.
 - C25 (00:48) — AUDIT L5: secret-file zeroing/removal now opt-in (VAULT_SECRET_FILE_CONSUME) + logs failures; migrated 2 tests + default test; config green. 12/14 audit fixed. Remaining: L4 (rate-limit FailClosed flag), M3 (CSRF — grok-delegate after coverage parks).
 - C26 (00:53) — AUDIT L4: RateLimitConfig.FailClosed (503 on cache outage for login/register/pwreset/TOTP, no per-pod fallback) + test; middleware/server green. 13/14 audit fixed — only M3 (CSRF) remains (grok-delegate after coverage campaign parks). grok coverage round4=73.7% (plateauing).
+- C27 (00:56) — WS0 final: comprehensive 0.8.9 CHANGELOG entry (features + security/audit + tests). grok coverage round5=75.6% (3 rounds left, ~80% ceiling). NEXT: park campaign → merge coverage tests + finalize coverage number; grok-delegate M3; final release-check.
