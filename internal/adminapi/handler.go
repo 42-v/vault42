@@ -245,6 +245,20 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxLockDuration bounds an admin-imposed account lock (L7): a caller with the
+// UsersLock grant must not be able to set an effectively permanent lock.
+const maxLockDuration = 30 * 24 * time.Hour
+
+// clampLockDuration parses an admin lock duration, defaulting to 24h for an
+// unparseable, non-positive, or absurdly long (>30d) value.
+func clampLockDuration(s string) time.Duration {
+	dur, err := time.ParseDuration(s)
+	if err != nil || dur <= 0 || dur > maxLockDuration {
+		return 24 * time.Hour
+	}
+	return dur
+}
+
 // LockUser handles POST /admin/users/{id}/lock.
 func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -259,12 +273,7 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req.Duration = "24h"
 	}
-	dur, err := time.ParseDuration(req.Duration)
-	if err != nil {
-		dur = 24 * time.Hour
-	}
-
-	until := time.Now().Add(dur)
+	until := time.Now().Add(clampLockDuration(req.Duration))
 	if err := h.users.LockUntil(r.Context(), id, until); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
