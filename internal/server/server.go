@@ -247,20 +247,22 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Rate limiting middleware factories
 	rlEnabled := cfg.RateLimitEnabled
+	// Auth-sensitive limiters fail closed on cache outage (audit L4): the per-pod
+	// in-memory fallback would multiply the effective limit across replicas.
 	loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey,
+		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	registerRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	refreshRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	passwordResetRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	totpRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	verifyEmailRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
