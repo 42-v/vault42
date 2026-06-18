@@ -106,6 +106,7 @@ func TestLoadSecretFileAndZero(t *testing.T) {
 	}
 
 	t.Setenv("TEST_KEY_FILE", secretFile)
+	t.Setenv("VAULT_SECRET_FILE_CONSUME", "true") // opt into the destructive wipe (L5)
 
 	val, err := LoadSecret("TEST_KEY")
 	if err != nil {

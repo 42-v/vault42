@@ -2,13 +2,18 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // LoadSecret reads a secret from the file path specified in the env var
-// (envKey + "_FILE"), trims whitespace, and zeros the file after reading.
+// (envKey + "_FILE") and trims whitespace. When VAULT_SECRET_FILE_CONSUME=true it
+// also zeroes + removes the file (defense in depth). That destruction is opt-in
+// (audit L5): the canonical deployment mounts secrets read-only where it is a
+// silent no-op, while on a writable real keyfile it would destroy the operator's
+// secret on first read — so failures are now surfaced rather than swallowed.
 func LoadSecret(envKey string) (string, error) {
 	path := os.Getenv(envKey + "_FILE")
 	if path == "" {
@@ -19,9 +24,14 @@ func LoadSecret(envKey string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
-	// Zero the file contents and delete it (defense in depth)
-	_ = os.WriteFile(path, make([]byte, len(data)), 0o400) // #nosec G104 -- secret file zeroing is best-effort; path from operator env var
-	_ = os.Remove(path)                                    // #nosec G104 -- secret file deletion is best-effort
+	if os.Getenv("VAULT_SECRET_FILE_CONSUME") == "true" {
+		if werr := os.WriteFile(path, make([]byte, len(data)), 0o400); werr != nil { // #nosec G104,G306 -- best-effort zeroing; path from operator env var
+			log.Printf("WARNING: failed to zero secret file %s (defense-in-depth wipe skipped): %v", path, werr)
+		}
+		if rerr := os.Remove(path); rerr != nil {
+			log.Printf("WARNING: failed to remove secret file %s (defense-in-depth wipe skipped): %v", path, rerr)
+		}
+	}
 	return strings.TrimSpace(string(data)), nil
 }
 
