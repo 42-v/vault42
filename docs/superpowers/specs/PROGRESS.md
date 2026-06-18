@@ -8,7 +8,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 **Test env:** `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock TESTCONTAINERS_RYUK_DISABLED=true GOTOOLCHAIN=auto GOFLAGS=-mod=mod`
 
 ## Metrics (update each cycle)
-- Coverage: baseline ~70.7% → **target ≥89%** → current: _measuring_
+- Coverage: baseline 70.69% (official metric: internal+unit+attack+fuzz via coverage.sh). grok unit campaign plateaus ~73-76% on ./internal/... — DB/cache/email/container-shellout paths only reachable via integration/e2e suites that the metric EXCLUDES, so 89% is not achievable purely via unit tests. Will merge grok's adds + report the real coverage.sh number honestly.
 - govulncheck: **CLEAN** (go1.26.4) · gosec HIGH/CRIT: 0 · frontend audit: clean
 - Security audit: 16 confirmed (2 HIGH/7 MED/7 LOW) → **H1+H2 FIXED**; 7 MED/7 LOW remain
 - Tests: internal + attack + compliance + fuzz must stay green
@@ -111,3 +111,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C26 (00:53) — AUDIT L4: RateLimitConfig.FailClosed (503 on cache outage for login/register/pwreset/TOTP, no per-pod fallback) + test; middleware/server green. 13/14 audit fixed — only M3 (CSRF) remains (grok-delegate after coverage campaign parks). grok coverage round4=73.7% (plateauing).
 - C27 (00:56) — WS0 final: comprehensive 0.8.9 CHANGELOG entry (features + security/audit + tests). grok coverage round5=75.6% (3 rounds left, ~80% ceiling). NEXT: park campaign → merge coverage tests + finalize coverage number; grok-delegate M3; final release-check.
 - C28 (01:00) — HEALTH CHECK: full build OK, govulncheck CLEAN, gosec 0 HIGH/CRIT; vet caught attack stubUserRepo missing 3 new UserRepository methods (latent CI compile break) → fixed. grok coverage oscillating 73-76% (round 6=73.1%, ceiling ~76%). NEXT: campaign parks → merge best test state + record honest %; then M3 + final release-check.
+- C29 (01:05) — Coverage-metric analysis: official coverage.sh = internal+unit+attack+fuzz; grok unit campaign ceiling ~76% (round6=73.1%, still running). 89% not unit-achievable on this IO-heavy codebase — will report honest number, not fake it. Did NOT run coverage.sh (testcontainer contention w/ campaign). Endgame: campaign parks → merge net-new tests → coverage.sh → M3 (oauth CSRF + 18-test migration) → release-check.
