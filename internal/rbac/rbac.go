@@ -16,6 +16,7 @@ const (
 	UsersLock      Permission = "users:lock"
 	UsersUnlock    Permission = "users:unlock"
 	UsersDelete    Permission = "users:delete"
+	UsersImport    Permission = "users:import"
 	SessionsList   Permission = "sessions:list"
 	SessionsRevoke Permission = "sessions:revoke"
 	ClientsList    Permission = "clients:list"
@@ -91,6 +92,7 @@ var superAdminPerms = map[Permission]bool{
 	AdminsRevoke:  true,
 	RolesCreate:   true,
 	RolesDelete:   true,
+	UsersImport:   true,
 }
 
 // HasPermission checks whether the given role has the specified permission.

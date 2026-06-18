@@ -48,6 +48,7 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	// User management
 	mux.Handle("GET /admin/users", withPerm(sessionAuth, rbac.UsersList, api.ListUsers))
 	mux.Handle("GET /admin/users/{id}", withPerm(sessionAuth, rbac.UsersRead, api.GetUser))
+	mux.Handle("POST /admin/users/import", withPerm(sessionAuth, rbac.UsersImport, api.ImportUsers))
 	mux.Handle("POST /admin/users/{id}/lock", withPerm(sessionAuth, rbac.UsersLock, api.LockUser))
 	mux.Handle("POST /admin/users/{id}/unlock", withPerm(sessionAuth, rbac.UsersUnlock, api.UnlockUser))
 
