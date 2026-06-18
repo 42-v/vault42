@@ -8,7 +8,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 **Test env:** `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock TESTCONTAINERS_RYUK_DISABLED=true GOTOOLCHAIN=auto GOFLAGS=-mod=mod`
 
 ## Metrics (update each cycle)
-- Coverage: baseline 70.69% (official metric: internal+unit+attack+fuzz via coverage.sh). grok unit campaign plateaus ~73-76% on ./internal/... — DB/cache/email/container-shellout paths only reachable via integration/e2e suites that the metric EXCLUDES, so 89% is not achievable purely via unit tests. Will merge grok's adds + report the real coverage.sh number honestly.
+- Coverage: 70.69% -> **77.36%** (2249 tests) via coverage.sh after merging grok campaign + feature/audit TDD. 89% NOT reachable: DB/cache/email/keystore/container paths need integration coverage the metric excludes. Reported honestly.
 - govulncheck: **CLEAN** (go1.26.4) · gosec HIGH/CRIT: 0 · frontend audit: clean
 - Security audit: 16 confirmed (2 HIGH/7 MED/7 LOW) → **H1+H2 FIXED**; 7 MED/7 LOW remain
 - Tests: internal + attack + compliance + fuzz must stay green
@@ -114,3 +114,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C29 (01:05) — Coverage-metric analysis: official coverage.sh = internal+unit+attack+fuzz; grok unit campaign ceiling ~76% (round6=73.1%, still running). 89% not unit-achievable on this IO-heavy codebase — will report honest number, not fake it. Did NOT run coverage.sh (testcontainer contention w/ campaign). Endgame: campaign parks → merge net-new tests → coverage.sh → M3 (oauth CSRF + 18-test migration) → release-check.
 - C30 (01:10) — Harvest plan recorded. grok campaign (round7=73.3%, round8 in progress) added ~3172 test lines across 24 pkgs. RECONCILIATION HAZARD: tests written vs frozen trunk (pre-audit) — some assert OLD behavior changed by C19-C28 (e.g. LockUser unbounded duration vs C20 clampLockDuration; config_edge_test.go edited both sides → conflict). HARVEST = git merge grok branch → run full suite → fix/drop tests asserting pre-audit behavior → coverage.sh → commit. Then M3, then release-check. Waiting on round 8 to park.
 - C31 (01:30) — AUDIT M3 (OAuth CSRF/session-fixation): browser-bound 4-part state + __Host cookie + constant-time compare in callback; migrated ~21 callback tests + validOAuthState helper to the new contract + 2 explicit CSRF tests; full handler suite green. **AUDIT 14/14 COMPLETE.** NEXT: harvest grok coverage tests, run coverage.sh, final release-check.
+- C33 (01:30) — Coverage harvest measured: official coverage.sh = **77.36%** (was 70.69%), 2249 tests. Committed test-coverage.md. NEXT (final): release-check.sh full gate, then wrap-up summary.
