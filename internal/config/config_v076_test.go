@@ -77,7 +77,8 @@ func TestLoadListEnvVars(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoadEmbeddedTrustDefaultsRealIPHeader(t *testing.T) {
-	t.Setenv("VAULT_PROFILE", "dev")
+	// The embedded-trust shortcut is only valid in the embedded profile (M7).
+	t.Setenv("VAULT_PROFILE", "embedded")
 	t.Setenv("VAULT_EMBEDDED_TRUSTED_UPSTREAM", "true")
 	// REAL_IP_HEADER deliberately unset so the default kicks in.
 

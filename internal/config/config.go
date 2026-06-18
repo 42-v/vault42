@@ -408,6 +408,14 @@ func Load() (*Config, error) {
 	// rate-limit + audit attribution. Explicit TRUSTED_PROXIES /
 	// REAL_IP_HEADER env values always win; this only fills the gaps.
 	if c.EmbeddedTrustedUpstream {
+		// Fail closed: this shortcut auto-trusts whole RFC1918 + loopback ranges
+		// and blindly honours X-Forwarded-For, collapsing per-IP rate-limit and
+		// audit attribution on a flat network. Only the embedded sidecar profile
+		// may use it; anywhere else, set TRUSTED_PROXIES/REAL_IP_HEADER explicitly
+		// (audit M7).
+		if c.Profile != ProfileEmbedded {
+			return nil, fmt.Errorf("VAULT_EMBEDDED_TRUSTED_UPSTREAM is only valid in the embedded profile (got %s); set TRUSTED_PROXIES and REAL_IP_HEADER explicitly", c.Profile)
+		}
 		if len(c.TrustedProxies) == 0 {
 			c.TrustedProxies = []string{
 				"10.0.0.0/8",     // RFC1918 large
