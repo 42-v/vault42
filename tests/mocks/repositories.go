@@ -43,6 +43,14 @@ type MockUserRepo struct {
 	LockUntilFn            func(ctx context.Context, id string, until time.Time) error
 	UnlockFn               func(ctx context.Context, id string) error
 	VerifyEmailFn          func(ctx context.Context, id string) error
+	SetLastLoginFn         func(ctx context.Context, id string) error
+}
+
+func (m *MockUserRepo) SetLastLogin(ctx context.Context, id string) error {
+	if m.SetLastLoginFn != nil {
+		return m.SetLastLoginFn(ctx, id)
+	}
+	return nil
 }
 
 func (m *MockUserRepo) Create(ctx context.Context, user *model.User) error {

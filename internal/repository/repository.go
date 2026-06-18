@@ -31,6 +31,8 @@ type UserRepository interface {
 	Unlock(ctx context.Context, id string) error
 	// VerifyEmail marks the user's email address as verified.
 	VerifyEmail(ctx context.Context, id string) error
+	// SetLastLogin stamps the user's last successful login time.
+	SetLastLogin(ctx context.Context, id string) error
 }
 
 // RefreshTokenRepository manages refresh token persistence.

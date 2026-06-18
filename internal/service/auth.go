@@ -58,6 +58,8 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrAccountLocked      = errors.New("account locked")
+	ErrAccountBanned      = errors.New("account banned")
+	ErrAccountDisabled    = errors.New("account disabled")
 	ErrPasswordBreached   = errors.New("password found in breach database")
 	ErrPasswordTooShort   = errors.New("password too short")
 	ErrPasswordReused     = errors.New("password recently used")
@@ -386,6 +388,25 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, ErrAccountLocked
 	}
 
+	// Account-state gate (BeOn3 parity, migration 004). Reject banned/disabled/
+	// deleted accounts before password verification. A soft-deleted account is
+	// treated as "no such user" (ErrInvalidCredentials) to avoid revealing it.
+	if user.Deleted {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_deleted"}, 20)
+		return nil, ErrInvalidCredentials
+	}
+	if user.Banned {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_banned"}, 30)
+		return nil, ErrAccountBanned
+	}
+	if user.Disabled {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_disabled"}, 30)
+		return nil, ErrAccountDisabled
+	}
+
 	// Verify password
 	valid, err := vaultcrypto.VerifyPassword(input.Password, user.PasswordHash, s.pepper)
 	if errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
@@ -501,6 +522,11 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 
 	if err := s.storeRefreshToken(ctx, user.ID, input.ClientID, deviceID, fp, pair); err != nil {
 		return nil, err
+	}
+
+	// Stamp last successful login (BeOn3 parity); best-effort.
+	if err := s.users.SetLastLogin(ctx, user.ID); err != nil {
+		log.Printf("auth: failed to set last_login for %s: %v", user.ID, err)
 	}
 
 	if s.metrics != nil {
@@ -694,6 +720,11 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 	if err := s.storeRefreshToken(ctx, userID, "", deviceID, fingerprint, pair); err != nil {
 		return nil, err
+	}
+
+	// Stamp last successful login (BeOn3 parity); best-effort.
+	if err := s.users.SetLastLogin(ctx, userID); err != nil {
+		log.Printf("auth: failed to set last_login for %s: %v", userID, err)
 	}
 
 	if s.metrics != nil {

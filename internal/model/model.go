@@ -24,6 +24,13 @@ type User struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	Roles            []string
+	// Account-state flags (BeOn3 parity, migration 004).
+	Disabled    bool
+	Banned      bool
+	BanReason   string
+	LastLoginAt *time.Time
+	Deleted     bool
+	DeletedAt   *time.Time
 }
 
 // PasswordHistory tracks previous password hashes to prevent reuse.

@@ -44,7 +44,8 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User) error {
 func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
-		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles
+		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
+		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at
 		FROM auth.users WHERE id = $1`, id))
 }
 
@@ -52,7 +53,8 @@ func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) 
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
-		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles
+		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
+		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at
 		FROM auth.users WHERE email = $1`, email))
 }
 
@@ -116,6 +118,15 @@ func (r *UserRepo) Unlock(ctx context.Context, id string) error {
 	return nil
 }
 
+// SetLastLogin stamps the user's last successful login time to now.
+func (r *UserRepo) SetLastLogin(ctx context.Context, id string) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET last_login_at=NOW() WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("set last login: %w", err)
+	}
+	return nil
+}
+
 // VerifyEmail marks the user's email as verified.
 func (r *UserRepo) VerifyEmail(ctx context.Context, id string) error {
 	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET email_verified=TRUE, updated_at=NOW() WHERE id=$1`, id)
@@ -133,6 +144,7 @@ func (r *UserRepo) scanUser(row pgx.Row) (*model.User, error) {
 		&displayName, &avatarURL, &u.Locale, &u.MFARequired,
 		&u.LockedUntil, &u.FailedLoginCount, &u.CreatedAt, &u.UpdatedAt,
 		&u.Roles,
+		&u.Disabled, &u.Banned, &u.BanReason, &u.LastLoginAt, &u.Deleted, &u.DeletedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
