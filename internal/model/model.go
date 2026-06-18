@@ -190,6 +190,17 @@ type AdminRole struct {
 	Rank        int
 }
 
+// AppRole is an entry in the custom roles catalog (auth.app_roles). User roles
+// are validated against this catalog at JWT issuance. Reserved=true entries are
+// catalog-protected and cannot be deleted via the admin API.
+type AppRole struct {
+	Name        string
+	Namespace   string
+	Description string
+	Reserved    bool
+	CreatedAt   time.Time
+}
+
 // AdminUser represents an admin gateway operator account.
 // Admin accounts are stored in auth.admin_users, fully decoupled from auth.users.
 // The Role field is populated from the auth.admin_roles reference table via JOIN.

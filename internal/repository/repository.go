@@ -4,10 +4,29 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
 )
+
+// ErrRoleReserved is returned when attempting to delete a reserved catalog role.
+var ErrRoleReserved = errors.New("role is reserved and cannot be deleted")
+
+// AppRoleRepository manages the custom roles catalog (auth.app_roles).
+type AppRoleRepository interface {
+	// List returns all catalog roles ordered by name.
+	List(ctx context.Context) ([]*model.AppRole, error)
+	// ListNames returns just the role names (for the validation cache).
+	ListNames(ctx context.Context) ([]string, error)
+	// Get returns one role by name, or nil, nil if absent.
+	Get(ctx context.Context, name string) (*model.AppRole, error)
+	// Create inserts a new catalog role.
+	Create(ctx context.Context, role *model.AppRole) error
+	// Delete removes a non-reserved role by name. Returns ErrRoleReserved if the
+	// role is reserved, or nil if the role does not exist (idempotent).
+	Delete(ctx context.Context, name string) error
+}
 
 // UserRepository manages user persistence.
 type UserRepository interface {
