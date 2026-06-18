@@ -319,7 +319,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		oauthExchangeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
-		mux.HandleFunc("GET /auth/oauth2/authorize", oauthHandler.Authorize)
+		// Authorize writes an unauthenticated per-request oauth_state cache entry;
+		// rate-limit it like its siblings to avoid cache-fill eviction pressure
+		// on shared lockout/OTP/reset state (audit M2).
+		authorizeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		}, rlEnabled)
+		mux.Handle("GET /auth/oauth2/authorize", authorizeRL(http.HandlerFunc(oauthHandler.Authorize)))
 		mux.Handle("GET /auth/oauth2/callback/{provider}", loginRL(http.HandlerFunc(oauthHandler.Callback)))
 		mux.Handle("POST /auth/oauth2/exchange", oauthExchangeRL(http.HandlerFunc(oauthHandler.Exchange)))
 	}

@@ -778,7 +778,7 @@ func (h *Handler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.AdminAccountCreate, creator.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountCreate, creator.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"new_admin_id":       id,
 		"new_admin_username": req.Username,
 		"new_admin_role":     req.Role,
@@ -815,7 +815,7 @@ func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"revoked_admin_id": id,
 	}, 0)
 
