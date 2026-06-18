@@ -56,7 +56,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 ### WS5 — generic OIDC / OAuth authority (Okta & any OpenID Connect issuer)
 Requested by v 2026-06-18: support a configurable generic OIDC provider (Okta, Auth0,
 Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Facebook.
-- [~] `internal/oauth2/oidc.go`: OIDCProvider discovery+authorize+exchange+userinfo DONE (issuer-match check, PKCE+nonce); ID-token JWKS validation = next slice.
+- [x] `internal/oauth2/oidc.go`: OIDCProvider discovery+authorize+exchange+userinfo + ID-token JWKS validation (alg allowlist, iss/aud/exp/nonce, embedded-key-header reject, 2048-bit min).
 - [ ] Config: register N generic providers from env/config (`provider name`, issuer URL, client id/secret `_FILE`, scopes, redirect URI); wire into the providers map in server bootstrap.
 - [ ] Nonce binding through the existing state/PKCE flow; map OIDC `sub`+email onto social_accounts/user link (same path as GitHub/Facebook).
 - [ ] Tests: discovery parse, ID-token validation (good/expired/bad-aud/bad-sig/bad-nonce), authorize URL shape, httptest fake issuer + JWKS. Add an attack test for ID-token forgery / alg=none.
@@ -99,3 +99,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C14 (23:40) — WS3.3 (completes WS3): POST /admin/users/import (rbac users:import, idempotent, admin-role strip, flags+legacy_id, per-row results, 1000 cap); 4 tests; adminapi+rbac green. WS3 DONE. NEXT: WS5 (generic OIDC authority).
 - C15 (23:50) — WS6 DONE: grok 16-agent multireplica e2e suite reviewed+merged (test-only). 8 cross-replica behaviors × dev+production + MemoryCacheNotShared all green. Stage-2 fixes: migrations-dir walk-up, shared MASTER_KEY across replicas, per-profile DB isolation. NOTE: one transient FAIL observed under overlapping container runs (port/resource contention) — passes cleanly in isolation; flag suite for a port-allocation hardening pass if it recurs in CI. NEXT: WS5 (generic OIDC).
 - C16 (23:54) — WS5.1: generic OIDCProvider (discovery cache + issuer-match, authorize openid+nonce+PKCE, exchange, userinfo) + 3 httptest-fake-issuer tests; oauth2 green. NEXT WS5.2: ID-token JWKS validation (alg=none/forgery attack test), then config registration + bootstrap wiring.
+- C17 (00:02) — WS5.2: VerifyIDToken (JWKS fetch+cache+rotation, RS256/384/512 only, iss/aud/exp/nonce, reject alg=none/HMAC/jku/x5u/x5c/jwk/<2048bit) + 7 tests incl. alg=none + forgery; oauth2 green. NEXT WS5.3: config registration of N OIDC providers + bootstrap wiring + callback ID-token verification.
