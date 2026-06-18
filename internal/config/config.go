@@ -106,6 +106,10 @@ type Config struct {
 	// OAuthFacebookClientSecret is the Facebook OAuth2 client secret (VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE).
 	OAuthFacebookClientSecret string
 
+	// OIDCProviders holds generic OpenID Connect providers (Okta, Auth0, Keycloak,
+	// Entra, …) registered via VAULT_OIDC_PROVIDERS + per-name env vars.
+	OIDCProviders []OIDCProviderConfig
+
 	// PasswordMinLength is the minimum password length (VAULT_PASSWORD_MIN_LENGTH). Default: 15 (NIST SP 800-63B).
 	PasswordMinLength int
 	// HIBPCheck enables Have I Been Pwned breach checking for passwords (VAULT_HIBP_CHECK). Default: true.
@@ -422,6 +426,9 @@ func Load() (*Config, error) {
 	// Load secrets from _FILE env vars
 	c.loadSecrets()
 
+	// Register generic OIDC providers from env.
+	c.loadOIDCProviders()
+
 	// Validate primary color format (defense-in-depth: prevents CSS injection in email templates)
 	if !isValidHexColor(c.PrimaryColor) {
 		return nil, fmt.Errorf("invalid VAULT_PRIMARY_COLOR %q: must be hex format #RRGGBB", c.PrimaryColor)
@@ -477,6 +484,47 @@ func (c *Config) loadSecrets() {
 	}
 	if fs, err := LoadSecret("VAULT_OAUTH_FACEBOOK_CLIENT_SECRET"); err == nil {
 		c.OAuthFacebookClientSecret = fs
+	}
+}
+
+// OIDCProviderConfig describes one generic OpenID Connect provider.
+type OIDCProviderConfig struct {
+	Name         string // provider key used in routes/state (e.g. "okta")
+	Issuer       string // issuer base URL (discovery: {issuer}/.well-known/openid-configuration)
+	ClientID     string
+	ClientSecret string
+	Scopes       string // optional, space-delimited; "" -> "openid email profile"
+}
+
+// loadOIDCProviders parses VAULT_OIDC_PROVIDERS (comma-separated provider names)
+// and, for each NAME, reads VAULT_OIDC_<NAME>_{ISSUER,CLIENT_ID,SCOPES} plus the
+// client secret via the _FILE convention (VAULT_OIDC_<NAME>_CLIENT_SECRET[_FILE]).
+// Providers missing an issuer or client id are skipped.
+func (c *Config) loadOIDCProviders() {
+	list := os.Getenv("VAULT_OIDC_PROVIDERS")
+	if list == "" {
+		return
+	}
+	for _, raw := range strings.Split(list, ",") {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		envKey := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+		prefix := "VAULT_OIDC_" + envKey + "_"
+		issuer := os.Getenv(prefix + "ISSUER")
+		clientID := os.Getenv(prefix + "CLIENT_ID")
+		if issuer == "" || clientID == "" {
+			continue
+		}
+		secret, _ := LoadSecret(prefix + "CLIENT_SECRET")
+		c.OIDCProviders = append(c.OIDCProviders, OIDCProviderConfig{
+			Name:         name,
+			Issuer:       issuer,
+			ClientID:     clientID,
+			ClientSecret: secret,
+			Scopes:       os.Getenv(prefix + "SCOPES"),
+		})
 	}
 }
 

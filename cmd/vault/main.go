@@ -289,6 +289,14 @@ func main() {
 			cfg.Origin+"/auth/oauth2/callback/facebook",
 		)
 	}
+	// Generic OpenID Connect providers (Okta, Auth0, Keycloak, Entra, …).
+	for _, op := range cfg.OIDCProviders {
+		oauthProviders[op.Name] = oauth2.NewOIDCProvider(
+			op.Name, op.Issuer, op.ClientID, op.ClientSecret,
+			cfg.Origin+"/auth/oauth2/callback/"+op.Name, op.Scopes,
+		)
+		log.Printf("oauth: registered OIDC provider %q (issuer=%s)", op.Name, op.Issuer)
+	}
 
 	// Set up keystore callbacks and refresh loop
 	if ks != nil {

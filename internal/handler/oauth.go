@@ -208,12 +208,27 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch user info from provider
-	userInfo, err := provider.UserInfo(r.Context(), tokenResp.AccessToken)
-	if err != nil {
-		log.Printf("oauth: user info failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
-		WriteError(w, http.StatusBadGateway, "provider_error")
-		return
+	// For OIDC providers, prefer the cryptographically-verified, nonce-bound ID
+	// token over the access-token userinfo call. nonce is the state nonce we
+	// minted at /authorize and round-tripped through the signed state.
+	var userInfo *oauth2.UserInfo
+	if oidcProvider, ok := provider.(*oauth2.OIDCProvider); ok && tokenResp.IDToken != "" {
+		userInfo, err = oidcProvider.VerifyIDToken(r.Context(), tokenResp.IDToken, nonce)
+		if err != nil {
+			log.Printf("oauth: id_token verification failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusBadGateway, "provider_error")
+			return
+		}
+	}
+
+	// Fetch user info from provider (non-OIDC, or OIDC issuer with no id_token).
+	if userInfo == nil {
+		userInfo, err = provider.UserInfo(r.Context(), tokenResp.AccessToken)
+		if err != nil {
+			log.Printf("oauth: user info failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusBadGateway, "provider_error")
+			return
+		}
 	}
 
 	// Find or create user
