@@ -106,3 +106,25 @@ func mustHost(raw string) string {
 	u, _ := url.Parse(raw)
 	return u.Host
 }
+
+// TestOIDCProvider_Name_Table covers Name() for different providers.
+func TestOIDCProvider_Name_Table(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{"generic", "generic", "generic"},
+		{"google", "google", "google"},
+		{"empty name", "", ""},
+		{"custom", "my-oidc", "my-oidc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewOIDCProvider(tt.provider, "https://iss", "cid", "sec", "https://cb", "")
+			if got := p.Name(); got != tt.want {
+				t.Errorf("Name() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

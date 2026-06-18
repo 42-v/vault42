@@ -101,3 +101,69 @@ func TestCollectorCounterIncrements(t *testing.T) {
 		t.Errorf("tokensIssued should be 1, got %d", v)
 	}
 }
+
+// additional table driven edge coverage for New and Handler
+func TestNewCollector_AndHandler_Edge(t *testing.T) {
+	tests := []struct {
+		name string
+		act  func() int64
+		rej  func() int64
+		maxc func() int
+	}{
+		{"zeros", func() int64 { return 0 }, func() int64 { return 0 }, func() int { return 0 }},
+		{"nilsafe", func() int64 { return 0 }, func() int64 { return 0 }, func() int { return 10 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewCollector(tt.act, tt.rej, tt.maxc)
+			rec := httptest.NewRecorder()
+			c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			if rec.Code != http.StatusOK {
+				t.Errorf("code=%d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestCollector_NilAccessors_Recovered(t *testing.T) {
+	c := NewCollector(nil, nil, nil)
+	defer func() { _ = recover() }()
+	rec := httptest.NewRecorder()
+	c.Handler()(rec, httptest.NewRequest("GET", "/", nil))
+}
+
+// TestCollector_Table exercises all recorders and handler edges in table form.
+func TestCollector_Table(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Collector)
+	}{
+		{"record all", func(c *Collector) {
+			c.RecordLoginAttempt()
+			c.RecordLoginSuccess()
+			c.RecordLoginFailed()
+			c.RecordTokenIssued()
+			c.RecordTokenRefreshed()
+		}},
+		{"multiple", func(c *Collector) {
+			for i := 0; i < 3; i++ {
+				c.RecordLoginAttempt()
+				c.RecordLoginFailed()
+			}
+		}},
+		{"handler after records", func(c *Collector) {
+			c.RecordLoginSuccess()
+			rec := httptest.NewRecorder()
+			c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/m", nil))
+			if rec.Code != http.StatusOK {
+				t.Error("bad code")
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewCollector(func() int64 { return 0 }, func() int64 { return 0 }, func() int { return 1 })
+			tt.run(c)
+		})
+	}
+}

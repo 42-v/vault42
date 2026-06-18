@@ -1,10 +1,17 @@
 package adminapi
 
 import (
+	"context"
 	"encoding/hex"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 )
 
 func TestHashSessionToken_Deterministic(t *testing.T) {
@@ -119,3 +126,114 @@ func TestDecryptTOTPSecret_RejectsLegacyCiphertext(t *testing.T) {
 		t.Fatal("legacy non-AAD ciphertext must NOT decrypt under A-4 code")
 	}
 }
+
+func TestAuthHandler_Status(t *testing.T) {
+	tests := []struct {
+		name       string
+		admin      *model.AdminUser
+		wantCode   int
+		wantHasID  bool
+	}{
+		{"no admin in ctx", nil, http.StatusUnauthorized, false},
+		{"with admin", &model.AdminUser{ID: "adm-xyz", Username: "bob", Role: "viewer", TOTPVerified: true}, http.StatusOK, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestAuth(nil, nil)
+			rec := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+			if tt.admin != nil {
+				r = r.WithContext(WithAdmin(r.Context(), tt.admin))
+			}
+			h.Status(rec, r)
+			if rec.Code != tt.wantCode {
+				t.Errorf("code = %d, want %d", rec.Code, tt.wantCode)
+			}
+			if tt.wantHasID && !strings.Contains(rec.Body.String(), tt.admin.ID) {
+				t.Errorf("body missing admin ID: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthHandler_Logout(t *testing.T) {
+	tests := []struct {
+		name     string
+		session  *model.AdminSession
+		sessRepo repository.AdminSessionRepository
+		wantCode int
+	}{
+		{"no session", nil, nil, http.StatusUnauthorized},
+		{"with session revoke ok", &model.AdminSession{ID: "s1"}, nil, http.StatusOK},
+		{"revoke error", &model.AdminSession{ID: "s2"}, func() repository.AdminSessionRepository {
+			sr := newFakeSessionRepo()
+			return &fakeSessionRepoWithErr{fakeSessionRepo: sr, errRevoke: errors.New("db")}
+		}(), http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := tt.sessRepo
+			if sess == nil {
+				sess = newFakeSessionRepo()
+			}
+			h := newTestAuth(nil, sess)
+			rec := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/admin/auth/logout", nil)
+			if tt.session != nil {
+				r = r.WithContext(WithSession(r.Context(), tt.session))
+			}
+			h.Logout(rec, r)
+			if rec.Code != tt.wantCode {
+				t.Errorf("code=%d want=%d body=%s", rec.Code, tt.wantCode, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
+	repo := newFakeAdminRepo()
+	err := EnsureFirstAdmin(context.Background(), repo, "")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(repo.users) != 1 {
+		t.Errorf("expected 1 admin created, got %d", len(repo.users))
+	}
+}
+
+func TestEnsureFirstAdmin_AlreadyExists(t *testing.T) {
+	repo := newFakeAdminRepo()
+	repo.users["existing"] = &model.AdminUser{ID: "existing", Username: "admin"}
+	err := EnsureFirstAdmin(context.Background(), repo, "")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(repo.users) != 1 {
+		t.Error("should not create duplicate")
+	}
+}
+
+func TestEnsureFirstAdmin_CountError(t *testing.T) {
+	repo := newFakeAdminRepo()
+	repo.errCount = errors.New("count fail")
+	err := EnsureFirstAdmin(context.Background(), repo, "")
+	if err == nil || !strings.Contains(err.Error(), "count admins") {
+		t.Errorf("expected count error, got %v", err)
+	}
+}
+
+// fakeSessionRepoWithErr extends for error injection on Revoke.
+type fakeSessionRepoWithErr struct {
+	*fakeSessionRepo
+	errRevoke error
+}
+
+func (f *fakeSessionRepoWithErr) Revoke(ctx context.Context, id string) error {
+	if f.errRevoke != nil {
+		return f.errRevoke
+	}
+	return f.fakeSessionRepo.Revoke(ctx, id)
+}
+
+var _ repository.AdminSessionRepository = (*fakeSessionRepoWithErr)(nil)
+

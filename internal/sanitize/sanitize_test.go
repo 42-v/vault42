@@ -20,6 +20,10 @@ func TestString(t *testing.T) {
 		{"trims then escapes", "  <b>  ", 100, "&lt;b&gt;"},
 		{"truncates after escape", "<", 4, "&lt;"},
 		{"unicode preserved", "caf\u00e9", 10, "caf\u00e9"},
+		{"truncates cutting open entity", "foo&bar", 5, "foo"},
+		{"truncates leaving & without ;", "x&y&z", 4, "x&y"},
+		{"truncate keeps closed entity", "a&b;def", 5, "a&b;d"},
+		{"maxLen 1", "x", 1, "x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,6 +52,9 @@ func TestLocale(t *testing.T) {
 		{"dot rejected", "en.UTF-8", "en"},
 		{"slash rejected", "../../etc", "en"},
 		{"max valid length", "abcdefghij", "abcdefghij"},
+		{"single char", "a", "a"},
+		{"hyphen", "en-GB", "en-gb"},
+		{"all invalid after check", "en gb", "en"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,6 +83,8 @@ func TestRedirectPath(t *testing.T) {
 		{"absolute URL", "https://evil.com", ""},
 		{"too long", "/" + string(make([]byte, 256)), ""},
 		{"max valid length", "/" + string(make([]byte, 255)), "/" + string(make([]byte, 255))},
+		{"query with special", "/p?a=1&b=2", "/p?a=1&b=2"},
+		{"empty after no slash", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -129,6 +138,11 @@ func TestEmail(t *testing.T) {
 		{"no local", "@example.com", false},
 		{"spaces", "user @example.com", false},
 		{"too long", string(make([]byte, 250)) + "@a.com", false},
+		{"long exactly 254 ok if parse", "a@" + string(make([]byte, 250)) + ".com", false}, // will fail parse anyway or len
+		{"valid longish", "user@ex.com", true},
+		{"trailing dot domain rejected by parse", "u@ex.com.", false},
+		{"exactly 254 len boundary", "u@" + string(make([]byte, 250)) + ".co", false},
+		{"simple valid", "a@b.co", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
