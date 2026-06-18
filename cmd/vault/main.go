@@ -237,6 +237,9 @@ func main() {
 
 	authSvc.SetRateLimitRepo(rateLimitRepo)
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
+	// Catalog-aware role validation: JWT issuance keeps only roles defined in
+	// auth.app_roles (in addition to the admin-reserved filter).
+	authSvc.SetRoleCatalog(service.NewRoleCatalog(postgres.NewAppRoleRepo(db), 60*time.Second))
 
 	// Zero master key and HMAC secret from config after passing to services.
 	// Note: string secrets (Pepper, DB passwords) can't be zeroed in Go — accepted limitation.

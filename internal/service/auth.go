@@ -93,6 +93,7 @@ type AuthService struct {
 	rateLimits         repository.RateLimitRepository
 	tokenSvc           *TokenService
 	mfaSvc             *MFAService
+	roleCatalog        *RoleCatalog
 	auditLog           *audit.Logger
 	hibp               *HIBPClient
 	cache              cache.Cache
@@ -158,6 +159,28 @@ func (s *AuthService) SetMetrics(m *metrics.Collector) {
 // ErrTooManySessions. A value of 0 disables the check.
 func (s *AuthService) SetMaxSessionsPerUser(n int) {
 	s.maxSessionsPerUser = n
+}
+
+// SetRoleCatalog enables catalog-aware role validation. When set, JWT issuance
+// keeps only roles present in the auth.app_roles catalog (in addition to the
+// admin-reserved filter). Nil (the default) preserves the prior behaviour.
+func (s *AuthService) SetRoleCatalog(c *RoleCatalog) {
+	s.roleCatalog = c
+}
+
+// effectiveRoles computes the roles embedded in a JWT for a user: strip
+// admin-reserved tiers (seed.FilterUserRoles), then — when a catalog is
+// configured — keep only catalog-defined roles, falling back to ["user"] when
+// the result is empty (preserving the historical default).
+func (s *AuthService) effectiveRoles(ctx context.Context, roles []string) []string {
+	out := seed.FilterUserRoles(roles)
+	if s.roleCatalog != nil {
+		out = s.roleCatalog.Filter(ctx, out)
+	}
+	if len(out) == 0 {
+		return []string{"user"}
+	}
+	return out
 }
 
 // RegisterInput is the registration request payload.
@@ -504,14 +527,9 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Find or create device (non-critical — log but don't fail)
 	deviceID := s.findOrCreateDevice(ctx, user.ID, fp, ip, ua)
 
-	// Issue tokens — use the user's persisted Roles, falling back to
-	// the historical default ["user"] when empty. Defense-in-depth:
-	// strip any admin-tier role that may have leaked into the user
-	// table via direct SQL — those tiers are AdminUser-only.
-	jwtRoles := seed.FilterUserRoles(user.Roles)
-	if len(jwtRoles) == 0 {
-		jwtRoles = []string{"user"}
-	}
+	// Issue tokens — use the user's persisted Roles, admin-filtered and
+	// catalog-validated, falling back to the historical default ["user"].
+	jwtRoles := s.effectiveRoles(ctx, user.Roles)
 	pair, err := s.tokenSvc.IssueTokenPair(
 		user.ID, jwtRoles, []string{"read", "write"},
 		input.ClientID, fp, "", input.RememberMe,
@@ -613,9 +631,8 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	refreshUser, _ := s.users.GetByID(ctx, stored.UserID)
 	var refreshRoles []string
 	if refreshUser != nil {
-		refreshRoles = seed.FilterUserRoles(refreshUser.Roles)
-	}
-	if len(refreshRoles) == 0 {
+		refreshRoles = s.effectiveRoles(ctx, refreshUser.Roles)
+	} else {
 		refreshRoles = []string{"user"}
 	}
 	pair, err := s.tokenSvc.IssueTokenPair(
@@ -705,9 +722,8 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	mfaUser, _ := s.users.GetByID(ctx, userID)
 	var mfaRoles []string
 	if mfaUser != nil {
-		mfaRoles = seed.FilterUserRoles(mfaUser.Roles)
-	}
-	if len(mfaRoles) == 0 {
+		mfaRoles = s.effectiveRoles(ctx, mfaUser.Roles)
+	} else {
 		mfaRoles = []string{"user"}
 	}
 	pair, err := s.tokenSvc.IssueTokenPair(

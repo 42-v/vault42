@@ -733,3 +733,49 @@ func (m *MockBlobRepo) Delete(ctx context.Context, id, pseudonymID string) error
 	}
 	return nil
 }
+
+// MockAppRoleRepo is a mock repository.AppRoleRepository.
+type MockAppRoleRepo struct {
+	ListFn      func(ctx context.Context) ([]*model.AppRole, error)
+	ListNamesFn func(ctx context.Context) ([]string, error)
+	GetFn       func(ctx context.Context, name string) (*model.AppRole, error)
+	CreateFn    func(ctx context.Context, role *model.AppRole) error
+	DeleteFn    func(ctx context.Context, name string) error
+}
+
+func (m *MockAppRoleRepo) List(ctx context.Context) ([]*model.AppRole, error) {
+	if m.ListFn != nil {
+		return m.ListFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) ListNames(ctx context.Context) ([]string, error) {
+	if m.ListNamesFn != nil {
+		return m.ListNamesFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) Get(ctx context.Context, name string) (*model.AppRole, error) {
+	if m.GetFn != nil {
+		return m.GetFn(ctx, name)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) Create(ctx context.Context, role *model.AppRole) error {
+	if m.CreateFn != nil {
+		return m.CreateFn(ctx, role)
+	}
+	return nil
+}
+
+func (m *MockAppRoleRepo) Delete(ctx context.Context, name string) error {
+	if m.DeleteFn != nil {
+		return m.DeleteFn(ctx, name)
+	}
+	return nil
+}
+
+var _ repository.AppRoleRepository = (*MockAppRoleRepo)(nil)
