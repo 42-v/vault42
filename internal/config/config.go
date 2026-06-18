@@ -445,6 +445,37 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
+// Validate enforces fail-closed deployment invariants for non-dev profiles. It
+// is called at startup (cmd/vault) — separate from Load() so config parsing
+// stays side-effect free. Covers audit findings M4/M5/M6/L3: a non-dev server
+// must not run with an empty HMAC key (weakens OAuth-state/backup-code/email-OTP
+// signing), empty pepper (weakens password hashing), empty origin (disables JWT
+// issuer/audience binding), or plaintext serving (drops the Secure cookie flag).
+func (c *Config) Validate() error {
+	if c.Profile == ProfileDev {
+		return nil
+	}
+	if len(c.HMACSecret) < 32 {
+		return fmt.Errorf("HMAC_SECRET_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.HMACSecret))
+	}
+	if c.Pepper == "" {
+		return fmt.Errorf("VAULT_PEPPER_FILE required in %s profile", c.Profile)
+	}
+	if c.Origin == "" {
+		return fmt.Errorf("VAULT_ORIGIN required in %s profile", c.Profile)
+	}
+	// M5: refuse to silently disable TLS.
+	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
+		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
+	}
+	// M4: TLS enabled but no cert/key silently falls back to plaintext while the
+	// Secure cookie flag is set. Require certs unless proxy-termination is opted in.
+	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
+		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
+	}
+	return nil
+}
+
 func (c *Config) loadSecrets() {
 	if mk, err := LoadSecret("MASTER_KEY"); err == nil {
 		c.MasterKey = []byte(mk)

@@ -62,6 +62,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 	log.Printf("Configuration loaded:\n%s", cfg)
 
 	// Run migrations (using vault_mig role)
