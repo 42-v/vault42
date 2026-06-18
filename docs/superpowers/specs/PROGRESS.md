@@ -29,7 +29,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [x] `go get -u ./...` + `go mod tidy` (webauthn 0.17.4, pgx 5.10.0, crypto 0.53.0)
 - [x] frontend `pnpm update -r` + audit clean + builds/tests green
 - [x] govulncheck CLEAN, build, vet pass
-- [ ] gosec G710 open-redirect guard in `internal/handler/oauth.go`
+- [x] gosec G710 open-redirect guard in `internal/handler/oauth.go`
 - [ ] CHANGELOG + version bump to 0.8.9
 
 ### WS1 — BeOn3 profile/user parity (hybrid)
@@ -52,6 +52,14 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [ ] Reset-confirm clears import_pending + sets Argon2; audit import_claimed
 - [ ] Tests: import idempotency, login→email, magic-link replay/expiry, enumeration-safety
 
+### WS5 — generic OIDC / OAuth authority (Okta & any OpenID Connect issuer)
+Requested by v 2026-06-18: support a configurable generic OIDC provider (Okta, Auth0,
+Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Facebook.
+- [ ] `internal/oauth2/oidc.go`: generic `OIDCProvider` implementing the Provider interface — OIDC discovery (`{issuer}/.well-known/openid-configuration`, cached), authorize URL with scope `openid email profile`, token exchange, **ID-token (JWT) validation** (iss/aud/exp/nonce, signature via the issuer's JWKS), userinfo fallback. Reuse `isSafeAuthorizeRedirect`.
+- [ ] Config: register N generic providers from env/config (`provider name`, issuer URL, client id/secret `_FILE`, scopes, redirect URI); wire into the providers map in server bootstrap.
+- [ ] Nonce binding through the existing state/PKCE flow; map OIDC `sub`+email onto social_accounts/user link (same path as GitHub/Facebook).
+- [ ] Tests: discovery parse, ID-token validation (good/expired/bad-aud/bad-sig/bad-nonce), authorize URL shape, httptest fake issuer + JWKS. Add an attack test for ID-token forgery / alg=none.
+
 ### WS4 — coverage ≥89% + hardening
 - [ ] Map under-covered packages; fan out test-writing (workflow + grok)
 - [ ] Attack tests for the new flows; keep fuzz green
@@ -60,3 +68,4 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 ## Cycle log
 - C0 (22:15) — WS0: go1.26.4 + all deps updated; govulncheck clean; frontend green; spec+progress written. Committed 86f2cb9/2b3b4bf/9fb3162.
 - C1 (22:55) — WS1.1: extended IdentityData (Username/State/MarketingEmails/Dynamic) + Validate() + 15 test cases; service pkg green. Committed 75c4404. Mark TODO: identity HANDLER must call Validate() + accept/return new fields (next WS1 slice).
+- C2 (22:30) — WS0: gosec G710 oauth open-redirect guard (isSafeAuthorizeRedirect + nosec) + 8 test cases; gosec now 0 HIGH/CRIT/MEDIUM. Committed 02ada6a. NEW: added WS5 (generic OIDC/Okta authority) per v request — loop should build it after WS3.
