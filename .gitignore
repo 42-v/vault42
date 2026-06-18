@@ -72,3 +72,6 @@ docs/TODO.md
 docs/spec-draft.md
 docs/security-audit-*.md
 docs/security-review.md
+
+# grok-fleet ledger (per-repo, never published)
+.fleet/

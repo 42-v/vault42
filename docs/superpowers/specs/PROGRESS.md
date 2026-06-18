@@ -66,6 +66,21 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - [ ] Attack tests for the new flows; keep fuzz green
 - [ ] Reach ≥89% statement coverage; final hardening pass + CHANGELOG
 
+### WS6 — multi-replica E2E verification (grok-delegated NOW, 16 agents, TEST-ONLY)
+Requested by v 2026-06-18: verify vault42 runs correctly as ≥2 replicas under multiple
+config matrices, with extensive e2e tests. Delegated to grok on its own trunk branch
+`grok/multireplica-e2e` (off release/0.8.9). Stage-2 gate: **merge ONLY test-file diffs** —
+reject any non-test source change (grok must surface real bugs, not patch source to pass).
+- [ ] grok writes Go e2e tests under tests/e2e/multireplica/: start TWO in-process vault
+  instances sharing ONE postgres + ONE redis testcontainer; assert cross-replica:
+  token issued on A verifies on B (shared JWKS); refresh rotation on B + replay of A's token
+  detected; account/MFA lockout counter shared; MFA challenge on A completed on B; rate-limit
+  + session-count shared; signing-key rotation on A seen by B; verify/reset/import token minted
+  on A consumed on B.
+- [ ] Config matrix: cache backend redis vs postgres; profile production vs dev; ± pepper.
+  Document that the in-memory cache is per-process → NOT multi-replica safe.
+- [ ] Claude Stage-2: test-only diff gate, build+test green on host, then merge into release/0.8.9.
+
 ## Cycle log
 - C0 (22:15) — WS0: go1.26.4 + all deps updated; govulncheck clean; frontend green; spec+progress written. Committed 86f2cb9/2b3b4bf/9fb3162.
 - C1 (22:55) — WS1.1: extended IdentityData (Username/State/MarketingEmails/Dynamic) + Validate() + 15 test cases; service pkg green. Committed 75c4404. Mark TODO: identity HANDLER must call Validate() + accept/return new fields (next WS1 slice).
