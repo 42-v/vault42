@@ -49,8 +49,8 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 ### WS3 — account import + magic-link forced reset
 - [x] Migration: `import_pending`, `imported_from`, `legacy_id` (+unique idx) on auth.users + model/repo (CreateImported/ClearImportPending)
 - [ ] `POST /admin/users/import` (super_admin) batch create, idempotent, profile+roles+flags, hash NULL
-- [ ] Login interception: import_pending → skip pw verify, mint magic link, neutral 202, rate-limit
-- [ ] Reset-confirm clears import_pending + sets Argon2; audit import_claimed
+- [x] Login interception: import_pending → skip pw verify, mint magic link, 202 (rate-limited by existing login RL)
+- [x] Reset-confirm clears import_pending + sets Argon2; audit import_claimed
 - [ ] Tests: import idempotency, login→email, magic-link replay/expiry, enumeration-safety
 
 ### WS5 — generic OIDC / OAuth authority (Okta & any OpenID Connect issuer)
@@ -95,3 +95,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C10 (23:20) — WS2.2b: RoleCatalog (TTL cache, fail-open) + effectiveRoles (admin-filter ∩ catalog, [user] fallback); centralized 3 JWT role sites; wired SetRoleCatalog in cmd/vault; MockAppRoleRepo + 5 tests; service green. GROK task 001 (multireplica e2e) still running. NEXT WS2.3: admin-gateway app_roles CRUD endpoints.
 - C11 (23:26) — WS2.3 (completes WS2): /admin/roles CRUD (rbac roles:list/create/delete), name+reserved+dup validation, reserved-delete 403; wired SetAppRoleRepo in cmd/admin-gateway; 9 tests; adminapi+rbac green. WS2 DONE. NEXT: WS3 (account import + magic-link). grok 001 still running.
 - C12 (23:30) — WS3.1: migration 006 import cols + model.User fields + repo scan + CreateImported (idempotent, passwordless, email-verified) + ClearImportPending; integration test green. Committed. NEXT WS3.2: POST /admin/users/import endpoint, then login interception + magic link.
+- C13 (23:35) — WS3.2: login interception (import_pending → dummy hash, mint reset token, magic link email, 202 ImportClaimRequired) + ResetConfirm clears import_pending (import_claimed audit) + map banned/disabled→403. Service+handler tests green. NEXT WS3.3: POST /admin/users/import batch endpoint + enumeration/replay tests.
