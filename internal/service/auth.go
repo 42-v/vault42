@@ -107,6 +107,13 @@ type AuthService struct {
 	minPwLength        int
 	hibpEnabled        bool
 	hmacSecret         []byte
+	strictSessionLimit bool
+}
+
+// SetStrictSessionLimit controls checkSessionLimit's behaviour on a count-query
+// error: true fails closed (rejects login + audits), false (default) fails open.
+func (s *AuthService) SetStrictSessionLimit(strict bool) {
+	s.strictSessionLimit = strict
 }
 
 // NewAuthService creates a new auth service.
@@ -1076,7 +1083,13 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 	count, err := s.tokens.CountActiveFamilies(ctx, userID)
 	if err != nil {
 		log.Printf("auth: session count check failed for user %s: %v", userID, err)
-		return nil // fail open — don't block login if the count query fails
+		if s.strictSessionLimit {
+			// Fail closed (audit L1): a count error must not silently disable the cap.
+			s.auditLog.Log(ctx, audit.RateLimit, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"reason": "session_limit_count_failed"}, 80)
+			return ErrTooManySessions
+		}
+		return nil // fail open (default) — don't block login if the count query fails
 	}
 	if count >= s.maxSessionsPerUser {
 		return ErrTooManySessions

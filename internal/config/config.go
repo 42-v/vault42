@@ -120,6 +120,9 @@ type Config struct {
 	RegistrationEnabled bool
 	// MaxSessionsPerUser limits the number of concurrent refresh token families per user (VAULT_MAX_SESSIONS_PER_USER). Default: 10.
 	MaxSessionsPerUser int
+	// StrictSessionLimit makes the concurrent-session check fail closed when the
+	// underlying count query errors, instead of allowing the login (VAULT_STRICT_SESSION_LIMIT). Default: false.
+	StrictSessionLimit bool
 
 	// AppName is the application display name used in emails and UI (VAULT_APP_NAME). Default: "The Vault".
 	AppName string
@@ -292,6 +295,7 @@ func Load() (*Config, error) {
 		MFARequired:         envBoolDefault("VAULT_MFA_REQUIRED", true),
 		RegistrationEnabled: envBoolDefault("VAULT_REGISTRATION_ENABLED", true),
 		MaxSessionsPerUser:  envInt("VAULT_MAX_SESSIONS_PER_USER", 10),
+		StrictSessionLimit:  envBool("VAULT_STRICT_SESSION_LIMIT"),
 
 		AppName:      envOr("VAULT_APP_NAME", "The Vault"),
 		LogoURL:      os.Getenv("VAULT_LOGO_URL"),
