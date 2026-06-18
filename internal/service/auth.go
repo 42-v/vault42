@@ -664,6 +664,8 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 			return nil, ErrChallengeConsumed
 		}
 	}
+	// Successful second factor clears the per-account failure counter (audit H2).
+	s.clearLockout(ctx, userID)
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, userID); err != nil {
 		return nil, err
@@ -873,6 +875,26 @@ func (s *AuthService) clearLockout(ctx context.Context, userID string) {
 	}
 	key := fmt.Sprintf("lockout:%s", userID)
 	s.cache.Delete(ctx, key) // #nosec G104 -- best-effort counter reset
+}
+
+// MFAVerifyLocked reports whether the account is locked out from further auth
+// attempts. MFA verify endpoints MUST call this before checking a second factor:
+// the per-IP rate limit alone is defeated by IP rotation, so without a per-account
+// gate the second factor is brute-forceable within the challenge window (audit H2).
+func (s *AuthService) MFAVerifyLocked(ctx context.Context, userID string) bool {
+	return s.isAccountLocked(ctx, userID)
+}
+
+// RecordMFAFailure counts a failed second-factor attempt toward the per-account
+// lockout (shared counter with the password path, so combined failures trip the
+// same lockoutThreshold/lockoutDuration) and audits it. Reset on success via
+// clearLockout in CompleteMFALogin (audit H2).
+func (s *AuthService) RecordMFAFailure(ctx context.Context, userID, ip, ua string) {
+	s.recordFailedAttempt(ctx, userID)
+	if s.auditLog != nil {
+		s.auditLog.Log(ctx, audit.LoginFailure, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort
+			map[string]interface{}{"reason": "mfa_failed"}, 30)
+	}
 }
 
 // isIPLocked checks the IP-based lockout counter. This limits credential

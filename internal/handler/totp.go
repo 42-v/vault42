@@ -96,6 +96,14 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-account lockout gate: the per-IP rate limit alone is defeated by IP
+	// rotation, so without this a TOTP code is brute-forceable in the challenge
+	// window (audit H2).
+	if h.authSvc != nil && h.authSvc.MFAVerifyLocked(r.Context(), claims.Subject) {
+		WriteError(w, http.StatusTooManyRequests, "account_locked")
+		return
+	}
+
 	var input struct {
 		Code string `json:"code"`
 	}
@@ -126,6 +134,9 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	// Validate code
 	step, err := vaultcrypto.ValidateTOTPCode(secret, input.Code, time.Now())
 	if err != nil || step < 0 {
+		if h.authSvc != nil {
+			h.authSvc.RecordMFAFailure(r.Context(), claims.Subject, middleware.ClientIP(r), r.Header.Get("User-Agent"))
+		}
 		WriteError(w, http.StatusUnauthorized, "invalid_code")
 		return
 	}
