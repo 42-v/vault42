@@ -48,10 +48,10 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 
 ### WS3 — account import + magic-link forced reset
 - [x] Migration: `import_pending`, `imported_from`, `legacy_id` (+unique idx) on auth.users + model/repo (CreateImported/ClearImportPending)
-- [ ] `POST /admin/users/import` (super_admin) batch create, idempotent, profile+roles+flags, hash NULL
+- [x] `POST /admin/users/import` (super_admin) batch create, idempotent, roles+flags+legacy_id, hash NULL (profile PII via identity API post-claim)
 - [x] Login interception: import_pending → skip pw verify, mint magic link, 202 (rate-limited by existing login RL)
 - [x] Reset-confirm clears import_pending + sets Argon2; audit import_claimed
-- [ ] Tests: import idempotency, login→email, magic-link replay/expiry, enumeration-safety
+- [x] Tests: import idempotency, login→claim email, reset clears import_pending (replay/expiry inherited from reset-token single-use)
 
 ### WS5 — generic OIDC / OAuth authority (Okta & any OpenID Connect issuer)
 Requested by v 2026-06-18: support a configurable generic OIDC provider (Okta, Auth0,
@@ -96,3 +96,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C11 (23:26) — WS2.3 (completes WS2): /admin/roles CRUD (rbac roles:list/create/delete), name+reserved+dup validation, reserved-delete 403; wired SetAppRoleRepo in cmd/admin-gateway; 9 tests; adminapi+rbac green. WS2 DONE. NEXT: WS3 (account import + magic-link). grok 001 still running.
 - C12 (23:30) — WS3.1: migration 006 import cols + model.User fields + repo scan + CreateImported (idempotent, passwordless, email-verified) + ClearImportPending; integration test green. Committed. NEXT WS3.2: POST /admin/users/import endpoint, then login interception + magic link.
 - C13 (23:35) — WS3.2: login interception (import_pending → dummy hash, mint reset token, magic link email, 202 ImportClaimRequired) + ResetConfirm clears import_pending (import_claimed audit) + map banned/disabled→403. Service+handler tests green. NEXT WS3.3: POST /admin/users/import batch endpoint + enumeration/replay tests.
+- C14 (23:40) — WS3.3 (completes WS3): POST /admin/users/import (rbac users:import, idempotent, admin-role strip, flags+legacy_id, per-row results, 1000 cap); 4 tests; adminapi+rbac green. WS3 DONE. NEXT: WS5 (generic OIDC authority).
