@@ -41,7 +41,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [x] Tests: profile round-trip, gate rejections, dynamic abuse
 
 ### WS2 — custom roles catalog
-- [ ] Migration `005_app_roles.sql` + seed (moderator, premium_user, business, creator, user, viewer, operator)
+- [x] Migration `005_app_roles.sql` + seed (moderator, premium_user, business, creator, user, viewer, operator)
 - [ ] `app_roles` repo + catalog cache; catalog-aware `FilterUserRoles`
 - [ ] Admin-gateway endpoints: list/create/delete app_roles (super_admin; can't delete reserved)
 - [ ] Tests: catalog validation, reserved rejection, JWT roles path, escalation attack
@@ -75,3 +75,4 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - C5 (22:48) — AUDIT H2 (no per-account MFA lockout) FIXED: MFAVerifyLocked/RecordMFAFailure reuse password lockout counter; gated TOTP+email-OTP+backup verify; clear on success; 3 tests. service/handler/attack green. Committed. NEXT: resume WS1.3 (user model/repo/login-gate) then WS2.
 - C6 (22:55) — WS1.3: model.User flags + repo scan + SetLastLogin + login gate (banned→ErrAccountBanned, disabled→ErrAccountDisabled, deleted→invalid-creds) + last_login stamp; 3 gate tests. BONUS: fixed tests/integration fixture (dynamic migrations) — repaired the whole integration suite (silently broken since mig 003, not in CI). internal-race + integration + attack all green. Committed 085d609. NEXT WS1.4: identity handler accepts/returns new fields + dynamic guard.
 - C7 (23:01) — WS1.4 (completes WS1): identity API exposes username/state/marketing_emails/dynamic; Validate() rejections → 400; round-trip + dynamic-abuse tests. handler pkg green. Committed. WS1 DONE. NEXT: WS2 (roles catalog, migration 005).
+- C8 (23:05) — WS2.1: migration 005 app_roles catalog + seed (3 core reserved + 4 beon3); vault_app SELECT grant; TestMigrateRun green. Committed. NEXT WS2.2: app_roles repo + catalog cache + catalog-aware FilterUserRoles.
