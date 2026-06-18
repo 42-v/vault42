@@ -10,6 +10,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 ## Metrics (update each cycle)
 - Coverage: baseline ~70.7% → **target ≥89%** → current: _measuring_
 - govulncheck: **CLEAN** (go1.26.4) · gosec HIGH/CRIT: 0 · frontend audit: clean
+- Security audit: 16 confirmed (2 HIGH/7 MED/7 LOW) → **H1 FIXED**; H2 next
 - Tests: internal + attack + compliance + fuzz must stay green
 
 ## Per-cycle protocol
@@ -70,3 +71,4 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - C1 (22:55) — WS1.1: extended IdentityData (Username/State/MarketingEmails/Dynamic) + Validate() + 15 test cases; service pkg green. Committed 75c4404. Mark TODO: identity HANDLER must call Validate() + accept/return new fields (next WS1 slice).
 - C2 (22:30) — WS0: gosec G710 oauth open-redirect guard (isSafeAuthorizeRedirect + nosec) + 8 test cases; gosec now 0 HIGH/CRIT/MEDIUM. Committed 02ada6a. NEW: added WS5 (generic OIDC/Okta authority) per v request — loop should build it after WS3.
 - C3 (22:35) — WS1.2: migration 004 account flags + partial index + grant; TestMigrateRun green (applies+idempotent). Committed. NEXT WS1.3: scan/write columns in model.User + repo + login gate (banned/disabled/deleted) + set last_login_at.
+- C4 (22:43) — AUDIT H1 (MFA email-OTP downgrade) FIXED: emailOTPAllowed gate on send+verify + 7 tests; updated 3 existing tests; service/handler/attack suites green. Committed. NEXT: audit H2 (per-account MFA lockout), then resume WS1.3 (user model/repo/login-gate).
