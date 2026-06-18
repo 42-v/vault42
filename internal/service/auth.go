@@ -168,6 +168,24 @@ func (s *AuthService) SetRoleCatalog(c *RoleCatalog) {
 	s.roleCatalog = c
 }
 
+// ChallengeFingerprintMatches reports whether the device fingerprint embedded in
+// a 2fa_challenge token matches the fingerprint recomputed from the redeeming
+// request. An empty challengeFP (legacy token without the claim) is treated as a
+// match so in-flight challenges aren't bricked. On mismatch it records a
+// FingerprintAnomaly audit event — the device/network-switch signal the claim was
+// added to detect, kept consistent with the refresh path (audit M1).
+func (s *AuthService) ChallengeFingerprintMatches(ctx context.Context, userID, challengeFP, requestFP, ip, ua string) bool {
+	if challengeFP == "" {
+		return true
+	}
+	if vaultcrypto.CompareFingerprints(challengeFP, requestFP) {
+		return true
+	}
+	s.auditLog.Log(ctx, audit.FingerprintAnomaly, userID, "", ip, ua, requestFP, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"}, 70)
+	return false
+}
+
 // effectiveRoles computes the roles embedded in a JWT for a user: strip
 // admin-reserved tiers (seed.FilterUserRoles), then — when a catalog is
 // configured — keep only catalog-defined roles, falling back to ["user"] when
