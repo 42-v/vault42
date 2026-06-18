@@ -88,9 +88,24 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	statePayload := fmt.Sprintf("%s.%s.%s", providerName, nonce, expiry)
+
+	// Bind the flow to the initiating browser (audit M3): mint a random CSRF
+	// token, set it as a short-lived host-only cookie, and embed its hash in the
+	// signed state. The callback recomputes the hash from the cookie and compares,
+	// so a state minted for one browser cannot be replayed into another (OAuth
+	// login CSRF / session fixation).
+	csrfToken, err := vaultcrypto.RandomHex(32)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	csrfHash := vaultcrypto.SHA256Hex(csrfToken)
+
+	statePayload := fmt.Sprintf("%s.%s.%s.%s", providerName, nonce, expiry, csrfHash)
 	sig := vaultcrypto.HMACSign([]byte(statePayload), h.hmacSecret)
 	state := fmt.Sprintf("%s.%s", statePayload, sig)
+
+	setOAuthStateCookie(w, csrfToken, h.secureCookies)
 
 	// Store verifier in cache (keyed by nonce) — failure here means the callback will reject the state
 	if err := h.cache.Set(r.Context(), "oauth_state:"+nonce, verifier, 10*time.Minute); err != nil {
@@ -114,6 +129,37 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, authURL, http.StatusFound) // #nosec G710 -- authURL is server-configured (static provider map) and validated by isSafeAuthorizeRedirect to be an absolute https URL
+}
+
+const oauthStateCookie = "__Host-oauth_state" // #nosec G101 -- cookie name constant, not a credential
+
+// setOAuthStateCookie binds the OAuth flow to the initiating browser. SameSite=Lax
+// (not Strict) so it survives the top-level GET redirect back from the provider;
+// host-only + HttpOnly so it is not script-readable or scoped to other hosts.
+func setOAuthStateCookie(w http.ResponseWriter, token string, secure bool) {
+	// #nosec G124 -- Secure is derived from TLS state at runtime; HttpOnly + SameSite=Lax pinned.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   600,
+	})
+}
+
+func clearOAuthStateCookie(w http.ResponseWriter, secure bool) {
+	// #nosec G124 -- Secure is derived from TLS state at runtime; HttpOnly + SameSite=Lax pinned.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }
 
 // isSafeAuthorizeRedirect reports whether a provider-supplied authorize URL is a
@@ -173,13 +219,27 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse payload parts: "provider.nonce.expiry"
-	parts := strings.SplitN(payload, ".", 3)
-	if len(parts) != 3 || parts[0] != providerName {
+	// Parse payload parts: "provider.nonce.expiry.csrfHash"
+	parts := strings.SplitN(payload, ".", 4)
+	if len(parts) != 4 || parts[0] != providerName {
 		WriteError(w, http.StatusBadRequest, "invalid_state")
 		return
 	}
 	nonce := parts[1]
+
+	// Verify the flow completes in the same browser that started it (audit M3):
+	// the state embeds the hash of a CSRF token mirrored in a host-only cookie.
+	// Without this, any HMAC-valid state minted for another browser could be
+	// replayed into the victim's browser (session fixation). Clear the one-shot
+	// cookie before exchanging the code, regardless of outcome.
+	csrfCookie, cookieErr := r.Cookie(oauthStateCookie)
+	clearOAuthStateCookie(w, h.secureCookies)
+	if cookieErr != nil || csrfCookie.Value == "" ||
+		!vaultcrypto.SecureCompare(parts[3], vaultcrypto.SHA256Hex(csrfCookie.Value)) {
+		WriteError(w, http.StatusBadRequest, "invalid_state")
+		return
+	}
+
 	expiry, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil || time.Now().Unix() > expiry {
 		WriteError(w, http.StatusBadRequest, "state_expired")

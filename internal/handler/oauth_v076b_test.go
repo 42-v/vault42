@@ -43,6 +43,7 @@ func TestOAuth_Callback_CreateRaceResolved(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
@@ -84,6 +85,7 @@ func TestOAuth_Callback_CreateRaceLookupFails(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	rec := httptest.NewRecorder()
 

@@ -19,6 +19,24 @@ import (
 	"github.com/42-v/vault42/tests/mocks"
 )
 
+// testOAuthCSRFToken is the fixed CSRF token used by signedOAuthState +
+// testOAuthCookie so a migrated callback test's browser-binding cookie (M3)
+// matches the csrfHash embedded in its signed state.
+const testOAuthCSRFToken = "test-csrf-token-fixed"
+
+// signedOAuthState builds a 4-part browser-bound OAuth state (M3):
+// provider.nonce.expiry.csrfHash + HMAC signature.
+func signedOAuthState(provider, nonce, expiry string, hmacSecret []byte) string {
+	csrfHash := vaultcrypto.SHA256Hex(testOAuthCSRFToken)
+	payload := fmt.Sprintf("%s.%s.%s.%s", provider, nonce, expiry, csrfHash)
+	return payload + "." + vaultcrypto.HMACSign([]byte(payload), hmacSecret)
+}
+
+// testOAuthCookie returns the browser-binding cookie matching signedOAuthState.
+func testOAuthCookie() *http.Cookie {
+	return &http.Cookie{Name: "__Host-oauth_state", Value: testOAuthCSRFToken}
+}
+
 // ---------------------------------------------------------------------------
 // MockProvider implements oauth2.Provider for testing.
 // ---------------------------------------------------------------------------
@@ -220,7 +238,9 @@ func TestOAuth_Callback_UnknownProvider(t *testing.T) {
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/facebook", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "facebook")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -244,7 +264,9 @@ func TestOAuth_Callback_MissingState(t *testing.T) {
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -268,7 +290,9 @@ func TestOAuth_Callback_InvalidState_NoSignature(t *testing.T) {
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=no-dots-in-state", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -287,7 +311,9 @@ func TestOAuth_Callback_InvalidState_BadHMAC(t *testing.T) {
 
 	// State with dots but bad HMAC signature
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=google.nonce.12345.badsignature", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -307,9 +333,7 @@ func TestOAuth_Callback_InvalidState_WrongProvider(t *testing.T) {
 	// Create a valid state for 'github' but call callback with 'google'
 	nonce := "testnonce123"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("github.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("github", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -320,7 +344,9 @@ func TestOAuth_Callback_InvalidState_WrongProvider(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -339,14 +365,14 @@ func TestOAuth_Callback_ExpiredState(t *testing.T) {
 	// Create state with expired timestamp
 	nonce := "expired-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(-10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -371,9 +397,7 @@ func TestOAuth_Callback_InvalidOrReusedState(t *testing.T) {
 	// Create valid state but cache.GetAndDelete returns empty (already consumed)
 	nonce := "reused-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -384,7 +408,9 @@ func TestOAuth_Callback_InvalidOrReusedState(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -408,9 +434,7 @@ func TestOAuth_Callback_MissingCode(t *testing.T) {
 
 	nonce := "valid-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -422,7 +446,9 @@ func TestOAuth_Callback_MissingCode(t *testing.T) {
 
 	// No code parameter
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state, nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -450,9 +476,7 @@ func TestOAuth_Callback_ExchangeError(t *testing.T) {
 
 	nonce := "exchange-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -463,7 +487,9 @@ func TestOAuth_Callback_ExchangeError(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -491,9 +517,7 @@ func TestOAuth_Callback_UserInfoError(t *testing.T) {
 
 	nonce := "userinfo-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -504,7 +528,9 @@ func TestOAuth_Callback_UserInfoError(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -521,9 +547,7 @@ func TestOAuth_Callback_ExistingSocialAccount(t *testing.T) {
 
 	nonce := "existing-social-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -543,7 +567,9 @@ func TestOAuth_Callback_ExistingSocialAccount(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -566,9 +592,7 @@ func TestOAuth_Callback_ExistingEmailUser(t *testing.T) {
 
 	nonce := "existing-email-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -591,7 +615,9 @@ func TestOAuth_Callback_ExistingEmailUser(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -609,9 +635,7 @@ func TestOAuth_Callback_NewUser(t *testing.T) {
 
 	nonce := "new-user-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -637,7 +661,9 @@ func TestOAuth_Callback_NewUser(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -663,9 +689,7 @@ func TestOAuth_Callback_UnableToIdentifyUser_NoEmail(t *testing.T) {
 
 	nonce := "no-email-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -682,7 +706,9 @@ func TestOAuth_Callback_UnableToIdentifyUser_NoEmail(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -705,9 +731,7 @@ func TestOAuth_Callback_UserCreateError(t *testing.T) {
 
 	nonce := "create-error-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -733,7 +757,9 @@ func TestOAuth_Callback_UserCreateError(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -750,9 +776,7 @@ func TestOAuth_Callback_ProviderInQueryParam(t *testing.T) {
 
 	nonce := "query-provider-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -770,6 +794,7 @@ func TestOAuth_Callback_ProviderInQueryParam(t *testing.T) {
 
 	// Provider in query param instead of path value
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback?provider=google&state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -787,9 +812,7 @@ func TestOAuth_Callback_MFARequired(t *testing.T) {
 
 	nonce := "mfa-required-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -818,7 +841,9 @@ func TestOAuth_Callback_MFARequired(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withMFA(mfaSvc))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -844,9 +869,7 @@ func TestOAuth_Callback_NilSocialRepo(t *testing.T) {
 
 	nonce := "nil-social-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -870,7 +893,9 @@ func TestOAuth_Callback_NilSocialRepo(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1010,9 +1035,7 @@ func TestOAuth_Callback_PKCE_VerifierPassedToExchange(t *testing.T) {
 	storedVerifier := "test-pkce-verifier-64-hex-chars-abcdef1234567890abcdef1234567890"
 	nonce := "pkce-verify-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -1032,7 +1055,9 @@ func TestOAuth_Callback_PKCE_VerifierPassedToExchange(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1054,9 +1079,7 @@ func TestOAuth_Callback_RedirectAlwaysToOrigin(t *testing.T) {
 
 	nonce := "redirect-safety-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("google.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("google", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -1073,7 +1096,9 @@ func TestOAuth_Callback_RedirectAlwaysToOrigin(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
 
@@ -1107,9 +1132,7 @@ func TestOAuth_Callback_CrossProviderStateRejected(t *testing.T) {
 	// Create valid state for "github"
 	nonce := "cross-provider-nonce"
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("github.%s.%s", nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	state := payload + "." + sig
+	state := signedOAuthState("github", nonce, expiry, hmacSecret)
 
 	mockCache := &mocks.MockCache{
 		GetAndDeleteFn: func(ctx context.Context, key string) (string, error) {
@@ -1121,7 +1144,9 @@ func TestOAuth_Callback_CrossProviderStateRejected(t *testing.T) {
 
 	// Use github state on google callback — must be rejected
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=test-code", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)
@@ -1149,7 +1174,9 @@ func TestOAuth_Callback_ProviderError(t *testing.T) {
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?error=access_denied&error_description=user+denied", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
+	req.AddCookie(testOAuthCookie())
 	rec := httptest.NewRecorder()
 
 	h.Callback(rec, req)

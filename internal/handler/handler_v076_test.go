@@ -243,13 +243,13 @@ func TestOAuth_Authorize_CacheStoreError(t *testing.T) {
 // OAuth Callback: additional branches
 // ---------------------------------------------------------------------------
 
+// validOAuthState builds a browser-bound (4-part, M3) signed state. Callers that
+// expect the callback to pass state validation must also attach testOAuthCookie().
 func validOAuthState(t *testing.T, provider, nonce string) string {
 	t.Helper()
 	hmacSecret := []byte("test-hmac-secret-32-bytes-long!!")
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	payload := fmt.Sprintf("%s.%s.%s", provider, nonce, expiry)
-	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
-	return payload + "." + sig
+	return signedOAuthState(provider, nonce, expiry, hmacSecret)
 }
 
 func TestOAuth_Callback_StateMalformedPayload(t *testing.T) {
@@ -270,6 +270,7 @@ func TestOAuth_Callback_StateMalformedPayload(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	rec := httptest.NewRecorder()
 
@@ -289,13 +290,16 @@ func TestOAuth_Callback_StateNonNumericExpiry(t *testing.T) {
 	hmacSecret := []byte("test-hmac-secret-32-bytes-long!!")
 	providers := map[string]oauth2.Provider{"google": &mockProvider{name: "google"}}
 
-	payload := "google.nonce123.not-a-number"
+	// 4-part state (M3) with a non-numeric expiry, so the callback reaches the
+	// expiry-parse step (not the part-count/cookie checks) and returns state_expired.
+	payload := "google.nonce123.not-a-number." + vaultcrypto.SHA256Hex(testOAuthCSRFToken)
 	sig := vaultcrypto.HMACSign([]byte(payload), hmacSecret)
 	state := payload + "." + sig
 
 	h := newTestOAuthHandler(t, providers)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	rec := httptest.NewRecorder()
 
@@ -339,6 +343,7 @@ func TestOAuth_Callback_EmailLinkRefused_UnverifiedEmail(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	rec := httptest.NewRecorder()
 
@@ -387,6 +392,7 @@ func TestOAuth_Callback_SocialLinkError(t *testing.T) {
 	h := newTestOAuthHandler(t, providers, withCache(mockCache), withSocial(social), withUsers(users))
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
@@ -431,6 +437,7 @@ func TestOAuth_Callback_RefreshTokenStoreError(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state="+state+"&code=c", nil)
+	req.AddCookie(testOAuthCookie())
 	req.SetPathValue("provider", "google")
 	req.RemoteAddr = "10.0.0.1:5000"
 	rec := httptest.NewRecorder()
