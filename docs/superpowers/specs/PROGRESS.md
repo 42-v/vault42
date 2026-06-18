@@ -57,9 +57,9 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 Requested by v 2026-06-18: support a configurable generic OIDC provider (Okta, Auth0,
 Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Facebook.
 - [x] `internal/oauth2/oidc.go`: OIDCProvider discovery+authorize+exchange+userinfo + ID-token JWKS validation (alg allowlist, iss/aud/exp/nonce, embedded-key-header reject, 2048-bit min).
-- [ ] Config: register N generic providers from env/config (`provider name`, issuer URL, client id/secret `_FILE`, scopes, redirect URI); wire into the providers map in server bootstrap.
-- [ ] Nonce binding through the existing state/PKCE flow; map OIDC `sub`+email onto social_accounts/user link (same path as GitHub/Facebook).
-- [ ] Tests: discovery parse, ID-token validation (good/expired/bad-aud/bad-sig/bad-nonce), authorize URL shape, httptest fake issuer + JWKS. Add an attack test for ID-token forgery / alg=none.
+- [x] Config: VAULT_OIDC_PROVIDERS + per-name env (issuer/client_id/scopes + CLIENT_SECRET_FILE); wired into providers map in cmd/vault.
+- [x] Nonce-bound ID-token verification in the OAuth callback (prefers verified id_token; falls back to userinfo for non-OIDC); maps onto the existing social-account/user-link path.
+- [x] Tests: discovery, authorize URL, exchange/userinfo, ID-token good/expired/bad-aud/bad-iss/bad-sig/bad-nonce + alg=none + forgery, config loader.
 
 ### WS4 — coverage ≥89% + hardening
 - [ ] Map under-covered packages; fan out test-writing (workflow + grok)
@@ -100,3 +100,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C15 (23:50) — WS6 DONE: grok 16-agent multireplica e2e suite reviewed+merged (test-only). 8 cross-replica behaviors × dev+production + MemoryCacheNotShared all green. Stage-2 fixes: migrations-dir walk-up, shared MASTER_KEY across replicas, per-profile DB isolation. NOTE: one transient FAIL observed under overlapping container runs (port/resource contention) — passes cleanly in isolation; flag suite for a port-allocation hardening pass if it recurs in CI. NEXT: WS5 (generic OIDC).
 - C16 (23:54) — WS5.1: generic OIDCProvider (discovery cache + issuer-match, authorize openid+nonce+PKCE, exchange, userinfo) + 3 httptest-fake-issuer tests; oauth2 green. NEXT WS5.2: ID-token JWKS validation (alg=none/forgery attack test), then config registration + bootstrap wiring.
 - C17 (00:02) — WS5.2: VerifyIDToken (JWKS fetch+cache+rotation, RS256/384/512 only, iss/aud/exp/nonce, reject alg=none/HMAC/jku/x5u/x5c/jwk/<2048bit) + 7 tests incl. alg=none + forgery; oauth2 green. NEXT WS5.3: config registration of N OIDC providers + bootstrap wiring + callback ID-token verification.
+- C18 (00:05) — WS5.3+5.4 (completes WS5): OIDC provider config (VAULT_OIDC_PROVIDERS + per-name env, _FILE secret) + bootstrap wiring + callback prefers verified nonce-bound id_token; config tests green. WS5 DONE.
