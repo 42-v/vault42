@@ -37,8 +37,8 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 - [x] Extend `IdentityData` (Username, State, MarketingEmails, Dynamic map) + validation + tests
 - [x] Migration `004_user_account_flags.sql` (disabled, banned, ban_reason, last_login_at, deleted, deleted_at) + vault_app grants
 - [x] User model + repo: scan/write new columns; login gate (banned/disabled/deleted); set last_login_at
-- [ ] Identity handler accepts/returns new fields; dynamic-JSON size/shape guard
-- [ ] Tests: profile round-trip, gate rejections, dynamic abuse
+- [x] Identity handler accepts/returns new fields; dynamic-JSON size/shape guard
+- [x] Tests: profile round-trip, gate rejections, dynamic abuse
 
 ### WS2 — custom roles catalog
 - [ ] Migration `005_app_roles.sql` + seed (moderator, premium_user, business, creator, user, viewer, operator)
@@ -74,3 +74,4 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - C4 (22:43) — AUDIT H1 (MFA email-OTP downgrade) FIXED: emailOTPAllowed gate on send+verify + 7 tests; updated 3 existing tests; service/handler/attack suites green. Committed. NEXT: audit H2 (per-account MFA lockout), then resume WS1.3 (user model/repo/login-gate).
 - C5 (22:48) — AUDIT H2 (no per-account MFA lockout) FIXED: MFAVerifyLocked/RecordMFAFailure reuse password lockout counter; gated TOTP+email-OTP+backup verify; clear on success; 3 tests. service/handler/attack green. Committed. NEXT: resume WS1.3 (user model/repo/login-gate) then WS2.
 - C6 (22:55) — WS1.3: model.User flags + repo scan + SetLastLogin + login gate (banned→ErrAccountBanned, disabled→ErrAccountDisabled, deleted→invalid-creds) + last_login stamp; 3 gate tests. BONUS: fixed tests/integration fixture (dynamic migrations) — repaired the whole integration suite (silently broken since mig 003, not in CI). internal-race + integration + attack all green. Committed 085d609. NEXT WS1.4: identity handler accepts/returns new fields + dynamic guard.
+- C7 (23:01) — WS1.4 (completes WS1): identity API exposes username/state/marketing_emails/dynamic; Validate() rejections → 400; round-trip + dynamic-abuse tests. handler pkg green. Committed. WS1 DONE. NEXT: WS2 (roles catalog, migration 005).
