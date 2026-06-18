@@ -108,7 +108,25 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authURL := provider.AuthURL(state, nonce, challenge)
-	http.Redirect(w, r, authURL, http.StatusFound)
+	if !isSafeAuthorizeRedirect(authURL) {
+		log.Printf("oauth: provider %q produced an unsafe authorize URL", providerName)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound) // #nosec G710 -- authURL is server-configured (static provider map) and validated by isSafeAuthorizeRedirect to be an absolute https URL
+}
+
+// isSafeAuthorizeRedirect reports whether a provider-supplied authorize URL is a
+// well-formed absolute https:// URL. The authorize endpoint is server-configured
+// (built from the static provider map, never from request input), so this is
+// defense-in-depth against a misconfigured provider — and it sanitizes the value
+// flowing into http.Redirect, closing the open-redirect taint path (gosec G710).
+func isSafeAuthorizeRedirect(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && u.Host != ""
 }
 
 // Callback handles GET /auth/oauth2/callback/{provider}.
