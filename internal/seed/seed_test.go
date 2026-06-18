@@ -51,6 +51,8 @@ func (m *mockUserRepo) LockUntil(_ context.Context, _ string, _ time.Time) error
 func (m *mockUserRepo) Unlock(context.Context, string) error                     { return nil }
 func (m *mockUserRepo) VerifyEmail(context.Context, string) error                { return nil }
 func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
+func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
+func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
 
 type mockClientRepo struct {
 	clients map[string]*model.Client

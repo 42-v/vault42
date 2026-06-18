@@ -31,6 +31,10 @@ type User struct {
 	LastLoginAt *time.Time
 	Deleted     bool
 	DeletedAt   *time.Time
+	// Account import (BeOn3 migration, migration 006).
+	ImportPending bool
+	ImportedFrom  string
+	LegacyID      string
 }
 
 // PasswordHistory tracks previous password hashes to prevent reuse.

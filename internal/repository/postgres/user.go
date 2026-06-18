@@ -40,12 +40,50 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User) error {
 	return nil
 }
 
+// CreateImported inserts an imported user with no password (import_pending=TRUE)
+// and the source tag + legacy id. Email is pre-verified (the source verified it).
+// Idempotent: ON CONFLICT (email) DO NOTHING.
+func (r *UserRepo) CreateImported(ctx context.Context, user *model.User) error {
+	roles := user.Roles
+	if roles == nil {
+		roles = []string{}
+	}
+	_, err := r.db.Pool.Exec(ctx, `
+		INSERT INTO auth.users
+			(id, email, email_verified, password_hash, display_name, avatar_url, locale,
+			 mfa_required, created_at, updated_at, roles,
+			 disabled, banned, ban_reason,
+			 import_pending, imported_from, legacy_id)
+		VALUES ($1, $2, TRUE, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13, $14)
+		ON CONFLICT (email) DO NOTHING`,
+		user.ID, user.Email, nullStr(user.DisplayName), nullStr(user.AvatarURL), user.Locale,
+		user.MFARequired, user.CreatedAt, user.UpdatedAt, roles,
+		user.Disabled, user.Banned, nullStr(user.BanReason),
+		nullStr(user.ImportedFrom), nullStr(user.LegacyID),
+	)
+	if err != nil {
+		return fmt.Errorf("create imported user: %w", err)
+	}
+	return nil
+}
+
+// ClearImportPending marks an imported account as claimed (called after the user
+// sets a password via the magic reset link).
+func (r *UserRepo) ClearImportPending(ctx context.Context, id string) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET import_pending=FALSE, updated_at=NOW() WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("clear import_pending: %w", err)
+	}
+	return nil
+}
+
 // GetByID retrieves a user by primary key. Returns nil, nil if not found.
 func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
 		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
-		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at
+		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at,
+		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, '')
 		FROM auth.users WHERE id = $1`, id))
 }
 
@@ -54,7 +92,8 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, e
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
 		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
-		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at
+		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at,
+		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, '')
 		FROM auth.users WHERE email = $1`, email))
 }
 
@@ -145,6 +184,7 @@ func (r *UserRepo) scanUser(row pgx.Row) (*model.User, error) {
 		&u.LockedUntil, &u.FailedLoginCount, &u.CreatedAt, &u.UpdatedAt,
 		&u.Roles,
 		&u.Disabled, &u.Banned, &u.BanReason, &u.LastLoginAt, &u.Deleted, &u.DeletedAt,
+		&u.ImportPending, &u.ImportedFrom, &u.LegacyID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

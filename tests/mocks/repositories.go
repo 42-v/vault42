@@ -44,11 +44,27 @@ type MockUserRepo struct {
 	UnlockFn               func(ctx context.Context, id string) error
 	VerifyEmailFn          func(ctx context.Context, id string) error
 	SetLastLoginFn         func(ctx context.Context, id string) error
+	CreateImportedFn       func(ctx context.Context, user *model.User) error
+	ClearImportPendingFn   func(ctx context.Context, id string) error
 }
 
 func (m *MockUserRepo) SetLastLogin(ctx context.Context, id string) error {
 	if m.SetLastLoginFn != nil {
 		return m.SetLastLoginFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) CreateImported(ctx context.Context, user *model.User) error {
+	if m.CreateImportedFn != nil {
+		return m.CreateImportedFn(ctx, user)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) ClearImportPending(ctx context.Context, id string) error {
+	if m.ClearImportPendingFn != nil {
+		return m.ClearImportPendingFn(ctx, id)
 	}
 	return nil
 }

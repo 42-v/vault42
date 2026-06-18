@@ -52,6 +52,11 @@ type UserRepository interface {
 	VerifyEmail(ctx context.Context, id string) error
 	// SetLastLogin stamps the user's last successful login time.
 	SetLastLogin(ctx context.Context, id string) error
+	// CreateImported inserts a passwordless imported user (import_pending=true),
+	// idempotent on email.
+	CreateImported(ctx context.Context, user *model.User) error
+	// ClearImportPending marks an imported account as claimed after reset.
+	ClearImportPending(ctx context.Context, id string) error
 }
 
 // RefreshTokenRepository manages refresh token persistence.
