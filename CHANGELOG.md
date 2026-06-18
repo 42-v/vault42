@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.8.9 (2026-06-19)
+
+### Features
+
+* **BeOn3 profile/user parity**: the encrypted identity blob gained `username`,
+  `state`, `marketing_emails` and a namespaced opaque `dynamic` JSON area (forum/
+  garage/etc.), with validation; `auth.users` gained account-state flags
+  (`disabled`, `banned`, `ban_reason`, `last_login_at`, `deleted`) via migration 004.
+  Login now rejects banned/disabled/deleted accounts and stamps `last_login_at`.
+* **Custom roles catalog** (`auth.app_roles`, migration 005): admin-managed role
+  catalog with `GET/POST/DELETE /admin/roles` (super_admin), reserved-role
+  protection, and catalog-aware role validation at JWT issuance.
+* **Account import + magic-link forced reset** (migration 006): `POST
+  /admin/users/import` batch-creates passwordless `import_pending` accounts; their
+  first login (any password) is intercepted, a one-time magic reset link is
+  emailed, and completing it sets a new Argon2 password — legacy BeOn3 SHA-256
+  hashes are never imported.
+* **Generic OIDC / OAuth authority**: a configurable OpenID Connect provider
+  (Okta, Auth0, Keycloak, Entra, …) via `VAULT_OIDC_PROVIDERS` — OIDC discovery,
+  PKCE+nonce authorize, code exchange, JWKS-verified ID tokens (rejecting
+  `alg=none`/HMAC/embedded-key headers/sub-2048-bit keys), and a callback that
+  prefers the nonce-bound verified ID token.
+
+### Security
+
+* Fix nightly govulncheck: bump Go toolchain to 1.26.4 (+ `golang:1.26.4-alpine`
+  builder) clearing stdlib CVEs GO-2026-5039 (net/textproto) and GO-2026-5037
+  (crypto/x509); update all Go + frontend dependencies.
+* Audit (workflow-driven, 2 HIGH + 7 MEDIUM + 7 LOW, adversarially verified): fix
+  **H1** MFA email-OTP factor downgrade, **H2** missing per-account MFA lockout,
+  **M1** challenge-token device-fingerprint binding, **M2** unrate-limited OAuth
+  authorize, **M4/M5/M6** fail-closed production config validation, **M7** embedded-
+  trust profile gate, **L1** opt-in strict session limit, **L2** RSA modulus upper
+  bound, **L3** required origin, **L4** fail-closed auth rate limiters, **L5** opt-in
+  secret-file consumption, **L6** structured admin audit target, **L7** lock-duration
+  clamp. (**M3** OAuth-state browser binding tracked separately.)
+* gosec G710 open-redirect guard on the OAuth authorize redirect.
+
+### Tests
+
+* Multi-replica end-to-end suite (`tests/e2e/multireplica`): two in-process
+  replicas over shared Postgres + Redis assert cross-replica JWKS, refresh-replay,
+  shared lockout, MFA A→B, rate-limit, session-count, key rotation, and one-time
+  tokens across dev + production profiles; plus an in-memory-cache-not-shared check.
+* 16-agent coverage campaign + per-feature TDD raised statement coverage toward the
+  89% target (see docs/test-coverage.md).
+
 ## 0.7.0 (2026-05-18)
 
 
