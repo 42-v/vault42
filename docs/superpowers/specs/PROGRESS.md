@@ -34,7 +34,7 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 
 ### WS1 — BeOn3 profile/user parity (hybrid)
 - [x] Extend `IdentityData` (Username, State, MarketingEmails, Dynamic map) + validation + tests
-- [ ] Migration `004_user_account_flags.sql` (disabled, banned, ban_reason, last_login_at, deleted, deleted_at) + vault_app grants
+- [x] Migration `004_user_account_flags.sql` (disabled, banned, ban_reason, last_login_at, deleted, deleted_at) + vault_app grants
 - [ ] User model + repo: scan/write new columns; login gate (banned/disabled/deleted); set last_login_at
 - [ ] Identity handler accepts/returns new fields; dynamic-JSON size/shape guard
 - [ ] Tests: profile round-trip, gate rejections, dynamic abuse
@@ -69,3 +69,4 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - C0 (22:15) — WS0: go1.26.4 + all deps updated; govulncheck clean; frontend green; spec+progress written. Committed 86f2cb9/2b3b4bf/9fb3162.
 - C1 (22:55) — WS1.1: extended IdentityData (Username/State/MarketingEmails/Dynamic) + Validate() + 15 test cases; service pkg green. Committed 75c4404. Mark TODO: identity HANDLER must call Validate() + accept/return new fields (next WS1 slice).
 - C2 (22:30) — WS0: gosec G710 oauth open-redirect guard (isSafeAuthorizeRedirect + nosec) + 8 test cases; gosec now 0 HIGH/CRIT/MEDIUM. Committed 02ada6a. NEW: added WS5 (generic OIDC/Okta authority) per v request — loop should build it after WS3.
+- C3 (22:35) — WS1.2: migration 004 account flags + partial index + grant; TestMigrateRun green (applies+idempotent). Committed. NEXT WS1.3: scan/write columns in model.User + repo + login gate (banned/disabled/deleted) + set last_login_at.
