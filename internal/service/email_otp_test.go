@@ -22,10 +22,15 @@ func newEmailOTPAuthService(t *testing.T) (*AuthService, *mocks.MockCache, *mock
 	mockEmail := &mocks.MockEmailSender{}
 	hmacSecret := []byte("test-hmac-secret-for-email-otp!!")
 
+	// Email-OTP is only permitted as a fallback for accounts with no stronger
+	// enrolled factor when MFA is required (audit H1 gate). Model exactly that:
+	// an MFA service with no enrolled methods and MFA required.
+	mfaSvc := NewMFAService(&mocks.MockTOTPRepo{}, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{}, true)
+
 	svc := NewAuthService(
 		&mocks.MockUserRepo{}, &mocks.MockRefreshTokenRepo{},
 		&mocks.MockDeviceRepo{}, &mocks.MockPasswordHistoryRepo{},
-		tokenSvc, nil, auditLogger, NewHIBPClient(),
+		tokenSvc, mfaSvc, auditLogger, NewHIBPClient(),
 		mockCache, mockEmail, "https://vault.test", "TestVault",
 		"", 15, false, hmacSecret,
 	)

@@ -65,6 +65,10 @@ var (
 	ErrTokenUsed          = errors.New("token already used")
 	ErrTokenInvalid       = errors.New("invalid token")
 	ErrReplayDetected     = errors.New("refresh token replay detected")
+	// ErrEmailOTPNotAllowed is returned when email-OTP is requested for a user
+	// who has a stronger enrolled factor (TOTP/WebAuthn). Email-OTP is only a
+	// fallback for accounts with no second factor when MFA is required.
+	ErrEmailOTPNotAllowed = errors.New("email OTP not permitted for this account")
 	ErrMFARequired        = errors.New("MFA verification required")
 	ErrChallengeConsumed  = errors.New("challenge token already consumed")
 	ErrTooManySessions    = errors.New("maximum concurrent sessions reached")
@@ -719,7 +723,29 @@ func (s *AuthService) sendEmailOTP(userID, emailAddr string) {
 	}
 }
 
+// emailOTPAllowed reports whether email-OTP is a permitted second factor for
+// this user. It mirrors the Login gate (see Login ~"No MFA methods configured
+// but MFA is required"): email-OTP is only a fallback for users with NO stronger
+// enrolled factor (TOTP/WebAuthn/backup) when MFA is required. Without this gate
+// a challenge-token holder could downgrade a hardware/TOTP factor to a 6-digit
+// email code (security audit H1). Fails closed on error.
+func (s *AuthService) emailOTPAllowed(ctx context.Context, userID string) bool {
+	if s.mfaSvc == nil {
+		return false
+	}
+	status, err := s.mfaSvc.GetStatus(ctx, userID)
+	if err != nil {
+		log.Printf("auth: MFA status check failed for %s: %v", userID, err)
+		return false
+	}
+	hasStrongMethod := status != nil && len(status.Methods) > 0
+	return !hasStrongMethod && s.mfaSvc.IsRequired()
+}
+
 func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr string) error {
+	if !s.emailOTPAllowed(ctx, userID) {
+		return ErrEmailOTPNotAllowed
+	}
 	if s.cache == nil || s.emailSender == nil {
 		return fmt.Errorf("email OTP requires cache and email sender")
 	}
@@ -748,6 +774,12 @@ func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr stri
 
 // VerifyEmailOTP verifies a 6-digit email OTP code. Single-use via atomic GetAndDelete.
 func (s *AuthService) VerifyEmailOTP(ctx context.Context, userID, code string) error {
+	// Defense-in-depth against MFA downgrade (audit H1): even if a code exists in
+	// the cache, refuse to accept email-OTP as a factor for a user who has a
+	// stronger enrolled method. Consume nothing on the gated path.
+	if !s.emailOTPAllowed(ctx, userID) {
+		return ErrInvalidCredentials
+	}
 	if s.cache == nil {
 		return ErrInvalidCredentials
 	}

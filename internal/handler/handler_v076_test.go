@@ -462,10 +462,13 @@ func TestEmailOTPVerify_Success(t *testing.T) {
 
 	tokenSvc, _ := newTestTokenService(t)
 	auditLog := newTestAuditLogger()
+	// Email-OTP fallback requires an MFA service reporting no enrolled methods +
+	// MFA required (audit H1 gate); model that instead of a nil MFA service.
+	mfaSvc := service.NewMFAService(&mocks.MockTOTPRepo{}, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{}, true)
 	authSvc := service.NewAuthService(
 		&mocks.MockUserRepo{}, &mocks.MockRefreshTokenRepo{},
 		&mocks.MockDeviceRepo{}, &mocks.MockPasswordHistoryRepo{},
-		tokenSvc, nil, auditLog, nil, mockCache, nil,
+		tokenSvc, mfaSvc, auditLog, nil, mockCache, nil,
 		"https://vault.test", "TestVault", "", 15, false, hmacSecret,
 	)
 
