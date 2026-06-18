@@ -307,6 +307,39 @@ func (s *AuthService) sendVerificationEmail(to, userID, redirectTo string) {
 	}
 }
 
+// sendImportClaimLink mints a one-time reset token (compatible with the
+// password reset-confirm flow) for an imported account and emails the magic
+// link. Fire-and-forget; failures are logged, not surfaced (anti-enumeration).
+func (s *AuthService) sendImportClaimLink(userID, emailAddr string) {
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	go func() { // #nosec G118 -- intentional: email send outlives the HTTP request
+		ctx := context.Background()
+		token, err := vaultcrypto.RandomHex(32)
+		if err != nil {
+			log.Printf("auth: import claim token gen failed: %v", err)
+			return
+		}
+		tokenHash := vaultcrypto.SHA256Hex(token)
+		// Same keys the password ResetConfirm handler consumes.
+		if err := s.cache.Set(ctx, "reset:"+tokenHash, userID, time.Hour); err != nil {
+			log.Printf("auth: import claim token store failed: %v", err)
+			return
+		}
+		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, time.Hour) // #nosec G104 -- reverse map for invalidation, best-effort
+
+		claimURL := s.origin + "/reset-password?token=" + token + "&import=1"
+		subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplatePasswordReset, vaultemail.TemplateData{
+			AppName: s.appName,
+			URL:     claimURL,
+		})
+		if err := s.emailSender.Send(ctx, emailAddr, subject, html, text); err != nil {
+			log.Printf("auth: failed to send import claim email to %s: %v", emailAddr, err)
+		}
+	}()
+}
+
 // LoginInput is the login request payload.
 type LoginInput struct {
 	Email       string `json:"email"`
@@ -326,6 +359,9 @@ type LoginResult struct {
 	Requires2FA      bool     `json:"requires_2fa,omitempty"`
 	ChallengeToken   string   `json:"challenge_token,omitempty"`
 	AvailableMethods []string `json:"available_methods,omitempty"`
+	// ImportClaimRequired is set for an imported account on its first login: no
+	// password was verified; a magic reset link was emailed to claim the account.
+	ImportClaimRequired bool `json:"import_claim_required,omitempty"`
 }
 
 // Login authenticates a user and issues tokens.
@@ -428,6 +464,21 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_disabled"}, 30)
 		return nil, ErrAccountDisabled
+	}
+
+	// Imported account, first login: the password the user typed is meaningless
+	// (we never imported their credentials). Don't verify it — run a dummy hash
+	// for timing parity, email a magic reset link, and tell the client to claim
+	// the account. The existing reset-confirm flow then sets the Argon2 password
+	// and clears import_pending.
+	if user.ImportPending {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.sendImportClaimLink(user.ID, user.Email)
+		s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"import_claim": true}, 0)
+		return &LoginResult{ImportClaimRequired: true}, nil
 	}
 
 	// Verify password

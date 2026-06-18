@@ -94,6 +94,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusUnauthorized, "invalid_credentials")
 		case errors.Is(err, service.ErrAccountLocked):
 			WriteError(w, http.StatusForbidden, "account_locked")
+		case errors.Is(err, service.ErrAccountBanned):
+			WriteError(w, http.StatusForbidden, "account_banned")
+		case errors.Is(err, service.ErrAccountDisabled):
+			WriteError(w, http.StatusForbidden, "account_disabled")
 		case errors.Is(err, service.ErrTooManySessions):
 			WriteError(w, http.StatusTooManyRequests, "too_many_sessions")
 		case errors.Is(err, vaultcrypto.ErrArgon2Overloaded):
@@ -101,6 +105,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		default:
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 		}
+		return
+	}
+
+	// Imported account first login: no session issued — a magic claim link was
+	// emailed. 202 Accepted with the flag, no token fields.
+	if result.ImportClaimRequired {
+		WriteJSON(w, http.StatusAccepted, map[string]any{"import_claim_required": true})
 		return
 	}
 
