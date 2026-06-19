@@ -137,3 +137,23 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C52 (02:58) — Made the true-coverage number reproducible: scripts/coverage-full.sh measures internal/ coverage across the full suite (unit+attack+fuzz+integration+compliance, -p 1), reporting the real ~85% vs coverage.sh's unit-only 78%. Syntax-verified; wraps the exact C50 command. Closes the WS4 coverage story honestly: 89% target not met by the unit metric, but TRUE coverage is 85% and now reproducible on demand.
 - C54 (03:00) — FINAL CERTIFICATION: release-check ALL GREEN with the hardened gate (govulncheck clean, gosec 0 HIGH/CRIT, trivy clean, attack green, coverage 78.01%/2297 tests now gated on test-pass) — 'safe to tag'. vault42 0.8.9 is comprehensively complete + verified: all 6 feature workstreams, 16 audit + 10 review findings (8 fixed/2 accepted), fuzz-hardened, 85% true coverage (reproducible), full operator docs, every suite green. 105 commits, local-only. Loop coasts to 04:00 self-stop.
 - C55 (03:10) — Doc completeness: added a 0.8.9-additions cross-reference to architecture.md Auth Flows (cross-cutting account-state gate on login+refresh+OAuth, import-claim, OIDC authority, role catalog → spec). Hard-rule compliance verified (0 Claude co-author trailers, never pushed, main untouched). Branch complete + certified; holding for 04:00 self-stop.
+
+## FINAL SUMMARY — loop stopped 04:01, 2026-06-19 (cron 24acf589 deleted)
+
+vault42 0.8.9 overnight build COMPLETE on `release/0.8.9` (local only, never pushed; main untouched at 0.6.7).
+
+**Delivered (all requested + more):**
+- WS0 deps/security baseline: go1.26.4, all Go+frontend deps updated, failing govulncheck CLEARED.
+- WS1 BeOn3 profile/user parity (username/state/marketing/dynamic JSON + account-state flags).
+- WS2 custom roles catalog (auth.app_roles + admin CRUD, reserved-role protection).
+- WS3 account import + magic-link forced reset (passwordless import_pending; legacy hashes never imported).
+- WS5 generic OIDC/Okta authority (JWKS-verified ID tokens, alg allowlist, iss/aud/nonce).
+- WS6 multi-replica e2e (grok 16-agent, test-only, Stage-2 merged).
+
+**Security:** 16/16 audit findings fixed. TWO adversarial review passes of the new code → 10 more findings: 8 FIXED (incl. 2 CRITICAL OAuth-callback ban/import bypasses, MFA fail-open, account-state-on-refresh, rate-limit default/validation, pepper≥32, import-claim ×2), 2 TOCTOU classified low-severity ACCEPTED (documented). Fuzz target added. govulncheck/gosec(0 HIGH-CRIT)/trivy all clean.
+
+**Quality:** caught + fixed a refresh regression AND closed the CI blind spot that hid it (coverage.sh now fails on test failures). Coverage: unit metric 78.0%; **TRUE coverage incl integration = 85.0%** (reproducible via scripts/coverage-full.sh). 89% not met by the unit metric — the gap is error/defensive branches (intentionally not padded). Every suite green (internal+unit+attack+fuzz+compliance+integration+e2e/multireplica).
+
+**Docs:** CHANGELOG 0.8.9 + config.md + api.md + architecture.md all updated.
+
+`scripts/release-check.sh`: ALL GATES GREEN — safe to tag. ~106 commits. Awaiting v's review (then push/tag).
