@@ -62,9 +62,9 @@ Authentik, Keycloak, Entra, Google-OIDC, etc.) alongside the hardcoded GitHub/Fa
 - [x] Tests: discovery, authorize URL, exchange/userinfo, ID-token good/expired/bad-aud/bad-iss/bad-sig/bad-nonce + alg=none + forgery, config loader.
 
 ### WS4 — coverage ≥89% + hardening
-- [ ] Map under-covered packages; fan out test-writing (workflow + grok)
-- [ ] Attack tests for the new flows; keep fuzz green
-- [ ] Reach ≥89% statement coverage; final hardening pass + CHANGELOG
+- [x] Map under-covered packages; fan out test-writing (workflow + grok) — grok 16-agent campaign merged + 4-pkg targeted fan-out (C35); oauth2 86→93%, etc.
+- [~] Attack tests for the new flows; keep fuzz green — fuzz green + FuzzIdentityValidate added (C42); new flows covered adversarially by two review workflows (C38 + C45 second-pass); dedicated attack-suite tests for import/roles abuse pending review outcome
+- [~] Reach ≥89% statement coverage; final hardening pass + CHANGELOG — CHANGELOG done; hardening done (16 audit + 6 review findings + fuzz); **89% NOT reachable via the unit metric** (DB/keystore/migrate/container paths need integration coverage the metric excludes) — honest ceiling 78%, reported in test-coverage.md
 
 ### WS6 — multi-replica E2E verification (grok-delegated NOW, 16 agents, TEST-ONLY)
 Requested by v 2026-06-18: verify vault42 runs correctly as ≥2 replicas under multiple
@@ -128,3 +128,4 @@ reject any non-test source change (grok must surface real bugs, not patch source
 - C44 (02:34) — Operator API docs: documented /admin/users/import (passwordless import_pending + magic-link, role stripping, skip-existing) + /admin/roles CRUD (perms, request/response shapes) in docs/api.md. New 0.8.9 features now fully operator-documented (config.md + api.md + CHANGELOG).
 - C45 (02:36) — Verified api.md accuracy: /admin/roles + /admin/users/import are mounted by cmd/admin-gateway (session-auth + RBAC), exactly as documented. Launched heavyweight re-verification (integration + multireplica, serial -p 1) to confirm the C39 refresh account-state change didn't break the e2e/integration refresh paths.
 - C46 (02:38) — Heavyweight re-verification GREEN after C39: integration (117s) + multireplica (35s) pass — the refresh account-state gate rejects banned/disabled/deleted without breaking legitimate refresh rotation. vault42 0.8.9 now fully verified end-to-end after the entire security-fix batch.
+- C47 (02:36) — Checklist reconciled to honest state: WS4 map+fan-out DONE; fuzz green + FuzzIdentityValidate; 89% NOT unit-reachable (ceiling 78%, reported). Remaining: dedicated attack-suite tests for new flows (import role-injection, reserved-role, account-state-on-refresh) — holding until the C45 second-pass review (running) lands, to write them informed by any findings.
