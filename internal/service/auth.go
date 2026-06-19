@@ -1090,6 +1090,16 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 // checkSessionLimit verifies that the user has not exceeded the maximum number of
 // concurrent refresh token families. Returns ErrTooManySessions if the limit is reached.
 // A maxSessionsPerUser of 0 disables the check.
+// checkSessionLimit is a soft, best-effort cap on concurrent session families.
+// It is intentionally NOT atomic with the subsequent token insert: concurrent
+// logins by the SAME user can each pass this check and then insert, briefly
+// exceeding the cap by the number of racing attempts. This is an accepted
+// trade-off — making it strict would require serializing the login hot path
+// (per-user advisory lock) or a count-conditional INSERT, adding latency/lock
+// contention for every login to prevent a user marginally exceeding their own
+// session cap (no auth bypass, bounded over-count). The cap converges as old
+// families expire/revoke. Revisit only if the limit becomes a hard security
+// boundary rather than a resource control.
 func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) error {
 	if s.maxSessionsPerUser <= 0 {
 		return nil
