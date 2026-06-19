@@ -392,6 +392,9 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		requiresMFA, err := h.mfaSvc.RequiresMFA(r.Context(), userID, false)
 		if err != nil {
 			log.Printf("oauth: MFA status check failed for %s: %v", httputil.SafeLogValue(userID), err) // #nosec G706 -- sanitized via SafeLogValue
+			// Fail closed: if MFA status is indeterminate, require it rather than
+			// issuing full tokens and silently bypassing a user's second factor.
+			requiresMFA = true
 		}
 		if requiresMFA {
 			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp)

@@ -7,12 +7,13 @@ func prodConfig() *Config {
 	return &Config{
 		Profile:            ProfileProduction,
 		HMACSecret:         []byte("0123456789abcdef0123456789abcdef"), // 32 bytes
-		Pepper:             "pepper",
+		Pepper:             "0123456789abcdef0123456789abcdef",         // 32 bytes
 		Origin:             "https://vault.test",
 		TLSEnabled:         true,
 		TLSCertFile:        "/tls/cert.pem",
 		TLSKeyFile:         "/tls/key.pem",
 		ForceSecureCookies: false,
+		RateLimitEnabled:   true,
 	}
 }
 
@@ -50,6 +51,22 @@ func TestValidate(t *testing.T) {
 		c.Pepper = ""
 		if err := c.Validate(); err == nil {
 			t.Fatal("missing pepper must fail")
+		}
+	})
+
+	t.Run("short pepper must fail", func(t *testing.T) {
+		c := prodConfig()
+		c.Pepper = "tooshort"
+		if err := c.Validate(); err == nil {
+			t.Fatal("sub-32-byte pepper must fail")
+		}
+	})
+
+	t.Run("rate limiting disabled in prod fails", func(t *testing.T) {
+		c := prodConfig()
+		c.RateLimitEnabled = false
+		if err := c.Validate(); err == nil {
+			t.Fatal("disabled rate limiting must fail in production without override")
 		}
 	})
 

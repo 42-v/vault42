@@ -310,7 +310,7 @@ func Load() (*Config, error) {
 		ShutdownTimeout:    envDuration("VAULT_SHUTDOWN_TIMEOUT", 0),
 		AuditFlushInterval: envDuration("VAULT_AUDIT_FLUSH_INTERVAL", 0),
 		AutoMigrate:             envBool("VAULT_AUTO_MIGRATE"),
-		RateLimitEnabled:        envBool("VAULT_RATE_LIMIT_ENABLED"),
+		RateLimitEnabled:        envBoolDefault("VAULT_RATE_LIMIT_ENABLED", true),
 		EmbeddedTrustedUpstream: envBool("VAULT_EMBEDDED_TRUSTED_UPSTREAM"),
 
 		EmailTemplatesDir:  os.Getenv("VAULT_EMAIL_TEMPLATES_DIR"),
@@ -470,11 +470,16 @@ func (c *Config) Validate() error {
 	if len(c.HMACSecret) < 32 {
 		return fmt.Errorf("HMAC_SECRET_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.HMACSecret))
 	}
-	if c.Pepper == "" {
-		return fmt.Errorf("VAULT_PEPPER_FILE required in %s profile", c.Profile)
+	if len(c.Pepper) < 32 {
+		return fmt.Errorf("VAULT_PEPPER_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.Pepper))
 	}
 	if c.Origin == "" {
 		return fmt.Errorf("VAULT_ORIGIN required in %s profile", c.Profile)
+	}
+	// Rate limiting is the brute-force defense on the auth endpoints; refuse to
+	// silently run a non-dev server with it disabled.
+	if !c.RateLimitEnabled && !envBool("VAULT_ALLOW_RATE_LIMIT_DISABLED") {
+		return fmt.Errorf("refusing to disable rate limiting in %s profile; set VAULT_ALLOW_RATE_LIMIT_DISABLED=true to override", c.Profile)
 	}
 	// M5: refuse to silently disable TLS.
 	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
