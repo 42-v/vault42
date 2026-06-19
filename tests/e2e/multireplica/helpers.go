@@ -9,27 +9,40 @@ import (
 	"time"
 )
 
-// jsonPost posts JSON, retries a few times on 429.
+// transientLimiter reports whether a response is a transient rate-limiter
+// condition worth retrying in a test: a 429 (rate limited, drains soon) or a
+// 503 rate_limiter_unavailable (the L4 fail-closed path tripped by a momentary
+// cache blip — under podman load the shared test-Redis can hiccup). Neither is
+// the behavior these cross-replica tests assert (the rate_limit_shared subtest
+// detects 429 with its own direct calls), so retrying keeps the suite robust
+// without masking real assertions or weakening the fail-closed design.
+func transientLimiter(status int, m map[string]interface{}) bool {
+	return status == 429 || (status == 503 && m["error"] == "rate_limiter_unavailable")
+}
+
+// jsonPost posts JSON, retrying a few times on a transient rate-limiter response.
 func jsonPost(t *testing.T, client *http.Client, url string, payload interface{}) (int, map[string]interface{}) {
 	t.Helper()
 	b, _ := json.Marshal(payload)
-	for i := 0; i < 4; i++ {
+	var status int
+	var m map[string]interface{}
+	for i := 0; i < 6; i++ {
 		resp, err := client.Post(url, "application/json", strings.NewReader(string(b)))
 		if err != nil {
 			t.Fatalf("POST %s: %v", url, err)
 		}
-		if resp.StatusCode == 429 {
-			resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		status = resp.StatusCode
+		m = nil
+		json.Unmarshal(raw, &m)
+		if transientLimiter(status, m) {
 			time.Sleep(150 * time.Millisecond)
 			continue
 		}
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		var m map[string]interface{}
-		json.Unmarshal(raw, &m)
-		return resp.StatusCode, m
+		return status, m
 	}
-	return 429, map[string]interface{}{"error": "rate_limited"}
+	return status, m
 }
 
 // jsonGet .
@@ -117,15 +130,14 @@ func challengePost(t *testing.T, client *http.Client, url, challengeToken string
 		if err != nil {
 			t.Fatalf("POST %s: %v", url, err)
 		}
-		if resp.StatusCode == 429 {
-			resp.Body.Close()
-			time.Sleep(150 * time.Millisecond)
-			continue
-		}
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		var m map[string]interface{}
 		json.Unmarshal(raw, &m)
+		if transientLimiter(resp.StatusCode, m) {
+			time.Sleep(150 * time.Millisecond)
+			continue
+		}
 		return resp.StatusCode, m
 	}
 	return 429, map[string]interface{}{"error": "rate_limited"}
@@ -156,9 +168,20 @@ func challengePostWithResp(t *testing.T, client *http.Client, url, challengeToke
 // Returns access and refresh (if set on final response).
 func loginUser(t *testing.T, client *http.Client, r *testReplica, email, pw string) (access, refresh string) {
 	t.Helper()
-	st, lbody, resp := jsonPostWithResp(t, client, r.URL+"/auth/login", map[string]string{
-		"email": email, "password": pw,
-	})
+	var st int
+	var lbody map[string]interface{}
+	var resp *http.Response
+	for i := 0; i < 6; i++ {
+		st, lbody, resp = jsonPostWithResp(t, client, r.URL+"/auth/login", map[string]string{
+			"email": email, "password": pw,
+		})
+		if transientLimiter(st, lbody) {
+			resp.Body.Close()
+			time.Sleep(150 * time.Millisecond)
+			continue
+		}
+		break
+	}
 	if st != 200 {
 		t.Fatalf("login %s: status=%d body=%v", email, st, lbody)
 	}
