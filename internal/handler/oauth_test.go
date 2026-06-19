@@ -95,6 +95,13 @@ func newTestOAuthHandler(t *testing.T, providers map[string]oauth2.Provider, opt
 	for _, opt := range opts {
 		opt(setup)
 	}
+	// Default: the callback's account-state gate resolves userID to a live,
+	// non-banned, non-import_pending user unless a test overrides GetByIDFn.
+	if setup.users.GetByIDFn == nil {
+		setup.users.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
+		}
+	}
 
 	tokenSvc, _ := newTestTokenService(t)
 	auditLog := newTestAuditLogger()
@@ -864,6 +871,9 @@ func TestOAuth_Callback_NilSocialRepo(t *testing.T) {
 	users := &mocks.MockUserRepo{
 		GetByEmailFn: func(ctx context.Context, email string) (*model.User, error) {
 			return &model.User{ID: "user-nosocial", Email: email, EmailVerified: true}, nil
+		},
+		GetByIDFn: func(ctx context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
 		},
 	}
 

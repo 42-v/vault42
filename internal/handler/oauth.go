@@ -379,6 +379,31 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce account state on the OAuth path too (parity with password login +
+	// token refresh; 2nd-pass review): OAuth must not become a bypass for a
+	// banned/disabled/deleted account. An unclaimed imported account is claimed
+	// here — the OAuth provider has verified ownership of the email, which is a
+	// valid claim — clearing import_pending so later logins behave normally.
+	acct, _ := h.users.GetByID(r.Context(), userID)
+	if acct == nil || acct.Deleted {
+		WriteError(w, http.StatusForbidden, "account_unavailable")
+		return
+	}
+	if acct.Banned {
+		WriteError(w, http.StatusForbidden, "account_banned")
+		return
+	}
+	if acct.Disabled {
+		WriteError(w, http.StatusForbidden, "account_disabled")
+		return
+	}
+	if acct.ImportPending {
+		if err := h.users.ClearImportPending(r.Context(), acct.ID); err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+	}
+
 	// Compute fingerprint
 	fp := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
 		IP:             middleware.ClientIP(r),

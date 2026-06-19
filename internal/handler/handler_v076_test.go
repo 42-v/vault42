@@ -432,7 +432,9 @@ func TestOAuth_Callback_RefreshTokenStoreError(t *testing.T) {
 	auditLog := newTestAuditLogger()
 	h := NewOAuthHandler(
 		providers, []byte("test-hmac-secret-32-bytes-long!!"), mockCache, "https://vault.test",
-		&mocks.MockUserRepo{}, social, tokens,
+		&mocks.MockUserRepo{GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
+		}}, social, tokens,
 		nil, tokenSvc, nil, auditLog, false,
 	)
 
