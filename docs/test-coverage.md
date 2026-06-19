@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-06-19 | Tests: 2296 | Total: 77.99% statement coverage
+Generated: 2026-06-19 | Tests: 2297 | Total: 78.01% statement coverage
 
 ## Package Summary
 
@@ -15,7 +15,7 @@ Generated: 2026-06-19 | Tests: 2296 | Total: 77.99% statement coverage
 | `internal/frontend` | 100.00% |
 | `internal/config` | 98.39% |
 | `internal/jwt` | 96.81% |
-| `internal/audit` | 94.83% |
+| `internal/audit` | 96.55% |
 | `internal/middleware` | 93.76% |
 | `internal/oauth2` | 93.37% |
 | `internal/crypto` | 91.44% |
