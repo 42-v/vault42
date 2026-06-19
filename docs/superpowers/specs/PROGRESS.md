@@ -8,10 +8,11 @@ never clear the Nitrokey. Commit per cycle ONLY when `scripts/release-check.sh` 
 **Test env:** `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock TESTCONTAINERS_RYUK_DISABLED=true GOTOOLCHAIN=auto GOFLAGS=-mod=mod`
 
 ## Metrics (update each cycle)
-- Coverage: 70.69% -> **77.36%** (2249 tests) via coverage.sh after merging grok campaign + feature/audit TDD. 89% NOT reachable: DB/cache/email/keystore/container paths need integration coverage the metric excludes. Reported honestly.
-- govulncheck: **CLEAN** (go1.26.4) · gosec HIGH/CRIT: 0 · frontend audit: clean
-- Security audit: 16 confirmed (2 HIGH/7 MED/7 LOW) → **H1+H2 FIXED**; 7 MED/7 LOW remain
-- Tests: internal + attack + compliance + fuzz must stay green
+- Coverage: 70.69% -> **77.99%** (2294 tests) via coverage.sh after grok campaign + feature/audit/review TDD + targeted fan-out. 89% NOT reachable via the unit metric: DB/keystore/migrate/cache/container paths need integration coverage the metric excludes. Reported honestly (ceiling ~78%).
+- govulncheck: **CLEAN** (go1.26.4) · gosec HIGH/CRIT: **0** · trivy fs: clean · frontend audit: clean
+- Security audit: 16 confirmed (2 HIGH/7 MED/7 LOW) → **ALL 16 FIXED**. Plus a second adversarial review of the new 0.8.9 code → **6 further findings, ALL FIXED** (MFA fail-open, account-state-on-refresh, rate-limit default/validation, pepper length, import-claim ×2).
+- Tests: internal + unit + attack + compliance + fuzz + integration + e2e/multireplica — all green (heavyweight suites verified individually / `-p 1`).
+- `scripts/release-check.sh`: **all gates green — safe to tag.**
 
 ## Per-cycle protocol
 1. `git -C /mnt/projects/vault42 log --oneline -5` + read this file → know where we are.
