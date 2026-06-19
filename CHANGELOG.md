@@ -39,13 +39,19 @@
   `__Host-` CSRF cookie compared at the callback, defeating login-CSRF/session
   fixation).
 * gosec G710 open-redirect guard on the OAuth authorize redirect.
-* Second-pass adversarial review of the new 0.8.9 code closed further fail-open
-  gaps: OAuth callback now fails closed when the MFA-status check errors (was
-  silently issuing full tokens); token refresh re-checks account state and
-  revokes the family for banned/disabled/deleted users (a ban no longer leaves a
-  refreshable session); rate limiting defaults on and is required in non-dev
-  profiles; the pepper must be ≥32 bytes; and a failed import-claim now fails
-  closed rather than leaving the account stuck `import_pending`.
+* Adversarial review of the new 0.8.9 code closed further fail-open gaps: OAuth
+  callback now fails closed when the MFA-status check errors (was silently issuing
+  full tokens); token refresh re-checks account state and revokes the family for
+  banned/disabled/deleted users (a ban no longer leaves a refreshable session);
+  rate limiting defaults on and is required in non-dev profiles; the pepper must
+  be ≥32 bytes; and a failed import-claim now fails closed rather than leaving the
+  account stuck `import_pending`.
+* A second review pass (feature-interaction lens) closed two account-state
+  bypasses on the **OAuth callback**: a banned/disabled/deleted account with a
+  linked social login could obtain tokens via OAuth (the gate existed on password
+  login + refresh but not OAuth), and an `import_pending` account was not handled.
+  The callback now enforces the same account-state gate and claims an imported
+  account via the OAuth-verified email.
 
 ### Tests
 
