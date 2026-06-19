@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-06-19 | Tests: 2292 | Total: 78.02% statement coverage
+Generated: 2026-06-19 | Tests: 2294 | Total: 77.99% statement coverage
 
 ## Package Summary
 
@@ -13,15 +13,15 @@ Generated: 2026-06-19 | Tests: 2292 | Total: 78.02% statement coverage
 | `internal/metrics` | 100.00% |
 | `internal/httputil` | 100.00% |
 | `internal/frontend` | 100.00% |
-| `internal/config` | 98.37% |
+| `internal/config` | 98.39% |
 | `internal/jwt` | 96.81% |
 | `internal/audit` | 96.55% |
 | `internal/middleware` | 93.76% |
 | `internal/oauth2` | 93.37% |
 | `internal/crypto` | 91.44% |
 | `internal/email` | 90.91% |
-| `internal/service` | 90.31% |
-| `internal/handler` | 90.15% |
+| `internal/service` | 90.24% |
+| `internal/handler` | 89.95% |
 | `internal/seed` | 89.23% |
 | `internal/honeypot` | 89.11% |
 | `internal/adminapi` | 86.64% |
@@ -217,4 +217,4 @@ Generated: 2026-06-19 | Tests: 2292 | Total: 78.02% statement coverage
 | `put` | internal/redis/pool.go:130 | 72.2% |
 | `initSelect` | internal/redis/pool.go:248 | 72.7% |
 | `writeCommand` | internal/redis/resp.go:22 | 61.1% |
-| `sendImportClaimLink` | internal/service/auth.go:338 | 70.6% |
+| `sendImportClaimLink` | internal/service/auth.go:338 | 68.4% |

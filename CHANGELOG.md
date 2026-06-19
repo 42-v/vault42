@@ -35,8 +35,17 @@
   trust profile gate, **L1** opt-in strict session limit, **L2** RSA modulus upper
   bound, **L3** required origin, **L4** fail-closed auth rate limiters, **L5** opt-in
   secret-file consumption, **L6** structured admin audit target, **L7** lock-duration
-  clamp. (**M3** OAuth-state browser binding tracked separately.)
+  clamp, and **M3** OAuth-state browser binding (4-part signed state + a
+  `__Host-` CSRF cookie compared at the callback, defeating login-CSRF/session
+  fixation).
 * gosec G710 open-redirect guard on the OAuth authorize redirect.
+* Second-pass adversarial review of the new 0.8.9 code closed further fail-open
+  gaps: OAuth callback now fails closed when the MFA-status check errors (was
+  silently issuing full tokens); token refresh re-checks account state and
+  revokes the family for banned/disabled/deleted users (a ban no longer leaves a
+  refreshable session); rate limiting defaults on and is required in non-dev
+  profiles; the pepper must be ≥32 bytes; and a failed import-claim now fails
+  closed rather than leaving the account stuck `import_pending`.
 
 ### Tests
 
