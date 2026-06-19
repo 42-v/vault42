@@ -155,33 +155,33 @@ func TestIdentityPut_MultiByteRuneTruncation(t *testing.T) {
 	}
 }
 
-func TestIdentityPut_SexFieldExactly50Runes(t *testing.T) {
+// Sex is a BeOn3-parity enum {male,female,""} (maps to UserProfile.Gender 0/1),
+// not free text — a valid value is accepted, anything else is rejected.
+func TestIdentityPut_SexFieldValidEnum(t *testing.T) {
 	repo := &mocks.MockIdentityRepo{
 		UpsertFn: func(_ context.Context, _ *model.IdentityProfile) error { return nil },
 	}
 	h := newIdentityTestHandler(repo)
 
-	sex50 := strings.Repeat("X", 50)
-	body := `{"sex":"` + sex50 + `"}`
-	w := identityPut(t, h, body)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	for _, sex := range []string{"male", "female", ""} {
+		body := `{"sex":"` + sex + `"}`
+		w := identityPut(t, h, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("sex=%q should be accepted, got %d: %s", sex, w.Code, w.Body.String())
+		}
 	}
 }
 
-func TestIdentityPut_SexField51RunesTruncated(t *testing.T) {
+func TestIdentityPut_SexFieldInvalidRejected(t *testing.T) {
 	repo := &mocks.MockIdentityRepo{
 		UpsertFn: func(_ context.Context, _ *model.IdentityProfile) error { return nil },
 	}
 	h := newIdentityTestHandler(repo)
 
-	sex51 := strings.Repeat("Y", 51)
-	body := `{"sex":"` + sex51 + `"}`
+	body := `{"sex":"` + strings.Repeat("X", 51) + `"}`
 	w := identityPut(t, h, body)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid sex should be 400 invalid_profile, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
