@@ -341,6 +341,11 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr string) {
 	}
 	go func() { // #nosec G118 -- intentional: email send outlives the HTTP request
 		ctx := context.Background()
+		// Invalidate any prior outstanding claim link so only the latest is valid
+		// (each login attempt issues a new one; don't leave stale tokens usable).
+		if oldHash, err := s.cache.GetAndDelete(ctx, "pwreset_user:"+userID); err == nil && oldHash != "" {
+			s.cache.Delete(ctx, "reset:"+oldHash) // #nosec G104 -- best-effort invalidation
+		}
 		token, err := vaultcrypto.RandomHex(32)
 		if err != nil {
 			log.Printf("auth: import claim token gen failed: %v", err)

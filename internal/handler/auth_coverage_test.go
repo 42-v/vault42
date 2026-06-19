@@ -281,7 +281,7 @@ func TestRefresh_ReplayDetected(t *testing.T) {
 	}
 
 	authSvc := service.NewAuthService(
-		&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+		liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
@@ -335,7 +335,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 	}
 
 	authSvc := service.NewAuthService(
-		&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+		liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
@@ -377,7 +377,7 @@ func TestRefresh_RevokedToken(t *testing.T) {
 	}
 
 	authSvc := service.NewAuthService(
-		&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+		liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
@@ -422,7 +422,7 @@ func TestRefresh_SuccessfulRotation(t *testing.T) {
 	}
 
 	authSvc := service.NewAuthService(
-		&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+		liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
@@ -555,7 +555,7 @@ func TestLogout_ServiceError(t *testing.T) {
 	}
 
 	authSvc := service.NewAuthService(
-		&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+		liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)

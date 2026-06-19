@@ -204,7 +204,13 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 	// Idempotent no-op for native accounts.
 	if user.ImportPending {
 		if err := h.users.ClearImportPending(r.Context(), user.ID); err != nil {
+			// Fail closed: don't report success while the account is still
+			// import_pending (the next login would re-trigger the magic-link flow
+			// despite the password now being set). import_pending stays true, so
+			// re-logging-in re-issues a fresh claim link — recoverable.
 			log.Printf("password: failed to clear import_pending for user %s: %v", user.ID, err)
+			WriteError(w, http.StatusInternalServerError, "import_claim_failed")
+			return
 		}
 	}
 
