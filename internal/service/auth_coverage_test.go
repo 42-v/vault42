@@ -204,6 +204,13 @@ func newMockAuthService(t *testing.T, opts ...func(*mockAuthOpts)) (*AuthService
 	for _, fn := range opts {
 		fn(o)
 	}
+	// Default: refresh/role lookups resolve to a live, non-banned user unless a
+	// test overrides GetByIDFn (e.g. to exercise banned/disabled/deleted rejection).
+	if o.userRepo.GetByIDFn == nil {
+		o.userRepo.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, Roles: []string{"user"}}, nil
+		}
+	}
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
 	tokenSvc := NewTokenService(key, kid, "https://vault.test", "https://vault.test",

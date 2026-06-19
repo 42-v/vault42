@@ -705,12 +705,21 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	// latest persisted Roles (refresh path must reflect role changes
 	// since the original login).
 	refreshUser, _ := s.users.GetByID(ctx, stored.UserID)
-	var refreshRoles []string
-	if refreshUser != nil {
-		refreshRoles = s.effectiveRoles(ctx, refreshUser.Roles)
-	} else {
-		refreshRoles = []string{"user"}
+	// Account state can change between login and refresh — a banned, disabled,
+	// deleted (or vanished) account must not mint new tokens. Revoke the whole
+	// family so the session is fully terminated, not just this rotation.
+	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled {
+		s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
+		switch {
+		case refreshUser != nil && refreshUser.Banned:
+			return nil, ErrAccountBanned
+		case refreshUser != nil && refreshUser.Disabled:
+			return nil, ErrAccountDisabled
+		default:
+			return nil, ErrTokenInvalid
+		}
 	}
+	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
 	pair, err := s.tokenSvc.IssueTokenPair(
 		stored.UserID, refreshRoles, []string{"read", "write"},
 		stored.ClientID, fp, stored.FamilyID, false,
