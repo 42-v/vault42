@@ -111,7 +111,7 @@ importers:
         specifier: ^20.10.6
         version: 20.10.6
       postcss:
-        specifier: ^8.5.15
+        specifier: '>=8.5.10'
         version: 8.5.15
       tailwindcss:
         specifier: ^3.4.19
