@@ -2357,6 +2357,64 @@ curl -X POST https://vault42.example.com/client/token \
 
 > **Note:** Key management endpoints (`POST /admin/keys/rotate`, `GET /admin/keys`, `DELETE /admin/keys/{kid}`) have moved to the **admin gateway** (`cmd/admin-gateway/`), which provides mTLS + RBAC + session authentication with 6-layer local-only enforcement. See the admin gateway documentation for details.
 
+The endpoints below are served by the admin gateway and require an authenticated admin session with the relevant RBAC permission.
+
+#### POST /admin/users/import
+
+Batch-import accounts (e.g. migrating from BeOn3). Imported accounts are created **passwordless** and `import_pending`: legacy password hashes are never imported. On the user's first login with any password, a one-time magic reset link is emailed and completing it sets a fresh Argon2id password (clearing `import_pending`). Admin-tier role names in `roles` are stripped. Existing emails are skipped (not overwritten).
+
+**Permission:** `users:import`
+
+**Request body:**
+
+```json
+{
+  "source": "beon3",
+  "users": [
+    {"email": "rider@example.com", "roles": ["user"], "legacy_id": "42", "locale": "sk",
+     "disabled": false, "banned": false, "ban_reason": ""}
+  ]
+}
+```
+
+**Success response (200 OK):** per-user results.
+
+```json
+{"results": [{"email": "rider@example.com", "status": "imported"}]}
+```
+
+`status` is `imported`, `skipped` (email already exists), or `error` (with an `error` code such as `invalid_email`, `create_failed`).
+
+#### GET /admin/roles
+
+List the custom application-role catalog (`auth.app_roles`).
+
+**Permission:** `roles:list`
+
+**Success response (200 OK):**
+
+```json
+{"roles": [{"name": "moderator", "namespace": "forum", "description": "Forum moderator", "reserved": false, "created_at": "2026-06-19T00:00:00Z"}]}
+```
+
+#### POST /admin/roles
+
+Create a custom application role. Reserved/admin-tier names are rejected (`role_reserved`).
+
+**Permission:** `roles:create`
+
+**Request body:**
+
+```json
+{"name": "moderator", "namespace": "forum", "description": "Forum moderator"}
+```
+
+#### DELETE /admin/roles/{name}
+
+Delete a custom role from the catalog. Reserved roles cannot be deleted.
+
+**Permission:** `roles:delete`
+
 ---
 
 ### Well-Known
