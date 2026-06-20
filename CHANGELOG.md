@@ -1,47 +1,121 @@
 # Changelog
 
+## 0.8.0 (2026-06-20)
+
+### Features
+
+* **the legacy platform profile/user parity**: the encrypted identity blob gained `username`,
+  `state`, `marketing_emails` and a namespaced opaque `dynamic` JSON area (forum/
+  garage/etc.), with validation; `auth.users` gained account-state flags
+  (`disabled`, `banned`, `ban_reason`, `last_login_at`, `deleted`) via migration 004.
+  Login now rejects banned/disabled/deleted accounts and stamps `last_login_at`.
+* **Custom roles catalog** (`auth.app_roles`, migration 005): admin-managed role
+  catalog with `GET/POST/DELETE /admin/roles` (super_admin), reserved-role
+  protection, and catalog-aware role validation at JWT issuance.
+* **Account import + magic-link forced reset** (migration 006): `POST
+  /admin/users/import` batch-creates passwordless `import_pending` accounts; their
+  first login (any password) is intercepted, a one-time magic reset link is
+  emailed, and completing it sets a new Argon2 password — legacy the legacy platform SHA-256
+  hashes are never imported.
+* **Generic OIDC / OAuth authority**: a configurable OpenID Connect provider
+  (Okta, Auth0, Keycloak, Entra, …) via `VAULT_OIDC_PROVIDERS` — OIDC discovery,
+  PKCE+nonce authorize, code exchange, JWKS-verified ID tokens (rejecting
+  `alg=none`/HMAC/embedded-key headers/sub-2048-bit keys), and a callback that
+  prefers the nonce-bound verified ID token.
+
+### Security
+
+* Fix nightly govulncheck: bump Go toolchain to 1.26.4 (+ `golang:1.26.4-alpine`
+  builder) clearing stdlib CVEs GO-2026-5039 (net/textproto) and GO-2026-5037
+  (crypto/x509); update all Go + frontend dependencies.
+* Audit (workflow-driven, 2 HIGH + 7 MEDIUM + 7 LOW, adversarially verified): fix
+  **H1** MFA email-OTP factor downgrade, **H2** missing per-account MFA lockout,
+  **M1** challenge-token device-fingerprint binding, **M2** unrate-limited OAuth
+  authorize, **M4/M5/M6** fail-closed production config validation, **M7** embedded-
+  trust profile gate, **L1** opt-in strict session limit, **L2** RSA modulus upper
+  bound, **L3** required origin, **L4** fail-closed auth rate limiters, **L5** opt-in
+  secret-file consumption, **L6** structured admin audit target, **L7** lock-duration
+  clamp, and **M3** OAuth-state browser binding (4-part signed state + a
+  `__Host-` CSRF cookie compared at the callback, defeating login-CSRF/session
+  fixation).
+* gosec G710 open-redirect guard on the OAuth authorize redirect.
+* Adversarial review of the new 0.8.0 code closed further fail-open gaps: OAuth
+  callback now fails closed when the MFA-status check errors (was silently issuing
+  full tokens); token refresh re-checks account state and revokes the family for
+  banned/disabled/deleted users (a ban no longer leaves a refreshable session);
+  rate limiting defaults on and is required in non-dev profiles; the pepper must
+  be ≥32 bytes; and a failed import-claim now fails closed rather than leaving the
+  account stuck `import_pending`.
+* A second review pass (feature-interaction lens) closed two account-state
+  bypasses on the **OAuth callback**: a banned/disabled/deleted account with a
+  linked social login could obtain tokens via OAuth (the gate existed on password
+  login + refresh but not OAuth), and an `import_pending` account was not handled.
+  The callback now enforces the same account-state gate and claims an imported
+  account via the OAuth-verified email.
+
+### Tests
+
+* Multi-replica end-to-end suite (`tests/e2e/multireplica`): two in-process
+  replicas over shared Postgres + Redis assert cross-replica JWKS, refresh-replay,
+  shared lockout, MFA A→B, rate-limit, session-count, key rotation, and one-time
+  tokens across dev + production profiles; plus an in-memory-cache-not-shared check.
+* 16-agent coverage campaign + per-feature TDD raised statement coverage toward the
+  89% target (see docs/test-coverage.md).
+
 ## 0.7.0 (2026-05-18)
 
 
 ### Bug Fixes
 
-* bump Go builder image to golang:1.26-alpine (Go 1.26.3), clearing 5 HIGH stdlib CVEs flagged nightly by the Trivy image scan (CVE-2026-33811, CVE-2026-33814, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499)
+* bump the Go builder image to golang:1.26-alpine (Go 1.26.3), clearing 5 HIGH stdlib CVEs flagged nightly by the Trivy image scan (CVE-2026-33811, CVE-2026-33814, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499)
 
 
 ### Tests
 
-* add admin/user handler coverage tests; statement coverage 69.42% → 70.69%
+* add admin and user handler coverage tests; statement coverage 69.42% -> 70.69%
 
-## [1.1.0](https://github.com/42-v/vault42/compare/v1.0.0...v1.1.0) (2026-02-21)
-
-
-### Features
-
-* add Helm chart for Vault42 deployment ([610c9fc](https://github.com/42-v/vault42/commit/610c9fc81cfa90ca5f42be848674fa0fa5096ef7))
-* rebuild frontend as production-quality auth dashboard ([f1fc10a](https://github.com/42-v/vault42/commit/f1fc10a9eb034f361c0f3b931eefb5724f7de77c))
+## 0.6.9 (2026-05-14)
 
 
-### Bug Fixes
+### Security
 
-* prevent panic in argon2 verify with malformed hash params ([9e7a784](https://github.com/42-v/vault42/commit/9e7a784a5618e38308074ea90fd954b9280aa229))
-* resolve frontend tab switching, sessions display, and auth UX issues ([41bc765](https://github.com/42-v/vault42/commit/41bc765648d49fa340ee3e438ec86f7a4d56f141))
-* restore multi-arch (amd64+arm64) to CI build step ([be4a579](https://github.com/42-v/vault42/commit/be4a5794e467197906c0346b7aae66fe59d82037))
-
-## 1.0.0 (2026-02-21)
+* bump the Go toolchain to 1.26.3, clearing the stdlib CVEs reported by govulncheck
 
 
-### Features
+### Build
 
-* add mandatory versioning with conventional commits ([9ced088](https://github.com/42-v/vault42/commit/9ced088bcaf2df28dd1be184c354590dc069c12e))
-* auto-generate device friendly names and allow user rename ([a692251](https://github.com/42-v/vault42/commit/a6922518d60980021e3abe6c6ffd645c70861a31))
-
-
-### Bug Fixes
-
-* backup codes 500 error — add missing used_at column and replace DELETE with UPDATE ([bf9b954](https://github.com/42-v/vault42/commit/bf9b954bf6d2394a77b3d4eebc32abbbe9992905))
-* session persistence and sessions view crash ([a08f786](https://github.com/42-v/vault42/commit/a08f786345b64200b6347327b3d26eed9a8d4c6a))
+* add `scripts/release-check.sh` — a local pre-release gate that mirrors the nightly security workflow
+* drop the custom `codeql.yml` workflow, which conflicted with the repository's default-setup CodeQL
 
 
-### Performance Improvements
+### Tests
 
-* remove ARM from CI builds, simplify release to K8s-only ([9371d79](https://github.com/42-v/vault42/commit/9371d79caa4c1df1f145f4b6f326d1ce07ef580a))
+* raise statement coverage to 69.42%
+
+## 0.6.7 (2026-05-14)
+
+
+### Security
+
+* SHA-pin all first-party GitHub Actions and add a CODEOWNERS file
+* mask IP addresses in logs and resolve CodeQL findings (config secret logging, IP CRLF injection)
+
+
+### Build
+
+* bump fast-uri 3.1.0 -> 3.1.2
+* pin pnpm to 10.18.0 (the lockfile is incompatible with pnpm 11's `--frozen-lockfile` check)
+
+
+### Tests
+
+* raise statement coverage to 67.69%
+
+
+### Chore
+
+* rebrand remaining stale `vault` references to `vault42`
+
+## 0.4.2 (2026-04-30)
+
+* Initial public release of Vault42 — JWT authentication server in Go, with an integrated Vue frontend, admin gateway, and honeypot mode.

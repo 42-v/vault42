@@ -135,3 +135,31 @@ func TestScrubMetadataNil(t *testing.T) {
 		t.Error("nil metadata should return nil")
 	}
 }
+
+// TestIsCriticalEvent_Table covers critical event detection.
+func TestIsCriticalEvent_Table(t *testing.T) {
+	tests := []struct {
+		event string
+		want  bool
+	}{
+		{"login_failure", true},
+		{"password_change", true},
+		{"password_reset", true},
+		{"token_revoke", true},
+		{"admin_action", true},
+		{"2fa_setup", false},
+		{"session_revoke", false},
+		{"login_success", false},
+		{"registration", false},
+		{"unknown", false},
+		{"", false},
+		{"noncritical:event", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.event, func(t *testing.T) {
+			if got := isCriticalEvent(tt.event); got != tt.want {
+				t.Errorf("isCriticalEvent(%q)=%v want %v", tt.event, got, tt.want)
+			}
+		})
+	}
+}

@@ -95,6 +95,13 @@ type RateLimitConfig struct {
 	Limit   int
 	Window  time.Duration
 	KeyFunc func(r *http.Request) string
+	// FailClosed rejects with 503 when the distributed cache is unavailable
+	// instead of falling back to the per-process in-memory counter. Set it for
+	// security-sensitive limiters (login, register, password reset, TOTP): the
+	// in-memory fallback is per-pod, so under a cache outage the effective limit
+	// would otherwise multiply by the pod count, weakening brute-force protection
+	// (audit L4). Zero value keeps the prior graceful-degradation behaviour.
+	FailClosed bool
 }
 
 // localRateLimiter provides in-memory fallback rate limiting when the cache backend is unavailable.
@@ -179,6 +186,17 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 
 			count, err := c.Increment(ctx, key, cfg.Window)
 			if err != nil {
+				if cfg.FailClosed {
+					// Security-sensitive limiter: the per-pod in-memory fallback would
+					// multiply the effective limit across pods during a cache outage, so
+					// fail closed rather than weaken brute-force protection (audit L4).
+					if fallbackWarned.CompareAndSwap(false, true) {
+						log.Printf("WARNING: rate limiter failing closed (cache unavailable)")
+					}
+					w.Header().Set("Retry-After", strconv.Itoa(int(cfg.Window.Seconds())))
+					httputil.WriteError(w, http.StatusServiceUnavailable, "rate_limiter_unavailable")
+					return
+				}
 				// Cache failure — use in-memory fallback instead of allowing unlimited requests
 				if fallbackWarned.CompareAndSwap(false, true) {
 					log.Printf("WARNING: rate limiter falling back to in-memory counter (cache unavailable)")

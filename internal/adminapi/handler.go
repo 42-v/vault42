@@ -3,6 +3,7 @@ package adminapi
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
+	"github.com/42-v/vault42/internal/service"
 )
 
 // Handler handles admin API endpoints.
@@ -27,10 +29,24 @@ type Handler struct {
 	admins      repository.AdminUserRepository
 	sessions    repository.AdminSessionRepository
 	adminConfig repository.AdminConfigRepository
+	appRoles    repository.AppRoleRepository
+	erasure     *service.ErasureService
 	keyStore    *keystore.KeyStore
 	auditLog    *audit.Logger
 	masterKey   []byte
 	pepper      string
+}
+
+// SetAppRoleRepo wires the custom-roles catalog repository, enabling the
+// /admin/roles endpoints. Optional (nil → those handlers return 503).
+func (h *Handler) SetAppRoleRepo(r repository.AppRoleRepository) {
+	h.appRoles = r
+}
+
+// SetErasureService wires the account-erasure service, enabling the
+// DELETE /admin/users/{id} endpoint. Optional (nil → that handler returns 503).
+func (h *Handler) SetErasureService(s *service.ErasureService) {
+	h.erasure = s
 }
 
 // NewHandler creates a new admin API handler.
@@ -238,6 +254,20 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxLockDuration bounds an admin-imposed account lock (L7): a caller with the
+// UsersLock grant must not be able to set an effectively permanent lock.
+const maxLockDuration = 30 * 24 * time.Hour
+
+// clampLockDuration parses an admin lock duration, defaulting to 24h for an
+// unparseable, non-positive, or absurdly long (>30d) value.
+func clampLockDuration(s string) time.Duration {
+	dur, err := time.ParseDuration(s)
+	if err != nil || dur <= 0 || dur > maxLockDuration {
+		return 24 * time.Hour
+	}
+	return dur
+}
+
 // LockUser handles POST /admin/users/{id}/lock.
 func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -252,12 +282,7 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req.Duration = "24h"
 	}
-	dur, err := time.ParseDuration(req.Duration)
-	if err != nil {
-		dur = 24 * time.Hour
-	}
-
-	until := time.Now().Add(dur)
+	until := time.Now().Add(clampLockDuration(req.Duration))
 	if err := h.users.LockUntil(r.Context(), id, until); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
@@ -293,9 +318,87 @@ func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
 }
 
+// DeleteUser handles DELETE /admin/users/{id}. It erases the user account (GDPR)
+// with key-recoverable escrow: when a recovery public key is configured the
+// user's email is written to the encrypted, append-only recovery log before the
+// PII is cascade-deleted and the user row is scrubbed and soft-deleted.
+func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "missing_id")
+		return
+	}
+	if h.erasure == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "erasure_unavailable")
+		return
+	}
+
+	admin := GetAdmin(r.Context())
+	if err := h.erasure.DeleteAccount(r.Context(), id, "admin:"+admin.ID, "admin_request"); err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			httputil.WriteError(w, http.StatusNotFound, "user_not_found")
+			return
+		}
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	_ = h.auditLog.Log(r.Context(), audit.AdminUserDelete, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+		"target_user": id,
+	}, 0)
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Pagination bounds for admin list endpoints that can return unbounded result
+// sets (admin users, active sessions). Enforcing a cap mitigates resource
+// exhaustion and oversized responses (OWASP API Security Top 10 — API4/M06).
+const (
+	defaultListLimit = 50
+	maxListLimit     = 100
+)
+
+// parsePagination extracts enforced limit/offset query params. An absent or
+// invalid limit falls back to defaultListLimit; any limit above maxListLimit is
+// clamped down to the cap. An absent or invalid offset is treated as 0.
+func parsePagination(r *http.Request) (limit, offset int) {
+	q := r.URL.Query()
+	limit = defaultListLimit
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > maxListLimit {
+		limit = maxListLimit
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	return limit, offset
+}
+
+// paginate returns the [offset, offset+limit) window of items, guarding against
+// out-of-range offsets. Callers must pass a limit already clamped to maxListLimit
+// (parsePagination guarantees this).
+func paginate[T any](items []T, limit, offset int) []T {
+	if offset >= len(items) {
+		return items[:0]
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
 // ========== Session Management ==========
 
 // ListSessions handles GET /admin/sessions.
+// Results are paginated via enforced limit/offset query params (default 50,
+// max 100) to bound the response size of an unbounded active-session set.
 func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, err := h.sessions.ListActive(r.Context())
 	if err != nil {
@@ -305,6 +408,10 @@ func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
 	if sessions == nil {
 		sessions = []*model.AdminSession{}
 	}
+
+	limit, offset := parsePagination(r)
+	total := len(sessions)
+	sessions = paginate(sessions, limit, offset)
 
 	type sessionView struct {
 		ID        string    `json:"id"`
@@ -327,7 +434,12 @@ func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"sessions": views})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"sessions": views,
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+	})
 }
 
 // RevokeAllSessions handles POST /admin/sessions/revoke-all.
@@ -659,12 +771,18 @@ func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 // ========== Admin User Management ==========
 
 // ListAdmins handles GET /admin/admins.
+// Results are paginated via enforced limit/offset query params (default 50,
+// max 100) to bound the response size of an unbounded admin-user set.
 func (h *Handler) ListAdmins(w http.ResponseWriter, r *http.Request) {
 	admins, err := h.admins.List(r.Context())
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+
+	limit, offset := parsePagination(r)
+	total := len(admins)
+	admins = paginate(admins, limit, offset)
 
 	type adminView struct {
 		ID          string     `json:"id"`
@@ -691,7 +809,12 @@ func (h *Handler) ListAdmins(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"admins": views})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"admins": views,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 // CreateAdmin handles POST /admin/admins.
@@ -762,7 +885,7 @@ func (h *Handler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.AdminAccountCreate, creator.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountCreate, creator.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"new_admin_id":       id,
 		"new_admin_username": req.Username,
 		"new_admin_role":     req.Role,
@@ -799,7 +922,7 @@ func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"revoked_admin_id": id,
 	}, 0)
 

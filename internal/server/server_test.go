@@ -215,3 +215,89 @@ func TestDPoPNoDPoPHeaderPassesThrough(t *testing.T) {
 		t.Errorf("no DPoP header should not produce DPoP error, got %q", rec.Body.String())
 	}
 }
+
+func TestSetupRoutes_Variants_Table(t *testing.T) {
+	memCache := cache.NewMemoryCache()
+	defer memCache.Close()
+
+	tests := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"base", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 8}},
+		{"metrics", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 8, MetricsEnabled: true}},
+		{"honeypot", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 8, Profile: config.ProfileHoneypot}},
+		{"no tls", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 8, TLSEnabled: false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := &Deps{
+				Config:    tt.cfg,
+				Cache:     memCache,
+				ReadyDeps: &handler.ReadyzDeps{},
+			}
+			s := New(deps)
+			mux := s.setupRoutes()
+			if mux == nil {
+				t.Fatal("nil mux")
+			}
+		})
+	}
+}
+
+// table for more server creation and setup variants
+func TestServer_VariantsMore(t *testing.T) {
+	memCache := cache.NewMemoryCache()
+	defer memCache.Close()
+	tests := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"frontend", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 15, ServeFrontend: true}},
+		{"tls", &config.Config{Origin: "https://v.test", AppName: "V", PasswordMinLength: 15, TLSEnabled: true, TLSCertFile: "c", TLSKeyFile: "k"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := &Deps{Config: tt.cfg, Cache: memCache, ReadyDeps: &handler.ReadyzDeps{}}
+			s := New(deps)
+			if s == nil {
+				t.Error("nil server")
+			}
+			m := s.setupRoutes()
+			if m == nil {
+				t.Error("nil mux")
+			}
+		})
+	}
+}
+
+// Table-driven test for parseCORSOrigins (covers its branches and edges).
+func TestParseCORSOrigins_Table(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"empty", "", nil},
+		{"single", "https://a.example", []string{"https://a.example"}},
+		{"multiple", "https://a, https://b", []string{"https://a", "https://b"}},
+		{"with spaces", " https://x , https://y ", []string{"https://x", "https://y"}},
+		{"empty parts", "https://a,,https://b,", []string{"https://a", "https://b"}},
+		{"only commas", ",,,", nil},
+		{"whitespace only", "   ,  , ", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCORSOrigins(tt.raw)
+			if len(got) != len(tt.want) {
+				t.Errorf("len=%d want %d; got=%v want=%v", len(got), len(tt.want), got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] %q != %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

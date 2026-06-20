@@ -88,9 +88,24 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiry := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
-	statePayload := fmt.Sprintf("%s.%s.%s", providerName, nonce, expiry)
+
+	// Bind the flow to the initiating browser (audit M3): mint a random CSRF
+	// token, set it as a short-lived host-only cookie, and embed its hash in the
+	// signed state. The callback recomputes the hash from the cookie and compares,
+	// so a state minted for one browser cannot be replayed into another (OAuth
+	// login CSRF / session fixation).
+	csrfToken, err := vaultcrypto.RandomHex(32)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	csrfHash := vaultcrypto.SHA256Hex(csrfToken)
+
+	statePayload := fmt.Sprintf("%s.%s.%s.%s", providerName, nonce, expiry, csrfHash)
 	sig := vaultcrypto.HMACSign([]byte(statePayload), h.hmacSecret)
 	state := fmt.Sprintf("%s.%s", statePayload, sig)
+
+	setOAuthStateCookie(w, csrfToken, h.secureCookies)
 
 	// Store verifier in cache (keyed by nonce) — failure here means the callback will reject the state
 	if err := h.cache.Set(r.Context(), "oauth_state:"+nonce, verifier, 10*time.Minute); err != nil {
@@ -108,7 +123,56 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authURL := provider.AuthURL(state, nonce, challenge)
-	http.Redirect(w, r, authURL, http.StatusFound)
+	if !isSafeAuthorizeRedirect(authURL) {
+		log.Printf("oauth: provider %q produced an unsafe authorize URL", providerName)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	http.Redirect(w, r, authURL, http.StatusFound) // #nosec G710 -- authURL is server-configured (static provider map) and validated by isSafeAuthorizeRedirect to be an absolute https URL
+}
+
+const oauthStateCookie = "__Host-oauth_state" // #nosec G101 -- cookie name constant, not a credential
+
+// setOAuthStateCookie binds the OAuth flow to the initiating browser. SameSite=Lax
+// (not Strict) so it survives the top-level GET redirect back from the provider;
+// host-only + HttpOnly so it is not script-readable or scoped to other hosts.
+func setOAuthStateCookie(w http.ResponseWriter, token string, secure bool) {
+	// #nosec G124 -- Secure is derived from TLS state at runtime; HttpOnly + SameSite=Lax pinned.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   600,
+	})
+}
+
+func clearOAuthStateCookie(w http.ResponseWriter, secure bool) {
+	// #nosec G124 -- Secure is derived from TLS state at runtime; HttpOnly + SameSite=Lax pinned.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+// isSafeAuthorizeRedirect reports whether a provider-supplied authorize URL is a
+// well-formed absolute https:// URL. The authorize endpoint is server-configured
+// (built from the static provider map, never from request input), so this is
+// defense-in-depth against a misconfigured provider — and it sanitizes the value
+// flowing into http.Redirect, closing the open-redirect taint path (gosec G710).
+func isSafeAuthorizeRedirect(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && u.Host != ""
 }
 
 // Callback handles GET /auth/oauth2/callback/{provider}.
@@ -155,13 +219,27 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse payload parts: "provider.nonce.expiry"
-	parts := strings.SplitN(payload, ".", 3)
-	if len(parts) != 3 || parts[0] != providerName {
+	// Parse payload parts: "provider.nonce.expiry.csrfHash"
+	parts := strings.SplitN(payload, ".", 4)
+	if len(parts) != 4 || parts[0] != providerName {
 		WriteError(w, http.StatusBadRequest, "invalid_state")
 		return
 	}
 	nonce := parts[1]
+
+	// Verify the flow completes in the same browser that started it (audit M3):
+	// the state embeds the hash of a CSRF token mirrored in a host-only cookie.
+	// Without this, any HMAC-valid state minted for another browser could be
+	// replayed into the victim's browser (session fixation). Clear the one-shot
+	// cookie before exchanging the code, regardless of outcome.
+	csrfCookie, cookieErr := r.Cookie(oauthStateCookie)
+	clearOAuthStateCookie(w, h.secureCookies)
+	if cookieErr != nil || csrfCookie.Value == "" ||
+		!vaultcrypto.SecureCompare(parts[3], vaultcrypto.SHA256Hex(csrfCookie.Value)) {
+		WriteError(w, http.StatusBadRequest, "invalid_state")
+		return
+	}
+
 	expiry, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil || time.Now().Unix() > expiry {
 		WriteError(w, http.StatusBadRequest, "state_expired")
@@ -190,12 +268,27 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch user info from provider
-	userInfo, err := provider.UserInfo(r.Context(), tokenResp.AccessToken)
-	if err != nil {
-		log.Printf("oauth: user info failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
-		WriteError(w, http.StatusBadGateway, "provider_error")
-		return
+	// For OIDC providers, prefer the cryptographically-verified, nonce-bound ID
+	// token over the access-token userinfo call. nonce is the state nonce we
+	// minted at /authorize and round-tripped through the signed state.
+	var userInfo *oauth2.UserInfo
+	if oidcProvider, ok := provider.(*oauth2.OIDCProvider); ok && tokenResp.IDToken != "" {
+		userInfo, err = oidcProvider.VerifyIDToken(r.Context(), tokenResp.IDToken, nonce)
+		if err != nil {
+			log.Printf("oauth: id_token verification failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusBadGateway, "provider_error")
+			return
+		}
+	}
+
+	// Fetch user info from provider (non-OIDC, or OIDC issuer with no id_token).
+	if userInfo == nil {
+		userInfo, err = provider.UserInfo(r.Context(), tokenResp.AccessToken)
+		if err != nil {
+			log.Printf("oauth: user info failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusBadGateway, "provider_error")
+			return
+		}
 	}
 
 	// Find or create user
@@ -286,6 +379,31 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce account state on the OAuth path too (parity with password login +
+	// token refresh; 2nd-pass review): OAuth must not become a bypass for a
+	// banned/disabled/deleted account. An unclaimed imported account is claimed
+	// here — the OAuth provider has verified ownership of the email, which is a
+	// valid claim — clearing import_pending so later logins behave normally.
+	acct, _ := h.users.GetByID(r.Context(), userID)
+	if acct == nil || acct.Deleted {
+		WriteError(w, http.StatusForbidden, "account_unavailable")
+		return
+	}
+	if acct.Banned {
+		WriteError(w, http.StatusForbidden, "account_banned")
+		return
+	}
+	if acct.Disabled {
+		WriteError(w, http.StatusForbidden, "account_disabled")
+		return
+	}
+	if acct.ImportPending {
+		if err := h.users.ClearImportPending(r.Context(), acct.ID); err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+	}
+
 	// Compute fingerprint
 	fp := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
 		IP:             middleware.ClientIP(r),
@@ -299,6 +417,9 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		requiresMFA, err := h.mfaSvc.RequiresMFA(r.Context(), userID, false)
 		if err != nil {
 			log.Printf("oauth: MFA status check failed for %s: %v", httputil.SafeLogValue(userID), err) // #nosec G706 -- sanitized via SafeLogValue
+			// Fail closed: if MFA status is indeterminate, require it rather than
+			// issuing full tokens and silently bypassing a user's second factor.
+			requiresMFA = true
 		}
 		if requiresMFA {
 			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp)

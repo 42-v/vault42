@@ -24,6 +24,17 @@ type User struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	Roles            []string
+	// Account-state flags (legacy-platform parity, migration 004).
+	Disabled    bool
+	Banned      bool
+	BanReason   string
+	LastLoginAt *time.Time
+	Deleted     bool
+	DeletedAt   *time.Time
+	// Account import (the legacy platform migration, migration 006).
+	ImportPending bool
+	ImportedFrom  string
+	LegacyID      string
 }
 
 // PasswordHistory tracks previous password hashes to prevent reuse.
@@ -44,6 +55,22 @@ type SocialAccount struct {
 	AccessTokenEnc  string
 	RefreshTokenEnc string
 	CreatedAt       time.Time
+}
+
+// AccountRecovery is one append-only escrow record written when a user account
+// is erased. Payload is a hybrid-asymmetric ciphertext (see crypto.EncryptRecovery)
+// of the recoverable profile (email, created_at, roles, display_name). The
+// server cannot decrypt it — only the holder of the offline recovery private
+// key can, to restore the deleted user from backup. Pseudonym is an HMAC of the
+// user id so a record can be correlated to a (soft-deleted) user without
+// storing the plaintext identity here.
+type AccountRecovery struct {
+	ID        string
+	Pseudonym string
+	Payload   []byte
+	DeletedAt time.Time
+	DeletedBy string
+	Reason    string
 }
 
 // Client represents a registered service client.
@@ -181,6 +208,17 @@ type AdminRole struct {
 	Role        string
 	Description string
 	Rank        int
+}
+
+// AppRole is an entry in the custom roles catalog (auth.app_roles). User roles
+// are validated against this catalog at JWT issuance. Reserved=true entries are
+// catalog-protected and cannot be deleted via the admin API.
+type AppRole struct {
+	Name        string
+	Namespace   string
+	Description string
+	Reserved    bool
+	CreatedAt   time.Time
 }
 
 // AdminUser represents an admin gateway operator account.

@@ -139,3 +139,14 @@ func (r *BlobRepo) Delete(ctx context.Context, id, pseudonymID string) error {
 	}
 	return nil
 }
+
+// DeleteAllForPseudonym removes every blob owned by a pseudonym. Unlike Delete it
+// does not error when there is nothing to remove — account erasure must succeed
+// for users who never stored a blob.
+func (r *BlobRepo) DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM objects.blobs WHERE pseudonym_id = $1`, pseudonymID)
+	if err != nil {
+		return fmt.Errorf("delete all blobs: %w", err)
+	}
+	return nil
+}

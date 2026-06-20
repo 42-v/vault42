@@ -85,6 +85,19 @@ type Deps struct {
 	// Identity & Blob storage
 	Identity repository.IdentityRepository
 	Blobs    repository.BlobRepository
+
+	// Account-recovery escrow log (append-only). Required to build the
+	// ErasureService that backs the self-service /user/account endpoint.
+	Recovery repository.AccountRecoveryRepository
+
+	// RecoveryPublicKey is the RSA public key used to encrypt recovery records.
+	// Nil disables escrow (deletion still works, but is not recoverable).
+	RecoveryPublicKey *rsa.PublicKey
+
+	// AuditEvents is the audit repository used for read-back of user-scoped
+	// events in the data-export endpoint. The AuditLog logger wraps the same
+	// repository for writes.
+	AuditEvents repository.AuditRepository
 }
 
 // Server is the main HTTP server for The Vault. It manages the middleware
@@ -247,20 +260,22 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Rate limiting middleware factories
 	rlEnabled := cfg.RateLimitEnabled
+	// Auth-sensitive limiters fail closed on cache outage (audit L4): the per-pod
+	// in-memory fallback would multiply the effective limit across replicas.
 	loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey,
+		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	registerRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	refreshRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	passwordResetRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	totpRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	verifyEmailRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
@@ -270,6 +285,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	}, rlEnabled)
 	clientTokenRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+	}, rlEnabled)
+	// Account erasure is irreversible (recoverable only via the offline key); cap
+	// it tightly and fail closed so a cache outage cannot widen the limit.
+	accountDeleteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 
 	// ===== Public endpoints (no auth) =====
@@ -319,7 +339,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		oauthExchangeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
-		mux.HandleFunc("GET /auth/oauth2/authorize", oauthHandler.Authorize)
+		// Authorize writes an unauthenticated per-request oauth_state cache entry;
+		// rate-limit it like its siblings to avoid cache-fill eviction pressure
+		// on shared lockout/OTP/reset state (audit M2).
+		authorizeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		}, rlEnabled)
+		mux.Handle("GET /auth/oauth2/authorize", authorizeRL(http.HandlerFunc(oauthHandler.Authorize)))
 		mux.Handle("GET /auth/oauth2/callback/{provider}", loginRL(http.HandlerFunc(oauthHandler.Callback)))
 		mux.Handle("POST /auth/oauth2/exchange", oauthExchangeRL(http.HandlerFunc(oauthHandler.Exchange)))
 	}
@@ -337,6 +363,19 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.Handle("GET /user/devices", authed(userHandler.Devices))
 	mux.Handle("PATCH /user/devices/{id}", authed(userHandler.RenameDevice))
 	mux.Handle("DELETE /user/devices/{id}", authed(userHandler.DeleteDevice))
+
+	// Self-service account erasure (GDPR). Requires auth + password re-confirmation
+	// (verified inside the handler) behind a strict, fail-closed rate limiter. The
+	// erasure service shares d.HMACSecret with the identity/blob services so it
+	// derives the same pseudonyms for the cascade.
+	if d.Recovery != nil {
+		erasureSvc := service.NewErasureService(
+			d.Users, d.Identity, d.Blobs, d.Devices, d.Social, d.PwHistory, d.Tokens,
+			d.Recovery, d.AuditLog, d.RecoveryPublicKey, d.HMACSecret,
+		)
+		accountHandler := handler.NewAccountHandler(erasureSvc, d.Users, d.AuditLog, d.Pepper)
+		mux.Handle("DELETE /user/account", authMw(fingerprintMw(accountDeleteRL(http.HandlerFunc(accountHandler.Delete)))))
+	}
 
 	// Password change (authenticated, rate limited, already requires current password)
 	mux.Handle("POST /user/password", authMw(fingerprintMw(confirmRL(http.HandlerFunc(passwordHandler.ChangePassword)))))
@@ -365,9 +404,15 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.Handle("POST /auth/2fa/email-otp/verify", totpRL(authedChallenge(emailOTPHandler.Verify)))
 	mux.Handle("POST /auth/2fa/email-otp/resend", totpRL(authedChallenge(emailOTPHandler.Resend)))
 
+	// Identity & blob services are built once here so both their own endpoints
+	// and the data-export aggregate can share a single instance. Either may
+	// remain nil when the corresponding store is disabled.
+	var identitySvc *service.IdentityService
+	var blobSvc *service.BlobService
+
 	// Identity store (encrypted PII)
 	if d.Identity != nil {
-		identitySvc := service.NewIdentityService(d.Identity, d.MasterKey, d.HMACSecret)
+		identitySvc = service.NewIdentityService(d.Identity, d.MasterKey, d.HMACSecret)
 		identityHandler := handler.NewIdentityHandler(identitySvc, d.AuditLog)
 		identityReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
@@ -382,7 +427,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Blob storage (encrypted objects) — disabled when BlobQuotaBytes == 0
 	if d.Blobs != nil && cfg.BlobQuotaBytes > 0 {
-		blobSvc := service.NewBlobService(d.Blobs, d.MasterKey, d.HMACSecret, service.BlobConfig{
+		blobSvc = service.NewBlobService(d.Blobs, d.MasterKey, d.HMACSecret, service.BlobConfig{
 			MinBlobSize:     cfg.BlobMinSize,
 			MaxBlobSize:     cfg.BlobMaxSize,
 			MaxBlobsPerUser: cfg.BlobMaxPerUser,
@@ -403,6 +448,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		mux.Handle("GET /user/blobs/named/{name}", blobReadRL(authed(blobHandler.DownloadNamed)))
 		mux.Handle("DELETE /user/blobs/named/{name}", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(blobHandler.DeleteNamed))))))
 	}
+
+	// Data portability (GDPR Articles 15/20) — aggregates all personal data
+	// held for the requesting user. Reuses the existing services/repositories.
+	dataExportHandler := handler.NewDataExportHandler(d.Users, d.Devices, d.Social, d.AuditEvents, identitySvc, blobSvc, d.AuditLog)
+	dataExportRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+		Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+	}, rlEnabled)
+	mux.Handle("GET /user/data-export", dataExportRL(authed(dataExportHandler.Export)))
 
 	// Embedded frontend (SPA catch-all) — off by default, enabled via VAULT_SERVE_FRONTEND or honeypot profile
 	if cfg.ServeFrontend {

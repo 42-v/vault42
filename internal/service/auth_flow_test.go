@@ -870,6 +870,32 @@ func TestRefreshTokenHashMatchesStoredHash(t *testing.T) {
 	}
 }
 
+func TestRefreshRejectsBannedUserAndRevokesFamily(t *testing.T) {
+	fp := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{IP: "1.2.3.4", UserAgent: "TestAgent"})
+	revokedFamily := ""
+	svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+		o.tokenRepo.GetByTokenHashFn = func(_ context.Context, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				ID: "rt-1", UserID: "user-1", FamilyID: "fam-1",
+				FingerprintHash: fp, ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		}
+		o.tokenRepo.MarkUsedFn = func(_ context.Context, _ string) (bool, error) { return true, nil }
+		o.tokenRepo.RevokeFamilyFn = func(_ context.Context, fam string) error { revokedFamily = fam; return nil }
+		o.userRepo.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, Banned: true}, nil
+		}
+	})
+
+	_, err := svc.Refresh(context.Background(), "tok", "1.2.3.4", "TestAgent", vaultcrypto.FingerprintInput{})
+	if !errors.Is(err, ErrAccountBanned) {
+		t.Fatalf("banned user refresh should return ErrAccountBanned, got %v", err)
+	}
+	if revokedFamily != "fam-1" {
+		t.Fatalf("banned refresh must revoke the token family, revoked=%q", revokedFamily)
+	}
+}
+
 func TestRefreshNewTokenInSameFamily(t *testing.T) {
 	fp := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
 		IP: "1.2.3.4", UserAgent: "TestAgent",

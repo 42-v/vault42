@@ -16,6 +16,16 @@ import (
 	"github.com/42-v/vault42/tests/mocks"
 )
 
+// liveUserRepo returns a user repo whose GetByID resolves to a live, non-banned
+// user — refresh now enforces account state, so refresh tests need a real user.
+func liveUserRepo() *mocks.MockUserRepo {
+	return &mocks.MockUserRepo{
+		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, Roles: []string{"user"}}, nil
+		},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Refresh: missing cookie (already tested in handler_test.go, but subtested here)
 // ---------------------------------------------------------------------------
@@ -101,7 +111,7 @@ func TestRefresh_FingerprintMismatch(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -181,7 +191,7 @@ func TestRefresh_MarkUsedFails(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -237,7 +247,7 @@ func TestRefresh_MarkUsedFails(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -281,7 +291,7 @@ func TestRefresh_GetByTokenHashError(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -338,7 +348,7 @@ func TestRefresh_SuccessfulRotation_FullResponseValidation(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -426,7 +436,7 @@ func TestRefresh_EmptyFingerprintHash(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -469,7 +479,7 @@ func TestRefresh_ReplayDetectedClearsCookie(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -523,7 +533,7 @@ func TestRefresh_ExpiredTokenClearsCookie(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -582,7 +592,7 @@ func TestRefresh_RevokedTokenClearsCookie(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -651,7 +661,7 @@ func TestRefresh_SuccessSecureCookies(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -716,7 +726,7 @@ func TestRefresh_WithAcceptLanguageHeader(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -774,7 +784,7 @@ func TestRefresh_NewTokenStoreFailure(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -1211,7 +1221,7 @@ func TestRefresh_PreservesClientIDAndFamilyID(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
@@ -1267,7 +1277,7 @@ func TestRefresh_JustExpiredToken(t *testing.T) {
 		}
 
 		authSvc := service.NewAuthService(
-			&mocks.MockUserRepo{}, mockTokens, &mocks.MockDeviceRepo{},
+			liveUserRepo(), mockTokens, &mocks.MockDeviceRepo{},
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)

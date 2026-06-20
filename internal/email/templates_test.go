@@ -1,6 +1,7 @@
 package email
 
 import (
+	"html/template"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,6 +268,144 @@ func TestAllTemplatesProduceValidHTML(t *testing.T) {
 			}
 			if !strings.Contains(html, "Vault") {
 				t.Error("should contain app name")
+			}
+		})
+	}
+}
+
+// TestSafeFuncMap exercises the template func map (safeURL, upper, lower, truncate)
+// for branches not necessarily hit by default renders.
+func TestSafeFuncMap(t *testing.T) {
+	fm := safeFuncMap()
+	safeURL := fm["safeURL"].(func(string) template.URL)
+	upper := fm["upper"].(func(string) string)
+	lower := fm["lower"].(func(string) string)
+	trunc := fm["truncate"].(func(string, int) string)
+
+	t.Run("safeURL https", func(t *testing.T) {
+		if got := safeURL("https://ex.com"); string(got) != "https://ex.com" {
+			t.Errorf("safeURL https got %q", got)
+		}
+	})
+	t.Run("safeURL http", func(t *testing.T) {
+		if got := safeURL("http://ex.com"); string(got) != "http://ex.com" {
+			t.Errorf("safeURL http got %q", got)
+		}
+	})
+	t.Run("safeURL relative", func(t *testing.T) {
+		if got := safeURL("/p"); string(got) != "/p" {
+			t.Errorf("safeURL rel got %q", got)
+		}
+	})
+	t.Run("safeURL unsafe js", func(t *testing.T) {
+		if got := safeURL("javascript:alert(1)"); string(got) != "" {
+			t.Errorf("safeURL js got %q", got)
+		}
+	})
+	t.Run("safeURL data", func(t *testing.T) {
+		if got := safeURL("data:x"); string(got) != "" {
+			t.Errorf("safeURL data got %q", got)
+		}
+	})
+	t.Run("upper", func(t *testing.T) {
+		if upper("hello") != "HELLO" {
+			t.Error("upper failed")
+		}
+	})
+	t.Run("lower", func(t *testing.T) {
+		if lower("HELLO") != "hello" {
+			t.Error("lower failed")
+		}
+	})
+	t.Run("truncate under", func(t *testing.T) {
+		if trunc("abc", 10) != "abc" {
+			t.Error("truncate under")
+		}
+	})
+	t.Run("truncate over", func(t *testing.T) {
+		if trunc("abcdef", 3) != "abc" {
+			t.Error("truncate over")
+		}
+	})
+	t.Run("truncate unicode", func(t *testing.T) {
+		if trunc("caféX", 4) != "café" {
+			t.Error("truncate unicode")
+		}
+	})
+}
+
+// TestSetDefaults_Table covers SetDefaults merging into Render for missing fields.
+func TestSetDefaults_Table(t *testing.T) {
+	tests := []struct {
+		name       string
+		defaults   TemplateData
+		renderData TemplateData
+		wantLogo   string
+		wantColor  string
+	}{
+		{
+			name:       "defaults used when empty",
+			defaults:   TemplateData{LogoURL: "https://ex/logo.png", PrimaryColor: "#123456"},
+			renderData: TemplateData{AppName: "X", URL: "https://ex/u"},
+			wantLogo:   "https://ex/logo.png",
+			wantColor:  "#123456",
+		},
+		{
+			name:       "explicit overrides defaults",
+			defaults:   TemplateData{LogoURL: "def", PrimaryColor: "defcol"},
+			renderData: TemplateData{AppName: "X", LogoURL: "https://ex/explicit.png", PrimaryColor: "excol"},
+			wantLogo:   "https://ex/explicit.png",
+			wantColor:  "excol",
+		},
+		{
+			name:       "partial default fill",
+			defaults:   TemplateData{PrimaryColor: "#abc"},
+			renderData: TemplateData{AppName: "X", LogoURL: "https://ex/onlylogo.png"},
+			wantLogo:   "https://ex/onlylogo.png",
+			wantColor:  "#abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := NewTemplateRenderer("")
+			if err != nil {
+				t.Fatalf("new renderer: %v", err)
+			}
+			r.SetDefaults(tt.defaults)
+			_, html, _ := r.Render(TemplateVerification, tt.renderData)
+			if tt.wantLogo != "" && !strings.Contains(html, tt.wantLogo) {
+				t.Errorf("logo %q not in html", tt.wantLogo)
+			}
+			if tt.wantColor != "" && !strings.Contains(html, tt.wantColor) {
+				t.Errorf("color %q not in html", tt.wantColor)
+			}
+		})
+	}
+}
+
+// TestSetRenderer_Table covers SetRenderer (once semantics) and default render path.
+func TestSetRenderer_Table(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{"set once"},
+		{"set twice noop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := NewTemplateRenderer("")
+			if err != nil {
+				t.Fatalf("renderer: %v", err)
+			}
+			// first set
+			SetRenderer(r)
+			// second set ignored
+			r2, _ := NewTemplateRenderer("")
+			SetRenderer(r2)
+
+			subj, _, _ := RenderTemplate(TemplateVerification, TemplateData{AppName: "SRTest"})
+			if subj == "" {
+				t.Error("expected subject after SetRenderer")
 			}
 		})
 	}

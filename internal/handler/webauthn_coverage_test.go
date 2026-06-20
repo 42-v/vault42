@@ -944,3 +944,97 @@ func TestModelCredsToWebAuthn_ManyCredentials(t *testing.T) {
 		}
 	})
 }
+
+// TestWebAuthn_ListCredentials_Table covers ListCredentials handler error and happy paths.
+func TestWebAuthn_ListCredentials_Table(t *testing.T) {
+	tests := []struct {
+		name       string
+		setupRepo  func(*mocks.MockWebAuthnRepo)
+		setClaims  bool
+		wantCode   int
+		wantErr    string
+		wantCount  int
+	}{
+		{
+			name:      "unauthorized no claims",
+			setClaims: false,
+			wantCode:  http.StatusUnauthorized,
+			wantErr:   "unauthorized",
+			wantCount: -1,
+		},
+		{
+			name: "repo error",
+			setupRepo: func(m *mocks.MockWebAuthnRepo) {
+				m.ListByUserFn = func(context.Context, string) ([]*model.WebAuthnCredential, error) {
+					return nil, errors.New("db fail")
+				}
+			},
+			setClaims: true,
+			wantCode:  http.StatusInternalServerError,
+			wantErr:   "internal_error",
+			wantCount: -1,
+		},
+		{
+			name: "success empty",
+			setupRepo: func(m *mocks.MockWebAuthnRepo) {
+				m.ListByUserFn = func(context.Context, string) ([]*model.WebAuthnCredential, error) {
+					return nil, nil
+				}
+			},
+			setClaims: true,
+			wantCode:  http.StatusOK,
+			wantCount: 0,
+		},
+		{
+			name: "success with creds",
+			setupRepo: func(m *mocks.MockWebAuthnRepo) {
+				m.ListByUserFn = func(context.Context, string) ([]*model.WebAuthnCredential, error) {
+					return []*model.WebAuthnCredential{
+						{ID: "c1", SignCount: 5, FriendlyName: "key1"},
+						{ID: "c2", SignCount: 10},
+					}, nil
+				}
+			},
+			setClaims: true,
+			wantCode:  http.StatusOK,
+			wantCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			webauthnRepo := &mocks.MockWebAuthnRepo{}
+			if tt.setupRepo != nil {
+				tt.setupRepo(webauthnRepo)
+			}
+			h := newWebAuthnHandler(&webauthn.WebAuthn{}, webauthnRepo, &mocks.MockUserRepo{}, nil)
+
+			req := httptest.NewRequest(http.MethodGet, "/auth/2fa/webauthn/credentials", nil)
+			if tt.setClaims {
+				req = setAuthContext(req, "u1")
+			}
+			rec := httptest.NewRecorder()
+
+			h.ListCredentials(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("code=%d want=%d", rec.Code, tt.wantCode)
+			}
+			if tt.wantErr != "" {
+				var res map[string]string
+				decodeResponse(t, rec, &res)
+				if res["error"] != tt.wantErr {
+					t.Errorf("err=%q want %q", res["error"], tt.wantErr)
+				}
+			}
+			if tt.wantCount >= 0 {
+				var res struct {
+					Credentials []interface{} `json:"credentials"`
+				}
+				decodeResponse(t, rec, &res)
+				if len(res.Credentials) != tt.wantCount {
+					t.Errorf("count=%d want %d", len(res.Credentials), tt.wantCount)
+				}
+			}
+		})
+	}
+}

@@ -26,6 +26,7 @@ var (
 	_ repository.AdminConfigRepository     = (*MockAdminConfigRepo)(nil)
 	_ repository.IdentityRepository        = (*MockIdentityRepo)(nil)
 	_ repository.BlobRepository            = (*MockBlobRepo)(nil)
+	_ repository.AccountRecoveryRepository = (*MockAccountRecoveryRepo)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,38 @@ type MockUserRepo struct {
 	LockUntilFn            func(ctx context.Context, id string, until time.Time) error
 	UnlockFn               func(ctx context.Context, id string) error
 	VerifyEmailFn          func(ctx context.Context, id string) error
+	SetLastLoginFn         func(ctx context.Context, id string) error
+	CreateImportedFn       func(ctx context.Context, user *model.User) error
+	ClearImportPendingFn   func(ctx context.Context, id string) error
+	SoftDeleteScrubFn      func(ctx context.Context, id, tombstoneEmail string) error
+}
+
+func (m *MockUserRepo) SoftDeleteScrub(ctx context.Context, id, tombstoneEmail string) error {
+	if m.SoftDeleteScrubFn != nil {
+		return m.SoftDeleteScrubFn(ctx, id, tombstoneEmail)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) SetLastLogin(ctx context.Context, id string) error {
+	if m.SetLastLoginFn != nil {
+		return m.SetLastLoginFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) CreateImported(ctx context.Context, user *model.User) error {
+	if m.CreateImportedFn != nil {
+		return m.CreateImportedFn(ctx, user)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) ClearImportPending(ctx context.Context, id string) error {
+	if m.ClearImportPendingFn != nil {
+		return m.ClearImportPendingFn(ctx, id)
+	}
+	return nil
 }
 
 func (m *MockUserRepo) Create(ctx context.Context, user *model.User) error {
@@ -509,6 +542,14 @@ type MockSocialAccountRepo struct {
 	GetByProviderAndIDFn func(ctx context.Context, provider, providerUserID string) (*model.SocialAccount, error)
 	ListByUserFn         func(ctx context.Context, userID string) ([]*model.SocialAccount, error)
 	DeleteFn             func(ctx context.Context, id, userID string) error
+	DeleteAllForUserFn   func(ctx context.Context, userID string) error
+}
+
+func (m *MockSocialAccountRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
+	}
+	return nil
 }
 
 func (m *MockSocialAccountRepo) Create(ctx context.Context, account *model.SocialAccount) error {
@@ -544,8 +585,16 @@ func (m *MockSocialAccountRepo) Delete(ctx context.Context, id, userID string) e
 // ---------------------------------------------------------------------------
 
 type MockPasswordHistoryRepo struct {
-	CreateFn          func(ctx context.Context, entry *model.PasswordHistory) error
-	GetRecentByUserFn func(ctx context.Context, userID string, limit int) ([]*model.PasswordHistory, error)
+	CreateFn           func(ctx context.Context, entry *model.PasswordHistory) error
+	GetRecentByUserFn  func(ctx context.Context, userID string, limit int) ([]*model.PasswordHistory, error)
+	DeleteAllForUserFn func(ctx context.Context, userID string) error
+}
+
+func (m *MockPasswordHistoryRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
+	}
+	return nil
 }
 
 func (m *MockPasswordHistoryRepo) Create(ctx context.Context, entry *model.PasswordHistory) error {
@@ -675,6 +724,14 @@ type MockBlobRepo struct {
 	ListByPseudonymFn         func(ctx context.Context, pseudonymID string) ([]*model.Blob, error)
 	GetQuotaFn                func(ctx context.Context, pseudonymID string) (*model.BlobQuota, error)
 	DeleteFn                  func(ctx context.Context, id, pseudonymID string) error
+	DeleteAllForPseudonymFn   func(ctx context.Context, pseudonymID string) error
+}
+
+func (m *MockBlobRepo) DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error {
+	if m.DeleteAllForPseudonymFn != nil {
+		return m.DeleteAllForPseudonymFn(ctx, pseudonymID)
+	}
+	return nil
 }
 
 func (m *MockBlobRepo) Create(ctx context.Context, blob *model.Blob) error {
@@ -725,3 +782,75 @@ func (m *MockBlobRepo) Delete(ctx context.Context, id, pseudonymID string) error
 	}
 	return nil
 }
+
+// MockAppRoleRepo is a mock repository.AppRoleRepository.
+type MockAppRoleRepo struct {
+	ListFn      func(ctx context.Context) ([]*model.AppRole, error)
+	ListNamesFn func(ctx context.Context) ([]string, error)
+	GetFn       func(ctx context.Context, name string) (*model.AppRole, error)
+	CreateFn    func(ctx context.Context, role *model.AppRole) error
+	DeleteFn    func(ctx context.Context, name string) error
+}
+
+func (m *MockAppRoleRepo) List(ctx context.Context) ([]*model.AppRole, error) {
+	if m.ListFn != nil {
+		return m.ListFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) ListNames(ctx context.Context) ([]string, error) {
+	if m.ListNamesFn != nil {
+		return m.ListNamesFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) Get(ctx context.Context, name string) (*model.AppRole, error) {
+	if m.GetFn != nil {
+		return m.GetFn(ctx, name)
+	}
+	return nil, nil
+}
+
+func (m *MockAppRoleRepo) Create(ctx context.Context, role *model.AppRole) error {
+	if m.CreateFn != nil {
+		return m.CreateFn(ctx, role)
+	}
+	return nil
+}
+
+func (m *MockAppRoleRepo) Delete(ctx context.Context, name string) error {
+	if m.DeleteFn != nil {
+		return m.DeleteFn(ctx, name)
+	}
+	return nil
+}
+
+var _ repository.AppRoleRepository = (*MockAppRoleRepo)(nil)
+
+// ---------------------------------------------------------------------------
+// MockAccountRecoveryRepo
+// ---------------------------------------------------------------------------
+
+// MockAccountRecoveryRepo is a mock repository.AccountRecoveryRepository.
+type MockAccountRecoveryRepo struct {
+	AppendFn func(ctx context.Context, rec *model.AccountRecovery) error
+	ListFn   func(ctx context.Context, limit, offset int) ([]model.AccountRecovery, error)
+}
+
+func (m *MockAccountRecoveryRepo) Append(ctx context.Context, rec *model.AccountRecovery) error {
+	if m.AppendFn != nil {
+		return m.AppendFn(ctx, rec)
+	}
+	return nil
+}
+
+func (m *MockAccountRecoveryRepo) List(ctx context.Context, limit, offset int) ([]model.AccountRecovery, error) {
+	if m.ListFn != nil {
+		return m.ListFn(ctx, limit, offset)
+	}
+	return nil, nil
+}
+
+var _ repository.AccountRecoveryRepository = (*MockAccountRecoveryRepo)(nil)

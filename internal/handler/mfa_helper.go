@@ -26,6 +26,12 @@ func completeMFAIfChallenge(w http.ResponseWriter, r *http.Request, claims *vaul
 		AcceptLanguage: r.Header.Get("Accept-Language"),
 		TLSFingerprint: middleware.TLSFingerprint(r),
 	})
+	// Enforce the device/network binding the challenge token carries (audit M1):
+	// a challenge minted for one device must not be redeemed from another.
+	if !authSvc.ChallengeFingerprintMatches(r.Context(), claims.Subject, claims.Fingerprint, fp, ip, ua) {
+		WriteError(w, http.StatusUnauthorized, "invalid_token")
+		return true
+	}
 	result, err := authSvc.CompleteMFALogin(r.Context(), claims.Subject, fp, ip, ua, claims.ID)
 	if err != nil {
 		if errors.Is(err, service.ErrChallengeConsumed) {

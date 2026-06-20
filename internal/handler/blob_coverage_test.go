@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime/multipart"
@@ -645,5 +646,108 @@ func TestBlobUpload_LabelTruncation(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBlobDeleteNamed_Table covers DeleteNamed paths (auth, missing name, not found, success, repo err).
+func TestBlobDeleteNamed_Table(t *testing.T) {
+	tests := []struct {
+		name      string
+		method    string
+		path      string
+		setup     func(*mocks.MockBlobRepo)
+		setClaims bool
+		nameParam string // if non-empty, SetPathValue("name", nameParam) to populate for handler
+		wantCode  int
+		wantErr   string
+	}{
+		{
+			name:      "unauth",
+			method:    http.MethodDelete,
+			path:      "/user/blobs/named/foo",
+			setClaims: false,
+			nameParam: "foo",
+			wantCode:  http.StatusUnauthorized,
+			wantErr:   "unauthorized",
+		},
+		{
+			name:      "missing name",
+			method:    http.MethodDelete,
+			path:      "/user/blobs/named/",
+			setClaims: true,
+			// nameParam empty => no SetPathValue => handler sees "" => missing_name
+			wantCode: http.StatusBadRequest,
+			wantErr:  "missing_name",
+		},
+		{
+			name:   "repo not found",
+			method: http.MethodDelete,
+			path:   "/user/blobs/named/missing",
+			setup: func(m *mocks.MockBlobRepo) {
+				m.DeleteByRefAndPseudonymFn = func(context.Context, string, string) error {
+					return errors.New("blob not found")
+				}
+			},
+			setClaims: true,
+			nameParam: "missing",
+			wantCode:  http.StatusNotFound,
+			wantErr:   "blob_not_found",
+		},
+		{
+			name:   "repo other err",
+			method: http.MethodDelete,
+			path:   "/user/blobs/named/x",
+			setup: func(m *mocks.MockBlobRepo) {
+				m.DeleteByRefAndPseudonymFn = func(context.Context, string, string) error {
+					return errors.New("db boom")
+				}
+			},
+			setClaims: true,
+			nameParam: "x",
+			wantCode:  http.StatusInternalServerError,
+			wantErr:   "internal_error",
+		},
+		{
+			name:   "success",
+			method: http.MethodDelete,
+			path:   "/user/blobs/named/myref",
+			setup: func(m *mocks.MockBlobRepo) {
+				m.DeleteByRefAndPseudonymFn = func(context.Context, string, string) error { return nil }
+			},
+			setClaims: true,
+			nameParam: "myref",
+			wantCode:  http.StatusOK,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &mocks.MockBlobRepo{}
+			if tt.setup != nil {
+				tt.setup(repo)
+			}
+			h := newTestBlobHandler(repo)
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			if tt.setClaims {
+				req = setAuthContext(req, "u-1")
+			}
+			if tt.nameParam != "" {
+				req.SetPathValue("name", tt.nameParam)
+			}
+			rec := httptest.NewRecorder()
+
+			h.DeleteNamed(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("code=%d want=%d body=%s", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantErr != "" {
+				var m map[string]string
+				_ = json.Unmarshal(rec.Body.Bytes(), &m) // ignore err for test decode
+				if m["error"] != tt.wantErr {
+					t.Errorf("error=%q want=%q", m["error"], tt.wantErr)
+				}
+			}
+		})
 	}
 }

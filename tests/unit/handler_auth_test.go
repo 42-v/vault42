@@ -48,7 +48,13 @@ func setupAuthHandler(t *testing.T) *authTestEnv {
 		t.Fatalf("generate kid: %v", err)
 	}
 
-	userRepo := &mocks.MockUserRepo{}
+	userRepo := &mocks.MockUserRepo{
+		// Refresh enforces account state (re-fetches the user); default to a live,
+		// non-banned user unless a test overrides GetByIDFn.
+		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
+		},
+	}
 	tokenRepo := &mocks.MockRefreshTokenRepo{}
 	deviceRepo := &mocks.MockDeviceRepo{}
 	pwHistRepo := &mocks.MockPasswordHistoryRepo{}

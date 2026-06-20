@@ -299,3 +299,30 @@ func TestWellKnown_UpdateKeys_Empty(t *testing.T) {
 		t.Fatalf("expected 0 keys after clearing, got %d", len(keysArr))
 	}
 }
+
+func TestWellKnown_OpenIDConfig_TableDriven(t *testing.T) {
+	tests := []struct {
+		name   string
+		issuer string
+		want   string
+	}{
+		{"default issuer", "https://vault.test", "https://vault.test"},
+		{"custom", "https://c.test:8443", "https://c.test:8443"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewWellKnownHandler(nil, tt.issuer)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
+			h.OpenIDConfig(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("code %d", rec.Code)
+			}
+			var res map[string]interface{}
+			decodeResponse(t, rec, &res)
+			if iss, _ := res["issuer"].(string); iss != tt.want {
+				t.Errorf("issuer %q want %q", iss, tt.want)
+			}
+		})
+	}
+}

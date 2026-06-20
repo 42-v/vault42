@@ -49,3 +49,12 @@ func (r *PasswordHistoryRepo) GetRecentByUser(ctx context.Context, userID string
 	}
 	return entries, nil
 }
+
+// DeleteAllForUser removes a user's entire password history (account erasure).
+func (r *PasswordHistoryRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM auth.password_history WHERE user_id=$1`, userID)
+	if err != nil {
+		return fmt.Errorf("delete all password history: %w", err)
+	}
+	return nil
+}

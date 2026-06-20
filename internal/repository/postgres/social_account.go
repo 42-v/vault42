@@ -78,3 +78,12 @@ func (r *SocialAccountRepo) Delete(ctx context.Context, id, userID string) error
 	}
 	return nil
 }
+
+// DeleteAllForUser removes every social account link for a user (account erasure).
+func (r *SocialAccountRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM auth.social_accounts WHERE user_id=$1`, userID)
+	if err != nil {
+		return fmt.Errorf("delete all social accounts: %w", err)
+	}
+	return nil
+}

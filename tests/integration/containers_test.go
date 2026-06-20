@@ -3,6 +3,8 @@ package integration_test
 import (
 	"context"
 	"os"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,10 +78,23 @@ func setupPostgres(t *testing.T) (*pgxpool.Pool, *pgx.Conn, func()) {
 		t.Fatalf("connect for migrations: %v", err)
 	}
 
-	// Run all migrations in order
-	migFiles := []string{
-		"001_initial_schema.sql",
+	// Run all migrations in order. Read the migrations directory dynamically so
+	// new migrations (003 roles, 004 account flags, …) are always applied and
+	// the fixture never drifts from the real schema.
+	migEntries, err := os.ReadDir("../../migrations")
+	if err != nil {
+		migConn.Close(ctx)
+		pool.Close()
+		pgContainer.Terminate(ctx)
+		t.Fatalf("read migrations dir: %v", err)
 	}
+	var migFiles []string
+	for _, e := range migEntries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			migFiles = append(migFiles, e.Name())
+		}
+	}
+	sort.Strings(migFiles)
 	for _, f := range migFiles {
 		migSQL, err := os.ReadFile("../../migrations/" + f)
 		if err != nil {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"time"
@@ -29,12 +31,16 @@ var (
 
 // identityInput is the JSON request body for PUT /user/identity.
 type identityInput struct {
-	GivenName   string        `json:"given_name"`
-	FamilyName  string        `json:"family_name"`
-	Country     string        `json:"country"`
-	DateOfBirth string        `json:"date_of_birth"`
-	Sex         string        `json:"sex"`
-	Billing     *billingInput `json:"billing"`
+	GivenName       string                     `json:"given_name"`
+	FamilyName      string                     `json:"family_name"`
+	Username        string                     `json:"username"`
+	Country         string                     `json:"country"`
+	State           string                     `json:"state"`
+	DateOfBirth     string                     `json:"date_of_birth"`
+	Sex             string                     `json:"sex"`
+	MarketingEmails *bool                      `json:"marketing_emails"`
+	Billing         *billingInput              `json:"billing"`
+	Dynamic         map[string]json.RawMessage `json:"dynamic"`
 }
 
 type billingInput struct {
@@ -70,13 +76,17 @@ func (h *IdentityHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := IdentityResponse{
-		GivenName:   data.GivenName,
-		FamilyName:  data.FamilyName,
-		Country:     data.Country,
-		DateOfBirth: data.DateOfBirth,
-		Sex:         data.Sex,
-		UpdatedAt:   updatedAt.Format(time.RFC3339),
-		Billing:     data.Billing,
+		GivenName:       data.GivenName,
+		FamilyName:      data.FamilyName,
+		Username:        data.Username,
+		Country:         data.Country,
+		State:           data.State,
+		DateOfBirth:     data.DateOfBirth,
+		Sex:             data.Sex,
+		MarketingEmails: data.MarketingEmails,
+		UpdatedAt:       updatedAt.Format(time.RFC3339),
+		Billing:         data.Billing,
+		Dynamic:         data.Dynamic,
 	}
 	WriteJSON(w, http.StatusOK, resp)
 }
@@ -101,11 +111,15 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &service.IdentityData{
-		GivenName:   truncate(input.GivenName, 100),
-		FamilyName:  truncate(input.FamilyName, 100),
-		Country:     input.Country,
-		DateOfBirth: input.DateOfBirth,
-		Sex:         truncate(input.Sex, 50),
+		GivenName:       truncate(input.GivenName, 100),
+		FamilyName:      truncate(input.FamilyName, 100),
+		Username:        input.Username,
+		Country:         input.Country,
+		State:           input.State,
+		DateOfBirth:     input.DateOfBirth,
+		Sex:             truncate(input.Sex, 50),
+		MarketingEmails: input.MarketingEmails,
+		Dynamic:         input.Dynamic,
 	}
 	if input.Billing != nil {
 		data.Billing = &service.BillingInfo{
@@ -118,7 +132,13 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Service-side Validate (username/state/sex/dynamic size+shape) is the
+	// authoritative gate; surface its rejections as 400, not 500.
 	if err := h.svc.Upsert(r.Context(), claims.Subject, data); err != nil {
+		if errors.Is(err, service.ErrInvalidProfile) {
+			WriteError(w, http.StatusBadRequest, "invalid_profile")
+			return
+		}
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
