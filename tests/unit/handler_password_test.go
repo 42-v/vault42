@@ -62,8 +62,8 @@ func TestResetRequest_Valid(t *testing.T) {
 	sender := &mocks.MockEmailSender{
 		SendFn: func(_ context.Context, to, subject, _, _ string) error {
 			emailSent.Store(true)
-			if to != "v@at-v.net" {
-				t.Errorf("expected email to v@at-v.net, got %q", to)
+			if to != "user@example.com" {
+				t.Errorf("expected email to user@example.com, got %q", to)
 			}
 			return nil
 		},
@@ -91,7 +91,7 @@ func TestResetRequest_Valid(t *testing.T) {
 
 	h := newPasswordHandler(users, &mocks.MockPasswordHistoryRepo{}, &mocks.MockRefreshTokenRepo{}, sender, c)
 
-	body := jsonBody(t, map[string]string{"email": "v@at-v.net"})
+	body := jsonBody(t, map[string]string{"email": "user@example.com"})
 	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestResetConfirm_Valid(t *testing.T) {
 
 	users := &mocks.MockUserRepo{
 		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
-			return &model.User{ID: id, Email: "v@at-v.net"}, nil
+			return &model.User{ID: id, Email: "user@example.com"}, nil
 		},
 		UpdatePasswordFn: func(_ context.Context, id, hash string) error {
 			if id != "user-abc" {

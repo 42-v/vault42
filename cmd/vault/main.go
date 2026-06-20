@@ -62,6 +62,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 	log.Printf("Configuration loaded:\n%s", cfg)
 
 	// Run migrations (using vault_mig role)
@@ -107,6 +110,7 @@ func main() {
 	socialAccountRepo := postgres.NewSocialAccountRepo(db)
 	identityRepo := postgres.NewIdentityRepo(db)
 	blobRepo := postgres.NewBlobRepo(db)
+	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
 	rateLimitRepo := postgres.NewRateLimitRepo(db)
 
 	// Initialize audit logger
@@ -237,8 +241,29 @@ func main() {
 
 	authSvc.SetRateLimitRepo(rateLimitRepo)
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
+	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
+	// Catalog-aware role validation: JWT issuance keeps only roles defined in
+	// auth.app_roles (in addition to the admin-reserved filter).
+	authSvc.SetRoleCatalog(service.NewRoleCatalog(postgres.NewAppRoleRepo(db), 60*time.Second))
 
-	// Zero master key and HMAC secret from config after passing to services.
+	// Parse the optional recovery public key used to escrow account-erasure
+	// records. Absent → recovery logging disabled (deletion still works).
+	var recoveryPub *rsa.PublicKey
+	if len(cfg.RecoveryPublicKeyPEM) > 0 {
+		recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)
+		if err != nil {
+			log.Fatalf("Failed to load recovery public key: %v", err)
+		}
+		log.Println("Account-recovery escrow enabled (records encrypted to the offline recovery key)")
+	}
+
+	// Keep working copies of the key material that downstream handlers
+	// (identity, blob, recovery escrow) consume lazily in setupRoutes, then zero
+	// the config-held originals. Handlers receive these copies, not cfg.*.
+	masterKey := append([]byte(nil), cfg.MasterKey...)
+	hmacSecret := append([]byte(nil), cfg.HMACSecret...)
+
+	// Zero master key and HMAC secret from config after copying for the services.
 	// Note: string secrets (Pepper, DB passwords) can't be zeroed in Go — accepted limitation.
 	config.ZeroBytes(cfg.MasterKey)
 	config.ZeroBytes(cfg.HMACSecret)
@@ -286,6 +311,14 @@ func main() {
 			cfg.Origin+"/auth/oauth2/callback/facebook",
 		)
 	}
+	// Generic OpenID Connect providers (Okta, Auth0, Keycloak, Entra, …).
+	for _, op := range cfg.OIDCProviders {
+		oauthProviders[op.Name] = oauth2.NewOIDCProvider(
+			op.Name, op.Issuer, op.ClientID, op.ClientSecret,
+			cfg.Origin+"/auth/oauth2/callback/"+op.Name, op.Scopes,
+		)
+		log.Printf("oauth: registered OIDC provider %q (issuer=%s)", op.Name, op.Issuer)
+	}
 
 	// Set up keystore callbacks and refresh loop
 	if ks != nil {
@@ -310,35 +343,38 @@ func main() {
 
 	// Start server
 	deps := &server.Deps{
-		Config:          cfg,
-		AuthSvc:         authSvc,
-		TokenSvc:        tokenSvc,
-		MFASvc:          mfaSvc,
-		Keys:            keys,
-		Cache:           appCache,
-		AuditLog:        auditLogger,
-		Users:           userRepo,
-		Devices:         deviceRepo,
-		Tokens:          refreshTokenRepo,
-		Clients:         clientRepo,
-		TOTP:            totpRepo,
-		WebAuthn:        webauthnRepo,
-		BackupCodes:     backupCodeRepo,
-		PwHistory:       pwHistoryRepo,
-		Social:          socialAccountRepo,
-		EmailSender:     emailSender,
-		OAuthProviders:  oauthProviders,
-		MasterKey:       cfg.MasterKey,
-		HMACSecret:      cfg.HMACSecret,
-		Pepper:          cfg.Pepper,
-		HIBP:            hibpClient,
-		HIBPEnabled:     cfg.HIBPCheck,
-		ReadyDeps:       readyDeps,
-		HoneypotAlerter: honeypotAlerter,
-		Metrics:         metricsCollector,
-		KeyStore:        ks,
-		Identity:        identityRepo,
-		Blobs:           blobRepo,
+		Config:            cfg,
+		AuthSvc:           authSvc,
+		TokenSvc:          tokenSvc,
+		MFASvc:            mfaSvc,
+		Keys:              keys,
+		Cache:             appCache,
+		AuditLog:          auditLogger,
+		Users:             userRepo,
+		Devices:           deviceRepo,
+		Tokens:            refreshTokenRepo,
+		Clients:           clientRepo,
+		TOTP:              totpRepo,
+		WebAuthn:          webauthnRepo,
+		BackupCodes:       backupCodeRepo,
+		PwHistory:         pwHistoryRepo,
+		Social:            socialAccountRepo,
+		EmailSender:       emailSender,
+		OAuthProviders:    oauthProviders,
+		MasterKey:         masterKey,
+		HMACSecret:        hmacSecret,
+		Pepper:            cfg.Pepper,
+		HIBP:              hibpClient,
+		HIBPEnabled:       cfg.HIBPCheck,
+		ReadyDeps:         readyDeps,
+		HoneypotAlerter:   honeypotAlerter,
+		Metrics:           metricsCollector,
+		KeyStore:          ks,
+		Identity:          identityRepo,
+		Blobs:             blobRepo,
+		Recovery:          recoveryRepo,
+		RecoveryPublicKey: recoveryPub,
+		AuditEvents:       auditRepo,
 	}
 
 	srv := server.New(deps)

@@ -314,6 +314,15 @@ Values flow through the request context:
 
 ## Auth Flows
 
+> **0.8.0 additions**:
+> account-state enforcement (`disabled`/`banned`/`deleted`) is applied on **every
+> token-issuance path** — password login, token refresh (revoking the family),
+> and the OAuth callback — so a ban takes effect across all of them. Imported
+> accounts (`import_pending`, no password) are intercepted on first login to force
+> a magic-link claim, or claimed via an OAuth-verified email. Any OpenID Connect
+> issuer can act as an authority (JWKS-verified ID tokens), and custom application
+> roles come from the `auth.app_roles` catalog.
+
 ### Registration Flow
 
 ```

@@ -387,6 +387,7 @@ func TestLoadSecret_FileZeroedAfterRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ZEROED_TEST_FILE", path)
+	t.Setenv("VAULT_SECRET_FILE_CONSUME", "true") // opt into the destructive wipe (L5)
 
 	val, err := LoadSecret("ZEROED_TEST")
 	if err != nil {

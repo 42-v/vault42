@@ -7,19 +7,32 @@ import (
 	"testing"
 )
 
+func TestWriteJSON_Table(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		data   interface{}
+		wantCT string
+	}{
+		{"ok", http.StatusOK, map[string]string{"a": "b"}, "application/json"},
+		{"created", http.StatusCreated, map[string]int{"c": 1}, "application/json"},
+		{"nil data", http.StatusNoContent, nil, "application/json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			WriteJSON(w, tt.status, tt.data)
+			if w.Code != tt.status {
+				t.Errorf("status=%d want %d", w.Code, tt.status)
+			}
+			if ct := w.Header().Get("Content-Type"); ct != tt.wantCT {
+				t.Errorf("ct=%q want %q", ct, tt.wantCT)
+			}
+		})
+	}
+}
+
 func TestWriteJSON(t *testing.T) {
-	t.Run("writes status and content type", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		WriteJSON(w, http.StatusOK, map[string]string{"msg": "hello"})
-
-		if w.Code != http.StatusOK {
-			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
-		}
-		if ct := w.Header().Get("Content-Type"); ct != "application/json" {
-			t.Errorf("Content-Type = %q, want %q", ct, "application/json")
-		}
-	})
-
 	t.Run("encodes body as JSON", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		WriteJSON(w, http.StatusCreated, map[string]int{"count": 42})
@@ -115,4 +128,37 @@ func TestWriteError(t *testing.T) {
 			t.Errorf("error = %q, want empty", got["error"])
 		}
 	})
+}
+
+func TestWriteError_Table(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    int
+		message string
+	}{
+		{"400", http.StatusBadRequest, "bad req"},
+		{"401", http.StatusUnauthorized, "no auth"},
+		{"empty msg 404", http.StatusNotFound, ""},
+		{"500", http.StatusInternalServerError, "boom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			WriteError(w, tt.code, tt.message)
+			if w.Code != tt.code {
+				t.Errorf("code %d", w.Code)
+			}
+		})
+	}
+}
+
+// TestWriteJSON_EncodeError covers the error logging path (non-actionable).
+func TestWriteJSON_EncodeError(t *testing.T) {
+	w := httptest.NewRecorder()
+	// func value cannot be JSON encoded; triggers err branch
+	WriteJSON(w, http.StatusOK, func() {})
+	// status already written before encode
+	if w.Code != http.StatusOK {
+		t.Errorf("status after bad encode = %d", w.Code)
+	}
 }

@@ -34,6 +34,15 @@ type Config struct {
 	// Master key for TOTP encryption (same as vault)
 	MasterKey []byte
 
+	// HMACSecret (HMAC_SECRET_FILE, same as vault) is needed to derive the
+	// identity/blob pseudonyms during account erasure. Empty disables the
+	// DELETE /admin/users/{id} cascade-by-pseudonym (it returns 503).
+	HMACSecret []byte
+
+	// RecoveryPublicKeyPEM (VAULT_RECOVERY_PUBLIC_KEY_FILE, same as vault) is the
+	// RSA public key used to escrow account-erasure records. Empty disables escrow.
+	RecoveryPublicKeyPEM []byte
+
 	// Pepper is the optional HMAC-pepper applied to admin password hashes
 	// (VAULT_PEPPER_FILE). Must match the value used by the user-side service
 	// for hash-format parity (see internal/crypto/argon2.go applyPepper).
@@ -89,6 +98,12 @@ func LoadConfig() (*Config, error) {
 	}
 	if p, err := loadSecret("VAULT_PEPPER"); err == nil {
 		c.Pepper = p
+	}
+	if hs, err := loadSecret("HMAC_SECRET"); err == nil {
+		c.HMACSecret = []byte(hs)
+	}
+	if rk, err := loadSecret("VAULT_RECOVERY_PUBLIC_KEY"); err == nil {
+		c.RecoveryPublicKeyPEM = []byte(rk)
 	}
 
 	// Validate required TLS config

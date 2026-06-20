@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -21,10 +22,12 @@ import (
 	"github.com/42-v/vault42/internal/adminapi"
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/config"
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/seed"
+	"github.com/42-v/vault42/internal/service"
 )
 
 var (
@@ -93,6 +96,14 @@ func main() {
 	clientRepo := postgres.NewClientRepo(db)
 	auditRepo := postgres.NewAuditRepo(db)
 	adminConfigRepo := postgres.NewAdminConfigRepo(db)
+	// Repositories used by the account-erasure cascade (DELETE /admin/users/{id}).
+	refreshTokenRepo := postgres.NewRefreshTokenRepo(db)
+	deviceRepo := postgres.NewDeviceRepo(db)
+	socialAccountRepo := postgres.NewSocialAccountRepo(db)
+	pwHistoryRepo := postgres.NewPasswordHistoryRepo(db)
+	identityRepo := postgres.NewIdentityRepo(db)
+	blobRepo := postgres.NewBlobRepo(db)
+	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
 
 	// Initialize audit logger
 	auditLogger := audit.NewLogger(auditRepo, 0)
@@ -146,6 +157,29 @@ func main() {
 		adminUserRepo, adminSessionRepo, adminConfigRepo,
 		ks, auditLogger, cfg.MasterKey, cfg.Pepper,
 	)
+	apiHandler.SetAppRoleRepo(postgres.NewAppRoleRepo(db))
+
+	// Wire the account-erasure service (DELETE /admin/users/{id}). It needs the
+	// HMAC secret to derive identity/blob pseudonyms; without it the endpoint
+	// stays disabled (returns 503). The recovery public key is optional — absent
+	// means erasure proceeds but is not recoverable.
+	if len(cfg.HMACSecret) > 0 {
+		var recoveryPub *rsa.PublicKey
+		if len(cfg.RecoveryPublicKeyPEM) > 0 {
+			recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)
+			if err != nil {
+				auditLogger.Close(ctx)
+				log.Fatalf("admin-gateway: failed to load recovery public key: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+			}
+		}
+		apiHandler.SetErasureService(service.NewErasureService(
+			userRepo, identityRepo, blobRepo, deviceRepo, socialAccountRepo,
+			pwHistoryRepo, refreshTokenRepo, recoveryRepo, auditLogger,
+			recoveryPub, cfg.HMACSecret,
+		))
+	} else {
+		log.Println("admin-gateway: HMAC_SECRET_FILE not set — account erasure endpoint disabled")
+	}
 
 	router := adminapi.NewRouter(authHandler, apiHandler, adminapi.RouterOpts{
 		DevMode:    cfg.DevMode,

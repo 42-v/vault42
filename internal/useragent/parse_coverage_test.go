@@ -532,6 +532,31 @@ func TestParseBrowser_Priority(t *testing.T) {
 	}
 }
 
+// TestParseBrowser_MoreEdges_Table covers remaining browser detection branches.
+func TestParseBrowser_MoreEdges_Table(t *testing.T) {
+	tests := []struct {
+		name string
+		ua   string
+		want string
+	}{
+		{"brave", "Mozilla/5.0 Brave/1.0 Chrome/90", "Brave"},
+		{"samsung", "Mozilla/5.0 SamsungBrowser/18.0 Chrome/99", "Samsung Internet"},
+		{"vivaldi", "Vivaldi/6 Chrome", "Vivaldi"},
+		{"yandex", "YaBrowser/24", "Yandex"},
+		{"firefox ios", "FxiOS/100", "Firefox"},
+		{"crios", "CriOS/100", "Chrome"},
+		{"chromium explicit", "Chromium/100 Chrome/100", "Chromium"},
+		{"unknown", "MyBot/1.0", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseBrowser(tt.ua); got != tt.want {
+				t.Errorf("parseBrowser(%q)=%q want %q", tt.ua, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestParseOS_MacOSVariants covers both "Macintosh" and "Mac OS" OS strings.
 func TestParseOS_MacOSVariants(t *testing.T) {
 	tests := []struct {

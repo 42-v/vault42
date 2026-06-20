@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +57,35 @@ func TestServeStaticEmptyPath404s(t *testing.T) {
 	h.ServeStatic(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestRender_UnknownPage(t *testing.T) {
+	h := NewFrontendHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	// call unexported render with bad page
+	h.render(w, req, "no-such-page", pageData{Title: "x"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("unknown page status=%d want 500", w.Code)
+	}
+}
+
+func TestRender_WithAdminInContext(t *testing.T) {
+	h := NewFrontendHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	admin := &model.AdminUser{ID: "a1", Username: "root", Role: "super_admin", TOTPVerified: true}
+	ctx := WithAdmin(context.Background(), admin)
+	req = req.WithContext(ctx)
+	// login page uses render
+	h.LoginPage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "root") {
+		t.Error("expected admin username in rendered page")
 	}
 }
 

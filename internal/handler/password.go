@@ -199,10 +199,29 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		log.Printf("password: failed to reset lockout for user %s after password reset: %v", user.ID, err)
 	}
 
+	// Claim an imported account: setting a password via the magic link clears
+	// import_pending so future logins verify the new Argon2 password normally.
+	// Idempotent no-op for native accounts.
+	if user.ImportPending {
+		if err := h.users.ClearImportPending(r.Context(), user.ID); err != nil {
+			// Fail closed: don't report success while the account is still
+			// import_pending (the next login would re-trigger the magic-link flow
+			// despite the password now being set). import_pending stays true, so
+			// re-logging-in re-issues a fresh claim link — recoverable.
+			log.Printf("password: failed to clear import_pending for user %s: %v", user.ID, err)
+			WriteError(w, http.StatusInternalServerError, "import_claim_failed")
+			return
+		}
+	}
+
 	// Audit log
 	if h.auditLog != nil {
+		action := "confirmed"
+		if user.ImportPending {
+			action = "import_claimed"
+		}
 		h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": "confirmed"}, 0)
+			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": action}, 0)
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "password_reset_complete"})

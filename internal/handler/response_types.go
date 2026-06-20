@@ -1,6 +1,9 @@
 package handler
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // StatusResponse is returned by endpoints that indicate success/failure with a single status field.
 type StatusResponse struct {
@@ -138,13 +141,87 @@ type CredentialListResponse struct {
 	Credentials []CredentialInfo `json:"credentials"`
 }
 
+// DataExportAccount holds account metadata in a data export.
+type DataExportAccount struct {
+	ID            string     `json:"id"`
+	Email         string     `json:"email"`
+	EmailVerified bool       `json:"email_verified"`
+	DisplayName   string     `json:"display_name"`
+	AvatarURL     string     `json:"avatar_url"`
+	Locale        string     `json:"locale"`
+	Roles         []string   `json:"roles"`
+	MFARequired   bool       `json:"mfa_required"`
+	Disabled      bool       `json:"disabled"`
+	Banned        bool       `json:"banned"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	LastLoginAt   *time.Time `json:"last_login_at"`
+}
+
+// DataExportDevice holds a single device in a data export.
+type DataExportDevice struct {
+	ID           string     `json:"id"`
+	FriendlyName string     `json:"friendly_name"`
+	Trusted      bool       `json:"trusted"`
+	IP           string     `json:"ip"`
+	UserAgent    string     `json:"user_agent"`
+	FirstSeenAt  time.Time  `json:"first_seen_at"`
+	LastSeenAt   *time.Time `json:"last_seen_at"`
+}
+
+// DataExportBlob holds blob metadata (no contents) in a data export.
+type DataExportBlob struct {
+	ID        string    `json:"id"`
+	Label     string    `json:"label,omitempty"`
+	Named     bool      `json:"named"`
+	SizeBytes int       `json:"size_bytes"`
+	Checksum  string    `json:"checksum"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// DataExportSocialAccount holds a linked social account in a data export.
+// Provider tokens are intentionally excluded.
+type DataExportSocialAccount struct {
+	Provider       string    `json:"provider"`
+	ProviderUserID string    `json:"provider_user_id"`
+	Email          string    `json:"email,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// DataExportAuditEvent holds a single user-scoped audit event in a data export.
+type DataExportAuditEvent struct {
+	Timestamp time.Time              `json:"timestamp"`
+	EventType string                 `json:"event_type"`
+	IP        string                 `json:"ip,omitempty"`
+	UserAgent string                 `json:"user_agent,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// DataExportResponse is the aggregate returned by GET /user/data-export. It
+// fulfils the data subject's right of access and right to data portability
+// (GDPR Articles 15 and 20) by returning every category of personal data the
+// service holds for the requesting user in a structured, machine-readable form.
+type DataExportResponse struct {
+	GeneratedAt    time.Time                 `json:"generated_at"`
+	Account        DataExportAccount         `json:"account"`
+	Identity       *IdentityResponse         `json:"identity"`
+	Devices        []DataExportDevice        `json:"devices"`
+	Blobs          []DataExportBlob          `json:"blobs"`
+	SocialAccounts []DataExportSocialAccount `json:"social_accounts"`
+	AuditEvents    []DataExportAuditEvent    `json:"audit_events"`
+}
+
 // IdentityResponse is returned by GET /user/identity.
 type IdentityResponse struct {
-	GivenName   string `json:"given_name"`
-	FamilyName  string `json:"family_name"`
-	Country     string `json:"country"`
-	DateOfBirth string `json:"date_of_birth"`
-	Sex         string `json:"sex"`
-	UpdatedAt   string `json:"updated_at"`
-	Billing     any    `json:"billing,omitempty"`
+	GivenName       string                     `json:"given_name"`
+	FamilyName      string                     `json:"family_name"`
+	Username        string                     `json:"username,omitempty"`
+	Country         string                     `json:"country"`
+	State           string                     `json:"state,omitempty"`
+	DateOfBirth     string                     `json:"date_of_birth"`
+	Sex             string                     `json:"sex"`
+	MarketingEmails *bool                      `json:"marketing_emails,omitempty"`
+	UpdatedAt       string                     `json:"updated_at"`
+	Billing         any                        `json:"billing,omitempty"`
+	Dynamic         map[string]json.RawMessage `json:"dynamic,omitempty"`
 }

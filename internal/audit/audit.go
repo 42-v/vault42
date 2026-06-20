@@ -36,6 +36,10 @@ const (
 	PasswordChange = "password_change"
 	// PasswordReset records a password reset via email token.
 	PasswordReset = "password_reset"
+	// AccountErased records a GDPR account erasure (self-service or admin). The
+	// real email is masked in the audit metadata; it survives only in the
+	// encrypted account-recovery escrow log.
+	AccountErased = "account_erased"
 	// TwoFASetup records TOTP or WebAuthn credential enrollment.
 	TwoFASetup = "2fa_setup"
 	// TwoFAVerify records a two-factor authentication verification attempt.
@@ -56,6 +60,8 @@ const (
 	OAuth2Callback = "oauth2_callback"
 	// AdminAction records an administrative CLI action.
 	AdminAction = "admin_action"
+	// DataExport records a user exporting their personal data (GDPR Articles 15/20).
+	DataExport = "data_export"
 	// HoneypotTrigger records a trap credential being used in honeypot mode.
 	HoneypotTrigger = "honeypot_trigger"
 	// HoneypotAlert records a webhook dispatch in honeypot mode.

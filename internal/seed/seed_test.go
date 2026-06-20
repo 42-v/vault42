@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ repository.UserRepository   = (*mockUserRepo)(nil)
-	_ repository.ClientRepository = (*mockClientRepo)(nil)
+	_ repository.UserRepository         = (*mockUserRepo)(nil)
+	_ repository.ClientRepository       = (*mockClientRepo)(nil)
+	_ repository.AdminUserRepository    = (*mockAdminUserRepo)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -50,6 +52,10 @@ func (m *mockUserRepo) ResetFailedLogin(context.Context, string) error          
 func (m *mockUserRepo) LockUntil(_ context.Context, _ string, _ time.Time) error { return nil }
 func (m *mockUserRepo) Unlock(context.Context, string) error                     { return nil }
 func (m *mockUserRepo) VerifyEmail(context.Context, string) error                { return nil }
+func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
+func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
+func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
+func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 
 type mockClientRepo struct {
 	clients map[string]*model.Client
@@ -388,6 +394,42 @@ func TestRun_ClientRepoError(t *testing.T) {
 	}
 }
 
+// TestLoad_ValidationErrors is table-driven covering error paths in Load+validate.
+func TestLoad_ValidationErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string // substring in error
+	}{
+		{"client name required", `{"clients":[{"role":"frontend"}]}`, "name is required"},
+		{"client role required", `{"clients":[{"name":"web"}]}`, "role is required"},
+		{"duplicate client", `{"clients":[{"name":"web","role":"a"},{"name":"web","role":"b"}]}`, "duplicate name"},
+		{"user email required", `{"users":[{"password":"TestPassword12345!"}]}`, "email is required"},
+		{"user email invalid no @", `{"users":[{"email":"noat","password":"TestPassword12345!"}]}`, "invalid email"},
+		{"user password required", `{"users":[{"email":"a@b.com"}]}`, "password is required"},
+		{"user password short", `{"users":[{"email":"a@b.com","password":"short123"}]}`, "at least 15"},
+		{"duplicate user email", `{"users":[{"email":"a@b.com","password":"TestPassword12345!"},{"email":"a@b.com","password":"TestPassword12345!"}]}`, "duplicate email"},
+		{"admin reserved role on user", `{"users":[{"email":"a@b.com","password":"TestPassword12345!","roles":["admin"]}]}`, "reserved for the admins"},
+		{"admin username required", `{"admins":[{"password":"TestPassword12345!","role":"viewer"}]}`, "username is required"},
+		{"admin password required", `{"admins":[{"username":"root","role":"viewer"}]}`, "password is required"},
+		{"admin password short", `{"admins":[{"username":"root","password":"short","role":"viewer"}]}`, "at least 15"},
+		{"admin bad role", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"root"}]}`, "role must be super_admin"},
+		{"admin duplicate", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"viewer"},{"username":"root","password":"TestPassword12345!","role":"viewer"}]}`, "duplicate username"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTemp(t, tt.content)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q does not contain %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Error mocks
 // ---------------------------------------------------------------------------
@@ -415,4 +457,153 @@ func writeTemp(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// Table for FilterUserRoles covering reserved stripping and edges.
+func TestFilterUserRoles_Table(t *testing.T) {
+	tests := []struct {
+		name  string
+		in    []string
+		want  []string
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, nil},
+		{"user only", []string{"user"}, []string{"user"}},
+		{"strips admin", []string{"user", "admin"}, []string{"user"}},
+		{"strips super", []string{"super_admin"}, nil},
+		{"strips mixed keeps others", []string{"admin", "operator", "super_admin", "viewer"}, []string{"operator", "viewer"}},
+		{"all reserved", []string{"admin", "super_admin"}, nil},
+		{"dupe preserved order except strip", []string{"user", "user"}, []string{"user", "user"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterUserRoles(tt.in)
+			if len(got) != len(tt.want) {
+				t.Errorf("len got %d want %d: %v vs %v", len(got), len(tt.want), got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("at %d: %q != %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// mockAdminUserRepo for testing admins seed.
+type mockAdminUserRepo struct {
+	users map[string]*model.AdminUser
+}
+
+func newMockAdminUserRepo() *mockAdminUserRepo {
+	return &mockAdminUserRepo{users: make(map[string]*model.AdminUser)}
+}
+
+func (m *mockAdminUserRepo) Create(_ context.Context, u *model.AdminUser) error {
+	m.users[u.Username] = u
+	return nil
+}
+func (m *mockAdminUserRepo) GetByUsername(_ context.Context, un string) (*model.AdminUser, error) {
+	return m.users[un], nil
+}
+func (m *mockAdminUserRepo) GetByID(context.Context, string) (*model.AdminUser, error) { return nil, nil }
+func (m *mockAdminUserRepo) List(context.Context) ([]*model.AdminUser, error)     { return nil, nil }
+func (m *mockAdminUserRepo) Count(context.Context) (int, error)                  { return 0, nil }
+func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error      { return nil }
+func (m *mockAdminUserRepo) IncrementFailedLogin(context.Context, string) (int, error) {
+	return 0, nil
+}
+func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error           { return nil }
+func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error       { return nil }
+func (m *mockAdminUserRepo) UpdateLastTOTPCounter(context.Context, string, int64) error { return nil }
+func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error            { return nil }
+func (m *mockAdminUserRepo) Revoke(context.Context, string) error                     { return nil }
+
+// TestLoad_Table covers happy and all error paths in Load/validate.
+func TestLoad_Table(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantErr string
+	}{
+		{"empty ok", `{}`, ""},
+		{"client missing name", `{"clients":[{"role":"web"}]}`, "name is required"},
+		{"client missing role", `{"clients":[{"name":"c"}]}`, "role is required"},
+		{"client dup name", `{"clients":[{"name":"c","role":"r"},{"name":"c","role":"r"}]}`, "duplicate name"},
+		{"user missing email", `{"users":[{"password":"123456789012345"}]}`, "email is required"},
+		{"user invalid email no @", `{"users":[{"email":"noat","password":"123456789012345"}]}`, "invalid email"},
+		{"user missing pass", `{"users":[{"email":"e@x.com"}]}`, "password is required"},
+		{"user short pass", `{"users":[{"email":"e@x.com","password":"short"}]}`, "at least 15 characters"},
+		{"user dup email", `{"users":[{"email":"e@x.com","password":"123456789012345"},{"email":"e@x.com","password":"123456789012345"}]}`, "duplicate email"},
+		{"user reserved role", `{"users":[{"email":"e@x.com","password":"123456789012345","roles":["admin"]}]}`, "reserved for the admins"},
+		{"admin missing username", `{"admins":[{"password":"123456789012345","role":"viewer"}]}`, "username is required"},
+		{"admin missing pass", `{"admins":[{"username":"a","role":"viewer"}]}`, "password is required"},
+		{"admin short pass", `{"admins":[{"username":"a","password":"short","role":"viewer"}]}`, "at least 15"},
+		{"admin bad role", `{"admins":[{"username":"a","password":"123456789012345","role":"root"}]}`, "role must be super_admin"},
+		{"admin dup username", `{"admins":[{"username":"a","password":"123456789012345","role":"viewer"},{"username":"a","password":"123456789012345","role":"viewer"}]}`, "duplicate username"},
+		{"valid with admins", `{"admins":[{"username":"root","password":"123456789012345","role":"super_admin"}]}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := writeTemp(t, tt.json)
+			sf, err := Load(p)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("err=%v want contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected err: %v", err)
+			}
+			if sf == nil {
+				t.Error("nil sf on success")
+			}
+		})
+	}
+}
+
+// TestRunAdmins_Table covers RunAdmins happy, skip, error paths.
+func TestRunAdmins_Table(t *testing.T) {
+	tests := []struct {
+		name    string
+		sf      *SeedFile
+		setup   func(*mockAdminUserRepo)
+		wantErr string
+	}{
+		{
+			name: "empty admins ok",
+			sf:   &SeedFile{},
+		},
+		{
+			name: "seed new admin",
+			sf:   &SeedFile{Admins: []AdminSeed{{Username: "adm", Password: "123456789012345", Role: "viewer"}}},
+		},
+		{
+			name: "skip existing admin",
+			sf:   &SeedFile{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "admin"}}},
+			setup: func(m *mockAdminUserRepo) {
+				m.users["ex"] = &model.AdminUser{ID: "1", Username: "ex"}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newMockAdminUserRepo()
+			if tt.setup != nil {
+				tt.setup(a)
+			}
+			err := RunAdmins(context.Background(), tt.sf, a, "")
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("err %v want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("err %v", err)
+			}
+		})
+	}
 }

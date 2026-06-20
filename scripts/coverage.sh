@@ -145,3 +145,15 @@ PY
 } > docs/test-coverage.md
 
 echo "docs/test-coverage.md updated: $TESTS tests, $TOTAL coverage"
+
+# Gate on test failures. The coverage `go test` above uses `|| true` so the
+# report is always produced — but a failing test in ./internal/ or ./tests/unit
+# must still fail this script (and therefore release-check), or regressions slip
+# the gate while coverage stays green.
+FAILS=$(grep -c '^--- FAIL:' "${TEST_OUTPUT_FILE:-$TEST_OUT}" 2>/dev/null || true)
+FAILS=${FAILS:-0}
+if [ "$FAILS" -gt 0 ]; then
+  echo "ERROR: $FAILS test(s) FAILED during the coverage run:" >&2
+  grep '^--- FAIL:' "${TEST_OUTPUT_FILE:-$TEST_OUT}" >&2 || true
+  exit 1
+fi

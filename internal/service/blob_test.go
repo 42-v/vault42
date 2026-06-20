@@ -21,6 +21,7 @@ type mockBlobRepo struct {
 	listByPseudonymFn         func(ctx context.Context, pseudonymID string) ([]*model.Blob, error)
 	getQuotaFn                func(ctx context.Context, pseudonymID string) (*model.BlobQuota, error)
 	deleteFn                  func(ctx context.Context, id, pseudonymID string) error
+	deleteAllForPseudonymFn   func(ctx context.Context, pseudonymID string) error
 }
 
 func (m *mockBlobRepo) Create(ctx context.Context, blob *model.Blob) error {
@@ -68,6 +69,13 @@ func (m *mockBlobRepo) GetQuota(ctx context.Context, pseudonymID string) (*model
 func (m *mockBlobRepo) Delete(ctx context.Context, id, pseudonymID string) error {
 	if m.deleteFn != nil {
 		return m.deleteFn(ctx, id, pseudonymID)
+	}
+	return nil
+}
+
+func (m *mockBlobRepo) DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error {
+	if m.deleteAllForPseudonymFn != nil {
+		return m.deleteAllForPseudonymFn(ctx, pseudonymID)
 	}
 	return nil
 }

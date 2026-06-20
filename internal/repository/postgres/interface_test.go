@@ -24,6 +24,7 @@ var (
 	_ repository.AdminConfigRepository     = (*AdminConfigRepo)(nil)
 	_ repository.IdentityRepository        = (*IdentityRepo)(nil)
 	_ repository.BlobRepository            = (*BlobRepo)(nil)
+	_ repository.AccountRecoveryRepository = (*AccountRecoveryRepo)(nil)
 )
 
 func TestInterfaceSatisfaction(t *testing.T) {

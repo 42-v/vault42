@@ -4,10 +4,29 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
 )
+
+// ErrRoleReserved is returned when attempting to delete a reserved catalog role.
+var ErrRoleReserved = errors.New("role is reserved and cannot be deleted")
+
+// AppRoleRepository manages the custom roles catalog (auth.app_roles).
+type AppRoleRepository interface {
+	// List returns all catalog roles ordered by name.
+	List(ctx context.Context) ([]*model.AppRole, error)
+	// ListNames returns just the role names (for the validation cache).
+	ListNames(ctx context.Context) ([]string, error)
+	// Get returns one role by name, or nil, nil if absent.
+	Get(ctx context.Context, name string) (*model.AppRole, error)
+	// Create inserts a new catalog role.
+	Create(ctx context.Context, role *model.AppRole) error
+	// Delete removes a non-reserved role by name. Returns ErrRoleReserved if the
+	// role is reserved, or nil if the role does not exist (idempotent).
+	Delete(ctx context.Context, name string) error
+}
 
 // UserRepository manages user persistence.
 type UserRepository interface {
@@ -31,6 +50,18 @@ type UserRepository interface {
 	Unlock(ctx context.Context, id string) error
 	// VerifyEmail marks the user's email address as verified.
 	VerifyEmail(ctx context.Context, id string) error
+	// SetLastLogin stamps the user's last successful login time.
+	SetLastLogin(ctx context.Context, id string) error
+	// CreateImported inserts a passwordless imported user (import_pending=true),
+	// idempotent on email.
+	CreateImported(ctx context.Context, user *model.User) error
+	// ClearImportPending marks an imported account as claimed after reset.
+	ClearImportPending(ctx context.Context, id string) error
+	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
+	// clears display_name and avatar_url, and marks the row deleted=true with
+	// deleted_at=now. The row is retained (not removed) to preserve referential
+	// integrity; the account-state gate rejects deleted users at login/refresh.
+	SoftDeleteScrub(ctx context.Context, id, tombstoneEmail string) error
 }
 
 // RefreshTokenRepository manages refresh token persistence.
@@ -169,6 +200,8 @@ type SocialAccountRepository interface {
 	// Delete removes a social account link. The userID parameter provides
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error
+	// DeleteAllForUser removes every social account link for a user (account erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
 // PasswordHistoryRepository manages password history persistence.
@@ -177,6 +210,8 @@ type PasswordHistoryRepository interface {
 	Create(ctx context.Context, entry *model.PasswordHistory) error
 	// GetRecentByUser returns the most recent password hashes for reuse prevention.
 	GetRecentByUser(ctx context.Context, userID string, limit int) ([]*model.PasswordHistory, error)
+	// DeleteAllForUser removes a user's entire password history (account erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
 // RateLimitRepository manages rate limit counter persistence (PostgreSQL fallback).
@@ -227,6 +262,20 @@ type BlobRepository interface {
 	GetQuota(ctx context.Context, pseudonymID string) (*model.BlobQuota, error)
 	// Delete removes a blob by ID, only if it belongs to the given pseudonym.
 	Delete(ctx context.Context, id, pseudonymID string) error
+	// DeleteAllForPseudonym removes every blob owned by a pseudonym (account erasure).
+	DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error
+}
+
+// AccountRecoveryRepository manages the append-only account-recovery escrow log
+// (auth.account_recovery). Records are written on account erasure and can only
+// be decrypted with the offline recovery private key. The table is append-only:
+// there is no update or delete method.
+type AccountRecoveryRepository interface {
+	// Append writes one encrypted recovery record.
+	Append(ctx context.Context, rec *model.AccountRecovery) error
+	// List returns recovery records ordered by deleted_at descending. Used by the
+	// offline recovery tool to enumerate and decrypt escrowed accounts.
+	List(ctx context.Context, limit, offset int) ([]model.AccountRecovery, error)
 }
 
 // AdminUserRepository manages admin gateway user persistence.

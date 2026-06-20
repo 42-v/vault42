@@ -184,6 +184,11 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 		if n.BitLen() < 2048 {
 			return nil, errors.New("RSA key too small: minimum 2048 bits required")
 		}
+		// Upper bound: a self-signed DPoP proof carries an attacker-chosen
+		// modulus; cap it to avoid an algorithmic-complexity DoS on verify (L2).
+		if n.BitLen() > 4096 {
+			return nil, errors.New("RSA key too large: maximum 4096 bits allowed")
+		}
 		eBig := new(big.Int).SetBytes(eBytes)
 		if !eBig.IsInt64() || eBig.Int64() < 3 || eBig.Int64() > 1<<31-1 {
 			return nil, errors.New("invalid RSA exponent")

@@ -1,0 +1,209 @@
+package crypto
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"math/big"
+	"strings"
+	"testing"
+	"time"
+)
+
+// ValidateTOTPCode must surface a decode error when the stored secret is not
+// valid base32, rather than silently treating it as a non-match.
+func TestValidateTOTPCodeBadSecret(t *testing.T) {
+	step, err := ValidateTOTPCode("!!!not-base32!!!", "123456", time.Unix(0, 0))
+	if err == nil {
+		t.Fatal("expected decode error for non-base32 secret")
+	}
+	if step != -1 {
+		t.Errorf("step = %d, want -1 on decode failure", step)
+	}
+}
+
+// LoadSigningKeyPEM must reject a PEM block whose bytes are not a valid PKCS#8
+// private key.
+func TestLoadSigningKeyPEMBadDER(t *testing.T) {
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("garbage-der")})
+	_, _, err := LoadSigningKeyPEM(pemData)
+	if err == nil {
+		t.Fatal("expected parse error for non-PKCS8 bytes")
+	}
+	if !strings.Contains(err.Error(), "parse signing key") {
+		t.Errorf("error = %v, want parse signing key", err)
+	}
+}
+
+// LoadSigningKeyPEM must reject a well-formed PKCS#8 key that is not RSA.
+func TestLoadSigningKeyPEMNotRSA(t *testing.T) {
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	_, _, err = LoadSigningKeyPEM(pemData)
+	if err == nil {
+		t.Fatal("expected error for non-RSA key")
+	}
+	if !strings.Contains(err.Error(), "not RSA") {
+		t.Errorf("error = %v, want not RSA", err)
+	}
+}
+
+// LoadSigningKeyPEM must reject an RSA key below the 2048-bit minimum.
+func TestLoadSigningKeyPEMTooSmall(t *testing.T) {
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(weak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	_, _, err = LoadSigningKeyPEM(pemData)
+	if err == nil {
+		t.Fatal("expected error for sub-2048-bit key")
+	}
+	if !strings.Contains(err.Error(), "too small") {
+		t.Errorf("error = %v, want too small", err)
+	}
+}
+
+// encodeRSAExponent must emit four big-endian bytes for exponents that do not
+// fit in three bytes.
+func TestEncodeRSAExponentFourBytes(t *testing.T) {
+	got := encodeRSAExponent(0x01020304)
+	want := []byte{0x01, 0x02, 0x03, 0x04}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("byte %d = %d, want %d", i, got[i], want[i])
+		}
+	}
+}
+
+// parseArgon2Hash (via VerifyPassword) must reject a parallelism value that
+// overflows the uint8 range before reaching the spec maximum check.
+func TestVerifyPasswordParallelismOverflow(t *testing.T) {
+	hash := "$argon2id$v=19$m=47104,t=1,p=256$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	_, err := VerifyPassword("test-user", hash)
+	if err == nil {
+		t.Fatal("expected error for p=256")
+	}
+	if !strings.Contains(err.Error(), "uint8 range") {
+		t.Errorf("error = %v, want uint8 range", err)
+	}
+}
+
+// parseArgon2Hash (via VerifyPassword) must surface a decode error when the
+// salt segment is not valid base64.
+func TestVerifyPasswordBadSaltEncoding(t *testing.T) {
+	hash := "$argon2id$v=19$m=47104,t=1,p=1$****invalid****$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	_, err := VerifyPassword("test-user", hash)
+	if err == nil {
+		t.Fatal("expected decode error for invalid salt base64")
+	}
+	if !strings.Contains(err.Error(), "decode salt") {
+		t.Errorf("error = %v, want decode salt", err)
+	}
+}
+
+// parseArgon2Hash (via VerifyPassword) must surface a decode error when the
+// hash segment is not valid base64.
+func TestVerifyPasswordBadHashEncoding(t *testing.T) {
+	hash := "$argon2id$v=19$m=47104,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$****invalid****"
+	_, err := VerifyPassword("test-user", hash)
+	if err == nil {
+		t.Fatal("expected decode error for invalid hash base64")
+	}
+	if !strings.Contains(err.Error(), "decode hash") {
+		t.Errorf("error = %v, want decode hash", err)
+	}
+}
+
+// parseJWKHeader must reject an RSA JWK whose exponent is below the minimum
+// accepted value.
+func TestParseJWKHeaderExponentTooSmall(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwk := map[string]interface{}{
+		"kty": "RSA",
+		"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString([]byte{0x02}), // e=2, below the minimum of 3
+	}
+	_, err = parseJWKHeader(jwk)
+	if err == nil {
+		t.Fatal("expected error for out-of-range RSA exponent")
+	}
+	if !strings.Contains(err.Error(), "invalid RSA exponent") {
+		t.Errorf("error = %v, want invalid RSA exponent", err)
+	}
+}
+
+// ValidateDPoPProof must reject a signed proof whose jwk header carries an
+// undersized RSA modulus, failing during key extraction.
+func TestDPoPProofUndersizedJWKModulus(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sign with a valid key but advertise a 1024-bit modulus in the jwk header.
+	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
+		func(header map[string]any, _ *DPoPClaims) {
+			header["jwk"] = map[string]any{
+				"kty": "RSA",
+				"n":   base64.RawURLEncoding.EncodeToString(weak.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(weak.E)).Bytes()),
+			}
+		})
+
+	_, _, err = ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
+	if err == nil {
+		t.Fatal("expected error for undersized jwk modulus")
+	}
+	if !strings.Contains(err.Error(), "too small") {
+		t.Errorf("error = %v, want too small", err)
+	}
+}
+
+// ValidateDPoPProof must reject a correctly-signed proof that omits the iat
+// claim, since proof freshness cannot be established without it.
+func TestDPoPProofMissingIAT(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
+		func(_ map[string]any, claims *DPoPClaims) {
+			claims.IssuedAt = nil
+		})
+
+	_, _, err = ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
+	if err == nil {
+		t.Fatal("expected error for missing iat claim")
+	}
+	if !strings.Contains(err.Error(), "missing iat") {
+		t.Errorf("error = %v, want missing iat", err)
+	}
+}

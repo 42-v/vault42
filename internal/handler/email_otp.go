@@ -28,6 +28,12 @@ func (h *EmailOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-account lockout gate (audit H2) — shared with TOTP/password failures.
+	if h.authSvc != nil && h.authSvc.MFAVerifyLocked(r.Context(), claims.Subject) {
+		WriteError(w, http.StatusTooManyRequests, "account_locked")
+		return
+	}
+
 	var req struct {
 		Code string `json:"code"`
 	}
@@ -37,6 +43,7 @@ func (h *EmailOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.authSvc.VerifyEmailOTP(r.Context(), claims.Subject, req.Code); err != nil {
+		h.authSvc.RecordMFAFailure(r.Context(), claims.Subject, middleware.ClientIP(r), r.Header.Get("User-Agent"))
 		WriteError(w, http.StatusUnauthorized, "invalid_code")
 		return
 	}

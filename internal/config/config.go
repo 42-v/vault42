@@ -59,6 +59,11 @@ type Config struct {
 	Pepper string
 	// HMACSecret is the key used for HMAC-SHA256 signatures (HMAC_SECRET_FILE). Must be at least 32 bytes in non-dev profiles.
 	HMACSecret []byte
+	// RecoveryPublicKeyPEM is the PEM-encoded RSA recovery public key
+	// (VAULT_RECOVERY_PUBLIC_KEY_FILE). When set, account erasure escrows an
+	// encrypted recovery record that only the offline private key can decrypt.
+	// When empty, recovery logging is disabled and erasure still proceeds.
+	RecoveryPublicKeyPEM []byte
 
 	// CacheBackend selects the cache implementation (CACHE_BACKEND): "redis", "memory", or "postgres".
 	CacheBackend string
@@ -106,6 +111,10 @@ type Config struct {
 	// OAuthFacebookClientSecret is the Facebook OAuth2 client secret (VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE).
 	OAuthFacebookClientSecret string
 
+	// OIDCProviders holds generic OpenID Connect providers (Okta, Auth0, Keycloak,
+	// Entra, …) registered via VAULT_OIDC_PROVIDERS + per-name env vars.
+	OIDCProviders []OIDCProviderConfig
+
 	// PasswordMinLength is the minimum password length (VAULT_PASSWORD_MIN_LENGTH). Default: 15 (NIST SP 800-63B).
 	PasswordMinLength int
 	// HIBPCheck enables Have I Been Pwned breach checking for passwords (VAULT_HIBP_CHECK). Default: true.
@@ -116,6 +125,9 @@ type Config struct {
 	RegistrationEnabled bool
 	// MaxSessionsPerUser limits the number of concurrent refresh token families per user (VAULT_MAX_SESSIONS_PER_USER). Default: 10.
 	MaxSessionsPerUser int
+	// StrictSessionLimit makes the concurrent-session check fail closed when the
+	// underlying count query errors, instead of allowing the login (VAULT_STRICT_SESSION_LIMIT). Default: false.
+	StrictSessionLimit bool
 
 	// AppName is the application display name used in emails and UI (VAULT_APP_NAME). Default: "The Vault".
 	AppName string
@@ -288,6 +300,7 @@ func Load() (*Config, error) {
 		MFARequired:         envBoolDefault("VAULT_MFA_REQUIRED", true),
 		RegistrationEnabled: envBoolDefault("VAULT_REGISTRATION_ENABLED", true),
 		MaxSessionsPerUser:  envInt("VAULT_MAX_SESSIONS_PER_USER", 10),
+		StrictSessionLimit:  envBool("VAULT_STRICT_SESSION_LIMIT"),
 
 		AppName:      envOr("VAULT_APP_NAME", "The Vault"),
 		LogoURL:      os.Getenv("VAULT_LOGO_URL"),
@@ -296,13 +309,13 @@ func Load() (*Config, error) {
 		CORSOrigins:  os.Getenv("CORS_ORIGINS"),
 		CORSAllowAll: envBool("CORS_ALLOW_ALL"),
 
-		AccessTokenTTL:     envDuration("VAULT_ACCESS_TOKEN_TTL", 0),
-		RefreshTokenTTL:    envDuration("VAULT_REFRESH_TOKEN_TTL", 0),
-		RememberMeTTL:      envDuration("VAULT_REMEMBER_ME_TTL", 0),
-		ShutdownTimeout:    envDuration("VAULT_SHUTDOWN_TIMEOUT", 0),
-		AuditFlushInterval: envDuration("VAULT_AUDIT_FLUSH_INTERVAL", 0),
+		AccessTokenTTL:          envDuration("VAULT_ACCESS_TOKEN_TTL", 0),
+		RefreshTokenTTL:         envDuration("VAULT_REFRESH_TOKEN_TTL", 0),
+		RememberMeTTL:           envDuration("VAULT_REMEMBER_ME_TTL", 0),
+		ShutdownTimeout:         envDuration("VAULT_SHUTDOWN_TIMEOUT", 0),
+		AuditFlushInterval:      envDuration("VAULT_AUDIT_FLUSH_INTERVAL", 0),
 		AutoMigrate:             envBool("VAULT_AUTO_MIGRATE"),
-		RateLimitEnabled:        envBool("VAULT_RATE_LIMIT_ENABLED"),
+		RateLimitEnabled:        envBoolDefault("VAULT_RATE_LIMIT_ENABLED", true),
 		EmbeddedTrustedUpstream: envBool("VAULT_EMBEDDED_TRUSTED_UPSTREAM"),
 
 		EmailTemplatesDir:  os.Getenv("VAULT_EMAIL_TEMPLATES_DIR"),
@@ -404,6 +417,14 @@ func Load() (*Config, error) {
 	// rate-limit + audit attribution. Explicit TRUSTED_PROXIES /
 	// REAL_IP_HEADER env values always win; this only fills the gaps.
 	if c.EmbeddedTrustedUpstream {
+		// Fail closed: this shortcut auto-trusts whole RFC1918 + loopback ranges
+		// and blindly honours X-Forwarded-For, collapsing per-IP rate-limit and
+		// audit attribution on a flat network. Only the embedded sidecar profile
+		// may use it; anywhere else, set TRUSTED_PROXIES/REAL_IP_HEADER explicitly
+		// (audit M7).
+		if c.Profile != ProfileEmbedded {
+			return nil, fmt.Errorf("VAULT_EMBEDDED_TRUSTED_UPSTREAM is only valid in the embedded profile (got %s); set TRUSTED_PROXIES and REAL_IP_HEADER explicitly", c.Profile)
+		}
 		if len(c.TrustedProxies) == 0 {
 			c.TrustedProxies = []string{
 				"10.0.0.0/8",     // RFC1918 large
@@ -422,6 +443,9 @@ func Load() (*Config, error) {
 	// Load secrets from _FILE env vars
 	c.loadSecrets()
 
+	// Register generic OIDC providers from env.
+	c.loadOIDCProviders()
+
 	// Validate primary color format (defense-in-depth: prevents CSS injection in email templates)
 	if !isValidHexColor(c.PrimaryColor) {
 		return nil, fmt.Errorf("invalid VAULT_PRIMARY_COLOR %q: must be hex format #RRGGBB", c.PrimaryColor)
@@ -438,6 +462,48 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
+// Validate enforces fail-closed deployment invariants for non-dev profiles. It
+// is called at startup (cmd/vault) — separate from Load() so config parsing
+// stays side-effect free. Covers audit findings M4/M5/M6/L3: a non-dev server
+// must not run with an empty HMAC key (weakens OAuth-state/backup-code/email-OTP
+// signing), empty pepper (weakens password hashing), empty origin (disables JWT
+// issuer/audience binding), or plaintext serving (drops the Secure cookie flag).
+func (c *Config) Validate() error {
+	if c.Profile == ProfileDev {
+		return nil
+	}
+	if len(c.HMACSecret) < 32 {
+		return fmt.Errorf("HMAC_SECRET_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.HMACSecret))
+	}
+	if len(c.Pepper) < 32 {
+		return fmt.Errorf("VAULT_PEPPER_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.Pepper))
+	}
+	if c.Origin == "" {
+		return fmt.Errorf("VAULT_ORIGIN required in %s profile", c.Profile)
+	}
+	// Rate limiting is the brute-force defense on the auth endpoints; refuse to
+	// silently run a non-dev server with it disabled.
+	if !c.RateLimitEnabled && !envBool("VAULT_ALLOW_RATE_LIMIT_DISABLED") {
+		return fmt.Errorf("refusing to disable rate limiting in %s profile; set VAULT_ALLOW_RATE_LIMIT_DISABLED=true to override", c.Profile)
+	}
+	// M5: refuse to silently disable TLS.
+	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
+		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
+	}
+	// M4: TLS enabled but no cert/key silently falls back to plaintext while the
+	// Secure cookie flag is set. Require certs unless proxy-termination is opted in.
+	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
+		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
+	}
+	// Recovery escrow is recommended but not mandatory: without it, an accidental
+	// or malicious account deletion is unrecoverable. Warn rather than hard-fail so
+	// operators can opt out deliberately.
+	if len(c.RecoveryPublicKeyPEM) == 0 {
+		log.Printf("SECURITY WARNING: VAULT_RECOVERY_PUBLIC_KEY_FILE not set — account erasures will not be recoverable")
+	}
+	return nil
+}
+
 func (c *Config) loadSecrets() {
 	if mk, err := LoadSecret("MASTER_KEY"); err == nil {
 		c.MasterKey = []byte(mk)
@@ -450,6 +516,9 @@ func (c *Config) loadSecrets() {
 	}
 	if hs, err := LoadSecret("HMAC_SECRET"); err == nil {
 		c.HMACSecret = []byte(hs)
+	}
+	if rk, err := LoadSecret("VAULT_RECOVERY_PUBLIC_KEY"); err == nil {
+		c.RecoveryPublicKeyPEM = []byte(rk)
 	}
 	if dp, err := LoadSecret("DB_MIG_PASSWORD"); err == nil {
 		c.DBMigPassword = dp
@@ -477,6 +546,47 @@ func (c *Config) loadSecrets() {
 	}
 	if fs, err := LoadSecret("VAULT_OAUTH_FACEBOOK_CLIENT_SECRET"); err == nil {
 		c.OAuthFacebookClientSecret = fs
+	}
+}
+
+// OIDCProviderConfig describes one generic OpenID Connect provider.
+type OIDCProviderConfig struct {
+	Name         string // provider key used in routes/state (e.g. "okta")
+	Issuer       string // issuer base URL (discovery: {issuer}/.well-known/openid-configuration)
+	ClientID     string
+	ClientSecret string
+	Scopes       string // optional, space-delimited; "" -> "openid email profile"
+}
+
+// loadOIDCProviders parses VAULT_OIDC_PROVIDERS (comma-separated provider names)
+// and, for each NAME, reads VAULT_OIDC_<NAME>_{ISSUER,CLIENT_ID,SCOPES} plus the
+// client secret via the _FILE convention (VAULT_OIDC_<NAME>_CLIENT_SECRET[_FILE]).
+// Providers missing an issuer or client id are skipped.
+func (c *Config) loadOIDCProviders() {
+	list := os.Getenv("VAULT_OIDC_PROVIDERS")
+	if list == "" {
+		return
+	}
+	for _, raw := range strings.Split(list, ",") {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		envKey := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+		prefix := "VAULT_OIDC_" + envKey + "_"
+		issuer := os.Getenv(prefix + "ISSUER")
+		clientID := os.Getenv(prefix + "CLIENT_ID")
+		if issuer == "" || clientID == "" {
+			continue
+		}
+		secret, _ := LoadSecret(prefix + "CLIENT_SECRET")
+		c.OIDCProviders = append(c.OIDCProviders, OIDCProviderConfig{
+			Name:         name,
+			Issuer:       issuer,
+			ClientID:     clientID,
+			ClientSecret: secret,
+			Scopes:       os.Getenv(prefix + "SCOPES"),
+		})
 	}
 }
 
@@ -521,8 +631,8 @@ func (c *Config) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "profile=%s listen=%s origin=%s\n", c.Profile, c.ListenAddr, c.Origin)
 	fmt.Fprintf(&b, "tls=%v db=%s:%s/%s cache=%s\n", c.TLSEnabled, c.DBHost, c.DBPort, c.DBName, c.CacheBackend)
-	fmt.Fprintf(&b, "master_key=%s admin_token=%s pepper=%s hmac=%s\n",
-		redact(c.MasterKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret))
+	fmt.Fprintf(&b, "master_key=%s admin_token=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
+		redact(c.MasterKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
 	fmt.Fprintf(&b, "db_mig_pass=%s db_app_pass=%s redis_pass=%s\n",
 		redactStr(c.DBMigPassword), redactStr(c.DBAppPassword), redactStr(c.RedisPass))
 	fmt.Fprintf(&b, "sendgrid_key=%s smtp_user=%s smtp_pass=%s\n",
@@ -546,6 +656,16 @@ func redactStr(s string) string {
 		return "<not set>"
 	}
 	return "<redacted>"
+}
+
+// presence reports whether non-secret key material is configured without
+// redacting it (a public key is not sensitive, but its absence is operationally
+// relevant).
+func presence(b []byte) string {
+	if len(b) == 0 {
+		return "<not set>"
+	}
+	return "set"
 }
 
 // isValidHexColor validates a CSS hex color like "#00FF42".

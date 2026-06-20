@@ -3,7 +3,7 @@
 # Frontend build stage: compile Vue SPA on the native build host. Output is static
 # JS/HTML so target arch is irrelevant — pinning $BUILDPLATFORM avoids running Node
 # under QEMU, which segfaults corepack/pnpm on arm64.
-FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:cb15fca92530d7ac113467696cf1001208dac49c3c64355fd1348c11a88ddf8f AS frontend
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd AS frontend
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/vue/package.json packages/vue/
@@ -15,7 +15,7 @@ RUN pnpm --filter @vault42/vue build && pnpm --filter @vault42/web build
 
 # Go build stage: runs on native (amd64) host, cross-compiles for target arch.
 # Go cross-compiles natively — no QEMU emulation needed, ~10x faster for ARM64.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH

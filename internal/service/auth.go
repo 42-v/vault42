@@ -58,6 +58,8 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrAccountLocked      = errors.New("account locked")
+	ErrAccountBanned      = errors.New("account banned")
+	ErrAccountDisabled    = errors.New("account disabled")
 	ErrPasswordBreached   = errors.New("password found in breach database")
 	ErrPasswordTooShort   = errors.New("password too short")
 	ErrPasswordReused     = errors.New("password recently used")
@@ -65,6 +67,10 @@ var (
 	ErrTokenUsed          = errors.New("token already used")
 	ErrTokenInvalid       = errors.New("invalid token")
 	ErrReplayDetected     = errors.New("refresh token replay detected")
+	// ErrEmailOTPNotAllowed is returned when email-OTP is requested for a user
+	// who has a stronger enrolled factor (TOTP/WebAuthn). Email-OTP is only a
+	// fallback for accounts with no second factor when MFA is required.
+	ErrEmailOTPNotAllowed = errors.New("email OTP not permitted for this account")
 	ErrMFARequired        = errors.New("MFA verification required")
 	ErrChallengeConsumed  = errors.New("challenge token already consumed")
 	ErrTooManySessions    = errors.New("maximum concurrent sessions reached")
@@ -87,6 +93,7 @@ type AuthService struct {
 	rateLimits         repository.RateLimitRepository
 	tokenSvc           *TokenService
 	mfaSvc             *MFAService
+	roleCatalog        *RoleCatalog
 	auditLog           *audit.Logger
 	hibp               *HIBPClient
 	cache              cache.Cache
@@ -100,6 +107,13 @@ type AuthService struct {
 	minPwLength        int
 	hibpEnabled        bool
 	hmacSecret         []byte
+	strictSessionLimit bool
+}
+
+// SetStrictSessionLimit controls checkSessionLimit's behaviour on a count-query
+// error: true fails closed (rejects login + audits), false (default) fails open.
+func (s *AuthService) SetStrictSessionLimit(strict bool) {
+	s.strictSessionLimit = strict
 }
 
 // NewAuthService creates a new auth service.
@@ -152,6 +166,46 @@ func (s *AuthService) SetMetrics(m *metrics.Collector) {
 // ErrTooManySessions. A value of 0 disables the check.
 func (s *AuthService) SetMaxSessionsPerUser(n int) {
 	s.maxSessionsPerUser = n
+}
+
+// SetRoleCatalog enables catalog-aware role validation. When set, JWT issuance
+// keeps only roles present in the auth.app_roles catalog (in addition to the
+// admin-reserved filter). Nil (the default) preserves the prior behaviour.
+func (s *AuthService) SetRoleCatalog(c *RoleCatalog) {
+	s.roleCatalog = c
+}
+
+// ChallengeFingerprintMatches reports whether the device fingerprint embedded in
+// a 2fa_challenge token matches the fingerprint recomputed from the redeeming
+// request. An empty challengeFP (legacy token without the claim) is treated as a
+// match so in-flight challenges aren't bricked. On mismatch it records a
+// FingerprintAnomaly audit event — the device/network-switch signal the claim was
+// added to detect, kept consistent with the refresh path (audit M1).
+func (s *AuthService) ChallengeFingerprintMatches(ctx context.Context, userID, challengeFP, requestFP, ip, ua string) bool {
+	if challengeFP == "" {
+		return true
+	}
+	if vaultcrypto.CompareFingerprints(challengeFP, requestFP) {
+		return true
+	}
+	s.auditLog.Log(ctx, audit.FingerprintAnomaly, userID, "", ip, ua, requestFP, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"}, 70)
+	return false
+}
+
+// effectiveRoles computes the roles embedded in a JWT for a user: strip
+// admin-reserved tiers (seed.FilterUserRoles), then — when a catalog is
+// configured — keep only catalog-defined roles, falling back to ["user"] when
+// the result is empty (preserving the historical default).
+func (s *AuthService) effectiveRoles(ctx context.Context, roles []string) []string {
+	out := seed.FilterUserRoles(roles)
+	if s.roleCatalog != nil {
+		out = s.roleCatalog.Filter(ctx, out)
+	}
+	if len(out) == 0 {
+		return []string{"user"}
+	}
+	return out
 }
 
 // RegisterInput is the registration request payload.
@@ -278,6 +332,44 @@ func (s *AuthService) sendVerificationEmail(to, userID, redirectTo string) {
 	}
 }
 
+// sendImportClaimLink mints a one-time reset token (compatible with the
+// password reset-confirm flow) for an imported account and emails the magic
+// link. Fire-and-forget; failures are logged, not surfaced (anti-enumeration).
+func (s *AuthService) sendImportClaimLink(userID, emailAddr string) {
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	go func() { // #nosec G118 -- intentional: email send outlives the HTTP request
+		ctx := context.Background()
+		// Invalidate any prior outstanding claim link so only the latest is valid
+		// (each login attempt issues a new one; don't leave stale tokens usable).
+		if oldHash, err := s.cache.GetAndDelete(ctx, "pwreset_user:"+userID); err == nil && oldHash != "" {
+			s.cache.Delete(ctx, "reset:"+oldHash) // #nosec G104 -- best-effort invalidation
+		}
+		token, err := vaultcrypto.RandomHex(32)
+		if err != nil {
+			log.Printf("auth: import claim token gen failed: %v", err)
+			return
+		}
+		tokenHash := vaultcrypto.SHA256Hex(token)
+		// Same keys the password ResetConfirm handler consumes.
+		if err := s.cache.Set(ctx, "reset:"+tokenHash, userID, time.Hour); err != nil {
+			log.Printf("auth: import claim token store failed: %v", err)
+			return
+		}
+		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, time.Hour) // #nosec G104 -- reverse map for invalidation, best-effort
+
+		claimURL := s.origin + "/reset-password?token=" + token + "&import=1"
+		subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplatePasswordReset, vaultemail.TemplateData{
+			AppName: s.appName,
+			URL:     claimURL,
+		})
+		if err := s.emailSender.Send(ctx, emailAddr, subject, html, text); err != nil {
+			log.Printf("auth: failed to send import claim email to %s: %v", emailAddr, err)
+		}
+	}()
+}
+
 // LoginInput is the login request payload.
 type LoginInput struct {
 	Email       string `json:"email"`
@@ -297,6 +389,9 @@ type LoginResult struct {
 	Requires2FA      bool     `json:"requires_2fa,omitempty"`
 	ChallengeToken   string   `json:"challenge_token,omitempty"`
 	AvailableMethods []string `json:"available_methods,omitempty"`
+	// ImportClaimRequired is set for an imported account on its first login: no
+	// password was verified; a magic reset link was emailed to claim the account.
+	ImportClaimRequired bool `json:"import_claim_required,omitempty"`
 }
 
 // Login authenticates a user and issues tokens.
@@ -380,6 +475,40 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_locked", "source": "auto"}, 30)
 		return nil, ErrAccountLocked
+	}
+
+	// Account-state gate (legacy-platform parity, migration 004). Reject banned/disabled/
+	// deleted accounts before password verification. A soft-deleted account is
+	// treated as "no such user" (ErrInvalidCredentials) to avoid revealing it.
+	if user.Deleted {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_deleted"}, 20)
+		return nil, ErrInvalidCredentials
+	}
+	if user.Banned {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_banned"}, 30)
+		return nil, ErrAccountBanned
+	}
+	if user.Disabled {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_disabled"}, 30)
+		return nil, ErrAccountDisabled
+	}
+
+	// Imported account, first login: the password the user typed is meaningless
+	// (we never imported their credentials). Don't verify it — run a dummy hash
+	// for timing parity, email a magic reset link, and tell the client to claim
+	// the account. The existing reset-confirm flow then sets the Argon2 password
+	// and clears import_pending.
+	if user.ImportPending {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.sendImportClaimLink(user.ID, user.Email)
+		s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"import_claim": true}, 0)
+		return &LoginResult{ImportClaimRequired: true}, nil
 	}
 
 	// Verify password
@@ -479,14 +608,9 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Find or create device (non-critical — log but don't fail)
 	deviceID := s.findOrCreateDevice(ctx, user.ID, fp, ip, ua)
 
-	// Issue tokens — use the user's persisted Roles, falling back to
-	// the historical default ["user"] when empty. Defense-in-depth:
-	// strip any admin-tier role that may have leaked into the user
-	// table via direct SQL — those tiers are AdminUser-only.
-	jwtRoles := seed.FilterUserRoles(user.Roles)
-	if len(jwtRoles) == 0 {
-		jwtRoles = []string{"user"}
-	}
+	// Issue tokens — use the user's persisted Roles, admin-filtered and
+	// catalog-validated, falling back to the historical default ["user"].
+	jwtRoles := s.effectiveRoles(ctx, user.Roles)
 	pair, err := s.tokenSvc.IssueTokenPair(
 		user.ID, jwtRoles, []string{"read", "write"},
 		input.ClientID, fp, "", input.RememberMe,
@@ -497,6 +621,11 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 
 	if err := s.storeRefreshToken(ctx, user.ID, input.ClientID, deviceID, fp, pair); err != nil {
 		return nil, err
+	}
+
+	// Stamp last successful login (legacy-platform parity); best-effort.
+	if err := s.users.SetLastLogin(ctx, user.ID); err != nil {
+		log.Printf("auth: failed to set last_login for %s: %v", user.ID, err)
 	}
 
 	if s.metrics != nil {
@@ -581,13 +710,21 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	// latest persisted Roles (refresh path must reflect role changes
 	// since the original login).
 	refreshUser, _ := s.users.GetByID(ctx, stored.UserID)
-	var refreshRoles []string
-	if refreshUser != nil {
-		refreshRoles = seed.FilterUserRoles(refreshUser.Roles)
+	// Account state can change between login and refresh — a banned, disabled,
+	// deleted (or vanished) account must not mint new tokens. Revoke the whole
+	// family so the session is fully terminated, not just this rotation.
+	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled {
+		s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
+		switch {
+		case refreshUser != nil && refreshUser.Banned:
+			return nil, ErrAccountBanned
+		case refreshUser != nil && refreshUser.Disabled:
+			return nil, ErrAccountDisabled
+		default:
+			return nil, ErrTokenInvalid
+		}
 	}
-	if len(refreshRoles) == 0 {
-		refreshRoles = []string{"user"}
-	}
+	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
 	pair, err := s.tokenSvc.IssueTokenPair(
 		stored.UserID, refreshRoles, []string{"read", "write"},
 		stored.ClientID, fp, stored.FamilyID, false,
@@ -660,6 +797,8 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 			return nil, ErrChallengeConsumed
 		}
 	}
+	// Successful second factor clears the per-account failure counter (audit H2).
+	s.clearLockout(ctx, userID)
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, userID); err != nil {
 		return nil, err
@@ -673,9 +812,8 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	mfaUser, _ := s.users.GetByID(ctx, userID)
 	var mfaRoles []string
 	if mfaUser != nil {
-		mfaRoles = seed.FilterUserRoles(mfaUser.Roles)
-	}
-	if len(mfaRoles) == 0 {
+		mfaRoles = s.effectiveRoles(ctx, mfaUser.Roles)
+	} else {
 		mfaRoles = []string{"user"}
 	}
 	pair, err := s.tokenSvc.IssueTokenPair(
@@ -688,6 +826,11 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 	if err := s.storeRefreshToken(ctx, userID, "", deviceID, fingerprint, pair); err != nil {
 		return nil, err
+	}
+
+	// Stamp last successful login (legacy-platform parity); best-effort.
+	if err := s.users.SetLastLogin(ctx, userID); err != nil {
+		log.Printf("auth: failed to set last_login for %s: %v", userID, err)
 	}
 
 	if s.metrics != nil {
@@ -719,7 +862,29 @@ func (s *AuthService) sendEmailOTP(userID, emailAddr string) {
 	}
 }
 
+// emailOTPAllowed reports whether email-OTP is a permitted second factor for
+// this user. It mirrors the Login gate (see Login ~"No MFA methods configured
+// but MFA is required"): email-OTP is only a fallback for users with NO stronger
+// enrolled factor (TOTP/WebAuthn/backup) when MFA is required. Without this gate
+// a challenge-token holder could downgrade a hardware/TOTP factor to a 6-digit
+// email code (security audit H1). Fails closed on error.
+func (s *AuthService) emailOTPAllowed(ctx context.Context, userID string) bool {
+	if s.mfaSvc == nil {
+		return false
+	}
+	status, err := s.mfaSvc.GetStatus(ctx, userID)
+	if err != nil {
+		log.Printf("auth: MFA status check failed for %s: %v", userID, err)
+		return false
+	}
+	hasStrongMethod := status != nil && len(status.Methods) > 0
+	return !hasStrongMethod && s.mfaSvc.IsRequired()
+}
+
 func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr string) error {
+	if !s.emailOTPAllowed(ctx, userID) {
+		return ErrEmailOTPNotAllowed
+	}
 	if s.cache == nil || s.emailSender == nil {
 		return fmt.Errorf("email OTP requires cache and email sender")
 	}
@@ -748,6 +913,12 @@ func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr stri
 
 // VerifyEmailOTP verifies a 6-digit email OTP code. Single-use via atomic GetAndDelete.
 func (s *AuthService) VerifyEmailOTP(ctx context.Context, userID, code string) error {
+	// Defense-in-depth against MFA downgrade (audit H1): even if a code exists in
+	// the cache, refuse to accept email-OTP as a factor for a user who has a
+	// stronger enrolled method. Consume nothing on the gated path.
+	if !s.emailOTPAllowed(ctx, userID) {
+		return ErrInvalidCredentials
+	}
 	if s.cache == nil {
 		return ErrInvalidCredentials
 	}
@@ -843,6 +1014,26 @@ func (s *AuthService) clearLockout(ctx context.Context, userID string) {
 	s.cache.Delete(ctx, key) // #nosec G104 -- best-effort counter reset
 }
 
+// MFAVerifyLocked reports whether the account is locked out from further auth
+// attempts. MFA verify endpoints MUST call this before checking a second factor:
+// the per-IP rate limit alone is defeated by IP rotation, so without a per-account
+// gate the second factor is brute-forceable within the challenge window (audit H2).
+func (s *AuthService) MFAVerifyLocked(ctx context.Context, userID string) bool {
+	return s.isAccountLocked(ctx, userID)
+}
+
+// RecordMFAFailure counts a failed second-factor attempt toward the per-account
+// lockout (shared counter with the password path, so combined failures trip the
+// same lockoutThreshold/lockoutDuration) and audits it. Reset on success via
+// clearLockout in CompleteMFALogin (audit H2).
+func (s *AuthService) RecordMFAFailure(ctx context.Context, userID, ip, ua string) {
+	s.recordFailedAttempt(ctx, userID)
+	if s.auditLog != nil {
+		s.auditLog.Log(ctx, audit.LoginFailure, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort
+			map[string]interface{}{"reason": "mfa_failed"}, 30)
+	}
+}
+
 // isIPLocked checks the IP-based lockout counter. This limits credential
 // stuffing and password spraying from a single source IP.
 // When the cache is unavailable, falls back to the rate limit repository
@@ -899,6 +1090,16 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 // checkSessionLimit verifies that the user has not exceeded the maximum number of
 // concurrent refresh token families. Returns ErrTooManySessions if the limit is reached.
 // A maxSessionsPerUser of 0 disables the check.
+// checkSessionLimit is a soft, best-effort cap on concurrent session families.
+// It is intentionally NOT atomic with the subsequent token insert: concurrent
+// logins by the SAME user can each pass this check and then insert, briefly
+// exceeding the cap by the number of racing attempts. This is an accepted
+// trade-off — making it strict would require serializing the login hot path
+// (per-user advisory lock) or a count-conditional INSERT, adding latency/lock
+// contention for every login to prevent a user marginally exceeding their own
+// session cap (no auth bypass, bounded over-count). The cap converges as old
+// families expire/revoke. Revisit only if the limit becomes a hard security
+// boundary rather than a resource control.
 func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) error {
 	if s.maxSessionsPerUser <= 0 {
 		return nil
@@ -906,7 +1107,13 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 	count, err := s.tokens.CountActiveFamilies(ctx, userID)
 	if err != nil {
 		log.Printf("auth: session count check failed for user %s: %v", userID, err)
-		return nil // fail open — don't block login if the count query fails
+		if s.strictSessionLimit {
+			// Fail closed (audit L1): a count error must not silently disable the cap.
+			s.auditLog.Log(ctx, audit.RateLimit, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"reason": "session_limit_count_failed"}, 80)
+			return ErrTooManySessions
+		}
+		return nil // fail open (default) — don't block login if the count query fails
 	}
 	if count >= s.maxSessionsPerUser {
 		return ErrTooManySessions

@@ -1,12 +1,15 @@
 package adminapi
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/42-v/vault42/internal/model"
 )
 
 func TestLocalOnly_RejectsNonLoopback(t *testing.T) {
@@ -294,6 +297,37 @@ func TestLoginRateLimit_BlocksExcessiveAttempts(t *testing.T) {
 	}
 }
 
+func TestLoginRateLimit_Table(t *testing.T) {
+	tests := []struct {
+		name     string
+		max      int
+		window   time.Duration
+		attempts int
+		wantCode int
+	}{
+		{"allow under", 2, time.Minute, 2, http.StatusOK},
+		{"block over", 1, time.Minute, 2, http.StatusTooManyRequests},
+		{"zero max blocks second", 0, time.Minute, 1, http.StatusTooManyRequests},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rl := NewLoginRateLimit(tt.max, tt.window)
+			h := rl.Wrap(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+			for i := 0; i < tt.attempts; i++ {
+				r := httptest.NewRequest("POST", "/login", nil)
+				r.RemoteAddr = "10.0.0.1:1"
+				w := httptest.NewRecorder()
+				h(w, r)
+				if i == tt.attempts-1 {
+					if w.Code != tt.wantCode {
+						t.Errorf("final code=%d want=%d", w.Code, tt.wantCode)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestConfigKeyPattern(t *testing.T) {
 	valid := []string{"session.ttl", "max_retries", "debugMode", "a"}
 	invalid := []string{"", "../etc/passwd", "key;DROP TABLE", "1starts_with_num", strings.Repeat("x", 65)}
@@ -307,5 +341,72 @@ func TestConfigKeyPattern(t *testing.T) {
 		if configKeyPattern.MatchString(k) {
 			t.Errorf("config key %q should be invalid", k)
 		}
+	}
+}
+
+func TestGetSession(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want *model.AdminSession
+	}{
+		{"background", context.Background(), nil},
+		{"no key", context.WithValue(context.Background(), "other", "x"), nil},
+		{"wrong type", context.WithValue(context.Background(), adminSessionKey, "notsession"), nil},
+		{"valid", func() context.Context {
+			s := &model.AdminSession{ID: "sess-1", AdminID: "adm-1"}
+			return context.WithValue(context.Background(), adminSessionKey, s)
+		}(), &model.AdminSession{ID: "sess-1", AdminID: "adm-1"}},
+		{"nil session stored", context.WithValue(context.Background(), adminSessionKey, (*model.AdminSession)(nil)), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GetSession(tt.ctx)
+			if (got == nil) != (tt.want == nil) || (got != nil && got.ID != tt.want.ID) {
+				t.Errorf("GetSession() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetAdmin(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want *model.AdminUser
+	}{
+		{"background", context.Background(), nil},
+		{"no key", context.WithValue(context.Background(), "other", "x"), nil},
+		{"wrong type", context.WithValue(context.Background(), adminUserKey, 42), nil},
+		{"valid", func() context.Context {
+			a := &model.AdminUser{ID: "adm-1", Username: "root"}
+			return context.WithValue(context.Background(), adminUserKey, a)
+		}(), &model.AdminUser{ID: "adm-1", Username: "root"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GetAdmin(tt.ctx)
+			if (got == nil) != (tt.want == nil) || (got != nil && got.ID != tt.want.ID) {
+				t.Errorf("GetAdmin() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithSession_Roundtrip(t *testing.T) {
+	s := &model.AdminSession{ID: "s1"}
+	ctx := WithSession(context.Background(), s)
+	got := GetSession(ctx)
+	if got == nil || got.ID != "s1" {
+		t.Errorf("WithSession roundtrip got %+v", got)
+	}
+}
+
+func TestWithAdmin_Roundtrip(t *testing.T) {
+	a := &model.AdminUser{ID: "a1", Username: "u"}
+	ctx := WithAdmin(context.Background(), a)
+	got := GetAdmin(ctx)
+	if got == nil || got.ID != "a1" {
+		t.Errorf("WithAdmin roundtrip got %+v", got)
 	}
 }

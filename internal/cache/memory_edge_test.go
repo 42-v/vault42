@@ -558,3 +558,28 @@ func TestMemory_OperationsAfterClose(t *testing.T) {
 		// Just verifying no panic
 	})
 }
+
+// TestMemory_IncrementExists_Table covers Increment and Exists paths.
+func TestMemory_IncrementExists_Table(t *testing.T) {
+	c := NewMemoryCache()
+	defer c.Close()
+	ctx := context.Background()
+
+	v, err := c.Increment(ctx, "inc1", time.Minute)
+	if err != nil || v != 1 {
+		t.Errorf("inc1: got %d err=%v", v, err)
+	}
+	v, err = c.Increment(ctx, "inc1", time.Minute)
+	if err != nil || v != 2 {
+		t.Errorf("inc1 again: got %d", v)
+	}
+
+	exists1, e1 := c.Exists(ctx, "inc1")
+	if e1 != nil || !exists1 {
+		t.Errorf("exists after inc: %v %v", exists1, e1)
+	}
+	exists2, e2 := c.Exists(ctx, "nope")
+	if e2 != nil || exists2 {
+		t.Errorf("exists missing: %v", exists2)
+	}
+}
