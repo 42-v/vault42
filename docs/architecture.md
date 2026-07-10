@@ -155,6 +155,7 @@ internal/
   frontend/                  Embedded Vue SPA serving via go:embed
   honeypot/                  Honeypot mode alerting, fake tokens, and threat observation
   keystore/                  Database-backed signing key storage with AES-256-GCM encryption at rest (master key, kid as AAD). Supports key rotation, revocation, multi-pod refresh (60s default), and automatic cleanup of expired retired keys.
+  kms/                       KEK envelope-unwrap oracle behind POST /kms/unwrap. Per-kid KEKs are derived from a KMS root secret (KMS_ROOT_KEY_FILE) via HKDF-SHA256 with a versioned, domain-separated info label, cryptographically separate from the master key. Wrap/Unwrap reuse the AES-256-GCM AEAD with kid as AAD; every unwrap failure collapses to one opaque error (oracle-resistant).
   metrics/                   Hand-rolled Prometheus text exposition format. Collector aggregates argon2 semaphore, login, and token counters. No external dependencies.
   oauth2/                    OAuth2/OIDC provider implementations (Google, GitHub, etc.)
   cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-audit, export-audit, etc.)
@@ -316,8 +317,8 @@ Values flow through the request context:
 
 > **0.8.0 additions**:
 > account-state enforcement (`disabled`/`banned`/`deleted`) is applied on **every
-> token-issuance path** — password login, token refresh (revoking the family),
-> and the OAuth callback — so a ban takes effect across all of them. Imported
+> token-issuance path** -- password login, token refresh (revoking the family),
+> and the OAuth callback -- so a ban takes effect across all of them. Imported
 > accounts (`import_pending`, no password) are intercepted on first login to force
 > a magic-link claim, or claimed via an OAuth-verified email. Any OpenID Connect
 > issuer can act as an authority (JWKS-verified ID tokens), and custom application

@@ -44,6 +44,7 @@ type sendGridPersonalization struct {
 
 type sendGridEmail struct {
 	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
 }
 
 type sendGridContent struct {
@@ -54,16 +55,21 @@ type sendGridContent struct {
 // Send sends an email via the SendGrid v3 API. Both HTML and plain-text bodies
 // are included as content entries, matching the multipart/alternative behavior
 // of the SMTP sender. The SendGrid API returns 202 Accepted on success.
-func (s *SendGridSender) Send(ctx context.Context, to, subject, htmlBody, textBody string) error {
+func (s *SendGridSender) Send(ctx context.Context, from Address, to, subject, htmlBody, textBody string) error {
 	if s.apiKey == "" {
 		return fmt.Errorf("sendgrid: API key is not configured")
+	}
+
+	fromAddr := s.from
+	if from.Email != "" {
+		fromAddr = from.Email
 	}
 
 	payload := sendGridPayload{
 		Personalizations: []sendGridPersonalization{
 			{To: []sendGridEmail{{Email: to}}},
 		},
-		From:    sendGridEmail{Email: s.from},
+		From:    sendGridEmail{Email: fromAddr, Name: sanitizeHeader(from.Name)},
 		Subject: subject,
 		Content: []sendGridContent{
 			{Type: "text/plain", Value: textBody},

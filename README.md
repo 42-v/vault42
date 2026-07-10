@@ -1,72 +1,84 @@
 # Vault42
 
-Production-grade JWT authentication server written in Go. Integrated Vue frontend, honeypot mode for threat observation, and only 3 direct dependencies — JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
+Production-grade JWT authentication server written in Go, with an integrated Vue frontend, honeypot mode for threat observation, and only 3 direct dependencies. JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
 
 <!-- badges -->
 | | | |
 |---|---|---|
-| ![Go](https://img.shields.io/badge/Go-1.26.0-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.0-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-1985-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-190-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-2175_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-21194_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5098_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-70.69%25-7d6e00?style=flat&labelColor=000) |
+| ![Go](https://img.shields.io/badge/Go-1.26.0-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Go_Tests-2625-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-190-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-2815_tests-155724?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Go-26027_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5098_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-86.69%25-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
 ## Highlights
 
-- **RS256 JWT** — algorithm whitelist (rejects `none`, `HS256`, all others), fingerprint-bound, 8KB size limit
-- **Argon2id** — 46 MiB / 1 iteration, NIST SP 800-63B compliant, 15-char minimum, HIBP breach check
-- **Refresh token rotation** — family tracking, single-use, replay detection nukes the entire family
-- **WebAuthn/FIDO2** — passkey registration + authentication
-- **TOTP 2FA** — RFC 6238, hand-rolled (~80 lines), backup codes for recovery
-- **OAuth2/OIDC** — GitHub, Google + Facebook, PKCE S256 enforced, strict redirect URI matching
-- **Encrypted identity store** — AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
-- **Encrypted blob storage** — compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
-- **IP access control & geo-fencing** — allowlist/blocklist, dynamic runtime bans, proxy-agnostic
-- **Append-only audit log** — DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
-- **Integrated Vue frontend** — embedded in the Go binary via `go:embed`, serves as SPA
-- **Honeypot mode** — trap user detection, webhook alerts, full interaction capture
-- **Honeypot bridge** — transparent reverse proxy with attacker detection, decoy pages, score-based routing
-- **Client credentials** — service-to-service auth grant
-- **Device tracking** — session management with fingerprint verification
+- **RS256 JWT**: algorithm whitelist (rejects `none`, `HS256`, all others), fingerprint-bound, 8KB size limit
+- **Argon2id**: 46 MiB / 1 iteration, NIST SP 800-63B compliant, 15-char minimum, HIBP breach check
+- **Refresh token rotation**: family tracking, single-use, replay detection nukes the entire family
+- **DPoP proof-of-possession** (RFC 9449): sender-constrained tokens with single-use anti-replay, enforced on login, refresh, 2FA verify, and the KMS unwrap oracle
+- **KMS unwrap oracle**: `POST /kms/unwrap` KEK envelope-unwrap, gated by the `kms:unwrap` scope, DPoP-bound, fail-closed rate limit, synchronous audit; the `vault kms wrap` CLI produces envelopes
+- **WebAuthn/FIDO2**: passkey registration and authentication
+- **TOTP 2FA**: RFC 6238, hand-rolled (~80 lines), backup codes for recovery
+- **OAuth2/OIDC**: GitHub, Google, Facebook, plus generic OIDC (Okta, Auth0, Keycloak, Entra via `VAULT_OIDC_PROVIDERS`); PKCE S256 enforced, strict redirect URI matching
+- **Encrypted identity store**: AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
+- **DB-backed signing keys**: encrypted at rest (AES-256-GCM, kid as AAD), multi-pod refresh, zero-downtime rotation via the admin gateway
+- **Encrypted blob storage**: compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
+- **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key)
+- **IP access control and geo-fencing**: allowlist/blocklist, dynamic runtime bans, proxy-agnostic
+- **Append-only audit log**: DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
+- **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA
+- **Honeypot mode**: trap user detection, webhook alerts, full interaction capture
+- **Honeypot bridge**: transparent reverse proxy with attacker detection, decoy pages, score-based routing
+- **Client credentials**: service-to-service auth grant
+- **Device tracking**: session management with fingerprint verification
 
 ## Architecture
 
 ```
-cmd/vault42/              Entry point
+cmd/vault/              Entry point (also hosts the `vault ...` admin CLI)
+cmd/admin-gateway/      mTLS admin gateway (key rotation, erasure, RBAC)
 cmd/bridge/             Honeypot bridge proxy (standalone, stdlib only)
+cmd/recover/            Offline account-recovery tool (decrypts erasure escrow)
 internal/
-  handler/              HTTP handlers (auth, user, oauth, 2fa, password, identity, blobs, admin)
-  service/              Business logic (token lifecycle, MFA, HIBP, identity, blobs)
+  handler/              HTTP handlers (auth, user, oauth, 2fa, password, identity, blobs, admin, kms)
+  service/              Business logic (token lifecycle, MFA, HIBP, identity, blobs, erasure)
   repository/           PostgreSQL via pgx
-  middleware/            Auth, fingerprint, rate limiting, CORS, security headers, IP access
+  adminapi/             Admin gateway HTTP layer (RBAC, sessions, email branding)
+  middleware/           Auth, fingerprint, rate limiting, CORS, DPoP, security headers, IP access
   jwt/                  Stdlib-only RS256 sign/verify, ES256 verify, parsing, claims
-  crypto/               Argon2id, AES-256-GCM, HMAC, TOTP, JWKS
+  crypto/               Argon2id, AES-256-GCM, HMAC, TOTP, JWKS, DPoP
+  kms/                  KEK envelope-unwrap oracle (HKDF-derived per-kid KEKs)
+  keystore/             DB-backed signing keys, encrypted at rest, multi-pod refresh
   redis/                RESP2 client + connection pool (stdlib net)
-  cache/                Pluggable — Redis, in-memory, PostgreSQL
-  config/               Env vars + _FILE secret loading + profiles
+  cache/                Pluggable: Redis, in-memory, PostgreSQL
+  config/               Env vars, _FILE secret loading, profiles
   server/               HTTP server, TLS 1.3, middleware wiring
   migrate/              SQL migration runner
   model/                Domain types + WebAuthn adapter
+  rbac/                 Admin role/permission checks
+  metrics/              Hand-rolled Prometheus text exposition
   audit/                Append-only audit logger
-  email/                SMTP + SendGrid, go:embed HTML templates
+  email/                SMTP + SendGrid, go:embed HTML templates, per-app white-label
+  webauthn/             WebAuthn/FIDO2 config + adapters
   cli/                  Admin CLI (add-client, rotate-jwks, lock-user, seed, etc.)
   seed/                 Declarative JSON seeding for clients and users
-  oauth2/               GitHub, Google + Facebook providers
+  oauth2/               GitHub, Google, Facebook, and generic OIDC providers
   honeypot/             Trap user detection, webhook alerts
   frontend/             Embedded Vue SPA (go:embed)
   httputil/             JSON helpers, log sanitization
   sanitize/             Input validation
   useragent/            User-Agent parser
-packages/vue/           @vault42/vue — composables + i18n (38 locales)
+packages/vue/           @vault42/vue: composables + i18n (38 locales)
 web/                    Vue 3 + Vite + Tailwind SPA
-charts/vault42/           Helm chart (production, embedded, honeypot profiles)
+charts/vault/           Helm chart (production, embedded, honeypot profiles)
 migrations/             PostgreSQL DDL (auth, audit, identity, objects schemas)
 tests/
   unit/                 Table-driven unit tests
-  attack/               Attack vector simulations (alg confusion, replay, injection, timing)
+  attack/               Attack vector simulations (alg confusion, replay, injection, timing, DPoP)
   compliance/           NIST SP 800-63B + OWASP ASVS verification
   integration/          Testcontainers (real PostgreSQL + Redis)
-  fuzz/                 Go native fuzzing (JWT, TOTP, registration, email, DPoP)
+  fuzz/                 Go native fuzzing (JWT, TOTP, Argon2, ES256, email, identity, kid, DPoP)
   browser/              Chromedp browser security tests (separate go.mod)
   honeypot/             Bridge + honeypot E2E tests (honeypot_e2e build tag)
 ```
@@ -79,10 +91,10 @@ scripts/deploy-dev.sh
 # → https://vault.localhost
 
 # Build from source
-CGO_ENABLED=0 go build -ldflags="-s -w" -o vault42 ./cmd/vault42
+CGO_ENABLED=0 go build -ldflags="-s -w" -o vault42 ./cmd/vault
 
 # ARM64 (RPi5)
-CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault42
+CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault
 
 # Tests
 scripts/t.sh                        # all
@@ -93,7 +105,7 @@ scripts/tcount.sh                   # quick count
 scripts/coverage.sh
 
 # Full security pass (govulncheck, gosec, trivy fs, attack suite, coverage).
-# Run this before tagging a release — it mirrors the nightly CI workflow.
+# Run this before tagging a release; it mirrors the nightly CI workflow.
 scripts/release-check.sh
 ```
 
@@ -108,7 +120,7 @@ scripts/release-check.sh
 
 ## Dependencies
 
-3 direct production dependencies — [full table](docs/deps.md):
+3 direct production dependencies ([full table](docs/deps.md)):
 
 | Dependency | Purpose |
 |---|---|
@@ -116,11 +128,11 @@ scripts/release-check.sh
 | `go-webauthn` | WebAuthn/FIDO2 passkeys |
 | `x/crypto` | Argon2id hashing |
 
-Everything else — JWT, Redis, TOTP, CORS, JWKS, config, migrations, password hashing — is stdlib or hand-written.
+Everything else (JWT, Redis, TOTP, CORS, JWKS, config, migrations, password hashing) is stdlib or hand-written.
 
 ## Testing
 
-Eight layers: unit, attack simulation (27 vectors), NIST/OWASP compliance, integration (testcontainers), fuzz (5 targets), browser (chromedp), frontend unit (vitest), frontend integration.
+Nine layers: unit, attack simulation (60+ vector files), NIST/OWASP compliance, integration (testcontainers), fuzz (11 targets), browser (chromedp), honeypot E2E (bridge + trap flows), frontend unit (vitest), frontend integration.
 
 Coverage tooling lives in `scripts/`:
 
@@ -130,14 +142,14 @@ Coverage tooling lives in `scripts/`:
 | `scripts/tcount.sh` | Fast test-count summary, no execution |
 | `scripts/coverage.sh` | Regenerate `docs/test-coverage.md` with per-package + per-function coverage |
 | `scripts/security-scan.sh` | Standalone Go + frontend security pass (gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
-| `scripts/release-check.sh` | Full pre-release gate — mirrors nightly CI (govulncheck, gosec, trivy fs, attack suite, coverage) |
+| `scripts/release-check.sh` | Full pre-release gate; mirrors nightly CI (govulncheck, gosec, trivy fs, attack suite, coverage) |
 | `scripts/precommit.sh` | Pre-commit verification: build, vet, gosec, tests, badges, docs |
 
 ## Docs
 
 | | |
 |---|---|
-| [API Reference](docs/api.md) | 42 endpoints, schemas, curl examples |
+| [API Reference](docs/api.md) | 54 endpoints, schemas, curl examples |
 | [Architecture](docs/architecture.md) | Auth flows, middleware chain, token architecture |
 | [Configuration](docs/config.md) | All env vars, profiles, `_FILE` convention |
 | [Attack Cheatsheet](docs/cheatsheet.md) | JWT/auth attack vectors with defenses |
@@ -149,8 +161,8 @@ Coverage tooling lives in `scripts/`:
 
 Found a vulnerability? **Do not open a public issue.**
 
-Email **vault@42-v.com** (Tuta — end-to-end encrypted). See [SECURITY.md](SECURITY.md).
+Email **vault@42-v.com** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md).
 
 ## Disclaimer
 
-**This software is provided "as is", without warranty of any kind.** It is designed with security as a core principle — constant-time comparisons, algorithm whitelisting, least-privilege DB roles, append-only audit — but it is only as secure as the system it is deployed on. **Review the code before deploying to production.** See [LICENSE](LICENSE) (MIT).
+**This software is provided "as is", without warranty of any kind.** It is designed with security as a core principle (constant-time comparisons, algorithm whitelisting, least-privilege DB roles, append-only audit), but it is only as secure as the system it is deployed on. **Review the code before deploying to production.** See [LICENSE](LICENSE) (MIT).

@@ -28,7 +28,7 @@ Vault42 is a production-grade authentication and authorization microservice buil
 1. Client submits `email`, `password`, `display_name` (optional), `locale` (optional), `redirect_to` (optional)
 2. Server validates email format, enforces minimum password length (15 characters, NIST SP 800-63B Rev 4)
 3. If HIBP check is enabled (`VAULT_HIBP_CHECK=true`, default), password is checked against Have I Been Pwned via k-anonymity (only SHA-1 prefix sent)
-4. If email already exists, a `201 Created` response with `{"status": "verification_email_sent"}` is returned — identical to the real success case, preventing user enumeration
+4. If email already exists, a `201 Created` response with `{"status": "verification_email_sent"}` is returned -- identical to the real success case, preventing user enumeration
 5. Password is hashed with Argon2id (46 MiB, 1 iteration, 1 parallelism)
 6. User record created; password hash stored in password history
 7. Verification email sent asynchronously (token stored hashed in cache, 24h TTL)
@@ -47,7 +47,7 @@ Vault42 is a production-grade authentication and authorization microservice buil
 4. Password verified with Argon2id (constant-time comparison via `crypto/subtle`)
 5. Email verification check -- unverified emails cannot log in
 6. Failed login counter reset on success
-7. Device fingerprint computed: `SHA256(len‖IP ‖ len‖User-Agent ‖ len‖Accept-Language ‖ len‖TLS-fingerprint)` — length-prefixed (4-byte big-endian) to prevent separator collision attacks
+7. Device fingerprint computed: `SHA256(len‖IP ‖ len‖User-Agent ‖ len‖Accept-Language ‖ len‖TLS-fingerprint)` -- length-prefixed (4-byte big-endian) to prevent separator collision attacks
 8. MFA check: if user has any verified 2FA methods (TOTP, WebAuthn, backup codes, email OTP):
    - A `2fa_challenge` JWT (5-minute TTL) is issued instead of real tokens
    - Response includes `requires_2fa: true`, `challenge_token`, and `available_methods`
@@ -239,10 +239,10 @@ Vault42 is a production-grade authentication and authorization microservice buil
 **Mode 2: DB-Backed (`VAULT_KEY_ROTATION_DB=true`)**
 - Keys stored in `auth.signing_keys` table, encrypted at rest with AES-256-GCM (master key), `kid` as AAD
 - Unique partial index enforces exactly one `active` key at a time
-- All pods refresh from DB every `VAULT_KEY_REFRESH_INTERVAL` (default 60s) — automatic multi-pod coordination
+- All pods refresh from DB every `VAULT_KEY_REFRESH_INTERVAL` (default 60s) -- automatic multi-pod coordination
 - On first boot: imports `SIGNING_KEY_FILE` if present, otherwise generates new RSA-2048 key
 - Rotation: `POST /admin/keys/rotate` generates new key, retires old one in a single transaction
-- Retired keys remain in JWKS until `VAULT_KEY_RETENTION_PERIOD` (default 1h) — zero-downtime rotation
+- Retired keys remain in JWKS until `VAULT_KEY_RETENTION_PERIOD` (default 1h) -- zero-downtime rotation
 - Revocation: `DELETE /admin/keys/{kid}` immediately removes key from JWKS; tokens signed with it fail validation
 - `OnKeyChange` callback updates `TokenService` signing key and `WellKnownHandler` JWKS
 
@@ -263,7 +263,7 @@ Vault42 is a production-grade authentication and authorization microservice buil
 **Verify:** `POST /auth/2fa/totp/verify` (authenticated or challenge)
 - 6-digit code validated with +/-1 period skew (30-second periods)
 - Constant-time comparison (`crypto/subtle`)
-- TOTP replay prevention: `last_totp_counter` stored per-user in DB — replayed codes (same or earlier counter) rejected. Returns HTTP 429 `totp_code_already_used`
+- TOTP replay prevention: `last_totp_counter` stored per-user in DB -- replayed codes (same or earlier counter) rejected. Returns HTTP 429 `totp_code_already_used`
 - If verifying during login (challenge token): issues real access + refresh tokens
 - If first-time verification: marks TOTP as verified
 
@@ -347,7 +347,7 @@ When `VAULT_MFA_REQUIRED=true` but a user has no configured 2FA methods (no TOTP
 - Re-sends the email OTP code
 - Shares the TOTP rate limiter
 
-**Template:** `email_otp` — renders the 6-digit code with app branding.
+**Template:** `email_otp` -- renders the 6-digit code with app branding.
 
 **Source:** `internal/handler/email_otp.go`
 
@@ -410,7 +410,7 @@ VAULT_SEED_FILE=/etc/vault42/seed.json
 ```
 Or via CLI: `vault42 seed --admin-token <token> --file seed.json`
 
-Seed files define clients and users declaratively. Seeding is idempotent — existing entries (matched by client name) are skipped. Client secrets are always generated (never in the seed file) and printed to stdout. See `seed.example.json` for the file format.
+Seed files define clients and users declaratively. Seeding is idempotent -- existing entries (matched by client name) are skipped. Client secrets are always generated (never in the seed file) and printed to stdout. See `seed.example.json` for the file format.
 
 - Generates UUID `client_id` and high-entropy random secret (64 hex chars)
 - Secret displayed once, only the Argon2id hash is stored
@@ -457,6 +457,22 @@ All commands require `--admin-token`:
 
 **Source:** `internal/cli/cli.go`
 
+### 6.4 KMS Envelope-Unwrap Oracle
+
+**Endpoint:** `POST /kms/unwrap` (mounted only when `KMS_ROOT_KEY_FILE` is configured)
+
+A KEK envelope-unwrap oracle: a caller presents a wrapped-key envelope and vault42 returns the unwrapped key while holding the Key-Encryption-Key itself and never releasing it. Backs the life42 vault re-root.
+
+- **Key derivation:** per-`kid` KEKs are derived from a single KMS root secret (`KMS_ROOT_KEY_FILE`, >= 32 bytes) via HKDF-SHA256 with a versioned, domain-separated info label (`vault42/kms/kek/v1/<kid>`). This keeps the KMS keyspace cryptographically separate from the master key that encrypts TOTP/identity/blob at rest, and supports rotation without provisioning a new secret per kid.
+- **Envelope format:** `nonce || AES-256-GCM ciphertext`, with `kid` bound as GCM AAD, base64 (std) on the wire. Reuses `internal/crypto` AEAD; no new crypto.
+- **Authorization:** requires a client-credential access token carrying the `kms:unwrap` scope (`middleware.RequireScope`). When `VAULT_DPOP_ENABLED=true`, a fresh single-use DPoP proof is also required (anti-replay).
+- **Oracle resistance:** every failure mode (empty kid, malformed envelope, bad base64, tampered ciphertext, wrong KEK) collapses to a single opaque `400 unwrap_failed` with a byte-identical body and audit outcome. No branch reveals which check failed.
+- **Rate limiting:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading to a weaker per-pod limiter).
+- **Audit:** every attempt is written synchronously (never dropped under buffer pressure), recording `kid` and outcome only. Key material is never logged, and KEKs plus the root secret are wiped after use.
+- **Tooling:** `vault kms wrap` produces envelopes the oracle accepts.
+
+**Source:** `internal/kms/kms.go`, `internal/handler/kms.go`, `internal/server/server.go`, `cmd/vault/kms.go`
+
 ---
 
 ## 7. User Management
@@ -469,7 +485,7 @@ Returns: `id`, `email`, `email_verified`, `display_name`, `locale`, `mfa_require
 
 **Update:** `PUT /user/profile` (authenticated)
 
-Accepts partial update with pointer-field semantics (`display_name`, `avatar_url`, `locale`). Omitted fields are unchanged. Email is not updatable (requires re-verification — deferred to v2). Returns the full updated profile.
+Accepts partial update with pointer-field semantics (`display_name`, `avatar_url`, `locale`). Omitted fields are unchanged. Email is not updatable (requires re-verification -- deferred to v2). Returns the full updated profile.
 
 ### 7.2 Sessions
 
@@ -499,30 +515,30 @@ Accepts partial update with pointer-field semantics (`display_name`, `avatar_url
 The Identity Store provides encrypted storage for personal identity information (PII). All data is encrypted at rest with AES-256-GCM and keyed to the user via HMAC-SHA256 pseudonymous foreign keys, ensuring that even database administrators cannot associate identity data with user accounts.
 
 **Architecture:**
-- Pseudonymous key: `HMAC-SHA256(userID + ":identity", hmac_secret)` — a different salt than blob storage, so identity and blob pseudonyms cannot be correlated
+- Pseudonymous key: `HMAC-SHA256(userID + ":identity", hmac_secret)` -- a different salt than blob storage, so identity and blob pseudonyms cannot be correlated
 - Data encryption: JSON-serialized identity fields encrypted with AES-256-GCM using the master key
-- AAD binding: pseudonym ID used as authenticated additional data (AAD) for AES-256-GCM encryption — ciphertext bound to owner
+- AAD binding: pseudonym ID used as authenticated additional data (AAD) for AES-256-GCM encryption -- ciphertext bound to owner
 - Single row per user in `identity.profiles` table (upsert semantics)
 - Schema: `identity.profiles(pseudonym_id VARCHAR(128) PK, data_enc BYTEA, version INT, updated_at, created_at)`
 - Permissions: `vault_app` role has SELECT, INSERT, UPDATE, DELETE on identity schema (DELETE required for user-initiated data removal)
 
 **Fields:**
-- `given_name` — max 100 runes
-- `family_name` — max 100 runes
-- `country` — ISO 3166-1 alpha-2 (regex `^[A-Z]{2}$`)
-- `date_of_birth` — ISO 8601 date (`YYYY-MM-DD`), must not be in the future
-- `sex` — max 50 runes (freeform)
-- `billing` — optional sub-object:
-  - `address_line_1`, `address_line_2` — max 200 runes each
-  - `city` — max 100 runes
-  - `postal_code` — max 20 runes
-  - `country` — ISO 3166-1 alpha-2
-  - `vat_id` — max 50 runes
+- `given_name` -- max 100 runes
+- `family_name` -- max 100 runes
+- `country` -- ISO 3166-1 alpha-2 (regex `^[A-Z]{2}$`)
+- `date_of_birth` -- ISO 8601 date (`YYYY-MM-DD`), must not be in the future
+- `sex` -- max 50 runes (freeform)
+- `billing` -- optional sub-object:
+  - `address_line_1`, `address_line_2` -- max 200 runes each
+  - `city` -- max 100 runes
+  - `postal_code` -- max 20 runes
+  - `country` -- ISO 3166-1 alpha-2
+  - `vat_id` -- max 50 runes
 
 **Endpoints:**
-- `GET /user/identity` — retrieve decrypted identity (404 if none set)
-- `PUT /user/identity` — upsert identity (create or replace)
-- `DELETE /user/identity` — permanently delete identity data
+- `GET /user/identity` -- retrieve decrypted identity (404 if none set)
+- `PUT /user/identity` -- upsert identity (create or replace)
+- `DELETE /user/identity` -- permanently delete identity data
 
 **Audit events:** `identity_read`, `identity_write`, `identity_delete`
 
@@ -533,21 +549,21 @@ The Identity Store provides encrypted storage for personal identity information 
 Encrypted blob storage allows users to upload, download, and manage encrypted files. Blobs are compressed with DEFLATE, encrypted with AES-256-GCM, and stored in PostgreSQL. Labels are encrypted separately to allow metadata listing without full decryption of blob data.
 
 **Architecture:**
-- Pseudonymous key: `HMAC-SHA256(userID + ":objects", hmac_secret)` — different salt from identity store
+- Pseudonymous key: `HMAC-SHA256(userID + ":objects", hmac_secret)` -- different salt from identity store
 - Pipeline: raw data → DEFLATE compression → AES-256-GCM encryption → PostgreSQL BYTEA
 - Labels encrypted separately with AES-256-GCM
 - Checksum: `sha256:<hex>` of original (uncompressed, unencrypted) data
 - Schema: `objects.blobs(id UUID PK, pseudonym_id VARCHAR(128), ref_hash VARCHAR(128), label_enc BYTEA, data_enc BYTEA, size_bytes INT, stored_bytes INT, checksum VARCHAR(128), created_at)`
-- Named blobs: `ref_hash` is HMAC(name, secret) — allows lookup by name without storing plaintext. UNIQUE index on `(pseudonym_id, ref_hash) WHERE ref_hash IS NOT NULL`
-- Immutability: database trigger prevents UPDATE — blobs can only be created and deleted
+- Named blobs: `ref_hash` is HMAC(name, secret) -- allows lookup by name without storing plaintext. UNIQUE index on `(pseudonym_id, ref_hash) WHERE ref_hash IS NOT NULL`
+- Immutability: database trigger prevents UPDATE -- blobs can only be created and deleted
 - Permissions: `vault_app` role has SELECT, INSERT, DELETE (no UPDATE)
-- **AAD binding:** Data encryption uses `id + ":" + pseudonym` as AAD; label encryption uses `"label:" + id + ":" + pseudonym` as AAD — ciphertext is bound to specific blob and owner
+- **AAD binding:** Data encryption uses `id + ":" + pseudonym` as AAD; label encryption uses `"label:" + id + ":" + pseudonym` as AAD -- ciphertext is bound to specific blob and owner
 - **Decompression bomb protection:** Download decompression capped at 10 MB (`io.LimitReader`)
 
 **Quota enforcement:**
 - Per-user file count limit: `VAULT_BLOB_MAX_PER_USER` (default: 50)
 - Per-user total storage limit: `VAULT_BLOB_QUOTA_BYTES` (default: 10 MB)
-- Minimum blob size: `VAULT_BLOB_MIN_SIZE` (default: 0, disabled — empty blobs are still rejected)
+- Minimum blob size: `VAULT_BLOB_MIN_SIZE` (default: 0, disabled -- empty blobs are still rejected)
 - Maximum single blob size: `VAULT_BLOB_MAX_SIZE` (default: 10 MB)
 - Setting `VAULT_BLOB_QUOTA_BYTES=0` disables the blob storage feature entirely (routes are not registered)
 - Quota checked before compression/encryption to fail fast
@@ -557,15 +573,15 @@ Encrypted blob storage allows users to upload, download, and manage encrypted fi
 - Multipart form data with `file` field and optional `label` field
 
 **Endpoints:**
-- `POST /user/blobs` — upload a blob (returns metadata with id, size, checksum)
-- `GET /user/blobs` — list blobs with metadata and quota info
-- `GET /user/blobs/{id}` — download decrypted blob (returns `application/octet-stream`)
-- `DELETE /user/blobs/{id}` — permanently delete a blob
-- `PUT /user/blobs/named/{name}` — create or replace a named blob (upsert by name)
-- `GET /user/blobs/named/{name}` — download a blob by name
-- `DELETE /user/blobs/named/{name}` — delete a blob by name
+- `POST /user/blobs` -- upload a blob (returns metadata with id, size, checksum)
+- `GET /user/blobs` -- list blobs with metadata and quota info
+- `GET /user/blobs/{id}` -- download decrypted blob (returns `application/octet-stream`)
+- `DELETE /user/blobs/{id}` -- permanently delete a blob
+- `PUT /user/blobs/named/{name}` -- create or replace a named blob (upsert by name)
+- `GET /user/blobs/named/{name}` -- download a blob by name
+- `DELETE /user/blobs/named/{name}` -- delete a blob by name
 
-**Named blobs:** Addressed by a human-readable name (e.g. `session-data`) instead of UUID. The name is stored as HMAC hash — the plaintext name never persists to the database. PUT replaces any existing blob with the same name (atomic delete + insert, preserving the immutability trigger). Names must match `[a-zA-Z0-9_-]+` (max 255 chars).
+**Named blobs:** Addressed by a human-readable name (e.g. `session-data`) instead of UUID. The name is stored as HMAC hash -- the plaintext name never persists to the database. PUT replaces any existing blob with the same name (atomic delete + insert, preserving the immutability trigger). Names must match `[a-zA-Z0-9_-]+` (max 255 chars).
 
 **Response headers on download:** `Content-Type: application/octet-stream`, `X-Blob-Checksum`, `X-Blob-Label` (if set)
 
@@ -817,7 +833,7 @@ Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encryp
 ### 12.2 Roles
 
 - **`vault_mig`:** DDL privileges, used only at startup for migrations, then connection closed
-- **`vault_app`:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `auth` schema; `INSERT`, `SELECT` only on `audit` schema; `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `identity` schema; `SELECT`, `INSERT`, `DELETE` on `objects` schema (no UPDATE — enforced by trigger); NO `TRUNCATE`, NO DDL
+- **`vault_app`:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `auth` schema; `INSERT`, `SELECT` only on `audit` schema; `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `identity` schema; `SELECT`, `INSERT`, `DELETE` on `objects` schema (no UPDATE -- enforced by trigger); NO `TRUNCATE`, NO DDL
 - **`vault_admin`:** Full CRUD on admin tables, read/update on user tables, full on clients + config, read + append on audit
 - All schemas, tables, indexes, and role grants are defined in `migrations/001_initial_schema.sql`
 
@@ -1021,9 +1037,9 @@ This is load-shedding (backpressure), not a server error. The HPA can use `vault
 | `CORS_ALLOW_ALL` | `false` (prod) / `true` (dev) | Allow all CORS origins |
 | `TRUSTED_PROXIES` | (optional) | CIDR/IP list for X-Forwarded-For |
 | `REAL_IP_HEADER` | (optional) | Proxy real-IP header (e.g. `CF-Connecting-IP`, `X-Real-IP`) |
-| `IP_ALLOWLIST` | (optional) | CIDR/IP allowlist — only matching IPs permitted |
-| `IP_BLOCKLIST` | (optional) | CIDR/IP blocklist — matching IPs denied (dynamic at runtime) |
-| `GEO_IP_HEADER` | (optional) | Country code header (e.g. `CF-IPCountry`) — empty disables geo-fencing |
+| `IP_ALLOWLIST` | (optional) | CIDR/IP allowlist -- only matching IPs permitted |
+| `IP_BLOCKLIST` | (optional) | CIDR/IP blocklist -- matching IPs denied (dynamic at runtime) |
+| `GEO_IP_HEADER` | (optional) | Country code header (e.g. `CF-IPCountry`) -- empty disables geo-fencing |
 | `GEO_ALLOWLIST` | (optional) | ISO 3166-1 alpha-2 country allowlist |
 | `GEO_BLOCKLIST` | (optional) | ISO 3166-1 alpha-2 country blocklist (`T1` = Tor) |
 | `VAULT_AUTO_MIGRATE` | `false` (prod) / `true` (dev/embedded) | Auto-migrate on startup |
@@ -1299,8 +1315,8 @@ Eight layers:
 | CORS | Custom middleware | ~15 |
 | Migrations | Read `migrations/*.sql` sorted, execute in transaction | ~90 |
 | JWKS serialization | Marshal `crypto/rsa` public key to JSON | ~30 |
-| JWT | `internal/jwt` — RS256 signing/verification, ES256 verification (DPoP), parsing, claims validation | ~500 |
-| Redis client | `internal/redis` — RESP2 protocol, connection pooling, semaphore-based blocking, idle reaping | ~350 |
+| JWT | `internal/jwt` -- RS256 signing/verification, ES256 verification (DPoP), parsing, claims validation | ~500 |
+| Redis client | `internal/redis` -- RESP2 protocol, connection pooling, semaphore-based blocking, idle reaping | ~350 |
 
 ---
 

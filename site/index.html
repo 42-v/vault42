@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vault42 — ROOT OF TRUST</title>
+  <meta name="description" content="Self-hosted identity authority. One Go binary. RS256/JWKS.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body class="v-bloom-bg">
+  <!-- atmosphere (subtle modern CRT) -->
+  <div class="v-crt" aria-hidden="true"></div>
+  <div class="v-grain" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="container inner">
+      <a href="#" class="v-wordmark" aria-label="vault42 home">vault42</a>
+      <nav class="nav-links" aria-label="primary">
+        <a href="#what">WHAT</a>
+        <a href="#proof">PROOF</a>
+        <a href="#audit">AUDIT</a>
+        <a href="#deploy">DEPLOY</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- HERO + LIVE TRUST CHAIN -->
+  <section class="hero" id="hero" aria-labelledby="hero-head">
+    <div class="container">
+      <h1 id="hero-head" class="hero-title">OWN THE ROOT OF TRUST.</h1>
+      <p class="sub">self-hosted identity authority, one binary.</p>
+
+      <div class="cta-row" role="group" aria-label="primary actions">
+        <a href="#deploy" class="v-btn v-btn--solid" id="hero-deploy">DEPLOY</a>
+        <a href="mailto:vault@42-v.com?subject=Briefing%20request" class="v-btn v-btn--ghost" id="hero-brief">BOOK A BRIEFING</a>
+      </div>
+
+      <div class="trust-strip" aria-label="trust markers">
+        <span>MIT</span><span>·</span><span>Go</span><span>·</span><span>RS256</span><span>·</span><span>JWKS</span><span>·</span><span>runs on a Pi</span>
+      </div>
+
+      <!-- LIVE TRUST CHAIN -->
+      <div class="section" style="padding-top:48px;border-top:none" aria-labelledby="chain-title">
+        <h2 id="chain-title" class="center" style="margin-bottom:12px">LIVE TRUST CHAIN</h2>
+        <p class="meta center" style="margin-bottom:16px;max-width:none">RS256 only. JWKS verification. Algorithm confusion rejected live.</p>
+
+        <div class="trust-chain" id="trust-chain" role="region" aria-live="polite" aria-label="live trust demonstration">
+          <!-- JS populates three nodes -->
+          <div class="chain-node issuer" data-node="issuer">
+            <div class="chain-head"><span class="label">ISSUER</span> vault42</div>
+            <div class="jwt-box" id="jwt-display" aria-label="decoded JWT">—</div>
+            <div class="status idle" id="issuer-status">ISSUING…</div>
+            <div class="chain-step">RS256 · kid=…</div>
+          </div>
+
+          <div class="chain-node verifier" data-node="v1">
+            <div class="chain-head"><span class="label">VERIFIER</span> svc-a</div>
+            <div class="jwt-box small" id="v1-detail">—</div>
+            <div class="status" id="v1-status">—</div>
+            <div class="chain-step">JWKS fetch → VERIFY</div>
+          </div>
+
+          <div class="chain-node verifier" data-node="v2">
+            <div class="chain-head"><span class="label">VERIFIER</span> svc-b</div>
+            <div class="jwt-box small" id="v2-detail">—</div>
+            <div class="status" id="v2-status">—</div>
+            <div class="chain-step">JWKS fetch → VERIFY</div>
+          </div>
+        </div>
+
+        <div class="trust-chain" id="attacker-chain" style="margin-top:-8px" aria-label="attacker demonstrations">
+          <div class="chain-node attacker" data-node="a-none">
+            <div class="chain-head"><span class="label">ATTACKER</span> alg:none</div>
+            <div class="status rejected" id="a-none-status">REJECTED</div>
+            <div class="chain-step">whitelist: only RS256</div>
+          </div>
+          <div class="chain-node attacker" data-node="a-hs">
+            <div class="chain-head"><span class="label">ATTACKER</span> HS256 confusion</div>
+            <div class="status rejected" id="a-hs-status">REJECTED</div>
+            <div class="chain-step">asymmetric keys only</div>
+          </div>
+          <div class="chain-node attacker" data-node="a-jku">
+            <div class="chain-head"><span class="label">ATTACKER</span> forged jku</div>
+            <div class="status rejected" id="a-jku-status">REJECTED</div>
+            <div class="chain-step">danger headers dropped</div>
+          </div>
+        </div>
+
+        <div class="center" style="margin-top:12px">
+          <button class="v-btn" id="chain-replay" type="button" aria-controls="trust-chain">REPLAY DEMO</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. WHAT IT IS -->
+  <section class="section container" id="what" aria-labelledby="what-head">
+    <h2 id="what-head">WHAT IT IS</h2>
+    <div class="v-panel" data-title="ROOT">
+      <p>vault42 is a self-hosted identity authority. A single Go binary issues all session JWTs using RS256 with a strict algorithm whitelist and publishes keys at a JWKS endpoint for any resource server to verify.</p>
+      <p style="margin-top:8px">No external IdP. No cloud. You run it. Stateless access tokens. Stateful refresh with replay-family revocation. PostgreSQL-backed with least-privilege roles. Embedded SPA or pure API.</p>
+      <ul>
+        <li>One static binary — CGO_ENABLED=0, distroless, read-only fs.</li>
+        <li>RS256/JWKS resource-server model. Tokens are verifiable by any service.</li>
+        <li>Full session lifecycle: register, login, refresh, logout, MFA.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 3. PROOF POINTS -->
+  <section class="section container" id="proof" aria-labelledby="proof-head">
+    <h2 id="proof-head">PROOF POINTS</h2>
+    <div class="proofs">
+      <div class="proof">
+        <div class="k">RS256 ONLY</div>
+        <div class="v">Algorithm whitelist rejects <code>none</code>, HS256, ES*, and all others at parse time. Rejects <code>jku</code>, <code>jwk</code>, <code>x5u</code> headers. 2048-bit RSA. 8 KB size cap.</div>
+      </div>
+      <div class="proof">
+        <div class="k">JWKS ENDPOINT</div>
+        <div class="v"><code>GET /.well-known/jwks.json</code>. Any resource server fetches public keys. Zero-downtime rotation. Retired keys retained for validation window.</div>
+      </div>
+      <div class="proof">
+        <div class="k">FIDO2 / WEBAUTHN</div>
+        <div class="v">Passkey registration and authentication. Security keys + platform authenticators. Works alongside TOTP + backup codes.</div>
+      </div>
+      <div class="proof">
+        <div class="k">APPEND-ONLY AUDIT</div>
+        <div class="v">DB-level enforcement. PostgreSQL triggers block UPDATE/DELETE on audit_log. <code>vault_app</code> role restricted to INSERT + SELECT only.</div>
+      </div>
+      <div class="proof">
+        <div class="k">REFRESH ROTATION + REPLAY DEFENSE</div>
+        <div class="v">Single-use refresh tokens. Family tracking. Replay of a used token nukes the entire family. Device fingerprint bound.</div>
+      </div>
+      <div class="proof">
+        <div class="k">MINIMAL + HAND-ROLLED</div>
+        <div class="v">Exactly three direct dependencies. JWT, TOTP, JWKS, fingerprint, constant-time, AES-GCM — implemented in stdlib or small internal packages.</div>
+      </div>
+      <div class="proof">
+        <div class="k">RUNS ON A PI</div>
+        <div class="v">Embedded profile: ~60-80 MB idle RAM, in-memory cache, 5 DB conns, auto-migrate. ARM64 build supported.</div>
+      </div>
+      <div class="proof">
+        <div class="k">ARGON2ID + FINGERPRINT</div>
+        <div class="v">46 MiB / 1 iter, NIST SP 800-63B. HIBP k-anonymity check. Every token carries device fingerprint hash.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. AUDIT -->
+  <section class="section container" id="audit" aria-labelledby="audit-head">
+    <h2 id="audit-head">AUDIT</h2>
+    <p style="margin-bottom:14px">Append-only. Hash-chained. Sealed. Mirrors the production audit log: DB triggers + role enforcement prevent mutation. Every entry references its predecessor; the final root is the chain seal.</p>
+
+    <div class="v-panel" data-title="LEDGER" style="padding-bottom:4px">
+      <div class="ledger" id="audit-ledger" role="table" aria-label="append-only hash-chained audit ledger">
+        <div class="ledger-head">
+          <div>TIMESTAMP</div>
+          <div>EVENT</div>
+          <div>IP</div>
+          <div>PREV</div>
+          <div>HASH</div>
+        </div>
+        <!-- rows injected by JS -->
+      </div>
+      <div class="root" id="audit-root" aria-live="polite">ROOT: —</div>
+    </div>
+
+    <div style="margin-top:10px">
+      <button class="v-btn" id="audit-append" type="button">APPEND EVENT</button>
+      <button class="v-btn v-btn--ghost" id="audit-reset" type="button" style="margin-left:8px">RESET CHAIN</button>
+    </div>
+    <p class="small">Client-side simulation using real SHA-256. Production log is immutable at the database.</p>
+  </section>
+
+  <!-- 5. SELF-HOST QUICKSTART -->
+  <section class="section container" id="deploy" aria-labelledby="deploy-head">
+    <h2 id="deploy-head">SELF-HOST QUICKSTART</h2>
+    <div class="v-panel" data-title="DEPLOY">
+      <div class="v-tabs" role="tablist" aria-label="deploy variants">
+        <button class="v-tab is-active" role="tab" aria-selected="true" id="tab-binary" data-target="binary">BINARY</button>
+        <button class="v-tab" role="tab" aria-selected="false" id="tab-helm" data-target="helm">HELM</button>
+      </div>
+
+      <div id="panel-binary" class="quickstart" style="position:relative;margin-top:0">
+        <pre id="code-binary"><code>CGO_ENABLED=0 go build -ldflags="-s -w" -o vault42 ./cmd/vault42
+
+# ARM64 (RPi5)
+CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault42</code></pre>
+        <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-binary" type="button" aria-label="copy binary commands">COPY</button>
+      </div>
+
+      <div id="panel-helm" class="quickstart" style="position:relative;margin-top:10px;display:none">
+        <pre id="code-helm"><code>microk8s helm3 upgrade --install vault42 charts/vault42 \
+  -n vault42 \
+  -f charts/vault42/values-embedded.yaml \
+  --set image.tag=v0.8.0 \
+  --set origin=https://vault.example.com \
+  --set secrets.existingSecret=vault42-secrets</code></pre>
+        <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-helm" type="button" aria-label="copy helm commands">COPY</button>
+      </div>
+
+      <p class="small" style="margin-top:12px">See deployment-guide.md for full MicroK8s + production paths. Secrets via _FILE or Kubernetes secrets. Always review before production use.</p>
+    </div>
+  </section>
+
+  <!-- 6. FOOTER -->
+  <footer class="footer container">
+    <div>
+      <span class="ver">vault42 v0.8.0</span> <span style="margin:0 6px">·</span> MIT
+    </div>
+    <div class="links">
+      <a href="#deploy" class="upper">DEPLOY</a>
+      <a href="https://github.com/42-v/vault42" target="_blank" rel="noopener" class="upper">READ SOURCE</a>
+      <a href="https://github.com/42-v/vault42/tree/main/docs" target="_blank" rel="noopener" class="upper">DOCS</a>
+    </div>
+    <div class="small" style="margin-top:12px">One binary. RS256. JWKS. Your root of trust.</div>
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>

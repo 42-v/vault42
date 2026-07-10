@@ -50,6 +50,9 @@ const (
 	SessionRevoke = "session_revoke"
 	// ClientAuth records a client credentials grant authentication.
 	ClientAuth = "client_auth"
+	// KMSUnwrap records a KEK envelope-unwrap request via POST /kms/unwrap.
+	// Metadata carries the KEK kid and outcome only — never key material.
+	KMSUnwrap = "kms_unwrap"
 	// RateLimit records a rate limit trigger event.
 	RateLimit = "rate_limit"
 	// FingerprintAnomaly records a fingerprint mismatch on token refresh.
@@ -125,10 +128,13 @@ type Logger struct {
 }
 
 // isCriticalEvent returns true for security-critical event types that must
-// not be silently dropped when the buffer is full.
+// not be silently dropped when the buffer is full. KMSUnwrap is a key-release
+// action (envelope-unwrap oracle) — every attempt needs a guaranteed audit
+// trail, so it is written synchronously rather than buffered where a DoS-driven
+// buffer overflow could drop it.
 func isCriticalEvent(eventType string) bool {
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap:
 		return true
 	}
 	return false

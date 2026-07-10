@@ -22,6 +22,7 @@ import (
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/keystore"
+	"github.com/42-v/vault42/internal/kms"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/oauth2"
@@ -52,6 +53,17 @@ func sanitizeDBError(err error) error {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Printf("vault %s (commit: %s, built: %s)\n", Version, GitCommit, BuildTime)
+		return
+	}
+
+	// `vault kms wrap` produces the wrapped-root artifact /kms/unwrap consumes.
+	// Handled here — before DB/server wiring — because it only needs the KMS
+	// root keyfile, no running vault.
+	if len(os.Args) > 1 && os.Args[1] == "kms" {
+		if err := runKMS(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "vault kms: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -129,7 +141,7 @@ func main() {
 	if cfg.SeedFile != "" {
 		sf, err := seed.Load(cfg.SeedFile)
 		if err != nil {
-			auditLogger.Close(ctx)
+			_ = auditLogger.Close(ctx)
 			log.Fatalf("Failed to load seed file: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 		}
 		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}); err != nil {
@@ -239,6 +251,24 @@ func main() {
 		cfg.PasswordMinLength, cfg.HIBPCheck, cfg.HMACSecret,
 	)
 
+	// White-label email: resolve per-app branding + template overrides on the
+	// send path. The app pool holds SELECT on the email tables (writes go through
+	// the admin gateway). One mailer is shared by the auth service and the
+	// password handler.
+	emailBrandingRepo := postgres.NewEmailBrandingRepo(db)
+	emailTemplateRepo := postgres.NewEmailTemplateRepo(db)
+	mailer := email.NewMailer(tmplRenderer, emailSender,
+		service.NewEmailOverrideStore(emailBrandingRepo, emailTemplateRepo),
+		email.Branding{
+			AppName:      cfg.AppName,
+			LogoURL:      cfg.LogoURL,
+			PrimaryColor: cfg.PrimaryColor,
+			FromName:     cfg.EmailFromName,
+		},
+		cfg.EmailFromAllowedDomains,
+	)
+	authSvc.SetMailer(mailer)
+
 	authSvc.SetRateLimitRepo(rateLimitRepo)
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
 	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
@@ -267,6 +297,20 @@ func main() {
 	// Note: string secrets (Pepper, DB passwords) can't be zeroed in Go — accepted limitation.
 	config.ZeroBytes(cfg.MasterKey)
 	config.ZeroBytes(cfg.HMACSecret)
+
+	// KMS envelope-unwrap oracle (POST /kms/unwrap): only built when a KMS root
+	// key is provisioned. The service holds its own copy of the root; zero the
+	// config-held original once it is constructed.
+	var kmsSvc *kms.Service
+	if len(cfg.KMSRootKey) > 0 {
+		kmsSvc, err = kms.New(cfg.KMSRootKey)
+		if err != nil {
+			log.Fatalf("KMS_ROOT_KEY invalid: %v", err)
+		}
+		defer kmsSvc.Close()
+		log.Println("KMS unwrap oracle enabled at POST /kms/unwrap (scope kms:unwrap required)")
+	}
+	config.ZeroBytes(cfg.KMSRootKey)
 
 	// Initialize honeypot alerter (only for honeypot profile)
 	var honeypotAlerter *honeypot.Alerter
@@ -360,6 +404,7 @@ func main() {
 		PwHistory:         pwHistoryRepo,
 		Social:            socialAccountRepo,
 		EmailSender:       emailSender,
+		Mailer:            mailer,
 		OAuthProviders:    oauthProviders,
 		MasterKey:         masterKey,
 		HMACSecret:        hmacSecret,
@@ -370,6 +415,7 @@ func main() {
 		HoneypotAlerter:   honeypotAlerter,
 		Metrics:           metricsCollector,
 		KeyStore:          ks,
+		KMS:               kmsSvc,
 		Identity:          identityRepo,
 		Blobs:             blobRepo,
 		Recovery:          recoveryRepo,

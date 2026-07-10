@@ -72,6 +72,17 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("POST /admin/roles", withPerm(sessionAuth, rbac.RolesCreate, api.CreateRole))
 	mux.Handle("DELETE /admin/roles/{name}", withPerm(sessionAuth, rbac.RolesDelete, api.DeleteRole))
 
+	// Per-app email branding + template overrides (white-label auth emails)
+	mux.Handle("GET /admin/email-branding", withPerm(sessionAuth, rbac.EmailRead, api.ListEmailBranding))
+	mux.Handle("GET /admin/email-branding/{app}", withPerm(sessionAuth, rbac.EmailRead, api.GetEmailBranding))
+	mux.Handle("PUT /admin/email-branding/{app}", withPerm(sessionAuth, rbac.EmailWrite, api.PutEmailBranding))
+	mux.Handle("DELETE /admin/email-branding/{app}", withPerm(sessionAuth, rbac.EmailDelete, api.DeleteEmailBranding))
+	mux.Handle("GET /admin/email-templates", withPerm(sessionAuth, rbac.EmailRead, api.ListEmailTemplates))
+	mux.Handle("POST /admin/email-templates/preview", withPerm(sessionAuth, rbac.EmailWrite, api.PreviewEmailTemplate))
+	mux.Handle("GET /admin/email-templates/{app}/{name}", withPerm(sessionAuth, rbac.EmailRead, api.GetEmailTemplate))
+	mux.Handle("PUT /admin/email-templates/{app}/{name}", withPerm(sessionAuth, rbac.EmailWrite, api.PutEmailTemplate))
+	mux.Handle("DELETE /admin/email-templates/{app}/{name}", withPerm(sessionAuth, rbac.EmailDelete, api.DeleteEmailTemplate))
+
 	// Config management
 	mux.Handle("GET /admin/config", withPerm(sessionAuth, rbac.ConfigRead, api.GetConfig))
 	mux.Handle("PUT /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.UpdateConfig))

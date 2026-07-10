@@ -53,6 +53,11 @@ type Config struct {
 
 	// MasterKey is the AES-256 encryption key (32 bytes) for TOTP secret encryption (MASTER_KEY_FILE).
 	MasterKey []byte
+	// KMSRootKey is the root secret (>= 32 bytes) from which per-kid KEKs are
+	// derived for the POST /kms/unwrap envelope-unwrap oracle (KMS_ROOT_KEY_FILE).
+	// When empty the KMS endpoint is not mounted. Kept cryptographically separate
+	// from MasterKey (which encrypts data at rest) via HKDF domain separation.
+	KMSRootKey []byte
 	// AdminTokenHash is the Argon2id hash of the admin CLI token (ADMIN_TOKEN_FILE).
 	AdminTokenHash string
 	// Pepper is a server-side secret added to password hashes (VAULT_PEPPER_FILE).
@@ -135,6 +140,16 @@ type Config struct {
 	LogoURL string
 	// PrimaryColor is the primary branding color hex code (VAULT_PRIMARY_COLOR). Default: "#00FF42".
 	PrimaryColor string
+	// EmailFromName is an optional global display name for the From line (VAULT_EMAIL_FROM_NAME).
+	EmailFromName string
+	// EmailFromAllowedDomains lists domains permitted for per-app From-address
+	// overrides (VAULT_EMAIL_FROM_ALLOWED_DOMAINS, comma-separated). A per-app
+	// from_address whose domain is not listed falls back to EmailFrom; an empty
+	// list disables address overrides entirely (display-name overrides still apply).
+	EmailFromAllowedDomains []string
+	// MaxEmailTemplateSize caps the byte size of a custom email template body
+	// accepted by the admin API (VAULT_MAX_EMAIL_TEMPLATE_SIZE). Default: 65536.
+	MaxEmailTemplateSize int
 
 	// CORSOrigins is a comma-separated list of allowed CORS origins (CORS_ORIGINS).
 	CORSOrigins string
@@ -232,7 +247,8 @@ type Config struct {
 
 	// DPoPEnabled enables DPoP (Demonstrating Proof-of-Possession) validation on token
 	// endpoints (VAULT_DPOP_ENABLED). When enabled, the DPoP middleware validates proof
-	// headers on /auth/login, /auth/refresh, and 2FA verify endpoints per RFC 9449.
+	// headers on /auth/login, /auth/refresh, the 2FA verify endpoints, and the
+	// POST /kms/unwrap key-release oracle (anti-replay) per RFC 9449.
 	// Default: false.
 	DPoPEnabled bool
 
@@ -302,9 +318,12 @@ func Load() (*Config, error) {
 		MaxSessionsPerUser:  envInt("VAULT_MAX_SESSIONS_PER_USER", 10),
 		StrictSessionLimit:  envBool("VAULT_STRICT_SESSION_LIMIT"),
 
-		AppName:      envOr("VAULT_APP_NAME", "The Vault"),
-		LogoURL:      os.Getenv("VAULT_LOGO_URL"),
-		PrimaryColor: envOr("VAULT_PRIMARY_COLOR", "#00FF42"),
+		AppName:                 envOr("VAULT_APP_NAME", "The Vault"),
+		LogoURL:                 os.Getenv("VAULT_LOGO_URL"),
+		PrimaryColor:            envOr("VAULT_PRIMARY_COLOR", "#00FF42"),
+		EmailFromName:           os.Getenv("VAULT_EMAIL_FROM_NAME"),
+		EmailFromAllowedDomains: splitTrimLower(os.Getenv("VAULT_EMAIL_FROM_ALLOWED_DOMAINS")),
+		MaxEmailTemplateSize:    envInt("VAULT_MAX_EMAIL_TEMPLATE_SIZE", 65536),
 
 		CORSOrigins:  os.Getenv("CORS_ORIGINS"),
 		CORSAllowAll: envBool("CORS_ALLOW_ALL"),
@@ -508,6 +527,9 @@ func (c *Config) loadSecrets() {
 	if mk, err := LoadSecret("MASTER_KEY"); err == nil {
 		c.MasterKey = []byte(mk)
 	}
+	if kr, err := LoadSecret("KMS_ROOT_KEY"); err == nil {
+		c.KMSRootKey = []byte(kr)
+	}
 	if at, err := LoadSecret("ADMIN_TOKEN"); err == nil {
 		c.AdminTokenHash = at
 	}
@@ -631,8 +653,8 @@ func (c *Config) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "profile=%s listen=%s origin=%s\n", c.Profile, c.ListenAddr, c.Origin)
 	fmt.Fprintf(&b, "tls=%v db=%s:%s/%s cache=%s\n", c.TLSEnabled, c.DBHost, c.DBPort, c.DBName, c.CacheBackend)
-	fmt.Fprintf(&b, "master_key=%s admin_token=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
-		redact(c.MasterKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
+	fmt.Fprintf(&b, "master_key=%s kms_root_key=%s admin_token=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
+		redact(c.MasterKey), redact(c.KMSRootKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
 	fmt.Fprintf(&b, "db_mig_pass=%s db_app_pass=%s redis_pass=%s\n",
 		redactStr(c.DBMigPassword), redactStr(c.DBAppPassword), redactStr(c.RedisPass))
 	fmt.Fprintf(&b, "sendgrid_key=%s smtp_user=%s smtp_pass=%s\n",
@@ -679,6 +701,21 @@ func isValidHexColor(s string) bool {
 		}
 	}
 	return true
+}
+
+// splitTrimLower splits a comma-separated list into lowercased, trimmed,
+// non-empty entries. Returns nil for an empty/blank input.
+func splitTrimLower(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, raw := range strings.Split(s, ",") {
+		if v := strings.ToLower(strings.TrimSpace(raw)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func envOr(key, fallback string) string {

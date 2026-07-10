@@ -7,6 +7,9 @@
 set -eo pipefail
 cd "$(dirname "$0")/.."
 
+# shellcheck source=lib/coverage-env.sh
+source "$(dirname "$0")/lib/coverage-env.sh"
+
 COVER_FILE=$(mktemp)
 TEST_OUT=$(mktemp)
 CREATOR_TMP=$(mktemp)
@@ -15,6 +18,8 @@ trap 'rm -f "$COVER_FILE" "$TEST_OUT" "$CREATOR_TMP"' EXIT
 # ═══════════════════════════════════════════════════════════════
 # 1. Run tests ONCE — get verbose output + coverage profile
 #    CI sets TEST_OUTPUT_FILE + COVERAGE_FILE to skip re-running.
+#    The package set and the number come from scripts/lib/coverage-env.sh, so
+#    the README badge always matches docs/test-coverage.md.
 # ═══════════════════════════════════════════════════════════════
 if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
    [ -n "${COVERAGE_FILE:-}" ] && [ -f "${COVERAGE_FILE}" ]; then
@@ -22,41 +27,14 @@ if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
   cp "$TEST_OUTPUT_FILE" "$TEST_OUT"
   cp "$COVERAGE_FILE" "$COVER_FILE"
 else
-  echo "Running tests..."
-  # -coverpkg=./internal/... attributes tests/unit/* coverage back to the
-  # internal packages they exercise. Without it the badge undercounts by ~8pp
-  # because handler/service tests live under tests/unit/ and their coverage
-  # contributions get filtered out. Mirrors scripts/coverage.sh.
-  export TESTCONTAINERS_RYUK_DISABLED=true
-  go test -v -count=1 -coverprofile="$COVER_FILE" -coverpkg=./internal/... \
-      ./internal/... ./tests/unit/... ./tests/attack/... ./tests/fuzz/... \
-      > "$TEST_OUT" 2>&1 || true
+  cov_require_runtime
+  echo "Running full-suite tests (DOCKER_HOST=$DOCKER_HOST)..."
+  cov_run "$COVER_FILE" "$TEST_OUT"
 fi
 
 PASSED=$(grep -c '^--- PASS' "$TEST_OUT" || true)
-FAILED=$(grep -c '^--- FAIL' "$TEST_OUT" || true)
 PKGS=$(grep -c '^ok\s' "$TEST_OUT" || true)
-# Two-decimal coverage from the raw profile — `go tool cover -func` rounds to
-# one decimal which loses the bullseye targets (e.g. 69.42 vs 69.4).
-TOTAL_COV=$(python3 - "$COVER_FILE" <<'PY'
-import sys
-seen = {}
-with open(sys.argv[1]) as fh:
-    next(fh)
-    for line in fh:
-        p = line.split()
-        if len(p) < 3:
-            continue
-        k, s, c = p[0], int(p[1]), int(p[2])
-        seen[k] = (s, seen.get(k, (s, False))[1] or c > 0)
-total = sum(s for s, _ in seen.values())
-if total == 0:
-    print("0.0%")
-else:
-    covered = sum(s for s, c in seen.values() if c)
-    print(f"{100.0 * covered / total:.2f}%")
-PY
-)
+TOTAL_COV=$(cov_total "$COVER_FILE")
 
 # ═══════════════════════════════════════════════════════════════
 # 2. Code metrics (no tests needed — fast)
@@ -195,17 +173,13 @@ while IFS= read -r line; do
 done < go.mod
 
 # ═══════════════════════════════════════════════════════════════
-# 5. Per-package coverage summary
+# 5. Per-package coverage summary (derived from the profile, not from the
+#    per-test-binary "coverage: X% of statements" lines, which under -coverpkg
+#    report one binary's contribution rather than the package's own coverage)
 # ═══════════════════════════════════════════════════════════════
 COVERAGE_ROWS=""
 if [ -s "$COVER_FILE" ]; then
-  while IFS= read -r line; do
-    pkg=$(echo "$line" | awk '{print $2}' | sed 's|github.com/42-v/vault42/||')
-    pct=$(echo "$line" | grep -oP '[0-9.]+% of statements' | grep -oP '[0-9.]+%' || true)
-    [ -n "$pkg" ] && [ -n "$pct" ] && COVERAGE_ROWS="${COVERAGE_ROWS}| \`${pkg}\` | ${pct} |
-"
-  done < <(grep -P '^ok\s.*coverage:' "$TEST_OUT")
-  COVERAGE_ROWS=$(echo "$COVERAGE_ROWS" | sort -t'|' -k3 -rn)
+  COVERAGE_ROWS=$(cov_pkg_table "$COVER_FILE")
 fi
 
 # ═══════════════════════════════════════════════════════════════

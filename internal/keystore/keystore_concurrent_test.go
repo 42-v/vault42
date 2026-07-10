@@ -1,9 +1,11 @@
 package keystore
 
 import (
+	"context"
 	"crypto/rsa"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestKeyStore_ConcurrentReadActiveKey verifies that concurrent reads of the
@@ -75,4 +77,43 @@ func TestKeyStore_StopZerosMasterKey(t *testing.T) {
 			t.Fatalf("master key byte %d not zeroed: %02x", i, b)
 		}
 	}
+}
+
+// TestKeyStore_StopWaitsForRefreshLoop verifies Stop() does not zero the master
+// key until the refresh loop has exited. The loop's Refresh reads masterKey
+// outside ks.mu, so zeroing it early is a data race on live key material.
+// A long tick interval keeps Refresh (which needs a pool) from ever running;
+// the loop exits via stopCh.
+func TestKeyStore_StopWaitsForRefreshLoop(t *testing.T) {
+	ks := &KeyStore{
+		masterKey:  make([]byte, 32),
+		publicKeys: make(map[string]*rsa.PublicKey),
+		stopCh:     make(chan struct{}),
+	}
+	ks.StartRefreshLoop(context.Background(), time.Hour)
+
+	done := make(chan struct{})
+	go func() {
+		ks.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return: it never joined the refresh loop")
+	}
+}
+
+// TestKeyStore_StopIsIdempotent verifies a second Stop() does not panic by
+// re-closing stopCh. Shutdown paths call Stop from both a defer and an error
+// branch, so a double call must be harmless.
+func TestKeyStore_StopIsIdempotent(t *testing.T) {
+	ks := &KeyStore{
+		masterKey:  make([]byte, 32),
+		publicKeys: make(map[string]*rsa.PublicKey),
+		stopCh:     make(chan struct{}),
+	}
+	ks.Stop()
+	ks.Stop()
 }

@@ -44,7 +44,7 @@ No code change is planned. If the threat model changes to include untrusted file
 
 **Severity:** Medium (platform limitation) | **Source:** M-13/M-14
 
-Secret files are overwritten with zeros and deleted after reading (`internal/config/secrets.go`). However, Go's immutable `string` type means that `ZeroString()` can only clear the slice header — the original bytes survive in heap memory until garbage collected. On copy-on-write filesystems (ZFS, Docker overlayfs), file overwriting may not erase the original blocks.
+Secret files are overwritten with zeros and deleted after reading (`internal/config/secrets.go`). However, Go's immutable `string` type means that `ZeroString()` can only clear the slice header -- the original bytes survive in heap memory until garbage collected. On copy-on-write filesystems (ZFS, Docker overlayfs), file overwriting may not erase the original blocks.
 
 **Why this is accepted:**
 
@@ -85,7 +85,7 @@ When `GetByTokenHash` returns nil (invalid session), the `SessionAuth` middlewar
 - **mTLS + loopback-only:** An attacker must be on the same node with a valid client certificate signed by the dedicated admin CA.
 - **SSH tunnel latency:** The gateway is accessed via SSH tunnel, adding network jitter that dwarfs sub-millisecond timing differences.
 - **DB query dominates:** The `GetByTokenHash` call itself always performs a DB query (even for misses), which dominates the timing regardless of hit/miss.
-- **6-layer enforcement:** Exploiting this requires bypassing hostNetwork, NetworkPolicy, mTLS, LocalOnly middleware, and RejectProxyHeaders — all before timing becomes relevant.
+- **6-layer enforcement:** Exploiting this requires bypassing hostNetwork, NetworkPolicy, mTLS, LocalOnly middleware, and RejectProxyHeaders -- all before timing becomes relevant.
 
 ---
 
@@ -116,7 +116,7 @@ Admin session tokens are stored in `sessionStorage`, accessible to any JavaScrip
 - **More restrictive, not less:** A single attacker's attempts consume the global budget, protecting all accounts.
 - **Per-account lockout:** The 5-attempt account lockout provides the per-account defense layer independently.
 - **Anti-enumeration:** Per-username rate limiting would leak username existence through rate-limit response differences.
-- **Two keys max:** Loopback-only means the map contains at most `127.0.0.1` and `::1` — no memory growth concern.
+- **Two keys max:** Loopback-only means the map contains at most `127.0.0.1` and `::1` -- no memory growth concern.
 
 ---
 
@@ -134,9 +134,24 @@ TLS config uses `RequireAndVerifyClientCert` with the CA pool but does not check
 
 ---
 
+### AR-10: KMS Unwrap Oracle Accepts Plain-Bearer Tokens When DPoP Is Disabled
+
+**Severity:** Low (by design) | **Source:** KMS unwrap review (0.8.6)
+
+`POST /kms/unwrap` is a key-release endpoint. When `VAULT_DPOP_ENABLED=false`, it authorizes on a plain Bearer client-credential token carrying the `kms:unwrap` scope, so a captured token could be replayed within its (short) TTL to re-release the plaintext.
+
+**Why this is accepted:**
+
+- **DPoP closes it when enabled:** with `VAULT_DPOP_ENABLED=true` the handler is wrapped so a fresh, single-use DPoP proof is mandatory; a captured Bearer token plus body cannot be replayed. Deployments that hold DPoP-bound kms tokens should enable it.
+- **Defense in depth already applied:** the endpoint is scope-gated (`kms:unwrap`), per-IP rate limited with fail-closed behaviour, mounted only when `KMS_ROOT_KEY_FILE` is set, and every attempt is synchronously audited.
+- **Oracle-resistant by construction:** all post-authorization failures collapse to one opaque `400 unwrap_failed`, so the endpoint leaks only success vs failure, never why an envelope was rejected, and never the KEK.
+- **Backward compatibility:** the plain-Bearer path keeps clients that cannot yet present DPoP proofs (e.g. the initial life42 kms client) working; the trade-off is documented at the mount site in `internal/server/server.go`.
+
+---
+
 ## Resolved Risks
 
-### AR-2: GitHub OAuth2 Without PKCE (S256) — RESOLVED
+### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED
 
 **Originally:** GitHub's OAuth2 implementation did not support PKCE, making S256 enforcement impossible for the GitHub provider.
 

@@ -794,7 +794,7 @@ Update the authenticated user's profile fields. Only fields included in the requ
 }
 ```
 
-All fields are optional (pointer semantics — omitted fields are not modified):
+All fields are optional (pointer semantics -- omitted fields are not modified):
 
 | Field | Type | Constraints |
 |-------|------|-------------|
@@ -1217,7 +1217,7 @@ curl -X DELETE https://vault42.example.com/user/identity \
 
 ### Encrypted Blob Storage
 
-Encrypted file storage with per-user quotas. Blobs are compressed (DEFLATE), encrypted (AES-256-GCM), and stored under a pseudonymous key derived via `HMAC-SHA256(userID + ":objects", hmac_secret)`. Blobs are immutable — they can be created and deleted but not updated.
+Encrypted file storage with per-user quotas. Blobs are compressed (DEFLATE), encrypted (AES-256-GCM), and stored under a pseudonymous key derived via `HMAC-SHA256(userID + ":objects", hmac_secret)`. Blobs are immutable -- they can be created and deleted but not updated.
 
 **Feature toggle:** Set `VAULT_BLOB_QUOTA_BYTES=0` to disable blob storage entirely. When disabled, blob endpoints are not registered and return 404.
 
@@ -1429,7 +1429,7 @@ curl -X DELETE https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef
 
 #### PUT /user/blobs/named/{name}
 
-Create or replace a **named blob**. Named blobs are addressed by a human-readable name (e.g. `session-data`, `preferences`) instead of a UUID. If a blob with the same name already exists for this user, it is replaced atomically (delete + insert). The name is stored as an HMAC hash in the database — the plaintext name never touches persistent storage.
+Create or replace a **named blob**. Named blobs are addressed by a human-readable name (e.g. `session-data`, `preferences`) instead of a UUID. If a blob with the same name already exists for this user, it is replaced atomically (delete + insert). The name is stored as an HMAC hash in the database -- the plaintext name never touches persistent storage.
 
 **Authentication:** Bearer token
 **Fingerprint:** Verified
@@ -2229,7 +2229,7 @@ If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=
 
 **Success response:** `302 Found` redirect to `{origin}/oauth/callback#code=...`
 
-Also sets the `refresh_token` HttpOnly cookie. The `code` is a one-time exchange code (60-second TTL) — call `POST /auth/oauth2/exchange` to retrieve the access token.
+Also sets the `refresh_token` HttpOnly cookie. The `code` is a one-time exchange code (60-second TTL) -- call `POST /auth/oauth2/exchange` to retrieve the access token.
 
 **Error responses:**
 
@@ -2349,6 +2349,59 @@ curl -X POST https://vault42.example.com/client/token \
 # Using form body
 curl -X POST https://vault42.example.com/client/token \
   -d "client_id=my-client&client_secret=my-secret&scope=user:read"
+```
+
+---
+
+### KMS
+
+---
+
+#### POST /kms/unwrap
+
+KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
+
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. When `VAULT_DPOP_ENABLED=true` the request must also carry a fresh, single-use DPoP proof (anti-replay).
+**Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `kid` | string | Yes | Key identifier the envelope was wrapped under |
+| `ciphertext` | string | Yes | Base64 (std) envelope: `nonce \|\| AES-256-GCM ciphertext`, with `kid` bound as AAD |
+
+**Success response (200 OK):**
+
+```json
+{
+  "plaintext": "TFVLU2VkLWtleS1tYXRlcmlhbC4uLg=="
+}
+```
+
+`plaintext` is the base64 (std) unwrapped key.
+
+**Error responses:**
+
+Every post-authorization failure (malformed body, bad base64, empty `kid`, tampered ciphertext, wrong KEK) collapses to a single opaque response so the endpoint cannot be used as a decryption oracle:
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `unwrap_failed` | Any envelope that does not unwrap. The status, body, and audit outcome are identical across all failure modes. |
+| 401 | `unauthorized` | Missing or invalid access token (or missing DPoP proof when enabled) |
+| 403 | `insufficient_scope` | Token lacks the `kms:unwrap` scope |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 503 | `service_unavailable` | Rate-limiter backing store is down (fail-closed) |
+
+Every attempt is written synchronously to the audit log (`kid` and outcome only; key material is never logged). Use the `vault kms wrap` CLI to produce envelopes this endpoint accepts.
+
+**curl example:**
+
+```bash
+curl -X POST https://vault42.example.com/kms/unwrap \
+  -H "Authorization: Bearer $KMS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"kid":"data-root-v1","ciphertext":"'"$ENVELOPE_B64"'"}'
 ```
 
 ---
@@ -2547,6 +2600,7 @@ curl https://vault42.example.com/.well-known/openid-configuration
 | `GET` | `/auth/oauth2/callback/{provider}` | None | -- | OAuth2 callback |
 | `POST` | `/auth/oauth2/exchange` | None | -- | Exchange OAuth2 one-time code for tokens |
 | `POST` | `/client/token` | Basic | 10/min | Client credentials grant |
+| `POST` | `/kms/unwrap` | Scope `kms:unwrap` | per-IP | KEK envelope-unwrap oracle (only when `KMS_ROOT_KEY_FILE` set) |
 | `GET` | `/.well-known/jwks.json` | None | -- | JWKS public keys |
 | `GET` | `/.well-known/openid-configuration` | None | -- | OpenID Connect discovery |
 
@@ -2557,6 +2611,7 @@ curl https://vault42.example.com/.well-known/openid-configuration
 - **Bearer + Confirm** -- Requires Bearer token + recent password confirmation via `POST /auth/confirm`
 - **Bearer/Challenge** -- Accepts both standard Bearer tokens and 2FA challenge tokens
 - **Basic** -- HTTP Basic authentication with client credentials
+- **Scope `kms:unwrap`** -- Bearer client-credential token carrying the `kms:unwrap` scope; DPoP-bound when `VAULT_DPOP_ENABLED=true`
 - **Admin** -- Key management is handled by the admin gateway (mTLS + RBAC); not exposed on the main vault42 binary
 
 ---

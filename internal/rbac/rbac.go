@@ -33,6 +33,9 @@ const (
 	RolesList      Permission = "roles:list"
 	RolesCreate    Permission = "roles:create"
 	RolesDelete    Permission = "roles:delete"
+	EmailRead      Permission = "email:read"
+	EmailWrite     Permission = "email:write"
+	EmailDelete    Permission = "email:delete"
 )
 
 // Role represents an admin role. Roles are strictly hierarchical:
@@ -67,6 +70,7 @@ var viewerPerms = map[Permission]bool{
 	ConfigRead:   true,
 	MetricsRead:  true,
 	RolesList:    true,
+	EmailRead:    true,
 }
 
 // operatorPerms are additional permissions granted to the operator role (on top of viewer).
@@ -93,6 +97,8 @@ var superAdminPerms = map[Permission]bool{
 	RolesCreate:   true,
 	RolesDelete:   true,
 	UsersImport:   true,
+	EmailWrite:    true,
+	EmailDelete:   true,
 }
 
 // HasPermission checks whether the given role has the specified permission.
@@ -120,11 +126,13 @@ func PermissionsForRole(role Role) []Permission {
 	var perms []Permission
 	all := []Permission{
 		KeysList, KeysRotate, KeysRevoke, AuditRead,
-		UsersList, UsersRead, UsersLock, UsersUnlock, UsersDelete,
+		UsersList, UsersRead, UsersLock, UsersUnlock, UsersDelete, UsersImport,
 		SessionsList, SessionsRevoke,
 		ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigRead, ConfigWrite, MetricsRead,
 		AdminsManage, AdminsCreate, AdminsRevoke,
+		RolesList, RolesCreate, RolesDelete,
+		EmailRead, EmailWrite, EmailDelete,
 	}
 	for _, p := range all {
 		if HasPermission(role, p) {

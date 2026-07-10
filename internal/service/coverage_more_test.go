@@ -157,7 +157,7 @@ func TestDoSendEmailOTP_CacheSetError(t *testing.T) {
 		appName:     "TestVault",
 	}
 
-	if err := s.doSendEmailOTP(context.Background(), "user-1", "user@example.com"); err == nil {
+	if err := s.doSendEmailOTP(context.Background(), "user-1", "user@example.com", ""); err == nil {
 		t.Fatal("expected error when caching the OTP signature fails")
 	}
 }
@@ -174,7 +174,7 @@ func TestDoSendEmailOTP_SendError(t *testing.T) {
 		appName:     "TestVault",
 	}
 
-	if err := s.doSendEmailOTP(context.Background(), "user-1", "user@example.com"); err == nil {
+	if err := s.doSendEmailOTP(context.Background(), "user-1", "user@example.com", ""); err == nil {
 		t.Fatal("expected error when OTP email delivery fails")
 	}
 	if !sent {

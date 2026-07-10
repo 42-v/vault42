@@ -98,6 +98,7 @@ type AuthService struct {
 	hibp               *HIBPClient
 	cache              cache.Cache
 	emailSender        vaultemail.Sender
+	mailer             *vaultemail.Mailer
 	honeypotAlert      *honeypot.Alerter
 	metrics            *metrics.Collector
 	maxSessionsPerUser int
@@ -133,7 +134,7 @@ func NewAuthService(
 	hibpEnabled bool,
 	hmacSecret []byte,
 ) *AuthService {
-	return &AuthService{
+	s := &AuthService{
 		users: users, tokens: tokens, devices: devices,
 		pwHistory: pwHistory, tokenSvc: tokenSvc, mfaSvc: mfaSvc,
 		auditLog: auditLog, hibp: hibp, cache: c, emailSender: emailSender,
@@ -141,6 +142,30 @@ func NewAuthService(
 		minPwLength: minPwLength, hibpEnabled: hibpEnabled,
 		hmacSecret: hmacSecret,
 	}
+	// Default mailer: global branding only, no per-app overrides. SetMailer
+	// upgrades it with an OverrideStore + allowlist at wiring time.
+	s.mailer = vaultemail.NewMailer(nil, emailSender, nil, vaultemail.Branding{AppName: appName}, nil)
+	return s
+}
+
+// SetMailer replaces the email mailer to enable per-app white-label branding and
+// template overrides (resolved through an email.OverrideStore). Called once at
+// wiring time; a nil mailer is ignored.
+func (s *AuthService) SetMailer(m *vaultemail.Mailer) {
+	if m != nil {
+		s.mailer = m
+	}
+}
+
+// emailMailer returns the configured mailer, or a global-branding fallback built
+// from the sender. The fallback covers services constructed as struct literals
+// (tests) that bypass NewAuthService; the send-site guards ensure emailSender is
+// non-nil before this is reached.
+func (s *AuthService) emailMailer() *vaultemail.Mailer {
+	if s.mailer != nil {
+		return s.mailer
+	}
+	return vaultemail.NewMailer(nil, s.emailSender, nil, vaultemail.Branding{AppName: s.appName}, nil)
 }
 
 // SetRateLimitRepo configures the PostgreSQL-backed rate limit repository
@@ -296,14 +321,16 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput, ip stri
 
 	// Send verification email (non-critical — log but don't fail registration)
 	if s.cache != nil && s.emailSender != nil {
-		go s.sendVerificationEmail(email, userID, sanitize.RedirectPath(input.RedirectTo)) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
+		app := vaultemail.AppFromContext(ctx)
+		go s.sendVerificationEmail(email, userID, app, sanitize.RedirectPath(input.RedirectTo)) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
 	}
 
 	return &RegisterResult{UserID: userID, Email: email}, nil
 }
 
-// sendVerificationEmail generates a verification token, stores it, and sends the email.
-func (s *AuthService) sendVerificationEmail(to, userID, redirectTo string) {
+// sendVerificationEmail generates a verification token, stores it, and sends the
+// email. app is the white-label tenant slug (may be empty for global branding).
+func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) {
 	ctx := context.Background()
 
 	token, err := vaultcrypto.RandomHex(32)
@@ -323,11 +350,9 @@ func (s *AuthService) sendVerificationEmail(to, userID, redirectTo string) {
 		verifyURL += "&redirect=" + url.QueryEscape(redirectTo)
 	}
 
-	subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplateVerification, vaultemail.TemplateData{
-		AppName: s.appName,
-		URL:     verifyURL,
-	})
-	if err := s.emailSender.Send(ctx, to, subject, html, text); err != nil {
+	if err := s.emailMailer().Send(ctx, app, vaultemail.TemplateVerification, to, vaultemail.TemplateData{
+		URL: verifyURL,
+	}); err != nil {
 		log.Printf("auth: failed to send verification email to %s: %v", to, err)
 	}
 }
@@ -335,7 +360,7 @@ func (s *AuthService) sendVerificationEmail(to, userID, redirectTo string) {
 // sendImportClaimLink mints a one-time reset token (compatible with the
 // password reset-confirm flow) for an imported account and emails the magic
 // link. Fire-and-forget; failures are logged, not surfaced (anti-enumeration).
-func (s *AuthService) sendImportClaimLink(userID, emailAddr string) {
+func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
 	if s.cache == nil || s.emailSender == nil {
 		return
 	}
@@ -360,11 +385,9 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr string) {
 		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, time.Hour) // #nosec G104 -- reverse map for invalidation, best-effort
 
 		claimURL := s.origin + "/reset-password?token=" + token + "&import=1"
-		subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplatePasswordReset, vaultemail.TemplateData{
-			AppName: s.appName,
-			URL:     claimURL,
-		})
-		if err := s.emailSender.Send(ctx, emailAddr, subject, html, text); err != nil {
+		if err := s.emailMailer().Send(ctx, app, vaultemail.TemplatePasswordReset, emailAddr, vaultemail.TemplateData{
+			URL: claimURL,
+		}); err != nil {
 			log.Printf("auth: failed to send import claim email to %s: %v", emailAddr, err)
 		}
 	}()
@@ -402,6 +425,9 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		s.metrics.RecordLoginAttempt()
 	}
 	email := strings.ToLower(strings.TrimSpace(input.Email))
+	// White-label tenant for any auth email sent during this login (verification
+	// resend, import claim, lockout alert, email-OTP). Empty => global branding.
+	app := vaultemail.AppFromContext(ctx)
 
 	// Honeypot: trap user check — return fake tokens to deceive attackers
 	if s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email) {
@@ -505,7 +531,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 			return nil, err
 		}
-		s.sendImportClaimLink(user.ID, user.Email)
+		s.sendImportClaimLink(user.ID, user.Email, app)
 		s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"import_claim": true}, 0)
 		return &LoginResult{ImportClaimRequired: true}, nil
@@ -532,12 +558,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
 			if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
 				go func() { // #nosec G118 -- intentional: email send outlives HTTP request
-					subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplateAccountLocked, vaultemail.TemplateData{
-						AppName: s.appName,
-						IP:      ip,
-					})
 					// Email is best-effort.
-					_ = s.emailSender.Send(context.Background(), user.Email, subject, html, text)
+					_ = s.emailMailer().Send(context.Background(), app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
+						IP: ip,
+					})
 				}()
 			}
 		}
@@ -585,7 +609,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
-			go s.sendEmailOTP(user.ID, user.Email) // #nosec G118 -- intentional: email OTP send outlives HTTP request
+			go s.sendEmailOTP(user.ID, user.Email, app) // #nosec G118 -- intentional: email OTP send outlives HTTP request
 			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
@@ -851,13 +875,13 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 // SendEmailOTP generates a 6-digit code, HMACs it, caches the signature, and sends the code via email.
 func (s *AuthService) SendEmailOTP(ctx context.Context, userID, emailAddr string) error {
-	return s.doSendEmailOTP(ctx, userID, emailAddr)
+	return s.doSendEmailOTP(ctx, userID, emailAddr, vaultemail.AppFromContext(ctx))
 }
 
 // sendEmailOTP is the fire-and-forget version called from the login flow goroutine.
-func (s *AuthService) sendEmailOTP(userID, emailAddr string) {
+func (s *AuthService) sendEmailOTP(userID, emailAddr, app string) {
 	ctx := context.Background()
-	if err := s.doSendEmailOTP(ctx, userID, emailAddr); err != nil {
+	if err := s.doSendEmailOTP(ctx, userID, emailAddr, app); err != nil {
 		log.Printf("auth: failed to send email OTP to %s: %v", userID, err)
 	}
 }
@@ -881,7 +905,7 @@ func (s *AuthService) emailOTPAllowed(ctx context.Context, userID string) bool {
 	return !hasStrongMethod && s.mfaSvc.IsRequired()
 }
 
-func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr string) error {
+func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr, app string) error {
 	if !s.emailOTPAllowed(ctx, userID) {
 		return ErrEmailOTPNotAllowed
 	}
@@ -901,11 +925,9 @@ func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr stri
 		return fmt.Errorf("cache OTP: %w", err)
 	}
 
-	subject, html, text := vaultemail.RenderTemplate(vaultemail.TemplateEmailOTP, vaultemail.TemplateData{
-		AppName: s.appName,
-		Code:    code,
-	})
-	if err := s.emailSender.Send(ctx, emailAddr, subject, html, text); err != nil {
+	if err := s.emailMailer().Send(ctx, app, vaultemail.TemplateEmailOTP, emailAddr, vaultemail.TemplateData{
+		Code: code,
+	}); err != nil {
 		return fmt.Errorf("send OTP email: %w", err)
 	}
 	return nil

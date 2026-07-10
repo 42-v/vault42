@@ -37,7 +37,7 @@ func TestGetRequestID(t *testing.T) {
 		want string
 	}{
 		{"background", context.Background(), ""},
-		{"no key", context.WithValue(context.Background(), "other", "x"), ""},
+		{"no key", context.WithValue(context.Background(), ctxKey("other"), "x"), ""},
 		{"wrong type", context.WithValue(context.Background(), RequestIDKey, 123), ""},
 		{"valid", func() context.Context {
 			ctx := context.WithValue(context.Background(), RequestIDKey, "req-abc123")

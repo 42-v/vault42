@@ -25,11 +25,12 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/config"
+	"github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/oauth2"
-	pgrepo "github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/redis"
+	pgrepo "github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/server"
 	"github.com/42-v/vault42/internal/service"
 )
@@ -222,7 +223,7 @@ func newCapturingEmailSender() *capturingEmailSender {
 	}
 }
 
-func (c *capturingEmailSender) Send(ctx context.Context, to, subject, htmlBody, textBody string) error {
+func (c *capturingEmailSender) Send(ctx context.Context, _ email.Address, to, subject, htmlBody, textBody string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	body := textBody

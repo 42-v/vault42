@@ -56,12 +56,23 @@ var (
 	spaceRe = regexp.MustCompile(`\s+`)
 )
 
-// unsafePattern matches dangerous content that must not appear in custom templates.
+// unsafePattern matches dangerous content that must not appear in custom email
+// templates. Beyond active scripting it also rejects the passive auto-loading
+// vectors a credential-bearing email must never carry — meta-refresh redirects,
+// <base> hijacks, <link>/<style>/<svg> external loads, any <form>, data: URIs,
+// and CSS url() — so an admin-authored template cannot beacon a live
+// verification/reset token or OTP code out to an arbitrary host.
+// It allows benign structure a real HTML email needs (a <meta charset>/viewport,
+// a <style> block of inline CSS) but rejects the beacon-capable subset: any
+// http-equiv meta (refresh redirect), <base>, <link>, <svg>, <form>, data: URIs,
+// and CSS url().
 var unsafePattern = regexp.MustCompile(
 	`(?i)` +
 		`<\s*script|<\s*iframe|<\s*object|<\s*embed|` +
-		`<\s*form\s+action\s*=|` +
-		`javascript\s*:|` +
+		`<\s*base|<\s*link|<\s*svg|<\s*form|` +
+		`<\s*meta[^>]*http-equiv|` +
+		`javascript\s*:|data\s*:|` +
+		`\burl\s*\(|` +
 		`\bon\w+\s*=|` +
 		`\{\{\s*call\s|` +
 		`\{\{\s*js\s`,
@@ -204,7 +215,7 @@ func (r *TemplateRenderer) Render(templateName string, data TemplateData) (strin
 // validateTemplate rejects templates containing unsafe patterns.
 func validateTemplate(data []byte) error {
 	if unsafePattern.Match(data) {
-		return fmt.Errorf("template contains forbidden content (script, iframe, event handlers, or call/js directives)")
+		return fmt.Errorf("template contains forbidden content (script/iframe/object/embed/meta/base/link/style/svg/form tags, javascript:/data: URIs, css url(), event handlers, or call/js directives)")
 	}
 	return nil
 }

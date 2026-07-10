@@ -35,6 +35,20 @@ type Handler struct {
 	auditLog    *audit.Logger
 	masterKey   []byte
 	pepper      string
+
+	emailBranding   repository.EmailBrandingRepository
+	emailTemplates  repository.EmailTemplateRepository
+	maxTemplateSize int
+}
+
+// SetEmailRepos wires the per-app email branding + template repositories,
+// enabling the /admin/email-branding and /admin/email-templates endpoints.
+// Optional (nil → those handlers return 503). maxTemplateSize caps custom
+// template body size in bytes; <= 0 disables the size check.
+func (h *Handler) SetEmailRepos(branding repository.EmailBrandingRepository, templates repository.EmailTemplateRepository, maxTemplateSize int) {
+	h.emailBranding = branding
+	h.emailTemplates = templates
+	h.maxTemplateSize = maxTemplateSize
 }
 
 // SetAppRoleRepo wires the custom-roles catalog repository, enabling the

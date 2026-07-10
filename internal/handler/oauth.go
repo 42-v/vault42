@@ -124,7 +124,9 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 
 	authURL := provider.AuthURL(state, nonce, challenge)
 	if !isSafeAuthorizeRedirect(authURL) {
-		log.Printf("oauth: provider %q produced an unsafe authorize URL", providerName)
+		// providerName reaches us from the request path. Quote it so a crafted
+		// value cannot forge extra log records (CWE-117).
+		log.Printf("oauth: provider %s produced an unsafe authorize URL", strconv.Quote(providerName))
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}

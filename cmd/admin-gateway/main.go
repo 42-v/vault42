@@ -158,6 +158,11 @@ func main() {
 		ks, auditLogger, cfg.MasterKey, cfg.Pepper,
 	)
 	apiHandler.SetAppRoleRepo(postgres.NewAppRoleRepo(db))
+	apiHandler.SetEmailRepos(
+		postgres.NewEmailBrandingRepo(db),
+		postgres.NewEmailTemplateRepo(db),
+		envInt("VAULT_MAX_EMAIL_TEMPLATE_SIZE", 65536),
+	)
 
 	// Wire the account-erasure service (DELETE /admin/users/{id}). It needs the
 	// HMAC secret to derive identity/blob pseudonyms; without it the endpoint
@@ -168,7 +173,7 @@ func main() {
 		if len(cfg.RecoveryPublicKeyPEM) > 0 {
 			recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)
 			if err != nil {
-				auditLogger.Close(ctx)
+				_ = auditLogger.Close(ctx)
 				log.Fatalf("admin-gateway: failed to load recovery public key: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 			}
 		}
@@ -190,12 +195,12 @@ func main() {
 	// Load mTLS configuration
 	clientCA, err := os.ReadFile(cfg.ClientCAFile)
 	if err != nil {
-		auditLogger.Close(ctx)
+		_ = auditLogger.Close(ctx)
 		log.Fatalf("admin-gateway: failed to read client CA: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 	}
 	clientCAPool := x509.NewCertPool()
 	if !clientCAPool.AppendCertsFromPEM(clientCA) {
-		auditLogger.Close(ctx)
+		_ = auditLogger.Close(ctx)
 		log.Fatal("admin-gateway: failed to parse client CA certificate")
 	}
 

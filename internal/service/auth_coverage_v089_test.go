@@ -88,7 +88,7 @@ func TestSendImportClaimLink_StoresResetTokenAndEmailsClaimURL(t *testing.T) {
 		return nil
 	}
 
-	svc.sendImportClaimLink("user-42", "rider@legacy.test")
+	svc.sendImportClaimLink("user-42", "rider@legacy.test", "")
 
 	var sawReset, sawReverse bool
 	timeout := time.After(5 * time.Second)
@@ -134,7 +134,7 @@ func TestSendImportClaimLink_NilDepsNoEmail(t *testing.T) {
 		return nil
 	}
 
-	svc.sendImportClaimLink("user-42", "rider@legacy.test")
+	svc.sendImportClaimLink("user-42", "rider@legacy.test", "")
 
 	select {
 	case <-sent:
@@ -165,7 +165,7 @@ func TestSendEmailOTPFireAndForget_CachesAndSends(t *testing.T) {
 
 	// sendEmailOTP runs doSendEmailOTP synchronously in this caller (the
 	// goroutine is at the Login call-site, not inside the method).
-	svc.sendEmailOTP("user-otp", "otp@example.com")
+	svc.sendEmailOTP("user-otp", "otp@example.com", "")
 
 	if gotKey != "email_otp:user-otp" {
 		t.Errorf("cache key = %q, want email_otp:user-otp", gotKey)
@@ -195,7 +195,7 @@ func TestSendEmailOTPFireAndForget_NotAllowedNoSend(t *testing.T) {
 		return nil
 	}
 
-	svc.sendEmailOTP("user-x", "x@example.com")
+	svc.sendEmailOTP("user-x", "x@example.com", "")
 
 	if emailed {
 		t.Error("email-OTP must not be sent when not an allowed factor")
