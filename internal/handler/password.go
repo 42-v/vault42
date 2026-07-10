@@ -30,6 +30,7 @@ type PasswordHandler struct {
 	pwHistory   repository.PasswordHistoryRepository
 	tokens      repository.RefreshTokenRepository
 	sender      email.Sender
+	mailer      *email.Mailer
 	auditLog    *audit.Logger
 	cache       cache.Cache
 	origin      string
@@ -73,6 +74,7 @@ func NewPasswordHandler(
 		pwHistory:   pwHistory,
 		tokens:      tokens,
 		sender:      sender,
+		mailer:      email.NewMailer(nil, sender, nil, email.Branding{AppName: appName}, nil),
 		auditLog:    auditLog,
 		cache:       c,
 		origin:      origin,
@@ -81,6 +83,14 @@ func NewPasswordHandler(
 		minLength:   minLength,
 		hibp:        hibp,
 		hibpEnabled: hibpEnabled,
+	}
+}
+
+// SetMailer upgrades the handler's mailer to enable per-app white-label branding
+// and template overrides. Called once at wiring time; a nil mailer is ignored.
+func (h *PasswordHandler) SetMailer(m *email.Mailer) {
+	if m != nil {
+		h.mailer = m
 	}
 }
 
@@ -131,13 +141,12 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	// Use Background ctx since the request ctx is canceled after response.
 	if h.sender != nil {
 		resetURL := h.origin + "/reset-password?token=" + token
+		app := email.AppFromContext(r.Context())
 		go func() { // #nosec G118 -- intentional: email send outlives HTTP request, uses Background ctx
-			subject, html, text := email.RenderTemplate(email.TemplatePasswordReset, email.TemplateData{
-				AppName: h.appName,
-				URL:     resetURL,
-			})
 			// Email send is best-effort; failure logged inside Send.
-			_ = h.sender.Send(context.Background(), user.Email, subject, html, text)
+			_ = h.mailer.Send(context.Background(), app, email.TemplatePasswordReset, user.Email, email.TemplateData{
+				URL: resetURL,
+			})
 		}()
 	}
 

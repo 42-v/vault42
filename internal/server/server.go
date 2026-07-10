@@ -26,6 +26,7 @@ import (
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/keystore"
+	"github.com/42-v/vault42/internal/kms"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/oauth2"
@@ -57,6 +58,9 @@ type Deps struct {
 
 	// Email
 	EmailSender email.Sender
+	// Mailer applies per-app white-label branding/templates. Optional: when nil,
+	// handlers fall back to their constructor-built global mailer.
+	Mailer *email.Mailer
 
 	// OAuth2 providers
 	OAuthProviders map[string]oauth2.Provider
@@ -81,6 +85,11 @@ type Deps struct {
 
 	// KeyStore (nil unless VAULT_KEY_ROTATION_DB=true)
 	KeyStore *keystore.KeyStore
+
+	// KMS backs the POST /kms/unwrap envelope-unwrap oracle (life42 data-root
+	// re-root). Nil unless a KMS root key is configured (KMS_ROOT_KEY_FILE), in
+	// which case the endpoint is not mounted at all.
+	KMS *kms.Service
 
 	// Identity & Blob storage
 	Identity repository.IdentityRepository
@@ -132,6 +141,7 @@ func (s *Server) Start() error {
 		h = honeypot.LoggingMiddleware(s.deps.HoneypotAlerter)(h)
 	}
 	h = middleware.MaxBodyWithExemptions(8*1024, []string{"/user/blobs"})(h) // 8KB max body; blob uploads enforce their own limit
+	h = middleware.AppContext(h)                                             // resolve X-Vault-App tenant for white-label emails
 	h = middleware.CORS(cfg.Origin, parseCORSOrigins(cfg.CORSOrigins), cfg.CORSAllowAll)(h)
 	h = middleware.IPAccess()(h)
 	h = middleware.SecurityHeaders(cfg.ServeFrontend)(h)
@@ -192,6 +202,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	authHandler := handler.NewAuthHandler(d.AuthSvc, d.Users, d.Cache, d.AuditLog, d.Pepper, secureCookies)
 	userHandler := handler.NewUserHandler(d.Users, d.Devices, d.Tokens, d.MFASvc)
 	passwordHandler := handler.NewPasswordHandler(d.Users, d.PwHistory, d.Tokens, d.EmailSender, d.AuditLog, d.Cache, cfg.Origin, cfg.AppName, d.Pepper, cfg.PasswordMinLength, d.HIBP, d.HIBPEnabled)
+	passwordHandler.SetMailer(d.Mailer) // share the white-label mailer (nil is ignored)
 	totpHandler := handler.NewTOTPHandler(d.TOTP, d.MasterKey, cfg.Origin, d.Cache, d.AuthSvc, secureCookies)
 	// Initialize WebAuthn
 	var webauthnHandler *handler.WebAuthnHandler
@@ -456,6 +467,32 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	mux.Handle("GET /user/data-export", dataExportRL(authed(dataExportHandler.Export)))
+
+	// KMS envelope-unwrap oracle (POST /kms/unwrap) — only mounted when a KMS
+	// root key is configured. Requires an authenticated client-credential token
+	// carrying the "kms:unwrap" scope; rate limited per-IP as a machine endpoint.
+	//
+	// This is a key-release oracle: every reachable request unwraps a data-root.
+	// Fail closed on a cache outage (like login/register/reset/TOTP) so the per-pod
+	// in-memory fallback cannot multiply the effective limit across replicas and
+	// widen the release rate under a Redis failure (audit L4).
+	//
+	// When DPoP is enabled (VAULT_DPOP_ENABLED), wrap the handler in dpopWrap —
+	// applied INSIDE authMw+RequireScope so the DPoP middleware sees the resolved
+	// client claims. For a DPoP-bound kms token (cnf.jkt), this makes a fresh,
+	// per-request DPoP proof mandatory and single-use (JTI replay cache), so a
+	// captured Bearer token + body cannot be replayed within the access-token TTL
+	// to re-release the same plaintext. Trade-off: when the flag is off (or the
+	// life42 kms client cannot present a DPoP proof / holds a non-bound token) the
+	// plain-Bearer path stands, and replay protection then rests on the short
+	// access-token TTL + TLS + per-IP rate limit alone.
+	if d.KMS != nil {
+		kmsHandler := handler.NewKMSHandler(d.KMS, d.AuditLog)
+		kmsUnwrapRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		}, rlEnabled)
+		mux.Handle("POST /kms/unwrap", kmsUnwrapRL(authMw(middleware.RequireScope("kms:unwrap")(dpopWrap(http.HandlerFunc(kmsHandler.Unwrap))))))
+	}
 
 	// Embedded frontend (SPA catch-all) — off by default, enabled via VAULT_SERVE_FRONTEND or honeypot profile
 	if cfg.ServeFrontend {

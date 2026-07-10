@@ -10,7 +10,7 @@ Three mechanisms work together:
 
 1. **Environment variables** -- all settings are read from env vars at startup.
 2. **Profiles** -- preset defaults for production, dev, and embedded deployments. The profile is selected via `VAULT_PROFILE` and fills in any env vars you did not set.
-3. **`_FILE` convention for secrets** -- sensitive values are never placed directly in env vars. Instead, a `_FILE`-suffixed variable points to a file containing the secret. The file is read, then zeroed on disk.
+3. **`_FILE` convention for secrets** -- sensitive values are never placed directly in env vars. Instead, a `_FILE`-suffixed variable points to a file containing the secret. The file is read into memory; with `VAULT_SECRET_FILE_CONSUME=true` it is then zeroed and removed from disk (opt-in, off by default).
 
 The startup sequence is: read env vars, apply profile defaults for unset fields, load secrets from `_FILE` paths.
 
@@ -70,7 +70,7 @@ Note: In the dev profile, if you explicitly set an env var (e.g., `LOG_LEVEL=inf
 | `LISTEN_ADDR` | string | `:8443` | No | Address and port the server binds to. Set by profile if unset. |
 | `VAULT_ORIGIN` | string | *(none)* | Yes | Public-facing URL (e.g., `https://auth.example.com`). Used for CORS `Access-Control-Allow-Origin`, JWT issuer claim, cookie domain, and WebAuthn RP ID. |
 | `LOG_LEVEL` | string | `warn` | No | Log verbosity. Profile defaults: `warn` (production), `debug` (dev), `info` (embedded). |
-| `VAULT_APP_NAME` | string | `Vault42` | No | Application display name used in email templates and UI. |
+| `VAULT_APP_NAME` | string | `The Vault` | No | Application display name used in email templates, the WebAuthn RP name, and UI. |
 | `VAULT_LOGO_URL` | string | *(none)* | No | URL to application logo for email templates. |
 | `VAULT_PRIMARY_COLOR` | string | `#00FF42` | No | Primary branding color hex code for email templates. |
 | `VAULT_AUTO_MIGRATE` | bool | `false` | No | Run database migrations automatically at startup. Profile defaults: `false` (production), `true` (dev, embedded). |
@@ -134,11 +134,12 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | `VAULT_MAX_SESSIONS_PER_USER` | int | `10` | No | Maximum concurrent refresh token families per user. Oldest sessions are revoked when the limit is exceeded. |
 | `VAULT_RATE_LIMIT_ENABLED` | bool | `true` | No | Enable rate limiting on authentication endpoints. Defaults to `true`; in non-dev profiles startup refuses to run with it disabled unless `VAULT_ALLOW_RATE_LIMIT_DISABLED=true`. |
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | bool | `false` | No | Escape hatch to run a non-dev profile with rate limiting disabled (e.g. when an upstream gateway handles it). Without it, disabling rate limiting fails startup. |
-| `VAULT_DPOP_ENABLED` | bool | `false` | No | Enable DPoP (Demonstrating Proof-of-Possession) validation on token endpoints per RFC 9449. When enabled, the DPoP middleware validates proof headers on `/auth/login`, `/auth/refresh`, and 2FA verify endpoints. |
+| `VAULT_DPOP_ENABLED` | bool | `false` | No | Enable DPoP (Demonstrating Proof-of-Possession) validation on token endpoints per RFC 9449. When enabled, the DPoP middleware validates proof headers on `/auth/login`, `/auth/refresh`, the 2FA verify endpoints, and the `POST /kms/unwrap` key-release oracle (single-use anti-replay). |
+| `KMS_ROOT_KEY_FILE` | string | *(none)* | No | Path to a file containing the KMS root secret (at least 32 bytes). Per-kid KEKs are derived from it via HKDF-SHA256, kept cryptographically separate from the master key. When unset, the `POST /kms/unwrap` envelope-unwrap oracle is not mounted. See [Secret Loading](#secret-loading-_file-convention). |
 | `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. Useful when running behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading). |
 | `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). |
 | `REAL_IP_HEADER` | string | *(none)* | No | HTTP header containing the real client IP from a trusted proxy. Only read when the direct connection is from a trusted proxy. Examples: `CF-Connecting-IP` (Cloudflare), `X-Real-IP` (nginx). Empty = use XFF parsing only. |
-| `VAULT_TLS_FINGERPRINT_HEADER` | string | *(none)* | No | HTTP header containing the client's TLS fingerprint (e.g. JA4) set by the TLS-terminating proxy. Since Vault42 runs behind a reverse proxy, it cannot compute TLS fingerprints directly — the proxy must extract the fingerprint during the TLS handshake and pass it as a header. The value is included in the device fingerprint hash. Empty = TLS fingerprint field remains empty (backward compatible). Example: `X-TLS-Fingerprint`. |
+| `VAULT_TLS_FINGERPRINT_HEADER` | string | *(none)* | No | HTTP header containing the client's TLS fingerprint (e.g. JA4) set by the TLS-terminating proxy. Since Vault42 runs behind a reverse proxy, it cannot compute TLS fingerprints directly; the proxy must extract the fingerprint during the TLS handshake and pass it as a header. The value is included in the device fingerprint hash. Empty = TLS fingerprint field remains empty (backward compatible). Example: `X-TLS-Fingerprint`. |
 
 ### IP Access Control & Geo-Fencing
 
@@ -152,7 +153,7 @@ Optional IP-based access control and geographic restrictions. All lists are empt
 | `GEO_ALLOWLIST` | string | *(none)* | No | Comma-separated country codes. When set, only matching countries are allowed. Requires `GEO_IP_HEADER`. |
 | `GEO_BLOCKLIST` | string | *(none)* | No | Comma-separated country codes. Matching countries are denied (403). Requires `GEO_IP_HEADER`. Use `T1` for Tor exit nodes (Cloudflare). |
 
-The IP blocklist supports runtime updates via `AddToIPBlocklist()` / `RemoveFromIPBlocklist()` — atomic copy-on-write, zero read contention.
+The IP blocklist supports runtime updates via `AddToIPBlocklist()` / `RemoveFromIPBlocklist()`: atomic copy-on-write, zero read contention.
 
 **Evaluation order:** IP allowlist → IP blocklist → Geo allowlist → Geo blocklist. Health endpoints (`/healthz`, `/readyz`) bypass all checks.
 
@@ -294,10 +295,12 @@ All sensitive configuration values use the `_FILE` suffix convention. The env va
 1. Reads the env var (e.g., `MASTER_KEY_FILE=/run/secrets/master-key`).
 2. Reads the file at that path.
 3. Trims leading/trailing whitespace from the contents.
-4. **Zeros the file on disk** (overwrites with null bytes) as defense in depth.
+4. If `VAULT_SECRET_FILE_CONSUME=true`, zeros **and removes** the file (defense in depth). By default the file is left intact: the canonical deployment mounts secrets read-only where zeroing is a no-op, and on a writable real keyfile an unconditional wipe would destroy the operator's secret on first read.
 5. Stores the value in memory only.
 
 This design ensures secrets never appear in environment variable listings (`/proc/*/environ`, `docker inspect`, Kubernetes `kubectl describe pod`, etc.).
+
+`VAULT_SECRET_FILE_CONSUME` (bool, default `false`): when `true`, every `_FILE` secret is zeroed and deleted from disk after it is read. Leave it unset when the same keyfile must survive a restart.
 
 ### Variables with `_FILE` Variants
 
@@ -482,7 +485,7 @@ export REDIS_PASS_FILE=/run/secrets/redis-password
 export VAULT_HONEYPOT_WEBHOOK=https://alerts.example.com/honeypot
 export VAULT_HONEYPOT_TRAP_USERS=admin,root,administrator,sa,test,user
 
-# Email (Mailpit or discard — never send real emails from a honeypot)
+# Email (Mailpit or discard, never send real emails from a honeypot)
 export SMTP_HOST=honeypot-mailpit
 export SMTP_PORT=1025
 export VAULT_EMAIL_FROM=vault42@decoy.example.com

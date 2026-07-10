@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -241,7 +243,11 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 	// treats this as evidence the authenticator may have been cloned. Revoke
 	// every active refresh-token family for the user and reject the assertion.
 	if credential.Authenticator.CloneWarning {
-		log.Printf("webauthn: CRITICAL clone warning user=%s cred=%x", claims.Subject, credential.ID)
+		// Both fields reach us from the caller (token subject, assertion
+		// credential). Quote them so neither can inject CR/LF and forge extra
+		// log records (CWE-117).
+		log.Printf("webauthn: CRITICAL clone warning user=%s cred=%s",
+			strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
 		_ = h.authSvc.RevokeAllTokensForUser(r.Context(), claims.Subject)
 		WriteError(w, http.StatusUnauthorized, "cloned_authenticator_detected")
 		return

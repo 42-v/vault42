@@ -10,9 +10,9 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** Change `alg` header from RS256 to HS256, sign with the public key as HMAC secret. Server verifies with the same public key and accepts.
 
-**Defense:** Whitelist `alg` — only accept RS256. Reject everything else at parse time.
+**Defense:** Whitelist `alg` -- only accept RS256. Reject everything else at parse time.
 
-**Test:** `tests/attack/alg_confusion_test.go` — TestAlgConfusion
+**Test:** `tests/attack/alg_confusion_test.go` -- TestAlgConfusion
 
 ### 1.2 Algorithm None (CVE-2015-9235)
 
@@ -20,7 +20,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Never trust `alg` from the token. Enforce RS256-only via `jwt.WithValidMethods`.
 
-**Test:** `tests/attack/alg_none_test.go` — TestAlgNone
+**Test:** `tests/attack/alg_none_test.go` -- TestAlgNone
 
 ### 1.3 Null/Empty Signature
 
@@ -28,7 +28,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Parser rejects tokens with missing or empty signature.
 
-**Test:** `tests/attack/null_signature_test.go` — TestNullSignature
+**Test:** `tests/attack/null_signature_test.go` -- TestNullSignature
 
 ### 1.4 Key ID (kid) Injection
 
@@ -36,7 +36,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Validate `kid` is UUID-format only (hex + dashes, max 64 chars). Look up keys only from an in-memory map or database by exact match. Never construct file paths from `kid`.
 
-**Test:** `tests/attack/kid_injection_test.go` — TestKIDPathTraversal
+**Test:** `tests/attack/kid_injection_test.go` -- TestKIDPathTraversal
 
 ### 1.5 Header Injection (jku/x5u/x5c/jwk)
 
@@ -52,7 +52,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Enforce `exp` claim validation. Use short TTLs (5-15 min for access tokens).
 
-**Test:** `tests/attack/expired_token_test.go` — TestExpiredTokens
+**Test:** `tests/attack/expired_token_test.go` -- TestExpiredTokens
 
 ### 1.7 Future `nbf` (Not Before) Bypass
 
@@ -60,7 +60,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Enforce `nbf` claim validation.
 
-**Test:** `tests/attack/future_nbf_test.go` — TestFutureNBF
+**Test:** `tests/attack/future_nbf_test.go` -- TestFutureNBF
 
 ### 1.8 Missing Required Claims
 
@@ -68,7 +68,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Require all claims: `exp`, `iss`, `aud`, `sub`, `iat`. Reject tokens missing any of them.
 
-**Test:** `tests/attack/missing_claims_test.go` — TestMissingClaims
+**Test:** `tests/attack/missing_claims_test.go` -- TestMissingClaims
 
 ### 1.9 Wrong Issuer / Wrong Audience
 
@@ -84,7 +84,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Enforce max JWT size (8KB) before parsing.
 
-**Test:** `tests/attack/oversized_jwt_test.go` — TestOversizedJWT
+**Test:** `tests/attack/oversized_jwt_test.go` -- TestOversizedJWT
 
 ### 1.11 JWKS Confusion / Key Rollover
 
@@ -92,15 +92,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Overlap rotation window. Keep old keys in JWKS for at least `access_token_ttl` after rotation. Look up by `kid`, not by position.
 
-**Test:** TODO — test JWKS rotation overlap window
+**Test:** TODO -- test JWKS rotation overlap window
 
 ### 1.12 JWT Claim Type Confusion
 
 **Attack:** Send `"roles": "admin"` (string) instead of `"roles": ["admin"]` (array). If deserialization is loose, the string may be treated as a single-element array.
 
-**Defense:** Strict JSON typing in claims struct. `Roles []string` — if the JSON has a string, deserialization fails.
+**Defense:** Strict JSON typing in claims struct. `Roles []string` -- if the JSON has a string, deserialization fails.
 
-**Test:** `tests/attack/jwt_type_confusion_test.go` — TestJWTTypeConfusion
+**Test:** `tests/attack/jwt_type_confusion_test.go` -- TestJWT_RolesAsString, TestJWT_RolesAsObject, TestJWT_RolesAsNull
 
 ---
 
@@ -112,7 +112,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Pre-computed dummy hash. When user is not found, run `VerifyPassword(password, dummyHash)` to burn the same CPU time as a real verification.
 
-**Tests:** `tests/attack/timing_attack_test.go`, `tests/compliance/nist_800_63b_test.go` — TestNIST_DummyHashTimingProtection
+**Tests:** `tests/attack/timing_attack_test.go`, `tests/compliance/nist_800_63b_test.go` -- TestNIST_DummyHashTimingProtection
 
 ### 2.2 User Enumeration via Error Messages
 
@@ -120,7 +120,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Identical error response for both cases: `{"error": "invalid_credentials"}`.
 
-**Test:** `tests/compliance/nist_800_63b_test.go` — TestNIST_UserEnumerationPrevention
+**Test:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_DummyHashTimingProtection
 
 ### 2.3 Brute Force / Credential Stuffing
 
@@ -128,7 +128,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Account lockout after N failed attempts (configurable threshold). Rate limiting per IP. Require CAPTCHA after threshold.
 
-**Tests:** `tests/compliance/owasp_asvs_test.go` — TestASVS_V2_2_1_AccountLockoutMechanism, `tests/attack/totp_replay_test.go` — TestTOTPBruteForce
+**Tests:** `tests/compliance/owasp_asvs_test.go` -- TestASVS_V2_2_1_AccountLockoutMechanism, `tests/attack/totp_replay_test.go` -- TestTOTPBruteForce
 
 ### 2.4 Password Spraying
 
@@ -156,7 +156,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Single-use refresh tokens with family tracking. When a replayed refresh token is detected, the entire token family is revoked (nuclear option). Tokens stored as SHA-256 hashes, not plaintext.
 
-**Tests:** `tests/compliance/nist_800_63b_test.go` — TestNIST_RefreshTokenHashedStorage, TestNIST_RefreshTokenReplayDetection
+**Tests:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_RefreshTokenHashedStorage; `tests/compliance/nist_integration_test.go` -- TestNIST_RefreshTokenFamilyReplay
 
 ### 3.2 Session Fixation
 
@@ -164,7 +164,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Generate new tokens on every authentication. Never accept session tokens from the client pre-authentication.
 
-**Test:** `tests/compliance/owasp_asvs_test.go` — TestASVS_V3_2_1_NewTokenOnAuth
+**Test:** `tests/compliance/owasp_asvs_test.go` -- TestASVS_V3_2_1_NewTokenOnAuth
 
 ### 3.3 Cookie Theft (XSS → Token Exfiltration)
 
@@ -172,7 +172,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** `HttpOnly` (no JS access), `Secure` (HTTPS only), `SameSite=Strict` (no cross-site sending), `Path=/auth` (minimal scope).
 
-**Test:** `tests/compliance/owasp_asvs_test.go` — TestASVS_V3_4_CookieSecurityAttributes
+**Test:** `tests/compliance/owasp_asvs_test.go` -- TestASVS_V3_4_CookieSecurityAttributes
 
 ### 3.4 Cross-Site Request Forgery (CSRF)
 
@@ -188,7 +188,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** SHA256(IP + User-Agent + Accept-Language + TLS fingerprint) embedded in token. Server recomputes and compares on every request. Constant-time comparison prevents timing leaks.
 
-**Tests:** `tests/attack/fingerprint_mismatch_test.go` — TestFingerprintMismatch, TestFingerprintConstantTime
+**Tests:** `tests/attack/fingerprint_mismatch_test.go` -- TestFingerprintMismatch, TestFingerprintConstantTime
 
 ---
 
@@ -200,15 +200,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Upper bounds on parsed Argon2id parameters: memory <= 128 MiB, iterations <= 10, parallelism <= 4. Reject hashes exceeding these.
 
-**Test:** `tests/compliance/nist_800_63b_test.go` — TestNIST_Argon2idParams
+**Test:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_Argon2idParameters
 
 ### 4.2 Argon2id Timing Leak on Malformed Hash
 
-**Attack:** Send malformed hash format — if parsing fails fast before Argon2id runs, the timing difference reveals whether the hash was valid format.
+**Attack:** Send malformed hash format -- if parsing fails fast before Argon2id runs, the timing difference reveals whether the hash was valid format.
 
 **Defense:** On parse error, still run `argon2.IDKey` with a dummy salt to consume the same time.
 
-**Test:** `tests/attack/timing_attack_test.go` — TestTimingAttackMalformedHash
+**Test:** `tests/attack/timing_attack_test.go` -- TestTimingAttackMalformedHash
 
 ### 4.3 AES-GCM Nonce Reuse
 
@@ -216,15 +216,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Generate random 12-byte nonce for every encryption. Never reuse.
 
-**Test:** `tests/compliance/owasp_asvs_test.go` — TestASVS_V6_2_6_AESGCMNonceUniqueness
+**Test:** `tests/compliance/owasp_asvs_test.go` -- TestASVS_V6_2_6_AESGCMNonceUniqueness
 
 ### 4.4 AES Key Length Enforcement
 
-**Attack:** Accept a 16-byte key for "AES-256" — actually AES-128, weaker than expected.
+**Attack:** Accept a 16-byte key for "AES-256" -- actually AES-128, weaker than expected.
 
 **Defense:** Reject any key that isn't exactly 32 bytes.
 
-**Test:** `tests/compliance/nist_800_63b_test.go` — TestNIST_AES256KeyLengthEnforced
+**Test:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_AES256KeyLengthEnforced
 
 ### 4.5 AES Ciphertext Tampering
 
@@ -232,15 +232,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** GCM authentication tag detects any modification. Return error, not corrupted plaintext.
 
-**Tests:** `tests/attack/aes_test.go` — TestAESTamperedCiphertext, TestAESTruncatedCiphertext, TestAESWrongKey
+**Tests:** `tests/attack/aes_test.go` -- TestAESTamperedCiphertext, TestAESTruncatedCiphertext, TestAESWrongKey
 
 ### 4.6 HMAC Key/Message Confusion
 
 **Attack:** Swap key and message parameters. If HMAC(key, msg) == HMAC(msg, key) for some implementation, signature verification becomes meaningless.
 
-**Defense:** Consistent parameter ordering. Function signature: `HMACVerify(message, key []byte, signature string)` — key before signature.
+**Defense:** Consistent parameter ordering. Function signature: `HMACVerify(message, key []byte, signature string)` -- key before signature.
 
-**Test:** `tests/attack/hmac_test.go` — TestHMACTamper
+**Test:** `tests/attack/hmac_test.go` -- TestHMACTamper
 
 ### 4.7 TOTP Replay
 
@@ -248,7 +248,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Track last-used TOTP time step. Reject codes for already-used time steps.
 
-**Test:** `tests/attack/totp_replay_test.go` — TestTOTPCodeDeterministic
+**Test:** `tests/attack/totp_replay_test.go` -- TestTOTPCodeDeterministic
 
 ### 4.8 TOTP Brute Force
 
@@ -256,7 +256,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Account lockout after N failed 2FA attempts. Rate limiting on 2FA endpoints.
 
-**Test:** `tests/attack/totp_replay_test.go` — TestTOTPBruteForce
+**Test:** `tests/attack/totp_replay_test.go` -- TestTOTPBruteForce
 
 ### 4.9 Constant-Time Comparison Bypass
 
@@ -264,7 +264,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** All secret comparisons use `crypto/subtle.ConstantTimeCompare` or equivalent.
 
-**Tests:** `tests/attack/constant_time_test.go` — TestSecureCompare, TestSecureCompareBytes
+**Tests:** `tests/attack/constant_time_test.go` -- TestSecureCompare, TestSecureCompareBytes
 
 ---
 
@@ -276,15 +276,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Parameterized queries exclusively (pgx `$1` placeholders). Never string-concatenate user input into SQL.
 
-**Test:** `tests/attack/sql_injection_test.go` — TestSQLInjectionInArgon2
+**Test:** `tests/attack/sql_injection_test.go` -- TestArgon2idHandlesSpecialCharacters
 
 ### 5.2 XSS via Error Messages
 
 **Attack:** Inject `<script>` tags in registration email field. If error messages echo the input, XSS executes.
 
-**Defense:** JSON API responses — never render user input as HTML. `Content-Type: application/json`. Security headers (`X-Content-Type-Options: nosniff`).
+**Defense:** JSON API responses -- never render user input as HTML. `Content-Type: application/json`. Security headers (`X-Content-Type-Options: nosniff`).
 
-**Test:** `tests/attack/xss_injection_test.go` — TestXSSSanitization
+**Test:** `tests/attack/xss_injection_test.go` -- TestXSSSanitization
 
 ### 5.3 Header Injection (CRLF)
 
@@ -304,7 +304,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** PKCE S256 enforcement. The code is useless without the `code_verifier` that only the legitimate client knows.
 
-**Tests:** `internal/handler/oauth_test.go` — TestOAuth_Authorize_PKCE_ChallengePassedToProvider, TestOAuth_Callback_PKCE_VerifierPassedToExchange, TestGitHubProvider_AuthURL_IncludesPKCE
+**Tests:** `internal/handler/oauth_test.go` -- TestOAuth_Authorize_PKCE_ChallengePassedToProvider, TestOAuth_Callback_PKCE_VerifierPassedToExchange, TestGitHubProvider_AuthURL_IncludesPKCE
 
 ### 6.2 State Parameter CSRF
 
@@ -312,23 +312,23 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** HMAC-signed state with provider name, nonce, and expiry. Validated on callback: signature checked, provider matched, expiry enforced, nonce atomically consumed (single-use via cache GetAndDelete).
 
-**Tests:** `internal/handler/oauth_test.go` — TestOAuth_Callback_MissingState, TestOAuth_Callback_InvalidState_BadHMAC, TestOAuth_Callback_InvalidState_WrongProvider, TestOAuth_Callback_ExpiredState, TestOAuth_Callback_InvalidOrReusedState
+**Tests:** `internal/handler/oauth_test.go` -- TestOAuth_Callback_MissingState, TestOAuth_Callback_InvalidState_BadHMAC, TestOAuth_Callback_InvalidState_WrongProvider, TestOAuth_Callback_ExpiredState, TestOAuth_Callback_InvalidOrReusedState
 
 ### 6.3 Open Redirect via redirect_uri
 
 **Attack:** Manipulate `redirect_uri` to send tokens to attacker's domain.
 
-**Defense:** Callback handler always redirects to `origin + "/oauth/callback"` — the redirect target is hardcoded from server config, never from user input. Provider redirect URIs are set at construction time from config.
+**Defense:** Callback handler always redirects to `origin + "/oauth/callback"` -- the redirect target is hardcoded from server config, never from user input. Provider redirect URIs are set at construction time from config.
 
-**Test:** `internal/handler/oauth_test.go` — TestOAuth_Callback_RedirectAlwaysToOrigin
+**Test:** `internal/handler/oauth_test.go` -- TestOAuth_Callback_RedirectAlwaysToOrigin
 
 ### 6.4 Token Substitution (IdP Mixup)
 
 **Attack:** Exchange a token from Provider A at Provider B's endpoint. If the server doesn't validate the token source, the attacker can impersonate.
 
-**Defense:** The HMAC-signed state embeds the provider name, which is validated against the callback URL path. A state for "github" is rejected on the "google" callback. Additionally, each provider's Exchange() and UserInfo() use that provider's specific endpoints — tokens cannot cross providers.
+**Defense:** The HMAC-signed state embeds the provider name, which is validated against the callback URL path. A state for "github" is rejected on the "google" callback. Additionally, each provider's Exchange() and UserInfo() use that provider's specific endpoints -- tokens cannot cross providers.
 
-**Test:** `internal/handler/oauth_test.go` — TestOAuth_Callback_CrossProviderStateRejected
+**Test:** `internal/handler/oauth_test.go` -- TestOAuth_Callback_CrossProviderStateRejected
 
 ---
 
@@ -340,7 +340,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** `jti` claim in DPoP proof must be unique. `iat` must be recent. Server tracks recently seen `jti` values.
 
-**Test:** `tests/attack/dpop_mismatch_test.go` (partial — method/URI mismatch tested)
+**Test:** `tests/attack/dpop_mismatch_test.go` (partial -- method/URI mismatch tested)
 
 ### 7.2 DPoP Method/URI Mismatch
 
@@ -348,7 +348,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Validate `htm` (HTTP method) and `htu` (HTTP URI) claims match the actual request.
 
-**Tests:** `tests/attack/dpop_mismatch_test.go` — TestDPoPMethodMismatch, TestDPoPURIMismatch
+**Tests:** `tests/attack/dpop_mismatch_test.go` -- TestDPoPMethodMismatch, TestDPoPURIMismatch
 
 ### 7.3 DPoP Key Substitution
 
@@ -356,7 +356,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** `jkt` (JWK Thumbprint) in the access token's `cnf` claim must match the public key in the DPoP proof.
 
-**Test:** `tests/attack/dpop_mismatch_test.go` — TestDPoPWrongKey
+**Test:** `tests/attack/dpop_mismatch_test.go` -- TestDPoPWrongKey
 
 ---
 
@@ -366,7 +366,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** Environment variables are visible in `/proc/self/environ`, `docker inspect`, crash dumps, and log aggregators.
 
-**Defense:** Secrets loaded via `_FILE` suffix convention — env var points to a file path, not the secret itself. File is zeroed after reading.
+**Defense:** Secrets loaded via `_FILE` suffix convention -- env var points to a file path, not the secret itself. File is zeroed after reading.
 
 **Test:** `tests/compliance/nist_800_63b_test.go` (secret loading tested indirectly)
 
@@ -390,7 +390,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** If Redis is shared or unprotected, inject malicious data into the rate limit or session cache.
 
-**Defense:** Dedicated Redis instance per environment. Graceful degradation — auth never fails because cache is down. Cache only stores rate limit counters, not session data.
+**Defense:** Dedicated Redis instance per environment. Graceful degradation -- auth never fails because cache is down. Cache only stores rate limit counters, not session data.
 
 **Test:** Cache interface tests in `internal/cache/`
 
@@ -400,23 +400,23 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Proxy headers (`X-Forwarded-For`, `REAL_IP_HEADER`) are only trusted when the direct TCP connection (`RemoteAddr`) comes from a configured `TRUSTED_PROXIES` CIDR. Direct connections from untrusted IPs always use `RemoteAddr`. Rightmost-trusted XFF parsing prevents left-side injection.
 
-**Test:** `internal/middleware/ipaccess_test.go` — TestClientIPRealIPHeaderNotTrusted, TestClientIPRealIPHeaderDisabled
+**Test:** `internal/middleware/ipaccess_test.go` -- TestClientIPRealIPHeaderNotTrusted, TestClientIPRealIPHeaderDisabled
 
 ### 8.6 Geo-Fence Bypass via Missing Header
 
 **Attack:** Connect without the geo header (e.g. bypass Cloudflare via direct IP) to avoid country-based blocking.
 
-**Defense:** When `GEO_IP_HEADER` is configured but the header is absent (not behind the proxy), geo checks are skipped — the request is still subject to IP allowlist/blocklist. For strict enforcement, combine geo-fencing with an IP allowlist restricted to the proxy's CIDR ranges.
+**Defense:** When `GEO_IP_HEADER` is configured but the header is absent (not behind the proxy), geo checks are skipped -- the request is still subject to IP allowlist/blocklist. For strict enforcement, combine geo-fencing with an IP allowlist restricted to the proxy's CIDR ranges.
 
-**Test:** `internal/middleware/ipaccess_test.go` — TestIPAccessGeoNoHeaderSkipsCheck, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessGeoNoHeaderSkipsCheck, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
 
 ### 8.7 IP Blocklist Evasion via IPv4/IPv6 Duality
 
 **Attack:** Access from the IPv6-mapped form of a blocked IPv4 address (e.g. `::ffff:192.0.2.1` when `192.0.2.0/24` is blocked).
 
-**Defense:** `net.ParseCIDR` and `net.IP.Contains` in Go's stdlib handle IPv4-mapped IPv6 addresses correctly — `::ffff:192.0.2.1` is contained in `192.0.2.0/24`.
+**Defense:** `net.ParseCIDR` and `net.IP.Contains` in Go's stdlib handle IPv4-mapped IPv6 addresses correctly -- `::ffff:192.0.2.1` is contained in `192.0.2.0/24`.
 
-**Test:** `internal/middleware/ipaccess_test.go` — TestIPAccessIPv6CIDR
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessIPv6CIDR
 
 ### 8.8 Health Endpoint Abuse Past IP Access Control
 
@@ -424,7 +424,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Health endpoints return only a static `{"status":"ok"}` body with no sensitive data. They are intentionally exempt from IP access control so that Kubernetes probes and load balancers work regardless of access restrictions.
 
-**Test:** `internal/middleware/ipaccess_test.go` — TestIPAccessHealthzBypass
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessHealthzBypass
 
 ---
 
@@ -444,7 +444,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Argon2id with 46 MiB memory cost makes GPU/ASIC attacks infeasible. Each hash takes ~150-200ms on a modern CPU. Unique 16-byte random salt per hash prevents rainbow tables.
 
-**Test:** `tests/attack/password_breach_test.go` — TestPasswordHashUniqueSalts
+**Test:** `tests/attack/password_breach_test.go` -- TestPasswordHashUniqueSalts
 
 ### 9.3 Password Truncation
 
@@ -452,7 +452,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** Argon2id accepts arbitrary-length input. Verify that `password + "X"` produces a different hash and that they don't cross-verify.
 
-**Tests:** `tests/compliance/nist_800_63b_test.go` — TestNIST_PasswordNoTruncation, `tests/compliance/owasp_asvs_test.go` — TestASVS_V2_1_3_PasswordNoTruncation
+**Tests:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_PasswordNoTruncation, `tests/compliance/owasp_asvs_test.go` -- TestASVS_V2_1_3_PasswordNoTruncation
 
 ### 9.4 Password Reset Token Prediction
 
@@ -460,7 +460,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** 256-bit cryptographically random reset tokens via `crypto/rand`. No sequential component.
 
-**Test:** `tests/compliance/owasp_asvs_test.go` — TestASVS_V2_5_1_PasswordResetTokenRandom
+**Test:** `tests/compliance/owasp_asvs_test.go` -- TestASVS_V2_5_1_PasswordResetTokenRandom
 
 ---
 
@@ -550,21 +550,21 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 | OAuth redirect_uri open redirect | `handler/oauth_test.go` | Covered |
 | IdP token substitution (cross-provider) | `handler/oauth_test.go` | Covered |
 | OAuth provider error handling | `handler/oauth_test.go` | Covered |
-| JWKS rotation overlap | — | TODO |
+| JWKS rotation overlap | -- | TODO |
 
 ---
 
 ## References
 
-- [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html) — Digital Identity Guidelines: Authentication
-- [OWASP ASVS v4.0.3](https://owasp.org/www-project-application-security-verification-standard/) — Application Security Verification Standard
+- [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html) -- Digital Identity Guidelines: Authentication
+- [OWASP ASVS v4.0.3](https://owasp.org/www-project-application-security-verification-standard/) -- Application Security Verification Standard
 - [OWASP JWT Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html)
-- [RFC 7519](https://tools.ietf.org/html/rfc7519) — JSON Web Token
-- [RFC 7518](https://tools.ietf.org/html/rfc7518) — JSON Web Algorithms
-- [RFC 9449](https://tools.ietf.org/html/rfc9449) — DPoP (Demonstration of Proof-of-Possession)
-- [RFC 6238](https://tools.ietf.org/html/rfc6238) — TOTP
-- [RFC 7636](https://tools.ietf.org/html/rfc7636) — PKCE
-- [CVE-2015-9235](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-9235) — JWT alg=none
-- [CVE-2025-30204](https://github.com/advisories/GHSA-mh63-6h87-4cp4) — golang-jwt parsing vulnerability
+- [RFC 7519](https://tools.ietf.org/html/rfc7519) -- JSON Web Token
+- [RFC 7518](https://tools.ietf.org/html/rfc7518) -- JSON Web Algorithms
+- [RFC 9449](https://tools.ietf.org/html/rfc9449) -- DPoP (Demonstration of Proof-of-Possession)
+- [RFC 6238](https://tools.ietf.org/html/rfc6238) -- TOTP
+- [RFC 7636](https://tools.ietf.org/html/rfc7636) -- PKCE
+- [CVE-2015-9235](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-9235) -- JWT alg=none
+- [CVE-2025-30204](https://github.com/advisories/GHSA-mh63-6h87-4cp4) -- golang-jwt parsing vulnerability
 - [PortSwigger JWT Attacks](https://portswigger.net/web-security/jwt)
 - [Auth0 JWT Handbook](https://auth0.com/resources/ebooks/jwt-handbook)

@@ -1,6 +1,7 @@
 package email
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -75,10 +76,18 @@ func TestBuildMIMEMessageStructure(t *testing.T) {
 	if !strings.Contains(msg, "Content-Type: text/html") {
 		t.Error("missing text/html part")
 	}
-	if !strings.Contains(msg, "text") {
-		t.Error("missing text body")
+	// Bodies are base64-encoded, so the raw content must NOT appear verbatim, and
+	// each part must declare base64 transfer encoding.
+	if strings.Contains(msg, "<b>html</b>") {
+		t.Error("html body appears unencoded; it must be base64 Content-Transfer-Encoding")
 	}
-	if !strings.Contains(msg, "<b>html</b>") {
-		t.Error("missing html body")
+	if strings.Count(msg, "Content-Transfer-Encoding: base64") != 2 {
+		t.Error("both parts must declare Content-Transfer-Encoding: base64")
+	}
+	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("text"))) {
+		t.Error("text body not present as base64")
+	}
+	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("<b>html</b>"))) {
+		t.Error("html body not present as base64")
 	}
 }

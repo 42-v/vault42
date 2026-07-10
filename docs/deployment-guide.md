@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> Vault42 — RPi5 / MicroK8s / Ubuntu Core
+> Vault42 -- RPi5 / MicroK8s / Ubuntu Core
 
 ## Overview
 
@@ -53,7 +53,7 @@ microk8s enable dns storage ingress helm3
 ./scripts/generate-secrets.sh ./secrets
 ```
 
-This generates all required secrets including `signing-key` (RSA-2048 PKCS#8 PEM for JWT signing). Save the admin token printed at the end — it is shown only once.
+This generates all required secrets including `signing-key` (RSA-2048 PKCS#8 PEM for JWT signing). Save the admin token printed at the end -- it is shown only once.
 
 ### 3. Create Kubernetes Resources
 
@@ -138,7 +138,7 @@ env:
   GEO_BLOCKLIST: "T1"                  # optional: block Tor exit nodes
 ```
 
-The `REAL_IP_HEADER` and `GEO_IP_HEADER` settings are proxy-agnostic — set them to whatever header your proxy injects. The IP blocklist supports runtime updates for dynamic banning.
+The `REAL_IP_HEADER` and `GEO_IP_HEADER` settings are proxy-agnostic -- set them to whatever header your proxy injects. The IP blocklist supports runtime updates for dynamic banning.
 
 To customize, create a values override file:
 

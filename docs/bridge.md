@@ -47,14 +47,14 @@ helm install vault42 charts/vault42 -f charts/vault42/values-bridge.yaml \
 
 ## Detection Signals
 
-Score-based detection — cumulative score >= `BRIDGE_FLAG_THRESHOLD` (default: 100) triggers flagging:
+Score-based detection -- cumulative score >= `BRIDGE_FLAG_THRESHOLD` (default: 100) triggers flagging:
 
 | Signal | Score | How |
 |--------|-------|-----|
 | Automation User-Agent | +30 | curl, sqlmap, nikto, gobuster, nuclei, etc. |
 | Rate exceeded | +50 | Sliding window counter per IP exceeds threshold |
 | Failed login | +20 each | `ModifyResponse` inspects 401 on `POST /auth/login` |
-| Decoy path hit | +100 | `/wp-admin`, `/phpmyadmin`, etc. — instant flag |
+| Decoy path hit | +100 | `/wp-admin`, `/phpmyadmin`, etc. -- instant flag |
 | Admin manual flag | +100 | `POST /bridge/flag` |
 
 ## Routing Logic
@@ -129,11 +129,11 @@ curl -X DELETE https://bridge/bridge/flag \
 | `BRIDGE_LOGIN_FAIL_WINDOW` | `15m` | Login failure counting window |
 | `BRIDGE_FLAG_TTL` | `24h` | How long an IP stays flagged |
 | `BRIDGE_FLAG_THRESHOLD` | `100` | Score threshold to trigger flag |
-| `BRIDGE_WEBHOOK_URL` | — | Optional webhook for flag events |
-| `BRIDGE_ADMIN_TOKEN_FILE` | — | Admin token (`_FILE` convention) |
-| `BRIDGE_REDIS_ADDR` | — | Optional Redis for persistent flags |
-| `BRIDGE_TRUSTED_PROXIES` | — | CIDR list for proxy IP detection |
-| `BRIDGE_REAL_IP_HEADER` | — | Header from proxy (e.g. `CF-Connecting-IP`) |
+| `BRIDGE_WEBHOOK_URL` | -- | Optional webhook for flag events |
+| `BRIDGE_ADMIN_TOKEN_FILE` | -- | Admin token (`_FILE` convention) |
+| `BRIDGE_REDIS_ADDR` | -- | Optional Redis for persistent flags |
+| `BRIDGE_TRUSTED_PROXIES` | -- | CIDR list for proxy IP detection |
+| `BRIDGE_REAL_IP_HEADER` | -- | Header from proxy (e.g. `CF-Connecting-IP`) |
 | `BRIDGE_LOG_LEVEL` | `info` | Log level (`info`, `debug`) |
 
 ## State Persistence

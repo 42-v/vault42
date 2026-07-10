@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.8.6 (2026-07-10)
+
+### Features
+
+* **KMS unwrap oracle** (`POST /kms/unwrap`). A vault42-held KEK envelope-unwrap
+  oracle: a caller presents a wrapped-key envelope and vault42 returns the
+  unwrapped key while holding the KEK itself and never releasing it. Backs the
+  life42 data-root re-root.
+  * `internal/kms`: per-kid KEKs derived from a KMS root secret
+    (`KMS_ROOT_KEY_FILE`) via HKDF-SHA256 with a versioned, domain-separated
+    info label, cryptographically separate from the master key. Wrap/Unwrap use
+    the existing AES-256-GCM AEAD with the kid bound as AAD.
+  * Oracle-resistant: every unwrap failure (malformed, tampered, wrong-KEK,
+    empty kid, bad base64) collapses to a single opaque 400 `unwrap_failed` with
+    a byte-identical body. Key material is never logged; KEKs and root are wiped.
+  * Gated by an authenticated client-credential token carrying the `kms:unwrap`
+    scope (`middleware.RequireScope`), per-IP rate limited with fail-closed
+    behaviour on a cache outage, synchronous audit that never drops under load,
+    and DPoP anti-replay when `VAULT_DPOP_ENABLED`. Mounted only when
+    `KMS_ROOT_KEY_FILE` is configured.
+  * `vault kms wrap` CLI produces envelopes the oracle accepts.
+
+* **White-label auth emails.** Per-app branding and template overrides so each
+  application served by vault42 sends auth emails (verification, password reset,
+  email-OTP, account-locked) that look native to it.
+  * `auth.email_branding` (migration 008): per-app display name, logo, accent
+    colour, and From line. Setting just this re-skins every existing template
+    for that app, with no template authoring required.
+  * `auth.email_templates` (migration 008): per-app, per-type full HTML override
+    for apps that need a completely custom body, reusing the existing template
+    safety validation.
+  * The tenant is selected by the `X-Vault-App` request header (or `?app=`),
+    resolved into context by new middleware; a gateway/BFF in front of vault42
+    sets it per tenant. An absent or unknown app falls back to the global
+    branding (unchanged behaviour).
+  * Per-app From line: the display name always applies; a per-app From *address*
+    is honoured only when its domain is on `VAULT_EMAIL_FROM_ALLOWED_DOMAINS`.
+  * Admin API: CRUD for branding + templates under `/admin/email-branding` and
+    `/admin/email-templates` (RBAC `email:read`/`email:write`/`email:delete`),
+    plus `POST /admin/email-templates/preview` to render without sending.
+  * New config: `VAULT_EMAIL_FROM_NAME`, `VAULT_EMAIL_FROM_ALLOWED_DOMAINS`,
+    `VAULT_MAX_EMAIL_TEMPLATE_SIZE`.
+
+### Security
+
+* **Fixed a data race on signing-key material.** `KeyStore.Refresh` reads the
+  master key outside the mutex while `Stop` zeroed it under the lock; a refresh
+  racing shutdown could read half-zeroed key bytes and fail to decrypt. `Stop`
+  now joins the refresh loop (`sync.WaitGroup`) before wiping, and is idempotent
+  (`sync.Once`) so the shutdown paths that call it twice no longer panic.
+* **Log-injection hardening (CWE-117).** Untrusted values interpolated into log
+  lines (operator secret-file paths, OAuth provider names, WebAuthn subjects and
+  credential IDs) are now quoted so a crafted value cannot forge log records.
+* Security scans are clean: `gosec` and `staticcheck` report zero findings
+  across the module. Test helpers under `tests/e2e/multireplica` were renamed to
+  `_test.go` so they are no longer scanned as production code.
+
+### Testing
+
+* Coverage is now measured across the **full suite** (unit + attack + fuzz +
+  integration + compliance) as one canonical number, replacing the previous
+  split between a unit-only floor and a separate `coverage-full.sh`. The shared
+  plumbing lives in `scripts/lib/coverage-env.sh`, so `docs/test-coverage.md`,
+  `docs/badges.json`, and the README badge can no longer disagree. The coverage
+  gate now also fails on a build error (a non-compiling package silently read as
+  0%), not just on a failing test.
+* New tests for the KMS oracle, the DB-backed keystore lifecycle
+  (rotate/revoke/refresh/cleanup, wrong-master-key fail-closed, multi-pod
+  refresh), the white-label email admin handlers, and the admin-user,
+  admin-session, and email branding/template repositories.
+
 ## 0.8.0 (2026-06-20)
 
 ### Features

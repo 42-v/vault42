@@ -351,7 +351,7 @@ func TestGetSession(t *testing.T) {
 		want *model.AdminSession
 	}{
 		{"background", context.Background(), nil},
-		{"no key", context.WithValue(context.Background(), "other", "x"), nil},
+		{"no key", context.WithValue(context.Background(), ctxKey("other"), "x"), nil},
 		{"wrong type", context.WithValue(context.Background(), adminSessionKey, "notsession"), nil},
 		{"valid", func() context.Context {
 			s := &model.AdminSession{ID: "sess-1", AdminID: "adm-1"}
@@ -376,7 +376,7 @@ func TestGetAdmin(t *testing.T) {
 		want *model.AdminUser
 	}{
 		{"background", context.Background(), nil},
-		{"no key", context.WithValue(context.Background(), "other", "x"), nil},
+		{"no key", context.WithValue(context.Background(), ctxKey("other"), "x"), nil},
 		{"wrong type", context.WithValue(context.Background(), adminUserKey, 42), nil},
 		{"valid", func() context.Context {
 			a := &model.AdminUser{ID: "adm-1", Username: "root"}

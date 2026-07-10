@@ -2,7 +2,7 @@
 
 **Component:** vault42 authentication server
 **Regulation:** EU General Data Protection Regulation 2016/679 (GDPR)
-**Status:** Living document — review at least annually and on any change to the data model
+**Status:** Living document -- review at least annually and on any change to the data model
 
 ---
 
@@ -14,8 +14,8 @@ to data subjects, the third-party processors involved, and the procedure followe
 of a personal-data breach.
 
 vault42 is authentication infrastructure. It is operated by a **deploying organization** (the
-"Operator"), which is the **controller** for the personal data of its end users. vault42 itself —
-the software and its maintainers — acts as a **processor** that handles personal data on the
+"Operator"), which is the **controller** for the personal data of its end users. vault42 itself --
+the software and its maintainers -- acts as a **processor** that handles personal data on the
 Operator's behalf under documented instructions (the configuration and this policy).
 
 Several controls described here are **operator-configurable** (token lifetimes, audit-log
@@ -35,16 +35,16 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 
 | # | Processing purpose | Personal data used | Lawful basis (Art. 6) |
 |---|---|---|---|
-| P1 | **Account creation and authentication** — verifying identity at login, issuing tokens | Email, password hash, roles, account-state flags | Art. 6(1)(b) — performance of a contract (providing the account) |
-| P2 | **Multi-factor authentication** — TOTP, WebAuthn passkeys, backup codes, email one-time codes | Encrypted TOTP secret, WebAuthn public key + credential ID, hashed backup codes, email | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in account security |
-| P3 | **Session and device management** — tracking active sessions, recognizing known devices, "remember me" | Refresh-token records, device records (fingerprint hash, friendly name, IP, user-agent, timestamps) | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in fraud/abuse prevention |
-| P4 | **Security monitoring and abuse prevention** — audit logging, rate limiting, account lockout, breach-password screening | Audit entries (user/client id, IP, user-agent, fingerprint hash, event metadata, risk score), rate-limit counters, failed-login counters | Art. 6(1)(f) legitimate interest in securing the service; Art. 6(1)(c) legal obligation to keep security records where applicable |
-| P5 | **Identity profile** — storing optional personal details an end user chooses to provide (name, country, date of birth, sex, billing address, app-specific data) | Encrypted identity profile | Art. 6(1)(b) where required to deliver a requested feature; otherwise Art. 6(1)(a) consent |
-| P6 | **Encrypted user data blobs** — opaque user-supplied data stored on the user's behalf | Encrypted blob payload + encrypted label | Art. 6(1)(b) contract (storage feature requested by the user) |
-| P7 | **Social / federated login** — linking an external OAuth/OIDC identity to an account | Provider name, provider user id, provider-supplied email, encrypted provider tokens | Art. 6(1)(b) contract; Art. 6(1)(a) consent (the user initiates the link) |
-| P8 | **Account import** — migrating a pre-existing account from a prior system | Email, source-system tag, source-system id, import-pending flag | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in service continuity |
-| P9 | **Transactional email** — verification, password reset, MFA codes, security notices | Email address | Art. 6(1)(b) contract (necessary to operate the account) |
-| P10 | **Marketing email** — optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent — sent only when the user has opted in |
+| P1 | **Account creation and authentication** -- verifying identity at login, issuing tokens | Email, password hash, roles, account-state flags | Art. 6(1)(b) -- performance of a contract (providing the account) |
+| P2 | **Multi-factor authentication** -- TOTP, WebAuthn passkeys, backup codes, email one-time codes | Encrypted TOTP secret, WebAuthn public key + credential ID, hashed backup codes, email | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in account security |
+| P3 | **Session and device management** -- tracking active sessions, recognizing known devices, "remember me" | Refresh-token records, device records (fingerprint hash, friendly name, IP, user-agent, timestamps) | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in fraud/abuse prevention |
+| P4 | **Security monitoring and abuse prevention** -- audit logging, rate limiting, account lockout, breach-password screening | Audit entries (user/client id, IP, user-agent, fingerprint hash, event metadata, risk score), rate-limit counters, failed-login counters | Art. 6(1)(f) legitimate interest in securing the service; Art. 6(1)(c) legal obligation to keep security records where applicable |
+| P5 | **Identity profile** -- storing optional personal details an end user chooses to provide (name, country, date of birth, sex, billing address, app-specific data) | Encrypted identity profile | Art. 6(1)(b) where required to deliver a requested feature; otherwise Art. 6(1)(a) consent |
+| P6 | **Encrypted user data blobs** -- opaque user-supplied data stored on the user's behalf | Encrypted blob payload + encrypted label | Art. 6(1)(b) contract (storage feature requested by the user) |
+| P7 | **Social / federated login** -- linking an external OAuth/OIDC identity to an account | Provider name, provider user id, provider-supplied email, encrypted provider tokens | Art. 6(1)(b) contract; Art. 6(1)(a) consent (the user initiates the link) |
+| P8 | **Account import** -- migrating a pre-existing account from a prior system | Email, source-system tag, source-system id, import-pending flag | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in service continuity |
+| P9 | **Transactional email** -- verification, password reset, MFA codes, security notices | Email address | Art. 6(1)(b) contract (necessary to operate the account) |
+| P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
 consent does not affect the lawfulness of processing carried out before withdrawal. Marketing
@@ -66,7 +66,7 @@ records), the **identity** store (encrypted personal profile, keyed by pseudonym
   TOTP secrets, and stored OAuth/OIDC provider tokens.
 - **Pseudonymization:** the identity profile and blobs are stored under a deterministic
   **pseudonym** derived by HMAC from the user id, not under the user id or email. The plaintext
-  reference name of a named blob never reaches the database — only its HMAC is stored.
+  reference name of a named blob never reaches the database -- only its HMAC is stored.
 - **Hashed, not recoverable:** passwords (and password history), backup codes, refresh tokens,
   device fingerprints, and admin/admin-session tokens are stored as hashes only.
 - **Append-only:** the audit log is enforced append-only at the database layer (UPDATE and
@@ -177,7 +177,7 @@ endpoints are listed where they exist; remaining requests are handled by the Ope
 the contact in §8. The Operator responds **without undue delay and within one month** (Art. 12),
 extendable by two months for complex requests with notice.
 
-Exercising a right requires the requester's identity to be verified — for self-service endpoints
+Exercising a right requires the requester's identity to be verified -- for self-service endpoints
 this is the authenticated session; sensitive operations additionally require a recent
 re-confirmation of credentials (step-up). Rights exercises are recorded in the audit log.
 
@@ -185,9 +185,9 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 
 - The user can read the currently stored identity profile via **`GET /user/identity`**, and
   review active sessions and devices via **`GET /user/sessions`** and **`GET /user/devices`**.
-- A consolidated, machine-readable export of all personal data associated with the account —
+- A consolidated, machine-readable export of all personal data associated with the account --
   profile, identity, blob metadata, linked social accounts, devices, and the user-scoped audit
-  events — is provided via the data-export facility (**`GET /user/data-export`**) where the
+  events -- is provided via the data-export facility (**`GET /user/data-export`**) where the
   deployment exposes it; otherwise the Operator produces the same export on request. The export
   is delivered in a structured, commonly used, machine-readable format (JSON) so it can be ported
   to another controller.
@@ -246,8 +246,8 @@ Operator enables. The set of processors depends on the Operator's configuration.
 | Recipient / processor | Role | Data shared | Notes |
 |---|---|---|---|
 | **OAuth / OIDC identity providers** (e.g. Google, GitHub, Facebook, and any generic OpenID Connect provider the Operator registers) | Processor / independent controller for federated login | The provider returns a provider user id and, typically, an email; vault42 stores these plus encrypted provider tokens | Used only when the Operator enables social login and the user initiates the link. The provider's own privacy notice governs data the user holds with that provider. |
-| **Email delivery service** (SMTP server, or a hosted email provider) | Processor | Recipient email address and message content (verification, reset, MFA, security and — if opted in — marketing messages) | Backend and credentials are operator-configured. Transactional mail is necessary to operate the account; marketing mail is sent only on opt-in. |
-| **Breach-password screening** (Have I Been Pwned range API) | Processor (k-anonymity) | A short prefix of the SHA-1 hash of a candidate password — **never the password, email, or any account identifier** | Uses the k-anonymity range protocol: only a hash prefix leaves the server. Fail-open: if the service is unreachable the check is skipped and authentication is not blocked. |
+| **Email delivery service** (SMTP server, or a hosted email provider) | Processor | Recipient email address and message content (verification, reset, MFA, security and -- if opted in -- marketing messages) | Backend and credentials are operator-configured. Transactional mail is necessary to operate the account; marketing mail is sent only on opt-in. |
+| **Breach-password screening** (Have I Been Pwned range API) | Processor (k-anonymity) | A short prefix of the SHA-1 hash of a candidate password -- **never the password, email, or any account identifier** | Uses the k-anonymity range protocol: only a hash prefix leaves the server. Fail-open: if the service is unreachable the check is skipped and authentication is not blocked. |
 | **Primary datastore (PostgreSQL)** | Processor (storage) | All persisted records described in §3, with the encryption and hashing protections noted there | Hosting/region is the Operator's choice; encrypted blobs and the encrypted identity profile are held here under pseudonymous keys. |
 | **Cache backend** (in-memory, PostgreSQL, or Redis, per Operator choice) | Processor (transient) | Short-lived operational values (e.g. confirmation state, cache entries) | Transient; not a long-term store of personal data. |
 
@@ -275,7 +275,7 @@ applies.
    subjects and records affected, the likely consequences, and the measures taken or proposed.
    Record this assessment.
 
-### 7.2 Regulator notification — within 72 hours
+### 7.2 Regulator notification -- within 72 hours
 
 If the breach is likely to result in a risk to the rights and freedoms of data subjects, the
 controller (the Operator) notifies the competent supervisory authority **without undue delay and,
@@ -288,7 +288,7 @@ available, it is provided in phases without further undue delay.
 A breach that is **unlikely** to result in a risk to data subjects need not be notified to the
 authority, but the reasoning is documented.
 
-### 7.3 Data-subject notification — without undue delay
+### 7.3 Data-subject notification -- without undue delay
 
 If the breach is likely to result in a **high risk** to the rights and freedoms of data subjects,
 affected users are notified **without undue delay**, in clear and plain language, describing the
@@ -296,14 +296,14 @@ nature of the breach, the contact point, the likely consequences, and the measur
 recommended (Art. 34). Direct notification is via the user's account email.
 
 Direct notification is not required if (a) the affected data was rendered unintelligible to
-unauthorized parties — for example data protected by the encryption-at-rest and hashing measures
-in §3 — (b) subsequent measures ensure the high risk is no longer likely to materialize, or (c)
+unauthorized parties -- for example data protected by the encryption-at-rest and hashing measures
+in §3 -- (b) subsequent measures ensure the high risk is no longer likely to materialize, or (c)
 direct notification would involve disproportionate effort, in which case a public communication
 of equivalent effectiveness is used.
 
 ### 7.4 Record-keeping
 
-All breaches are documented — facts, effects, and remedial action — regardless of whether they
+All breaches are documented -- facts, effects, and remedial action -- regardless of whether they
 were notifiable, so the supervisory authority can verify compliance (Art. 33(5)). The
 append-only audit log supports reconstructing the timeline of security-relevant events.
 

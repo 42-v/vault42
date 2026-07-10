@@ -93,7 +93,7 @@ type MockEmailSender struct {
 	SendFn func(ctx context.Context, to, subject, htmlBody, textBody string) error
 }
 
-func (m *MockEmailSender) Send(ctx context.Context, to, subject, htmlBody, textBody string) error {
+func (m *MockEmailSender) Send(ctx context.Context, _ email.Address, to, subject, htmlBody, textBody string) error {
 	if m.SendFn != nil {
 		return m.SendFn(ctx, to, subject, htmlBody, textBody)
 	}

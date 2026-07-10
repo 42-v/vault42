@@ -3,6 +3,7 @@ package email
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"strings"
@@ -157,8 +158,10 @@ func TestBuildMIMEMessageTextPart(t *testing.T) {
 	if !strings.Contains(msg, "Content-Type: text/plain; charset=utf-8") {
 		t.Error("missing text/plain content type")
 	}
-	if !strings.Contains(msg, "plain text body here") {
-		t.Error("missing text body content")
+	// The body is base64-encoded (Content-Transfer-Encoding: base64), so it must
+	// appear encoded, not verbatim.
+	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("plain text body here"))) {
+		t.Error("missing base64-encoded text body content")
 	}
 }
 
@@ -167,8 +170,8 @@ func TestBuildMIMEMessageHTMLPart(t *testing.T) {
 	if !strings.Contains(msg, "Content-Type: text/html; charset=utf-8") {
 		t.Error("missing text/html content type")
 	}
-	if !strings.Contains(msg, "<h1>Hello World</h1>") {
-		t.Error("missing HTML body content")
+	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("<h1>Hello World</h1>"))) {
+		t.Error("missing base64-encoded HTML body content")
 	}
 }
 
@@ -385,7 +388,7 @@ func TestSendWithMockSMTPServer(t *testing.T) {
 	defer srv.close()
 
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "sender@test.com")
-	err := sender.Send(context.Background(), "recipient@test.com", "Test Subject", "<b>HTML</b>", "text body")
+	err := sender.Send(context.Background(), Address{}, "recipient@test.com", "Test Subject", "<b>HTML</b>", "text body")
 	if err != nil {
 		t.Fatalf("Send should succeed: %v", err)
 	}
@@ -407,7 +410,7 @@ func TestSendMessageContainsSubject(t *testing.T) {
 	defer srv.close()
 
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
-	sender.Send(context.Background(), "r@t.com", "My Custom Subject", "<b>h</b>", "t")
+	sender.Send(context.Background(), Address{}, "r@t.com", "My Custom Subject", "<b>h</b>", "t")
 
 	msgs := srv.messages()
 	if len(msgs) != 1 {
@@ -423,14 +426,14 @@ func TestSendMessageContainsHTMLBody(t *testing.T) {
 	defer srv.close()
 
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
-	sender.Send(context.Background(), "r@t.com", "Sub", "<h1>Hello HTML</h1>", "text")
+	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<h1>Hello HTML</h1>", "text")
 
 	msgs := srv.messages()
 	if len(msgs) < 1 {
 		t.Fatal("no messages received")
 	}
-	if !strings.Contains(msgs[0].data, "<h1>Hello HTML</h1>") {
-		t.Error("message data should contain HTML body")
+	if !strings.Contains(msgs[0].data, base64.StdEncoding.EncodeToString([]byte("<h1>Hello HTML</h1>"))) {
+		t.Error("message data should contain the base64-encoded HTML body")
 	}
 }
 
@@ -439,21 +442,22 @@ func TestSendMessageContainsTextBody(t *testing.T) {
 	defer srv.close()
 
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
-	sender.Send(context.Background(), "r@t.com", "Sub", "<b>h</b>", "Plain text content")
+	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "Plain text content")
 
 	msgs := srv.messages()
 	if len(msgs) < 1 {
 		t.Fatal("no messages received")
 	}
-	if !strings.Contains(msgs[0].data, "Plain text content") {
-		t.Error("message data should contain text body")
+	// The body is base64-encoded on the wire (Content-Transfer-Encoding: base64).
+	if !strings.Contains(msgs[0].data, base64.StdEncoding.EncodeToString([]byte("Plain text content"))) {
+		t.Error("message data should contain the base64-encoded text body")
 	}
 }
 
 func TestSendConnectionRefused(t *testing.T) {
 	// Use a port that is not listening
 	sender := NewSMTPSender("127.0.0.1", "1", "", "", "s@t.com")
-	err := sender.Send(context.Background(), "r@t.com", "Sub", "<b>h</b>", "t")
+	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err == nil {
 		t.Error("Send should fail when connection is refused")
 	}
@@ -465,7 +469,7 @@ func TestSendNoAuth(t *testing.T) {
 
 	// Empty user means no auth
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "noauth@test.com")
-	err := sender.Send(context.Background(), "r@t.com", "Sub", "<b>h</b>", "t")
+	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err != nil {
 		t.Fatalf("Send without auth should succeed: %v", err)
 	}
@@ -478,7 +482,7 @@ func TestSendMultipleMessages(t *testing.T) {
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
 
 	for i := 0; i < 3; i++ {
-		err := sender.Send(context.Background(), fmt.Sprintf("r%d@t.com", i),
+		err := sender.Send(context.Background(), Address{}, fmt.Sprintf("r%d@t.com", i),
 			fmt.Sprintf("Subject %d", i), "<b>h</b>", "t")
 		if err != nil {
 			t.Fatalf("Send %d failed: %v", i, err)
@@ -493,7 +497,7 @@ func TestSendMultipleMessages(t *testing.T) {
 
 func TestSendInvalidHost(t *testing.T) {
 	sender := NewSMTPSender("nonexistent.invalid.host.example", "587", "", "", "s@t.com")
-	err := sender.Send(context.Background(), "r@t.com", "Sub", "<b>h</b>", "t")
+	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err == nil {
 		t.Error("Send should fail with invalid host")
 	}

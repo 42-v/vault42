@@ -1,6 +1,9 @@
 # Test Coverage Report
 
-Generated: 2026-06-20 | Tests: 2404 | Total: 78.42% statement coverage
+Generated: 2026-07-10 | Tests: 2625 | Total: 86.69% statement coverage
+
+Measured across the full suite (unit + attack + fuzz + integration +
+compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 
 ## Package Summary
 
@@ -14,24 +17,25 @@ Generated: 2026-06-20 | Tests: 2404 | Total: 78.42% statement coverage
 | `internal/httputil` | 100.00% |
 | `internal/frontend` | 100.00% |
 | `internal/oauth2` | 97.69% |
-| `internal/config` | 97.65% |
 | `internal/jwt` | 96.81% |
 | `internal/audit` | 96.55% |
-| `internal/middleware` | 94.15% |
-| `internal/email` | 90.91% |
-| `internal/adminapi` | 89.91% |
+| `internal/config` | 95.47% |
+| `internal/middleware` | 93.03% |
+| `internal/cache` | 92.21% |
+| `internal/adminapi` | 90.74% |
 | `internal/crypto` | 89.58% |
 | `internal/redis` | 89.35% |
-| `internal/handler` | 89.27% |
+| `internal/handler` | 89.35% |
 | `internal/seed` | 89.23% |
 | `internal/honeypot` | 89.11% |
-| `internal/service` | 88.71% |
-| `internal/cache` | 82.47% |
-| `internal/server` | 75.69% |
+| `internal/service` | 86.39% |
+| `internal/keystore` | 84.83% |
+| `internal/kms` | 83.33% |
+| `internal/migrate` | 77.50% |
+| `internal/server` | 74.33% |
+| `internal/repository/postgres` | 71.83% |
+| `internal/email` | 67.81% |
 | `internal/cli` | 63.56% |
-| `internal/keystore` | 12.77% |
-| `internal/migrate` | 2.50% |
-| `internal/repository/postgres` | 0.00% |
 
 ## Uncovered Functions
 
@@ -40,182 +44,75 @@ Generated: 2026-06-20 | Tests: 2404 | Total: 78.42% statement coverage
 | `runSeed` | internal/cli/cli.go:350 |
 | `cleanupAudit` | internal/cli/cli.go:372 |
 | `exportAudit` | internal/cli/cli.go:397 |
-| `Import` | internal/keystore/keystore.go:105 |
-| `Rotate` | internal/keystore/keystore.go:170 |
-| `Revoke` | internal/keystore/keystore.go:180 |
-| `Refresh` | internal/keystore/keystore.go:196 |
-| `ListKeys` | internal/keystore/keystore.go:271 |
-| `StartRefreshLoop` | internal/keystore/keystore.go:305 |
-| `EnsureKey` | internal/keystore/keystore.go:336 |
-| `CleanupExpired` | internal/keystore/keystore.go:369 |
+| `WithStore` | internal/email/mailer.go:73 |
+| `fromDomainAllowed` | internal/email/mailer.go:181 |
+| `getBranding` | internal/email/mailer.go:241 |
+| `putBranding` | internal/email/mailer.go:251 |
+| `getTemplate` | internal/email/mailer.go:260 |
+| `putTemplate` | internal/email/mailer.go:270 |
+| `Close` | internal/kms/kms.go:112 |
+| `AppContext` | internal/middleware/appcontext.go:16 |
 | `NewAccountRecoveryRepo` | internal/repository/postgres/account_recovery.go:18 |
 | `Append` | internal/repository/postgres/account_recovery.go:24 |
 | `List` | internal/repository/postgres/account_recovery.go:38 |
-| `NewAdminConfigRepo` | internal/repository/postgres/admin_config.go:17 |
 | `List` | internal/repository/postgres/admin_config.go:22 |
-| `Get` | internal/repository/postgres/admin_config.go:41 |
-| `Set` | internal/repository/postgres/admin_config.go:54 |
-| `Delete` | internal/repository/postgres/admin_config.go:65 |
-| `NewAdminSessionRepo` | internal/repository/postgres/admin_session.go:19 |
-| `Create` | internal/repository/postgres/admin_session.go:24 |
-| `GetByTokenHash` | internal/repository/postgres/admin_session.go:39 |
-| `ListByAdmin` | internal/repository/postgres/admin_session.go:61 |
-| `ListActive` | internal/repository/postgres/admin_session.go:75 |
-| `Revoke` | internal/repository/postgres/admin_session.go:89 |
-| `RevokeAllForAdmin` | internal/repository/postgres/admin_session.go:99 |
 | `RevokeAll` | internal/repository/postgres/admin_session.go:109 |
-| `DeleteExpired` | internal/repository/postgres/admin_session.go:119 |
-| `scanSessions` | internal/repository/postgres/admin_session.go:128 |
-| `NewAdminUserRepo` | internal/repository/postgres/admin_user.go:20 |
-| `Create` | internal/repository/postgres/admin_user.go:25 |
-| `GetByID` | internal/repository/postgres/admin_user.go:42 |
-| `GetByUsername` | internal/repository/postgres/admin_user.go:54 |
-| `List` | internal/repository/postgres/admin_user.go:66 |
-| `Count` | internal/repository/postgres/admin_user.go:92 |
-| `Update` | internal/repository/postgres/admin_user.go:102 |
-| `IncrementFailedLogin` | internal/repository/postgres/admin_user.go:117 |
-| `ResetFailedLogin` | internal/repository/postgres/admin_user.go:128 |
-| `LockUntil` | internal/repository/postgres/admin_user.go:138 |
-| `UpdateLastTOTPCounter` | internal/repository/postgres/admin_user.go:148 |
-| `UpdateLastLogin` | internal/repository/postgres/admin_user.go:158 |
-| `Revoke` | internal/repository/postgres/admin_user.go:168 |
-| `scanAdminUser` | internal/repository/postgres/admin_user.go:176 |
-| `scanAdminUserRow` | internal/repository/postgres/admin_user.go:193 |
-| `NewAppRoleRepo` | internal/repository/postgres/app_role.go:20 |
-| `List` | internal/repository/postgres/app_role.go:25 |
 | `ListNames` | internal/repository/postgres/app_role.go:45 |
-| `Get` | internal/repository/postgres/app_role.go:63 |
-| `Create` | internal/repository/postgres/app_role.go:79 |
-| `Delete` | internal/repository/postgres/app_role.go:96 |
-| `NewAuditRepo` | internal/repository/postgres/audit.go:19 |
-| `Insert` | internal/repository/postgres/audit.go:24 |
-| `InsertBatch` | internal/repository/postgres/audit.go:41 |
-| `Query` | internal/repository/postgres/audit.go:71 |
 | `Cleanup` | internal/repository/postgres/audit.go:141 |
-| `NewBackupCodeRepo` | internal/repository/postgres/backup_code.go:15 |
-| `CreateBatch` | internal/repository/postgres/backup_code.go:19 |
-| `ListUnusedByUser` | internal/repository/postgres/backup_code.go:41 |
-| `MarkUsed` | internal/repository/postgres/backup_code.go:65 |
-| `DeleteAllForUser` | internal/repository/postgres/backup_code.go:75 |
-| `NewBlobRepo` | internal/repository/postgres/blob.go:19 |
-| `Create` | internal/repository/postgres/blob.go:24 |
-| `GetByIDAndPseudonym` | internal/repository/postgres/blob.go:42 |
 | `GetByRefAndPseudonym` | internal/repository/postgres/blob.go:62 |
 | `DeleteByRefAndPseudonym` | internal/repository/postgres/blob.go:82 |
-| `ListByPseudonym` | internal/repository/postgres/blob.go:94 |
-| `GetQuota` | internal/repository/postgres/blob.go:119 |
-| `Delete` | internal/repository/postgres/blob.go:132 |
 | `DeleteAllForPseudonym` | internal/repository/postgres/blob.go:146 |
-| `NewClientRepo` | internal/repository/postgres/client.go:19 |
-| `Create` | internal/repository/postgres/client.go:24 |
-| `GetByID` | internal/repository/postgres/client.go:39 |
-| `GetByName` | internal/repository/postgres/client.go:57 |
-| `List` | internal/repository/postgres/client.go:75 |
-| `Update` | internal/repository/postgres/client.go:100 |
-| `Deactivate` | internal/repository/postgres/client.go:114 |
-| `New` | internal/repository/postgres/db.go:18 |
-| `Close` | internal/repository/postgres/db.go:43 |
-| `NewDeviceRepo` | internal/repository/postgres/device.go:20 |
-| `Create` | internal/repository/postgres/device.go:25 |
-| `GetByID` | internal/repository/postgres/device.go:40 |
-| `GetByFingerprint` | internal/repository/postgres/device.go:55 |
-| `ListByUser` | internal/repository/postgres/device.go:70 |
-| `UpdateLastSeen` | internal/repository/postgres/device.go:94 |
-| `UpdateFriendlyName` | internal/repository/postgres/device.go:103 |
-| `Trust` | internal/repository/postgres/device.go:112 |
-| `Delete` | internal/repository/postgres/device.go:121 |
 | `DeleteAllForUser` | internal/repository/postgres/device.go:130 |
-| `NewIdentityRepo` | internal/repository/postgres/identity.go:19 |
-| `Upsert` | internal/repository/postgres/identity.go:24 |
-| `GetByPseudonym` | internal/repository/postgres/identity.go:41 |
-| `Delete` | internal/repository/postgres/identity.go:57 |
-| `NewPasswordHistoryRepo` | internal/repository/postgres/password_history.go:15 |
-| `Create` | internal/repository/postgres/password_history.go:20 |
-| `GetRecentByUser` | internal/repository/postgres/password_history.go:31 |
 | `DeleteAllForUser` | internal/repository/postgres/password_history.go:54 |
-| `NewRateLimitRepo` | internal/repository/postgres/rate_limit.go:18 |
-| `Increment` | internal/repository/postgres/rate_limit.go:21 |
-| `Get` | internal/repository/postgres/rate_limit.go:36 |
-| `DeleteExpired` | internal/repository/postgres/rate_limit.go:51 |
-| `NewRefreshTokenRepo` | internal/repository/postgres/refresh_token.go:19 |
-| `Create` | internal/repository/postgres/refresh_token.go:24 |
-| `GetByTokenHash` | internal/repository/postgres/refresh_token.go:39 |
-| `MarkUsed` | internal/repository/postgres/refresh_token.go:63 |
-| `RevokeByID` | internal/repository/postgres/refresh_token.go:72 |
 | `RevokeByDeviceID` | internal/repository/postgres/refresh_token.go:81 |
-| `RevokeFamily` | internal/repository/postgres/refresh_token.go:90 |
-| `RevokeAllForUser` | internal/repository/postgres/refresh_token.go:99 |
 | `RevokeAll` | internal/repository/postgres/refresh_token.go:108 |
 | `CountActiveFamilies` | internal/repository/postgres/refresh_token.go:117 |
-| `DeleteExpired` | internal/repository/postgres/refresh_token.go:129 |
-| `deref` | internal/repository/postgres/scan.go:6 |
-| `newDeviceScan` | internal/repository/postgres/scan.go:23 |
-| `ptrs` | internal/repository/postgres/scan.go:25 |
-| `device` | internal/repository/postgres/scan.go:32 |
-| `NewSocialAccountRepo` | internal/repository/postgres/social_account.go:18 |
-| `Create` | internal/repository/postgres/social_account.go:23 |
-| `GetByProviderAndID` | internal/repository/postgres/social_account.go:35 |
-| `ListByUser` | internal/repository/postgres/social_account.go:51 |
-| `Delete` | internal/repository/postgres/social_account.go:74 |
 | `DeleteAllForUser` | internal/repository/postgres/social_account.go:83 |
-| `NewTOTPRepo` | internal/repository/postgres/totp.go:18 |
-| `Create` | internal/repository/postgres/totp.go:21 |
-| `GetByUserID` | internal/repository/postgres/totp.go:32 |
-| `MarkVerified` | internal/repository/postgres/totp.go:47 |
-| `DeleteByUserID` | internal/repository/postgres/totp.go:56 |
-| `NewUserRepo` | internal/repository/postgres/user.go:20 |
-| `Create` | internal/repository/postgres/user.go:25 |
-| `CreateImported` | internal/repository/postgres/user.go:46 |
-| `ClearImportPending` | internal/repository/postgres/user.go:72 |
-| `GetByID` | internal/repository/postgres/user.go:81 |
-| `GetByEmail` | internal/repository/postgres/user.go:91 |
-| `Update` | internal/repository/postgres/user.go:101 |
 | `SoftDeleteScrub` | internal/repository/postgres/user.go:120 |
-| `UpdatePassword` | internal/repository/postgres/user.go:133 |
-| `IncrementFailedLogin` | internal/repository/postgres/user.go:142 |
-| `ResetFailedLogin` | internal/repository/postgres/user.go:151 |
-| `LockUntil` | internal/repository/postgres/user.go:160 |
-| `Unlock` | internal/repository/postgres/user.go:169 |
 | `SetLastLogin` | internal/repository/postgres/user.go:178 |
-| `VerifyEmail` | internal/repository/postgres/user.go:187 |
-| `scanUser` | internal/repository/postgres/user.go:195 |
-| `nullStr` | internal/repository/postgres/user.go:221 |
-| `NewWebAuthnRepo` | internal/repository/postgres/webauthn.go:18 |
-| `Create` | internal/repository/postgres/webauthn.go:21 |
-| `GetByCredentialID` | internal/repository/postgres/webauthn.go:33 |
-| `ListByUser` | internal/repository/postgres/webauthn.go:49 |
-| `UpdateSignCount` | internal/repository/postgres/webauthn.go:72 |
-| `Delete` | internal/repository/postgres/webauthn.go:81 |
-| `Start` | internal/server/server.go:119 |
+| `Start` | internal/server/server.go:128 |
+| `SetMailer` | internal/service/auth.go:154 |
+| `NewEmailOverrideStore` | internal/service/email_overrides.go:22 |
+| `Branding` | internal/service/email_overrides.go:27 |
+| `Template` | internal/service/email_overrides.go:50 |
 | `AALForMethods` | internal/service/mfa.go:57 |
 
 ## Low Coverage (1-74%)
 
 | Function | File | Coverage |
 |----------|------|----------|
-| `ListKeys` | internal/adminapi/handler.go:86 | 30.0% |
-| `RotateKey` | internal/adminapi/handler.go:103 | 30.0% |
-| `RevokeKey` | internal/adminapi/handler.go:123 | 53.8% |
-| `GetClient` | internal/adminapi/handler.go:545 | 66.7% |
-| `RevokeClient` | internal/adminapi/handler.go:631 | 60.0% |
+| `actor` | internal/adminapi/email.go:18 | 66.7% |
+| `ListKeys` | internal/adminapi/handler.go:100 | 30.0% |
+| `RotateKey` | internal/adminapi/handler.go:117 | 30.0% |
+| `RevokeKey` | internal/adminapi/handler.go:137 | 53.8% |
+| `GetClient` | internal/adminapi/handler.go:559 | 66.7% |
+| `RevokeClient` | internal/adminapi/handler.go:645 | 60.0% |
 | `cleanup` | internal/cache/memory.go:132 | 45.5% |
-| `Get` | internal/cache/postgres.go:24 | 42.9% |
-| `GetAndDelete` | internal/cache/postgres.go:59 | 42.9% |
-| `Exists` | internal/cache/postgres.go:128 | 33.3% |
 | `rotateAdminToken` | internal/cli/cli.go:267 | 69.2% |
-| `presence` | internal/config/config.go:664 | 66.7% |
+| `presence` | internal/config/config.go:686 | 66.7% |
+| `splitTrimLower` | internal/config/config.go:708 | 28.6% |
 | `acquireArgon2` | internal/crypto/argon2.go:53 | 70.0% |
 | `init` | internal/crypto/argon2.go:97 | 60.0% |
 | `EncryptRecovery` | internal/crypto/recovery.go:36 | 72.2% |
 | `LoadRSAPublicKeyPEM` | internal/crypto/recovery.go:100 | 50.0% |
 | `LoadRSAPrivateKeyPEM` | internal/crypto/recovery.go:124 | 50.0% |
+| `NewMailer` | internal/email/mailer.go:46 | 71.4% |
+| `resolveBranding` | internal/email/mailer.go:104 | 11.1% |
+| `renderOverride` | internal/email/mailer.go:135 | 8.7% |
 | `Delete` | internal/handler/account.go:31 | 67.9% |
 | `Export` | internal/handler/data_export.go:62 | 74.5% |
-| `VerifyFinish` | internal/handler/webauthn.go:197 | 65.1% |
+| `SetMailer` | internal/handler/password.go:91 | 50.0% |
+| `VerifyFinish` | internal/handler/webauthn.go:199 | 65.1% |
+| `Import` | internal/keystore/keystore.go:107 | 71.4% |
+| `Wrap` | internal/kms/kms.go:78 | 71.4% |
 | `addLimiter` | internal/middleware/ratelimit.go:143 | 47.1% |
 | `RequestID` | internal/middleware/requestid.go:19 | 66.7% |
-| `Run` | internal/migrate/migrate.go:17 | 2.5% |
 | `Expire` | internal/redis/client.go:187 | 71.4% |
 | `writeCommand` | internal/redis/resp.go:22 | 61.1% |
-| `sendImportClaimLink` | internal/service/auth.go:338 | 68.4% |
+| `Create` | internal/repository/postgres/app_role.go:79 | 71.4% |
+| `Create` | internal/repository/postgres/blob.go:24 | 71.4% |
+| `Delete` | internal/repository/postgres/email_branding.go:99 | 66.7% |
+| `Delete` | internal/repository/postgres/email_template.go:105 | 66.7% |
+| `CreateImported` | internal/repository/postgres/user.go:46 | 71.4% |
+| `sendImportClaimLink` | internal/service/auth.go:363 | 66.7% |
 | `DeleteAccount` | internal/service/erasure.go:76 | 69.2% |

@@ -112,6 +112,29 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// RequireScope rejects authenticated requests whose token does not carry the
+// given OAuth2 scope. It must be chained AFTER an Auth middleware so the
+// validated claims are already in context. Used to gate the KMS unwrap oracle
+// to client-credential tokens explicitly granted "kms:unwrap".
+func RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := GetClaims(r.Context())
+			if claims == nil {
+				httputil.WriteError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			for _, s := range claims.Scopes {
+				if s == scope {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			httputil.WriteError(w, http.StatusForbidden, "insufficient_scope")
+		})
+	}
+}
+
 // Confirmed checks that the user recently confirmed their password via POST /auth/confirm.
 // Returns 403 requires_confirmation if no recent confirmation exists.
 func Confirmed(c cache.Cache) func(http.Handler) http.Handler {

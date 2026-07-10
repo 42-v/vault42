@@ -28,6 +28,33 @@ type AppRoleRepository interface {
 	Delete(ctx context.Context, name string) error
 }
 
+// EmailBrandingRepository manages per-app email branding (auth.email_branding).
+type EmailBrandingRepository interface {
+	// Get returns the branding for an app, or nil, nil if absent.
+	Get(ctx context.Context, app string) (*model.EmailBranding, error)
+	// List returns all per-app branding rows ordered by app.
+	List(ctx context.Context) ([]*model.EmailBranding, error)
+	// Upsert creates or replaces the branding for an app.
+	Upsert(ctx context.Context, b *model.EmailBranding) error
+	// Delete removes the branding for an app (idempotent).
+	Delete(ctx context.Context, app string) error
+}
+
+// EmailTemplateRepository manages per-app email template overrides
+// (auth.email_templates), keyed by (app, template_name).
+type EmailTemplateRepository interface {
+	// Get returns the override for (app, templateName), or nil, nil if absent.
+	Get(ctx context.Context, app, templateName string) (*model.EmailTemplate, error)
+	// ListByApp returns all template overrides for an app ordered by template_name.
+	ListByApp(ctx context.Context, app string) ([]*model.EmailTemplate, error)
+	// List returns every template override ordered by app, template_name.
+	List(ctx context.Context) ([]*model.EmailTemplate, error)
+	// Upsert creates or replaces the override for (app, template_name).
+	Upsert(ctx context.Context, t *model.EmailTemplate) error
+	// Delete removes the override for (app, templateName) (idempotent).
+	Delete(ctx context.Context, app, templateName string) error
+}
+
 // UserRepository manages user persistence.
 type UserRepository interface {
 	// Create inserts a new user record.

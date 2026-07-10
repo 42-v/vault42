@@ -110,6 +110,20 @@ type ClientTokenResponse struct {
 	Scope       string `json:"scope"`
 }
 
+// KMSUnwrapRequest is the POST /kms/unwrap request body. Ciphertext is the
+// base64 (std) wrapped-key envelope (nonce || AES-256-GCM ciphertext); Kid names
+// the KEK it was wrapped under.
+type KMSUnwrapRequest struct {
+	Kid        string `json:"kid"`
+	Ciphertext string `json:"ciphertext"`
+}
+
+// KMSUnwrapResponse is returned by POST /kms/unwrap. Plaintext is the base64
+// (std) unwrapped key, released only over the authenticated response.
+type KMSUnwrapResponse struct {
+	Plaintext string `json:"plaintext"` // #nosec G117 -- base64 key material, returned only to the authorized caller over the response body
+}
+
 // OAuthExchangeData is the token data stored in cache and returned by POST /auth/oauth2/exchange.
 type OAuthExchangeData struct {
 	AccessToken string `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749

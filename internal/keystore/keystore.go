@@ -53,7 +53,9 @@ type KeyStore struct {
 	retentionPeriod time.Duration
 	onKeyChange     OnKeyChangeFunc
 
-	stopCh chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // New creates a new KeyStore. masterKey must be exactly 32 bytes (AES-256).
@@ -303,7 +305,9 @@ type KeyInfo struct {
 // StartRefreshLoop starts a background goroutine that refreshes keys from the
 // database at the given interval. Call Stop() to terminate the loop.
 func (ks *KeyStore) StartRefreshLoop(ctx context.Context, interval time.Duration) {
+	ks.wg.Add(1)
 	go func() {
+		defer ks.wg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -322,8 +326,15 @@ func (ks *KeyStore) StartRefreshLoop(ctx context.Context, interval time.Duration
 }
 
 // Stop terminates the refresh loop and zeros the master key.
+//
+// It blocks until the refresh loop has exited. Refresh reads masterKey outside
+// ks.mu (AES-GCM decrypt of the active key), so zeroing it while a refresh is
+// still in flight is a data race on live key material — and a refresh that read
+// the half-zeroed key would fail to decrypt. Stop is idempotent: a second call
+// must not re-close stopCh.
 func (ks *KeyStore) Stop() {
-	close(ks.stopCh)
+	ks.stopOnce.Do(func() { close(ks.stopCh) })
+	ks.wg.Wait()
 	ks.mu.Lock()
 	for i := range ks.masterKey {
 		ks.masterKey[i] = 0

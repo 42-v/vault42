@@ -1,4 +1,4 @@
-# Vault42 — Authentication Server Compliance Report
+# Vault42 -- Authentication Server Compliance Report
 
 This report assesses the Vault42 authentication server against seven security and
 privacy standards spanning authentication, session management, cryptography, audit
@@ -19,12 +19,12 @@ remediation prioritization.
 |---|---:|---:|---:|---:|---:|
 | NIST SP 800-63B (Authentication & Lifecycle Management) | 39 | 2 | 0 | 0 | 96% |
 | OWASP ASVS V2 (Authentication) + V3 (Session Management) | 40 | 2 | 0 | 0 | 95% |
-| OWASP ASVS v4.0 — Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8) | 34 | 3 | 0 | 3 | 96% |
-| NIST SP 800-53 Rev 5 — IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
+| OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8) | 34 | 3 | 0 | 3 | 96% |
+| NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
 | OWASP Top 10 (2021) | 47 | 1 | 0 | 0 | 97% |
 | RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC | 50 | 1 | 0 | 3 | 96% |
-| GDPR — General Data Protection Regulation (EU 2016/679) | 4 | 9 | 2 | 0 | 60% |
-| **Totals** | **234** | **21** | **2** | **9** | — |
+| GDPR -- General Data Protection Regulation (EU 2016/679) | 4 | 9 | 2 | 0 | 60% |
+| **Totals** | **234** | **21** | **2** | **9** | -- |
 
 **Overall weighted coverage:** **91.1%** (234 requirements met out of 257 applicable,
 excluding 9 Not-Applicable organizational/out-of-scope controls). Awarding half credit
@@ -35,7 +35,7 @@ for partial findings raises the figure to **95.1%**. **High-severity open findin
 
 ## NIST SP 800-63B (Authentication & Lifecycle Management)
 
-**Coverage: 96%** — 39 met, 2 partial, 0 gap, 0 N/A
+**Coverage: 96%** -- 39 met, 2 partial, 0 gap, 0 N/A
 
 The authentication server demonstrates comprehensive compliance with NIST SP 800-63B.
 All core password controls are met: Argon2id with a 46 MiB memory cost, a 15-character
@@ -59,7 +59,7 @@ trade-off).
 
 ## OWASP ASVS V2 (Authentication) + V3 (Session Management)
 
-**Coverage: 95%** — 40 met, 2 partial, 0 gap, 0 N/A
+**Coverage: 95%** -- 40 met, 2 partial, 0 gap, 0 N/A
 
 The server aligns strongly with ASVS V2 and V3. Strengths include CSPRNG-based token
 generation, anti-automation lockouts (per-user 5/15min and per-IP 20/15min),
@@ -81,9 +81,9 @@ that an account exists.
 
 ---
 
-## OWASP ASVS v4.0 — Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8)
+## OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8)
 
-**Coverage: 96%** — 34 met, 3 partial, 0 gap, 3 N/A
+**Coverage: 96%** -- 34 met, 3 partial, 0 gap, 3 N/A
 
 Approved algorithms are enforced throughout: AES-256-GCM for data encryption, Argon2id
 for passwords (46 MiB, 1 iteration, 1 lane), SHA-256 for hashing, RS256 for JWT signing
@@ -111,9 +111,9 @@ codebase.*
 
 ---
 
-## NIST SP 800-53 Rev 5 — IA / AC / AU / SC (Authentication-Relevant Controls)
+## NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (Authentication-Relevant Controls)
 
-**Coverage: 95%** — 20 met, 3 partial, 0 gap, 0 N/A
+**Coverage: 95%** -- 20 met, 3 partial, 0 gap, 0 N/A
 
 The server implements strong fundamentals across Identification & Authentication, Access
 Control, Audit & Accountability, and System & Communications Protection: MFA (TOTP,
@@ -134,7 +134,7 @@ database constraints, and documentation of infrastructure-level boundary protect
 
 ## OWASP Top 10 (2021)
 
-**Coverage: 97%** — 47 met, 1 partial, 0 gap, 0 N/A
+**Coverage: 97%** -- 47 met, 1 partial, 0 gap, 0 N/A
 
 The server reflects enterprise-grade alignment with the OWASP Top 10 (2021): a layered
 administrative gateway (mutual TLS, loopback-only access, role-based access control,
@@ -156,12 +156,12 @@ endpoints.
 
 ## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC
 
-**Coverage: 96%** — 50 met, 1 partial, 0 gap, 3 N/A
+**Coverage: 96%** -- 50 met, 1 partial, 0 gap, 3 N/A
 
 The implementation adheres strongly to the JWT and OAuth2 protocol family with
 defense-in-depth against well-known attacks (algorithm confusion, header injection,
 session fixation, code reuse, replay, key confusion). JWT parsing uses a strict algorithm
-allowlist (RS256, ES256 only — no `none` or HMAC), rejects header-injection vectors
+allowlist (RS256, ES256 only -- no `none` or HMAC), rejects header-injection vectors
 (`jku`/`x5u`/`x5c`/`jwk`), validates all standard claims (`exp`, `nbf`, `iat`, `iss`,
 `aud`), enforces an 8 KB size limit, and constrains `kid` to a safe pattern to prevent
 path traversal. PKCE is fully implemented with S256 and one-time-use atomicity. CSRF state
@@ -182,9 +182,9 @@ infrastructure, JWKS endpoint operation) and unused `crit` header handling.*
 
 ---
 
-## GDPR — General Data Protection Regulation (EU 2016/679)
+## GDPR -- General Data Protection Regulation (EU 2016/679)
 
-**Coverage: 60%** — 4 met, 9 partial, 2 gap, 0 N/A
+**Coverage: 60%** -- 4 met, 9 partial, 2 gap, 0 N/A
 
 Identity and PII handling shows strong technical data-protection: AES-256-GCM encryption
 at rest with pseudonymized keys, audit logging of PII access with sensitive-key scrubbing,
@@ -220,46 +220,46 @@ High-severity findings first, then medium, then low. All high-severity items fal
 GDPR data-lifecycle and accountability scope.
 
 ### High severity
-1. **GDPR-10 — Data retention limits (Gap).** No automatic purge of audit entries,
+1. **GDPR-10 -- Data retention limits (Gap).** No automatic purge of audit entries,
    expired tokens, or abandoned records. Add configurable retention periods, scheduled
    cleanup jobs, and legal-hold overrides.
-2. **GDPR-12 — Breach notification (Gap).** No breach-notification procedure or
+2. **GDPR-12 -- Breach notification (Gap).** No breach-notification procedure or
    risk-threshold alerting. Implement notification recipients, alerting from audit risk
    scores, a 72-hour regulator timeline, and an incident-response playbook.
-3. **GDPR-5 — Right to erasure (Partial).** Only the identity profile can be deleted. Add
+3. **GDPR-5 -- Right to erasure (Partial).** Only the identity profile can be deleted. Add
    a full account-deletion flow with cascade deletion, token revocation, and audit
    anonymization.
-4. **GDPR-13 — Data subject rights support (Partial).** Add the missing rights endpoints
+4. **GDPR-13 -- Data subject rights support (Partial).** Add the missing rights endpoints
    (deletion, objection/preferences, portability export) and log rights exercises.
 
 ### Medium severity
-5. **AC-12 — Inactivity timeout (Partial).** Add idle-timeout tracking and refresh
+5. **AC-12 -- Inactivity timeout (Partial).** Add idle-timeout tracking and refresh
    rejection beyond the idle threshold.
-6. **AU-9 — Audit log integrity (Partial).** Add cryptographic chaining and read-time
+6. **AU-9 -- Audit log integrity (Partial).** Add cryptographic chaining and read-time
    verification, and consider an immutable off-system mirror.
-7. **V3-2-2 — Session invalidation on login (Partial).** Add an optional policy to revoke
+7. **V3-2-2 -- Session invalidation on login (Partial).** Add an optional policy to revoke
    existing token families on new login.
-8. **V2-1-1 — Generic auth error messages (Partial).** Return generic
+8. **V2-1-1 -- Generic auth error messages (Partial).** Return generic
    `invalid_credentials` for locked/banned/disabled accounts.
-9. **V6.4.1 — Secret zeroing for runtime configs (Partial).** Migrate pepper and database
+9. **V6.4.1 -- Secret zeroing for runtime configs (Partial).** Migrate pepper and database
    password to `[]byte` and zero on shutdown.
 10. **GDPR-1, GDPR-7, GDPR-8, GDPR-9, GDPR-11, GDPR-15 (Partial).** Consent management,
     purpose/processing documentation, data export, accountability artifacts, third-party
     transfer documentation, and marketing-consent tracking.
 
 ### Low severity
-11. **NIST-5.2.2 — Strict concurrent-session limit (Partial).** Optional hard enforcement
+11. **NIST-5.2.2 -- Strict concurrent-session limit (Partial).** Optional hard enforcement
     via per-user lock.
-12. **NIST-5.2.4 — Explicit AAL labeling (Partial).** Add AAL constants and an
+12. **NIST-5.2.4 -- Explicit AAL labeling (Partial).** Add AAL constants and an
     `aal_level` field.
-13. **V6.2.2 — TOTP SHA-1 interop note (Partial).** Document the RFC 6238 constraint.
-14. **V8.3.2 — Ephemeral buffer zeroing (Partial).** Zero decrypted identity plaintext and
+13. **V6.2.2 -- TOTP SHA-1 interop note (Partial).** Document the RFC 6238 constraint.
+14. **V8.3.2 -- Ephemeral buffer zeroing (Partial).** Zero decrypted identity plaintext and
     crypto buffers after use.
-15. **SC-7 — Boundary protection documentation (Partial).** Document infrastructure-level
+15. **SC-7 -- Boundary protection documentation (Partial).** Document infrastructure-level
     network boundaries and provide network-policy examples.
-16. **M06 — List endpoint pagination (Partial).** Add bounded `limit`/`offset` to
+16. **M06 -- List endpoint pagination (Partial).** Add bounded `limit`/`offset` to
     administrative list endpoints.
-17. **OAUTH2-TOKEN-001 — Refresh-token invalidation (Partial).** Confirm and, if needed,
+17. **OAUTH2-TOKEN-001 -- Refresh-token invalidation (Partial).** Confirm and, if needed,
     enforce revocation of the old refresh token on rotation.
-18. **GDPR-2 — Data minimization documentation (Partial).** Document field-necessity
+18. **GDPR-2 -- Data minimization documentation (Partial).** Document field-necessity
     rationale and add a collection notice.

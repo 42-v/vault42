@@ -2,7 +2,7 @@
 
 Vault42 Admin Gateway is a standalone binary (`cmd/admin-gateway/`) for RBAC-protected administrative operations. It binds exclusively to loopback, requires mutual TLS (mTLS) client certificates, and enforces role-based permissions through 6 layers of defense-in-depth.
 
-All admin operations — key management, user management, audit log access, client management, and admin account management — are served exclusively through the admin gateway. The main vault42 binary does not expose any admin endpoints.
+All admin operations -- key management, user management, audit log access, client management, and admin account management -- are served exclusively through the admin gateway. The main vault42 binary does not expose any admin endpoints.
 
 ---
 
@@ -17,11 +17,11 @@ Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
 ```
 
 The admin gateway is a separate Go binary with its own:
-- Database role (`vault_admin`) — full CRUD on admin tables, read/update on user tables
-- TLS configuration — mTLS with client certificate verification
-- Session system — 64-byte tokens, SHA256-hashed, stored in `auth.admin_sessions`
-- RBAC model — hardcoded in Go (not configurable via SQL, preventing injection-based escalation)
-- Server-rendered HTML dashboard — no client-side JavaScript frameworks
+- Database role (`vault_admin`) -- full CRUD on admin tables, read/update on user tables
+- TLS configuration -- mTLS with client certificate verification
+- Session system -- 64-byte tokens, SHA256-hashed, stored in `auth.admin_sessions`
+- RBAC model -- hardcoded in Go (not configurable via SQL, preventing injection-based escalation)
+- Server-rendered HTML dashboard -- no client-side JavaScript frameworks
 
 ---
 
@@ -46,11 +46,11 @@ Three roles with strict hierarchy (hardcoded in `internal/rbac/`):
 
 | Role | Inherits | Additional Permissions |
 |------|----------|----------------------|
-| `viewer` | — | List/read keys, audit, users, sessions, clients, config, metrics |
+| `viewer` | -- | List/read keys, audit, users, sessions, clients, config, metrics |
 | `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, revoke sessions, create/revoke/rotate clients, write config |
 | `super_admin` | `operator` | Manage/create/revoke admin accounts |
 
-22 permissions total. Permission checks are Go code — not database queries — so SQL injection cannot escalate privileges.
+22 permissions total. Permission checks are Go code -- not database queries -- so SQL injection cannot escalate privileges.
 
 ---
 
@@ -61,9 +61,9 @@ All configuration via environment variables:
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `ADMIN_GW_LISTEN_ADDR` | string | `127.0.0.1:9443` | No | Bind address (must be loopback) |
-| `ADMIN_GW_TLS_CERT_FILE` | string | — | Yes | Server TLS certificate path |
-| `ADMIN_GW_TLS_KEY_FILE` | string | — | Yes | Server TLS private key path |
-| `ADMIN_GW_CLIENT_CA_FILE` | string | — | Yes | Client CA certificate for mTLS verification |
+| `ADMIN_GW_TLS_CERT_FILE` | string | -- | Yes | Server TLS certificate path |
+| `ADMIN_GW_TLS_KEY_FILE` | string | -- | Yes | Server TLS private key path |
+| `ADMIN_GW_CLIENT_CA_FILE` | string | -- | Yes | Client CA certificate for mTLS verification |
 | `ADMIN_GW_SESSION_TTL` | duration | `1h` | No | Admin session lifetime |
 | `ADMIN_GW_MAX_FAILED_LOGINS` | int | `5` | No | Failed login attempts before lockout |
 | `ADMIN_GW_LOCKOUT_DURATION` | duration | `30m` | No | Account lockout duration |
@@ -76,8 +76,8 @@ All configuration via environment variables:
 | `DB_NAME` | string | `vault` | No | Database name |
 | `DB_SSLMODE` | string | `require` | No | PostgreSQL SSL mode |
 | `DB_MAX_CONNS` | int | `5` | No | Max database connections |
-| `DB_ADMIN_PASSWORD_FILE` | string | — | Yes | Path to `vault_admin` DB password |
-| `MASTER_KEY_FILE` | string | — | Yes | Path to 32-byte AES-256 master key |
+| `DB_ADMIN_PASSWORD_FILE` | string | -- | Yes | Path to `vault_admin` DB password |
+| `MASTER_KEY_FILE` | string | -- | Yes | Path to 32-byte AES-256 master key |
 
 ---
 
@@ -89,16 +89,16 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `POST` | `/admin/auth/login` | None (rate-limited 10/min) | — | Login with username + password + optional TOTP |
-| `POST` | `/admin/auth/logout` | Session | — | Revoke current session |
-| `GET` | `/admin/status` | Session | — | Current admin info + 2FA status |
+| `POST` | `/admin/auth/login` | None (rate-limited 10/min) | -- | Login with username + password + optional TOTP |
+| `POST` | `/admin/auth/logout` | Session | -- | Revoke current session |
+| `GET` | `/admin/status` | Session | -- | Current admin info + 2FA status |
 
 ### TOTP (Two-Factor)
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `POST` | `/admin/admins/me/totp/setup` | Session | — | Generate TOTP secret + QR URI |
-| `POST` | `/admin/admins/me/totp/verify` | Session | — | Verify TOTP code and enable 2FA |
+| `POST` | `/admin/admins/me/totp/setup` | Session | -- | Generate TOTP secret + QR URI |
+| `POST` | `/admin/admins/me/totp/verify` | Session | -- | Verify TOTP code and enable 2FA |
 
 ### Key Management
 
@@ -182,9 +182,9 @@ All endpoints are prefixed with `/admin/`.
 
 Migration `001_initial_schema.sql` creates (among other tables):
 
-- **`auth.admin_roles`** — Reference table: `viewer`, `operator`, `super_admin` with description and rank
-- **`auth.admin_users`** — UUID id, unique username, Argon2id password hash, role (FK), encrypted TOTP secret, TOTP verified flag, last_totp_counter (replay prevention), locked_until, failed_login_count, timestamps, created_by (self-referential FK)
-- **`auth.admin_sessions`** — Session id, admin_id (FK with CASCADE), SHA256 token hash, IP, user agent, timestamps, revoked flag
+- **`auth.admin_roles`** -- Reference table: `viewer`, `operator`, `super_admin` with description and rank
+- **`auth.admin_users`** -- UUID id, unique username, Argon2id password hash, role (FK), encrypted TOTP secret, TOTP verified flag, last_totp_counter (replay prevention), locked_until, failed_login_count, timestamps, created_by (self-referential FK)
+- **`auth.admin_sessions`** -- Session id, admin_id (FK with CASCADE), SHA256 token hash, IP, user agent, timestamps, revoked flag
 
 ### Database Roles
 
@@ -200,7 +200,7 @@ Migration `001_initial_schema.sql` creates (among other tables):
 On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The credentials are printed to stdout (one-time only):
 
 ```
-admin-gateway: FIRST BOOT — created super_admin "admin" with password: <random>
+admin-gateway: FIRST BOOT -- created super_admin "admin" with password: <random>
 ```
 
 Change this password immediately after first login.
@@ -211,11 +211,11 @@ Change this password immediately after first login.
 
 The admin gateway includes a killswitch mechanism that crashes the pod when a non-loopback request is detected. This is a defense-in-depth measure: if all other layers (bind address, NetworkPolicy, mTLS, etc.) fail and a remote attacker reaches the gateway, the hard crash:
 
-1. **Stops the breach immediately** — no response is sent, the process terminates
-2. **Creates visibility** — Kubernetes CrashLoopBackOff triggers alerting and is visible in `kubectl get pods`
-3. **Leaves an audit trail** — a best-effort audit entry (`admin:killswitch_triggered`, risk score 100) is written before the crash
+1. **Stops the breach immediately** -- no response is sent, the process terminates
+2. **Creates visibility** -- Kubernetes CrashLoopBackOff triggers alerting and is visible in `kubectl get pods`
+3. **Leaves an audit trail** -- a best-effort audit entry (`admin:killswitch_triggered`, risk score 100) is written before the crash
 
-The killswitch is enabled by default (`ADMIN_GW_KILLSWITCH=true`) and disabled automatically in dev mode. The Recovery middleware explicitly re-panics killswitch signals — it cannot accidentally swallow them.
+The killswitch is enabled by default (`ADMIN_GW_KILLSWITCH=true`) and disabled automatically in dev mode. The Recovery middleware explicitly re-panics killswitch signals -- it cannot accidentally swallow them.
 
 ## Database Role Separation
 
@@ -231,7 +231,7 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 | `auth.signing_keys` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
 | `audit.audit_log` | SELECT, INSERT | SELECT, INSERT |
 
-This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is intentionally restricted from modifying user identity data (password, email, display name, avatar) — it can only lock/unlock accounts.
+This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is intentionally restricted from modifying user identity data (password, email, display name, avatar) -- it can only lock/unlock accounts.
 
 A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders protection against admin role escalation: even if SQL injection reaches the `vault_admin` role, a lower-ranked admin cannot promote themselves to a higher rank.
 
@@ -241,15 +241,15 @@ A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders pr
 - **Session tokens**: 64-byte random, SHA256-hashed before database storage
 - **TOTP secrets**: Encrypted at rest with AES-256 (master key)
 - **TOTP replay prevention**: Each accepted TOTP code's time-step counter is stored per admin. Replayed codes (same or earlier counter) are rejected within the ±1 period window
-- **Account lockout**: Configurable failed attempts threshold and lockout duration. Lockout counter is atomic (SQL `RETURNING` clause) — immune to race conditions under concurrent login attempts
-- **Admin revocation**: Deleting an admin CASCADE deletes all sessions — no race window between session revoke and admin revoke
+- **Account lockout**: Configurable failed attempts threshold and lockout duration. Lockout counter is atomic (SQL `RETURNING` clause) -- immune to race conditions under concurrent login attempts
+- **Admin revocation**: Deleting an admin CASCADE deletes all sessions -- no race window between session revoke and admin revoke
 - **Audit trail**: All admin mutations logged with admin ID, timestamp, IP, user agent
 - **No external dependencies**: Uses stdlib HTTP only (no frameworks)
-- **RBAC hardcoded**: Permission maps defined in Go code, not database — immune to SQL injection escalation
+- **RBAC hardcoded**: Permission maps defined in Go code, not database -- immune to SQL injection escalation
 - **Security headers**: CSP, HSTS (2 years), X-Frame-Options: DENY, X-Content-Type-Options: nosniff, Permissions-Policy, Cache-Control: no-store (all responses including static assets)
 - **Request ID**: Always server-generated (never trusts client `X-Request-ID`)
 - **Max body size**: 64KB limit
-- **Helm TLS validation**: `adminGateway.tls.secretName` is required when the gateway is enabled — Helm template fails with a clear error if missing
+- **Helm TLS validation**: `adminGateway.tls.secretName` is required when the gateway is enabled -- Helm template fails with a clear error if missing
 
 ### Accepted Risks
 
@@ -272,9 +272,9 @@ scripts/generate-admin-certs.sh
 ```
 
 Generates CA, server, and client certificates in `secrets/admin-gateway/`:
-- `ca.crt` — Certificate Authority
-- `server.key`, `server.crt` — Server certificate (SANs: localhost, 127.0.0.1, ::1)
-- `client.key`, `client.crt` — Client certificate (CN: admin-operator)
+- `ca.crt` -- Certificate Authority
+- `server.key`, `server.crt` -- Server certificate (SANs: localhost, 127.0.0.1, ::1)
+- `client.key`, `client.crt` -- Client certificate (CN: admin-operator)
 
 ### Kubernetes (Helm)
 

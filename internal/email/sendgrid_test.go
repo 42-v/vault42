@@ -38,6 +38,7 @@ func TestSendGridSender_Send(t *testing.T) {
 	sender := NewSendGridSender("test-api-key-123", "sender@example.com")
 	err := sender.Send(
 		context.Background(),
+		Address{},
 		"recipient@example.com",
 		"Test Subject",
 		"<h1>Hello</h1>",
@@ -108,7 +109,7 @@ func TestSendGridSender_ErrorResponse(t *testing.T) {
 	defer func() { sendGridURL = origURL }()
 
 	sender := NewSendGridSender("bad-key", "sender@example.com")
-	err := sender.Send(context.Background(), "to@example.com", "Subj", "<p>body</p>", "body")
+	err := sender.Send(context.Background(), Address{}, "to@example.com", "Subj", "<p>body</p>", "body")
 
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
@@ -137,7 +138,7 @@ func TestSendGridSender_ServerError(t *testing.T) {
 	defer func() { sendGridURL = origURL }()
 
 	sender := NewSendGridSender("valid-key", "sender@example.com")
-	err := sender.Send(context.Background(), "to@example.com", "Subj", "<p>body</p>", "body")
+	err := sender.Send(context.Background(), Address{}, "to@example.com", "Subj", "<p>body</p>", "body")
 
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
@@ -149,7 +150,7 @@ func TestSendGridSender_ServerError(t *testing.T) {
 
 func TestSendGridSender_MissingAPIKey(t *testing.T) {
 	sender := NewSendGridSender("", "sender@example.com")
-	err := sender.Send(context.Background(), "to@example.com", "Subj", "<p>body</p>", "body")
+	err := sender.Send(context.Background(), Address{}, "to@example.com", "Subj", "<p>body</p>", "body")
 
 	if err == nil {
 		t.Fatal("expected error for missing API key, got nil")
@@ -174,7 +175,7 @@ func TestSendGridSender_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	sender := NewSendGridSender("key", "sender@example.com")
-	err := sender.Send(ctx, "to@example.com", "Subj", "<p>body</p>", "body")
+	err := sender.Send(ctx, Address{}, "to@example.com", "Subj", "<p>body</p>", "body")
 
 	if err == nil {
 		t.Fatal("expected error for canceled context, got nil")

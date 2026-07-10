@@ -221,6 +221,39 @@ type AppRole struct {
 	CreatedAt   time.Time
 }
 
+// EmailBranding holds the per-app white-label overrides applied to auth emails.
+// App is the tenant slug (e.g. "acme"). Any empty field falls back to the
+// global default at render time. FromAddress is honoured only when its domain
+// is on the configured From allowlist (see config.EmailFromAllowedDomains).
+type EmailBranding struct {
+	App          string
+	AppName      string
+	LogoURL      string
+	PrimaryColor string
+	FromName     string
+	FromAddress  string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	UpdatedBy    string
+}
+
+// EmailTemplate is a per-app, per-type full override of an auth email body.
+// TemplateName is one of the email.Template* constants. When absent or
+// disabled, the global template is rendered with the app's branding instead.
+type EmailTemplate struct {
+	ID           string
+	App          string
+	TemplateName string
+	Subject      string
+	HTMLContent  string
+	TextContent  string
+	Enabled      bool
+	CreatedAt    time.Time
+	CreatedBy    string
+	UpdatedAt    time.Time
+	UpdatedBy    string
+}
+
 // AdminUser represents an admin gateway operator account.
 // Admin accounts are stored in auth.admin_users, fully decoupled from auth.users.
 // The Role field is populated from the auth.admin_roles reference table via JOIN.
