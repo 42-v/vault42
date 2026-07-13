@@ -24,6 +24,24 @@ func NewIdentityHandler(svc *service.IdentityService, auditLog *audit.Logger) *I
 	return &IdentityHandler{svc: svc, auditLog: auditLog}
 }
 
+// logConsent records a consent decision in the audit trail. The trail is what
+// answers "prove this user opted in" (Art. 7(1)) and "prove withdrawal was
+// honoured" (Art. 7(3)); the profile only holds the current state.
+func (h *IdentityHandler) logConsent(r *http.Request, userID string, granted bool, source string) {
+	if h.auditLog == nil {
+		return
+	}
+	event := audit.ConsentWithdrawn
+	if granted {
+		event = audit.ConsentGranted
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"purpose": "marketing_email",
+			"source":  source,
+		}, 0)
+}
+
 var (
 	countryCodeRe = regexp.MustCompile(`^[A-Z]{2}$`)
 	dateRe        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -111,15 +129,20 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &service.IdentityData{
-		GivenName:       truncate(input.GivenName, 100),
-		FamilyName:      truncate(input.FamilyName, 100),
-		Username:        input.Username,
-		Country:         input.Country,
-		State:           input.State,
-		DateOfBirth:     input.DateOfBirth,
-		Sex:             truncate(input.Sex, 50),
-		MarketingEmails: input.MarketingEmails,
-		Dynamic:         input.Dynamic,
+		GivenName:   truncate(input.GivenName, 100),
+		FamilyName:  truncate(input.FamilyName, 100),
+		Username:    input.Username,
+		Country:     input.Country,
+		State:       input.State,
+		DateOfBirth: input.DateOfBirth,
+		Sex:         truncate(input.Sex, 50),
+		Dynamic:     input.Dynamic,
+	}
+	// The user actively submitted this preference, so it is affirmative consent —
+	// stamp it with its provenance rather than storing a bare bool.
+	if input.MarketingEmails != nil {
+		data.StampMarketingConsent(*input.MarketingEmails, service.ConsentSourceProfile, "")
+		h.logConsent(r, claims.Subject, *input.MarketingEmails, service.ConsentSourceProfile)
 	}
 	if input.Billing != nil {
 		data.Billing = &service.BillingInfo{
@@ -170,6 +193,42 @@ func (h *IdentityHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})
+}
+
+// Unsubscribe handles POST /user/marketing/unsubscribe.
+//
+// Art. 7(3): withdrawing consent must be as easy as giving it. Granting is a
+// checkbox, so withdrawal is a single call with no body and no confirmation
+// step. It is idempotent — unsubscribing twice is not an error — and it only
+// clears the marketing preference; the account and every other purpose are
+// untouched.
+func (h *IdentityHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r.Context())
+	if claims == nil {
+		WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	data, _, err := h.svc.Get(r.Context(), claims.Subject)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if data == nil {
+		// No profile yet. Still record the withdrawal rather than no-opping: an
+		// account import could otherwise land a legacy opt-in on this user later
+		// and silently re-grant a consent they have already refused.
+		data = &service.IdentityData{}
+	}
+
+	data.StampMarketingConsent(false, service.ConsentSourceUnsubscribe, "")
+	if err := h.svc.Upsert(r.Context(), claims.Subject, data); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	h.logConsent(r, claims.Subject, false, service.ConsentSourceUnsubscribe)
+	WriteJSON(w, http.StatusOK, StatusResponse{Status: "unsubscribed"})
 }
 
 func validateIdentity(input *identityInput) error {

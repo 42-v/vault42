@@ -78,6 +78,9 @@ MSG
 # coverage, so a second run would report a lower number than the first.
 # -p 1 serializes package binaries — integration and compliance each spin up
 # their own Postgres testcontainer and contend for ports when run in parallel.
+# -timeout 30m: the integration suite spins a fresh container per test function,
+# so its wall-clock grows with the suite; the default 10m/package timeout is not
+# enough once integration + compliance are included.
 cov_run() {
   local profile="$1" out="$2"
   # Swallow the exit code so the report is always produced (cov_check_failures
@@ -86,7 +89,7 @@ cov_run() {
   # profile with no FAIL line, so the raw code is the only signal that the number
   # is incomplete rather than a real regression.
   local rc=0
-  go test -count=1 -p 1 -v -coverprofile="$profile" -coverpkg=./internal/... \
+  go test -count=1 -p 1 -timeout 30m -v -coverprofile="$profile" -coverpkg=./internal/... \
       "${COV_PKGS[@]}" > "$out" 2>&1 || rc=$?
   echo "$rc" > "${out}.rc"
 }

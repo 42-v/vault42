@@ -44,26 +44,26 @@
 | `internal/metrics` | 100.00% |
 | `internal/httputil` | 100.00% |
 | `internal/frontend` | 100.00% |
+| `internal/config` | 98.11% |
 | `internal/oauth2` | 97.69% |
 | `internal/jwt` | 96.81% |
-| `internal/audit` | 96.55% |
-| `internal/config` | 95.47% |
-| `internal/middleware` | 93.03% |
+| `internal/audit` | 94.87% |
+| `internal/middleware` | 94.35% |
+| `internal/seed` | 93.85% |
+| `internal/crypto` | 93.52% |
 | `internal/cache` | 92.21% |
-| `internal/adminapi` | 90.74% |
-| `internal/crypto` | 89.58% |
+| `internal/adminapi` | 91.92% |
+| `internal/service` | 90.85% |
+| `internal/handler` | 89.71% |
+| `internal/email` | 89.51% |
 | `internal/redis` | 89.35% |
-| `internal/handler` | 89.35% |
-| `internal/seed` | 89.23% |
 | `internal/honeypot` | 89.11% |
-| `internal/service` | 86.39% |
+| `internal/kms` | 87.50% |
+| `internal/cli` | 86.44% |
 | `internal/keystore` | 84.83% |
-| `internal/kms` | 83.33% |
+| `internal/repository/postgres` | 82.04% |
 | `internal/migrate` | 77.50% |
-| `internal/server` | 74.33% |
-| `internal/repository/postgres` | 71.83% |
-| `internal/email` | 67.81% |
-| `internal/cli` | 63.56% |
+| `internal/server` | 74.87% |
 ## Maintainers
 
 12 maintainers behind Vault's dependency tree.
@@ -71,11 +71,11 @@
 | Creator | Type | Packages | Repos | Followers | Since |
 |---|---|---|---|---|---|
 | [cespare](https://github.com/cespare) | User | xxhash | 150 | ![followers](https://img.shields.io/github/followers/cespare?style=flat&label=) | 2010-06-30 |
-| [fxamacker](https://github.com/fxamacker) | User | cbor | 35 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
+| [fxamacker](https://github.com/fxamacker) | User | cbor | 36 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
 | [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2882 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2883 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
 | [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 190 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |

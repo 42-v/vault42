@@ -129,6 +129,15 @@ func main() {
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
 	defer auditLogger.Close(ctx)
 
+	// Audit retention sweeper (Art. 5(1)(e)). No-op unless
+	// VAULT_AUDIT_RETENTION_DAYS is set.
+	auditRetention := audit.NewRetention(auditRepo, cfg.AuditRetentionPeriod)
+	if auditRetention.Enabled() {
+		auditRetention.Start(ctx)
+		defer auditRetention.Stop()
+		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
+	}
+
 	// CLI commands (check before starting server)
 	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper)
 

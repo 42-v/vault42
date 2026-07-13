@@ -51,6 +51,32 @@ consent does not affect the lawfulness of processing carried out before withdraw
 email is **off unless the user opts in** via the `marketing_emails` preference; clearing that
 preference withdraws consent.
 
+### 2.1 Demonstrating consent (Art. 7(1))
+
+Art. 7(1) puts the burden on the controller to **demonstrate** that consent was given. A boolean
+preference records what the user wants; it cannot show that they ever chose it. Every marketing
+preference is therefore stored together with a consent record — `granted`, `at`, `source` and, for
+migrated accounts, `origin` — on the encrypted identity profile, and each change also writes a
+`consent_granted` / `consent_withdrawn` audit entry.
+
+Only two sources count as **affirmative** consent, and only these authorise sending:
+
+| Source | Meaning | Affirmative? |
+|---|---|---|
+| `registration` | an explicit boolean supplied by a frontend at sign-up | **yes** |
+| `profile` | the user changed the preference on their profile | **yes** |
+| `unsubscribe` | withdrawal via the one-click unsubscribe path | n/a (always a withdrawal) |
+| `import` | carried over from a migrated system | **no** |
+| `legacy` | profile predates consent provenance; value known, origin unknown | **no** |
+
+`import` and `legacy` are deliberately **not** affirmative. A migrated flag may be a default the
+user was never shown: a column that defaults to true, or a consent checkbox that ships pre-ticked,
+produces a `true` that is indistinguishable from a choice — and Recital 32 (and *Planet49*,
+C-673/17) is explicit that pre-ticked boxes and silence are not consent. The imported value is
+preserved so the Operator can run a re-permission campaign against it, but it does not by itself
+authorise sending. `IdentityService.MarketingAllowed` is the only sanctioned gate for a campaign
+sender and fails closed on everything except the two affirmative sources.
+
 ---
 
 ## 3. Data Inventory
@@ -150,10 +176,15 @@ or the session they belong to. The following periods apply:
 - **Rate-limit counters:** transient; bounded to the active rate-limit window.
 - **Lockout / failed-login state:** transient; cleared on successful authentication or when the
   lockout window expires.
-- **Audit log:** retained for security and accountability and removed by an explicit
-  retention-cleanup operation. The retention horizon is **operator-set** (the cleanup operation
-  takes a retention-days value); entries older than the configured horizon are removed. Because
-  the audit log is append-only, this is the only sanctioned removal path.
+- **Audit log:** retained for security and accountability, then purged. The retention horizon is
+  **operator-set** via `VAULT_AUDIT_RETENTION_DAYS`; a background sweeper runs every 6 hours (and
+  once at startup) and removes entries older than the horizon. Because the audit log is
+  append-only, this is the only sanctioned removal path; `vault cleanup-audit` performs the same
+  purge on demand. **The sweeper is disabled by default** (`VAULT_AUDIT_RETENTION_DAYS=0`):
+  silently deleting security logs is not a safe default, so an Operator processing personal data
+  under Art. 5(1)(e) must set a horizon explicitly. Audit entries are deliberately exempt from the
+  account-erasure cascade (Art. 17(3)(b)/(e)), which is precisely why they need a time-based
+  purge of their own.
 - **Signing keys:** retired keys remain published only for a short overlap window (default **1
   hour**, operator-configurable) so in-flight tokens validate, then are removed from the
   published key set.
@@ -204,11 +235,16 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 - The user can delete the identity profile via **`DELETE /user/identity`**, individual blobs via
   **`DELETE /user/blobs/{id}`** (and named blobs), individual devices/sessions, and MFA
   credentials, each through the corresponding authenticated endpoint.
-- Full account erasure removes or anonymizes the account record, cascade-removes the
-  account-linked auth records (password history, refresh tokens, devices, TOTP secrets, WebAuthn
-  credentials, backup codes, social-account links), and deletes the pseudonym-keyed identity
-  profile and blobs. Account erasure is requested through the Operator (§8) where no self-service
-  account-deletion endpoint is exposed in the deployment.
+- The user can unlink a federated identity via **`DELETE /user/social/{id}`**, which removes the
+  provider link together with the encrypted provider access/refresh tokens held for it.
+- Full account erasure removes or anonymizes the account record and deletes every account-linked
+  auth record: password history, refresh tokens (deleted outright, not merely revoked — a revoked
+  row still carries a fingerprint hash and a device reference), devices, TOTP secrets, WebAuthn
+  credentials, backup codes, and social-account links, plus the pseudonym-keyed identity profile
+  and blobs. The MFA authenticators are deleted explicitly rather than by database cascade: the
+  account row is scrubbed in place (an `UPDATE`) so that foreign keys stay valid, which means the
+  `ON DELETE CASCADE` on those tables never fires. Account erasure is requested through the
+  Operator (§8) where no self-service account-deletion endpoint is exposed in the deployment.
 - **Audit records are an exception to immediate erasure.** Security audit entries are retained
   for their retention period (§4) and for any applicable legal-hold or legal-obligation reason
   (Art. 17(3)(b)/(e)); they are minimized (identifiers are limited to what is needed for the
@@ -223,7 +259,10 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 ### 5.5 Right to object (Art. 21)
 
 - The user can object to marketing communications at any time by clearing the
-  `marketing_emails` preference (via `PUT /user/identity`), which withdraws consent under P10.
+  `marketing_emails` preference (via `PUT /user/identity`), or in a single call with no
+  confirmation step via **`POST /user/marketing/unsubscribe`**, which withdraws consent under P10.
+  Art. 7(3) requires withdrawal to be as easy as granting; granting is one checkbox, so
+  withdrawal is one request. Both paths write a `consent_withdrawn` audit entry.
 - Objections to processing based on legitimate interest (P3, P4) are assessed by the Operator;
   security and abuse-prevention processing necessary to protect the service and other users may
   continue where compelling legitimate grounds apply.

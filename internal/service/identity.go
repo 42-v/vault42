@@ -33,6 +33,50 @@ type IdentityData struct {
 	MarketingEmails *bool                      `json:"marketing_emails,omitempty"`
 	Billing         *BillingInfo               `json:"billing,omitempty"`
 	Dynamic         map[string]json.RawMessage `json:"dynamic,omitempty"`
+
+	// MarketingConsent is the provenance of MarketingEmails. The bool alone says
+	// what the user's preference is; Art. 7(1) requires the controller to be able
+	// to demonstrate *that* consent was given, which needs when and how.
+	MarketingConsent *ConsentRecord `json:"marketing_consent,omitempty"`
+}
+
+// Consent sources. These are recorded verbatim so a later audit can tell an
+// affirmative opt-in apart from a value that was merely carried over.
+const (
+	// ConsentSourceRegistration — an explicit boolean supplied by a frontend at
+	// sign-up. This is the only source that is unambiguously affirmative consent.
+	ConsentSourceRegistration = "registration"
+	// ConsentSourceProfile — the user changed the preference on their profile.
+	ConsentSourceProfile = "profile"
+	// ConsentSourceUnsubscribe — withdrawal via the one-click unsubscribe link.
+	ConsentSourceUnsubscribe = "unsubscribe"
+	// ConsentSourceImport — carried over from a migrated system. NOT affirmative
+	// consent on its own: the value may be a default the user never saw. Records
+	// with this source keep the imported value but are flagged for re-permission.
+	ConsentSourceImport = "import"
+	// ConsentSourceLegacy — the profile predates consent provenance. The value is
+	// known, the origin is not; recorded honestly rather than backfilled.
+	ConsentSourceLegacy = "legacy"
+)
+
+// ConsentRecord captures a single consent decision and where it came from.
+type ConsentRecord struct {
+	Granted bool      `json:"granted"`
+	At      time.Time `json:"at"`
+	Source  string    `json:"source"`
+	// Origin optionally names the system a ConsentSourceImport record came from
+	// (e.g. "beon3"), so an imported list can be re-permissioned selectively.
+	Origin string `json:"origin,omitempty"`
+}
+
+// Affirmative reports whether the record can be relied on as consent under
+// Art. 7. Imported and legacy values carry a preference but not a demonstrable
+// act of consent, so they are not affirmative regardless of the flag.
+func (c *ConsentRecord) Affirmative() bool {
+	if c == nil || !c.Granted {
+		return false
+	}
+	return c.Source == ConsentSourceRegistration || c.Source == ConsentSourceProfile
 }
 
 // Identity profile validation bounds.
@@ -159,8 +203,54 @@ func (s *IdentityService) Get(ctx context.Context, userID string) (*IdentityData
 	if err := json.Unmarshal(plaintext, &data); err != nil {
 		return nil, time.Time{}, fmt.Errorf("identity unmarshal: %w", err)
 	}
+	data.normalizeConsent()
 
 	return &data, profile.UpdatedAt, nil
+}
+
+// MarketingAllowed reports whether marketing email may be sent to a user, and is
+// the only thing a campaign sender should consult. It fails closed: no profile,
+// no consent record, or a non-affirmative (imported/legacy) record all mean no.
+func (s *IdentityService) MarketingAllowed(ctx context.Context, userID string) (bool, error) {
+	data, _, err := s.Get(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if data == nil {
+		return false, nil
+	}
+	return data.MarketingConsent.Affirmative(), nil
+}
+
+// StampMarketingConsent sets the marketing preference together with its
+// provenance. Always prefer this over assigning MarketingEmails directly: a bare
+// bool records the preference but not the consent, which is what Art. 7(1)
+// actually requires the controller to be able to produce.
+func (d *IdentityData) StampMarketingConsent(granted bool, source, origin string) {
+	d.MarketingEmails = &granted
+	d.MarketingConsent = &ConsentRecord{
+		Granted: granted,
+		At:      time.Now().UTC(),
+		Source:  source,
+		Origin:  origin,
+	}
+}
+
+// normalizeConsent keeps the legacy bool and the consent record from drifting.
+// The record is authoritative when present; a profile written before consent
+// provenance existed keeps its value but is labelled legacy rather than being
+// backfilled with an invented timestamp.
+func (d *IdentityData) normalizeConsent() {
+	switch {
+	case d.MarketingConsent != nil:
+		granted := d.MarketingConsent.Granted
+		d.MarketingEmails = &granted
+	case d.MarketingEmails != nil:
+		d.MarketingConsent = &ConsentRecord{
+			Granted: *d.MarketingEmails,
+			Source:  ConsentSourceLegacy,
+		}
+	}
 }
 
 // Upsert encrypts and stores a user's identity profile.
@@ -168,6 +258,7 @@ func (s *IdentityService) Upsert(ctx context.Context, userID string, data *Ident
 	if err := data.Validate(); err != nil {
 		return err
 	}
+	data.normalizeConsent()
 	plaintext, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("identity marshal: %w", err)

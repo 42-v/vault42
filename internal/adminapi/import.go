@@ -11,6 +11,7 @@ import (
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/seed"
+	"github.com/42-v/vault42/internal/service"
 )
 
 const maxImportBatch = 1000
@@ -23,6 +24,14 @@ type importUser struct {
 	BanReason string   `json:"ban_reason"`
 	LegacyID  string   `json:"legacy_id"`
 	Locale    string   `json:"locale"`
+
+	// MarketingEmails carries the source system's marketing preference. It is
+	// stored with source=import, which is deliberately NOT treated as affirmative
+	// consent: a migrated flag may be a default the user was never shown (this is
+	// exactly the case for BeOn3, whose column defaults to true and whose consent
+	// checkbox ships pre-ticked). The value is preserved so the operator can run a
+	// re-permission campaign against it; it does not by itself authorise sending.
+	MarketingEmails *bool `json:"marketing_emails,omitempty"`
 }
 
 type importResult struct {
@@ -58,7 +67,7 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := make([]importResult, 0, len(req.Users))
-	var imported int
+	var imported, consentFailed int
 	for _, u := range req.Users {
 		email := strings.ToLower(strings.TrimSpace(u.Email))
 		if _, err := mail.ParseAddress(email); err != nil {
@@ -95,15 +104,29 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 			results = append(results, importResult{Email: email, Status: "error", Error: "create_failed"})
 			continue
 		}
+		if u.MarketingEmails != nil && h.identity != nil {
+			data := &service.IdentityData{}
+			data.StampMarketingConsent(*u.MarketingEmails, service.ConsentSourceImport, source)
+			if err := h.identity.Upsert(r.Context(), id, data); err != nil {
+				// The account is already created; a lost preference must not fail
+				// the import. Record it and move on — a dropped flag fails closed
+				// (no consent), which is the safe direction.
+				consentFailed++
+			}
+		}
 		imported++
 		results = append(results, importResult{Email: email, Status: "imported"})
 	}
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "admin:users_import", "", "", "", "", "", "", // #nosec G104 -- audit is best-effort
-			map[string]any{"source": source, "submitted": len(req.Users), "imported": imported}, 0)
+			map[string]any{
+				"source": source, "submitted": len(req.Users), "imported": imported,
+				"consent_failed": consentFailed,
+			}, 0)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"source": source, "submitted": len(req.Users), "imported": imported, "results": results,
+		"source": source, "submitted": len(req.Users), "imported": imported,
+		"consent_failed": consentFailed, "results": results,
 	})
 }

@@ -31,6 +31,7 @@ type Handler struct {
 	adminConfig repository.AdminConfigRepository
 	appRoles    repository.AppRoleRepository
 	erasure     *service.ErasureService
+	identity    *service.IdentityService
 	keyStore    *keystore.KeyStore
 	auditLog    *audit.Logger
 	masterKey   []byte
@@ -61,6 +62,14 @@ func (h *Handler) SetAppRoleRepo(r repository.AppRoleRepository) {
 // DELETE /admin/users/{id} endpoint. Optional (nil → that handler returns 503).
 func (h *Handler) SetErasureService(s *service.ErasureService) {
 	h.erasure = s
+}
+
+// SetIdentityService wires the identity service so account import can persist a
+// migrated marketing-consent record. Optional: without it, import still creates
+// accounts but drops any marketing preference in the payload rather than storing
+// a preference it cannot attach provenance to.
+func (h *Handler) SetIdentityService(s *service.IdentityService) {
+	h.identity = s
 }
 
 // NewHandler creates a new admin API handler.

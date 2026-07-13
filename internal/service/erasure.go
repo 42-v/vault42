@@ -33,6 +33,9 @@ type ErasureService struct {
 	social      repository.SocialAccountRepository
 	pwHistory   repository.PasswordHistoryRepository
 	tokens      repository.RefreshTokenRepository
+	totp        repository.TOTPRepository
+	webauthn    repository.WebAuthnRepository
+	backupCodes repository.BackupCodeRepository
 	recovery    repository.AccountRecoveryRepository
 	auditLog    *audit.Logger
 	recoveryPub *rsa.PublicKey
@@ -49,6 +52,9 @@ func NewErasureService(
 	social repository.SocialAccountRepository,
 	pwHistory repository.PasswordHistoryRepository,
 	tokens repository.RefreshTokenRepository,
+	totp repository.TOTPRepository,
+	webauthn repository.WebAuthnRepository,
+	backupCodes repository.BackupCodeRepository,
 	recovery repository.AccountRecoveryRepository,
 	auditLog *audit.Logger,
 	recoveryPub *rsa.PublicKey,
@@ -56,7 +62,8 @@ func NewErasureService(
 ) *ErasureService {
 	return &ErasureService{
 		users: users, identity: identity, blobs: blobs, devices: devices,
-		social: social, pwHistory: pwHistory, tokens: tokens, recovery: recovery,
+		social: social, pwHistory: pwHistory, tokens: tokens,
+		totp: totp, webauthn: webauthn, backupCodes: backupCodes, recovery: recovery,
 		auditLog: auditLog, recoveryPub: recoveryPub, hmacSecret: hmacSecret,
 	}
 }
@@ -108,8 +115,25 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	if err := s.pwHistory.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete password history: %w", err)
 	}
-	if err := s.tokens.RevokeAllForUser(ctx, userID); err != nil {
-		return fmt.Errorf("erasure: revoke tokens: %w", err)
+
+	// MFA authenticators. These hang off user_id with ON DELETE CASCADE, but the
+	// scrub below is an UPDATE, not a DELETE — the cascade never fires, so they
+	// must be removed explicitly or the encrypted TOTP secret, the WebAuthn public
+	// keys and the backup-code hashes outlive the erased account.
+	if err := s.totp.DeleteByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete totp secret: %w", err)
+	}
+	if err := s.webauthn.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete webauthn credentials: %w", err)
+	}
+	if err := s.backupCodes.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete backup codes: %w", err)
+	}
+
+	// Hard-delete rather than revoke: a revoked row keeps the fingerprint hash and
+	// the device reference, and an erased account has no replay left to detect.
+	if err := s.tokens.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete tokens: %w", err)
 	}
 
 	// Scrub + soft-delete the user row. The real email now lives only in the

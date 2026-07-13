@@ -160,6 +160,7 @@ type MockRefreshTokenRepo struct {
 	RevokeByDeviceIDFn    func(ctx context.Context, deviceID string) error
 	RevokeFamilyFn        func(ctx context.Context, familyID string) error
 	RevokeAllForUserFn    func(ctx context.Context, userID string) error
+	DeleteAllForUserFn    func(ctx context.Context, userID string) error
 	RevokeAllFn           func(ctx context.Context) error
 	CountActiveFamiliesFn func(ctx context.Context, userID string) (int, error)
 	DeleteExpiredFn       func(ctx context.Context) (int64, error)
@@ -210,6 +211,13 @@ func (m *MockRefreshTokenRepo) RevokeFamily(ctx context.Context, familyID string
 func (m *MockRefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID string) error {
 	if m.RevokeAllForUserFn != nil {
 		return m.RevokeAllForUserFn(ctx, userID)
+	}
+	return nil
+}
+
+func (m *MockRefreshTokenRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
 	}
 	return nil
 }
@@ -418,6 +426,7 @@ type MockWebAuthnRepo struct {
 	ListByUserFn        func(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	UpdateSignCountFn   func(ctx context.Context, id string, count int) error
 	DeleteFn            func(ctx context.Context, id, userID string) error
+	DeleteAllForUserFn  func(ctx context.Context, userID string) error
 }
 
 func (m *MockWebAuthnRepo) Create(ctx context.Context, cred *model.WebAuthnCredential) error {
@@ -451,6 +460,13 @@ func (m *MockWebAuthnRepo) UpdateSignCount(ctx context.Context, id string, count
 func (m *MockWebAuthnRepo) Delete(ctx context.Context, id, userID string) error {
 	if m.DeleteFn != nil {
 		return m.DeleteFn(ctx, id, userID)
+	}
+	return nil
+}
+
+func (m *MockWebAuthnRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
 	}
 	return nil
 }

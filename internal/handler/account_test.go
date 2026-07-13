@@ -16,6 +16,7 @@ func newTestAccountHandler(users *mocks.MockUserRepo) *AccountHandler {
 	erasure := service.NewErasureService(
 		users, &mocks.MockIdentityRepo{}, &mocks.MockBlobRepo{}, &mocks.MockDeviceRepo{},
 		&mocks.MockSocialAccountRepo{}, &mocks.MockPasswordHistoryRepo{}, &mocks.MockRefreshTokenRepo{},
+		&mocks.MockTOTPRepo{}, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{},
 		&mocks.MockAccountRecoveryRepo{}, newTestAuditLogger(), nil, nil,
 	)
 	return NewAccountHandler(erasure, users, newTestAuditLogger(), "")

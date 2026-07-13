@@ -107,6 +107,8 @@ type RefreshTokenRepository interface {
 	RevokeFamily(ctx context.Context, familyID string) error
 	// RevokeAllForUser revokes all active refresh tokens for a user.
 	RevokeAllForUser(ctx context.Context, userID string) error
+	// DeleteAllForUser hard-deletes every refresh token row for a user (erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 	// RevokeAll revokes all active refresh tokens system-wide.
 	RevokeAll(ctx context.Context) error
 	// CountActiveFamilies returns the number of distinct active (non-revoked, non-expired) token families for a user.
@@ -179,6 +181,8 @@ type WebAuthnRepository interface {
 	// Delete removes a single WebAuthn credential. The userID parameter provides
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error
+	// DeleteAllForUser removes every WebAuthn credential for a user (account erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
 // BackupCodeRepository manages backup code persistence.

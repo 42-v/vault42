@@ -101,6 +101,9 @@ func main() {
 	deviceRepo := postgres.NewDeviceRepo(db)
 	socialAccountRepo := postgres.NewSocialAccountRepo(db)
 	pwHistoryRepo := postgres.NewPasswordHistoryRepo(db)
+	totpRepo := postgres.NewTOTPRepo(db)
+	webauthnRepo := postgres.NewWebAuthnRepo(db)
+	backupCodeRepo := postgres.NewBackupCodeRepo(db)
 	identityRepo := postgres.NewIdentityRepo(db)
 	blobRepo := postgres.NewBlobRepo(db)
 	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
@@ -179,9 +182,12 @@ func main() {
 		}
 		apiHandler.SetErasureService(service.NewErasureService(
 			userRepo, identityRepo, blobRepo, deviceRepo, socialAccountRepo,
-			pwHistoryRepo, refreshTokenRepo, recoveryRepo, auditLogger,
-			recoveryPub, cfg.HMACSecret,
+			pwHistoryRepo, refreshTokenRepo, totpRepo, webauthnRepo, backupCodeRepo,
+			recoveryRepo, auditLogger, recoveryPub, cfg.HMACSecret,
 		))
+		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
+		// the profile ciphertext an import writes are readable by the main server.
+		apiHandler.SetIdentityService(service.NewIdentityService(identityRepo, cfg.MasterKey, cfg.HMACSecret))
 	} else {
 		log.Println("admin-gateway: HMAC_SECRET_FILE not set — account erasure endpoint disabled")
 	}

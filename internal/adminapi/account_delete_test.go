@@ -15,6 +15,7 @@ func newTestErasureService(users *mocks.MockUserRepo) *service.ErasureService {
 	return service.NewErasureService(
 		users, &mocks.MockIdentityRepo{}, &mocks.MockBlobRepo{}, &mocks.MockDeviceRepo{},
 		&mocks.MockSocialAccountRepo{}, &mocks.MockPasswordHistoryRepo{}, &mocks.MockRefreshTokenRepo{},
+		&mocks.MockTOTPRepo{}, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{},
 		&mocks.MockAccountRecoveryRepo{}, testAuditLog(), nil, nil,
 	)
 }

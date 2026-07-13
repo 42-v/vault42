@@ -129,6 +129,8 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID stri
 	return nil
 }
 
+func (m *mockRefreshTokenRepo) DeleteAllForUser(context.Context, string) error { return nil }
+
 func (m *mockRefreshTokenRepo) RevokeAll(ctx context.Context) error {
 	if m.RevokeAllFn != nil {
 		return m.RevokeAllFn(ctx)
