@@ -145,6 +145,11 @@ func (r *racingIdentityRepo) GetByPseudonym(context.Context, string) (*model.Ide
 	return r.stored, nil
 }
 
+func (r *racingIdentityRepo) Upsert(_ context.Context, p *model.IdentityProfile) error {
+	r.stored = p
+	return nil
+}
+
 func (r *racingIdentityRepo) UpsertCAS(_ context.Context, p *model.IdentityProfile, expected time.Time) (bool, error) {
 	if r.losses > 0 {
 		r.losses--
@@ -185,6 +190,109 @@ func TestUpdateMarketingConsent_GivesUpRatherThanClobber(t *testing.T) {
 	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
 
 	err := svc.UpdateMarketingConsent(context.Background(), "user-1", false, ConsentSourceUnsubscribe, "")
+	if !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("err = %v, want ErrConcurrentUpdate", err)
+	}
+	if repo.commits != 0 {
+		t.Error("a losing CAS must never commit")
+	}
+}
+
+// PutProfile is the full-replace write behind PUT /user/identity. Its whole job
+// is to reconcile consent inside the same compare-and-set as the write, so these
+// cover the cases that a blind read-then-write got wrong.
+func TestPutProfile_UnchangedValueKeepsImportProvenance(t *testing.T) {
+	repo := &racingIdentityRepo{}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+	ctx := context.Background()
+
+	// Seed an imported (pre-ticked, never affirmed) opt-in, the way the import
+	// endpoint does — PutProfile reconciles against the prior record, so it is the
+	// wrong tool for establishing a starting state.
+	seed := &IdentityData{GivenName: "Ada"}
+	seed.StampMarketingConsent(true, ConsentSourceImport, "beon3")
+	if err := svc.Upsert(ctx, "user-1", seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// The user edits their country and the client re-submits the ticked box.
+	yes := true
+	incoming := &IdentityData{GivenName: "Ada", Country: "GB"}
+	stored, changed, err := svc.PutProfile(ctx, "user-1", incoming, &yes)
+	if err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	if changed {
+		t.Error("re-submitting an unchanged value is not an act of consent")
+	}
+	if stored.Source != ConsentSourceImport {
+		t.Errorf("source = %q, want %q — imported consent was laundered", stored.Source, ConsentSourceImport)
+	}
+	if stored.Affirmative() {
+		t.Error("an imported flag must not become affirmative by being echoed back")
+	}
+}
+
+func TestPutProfile_OmittedFieldPreservesWithdrawal(t *testing.T) {
+	repo := &racingIdentityRepo{}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+	ctx := context.Background()
+
+	if err := svc.UpdateMarketingConsent(ctx, "user-1", false, ConsentSourceUnsubscribe, ""); err != nil {
+		t.Fatalf("unsubscribe: %v", err)
+	}
+
+	// A client with no checkbox saves the profile.
+	stored, changed, err := svc.PutProfile(ctx, "user-1", &IdentityData{GivenName: "Ada"}, nil)
+	if err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	if changed {
+		t.Error("omitting the field is not a consent change")
+	}
+	if stored == nil || stored.Granted || stored.Source != ConsentSourceUnsubscribe {
+		t.Errorf("withdrawal destroyed by a save that never mentioned it: %+v", stored)
+	}
+}
+
+func TestPutProfile_RealChangeIsAffirmative(t *testing.T) {
+	repo := &racingIdentityRepo{}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+	ctx := context.Background()
+
+	yes := true
+	stored, changed, err := svc.PutProfile(ctx, "user-1", &IdentityData{}, &yes)
+	if err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	if !changed || !stored.Affirmative() {
+		t.Errorf("a user ticking the box is affirmative consent: changed=%v stored=%+v", changed, stored)
+	}
+}
+
+// A failed read of the prior consent must abort. Treating it as "no prior
+// consent" is what silently blanked withdrawals and laundered imported flags.
+func TestPutProfile_ReadFailureAborts(t *testing.T) {
+	repo := &mocks.MockIdentityRepo{
+		GetByPseudonymFn: func(context.Context, string) (*model.IdentityProfile, error) {
+			return nil, errors.New("db down")
+		},
+	}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+
+	yes := true
+	if _, _, err := svc.PutProfile(context.Background(), "user-1", &IdentityData{}, &yes); err == nil {
+		t.Fatal("a failed consent read must fail the request, not guess")
+	}
+}
+
+// A profile that keeps moving must 409 rather than overwrite someone else's write.
+func TestPutProfile_GivesUpUnderPermanentContention(t *testing.T) {
+	repo := &racingIdentityRepo{losses: 99}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+
+	yes := true
+	_, _, err := svc.PutProfile(context.Background(), "user-1", &IdentityData{}, &yes)
 	if !errors.Is(err, ErrConcurrentUpdate) {
 		t.Fatalf("err = %v, want ErrConcurrentUpdate", err)
 	}

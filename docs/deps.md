@@ -45,25 +45,25 @@
 | `internal/httputil` | 100.00% |
 | `internal/frontend` | 100.00% |
 | `internal/config` | 98.11% |
+| `internal/middleware` | 97.74% |
 | `internal/oauth2` | 97.69% |
 | `internal/jwt` | 96.81% |
-| `internal/audit` | 95.18% |
-| `internal/middleware` | 94.35% |
+| `internal/audit` | 96.67% |
 | `internal/seed` | 93.85% |
 | `internal/crypto` | 93.52% |
+| `internal/adminapi` | 93.36% |
+| `internal/redis` | 93.20% |
+| `internal/service` | 92.42% |
 | `internal/cache` | 92.21% |
-| `internal/adminapi` | 91.96% |
-| `internal/service` | 90.87% |
-| `internal/handler` | 89.53% |
-| `internal/email` | 89.51% |
-| `internal/redis` | 89.35% |
+| `internal/server` | 92.15% |
+| `internal/email` | 91.15% |
+| `internal/handler` | 90.05% |
 | `internal/honeypot` | 89.11% |
+| `internal/keystore` | 88.97% |
+| `internal/cli` | 88.14% |
+| `internal/repository/postgres` | 87.60% |
 | `internal/kms` | 87.50% |
-| `internal/cli` | 86.44% |
-| `internal/keystore` | 84.83% |
-| `internal/repository/postgres` | 79.72% |
 | `internal/migrate` | 77.50% |
-| `internal/server` | 74.87% |
 ## Maintainers
 
 12 maintainers behind Vault's dependency tree.

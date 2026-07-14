@@ -111,7 +111,7 @@ func TestMultiReplica(t *testing.T) {
 				if chTok == "" {
 					t.Fatalf("expected challenge_token (MFARequired): %v", lbody)
 				}
-				code := replA.email.getOTP(email)
+				code := replA.email.waitOTP(email, 5*time.Second)
 				if code == "" {
 					t.Fatal("no OTP captured from A")
 				}

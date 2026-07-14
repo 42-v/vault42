@@ -3,6 +3,8 @@ package audit
 import (
 	"context"
 	"log"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/42-v/vault42/internal/repository"
@@ -25,17 +27,34 @@ const SweepInterval = 6 * time.Hour
 // erasure request, so audit entries are deliberately exempt from the account
 // cascade — which is precisely why they need a time-based purge of their own.
 type Retention struct {
-	repo   repository.AuditRepository
-	period time.Duration
-	stopCh chan struct{}
+	repo     repository.AuditRepository
+	period   time.Duration
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
+	started  atomic.Bool
 }
 
 // NewRetention builds a sweeper. A period of zero disables it, which is the
 // default: an operator who has not chosen a horizon should not have one silently
 // chosen for them, and deleting security logs is not a safe default.
 func NewRetention(repo repository.AuditRepository, period time.Duration) *Retention {
-	return &Retention{repo: repo, period: period, stopCh: make(chan struct{})}
+	return &Retention{
+		repo:   repo,
+		period: period,
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
+	}
 }
+
+// Done is closed once the sweep loop has exited, whether it ended via Stop or via
+// its context being cancelled. Without it there is no way to know the sweeper has
+// actually stopped: Stop and cancel both only *request* an exit, and a caller that
+// closes the database pool on their return can still race a sweep that is mid-DELETE.
+//
+// The channel never closes if Start was not called — a sweeper that was never
+// running has nothing to wait for.
+func (r *Retention) Done() <-chan struct{} { return r.doneCh }
 
 // Enabled reports whether a retention horizon is configured.
 func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
@@ -69,7 +88,9 @@ func (r *Retention) Start(ctx context.Context) {
 	if !r.Enabled() {
 		return
 	}
+	r.started.Store(true)
 	go func() {
+		defer close(r.doneCh)
 		ticker := time.NewTicker(SweepInterval)
 		defer ticker.Stop()
 		for {
@@ -89,9 +110,23 @@ func (r *Retention) Start(ctx context.Context) {
 	}()
 }
 
-// Stop terminates the sweep loop.
+// Stop terminates the sweep loop and blocks until it has actually exited.
+//
+// The wait is the point. The sole caller is `defer auditRetention.Stop()` in main,
+// which returns straight into the deferred close of the database pool — so a Stop
+// that only *asked* the loop to finish could return while a sweep was still inside
+// its DELETE, and the pool would be torn out from under it. Waiting for the loop to
+// exit is what makes "the sweeper does not outlive shutdown" true rather than
+// merely intended.
+//
+// Safe to call more than once, and safe on a sweeper that was never started: an
+// unstarted loop closes nothing, so there is nothing to wait for.
 func (r *Retention) Stop() {
-	if r.Enabled() {
-		close(r.stopCh)
+	if !r.Enabled() {
+		return
+	}
+	r.stopOnce.Do(func() { close(r.stopCh) })
+	if r.started.Load() {
+		<-r.doneCh
 	}
 }
