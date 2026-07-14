@@ -33,6 +33,50 @@ type IdentityData struct {
 	MarketingEmails *bool                      `json:"marketing_emails,omitempty"`
 	Billing         *BillingInfo               `json:"billing,omitempty"`
 	Dynamic         map[string]json.RawMessage `json:"dynamic,omitempty"`
+
+	// MarketingConsent is the provenance of MarketingEmails. The bool alone says
+	// what the user's preference is; Art. 7(1) requires the controller to be able
+	// to demonstrate *that* consent was given, which needs when and how.
+	MarketingConsent *ConsentRecord `json:"marketing_consent,omitempty"`
+}
+
+// Consent sources. These are recorded verbatim so a later audit can tell an
+// affirmative opt-in apart from a value that was merely carried over.
+const (
+	// ConsentSourceRegistration — an explicit boolean supplied by a frontend at
+	// sign-up. This is the only source that is unambiguously affirmative consent.
+	ConsentSourceRegistration = "registration"
+	// ConsentSourceProfile — the user changed the preference on their profile.
+	ConsentSourceProfile = "profile"
+	// ConsentSourceUnsubscribe — withdrawal via the one-click unsubscribe link.
+	ConsentSourceUnsubscribe = "unsubscribe"
+	// ConsentSourceImport — carried over from a migrated system. NOT affirmative
+	// consent on its own: the value may be a default the user never saw. Records
+	// with this source keep the imported value but are flagged for re-permission.
+	ConsentSourceImport = "import"
+	// ConsentSourceLegacy — the profile predates consent provenance. The value is
+	// known, the origin is not; recorded honestly rather than backfilled.
+	ConsentSourceLegacy = "legacy"
+)
+
+// ConsentRecord captures a single consent decision and where it came from.
+type ConsentRecord struct {
+	Granted bool      `json:"granted"`
+	At      time.Time `json:"at"`
+	Source  string    `json:"source"`
+	// Origin optionally names the system a ConsentSourceImport record came from
+	// (e.g. "beon3"), so an imported list can be re-permissioned selectively.
+	Origin string `json:"origin,omitempty"`
+}
+
+// Affirmative reports whether the record can be relied on as consent under
+// Art. 7. Imported and legacy values carry a preference but not a demonstrable
+// act of consent, so they are not affirmative regardless of the flag.
+func (c *ConsentRecord) Affirmative() bool {
+	if c == nil || !c.Granted {
+		return false
+	}
+	return c.Source == ConsentSourceRegistration || c.Source == ConsentSourceProfile
 }
 
 // Identity profile validation bounds.
@@ -159,8 +203,207 @@ func (s *IdentityService) Get(ctx context.Context, userID string) (*IdentityData
 	if err := json.Unmarshal(plaintext, &data); err != nil {
 		return nil, time.Time{}, fmt.Errorf("identity unmarshal: %w", err)
 	}
+	data.normalizeConsent()
 
 	return &data, profile.UpdatedAt, nil
+}
+
+// ErrConcurrentUpdate is returned when a profile kept changing underneath a
+// read-modify-write for more than consentUpdateAttempts tries.
+var ErrConcurrentUpdate = errors.New("identity profile changed concurrently")
+
+const consentUpdateAttempts = 3
+
+// UpdateMarketingConsent changes only the marketing consent, leaving every other
+// field of the profile as it was.
+//
+// It is a compare-and-set loop rather than a plain Get/Upsert because the profile
+// is one encrypted blob: a writer must decrypt the whole thing, change its field
+// and re-encrypt, so two concurrent writers would each persist their own stale
+// view and one change would vanish. Losing a withdrawal that way is not an
+// acceptable outcome — the user would be told they had unsubscribed while the
+// stored record still said otherwise.
+func (s *IdentityService) UpdateMarketingConsent(ctx context.Context, userID string, granted bool, source, origin string) error {
+	for attempt := 0; attempt < consentUpdateAttempts; attempt++ {
+		data, updatedAt, err := s.Get(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if data == nil {
+			// No profile: record the withdrawal anyway, but as an insert that must
+			// not clobber a profile created in the race window (a blind Upsert here
+			// would replace a real profile with an empty one carrying only consent).
+			data = &IdentityData{}
+			updatedAt = time.Time{}
+		}
+		data.StampMarketingConsent(granted, source, origin)
+
+		ok, err := s.upsertCAS(ctx, userID, data, updatedAt)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		// Lost the race: re-read and re-apply on top of whatever landed.
+	}
+	return ErrConcurrentUpdate
+}
+
+// PutProfile is the full-replace profile write behind PUT /user/identity.
+//
+// The consent reconciliation has to happen inside the same compare-and-set as the
+// write, not before a blind one. Two things go wrong otherwise:
+//
+//   - The prior record is read, then a concurrent unsubscribe commits, then this
+//     write lands carrying the pre-withdrawal consent — silently reverting a
+//     withdrawal the user was told had been honoured. The CAS turns that into a
+//     retry, which re-reads the withdrawal and preserves it.
+//   - If the prior read fails, treating that as "no prior consent" would blank a
+//     stored withdrawal and re-stamp an imported flag as affirmative. The error is
+//     returned instead: a profile save is not worth guessing about consent.
+//
+// Returns the consent record as persisted and whether it actually changed, so the
+// caller can log a consent event only when one occurred, with the value that
+// really landed — and only after the write has succeeded.
+func (s *IdentityService) PutProfile(ctx context.Context, userID string, incoming *IdentityData, submitted *bool) (stored *ConsentRecord, changed bool, err error) {
+	for attempt := 0; attempt < consentUpdateAttempts; attempt++ {
+		existing, updatedAt, err := s.Get(ctx, userID)
+		if err != nil {
+			return nil, false, err
+		}
+		var prior *ConsentRecord
+		if existing != nil {
+			prior = existing.MarketingConsent
+		} else {
+			updatedAt = time.Time{}
+		}
+
+		// Reconcile onto a fresh copy each round: a retry must re-apply against the
+		// consent it just re-read, not compound the previous attempt's stamp.
+		data := *incoming
+		didChange := data.ReconcileMarketingConsent(submitted, prior)
+
+		ok, err := s.upsertCAS(ctx, userID, &data, updatedAt)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return data.MarketingConsent, didChange, nil
+		}
+	}
+	return nil, false, ErrConcurrentUpdate
+}
+
+// upsertCAS encrypts and writes a profile only if the stored row is unchanged.
+func (s *IdentityService) upsertCAS(ctx context.Context, userID string, data *IdentityData, expectedUpdatedAt time.Time) (bool, error) {
+	if err := data.Validate(); err != nil {
+		return false, err
+	}
+	data.normalizeConsent()
+	plaintext, err := json.Marshal(data)
+	if err != nil {
+		return false, fmt.Errorf("identity marshal: %w", err)
+	}
+	pseudo := s.Pseudonym(userID)
+	enc, err := vaultcrypto.Encrypt(plaintext, s.masterKey, []byte(pseudo))
+	if err != nil {
+		return false, fmt.Errorf("identity encrypt: %w", err)
+	}
+	now := time.Now()
+	return s.repo.UpsertCAS(ctx, &model.IdentityProfile{
+		PseudonymID: pseudo,
+		DataEnc:     enc,
+		Version:     1,
+		UpdatedAt:   now,
+		CreatedAt:   now,
+	}, expectedUpdatedAt)
+}
+
+// MarketingAllowed reports whether marketing email may be sent to a user, and is
+// the only thing a campaign sender should consult. It fails closed: no profile,
+// no consent record, or a non-affirmative (imported/legacy) record all mean no.
+func (s *IdentityService) MarketingAllowed(ctx context.Context, userID string) (bool, error) {
+	data, _, err := s.Get(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if data == nil {
+		return false, nil
+	}
+	return data.MarketingConsent.Affirmative(), nil
+}
+
+// StampMarketingConsent sets the marketing preference together with its
+// provenance. Always prefer this over assigning MarketingEmails directly: a bare
+// bool records the preference but not the consent, which is what Art. 7(1)
+// actually requires the controller to be able to produce.
+func (d *IdentityData) StampMarketingConsent(granted bool, source, origin string) {
+	d.MarketingEmails = &granted
+	d.MarketingConsent = &ConsentRecord{
+		Granted: granted,
+		At:      time.Now().UTC(),
+		Source:  source,
+		Origin:  origin,
+	}
+}
+
+// ReconcileMarketingConsent decides what consent record an incoming profile
+// update should carry, given what is already stored. It exists because
+// PUT /user/identity is a full replace fed by a form the client round-trips:
+// without it, two things go wrong.
+//
+//   - Laundering. GET returns the bare bool with no provenance, so a client
+//     re-submits marketing_emails=true for an imported (pre-ticked, never
+//     affirmed) opt-in. Stamping that as source=profile would turn a value the
+//     user never chose into demonstrable Art. 7 consent. So a submitted value
+//     that is unchanged from the stored one is NOT a fresh act of consent: the
+//     existing record, and its provenance, is kept exactly as it was.
+//   - Erasure. A client that omits marketing_emails entirely (a partial-update
+//     client, or one whose form has no checkbox) would otherwise blank the
+//     stored record — destroying a recorded withdrawal along with it.
+//
+// Only a value that actually differs from what is stored is an affirmative act,
+// and only then is it stamped with source=profile. Returns true when the caller
+// should emit a consent audit event.
+func (d *IdentityData) ReconcileMarketingConsent(submitted *bool, prior *ConsentRecord) (changed bool) {
+	// Omitted: preserve whatever is on record, including a withdrawal.
+	if submitted == nil {
+		d.MarketingConsent = prior
+		if prior != nil {
+			granted := prior.Granted
+			d.MarketingEmails = &granted
+		}
+		return false
+	}
+	// Unchanged: not a fresh act of consent — keep the original provenance, so an
+	// imported or legacy value cannot be promoted by an echo of itself.
+	if prior != nil && prior.Granted == *submitted {
+		d.MarketingConsent = prior
+		granted := prior.Granted
+		d.MarketingEmails = &granted
+		return false
+	}
+	// Genuinely changed (or first ever): the user acted, so this is affirmative.
+	d.StampMarketingConsent(*submitted, ConsentSourceProfile, "")
+	return true
+}
+
+// normalizeConsent keeps the legacy bool and the consent record from drifting.
+// The record is authoritative when present; a profile written before consent
+// provenance existed keeps its value but is labelled legacy rather than being
+// backfilled with an invented timestamp.
+func (d *IdentityData) normalizeConsent() {
+	switch {
+	case d.MarketingConsent != nil:
+		granted := d.MarketingConsent.Granted
+		d.MarketingEmails = &granted
+	case d.MarketingEmails != nil:
+		d.MarketingConsent = &ConsentRecord{
+			Granted: *d.MarketingEmails,
+			Source:  ConsentSourceLegacy,
+		}
+	}
 }
 
 // Upsert encrypts and stores a user's identity profile.
@@ -168,6 +411,7 @@ func (s *IdentityService) Upsert(ctx context.Context, userID string, data *Ident
 	if err := data.Validate(); err != nil {
 		return err
 	}
+	data.normalizeConsent()
 	plaintext, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("identity marshal: %w", err)

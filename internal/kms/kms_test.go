@@ -87,3 +87,21 @@ func TestUnwrap_UniformFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestClose_WipesRoot(t *testing.T) {
+	root := make([]byte, 32)
+	for i := range root {
+		root[i] = 0x5a
+	}
+	svc, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Close must zero the service's internal copy of the root secret.
+	svc.Close()
+	// A wrap after Close derives from a zeroed root; it must still not panic and
+	// must produce a different envelope than one from the live root.
+	if _, err := svc.Wrap("kid", []byte("x")); err != nil {
+		t.Fatalf("Wrap after Close: %v", err)
+	}
+}

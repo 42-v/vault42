@@ -136,6 +136,46 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 	return entries, nil
 }
 
+// auditRetentionLockKey is the advisory-lock key the retention sweep serialises
+// on. Arbitrary but fixed: every replica must pick the same number.
+const auditRetentionLockKey int64 = 4242
+
+// CleanupLocked runs Cleanup under a transaction-scoped advisory lock, and
+// reports acquired=false when another replica is already sweeping.
+//
+// audit.cleanup_old_entries() does ALTER TABLE ... DISABLE TRIGGER, which takes
+// an ACCESS EXCLUSIVE lock on audit.audit_log and briefly drops the append-only
+// guard. Every replica running that on its own timer would pile up on the lock,
+// stall audit inserts across the fleet, and widen the window in which the
+// append-only trigger is off. One sweeper at a time is enough — the work is
+// idempotent, so a replica that loses the lock simply skips this round.
+func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error) {
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("cleanup audit entries: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+	if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", auditRetentionLockKey).Scan(&acquired); err != nil {
+		return 0, false, fmt.Errorf("cleanup audit entries: lock: %w", err)
+	}
+	if !acquired {
+		return 0, false, nil
+	}
+
+	interval := time.Since(olderThan)
+	if err := tx.QueryRow(ctx,
+		"SELECT audit.cleanup_old_entries($1::interval)",
+		fmt.Sprintf("%d seconds", int(interval.Seconds())),
+	).Scan(&deleted); err != nil {
+		return 0, true, fmt.Errorf("cleanup audit entries: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, true, fmt.Errorf("cleanup audit entries: commit: %w", err)
+	}
+	return deleted, true, nil
+}
+
 // Cleanup removes audit entries older than the given time using the
 // audit.cleanup_old_entries() SECURITY DEFINER function.
 func (r *AuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64, error) {

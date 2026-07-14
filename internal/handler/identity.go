@@ -24,6 +24,24 @@ func NewIdentityHandler(svc *service.IdentityService, auditLog *audit.Logger) *I
 	return &IdentityHandler{svc: svc, auditLog: auditLog}
 }
 
+// logConsent records a consent decision in the audit trail. The trail is what
+// answers "prove this user opted in" (Art. 7(1)) and "prove withdrawal was
+// honoured" (Art. 7(3)); the profile only holds the current state.
+func (h *IdentityHandler) logConsent(r *http.Request, userID string, granted bool, source string) {
+	if h.auditLog == nil {
+		return
+	}
+	event := audit.ConsentWithdrawn
+	if granted {
+		event = audit.ConsentGranted
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"purpose": "marketing_email",
+			"source":  source,
+		}, 0)
+}
+
 var (
 	countryCodeRe = regexp.MustCompile(`^[A-Z]{2}$`)
 	dateRe        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -88,6 +106,17 @@ func (h *IdentityHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Billing:         data.Billing,
 		Dynamic:         data.Dynamic,
 	}
+	if c := data.MarketingConsent; c != nil {
+		view := &MarketingConsentView{
+			Granted:     c.Granted,
+			Source:      c.Source,
+			Affirmative: c.Affirmative(),
+		}
+		if !c.At.IsZero() {
+			view.At = c.At.Format(time.RFC3339)
+		}
+		resp.MarketingConsent = view
+	}
 	WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -111,16 +140,20 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &service.IdentityData{
-		GivenName:       truncate(input.GivenName, 100),
-		FamilyName:      truncate(input.FamilyName, 100),
-		Username:        input.Username,
-		Country:         input.Country,
-		State:           input.State,
-		DateOfBirth:     input.DateOfBirth,
-		Sex:             truncate(input.Sex, 50),
-		MarketingEmails: input.MarketingEmails,
-		Dynamic:         input.Dynamic,
+		GivenName:   truncate(input.GivenName, 100),
+		FamilyName:  truncate(input.FamilyName, 100),
+		Username:    input.Username,
+		Country:     input.Country,
+		State:       input.State,
+		DateOfBirth: input.DateOfBirth,
+		Sex:         truncate(input.Sex, 50),
+		Dynamic:     input.Dynamic,
 	}
+	// PUT is a full replace, so the consent record has to be reconciled against
+	// what is already stored: an omitted field must not erase a withdrawal, and a
+	// re-submitted value that has not changed is not a fresh act of consent (see
+	// ReconcileMarketingConsent). Only a real change is stamped, and only then is
+	// a consent event logged — after the write succeeds.
 	if input.Billing != nil {
 		data.Billing = &service.BillingInfo{
 			AddressLine1: truncate(input.Billing.AddressLine1, 200),
@@ -134,13 +167,28 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 
 	// Service-side Validate (username/state/sex/dynamic size+shape) is the
 	// authoritative gate; surface its rejections as 400, not 500.
-	if err := h.svc.Upsert(r.Context(), claims.Subject, data); err != nil {
-		if errors.Is(err, service.ErrInvalidProfile) {
+	//
+	// PutProfile reconciles the consent record and writes under a compare-and-set,
+	// so a concurrent unsubscribe cannot be reverted by this write, and a failed
+	// read of the prior consent aborts rather than being treated as "no consent".
+	storedConsent, consentChanged, err := h.svc.PutProfile(r.Context(), claims.Subject, data, input.MarketingEmails)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidProfile):
 			WriteError(w, http.StatusBadRequest, "invalid_profile")
-			return
+		case errors.Is(err, service.ErrConcurrentUpdate):
+			WriteError(w, http.StatusConflict, "concurrent_update")
+		default:
+			WriteError(w, http.StatusInternalServerError, "internal_error")
 		}
-		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
+	}
+
+	// Logged only once the write has landed: an audit trail that records a consent
+	// change which never persisted is worse than no entry at all, because it is
+	// the thing the controller would produce as proof.
+	if consentChanged && storedConsent != nil {
+		h.logConsent(r, claims.Subject, storedConsent.Granted, service.ConsentSourceProfile)
 	}
 
 	if h.auditLog != nil {
@@ -170,6 +218,39 @@ func (h *IdentityHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})
+}
+
+// Unsubscribe handles POST /user/marketing/unsubscribe.
+//
+// Art. 7(3): withdrawing consent must be as easy as giving it. Granting is a
+// checkbox, so withdrawal is a single call with no body and no confirmation
+// step. It is idempotent — unsubscribing twice is not an error — and it only
+// clears the marketing preference; the account and every other purpose are
+// untouched.
+func (h *IdentityHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r.Context())
+	if claims == nil {
+		WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	// Compare-and-set: changes only the consent field and leaves the rest of the
+	// profile alone, so a concurrent profile write can neither lose the withdrawal
+	// nor be overwritten by it. A user with no profile still gets the withdrawal
+	// recorded — otherwise a later account import could land a legacy opt-in on an
+	// account that has already refused.
+	err := h.svc.UpdateMarketingConsent(r.Context(), claims.Subject, false, service.ConsentSourceUnsubscribe, "")
+	if err != nil {
+		if errors.Is(err, service.ErrConcurrentUpdate) {
+			WriteError(w, http.StatusConflict, "concurrent_update")
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	h.logConsent(r, claims.Subject, false, service.ConsentSourceUnsubscribe)
+	WriteJSON(w, http.StatusOK, StatusResponse{Status: "unsubscribed"})
 }
 
 func validateIdentity(input *identityInput) error {

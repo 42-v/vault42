@@ -70,15 +70,30 @@ func (r *BackupCodeRepo) MarkUsed(ctx context.Context, id string) (bool, error) 
 	return tag.RowsAffected() == 1, nil
 }
 
-// DeleteAllForUser invalidates all backup codes for a user by marking them as used.
-// Uses UPDATE instead of DELETE because vault_app has no DELETE privilege on auth schema.
+// DeleteAllForUser invalidates all backup codes for a user by marking them used.
+//
+// This is the regeneration path: the rows are kept so a used//spent code cannot be
+// replayed and the history stays visible. It does NOT remove the code hashes, so
+// it is not sufficient for erasure — see PurgeAllForUser.
 func (r *BackupCodeRepo) DeleteAllForUser(ctx context.Context, userID string) error {
-	// vault_app role has no DELETE privilege on auth schema (by design).
-	// Instead of deleting, mark all existing codes as used to invalidate them.
 	_, err := r.db.Pool.Exec(ctx,
 		`UPDATE auth.backup_codes SET used=true, used_at=NOW() WHERE user_id=$1 AND used=false`, userID)
 	if err != nil {
-		return fmt.Errorf("delete backup codes: %w", err)
+		return fmt.Errorf("invalidate backup codes: %w", err)
+	}
+	return nil
+}
+
+// PurgeAllForUser hard-deletes every backup code row for a user (account erasure).
+//
+// Marking a code used leaves its hash and user_id in the table, so erasure cannot
+// use DeleteAllForUser: the codes would outlive the account. vault_app does hold
+// DELETE on auth.backup_codes (migrations/001_initial_schema.sql), despite an
+// older comment here that claimed otherwise.
+func (r *BackupCodeRepo) PurgeAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM auth.backup_codes WHERE user_id=$1`, userID)
+	if err != nil {
+		return fmt.Errorf("purge backup codes: %w", err)
 	}
 	return nil
 }

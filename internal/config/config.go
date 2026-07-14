@@ -267,6 +267,14 @@ type Config struct {
 	// (VAULT_KEY_RETENTION_PERIOD). Default: 1h.
 	KeyRetentionPeriod time.Duration
 
+	// AuditRetentionPeriod is how long audit entries are kept before the sweeper
+	// purges them (VAULT_AUDIT_RETENTION_DAYS, in days). Audit rows hold personal
+	// data (user ID, IP, user agent, fingerprint hash), so Art. 5(1)(e) caps how
+	// long they may live. Default: 0 — disabled. Deleting security logs is not a
+	// safe default, so the operator must pick a horizon consistent with the
+	// retention table in docs/PRIVACY.md §4.
+	AuditRetentionPeriod time.Duration
+
 	// KeyRefreshInterval is how often pods refresh signing keys from the database
 	// (VAULT_KEY_REFRESH_INTERVAL). Default: 60s.
 	KeyRefreshInterval time.Duration
@@ -355,6 +363,8 @@ func Load() (*Config, error) {
 
 		KeyRotationDB:      envBool("VAULT_KEY_ROTATION_DB"),
 		KeyRetentionPeriod: envDuration("VAULT_KEY_RETENTION_PERIOD", time.Hour),
+
+		AuditRetentionPeriod: time.Duration(envInt("VAULT_AUDIT_RETENTION_DAYS", 0)) * 24 * time.Hour,
 		KeyRefreshInterval: envDuration("VAULT_KEY_REFRESH_INTERVAL", 60*time.Second),
 
 		SeedFile: os.Getenv("VAULT_SEED_FILE"),

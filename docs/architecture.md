@@ -880,6 +880,16 @@ hash, device ID, scrubbed metadata, risk score, and timestamp.
 - Optional batching for high-throughput deployments (configurable flush interval)
 - Best-effort -- audit failures never block auth operations
 
+**Retention** (`internal/audit/retention.go`): entries carry personal data (user ID,
+IP, user agent, fingerprint hash), so they are bounded by time rather than by the
+account lifecycle. Audit records are deliberately exempt from the erasure cascade --
+Art. 17(3)(b)/(e) permits keeping security records past an erasure request -- which is
+exactly why they need a purge of their own. A sweeper deletes entries older than
+`VAULT_AUDIT_RETENTION_DAYS` at startup and every 6 hours. It is disabled by default:
+silently deleting security logs is not a safe default, so the horizon is an explicit
+operator choice. Because the log is append-only, this is the only sanctioned removal
+path (`vault cleanup-audit` runs the same purge on demand).
+
 ### Cache Interface
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:

@@ -40,6 +40,15 @@ const (
 	// real email is masked in the audit metadata; it survives only in the
 	// encrypted account-recovery escrow log.
 	AccountErased = "account_erased"
+	// ConsentGranted records an opt-in to a consent-based processing purpose.
+	// Art. 7(1) puts the burden of demonstrating consent on the controller, so
+	// the grant is logged with its source; the record itself lives on the
+	// encrypted identity profile.
+	ConsentGranted = "consent_granted"
+	// ConsentWithdrawn records a withdrawal of consent (Art. 7(3)). Withdrawal
+	// must be as easy as granting, so this is also emitted by the unauthenticated
+	// one-click unsubscribe path.
+	ConsentWithdrawn = "consent_withdrawn"
 	// TwoFASetup records TOTP or WebAuthn credential enrollment.
 	TwoFASetup = "2fa_setup"
 	// TwoFAVerify records a two-factor authentication verification attempt.

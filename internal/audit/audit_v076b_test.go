@@ -52,6 +52,11 @@ func TestLogBufferFullDropsNonCritical(t *testing.T) {
 	}
 }
 
+func (m *hookAuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (int64, bool, error) {
+	n, err := m.Cleanup(ctx, olderThan)
+	return n, true, err
+}
+
 // A full buffer writes a critical event synchronously.
 func TestLogBufferFullSyncWritesCritical(t *testing.T) {
 	repo := &hookAuditRepo{}

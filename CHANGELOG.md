@@ -1,5 +1,158 @@
 # Changelog
 
+## 0.9.0 (2026-07-14)
+
+### Fixed in second review
+
+A second, independent review of the fixes below found six more — including two that
+predate this release and were never caught because the test suite cannot see them:
+
+* **Account erasure had never worked in a real deployment.** `SoftDeleteScrub` writes
+  `auth.users.email`, and `vault_app` was never granted `UPDATE` on that column;
+  Postgres rejects the entire statement if a single target column is denied, so every
+  erasure request failed with `42501`. The admin gateway was worse — `vault_admin` held
+  `SELECT` and nothing else on the user tables, so admin-initiated erasure could not
+  touch a single row. Migration `009_erasure_grants.sql` grants exactly what the cascade
+  needs and nothing more.
+* **The suite could not have caught it.** `tests/integration` connects as the container
+  owner (a superuser) *and* `stripRoleGrants()` deletes every `GRANT`/`REVOKE` before
+  applying the migrations — the privilege model is removed from the fixture. Added
+  `TestErasureUnderVaultAppRole`, which re-applies the grants verbatim and connects as
+  the **real `vault_app` role**. It fails without migration 009 and passes with it.
+* **Three more services were holding the zeroed master key.** The fix below copied the
+  key for the identity service but missed `keystore.New`, `NewAuthHandler` and
+  `NewHandler` in the gateway, and `keystore.New` + `NewAuthService` in `cmd/vault`. The
+  keystore encrypts the **JWT signing keys** at rest — under an all-zero key a database
+  dump yields forgeable tokens — and the auth service HMACs email-OTP codes. Both
+  binaries now take the copies at the top of `main`, before any consumer.
+* **`PUT /user/identity` swallowed a failed consent read** (`err == nil && existing != nil`),
+  so a transient DB error re-opened both bugs it was meant to close: an omitted field
+  blanked a stored withdrawal, and an echoed imported flag was stamped affirmative. It
+  now fails the request instead of guessing.
+* **`PUT` still raced unsubscribe.** It read the prior consent and then wrote blind, so a
+  withdrawal committed in between was silently reverted. The read, the reconciliation and
+  the write now happen inside one compare-and-set (`IdentityService.PutProfile`).
+* The compare-and-set had no honest test — every mock returned "won the race"
+  unconditionally, so inverting the CAS semantics passed the suite. Added a mock that
+  actually loses races.
+
+### Fixed in first review
+
+Ten defects found by an adversarial review of this release's own changes, before merge:
+
+* **The admin gateway encrypted imported consent with an all-zero key.** `NewIdentityService`
+  retains the slice it is given, and `config.ZeroBytes(cfg.MasterKey)` wipes that backing
+  array in place a few lines later. 32 zero bytes is still a valid AES-256 key, so `Encrypt`
+  succeeded and wrote ciphertext no one could ever read. `cmd/vault` copies the key first;
+  the gateway now does too.
+* **Backup codes were not actually erased.** `BackupCodeRepo.DeleteAllForUser` is the
+  *regeneration* path — it runs `UPDATE ... SET used=true`, leaving the hash and the user ID
+  in the table. Erasure called it and reported success. Added `PurgeAllForUser`, and the
+  integration test now asserts a **row count**, not that a mock method was called.
+* **Consent could be laundered by a profile save.** `GET` returns the bare `marketing_emails`
+  bool with no provenance, so any client that round-trips the form re-submits an imported
+  (pre-ticked, never affirmed) `true` — which was then stamped `source=profile`, i.e.
+  affirmative consent. A re-submitted value that has not changed is no longer treated as an
+  act of consent, and the response now exposes the provenance so a client can tell the
+  difference.
+* **A profile save could destroy a withdrawal.** `PUT` is a full replace, so a client that
+  omitted `marketing_emails` blanked the stored `ConsentRecord` — including a recorded
+  unsubscribe — with no audit entry. Omitted now means "unchanged".
+* **Erasure could leave a live account with no second factor.** The cascade spans nine stores
+  with no transaction; the user row was scrubbed *last*, so a failure part-way left an account
+  that still authenticated but whose TOTP secret, WebAuthn credentials and backup codes were
+  already gone — the user locked out, and nothing erased. The account is now tombstoned
+  first, and the cascade is idempotent so an interrupted erasure is finished by re-running it.
+* Unsubscribe was a lock-free read-modify-write over a single encrypted blob: a concurrent
+  profile write could drop the withdrawal, and the no-profile branch could replace a real
+  profile with an empty one. It now uses a compare-and-set with retry.
+* The audit retention sweeper ran on **every CLI subcommand** (it starts with an immediate
+  sweep, and was started before the CLI dispatch), and in **every replica** with no
+  coordination — each sweep takes an `ACCESS EXCLUSIVE` lock on the audit table and briefly
+  disables the append-only trigger. It now starts only for the server, and serialises across
+  replicas on a Postgres advisory lock.
+* Import silently discarded every marketing flag when the identity service was not wired,
+  while still reporting `consent_failed: 0`. It now counts and reports per row.
+* The consent audit entry was written *before* the profile write, so a failed write still
+  left a trail claiming consent had changed.
+
+### Privacy / GDPR
+
+* **Account erasure retained the MFA authenticators.** `DeleteAccount` cascaded the
+  identity profile, blobs, devices, social links, password history and refresh tokens,
+  but never removed the encrypted TOTP secret, the WebAuthn credentials or the
+  backup-code hashes. The schema carries `ON DELETE CASCADE` on all three, so it looked
+  correct — the cascade never fired, because erasure scrubs the user row with an `UPDATE`
+  rather than deleting it. `docs/PRIVACY.md` §5.3 stated these were removed, so the
+  published policy was wrong about what erasure did. They are now deleted explicitly, and
+  refresh tokens are hard-deleted rather than revoked (a revoked row keeps its fingerprint
+  hash and device reference). Regression test added — the omission had been untested.
+* **Marketing consent is now a record, not a bare flag.** `marketing_emails` is stored with
+  `granted` / `at` / `source` / `origin`, because Art. 7(1) requires the controller to
+  *demonstrate* consent, which a boolean cannot. Only `registration` and `profile` sources
+  are affirmative; `import` and `legacy` preserve the value but do not authorise sending —
+  a migrated default-true flag, or a pre-ticked checkbox, is not consent (Recital 32;
+  *Planet49*, C-673/17). `IdentityService.MarketingAllowed` is the sole send gate and fails
+  closed. `POST /admin/users/import` now accepts `marketing_emails` so a migrating system's
+  preferences survive the cutover with honest provenance.
+* **`POST /user/marketing/unsubscribe`** — withdrawal in one call, no body, no confirmation
+  step (Art. 7(3): withdrawal must be as easy as granting). Emits `consent_withdrawn`.
+* **Audit retention is enforced** (`VAULT_AUDIT_RETENTION_DAYS`). Audit rows hold personal
+  data and were the one store with no expiry: a manual `cleanup-audit` existed but nothing
+  ran it. A sweeper now purges at startup and every 6h. Disabled by default — silently
+  deleting security logs is not a safe default, so the horizon is an explicit operator
+  choice.
+* **`GET /user/social` + `DELETE /user/social/{id}`** — list and unlink federated identities.
+  The provider's encrypted OAuth tokens previously could not be removed without erasing the
+  entire account; `SocialAccountRepo.Delete` had been dead code with no route.
+* `docs/COMPLIANCE.md` GDPR section re-audited against the code: **60% → 93%**, no open
+  high-severity findings. The old figure both understated shipped work and asserted erasure
+  guarantees the code did not implement.
+
+### Security
+
+* **Go toolchain bumped to 1.26.5**, clearing the three red nightly jobs. Both
+  findings are stdlib-only and fixed in 1.26.5:
+  * `GO-2026-5856` — Encrypted Client Hello privacy leak in `crypto/tls`,
+    reachable from the OIDC user-info client, the Redis pool dialer and the
+    server's TLS handshake (govulncheck symbol trace).
+  * `CVE-2026-39822` (HIGH) — `os.Root` symlink-following in `os`, flagged by
+    Trivy against the `stdlib` component compiled into the `vault` and
+    `admin-gateway` images.
+* Builder image pinned to `golang:1.26.5-alpine` by digest across `Dockerfile`,
+  `Dockerfile.bridge` and `Dockerfile.admin-gateway`.
+
+### Testing
+
+* **Coverage raised to 90.42% across the full suite** (from 86.69%). Added real behavioural tests
+  for previously-uncovered surfaces:
+  * The GDPR work above, tested where it actually matters: the erasure cascade asserts the
+    TOTP secret, WebAuthn credentials and backup codes are gone (against a real Postgres,
+    since the bug was that the schema *looked* like it handled this); a failure in any of
+    those deletes must abort the erasure rather than report a success that did not happen.
+  * Consent provenance: an imported or legacy flag must never read as affirmative consent,
+    a withdrawal must survive the encrypt/decrypt round-trip, and `MarketingAllowed` fails
+    closed on a missing profile, a missing record, and a repository error.
+  * The audit retention sweeper (disabled-by-default is inert, the cutoff is `now - horizon`,
+    `Start` sweeps immediately rather than waiting hours for the first tick).
+  * The offline recovery tool's reject paths (`cmd/recover` reads operator-supplied escrow
+    files, so a truncated blob, a corrupt length prefix, a tampered AES payload and a
+    non-RSA key must all fail cleanly).
+  * The white-label email send path: `service.EmailOverrideStore` (branding +
+    template lookups that degrade to the global template on error) and the
+    `middleware.AppContext` tenant-slug resolver (`X-Vault-App` header, `?app=`
+    fallback, invalid-slug rejection).
+  * The account-erasure and session-management repository methods
+    (`DeleteAllForUser`/`DeleteAllForPseudonym`, `SoftDeleteScrub`,
+    `SetLastLogin`, `RevokeByDeviceID`, `RevokeAll`, `CountActiveFamilies`,
+    blob ref-hash lookup/delete) plus the append-only `account_recovery` escrow
+    repo and its no-UPDATE/no-DELETE trigger.
+  * Admin/audit CLI commands (`seed`, `cleanup-audit`, `export-audit`) and their
+    validation branches, `AdminConfig.List`, `AppRole.ListNames`,
+    `Audit.Cleanup`, `AdminSession.RevokeAll`, the NIST AAL classifier
+    (`AALForMethods`), and the offline recovery-tool RSA PEM loaders (PKCS#1
+    fallback and error paths).
+
 ## 0.8.6 (2026-07-10)
 
 ### Features

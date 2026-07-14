@@ -23,13 +23,17 @@ remediation prioritization.
 | NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
 | OWASP Top 10 (2021) | 47 | 1 | 0 | 0 | 97% |
 | RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC | 50 | 1 | 0 | 3 | 96% |
-| GDPR -- General Data Protection Regulation (EU 2016/679) | 4 | 9 | 2 | 0 | 60% |
-| **Totals** | **234** | **21** | **2** | **9** | -- |
+| GDPR -- General Data Protection Regulation (EU 2016/679) | 12 | 3 | 0 | 0 | 93% |
+| **Totals** | **242** | **15** | **0** | **9** | -- |
 
-**Overall weighted coverage:** **91.1%** (234 requirements met out of 257 applicable,
+**Overall weighted coverage:** **94.2%** (242 requirements met out of 257 applicable,
 excluding 9 Not-Applicable organizational/out-of-scope controls). Awarding half credit
-for partial findings raises the figure to **95.1%**. **High-severity open findings: 4**
-(all within the GDPR data-lifecycle and accountability scope).
+for partial findings raises the figure to **97.1%**. **High-severity open findings: 0.**
+
+The GDPR data-lifecycle gaps that previously drove every high-severity finding are closed
+(erasure completeness, audit retention, consent provenance, federated unlink). What remains
+across all seven standards is medium/low: breach-notification alerting in code, cryptographic
+audit-log chaining, and a set of hardening options that are deliberate trade-offs.
 
 ---
 
@@ -184,33 +188,38 @@ infrastructure, JWKS endpoint operation) and unused `crit` header handling.*
 
 ## GDPR -- General Data Protection Regulation (EU 2016/679)
 
-**Coverage: 60%** -- 4 met, 9 partial, 2 gap, 0 N/A
+**Coverage: 93%** -- 12 met, 3 partial, 0 gap, 0 N/A
 
-Identity and PII handling shows strong technical data-protection: AES-256-GCM encryption
-at rest with pseudonymized keys, audit logging of PII access with sensitive-key scrubbing,
-and a marketing-email preference field. However, GDPR compliance has substantive gaps
-concentrated in data lifecycle and accountability. The right to erasure is incomplete
-(only the identity profile can be deleted; full account deletion is missing); there is no
-data-retention policy or automatic purge; user-rights mechanisms for portability,
-objection, and restriction are absent; and accountability artifacts (privacy policy, data
-processing agreements, data protection impact assessment, breach-notification procedure)
-are not yet in place. Several of these requirements are organizational/policy decisions
-that must be documented alongside the supporting code features. This section drives most
-of the report's high-severity remediation work.
+*Re-audited 2026-07-14 against the code (the previous 60% assessment predated the 0.8.x
+data-lifecycle work and understated shipped behaviour by roughly 17 points; it also asserted
+erasure guarantees the code did not implement — see GDPR-5).*
 
-| ID | Requirement | Status | Severity | Recommended fix |
+Technical data-protection is strong: AES-256-GCM at rest under pseudonymized (HMAC-derived)
+keys, append-only audit logging with sensitive-key scrubbing, and per-purpose lawful bases
+documented in `docs/PRIVACY.md`. The data-lifecycle work is now complete: full account erasure
+cascades to every account-linked record including the MFA authenticators, audit retention is
+enforced by a background sweeper, marketing consent is stored with provenance and is withdrawable
+in one call, and federated links can be unlinked individually. The three remaining partials are
+the breach-notification *code path* (the procedure is documented but no risk-threshold alerting
+exists), cryptographic audit-log chaining, and a DPIA template.
+
+| ID | Requirement | Status | Severity | Notes / remaining work |
 |---|---|---|---|---|
-| GDPR-5 | Right to erasure (Art. 17): complete deletion of personal data on request | Partial | High | Add a comprehensive account-deletion flow: soft-delete the user record, delete the identity profile, cascade-delete blobs, TOTP secrets, WebAuthn credentials, backup codes and devices, revoke all refresh tokens, and anonymize audit entries. Document erasure handling and legal-hold exceptions. |
-| GDPR-10 | Data retention limits (Art. 5(1)(e)): data not kept longer than necessary | Gap | High | Add configurable retention periods and scheduled cleanup jobs for audit entries, expired tokens, and abandoned blobs/devices; support legal-hold overrides with justification; log retention actions; document the policy. A manual cleanup function exists but is not automated. |
-| GDPR-12 | Breach notification (Arts. 33–34): notify regulator within 72 hours and users without undue delay | Gap | High | Implement a breach-notification procedure: configurable notification recipients, risk-threshold alerting from audit risk scores, a documented 72-hour regulator timeline, user-notification templates, and an incident-response playbook. |
-| GDPR-13 | Data subject rights support (Arts. 15–21): access, rectification, erasure, restriction, portability, objection | Partial | High | Add the missing rights endpoints: full account deletion, data-processing-preference (objection) updates, and data export (portability); document them under a "User Rights" section and log rights exercises to the audit trail. |
-| GDPR-1 | Lawful basis for processing (Art. 6) | Partial | Medium | Add consent-management endpoints to capture, retrieve, and withdraw consent; log consent decisions with timestamps; document the lawful basis in the specification. |
-| GDPR-7 | Purpose limitation (Art. 5(1)(b)) | Partial | Medium | Document each data field's purpose, retention period, and sharing restrictions; require separate explicit consent for any third-party marketing use; produce a data-processing agreement. |
-| GDPR-8 | Data subject access & portability (Arts. 15, 20) | Partial | Medium | Add a single data-export endpoint returning all personal data (profile, identity, blob metadata, devices, user-scoped audit events) in a portable, machine-readable format; document it. |
-| GDPR-9 | Accountability (Art. 5(2), Recital 76) | Partial | Medium | Produce a privacy policy documenting processing purposes, lawful basis, retention periods, user rights, the breach-notification procedure, and sub-processors; add a data-protection-impact-assessment template. |
-| GDPR-11 | Third-party data sharing and transfers (Arts. 4, 6, 28) | Partial | Medium | Document third-party processors (OAuth providers, email, storage backends) and their roles; reference data-processing agreements and, for non-EU processors, the applicable transfer mechanism (Standard Contractual Clauses or adequacy); cascade-delete linked social-account data on unlink. |
-| GDPR-15 | Consent for marketing communications (Arts. 5, 7) | Partial | Medium | Record consent timestamp and source for the marketing preference; add a dedicated unsubscribe endpoint; ensure the email service checks the preference before sending campaigns; document the flow. |
-| GDPR-2 | Data minimization (Art. 5(1)(c)) | Partial | Low | Document the necessity rationale for each collected field, consider making the avatar URL optional by default, and present a data-collection notice at registration. |
+| GDPR-1 | Lawful basis for processing (Art. 6) | Met | -- | Per-purpose bases P1–P10 in PRIVACY.md §2. Consent is stored as a record (`granted`/`at`/`source`/`origin`), not a bare flag, and every change writes a `consent_granted` / `consent_withdrawn` audit entry — Art. 7(1) requires the controller to be able to *demonstrate* consent. |
+| GDPR-2 | Data minimization (Art. 5(1)(c)) | Met | -- | Per-field necessity rationale in PRIVACY.md §3.2. |
+| GDPR-5 | Right to erasure (Art. 17) | Met | -- | **Was a live defect, not merely undocumented.** Erasure cascades identity, blobs, devices, social links, password history and refresh tokens — but silently retained the TOTP secret, WebAuthn credentials and backup codes. The schema carries `ON DELETE CASCADE` on all three, so it *looked* correct; the cascade never fired because the account row is scrubbed with an `UPDATE`, not deleted. Now deleted explicitly, and refresh tokens are hard-deleted rather than revoked (a revoked row keeps its fingerprint hash and device reference). Regression-tested in `erasure_test.go`. |
+| GDPR-7 | Purpose limitation (Art. 5(1)(b)) | Met | -- | PRIVACY.md §2 + §3.2. |
+| GDPR-8 | Access & portability (Arts. 15, 20) | Met | -- | `GET /user/data-export` returns profile, identity, blob metadata, devices and user-scoped audit events as machine-readable JSON. |
+| GDPR-9 | Accountability (Art. 5(2), Recital 76) | Met | -- | `docs/PRIVACY.md` is the processing policy: roles, bases, inventory, retention, rights, processors, breach procedure. |
+| GDPR-10 | Data retention limits (Art. 5(1)(e)) | Met | -- | `VAULT_AUDIT_RETENTION_DAYS` + a sweeper (`internal/audit/retention.go`) purging every 6h and at startup. Disabled by default: deleting security logs is not a safe default, so the horizon is an explicit operator choice. Audit entries are exempt from the erasure cascade under Art. 17(3)(b)/(e), which is why they need a time-based purge. |
+| GDPR-11 | Third-party sharing and transfers (Arts. 4, 6, 28) | Met | -- | Processors documented in PRIVACY.md §6. `DELETE /user/social/{id}` unlinks a federated identity and removes the encrypted provider tokens with it; previously this was only possible by erasing the whole account. |
+| GDPR-13 | Data subject rights (Arts. 15–21) | Met | -- | Access/portability, rectification, erasure, restriction, objection and withdrawal all have endpoints; each writes to the audit trail. |
+| GDPR-15 | Consent for marketing (Arts. 5, 7) | Met | -- | `POST /user/marketing/unsubscribe` withdraws in one call with no confirmation step (Art. 7(3): withdrawal must be as easy as granting). `IdentityService.MarketingAllowed` is the sole send gate and fails closed: `import` and `legacy` provenance are **not** affirmative consent, so a migrated default-true flag or a pre-ticked checkbox cannot become a lawful basis for sending (Recital 32; *Planet49*, C-673/17). |
+| GDPR-3 | Security of processing (Art. 32) | Met | -- | Covered in depth by the ASVS/NIST sections above. |
+| GDPR-4 | Records of processing (Art. 30) | Met | -- | PRIVACY.md §2/§3 constitute the processor-side record. |
+| GDPR-12 | Breach notification (Arts. 33–34) | Partial | Medium | PRIVACY.md §7 documents the 72-hour procedure and the processor→controller duty (Art. 33(2)), but nothing raises an alert from code. `riskScore` is computed and stored on every audit entry and no consumer reads it; the honeypot `Alerter` fires only on trap-user login, which is an intrusion tripwire, not a breach detector. **Fix:** risk-threshold webhook reusing the honeypot dispatcher. |
+| GDPR-14 | Audit-log integrity (Art. 5(2) accountability) | Partial | Medium | Append-only is enforced at the database level (trigger + revoked UPDATE/DELETE privileges). Cryptographic chaining (HMAC over the previous record hash) with read-time verification would make tampering by a DB-level adversary detectable. Tracked as AU-9 above. |
+| GDPR-16 | DPIA (Art. 35) | Partial | Low | Authentication of an existing user base is unlikely to meet the Art. 35(1) "high risk" threshold, but a DPIA template should ship for Operators whose deployment does. |
 
 ---
 
@@ -220,17 +229,17 @@ High-severity findings first, then medium, then low. All high-severity items fal
 GDPR data-lifecycle and accountability scope.
 
 ### High severity
-1. **GDPR-10 -- Data retention limits (Gap).** No automatic purge of audit entries,
-   expired tokens, or abandoned records. Add configurable retention periods, scheduled
-   cleanup jobs, and legal-hold overrides.
-2. **GDPR-12 -- Breach notification (Gap).** No breach-notification procedure or
-   risk-threshold alerting. Implement notification recipients, alerting from audit risk
-   scores, a 72-hour regulator timeline, and an incident-response playbook.
-3. **GDPR-5 -- Right to erasure (Partial).** Only the identity profile can be deleted. Add
-   a full account-deletion flow with cascade deletion, token revocation, and audit
-   anonymization.
-4. **GDPR-13 -- Data subject rights support (Partial).** Add the missing rights endpoints
-   (deletion, objection/preferences, portability export) and log rights exercises.
+
+**None open.** The four former high-severity findings are closed:
+
+1. ~~**GDPR-10 -- Data retention limits.**~~ Closed: `VAULT_AUDIT_RETENTION_DAYS` + background
+   sweeper (`internal/audit/retention.go`).
+2. **GDPR-12 -- Breach notification.** Downgraded to Medium: the Art. 33 procedure is documented
+   (PRIVACY.md §7); what is missing is the code path that raises an alert. See below.
+3. ~~**GDPR-5 -- Right to erasure.**~~ Closed: erasure now deletes the TOTP secret, WebAuthn
+   credentials and backup codes (which the `ON DELETE CASCADE` never removed, because the account
+   row is scrubbed with an `UPDATE`), and hard-deletes refresh-token rows.
+4. ~~**GDPR-13 -- Data subject rights.**~~ Closed: every right has an endpoint, each audited.
 
 ### Medium severity
 5. **AC-12 -- Inactivity timeout (Partial).** Add idle-timeout tracking and refresh
@@ -243,9 +252,10 @@ GDPR data-lifecycle and accountability scope.
    `invalid_credentials` for locked/banned/disabled accounts.
 9. **V6.4.1 -- Secret zeroing for runtime configs (Partial).** Migrate pepper and database
    password to `[]byte` and zero on shutdown.
-10. **GDPR-1, GDPR-7, GDPR-8, GDPR-9, GDPR-11, GDPR-15 (Partial).** Consent management,
-    purpose/processing documentation, data export, accountability artifacts, third-party
-    transfer documentation, and marketing-consent tracking.
+10. **GDPR-12 -- Breach-notification alerting (Partial).** The procedure is documented but no
+    code raises an alert. `riskScore` is written on every audit entry and never read; the
+    honeypot `Alerter` fires only on trap-user login. Add a risk-threshold webhook reusing the
+    honeypot dispatcher, so a scoring spike reaches the controller inside the Art. 33 window.
 
 ### Low severity
 11. **NIST-5.2.2 -- Strict concurrent-session limit (Partial).** Optional hard enforcement
@@ -261,5 +271,6 @@ GDPR data-lifecycle and accountability scope.
     administrative list endpoints.
 17. **OAUTH2-TOKEN-001 -- Refresh-token invalidation (Partial).** Confirm and, if needed,
     enforce revocation of the old refresh token on rotation.
-18. **GDPR-2 -- Data minimization documentation (Partial).** Document field-necessity
-    rationale and add a collection notice.
+18. **GDPR-16 -- DPIA template (Partial).** Authentication of an existing user base is unlikely
+    to cross the Art. 35(1) "high risk" threshold, but ship a template for Operators whose
+    deployment does.

@@ -24,14 +24,17 @@ func testErasureUser() *model.User {
 
 // erasureMocks bundles the mock repos so a test can assert on what was called.
 type erasureMocks struct {
-	users     *mocks.MockUserRepo
-	identity  *mocks.MockIdentityRepo
-	blobs     *mocks.MockBlobRepo
-	devices   *mocks.MockDeviceRepo
-	social    *mocks.MockSocialAccountRepo
-	pwHistory *mocks.MockPasswordHistoryRepo
-	tokens    *mocks.MockRefreshTokenRepo
-	recovery  *mocks.MockAccountRecoveryRepo
+	users       *mocks.MockUserRepo
+	identity    *mocks.MockIdentityRepo
+	blobs       *mocks.MockBlobRepo
+	devices     *mocks.MockDeviceRepo
+	social      *mocks.MockSocialAccountRepo
+	pwHistory   *mocks.MockPasswordHistoryRepo
+	tokens      *mocks.MockRefreshTokenRepo
+	totp        *mocks.MockTOTPRepo
+	webauthn    *mocks.MockWebAuthnRepo
+	backupCodes *mocks.MockBackupCodeRepo
+	recovery    *mocks.MockAccountRecoveryRepo
 }
 
 func newErasureService(t *testing.T, pub *rsa.PublicKey, m *erasureMocks) *ErasureService {
@@ -43,21 +46,176 @@ func newErasureService(t *testing.T, pub *rsa.PublicKey, m *erasureMocks) *Erasu
 	}
 	return NewErasureService(
 		m.users, m.identity, m.blobs, m.devices, m.social, m.pwHistory,
-		m.tokens, m.recovery, audit.NewLogger(&mocks.MockAuditRepo{}, 0),
+		m.tokens, m.totp, m.webauthn, m.backupCodes,
+		m.recovery, audit.NewLogger(&mocks.MockAuditRepo{}, 0),
 		pub, testHMAC,
 	)
 }
 
 func newErasureMocks() *erasureMocks {
 	return &erasureMocks{
-		users:     &mocks.MockUserRepo{},
-		identity:  &mocks.MockIdentityRepo{},
-		blobs:     &mocks.MockBlobRepo{},
-		devices:   &mocks.MockDeviceRepo{},
-		social:    &mocks.MockSocialAccountRepo{},
-		pwHistory: &mocks.MockPasswordHistoryRepo{},
-		tokens:    &mocks.MockRefreshTokenRepo{},
-		recovery:  &mocks.MockAccountRecoveryRepo{},
+		users:       &mocks.MockUserRepo{},
+		identity:    &mocks.MockIdentityRepo{},
+		blobs:       &mocks.MockBlobRepo{},
+		devices:     &mocks.MockDeviceRepo{},
+		social:      &mocks.MockSocialAccountRepo{},
+		pwHistory:   &mocks.MockPasswordHistoryRepo{},
+		tokens:      &mocks.MockRefreshTokenRepo{},
+		totp:        &mocks.MockTOTPRepo{},
+		webauthn:    &mocks.MockWebAuthnRepo{},
+		backupCodes: &mocks.MockBackupCodeRepo{},
+		recovery:    &mocks.MockAccountRecoveryRepo{},
+	}
+}
+
+// Art. 17 requires the MFA authenticators to go with the account. They hang off
+// user_id with ON DELETE CASCADE, but erasure soft-deletes the user row with an
+// UPDATE, so the cascade never fires — without an explicit delete the encrypted
+// TOTP secret, the WebAuthn public keys and the backup-code hashes survive the
+// erasure. docs/PRIVACY.md §5.3 promises they do not.
+func TestDeleteAccount_ErasesMFAAuthenticators(t *testing.T) {
+	m := newErasureMocks()
+
+	var totpDeleted, webauthnDeleted, backupDeleted string
+	m.totp.DeleteByUserIDFn = func(_ context.Context, userID string) error {
+		totpDeleted = userID
+		return nil
+	}
+	m.webauthn.DeleteAllForUserFn = func(_ context.Context, userID string) error {
+		webauthnDeleted = userID
+		return nil
+	}
+	// Purge, not DeleteAllForUser: the latter is the regeneration path and only
+	// marks codes used, leaving the hash and user_id behind. Erasure must remove
+	// the rows, so a test that accepted DeleteAllForUser would pass while the
+	// backup-code hashes survived the erasure.
+	m.backupCodes.PurgeAllForUserFn = func(_ context.Context, userID string) error {
+		backupDeleted = userID
+		return nil
+	}
+	m.backupCodes.DeleteAllForUserFn = func(context.Context, string) error {
+		t.Error("erasure must purge backup codes, not merely mark them used")
+		return nil
+	}
+
+	svc := newErasureService(t, nil, m)
+	if err := svc.DeleteAccount(context.Background(), "user-1", "self", "user request"); err != nil {
+		t.Fatalf("DeleteAccount: %v", err)
+	}
+
+	if totpDeleted != "user-1" {
+		t.Errorf("TOTP secret not erased: got %q, want %q", totpDeleted, "user-1")
+	}
+	if webauthnDeleted != "user-1" {
+		t.Errorf("WebAuthn credentials not erased: got %q, want %q", webauthnDeleted, "user-1")
+	}
+	if backupDeleted != "user-1" {
+		t.Errorf("backup codes not erased: got %q, want %q", backupDeleted, "user-1")
+	}
+}
+
+// A failure to remove an MFA authenticator must abort the erasure loudly. If it
+// were swallowed, DeleteAccount would report success while the encrypted TOTP
+// secret or the WebAuthn keys stayed behind — the caller would believe the data
+// was gone, which is the worst possible outcome for an Art. 17 request.
+func TestDeleteAccount_MFADeleteFailureAborts(t *testing.T) {
+	boom := errors.New("db down")
+
+	tests := []struct {
+		name string
+		wire func(m *erasureMocks)
+	}{
+		{"totp", func(m *erasureMocks) {
+			m.totp.DeleteByUserIDFn = func(context.Context, string) error { return boom }
+		}},
+		{"webauthn", func(m *erasureMocks) {
+			m.webauthn.DeleteAllForUserFn = func(context.Context, string) error { return boom }
+		}},
+		{"backup codes", func(m *erasureMocks) {
+			m.backupCodes.PurgeAllForUserFn = func(context.Context, string) error { return boom }
+		}},
+		{"refresh tokens", func(m *erasureMocks) {
+			m.tokens.DeleteAllForUserFn = func(context.Context, string) error { return boom }
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newErasureMocks()
+			scrubbed := false
+			m.users.SoftDeleteScrubFn = func(context.Context, string, string) error {
+				scrubbed = true
+				return nil
+			}
+			tc.wire(m)
+
+			svc := newErasureService(t, nil, m)
+			err := svc.DeleteAccount(context.Background(), "user-1", "self", "user request")
+			if err == nil {
+				t.Fatalf("expected erasure to fail when %s deletion fails", tc.name)
+			}
+			if !errors.Is(err, boom) {
+				t.Errorf("error did not wrap the cause: %v", err)
+			}
+			// The account MUST already be tombstoned when the cascade dies. There is
+			// no transaction spanning the nine stores, so a failure always leaves the
+			// erasure half-done — the only question is which half. Scrubbing first
+			// means the account has already stopped authenticating, and the remaining
+			// deletes are idempotent and can simply be re-run. Scrubbing last would
+			// leave a live, loginable account whose MFA authenticators had already
+			// been destroyed: the user locked out, and nothing actually erased.
+			if !scrubbed {
+				t.Error("account must be tombstoned before the PII cascade, so a mid-cascade failure cannot leave a live account with destroyed MFA")
+			}
+		})
+	}
+}
+
+// Erasure has to be safe to re-run: a failed cascade leaves the account
+// tombstoned with some PII still present, and the only way to finish the job is
+// to call it again. The retry must not re-escrow — the row now holds the
+// tombstone email, so escrowing it would overwrite the recovery record with
+// exactly the data the escrow exists to preserve.
+func TestDeleteAccount_RetryOnTombstonedAccountSkipsEscrow(t *testing.T) {
+	priv, _ := vaultcrypto.GenerateRSAKeyPair()
+	m := newErasureMocks()
+
+	m.users.GetByIDFn = func(context.Context, string) (*model.User, error) {
+		u := testErasureUser()
+		u.Deleted = true // already tombstoned by the first, failed attempt
+		u.Email = "deleted-user-1@deleted.invalid"
+		return u, nil
+	}
+
+	escrowed := false
+	m.recovery.AppendFn = func(context.Context, *model.AccountRecovery) error {
+		escrowed = true
+		return nil
+	}
+	scrubbed := false
+	m.users.SoftDeleteScrubFn = func(context.Context, string, string) error {
+		scrubbed = true
+		return nil
+	}
+	purged := false
+	m.backupCodes.PurgeAllForUserFn = func(context.Context, string) error {
+		purged = true
+		return nil
+	}
+
+	svc := newErasureService(t, &priv.PublicKey, m)
+	if err := svc.DeleteAccount(context.Background(), "user-1", "self", "retry"); err != nil {
+		t.Fatalf("re-running erasure on a tombstoned account must succeed: %v", err)
+	}
+
+	if escrowed {
+		t.Error("retry must not re-escrow: it would overwrite the recovery record with the tombstone email")
+	}
+	if scrubbed {
+		t.Error("retry must not re-scrub an already-tombstoned row")
+	}
+	if !purged {
+		t.Error("retry must still finish the PII cascade")
 	}
 }
 
@@ -75,9 +233,11 @@ func TestDeleteAccount_EscrowsAndCascades(t *testing.T) {
 		scrubbedEmail = tombstone
 		return nil
 	}
-	tokensRevoked := false
-	m.tokens.RevokeAllForUserFn = func(context.Context, string) error {
-		tokensRevoked = true
+	// Erasure hard-deletes the token rows rather than flipping revoked=TRUE: a
+	// revoked row still carries the fingerprint hash and the device reference.
+	tokensDeleted := false
+	m.tokens.DeleteAllForUserFn = func(context.Context, string) error {
+		tokensDeleted = true
 		return nil
 	}
 
@@ -89,8 +249,8 @@ func TestDeleteAccount_EscrowsAndCascades(t *testing.T) {
 	if appended == nil {
 		t.Fatal("expected a recovery record to be appended")
 	}
-	if !tokensRevoked {
-		t.Error("expected refresh tokens to be revoked")
+	if !tokensDeleted {
+		t.Error("expected refresh token rows to be deleted, not merely revoked")
 	}
 	if scrubbedEmail != "deleted-user-1@deleted.invalid" {
 		t.Errorf("tombstone email = %q", scrubbedEmail)

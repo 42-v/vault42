@@ -33,6 +33,9 @@ type ErasureService struct {
 	social      repository.SocialAccountRepository
 	pwHistory   repository.PasswordHistoryRepository
 	tokens      repository.RefreshTokenRepository
+	totp        repository.TOTPRepository
+	webauthn    repository.WebAuthnRepository
+	backupCodes repository.BackupCodeRepository
 	recovery    repository.AccountRecoveryRepository
 	auditLog    *audit.Logger
 	recoveryPub *rsa.PublicKey
@@ -49,6 +52,9 @@ func NewErasureService(
 	social repository.SocialAccountRepository,
 	pwHistory repository.PasswordHistoryRepository,
 	tokens repository.RefreshTokenRepository,
+	totp repository.TOTPRepository,
+	webauthn repository.WebAuthnRepository,
+	backupCodes repository.BackupCodeRepository,
 	recovery repository.AccountRecoveryRepository,
 	auditLog *audit.Logger,
 	recoveryPub *rsa.PublicKey,
@@ -56,7 +62,8 @@ func NewErasureService(
 ) *ErasureService {
 	return &ErasureService{
 		users: users, identity: identity, blobs: blobs, devices: devices,
-		social: social, pwHistory: pwHistory, tokens: tokens, recovery: recovery,
+		social: social, pwHistory: pwHistory, tokens: tokens,
+		totp: totp, webauthn: webauthn, backupCodes: backupCodes, recovery: recovery,
 		auditLog: auditLog, recoveryPub: recoveryPub, hmacSecret: hmacSecret,
 	}
 }
@@ -82,12 +89,38 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 		return ErrUserNotFound
 	}
 
-	// Escrow first, fail closed: when recovery is enabled we must not delete
-	// without a recoverable record. A compromised server cannot read this back —
-	// it is encrypted to the offline recovery public key.
-	if s.recoveryPub != nil {
-		if err := s.escrow(ctx, user, deletedBy, reason); err != nil {
-			return err
+	// The cascade below spans nine stores and the repositories are pool-backed, so
+	// there is no transaction to roll back with: any step can fail with the ones
+	// before it already committed. What matters is which side of the failure the
+	// account is left on.
+	//
+	// Escrow, then tombstone, THEN purge. Scrubbing last would mean a mid-cascade
+	// failure left a live, still-loginable account whose second factors had already
+	// been destroyed — the user locked out of their own account, and nothing erased.
+	// Tombstoning first inverts that: the account stops authenticating before any
+	// PII is touched, so a failure leaves it dead-but-not-yet-fully-purged, and the
+	// deletes below are all idempotent (DELETE ... WHERE user_id), so the operation
+	// can simply be run again to finish the job.
+	//
+	// A re-run of an already-tombstoned account skips the escrow: the row now holds
+	// the tombstone email, and escrowing that would overwrite the recovery record
+	// with useless data.
+	if !user.Deleted {
+		// Escrow first, fail closed: when recovery is enabled we must not delete
+		// without a recoverable record. A compromised server cannot read this back —
+		// it is encrypted to the offline recovery public key.
+		if s.recoveryPub != nil {
+			if err := s.escrow(ctx, user, deletedBy, reason); err != nil {
+				return err
+			}
+		}
+
+		// Scrub + soft-delete the user row. The real email now lives only in the
+		// encrypted recovery log; the row is kept for referential integrity and the
+		// account-state gate rejects deleted=true users at login/refresh.
+		tombstone := "deleted-" + userID + "@deleted.invalid"
+		if err := s.users.SoftDeleteScrub(ctx, userID, tombstone); err != nil {
+			return fmt.Errorf("erasure: scrub user: %w", err)
 		}
 	}
 
@@ -108,16 +141,27 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	if err := s.pwHistory.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete password history: %w", err)
 	}
-	if err := s.tokens.RevokeAllForUser(ctx, userID); err != nil {
-		return fmt.Errorf("erasure: revoke tokens: %w", err)
+
+	// MFA authenticators. These hang off user_id with ON DELETE CASCADE, but the
+	// user row is scrubbed with an UPDATE and never deleted — the cascade never
+	// fires, so they must be removed explicitly or the encrypted TOTP secret, the
+	// WebAuthn public keys and the backup-code hashes outlive the erased account.
+	if err := s.totp.DeleteByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete totp secret: %w", err)
+	}
+	if err := s.webauthn.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete webauthn credentials: %w", err)
+	}
+	// Purge, not DeleteAllForUser: the latter only marks codes used, which leaves
+	// the hash and the user_id in the table.
+	if err := s.backupCodes.PurgeAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: purge backup codes: %w", err)
 	}
 
-	// Scrub + soft-delete the user row. The real email now lives only in the
-	// encrypted recovery log; the row is kept for referential integrity and the
-	// account-state gate rejects deleted=true users at login/refresh.
-	tombstone := "deleted-" + userID + "@deleted.invalid"
-	if err := s.users.SoftDeleteScrub(ctx, userID, tombstone); err != nil {
-		return fmt.Errorf("erasure: scrub user: %w", err)
+	// Hard-delete rather than revoke: a revoked row keeps the fingerprint hash and
+	// the device reference, and an erased account has no replay left to detect.
+	if err := s.tokens.DeleteAllForUser(ctx, userID); err != nil {
+		return fmt.Errorf("erasure: delete tokens: %w", err)
 	}
 
 	if s.auditLog != nil {

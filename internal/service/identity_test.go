@@ -27,6 +27,10 @@ func (m *mockIdentityRepo) Upsert(ctx context.Context, profile *model.IdentityPr
 	return nil
 }
 
+func (m *mockIdentityRepo) UpsertCAS(ctx context.Context, p *model.IdentityProfile, _ time.Time) (bool, error) {
+	return true, m.Upsert(ctx, p)
+}
+
 func (m *mockIdentityRepo) GetByPseudonym(ctx context.Context, pseudonymID string) (*model.IdentityProfile, error) {
 	if m.getByPseudonymFn != nil {
 		return m.getByPseudonymFn(ctx, pseudonymID)

@@ -101,6 +101,9 @@ func main() {
 	deviceRepo := postgres.NewDeviceRepo(db)
 	socialAccountRepo := postgres.NewSocialAccountRepo(db)
 	pwHistoryRepo := postgres.NewPasswordHistoryRepo(db)
+	totpRepo := postgres.NewTOTPRepo(db)
+	webauthnRepo := postgres.NewWebAuthnRepo(db)
+	backupCodeRepo := postgres.NewBackupCodeRepo(db)
 	identityRepo := postgres.NewIdentityRepo(db)
 	blobRepo := postgres.NewBlobRepo(db)
 	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
@@ -126,11 +129,23 @@ func main() {
 		}
 	}
 
+	// Working copies of the key material, taken BEFORE anything consumes it.
+	//
+	// Every consumer below retains the slice it is handed (keystore.New, the auth
+	// handler, the API handler, the identity service all just store the header),
+	// and config.ZeroBytes(cfg.MasterKey) wipes the config's backing array in place
+	// at the end of setup. A consumer handed cfg.MasterKey directly would be left
+	// holding 32 zero bytes — still a valid AES-256 key length, so it would encrypt
+	// and decrypt consistently against itself while the at-rest protection was
+	// silently gone: admin TOTP secrets, and the JWT signing keys the gateway wraps
+	// on rotation. Pass these copies; never cfg.MasterKey.
+	masterKey := append([]byte(nil), cfg.MasterKey...)
+
 	// Initialize keystore (if master key available and DB-backed keys are configured)
 	var ks *keystore.KeyStore
-	if len(cfg.MasterKey) == 32 {
+	if len(masterKey) == 32 {
 		retentionPeriod := time.Hour
-		ks, err = keystore.New(db.Pool, cfg.MasterKey, retentionPeriod)
+		ks, err = keystore.New(db.Pool, masterKey, retentionPeriod)
 		if err != nil {
 			log.Printf("admin-gateway: keystore init error (key management disabled): %v", err)
 		} else {
@@ -149,13 +164,13 @@ func main() {
 	// Create handlers
 	authHandler := adminapi.NewAuthHandler(
 		adminUserRepo, adminSessionRepo, auditLogger,
-		cfg.MasterKey, cfg.Pepper, cfg.SessionTTL, cfg.MaxFailed, cfg.LockoutDur,
+		masterKey, cfg.Pepper, cfg.SessionTTL, cfg.MaxFailed, cfg.LockoutDur,
 	)
 
 	apiHandler := adminapi.NewHandler(
 		userRepo, clientRepo, nil, auditRepo,
 		adminUserRepo, adminSessionRepo, adminConfigRepo,
-		ks, auditLogger, cfg.MasterKey, cfg.Pepper,
+		ks, auditLogger, masterKey, cfg.Pepper,
 	)
 	apiHandler.SetAppRoleRepo(postgres.NewAppRoleRepo(db))
 	apiHandler.SetEmailRepos(
@@ -179,9 +194,13 @@ func main() {
 		}
 		apiHandler.SetErasureService(service.NewErasureService(
 			userRepo, identityRepo, blobRepo, deviceRepo, socialAccountRepo,
-			pwHistoryRepo, refreshTokenRepo, recoveryRepo, auditLogger,
-			recoveryPub, cfg.HMACSecret,
+			pwHistoryRepo, refreshTokenRepo, totpRepo, webauthnRepo, backupCodeRepo,
+			recoveryRepo, auditLogger, recoveryPub, cfg.HMACSecret,
 		))
+		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
+		// the profile ciphertext an import writes are readable by the main server.
+		//
+		apiHandler.SetIdentityService(service.NewIdentityService(identityRepo, masterKey, cfg.HMACSecret))
 	} else {
 		log.Println("admin-gateway: HMAC_SECRET_FILE not set — account erasure endpoint disabled")
 	}

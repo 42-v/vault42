@@ -129,6 +129,8 @@ func (m *mockRefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID stri
 	return nil
 }
 
+func (m *mockRefreshTokenRepo) DeleteAllForUser(context.Context, string) error { return nil }
+
 func (m *mockRefreshTokenRepo) RevokeAll(ctx context.Context) error {
 	if m.RevokeAllFn != nil {
 		return m.RevokeAllFn(ctx)
@@ -217,6 +219,10 @@ func (m *mockAuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64
 		return m.CleanupFn(ctx, olderThan)
 	}
 	return 0, nil
+}
+
+func (*mockAuditRepo) CleanupLocked(context.Context, time.Time) (int64, bool, error) {
+	return 0, true, nil
 }
 
 // Compile-time interface checks.

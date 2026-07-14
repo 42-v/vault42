@@ -107,6 +107,8 @@ type RefreshTokenRepository interface {
 	RevokeFamily(ctx context.Context, familyID string) error
 	// RevokeAllForUser revokes all active refresh tokens for a user.
 	RevokeAllForUser(ctx context.Context, userID string) error
+	// DeleteAllForUser hard-deletes every refresh token row for a user (erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 	// RevokeAll revokes all active refresh tokens system-wide.
 	RevokeAll(ctx context.Context) error
 	// CountActiveFamilies returns the number of distinct active (non-revoked, non-expired) token families for a user.
@@ -179,6 +181,8 @@ type WebAuthnRepository interface {
 	// Delete removes a single WebAuthn credential. The userID parameter provides
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error
+	// DeleteAllForUser removes every WebAuthn credential for a user (account erasure).
+	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
 // BackupCodeRepository manages backup code persistence.
@@ -189,8 +193,11 @@ type BackupCodeRepository interface {
 	ListUnusedByUser(ctx context.Context, userID string) ([]*model.BackupCode, error)
 	// MarkUsed atomically marks a single backup code as consumed. Returns true if the code was unused and is now marked.
 	MarkUsed(ctx context.Context, id string) (bool, error)
-	// DeleteAllForUser invalidates all backup codes for a user.
+	// DeleteAllForUser invalidates all backup codes for a user (marks them used).
+	// The rows, and their hashes, remain — use PurgeAllForUser for erasure.
 	DeleteAllForUser(ctx context.Context, userID string) error
+	// PurgeAllForUser hard-deletes every backup code row for a user (erasure).
+	PurgeAllForUser(ctx context.Context, userID string) error
 }
 
 // AuditRepository manages audit log persistence.
@@ -204,6 +211,10 @@ type AuditRepository interface {
 	// Cleanup removes audit entries older than the given time using the
 	// SECURITY DEFINER function that temporarily disables append-only triggers.
 	Cleanup(ctx context.Context, olderThan time.Time) (int64, error)
+	// CleanupLocked is Cleanup serialised across replicas by a Postgres advisory
+	// lock. acquired=false means another replica is already sweeping and this one
+	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the audit table.
+	CleanupLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
 
 // AuditFilter specifies criteria for querying audit log entries.
@@ -267,6 +278,11 @@ type AdminConfigRepository interface {
 type IdentityRepository interface {
 	// Upsert creates or updates an identity profile by pseudonym ID.
 	Upsert(ctx context.Context, profile *model.IdentityProfile) error
+	// UpsertCAS writes only if the stored row still matches expectedUpdatedAt
+	// (zero = expected absent). Returns false on a losing race, so a
+	// read-modify-write of the encrypted blob cannot silently drop a concurrent
+	// change. See the repo implementation for why a partial UPDATE is impossible.
+	UpsertCAS(ctx context.Context, profile *model.IdentityProfile, expectedUpdatedAt time.Time) (bool, error)
 	// GetByPseudonym retrieves an identity profile. Returns nil, nil if not found.
 	GetByPseudonym(ctx context.Context, pseudonymID string) (*model.IdentityProfile, error)
 	// Delete removes an identity profile by pseudonym ID.

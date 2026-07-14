@@ -382,6 +382,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	if d.Recovery != nil {
 		erasureSvc := service.NewErasureService(
 			d.Users, d.Identity, d.Blobs, d.Devices, d.Social, d.PwHistory, d.Tokens,
+			d.TOTP, d.WebAuthn, d.BackupCodes,
 			d.Recovery, d.AuditLog, d.RecoveryPublicKey, d.HMACSecret,
 		)
 		accountHandler := handler.NewAccountHandler(erasureSvc, d.Users, d.AuditLog, d.Pepper)
@@ -434,6 +435,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		mux.Handle("GET /user/identity", identityReadRL(authed(identityHandler.Get)))
 		mux.Handle("PUT /user/identity", identityWriteRL(authed(identityHandler.Put)))
 		mux.Handle("DELETE /user/identity", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(identityHandler.Delete))))))
+		// Withdrawal must be no harder than granting (Art. 7(3)), so this carries
+		// the read rate limit and no confirmation step — unlike identity deletion.
+		mux.Handle("POST /user/marketing/unsubscribe", identityReadRL(authed(identityHandler.Unsubscribe)))
 	}
 
 	// Blob storage (encrypted objects) — disabled when BlobQuotaBytes == 0
@@ -467,6 +471,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	mux.Handle("GET /user/data-export", dataExportRL(authed(dataExportHandler.Export)))
+
+	// Federated identity links. Unlinking is the only way to remove a provider's
+	// stored OAuth tokens without erasing the whole account.
+	socialHandler := handler.NewSocialHandler(d.Social, d.AuditLog)
+	mux.Handle("GET /user/social", authed(socialHandler.List))
+	mux.Handle("DELETE /user/social/{id}", authMw(fingerprintMw(confirmRL(http.HandlerFunc(socialHandler.Unlink)))))
 
 	// KMS envelope-unwrap oracle (POST /kms/unwrap) — only mounted when a KMS
 	// root key is configured. Requires an authenticated client-credential token

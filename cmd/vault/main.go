@@ -93,6 +93,18 @@ func main() {
 		log.Println("Migrations complete")
 	}
 
+	// Working copies of the key material, taken BEFORE anything consumes it.
+	//
+	// Every service that is handed a key retains the slice it is given (the
+	// keystore, the auth service, the identity/blob/erasure services all just
+	// store the header). config.ZeroBytes below wipes the config's backing array
+	// in place, so a service handed cfg.MasterKey directly would end up holding 32
+	// zero bytes — still a valid AES-256 key length, so it would encrypt and
+	// decrypt happily against itself while the at-rest protection was gone. Pass
+	// these copies to every consumer; never cfg.MasterKey / cfg.HMACSecret.
+	masterKey := append([]byte(nil), cfg.MasterKey...)
+	hmacSecret := append([]byte(nil), cfg.HMACSecret...)
+
 	// Connect to PostgreSQL (vault_app role)
 	db, err := postgres.New(ctx, cfg.DatabaseURL("app"), cfg.DBMaxConns)
 	if err != nil {
@@ -154,6 +166,20 @@ func main() {
 		return
 	}
 
+	// Audit retention sweeper (Art. 5(1)(e)). No-op unless
+	// VAULT_AUDIT_RETENTION_DAYS is set.
+	//
+	// Started only once we know this is the server and not a CLI invocation:
+	// the sweep runs immediately on start, so starting it above would make every
+	// `vault add-client`, `vault rotate-jwks`, … silently purge the audit log as a
+	// side effect of running an unrelated subcommand.
+	auditRetention := audit.NewRetention(auditRepo, cfg.AuditRetentionPeriod)
+	if auditRetention.Enabled() {
+		auditRetention.Start(ctx)
+		defer auditRetention.Stop()
+		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
+	}
+
 	// Signing key initialization — two modes:
 	// 1. DB-backed keystore (VAULT_KEY_ROTATION_DB=true): keys encrypted in PostgreSQL,
 	//    auto-refreshed across pods, admin-rotatable at runtime.
@@ -164,10 +190,13 @@ func main() {
 	var ks *keystore.KeyStore
 
 	if cfg.KeyRotationDB {
-		if len(cfg.MasterKey) != 32 {
+		if len(masterKey) != 32 {
 			log.Fatal("VAULT_KEY_ROTATION_DB=true requires MASTER_KEY_FILE (32 bytes)")
 		}
-		ks, err = keystore.New(db.Pool, cfg.MasterKey, cfg.KeyRetentionPeriod)
+		// masterKey, not cfg.MasterKey: the keystore retains the slice and the
+		// config array is zeroed below. It encrypts the JWT signing keys at rest,
+		// so an all-zero key here would nullify that protection silently.
+		ks, err = keystore.New(db.Pool, masterKey, cfg.KeyRetentionPeriod)
 		if err != nil {
 			log.Fatalf("Failed to create keystore: %v", err)
 		}
@@ -248,7 +277,7 @@ func main() {
 		userRepo, refreshTokenRepo, deviceRepo, pwHistoryRepo,
 		tokenSvc, mfaSvc, auditLogger, hibpClient,
 		appCache, emailSender, cfg.Origin, cfg.AppName, cfg.Pepper,
-		cfg.PasswordMinLength, cfg.HIBPCheck, cfg.HMACSecret,
+		cfg.PasswordMinLength, cfg.HIBPCheck, hmacSecret,
 	)
 
 	// White-label email: resolve per-app branding + template overrides on the
@@ -287,13 +316,10 @@ func main() {
 		log.Println("Account-recovery escrow enabled (records encrypted to the offline recovery key)")
 	}
 
-	// Keep working copies of the key material that downstream handlers
-	// (identity, blob, recovery escrow) consume lazily in setupRoutes, then zero
-	// the config-held originals. Handlers receive these copies, not cfg.*.
-	masterKey := append([]byte(nil), cfg.MasterKey...)
-	hmacSecret := append([]byte(nil), cfg.HMACSecret...)
-
-	// Zero master key and HMAC secret from config after copying for the services.
+	// Zero the config-held originals. Every consumer above was handed masterKey /
+	// hmacSecret (the copies made at the top of main), never cfg.*, so this cannot
+	// blank a key that something is still holding.
+	//
 	// Note: string secrets (Pepper, DB passwords) can't be zeroed in Go — accepted limitation.
 	config.ZeroBytes(cfg.MasterKey)
 	config.ZeroBytes(cfg.HMACSecret)

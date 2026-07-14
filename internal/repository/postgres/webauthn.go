@@ -85,3 +85,16 @@ func (r *WebAuthnRepo) Delete(ctx context.Context, id, userID string) error {
 	}
 	return nil
 }
+
+// DeleteAllForUser removes every WebAuthn credential belonging to a user.
+//
+// The ON DELETE CASCADE on the user_id foreign key never fires for erasure:
+// account erasure soft-deletes the user row (UPDATE), so the credentials —
+// public key, credential ID and friendly name — would outlive the account.
+func (r *WebAuthnRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM auth.webauthn_credentials WHERE user_id=$1`, userID)
+	if err != nil {
+		return fmt.Errorf("delete all webauthn credentials: %w", err)
+	}
+	return nil
+}

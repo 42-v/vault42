@@ -260,6 +260,10 @@ func (n *noopAuditRepo) Cleanup(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
 
+func (n *noopAuditRepo) CleanupLocked(_ context.Context, _ time.Time) (int64, bool, error) {
+	return 0, true, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------

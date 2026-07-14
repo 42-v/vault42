@@ -1253,6 +1253,9 @@ Threat observation deployment. Extends production with debug logging, auto-migra
 | `GET` | `/user/identity` | Bearer | Get identity profile |
 | `PUT` | `/user/identity` | Bearer | Upsert identity profile |
 | `DELETE` | `/user/identity` | Bearer | Delete identity profile |
+| `POST` | `/user/marketing/unsubscribe` | Bearer | Withdraw marketing consent (Art. 7(3)) |
+| `GET` | `/user/social` | Bearer | List linked federated identities |
+| `DELETE` | `/user/social/{id}` | Bearer | Unlink provider + its encrypted tokens |
 | `POST` | `/user/blobs` | Bearer | Upload encrypted blob |
 | `GET` | `/user/blobs` | Bearer | List blobs + quota |
 | `GET` | `/user/blobs/{id}` | Bearer | Download decrypted blob |

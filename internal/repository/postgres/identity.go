@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -21,6 +22,41 @@ func NewIdentityRepo(db *DB) *IdentityRepo {
 }
 
 // Upsert creates or updates an identity profile by pseudonym ID.
+// UpsertCAS writes a profile only if the stored row still matches expectedUpdatedAt,
+// returning false when it does not. The profile is a single encrypted blob, so a
+// read-modify-write (decrypt, change one field, re-encrypt) cannot be expressed as
+// a partial UPDATE: without a compare-and-set, two concurrent writers each encrypt
+// their own view of the profile and the loser's changes vanish — a withdrawal of
+// consent among them.
+//
+// A zero expectedUpdatedAt means "the profile did not exist when I read it", which
+// is an insert that must not overwrite a row created in the meantime.
+func (r *IdentityRepo) UpsertCAS(ctx context.Context, profile *model.IdentityProfile, expectedUpdatedAt time.Time) (bool, error) {
+	if expectedUpdatedAt.IsZero() {
+		tag, err := r.db.Pool.Exec(ctx, `
+			INSERT INTO identity.profiles (pseudonym_id, data_enc, version, updated_at, created_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (pseudonym_id) DO NOTHING`,
+			profile.PseudonymID, profile.DataEnc, profile.Version, profile.UpdatedAt, profile.CreatedAt,
+		)
+		if err != nil {
+			return false, fmt.Errorf("insert identity (cas): %w", err)
+		}
+		return tag.RowsAffected() > 0, nil
+	}
+
+	tag, err := r.db.Pool.Exec(ctx, `
+		UPDATE identity.profiles
+		SET data_enc = $2, version = $3, updated_at = $4
+		WHERE pseudonym_id = $1 AND updated_at = $5`,
+		profile.PseudonymID, profile.DataEnc, profile.Version, profile.UpdatedAt, expectedUpdatedAt,
+	)
+	if err != nil {
+		return false, fmt.Errorf("update identity (cas): %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *IdentityRepo) Upsert(ctx context.Context, profile *model.IdentityProfile) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO identity.profiles (pseudonym_id, data_enc, version, updated_at, created_at)

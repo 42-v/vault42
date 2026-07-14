@@ -1215,6 +1215,89 @@ curl -X DELETE https://vault42.example.com/user/identity \
 
 ---
 
+### Marketing Consent
+
+The `marketing_emails` field on the identity profile is stored with its provenance: a consent
+record carrying `granted`, `at`, `source` and (for imported accounts) `origin`. Only `registration`
+and `profile` sources count as affirmative consent and authorise sending; `import` and `legacy`
+preserve the value but do not (a migrated flag may be a default the user never saw — see
+`docs/PRIVACY.md` §2.1). Every change writes a `consent_granted` / `consent_withdrawn` audit entry.
+
+#### POST /user/marketing/unsubscribe
+
+Withdraw consent for marketing email. Art. 7(3) requires withdrawal to be as easy as granting, so
+this takes no body and has no confirmation step. Idempotent.
+
+**Authentication:** Bearer token
+
+**Success response (200 OK):**
+
+```json
+{"status": "unsubscribed"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `unauthorized` | Not authenticated |
+| 500 | `internal_error` | Server error |
+
+**curl example:**
+
+```bash
+curl -X POST https://vault42.example.com/user/marketing/unsubscribe \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
+```
+
+---
+
+### Federated Identity Links
+
+#### GET /user/social
+
+List the caller's linked social/OIDC providers. The encrypted provider access and refresh tokens
+are never returned.
+
+**Authentication:** Bearer token
+
+**Success response (200 OK):**
+
+```json
+{
+  "accounts": [
+    {"id": "3f2b...", "provider": "google", "email": "user@example.com", "created_at": "2026-07-14T09:12:00Z"}
+  ]
+}
+```
+
+#### DELETE /user/social/{id}
+
+Unlink a federated identity. Removes the link and the encrypted provider tokens stored with it.
+Previously these tokens could only be removed by erasing the entire account.
+
+The delete is scoped by user ID as well as link ID, so a caller cannot unlink another user's
+provider. An ID that does not exist (or is not the caller's) reports success rather than 404 — the
+response must not become an oracle for whether an ID belongs to somebody else.
+
+**Authentication:** Bearer token
+**Fingerprint:** Verified
+
+**Success response (200 OK):**
+
+```json
+{"status": "unlinked"}
+```
+
+**curl example:**
+
+```bash
+curl -X DELETE https://vault42.example.com/user/social/3f2b... \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
+```
+
+---
+
 ### Encrypted Blob Storage
 
 Encrypted file storage with per-user quotas. Blobs are compressed (DEFLATE), encrypted (AES-256-GCM), and stored under a pseudonymous key derived via `HMAC-SHA256(userID + ":objects", hmac_secret)`. Blobs are immutable -- they can be created and deleted but not updated.
@@ -2425,18 +2508,30 @@ Batch-import accounts (e.g. migrating from the legacy platform). Imported accoun
   "source": "legacy",
   "users": [
     {"email": "rider@example.com", "roles": ["user"], "legacy_id": "42", "locale": "sk",
-     "disabled": false, "banned": false, "ban_reason": ""}
+     "disabled": false, "banned": false, "ban_reason": "", "marketing_emails": true}
   ]
 }
 ```
 
+**`marketing_emails`** (optional) carries the source system's marketing preference. It is stored
+with `source=import` and `origin=<source>`, which is **not** treated as affirmative consent: a
+migrated flag may be a default the user was never shown (a column defaulting to true, or a
+pre-ticked consent checkbox, yields a `true` indistinguishable from a choice — Recital 32,
+*Planet49* C-673/17). The value is preserved so the Operator can run a re-permission campaign
+against it, but `IdentityService.MarketingAllowed` will return false for it, so it does not by
+itself authorise sending. See `docs/PRIVACY.md` §2.1.
+
+Requires the identity service to be wired (`HMAC_SECRET_FILE` + master key on the admin gateway).
+Without it, accounts still import but the preference is dropped — which fails closed (no consent).
+
 **Success response (200 OK):** per-user results.
 
 ```json
-{"results": [{"email": "rider@example.com", "status": "imported"}]}
+{"source": "legacy", "submitted": 1, "imported": 1, "consent_failed": 0,
+ "results": [{"email": "rider@example.com", "status": "imported"}]}
 ```
 
-`status` is `imported`, `skipped` (email already exists), or `error` (with an `error` code such as `invalid_email`, `create_failed`).
+`status` is `imported`, `skipped` (email already exists), or `error` (with an `error` code such as `invalid_email`, `create_failed`). `consent_failed` counts accounts that imported but whose marketing preference could not be persisted; a dropped preference fails closed.
 
 #### GET /admin/roles
 

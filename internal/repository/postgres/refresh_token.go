@@ -104,6 +104,19 @@ func (r *RefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID string) 
 	return nil
 }
 
+// DeleteAllForUser hard-deletes every refresh token row for a user.
+//
+// Revoking is enough to end a session, but it leaves the row — and its
+// fingerprint hash and device reference — behind. On erasure the account is
+// gone, so there is no replay to detect and nothing to keep the rows for.
+func (r *RefreshTokenRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `DELETE FROM auth.refresh_tokens WHERE user_id = $1`, userID)
+	if err != nil {
+		return fmt.Errorf("delete all user tokens: %w", err)
+	}
+	return nil
+}
+
 // RevokeAll revokes all active refresh tokens system-wide (nuclear option).
 func (r *RefreshTokenRepo) RevokeAll(ctx context.Context) error {
 	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.refresh_tokens SET revoked = TRUE WHERE revoked = FALSE`)

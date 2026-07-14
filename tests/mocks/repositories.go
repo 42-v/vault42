@@ -160,6 +160,7 @@ type MockRefreshTokenRepo struct {
 	RevokeByDeviceIDFn    func(ctx context.Context, deviceID string) error
 	RevokeFamilyFn        func(ctx context.Context, familyID string) error
 	RevokeAllForUserFn    func(ctx context.Context, userID string) error
+	DeleteAllForUserFn    func(ctx context.Context, userID string) error
 	RevokeAllFn           func(ctx context.Context) error
 	CountActiveFamiliesFn func(ctx context.Context, userID string) (int, error)
 	DeleteExpiredFn       func(ctx context.Context) (int64, error)
@@ -210,6 +211,13 @@ func (m *MockRefreshTokenRepo) RevokeFamily(ctx context.Context, familyID string
 func (m *MockRefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID string) error {
 	if m.RevokeAllForUserFn != nil {
 		return m.RevokeAllForUserFn(ctx, userID)
+	}
+	return nil
+}
+
+func (m *MockRefreshTokenRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
 	}
 	return nil
 }
@@ -418,6 +426,7 @@ type MockWebAuthnRepo struct {
 	ListByUserFn        func(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	UpdateSignCountFn   func(ctx context.Context, id string, count int) error
 	DeleteFn            func(ctx context.Context, id, userID string) error
+	DeleteAllForUserFn  func(ctx context.Context, userID string) error
 }
 
 func (m *MockWebAuthnRepo) Create(ctx context.Context, cred *model.WebAuthnCredential) error {
@@ -455,6 +464,13 @@ func (m *MockWebAuthnRepo) Delete(ctx context.Context, id, userID string) error 
 	return nil
 }
 
+func (m *MockWebAuthnRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockBackupCodeRepo
 // ---------------------------------------------------------------------------
@@ -464,6 +480,7 @@ type MockBackupCodeRepo struct {
 	ListUnusedByUserFn func(ctx context.Context, userID string) ([]*model.BackupCode, error)
 	MarkUsedFn         func(ctx context.Context, id string) (bool, error)
 	DeleteAllForUserFn func(ctx context.Context, userID string) error
+	PurgeAllForUserFn  func(ctx context.Context, userID string) error
 }
 
 func (m *MockBackupCodeRepo) CreateBatch(ctx context.Context, codes []*model.BackupCode) error {
@@ -494,6 +511,13 @@ func (m *MockBackupCodeRepo) DeleteAllForUser(ctx context.Context, userID string
 	return nil
 }
 
+func (m *MockBackupCodeRepo) PurgeAllForUser(ctx context.Context, userID string) error {
+	if m.PurgeAllForUserFn != nil {
+		return m.PurgeAllForUserFn(ctx, userID)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // MockAuditRepo
 // ---------------------------------------------------------------------------
@@ -502,7 +526,21 @@ type MockAuditRepo struct {
 	InsertFn      func(ctx context.Context, entry *model.AuditEntry) error
 	InsertBatchFn func(ctx context.Context, entries []*model.AuditEntry) error
 	QueryFn       func(ctx context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error)
-	CleanupFn     func(ctx context.Context, olderThan time.Time) (int64, error)
+	CleanupFn       func(ctx context.Context, olderThan time.Time) (int64, error)
+	CleanupLockedFn func(ctx context.Context, olderThan time.Time) (int64, bool, error)
+}
+
+func (m *MockAuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (int64, bool, error) {
+	if m.CleanupLockedFn != nil {
+		return m.CleanupLockedFn(ctx, olderThan)
+	}
+	// Default: behave like a sweeper that won the lock and delegates to Cleanup,
+	// so existing tests that only stub CleanupFn keep working.
+	if m.CleanupFn != nil {
+		n, err := m.CleanupFn(ctx, olderThan)
+		return n, true, err
+	}
+	return 0, true, nil
 }
 
 func (m *MockAuditRepo) Insert(ctx context.Context, entry *model.AuditEntry) error {
@@ -687,8 +725,21 @@ func (m *MockAdminConfigRepo) Delete(ctx context.Context, key string) error {
 
 type MockIdentityRepo struct {
 	UpsertFn         func(ctx context.Context, profile *model.IdentityProfile) error
+	UpsertCASFn      func(ctx context.Context, profile *model.IdentityProfile, expectedUpdatedAt time.Time) (bool, error)
 	GetByPseudonymFn func(ctx context.Context, pseudonymID string) (*model.IdentityProfile, error)
 	DeleteFn         func(ctx context.Context, pseudonymID string) error
+}
+
+func (m *MockIdentityRepo) UpsertCAS(ctx context.Context, profile *model.IdentityProfile, expectedUpdatedAt time.Time) (bool, error) {
+	if m.UpsertCASFn != nil {
+		return m.UpsertCASFn(ctx, profile, expectedUpdatedAt)
+	}
+	// Default: the CAS always wins, delegating to UpsertFn so tests that only stub
+	// the plain Upsert still observe the write.
+	if m.UpsertFn != nil {
+		return true, m.UpsertFn(ctx, profile)
+	}
+	return true, nil
 }
 
 func (m *MockIdentityRepo) Upsert(ctx context.Context, profile *model.IdentityProfile) error {
