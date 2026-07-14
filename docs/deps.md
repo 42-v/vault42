@@ -47,21 +47,21 @@
 | `internal/config` | 98.11% |
 | `internal/middleware` | 97.74% |
 | `internal/oauth2` | 97.69% |
+| `internal/server` | 97.38% |
+| `internal/adminapi` | 97.01% |
 | `internal/jwt` | 96.81% |
 | `internal/audit` | 96.67% |
-| `internal/seed` | 93.85% |
-| `internal/crypto` | 93.52% |
-| `internal/adminapi` | 93.36% |
-| `internal/redis` | 93.20% |
-| `internal/service` | 92.42% |
-| `internal/cache` | 92.21% |
-| `internal/server` | 92.15% |
-| `internal/email` | 91.15% |
-| `internal/handler` | 90.05% |
+| `internal/crypto` | 95.60% |
+| `internal/redis` | 95.56% |
+| `internal/cache` | 95.45% |
+| `internal/repository/postgres` | 94.79% |
+| `internal/seed` | 94.62% |
+| `internal/service` | 93.11% |
+| `internal/handler` | 92.74% |
+| `internal/email` | 91.48% |
 | `internal/honeypot` | 89.11% |
 | `internal/keystore` | 88.97% |
 | `internal/cli` | 88.14% |
-| `internal/repository/postgres` | 87.60% |
 | `internal/kms` | 87.50% |
 | `internal/migrate` | 77.50% |
 ## Maintainers
@@ -75,7 +75,7 @@
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
 | [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2883 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2884 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
 | [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 190 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
