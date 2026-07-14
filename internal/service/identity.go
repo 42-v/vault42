@@ -250,6 +250,51 @@ func (s *IdentityService) UpdateMarketingConsent(ctx context.Context, userID str
 	return ErrConcurrentUpdate
 }
 
+// PutProfile is the full-replace profile write behind PUT /user/identity.
+//
+// The consent reconciliation has to happen inside the same compare-and-set as the
+// write, not before a blind one. Two things go wrong otherwise:
+//
+//   - The prior record is read, then a concurrent unsubscribe commits, then this
+//     write lands carrying the pre-withdrawal consent — silently reverting a
+//     withdrawal the user was told had been honoured. The CAS turns that into a
+//     retry, which re-reads the withdrawal and preserves it.
+//   - If the prior read fails, treating that as "no prior consent" would blank a
+//     stored withdrawal and re-stamp an imported flag as affirmative. The error is
+//     returned instead: a profile save is not worth guessing about consent.
+//
+// Returns the consent record as persisted and whether it actually changed, so the
+// caller can log a consent event only when one occurred, with the value that
+// really landed — and only after the write has succeeded.
+func (s *IdentityService) PutProfile(ctx context.Context, userID string, incoming *IdentityData, submitted *bool) (stored *ConsentRecord, changed bool, err error) {
+	for attempt := 0; attempt < consentUpdateAttempts; attempt++ {
+		existing, updatedAt, err := s.Get(ctx, userID)
+		if err != nil {
+			return nil, false, err
+		}
+		var prior *ConsentRecord
+		if existing != nil {
+			prior = existing.MarketingConsent
+		} else {
+			updatedAt = time.Time{}
+		}
+
+		// Reconcile onto a fresh copy each round: a retry must re-apply against the
+		// consent it just re-read, not compound the previous attempt's stamp.
+		data := *incoming
+		didChange := data.ReconcileMarketingConsent(submitted, prior)
+
+		ok, err := s.upsertCAS(ctx, userID, &data, updatedAt)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return data.MarketingConsent, didChange, nil
+		}
+	}
+	return nil, false, ErrConcurrentUpdate
+}
+
 // upsertCAS encrypts and writes a profile only if the stored row is unchanged.
 func (s *IdentityService) upsertCAS(ctx context.Context, userID string, data *IdentityData, expectedUpdatedAt time.Time) (bool, error) {
 	if err := data.Validate(); err != nil {

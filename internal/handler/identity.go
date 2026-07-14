@@ -154,12 +154,6 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 	// re-submitted value that has not changed is not a fresh act of consent (see
 	// ReconcileMarketingConsent). Only a real change is stamped, and only then is
 	// a consent event logged — after the write succeeds.
-	var prior *service.ConsentRecord
-	if existing, _, err := h.svc.Get(r.Context(), claims.Subject); err == nil && existing != nil {
-		prior = existing.MarketingConsent
-	}
-	consentChanged := data.ReconcileMarketingConsent(input.MarketingEmails, prior)
-
 	if input.Billing != nil {
 		data.Billing = &service.BillingInfo{
 			AddressLine1: truncate(input.Billing.AddressLine1, 200),
@@ -173,20 +167,28 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 
 	// Service-side Validate (username/state/sex/dynamic size+shape) is the
 	// authoritative gate; surface its rejections as 400, not 500.
-	if err := h.svc.Upsert(r.Context(), claims.Subject, data); err != nil {
-		if errors.Is(err, service.ErrInvalidProfile) {
+	//
+	// PutProfile reconciles the consent record and writes under a compare-and-set,
+	// so a concurrent unsubscribe cannot be reverted by this write, and a failed
+	// read of the prior consent aborts rather than being treated as "no consent".
+	storedConsent, consentChanged, err := h.svc.PutProfile(r.Context(), claims.Subject, data, input.MarketingEmails)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidProfile):
 			WriteError(w, http.StatusBadRequest, "invalid_profile")
-			return
+		case errors.Is(err, service.ErrConcurrentUpdate):
+			WriteError(w, http.StatusConflict, "concurrent_update")
+		default:
+			WriteError(w, http.StatusInternalServerError, "internal_error")
 		}
-		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
 	// Logged only once the write has landed: an audit trail that records a consent
 	// change which never persisted is worse than no entry at all, because it is
 	// the thing the controller would produce as proof.
-	if consentChanged && data.MarketingConsent != nil {
-		h.logConsent(r, claims.Subject, data.MarketingConsent.Granted, service.ConsentSourceProfile)
+	if consentChanged && storedConsent != nil {
+		h.logConsent(r, claims.Subject, storedConsent.Granted, service.ConsentSourceProfile)
 	}
 
 	if h.auditLog != nil {

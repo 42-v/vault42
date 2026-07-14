@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
@@ -126,4 +127,68 @@ func stamped(granted bool, source string) *IdentityData {
 	d := &IdentityData{}
 	d.StampMarketingConsent(granted, source, "")
 	return d
+}
+
+// The CAS is the whole protection against a concurrent write dropping a
+// withdrawal, and the default mocks return "won the race" unconditionally — so a
+// test that only stubs UpsertFn would pass even if the CAS semantics were
+// inverted. This mock lies: it loses the race a fixed number of times, and the
+// profile it hands back changes underneath, exactly as a competing writer would.
+type racingIdentityRepo struct {
+	mocks.MockIdentityRepo
+	losses  int
+	commits int
+	stored  *model.IdentityProfile
+}
+
+func (r *racingIdentityRepo) GetByPseudonym(context.Context, string) (*model.IdentityProfile, error) {
+	return r.stored, nil
+}
+
+func (r *racingIdentityRepo) UpsertCAS(_ context.Context, p *model.IdentityProfile, expected time.Time) (bool, error) {
+	if r.losses > 0 {
+		r.losses--
+		// Someone else committed: the stored row moves on, so the caller's
+		// expectation is now stale and must be re-read.
+		if r.stored != nil {
+			r.stored.UpdatedAt = r.stored.UpdatedAt.Add(time.Second)
+		}
+		return false, nil
+	}
+	if r.stored != nil && !expected.Equal(r.stored.UpdatedAt) {
+		return false, nil // stale expectation — a correct caller retries
+	}
+	r.commits++
+	r.stored = p
+	return true, nil
+}
+
+func TestUpdateMarketingConsent_RetriesUntilItWins(t *testing.T) {
+	repo := &racingIdentityRepo{losses: 2}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+
+	if err := svc.UpdateMarketingConsent(context.Background(), "user-1", false, ConsentSourceUnsubscribe, ""); err != nil {
+		t.Fatalf("UpdateMarketingConsent: %v", err)
+	}
+	if repo.commits != 1 {
+		t.Errorf("commits = %d, want exactly 1", repo.commits)
+	}
+	if repo.losses != 0 {
+		t.Errorf("retries did not consume the lost races: %d left", repo.losses)
+	}
+}
+
+// If the profile keeps moving, the withdrawal must fail loudly rather than be
+// silently dropped or written over someone else's change.
+func TestUpdateMarketingConsent_GivesUpRatherThanClobber(t *testing.T) {
+	repo := &racingIdentityRepo{losses: 99}
+	svc := NewIdentityService(repo, make([]byte, 32), testHMAC)
+
+	err := svc.UpdateMarketingConsent(context.Background(), "user-1", false, ConsentSourceUnsubscribe, "")
+	if !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("err = %v, want ErrConcurrentUpdate", err)
+	}
+	if repo.commits != 0 {
+		t.Error("a losing CAS must never commit")
+	}
 }
