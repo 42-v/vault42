@@ -317,9 +317,28 @@ if [ -f README.md ]; then
     COV_COLOR="red"
   fi
 
-  GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
+  # Both version badges must report what actually ships, not the minimum the project
+  # declares it can build against. The two are different values and they drift apart
+  # exactly when it matters — on a security bump.
+  #
+  # Go: the `go` directive is the language floor and does not move when `toolchain`
+  # is bumped, so a release cut to clear a stdlib CVE would keep advertising the old
+  # patch version. That is how 0.6.9 shipped a stale Go-1.26.0 badge on a 1.26.3
+  # toolchain. Prefer `toolchain`, fall back to the directive when it is absent.
+  GO_VER=$(grep '^toolchain ' go.mod | awk '{print $2}' | sed 's/^go//')
+  if [ -z "$GO_VER" ]; then
+    GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
+  fi
+
+  # Vue: package.json holds a range ("^3.5.38"), which is the floor, not the resolved
+  # version — a project running 3.5.42 would still badge 3.5.38. Prefer the version
+  # actually installed, fall back to the declared range.
   NODE_VER=$(node --version 2>/dev/null | tr -d 'v' | cut -d. -f1)
-  VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
+  VUE_VER=$(python3 -c "import json;print(json.load(open('web/node_modules/vue/package.json'))['version'])" 2>/dev/null)
+  if [ -z "$VUE_VER" ]; then
+    VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
+  fi
+
   TOTAL_TESTS=$((PASSED + FE_TESTS))
 
   python3 -c "
