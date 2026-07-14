@@ -92,3 +92,4 @@ func TestLoadRSAPrivateKeyPEM_NotRSA(t *testing.T) {
 		t.Error("expected a non-RSA PKCS#8 key to be rejected")
 	}
 }
+

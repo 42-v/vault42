@@ -253,6 +253,27 @@ func (c *capturingEmailSender) getOTP(email string) string {
 	return c.lastCode[email]
 }
 
+// waitOTP blocks until the OTP mail for this address has been captured, or the timeout
+// expires.
+//
+// The server sends the OTP from a goroutine, so the login response carrying the
+// challenge token can reach the test before the mail reaches the sink. Reading the sink
+// once is therefore a race against the mailer, and losing it produced an intermittent
+// "MFA required but no OTP captured" — a failure that says nothing about the code under
+// test, only about how quickly the goroutine happened to run.
+func (c *capturingEmailSender) waitOTP(email string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		if code := c.getOTP(email); code != "" {
+			return code
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (c *capturingEmailSender) getVerifyToken(email string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

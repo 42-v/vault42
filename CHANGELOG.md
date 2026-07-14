@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.9.2 (2026-07-14)
+
+Coverage lands at **92.42%** (from 90.12%), which is where the version number comes
+from. 0.9.1 was never cut: the work below started as a coverage bump and turned up a
+defect that made the coverage number itself untrustworthy, and the honest total after
+fixing it was past the range 0.9.1 could occupy.
+
+### Fixed
+
+* **The suite's own coverage total was nondeterministic.** Two tests in `internal/audit`
+  raced, and the total moved by a statement between identical runs — so the number CI
+  published could disagree with the number in `docs/badges.json` and the README, with
+  nothing to indicate which was right. That is the same class of defect as 0.9.0's false
+  90.42% claim, one layer down: a measurement that cannot be reproduced is not a
+  measurement.
+
+  The root cause was `Retention.Stop()`. It closed `stopCh` and returned immediately —
+  it only ever *asked* the sweep loop to finish. `TestRetention_StopsOnContextCancel`
+  then cancelled the context *and* called `Stop`, leaving the loop's `select` with two
+  ready cases; Go chooses among ready cases at random, so which `return` the profile
+  recorded was a coin flip. Both retention tests also returned without waiting for the
+  loop to exit at all, so the goroutine could miss its scheduling window entirely.
+
+* **`Retention.Stop()` could return while a sweep was still running.** The same bug, seen
+  as a shutdown defect rather than a test one. Its only caller is
+  `defer auditRetention.Stop()` in `cmd/vault/main.go`, which returns straight into the
+  deferred close of the database pool — so `Stop` could return with the sweeper still
+  inside its `DELETE`, and the pool would be torn out from under it. The test asserting
+  this ("otherwise the sweeper outlives shutdown and keeps issuing deletes against a
+  closing pool") asserted nothing at all: it called `Stop` and returned.
+
+  `Stop` now blocks until the loop has exited, is idempotent, and is safe on a sweeper
+  that was never started; `Done()` makes the exit observable. This is the pattern
+  `keystore.Stop()` already used (`stopOnce` + `wg.Wait()`), which is why keystore's
+  shutdown was never flaky and retention's was.
+
+* **Erasure filed a fabricated email address in its own audit record.** On a retry of an
+  interrupted erasure the user row already holds the tombstone, so `maskEmail(user.Email)`
+  masked `deleted-<id>@deleted.invalid` and recorded *that* as the erased address — a
+  value that never belonged to anyone, in the one record an investigator would trust. The
+  retry path now records `retry: true` and states that the address was captured by the
+  original attempt.
+
+### Testing
+
+Coverage raised to **92.42%** (7459 of 8071 statements). The theme is that the codebase's
+fail-closed guarantees were asserted in comments and prose but not in tests — most of
+what follows covers an error branch whose failure mode is *silence*.
+
+* **The erasure cascade, step by step.** It spans nine stores with no transaction to roll
+  back with, so every step must surface its own failure. Each of the seven steps is now
+  failed in turn, asserting the error surfaces, names the step, and stops the cascade. A
+  swallowed error here means `DeleteAccount` returns nil, the audit log records an
+  erasure, and the data is still in the database — while `docs/PRIVACY.md` §5.3 says
+  otherwise, and under Art. 17 that is a statement a regulator relies on.
+* **The keystore against a dead database.** A `Rotate` that reported success without
+  writing would leave an operator believing a compromised signing key had been retired; a
+  `Revoke` doing the same leaves a stolen key signing valid tokens; an `EnsureKey` that
+  swallowed its error at boot brings the process up "healthy" with no active signing key.
+  Same for the admin endpoints that drive them.
+* **Redis, both ways it dies.** The dial-failure and the command-failure paths are
+  separate branches, and only the second one is taken when Redis dies underneath a live
+  pooled connection (a restart, a failover, an idle proxy timeout). The zero values here
+  are all indistinguishable from success: `Set` returning nil means an OTP looks stored
+  and then vanishes; `SetNX` returning `(true, nil)` means the single-use guarantee
+  behind OTP redemption silently disappears and a code becomes replayable; `Incr`
+  returning `(0, nil)` means every request looks like the first in its window and the
+  rate limiter stops limiting.
+* **The user, blob and audit repositories against a dead database.** `IncrementFailedLogin`
+  quietly doing nothing means the lockout counter never advances — brute force with no
+  ceiling and no error in the logs. `SoftDeleteScrub` doing nothing means an account
+  reported as erased with its real email still in the table.
+* **HIBP k-anonymity is now asserted, not assumed.** Only the first five characters of the
+  password's SHA-1 may leave the process. The test fails if the hash suffix or the
+  plaintext is ever sent upstream — without it, every registration could be handing a
+  crackable credential to a third party and nothing would say so. The documented
+  fail-open on an HIBP outage is pinned too, as is the requirement that a *disabled*
+  check does not still leak prefixes.
+* **Refresh rejects accounts that changed since login.** Banned was covered; **disabled**
+  and **the user row is gone** were not — the two an operator actually reaches for, since
+  disabling is the routine response to a compromised user and a vanished row is what
+  erasure leaves behind. Both must revoke the entire token family, or a sibling refresh
+  token mints a fresh pair a second later.
+
 ## 0.9.0 (2026-07-14)
 
 ### Fixed in second review
@@ -124,8 +208,13 @@ Ten defects found by an adversarial review of this release's own changes, before
 
 ### Testing
 
-* **Coverage raised to 90.42% across the full suite** (from 86.69%). Added real behavioural tests
-  for previously-uncovered surfaces:
+* **Coverage raised to 90.12% across the full suite** (from 86.69%). The 0.9.0 release notes
+  and its commit subject said 90.42%: that was the number before the two rounds of review
+  fixes, and the prose was not updated when the fixes moved it. `docs/badges.json`, the
+  README badge and `docs/test-coverage.md` all carried the correct 90.12%. Corrected here
+  rather than left to rot — a document that asserts something the artifacts contradict is
+  the exact defect class this release exists to fix.
+  Added real behavioural tests for previously-uncovered surfaces:
   * The GDPR work above, tested where it actually matters: the erasure cascade asserts the
     TOTP secret, WebAuthn credentials and backup codes are gone (against a real Postgres,
     since the bug was that the schema *looked* like it handled this); a failure in any of

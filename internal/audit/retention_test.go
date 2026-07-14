@@ -86,17 +86,46 @@ func TestRetention_StartSweepsImmediately(t *testing.T) {
 
 // A cancelled context must end the loop — otherwise the sweeper outlives
 // shutdown and keeps issuing deletes against a closing pool.
+//
+// This deliberately does NOT call Stop. The loop parks in a select over stopCh,
+// ctx.Done and the ticker; Go chooses at random among the cases that are ready, so
+// cancelling the context *and* closing stopCh would leave the exit path a coin
+// flip — and with it, which of the two return statements the coverage profile
+// records. That is not a cosmetic problem: it made the suite's own coverage total
+// vary by a statement between identical runs, so the number CI published could
+// disagree with the number in the docs. Cancelling alone leaves exactly one ready
+// case, which is what makes this test assert the thing it claims to.
 func TestRetention_StopsOnContextCancel(t *testing.T) {
-	repo := &mocks.MockAuditRepo{}
-	repo.CleanupFn = func(context.Context, time.Time) (int64, error) { return 0, nil }
+	swept := make(chan struct{}, 1)
+	repo := &mocks.MockAuditRepo{
+		CleanupFn: func(context.Context, time.Time) (int64, error) {
+			select {
+			case swept <- struct{}{}:
+			default:
+			}
+			return 0, nil
+		},
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r := NewRetention(repo, time.Hour)
 	r.Start(ctx)
+
+	// Wait for the immediate sweep, so the loop is known to have reached the select
+	// before the context is cancelled under it.
+	select {
+	case <-swept:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sweeper never started")
+	}
+
 	cancel()
 
-	// Stop must remain safe to call after the context already ended the loop.
-	r.Stop()
+	select {
+	case <-r.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("sweeper did not exit when its context was cancelled — it would outlive shutdown")
+	}
 }
 
 // A sweep failure must not kill the loop: a transient DB error should be logged
@@ -119,4 +148,30 @@ func TestRetention_DisabledLifecycleIsSafe(t *testing.T) {
 	r := NewRetention(&mocks.MockAuditRepo{}, 0)
 	r.Start(context.Background())
 	r.Stop()
+}
+
+// The cleanup takes an ACCESS EXCLUSIVE lock on the audit table — it disables the
+// append-only trigger to delete — so only one replica may sweep at a time. A
+// replica that does not win the advisory lock has done no work, and must say so:
+// reporting the winner's row count as its own would have every replica log the
+// same purge, and an operator counting deletions across the fleet would see the
+// horizon apply several times over when it applied exactly once.
+//
+// The repo here returns rows *and* acquired=false, which is the shape that catches
+// a refactor returning `deleted` unconditionally.
+func TestRetention_ReplicaThatLosesTheLockReportsNoWork(t *testing.T) {
+	repo := &mocks.MockAuditRepo{
+		CleanupLockedFn: func(context.Context, time.Time) (int64, bool, error) {
+			return 99, false, nil
+		},
+	}
+	r := NewRetention(repo, 30*24*time.Hour)
+
+	deleted, err := r.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("losing the lock is not an error — the work is idempotent and retries next tick: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0 — this replica swept nothing and must not claim another's rows", deleted)
+	}
 }

@@ -105,10 +105,22 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	// A re-run of an already-tombstoned account skips the escrow: the row now holds
 	// the tombstone email, and escrowing that would overwrite the recovery record
 	// with useless data.
-	if !user.Deleted {
+	// tombstoned records whether THIS call did the escrow + scrub, or whether it is
+	// finishing an erasure a previous, interrupted call had already started.
+	tombstoned := !user.Deleted
+
+	if tombstoned {
 		// Escrow first, fail closed: when recovery is enabled we must not delete
 		// without a recoverable record. A compromised server cannot read this back —
 		// it is encrypted to the offline recovery public key.
+		//
+		// A failure between here and the scrub below leaves the account un-tombstoned,
+		// so a retry escrows again: auth.account_recovery is append-only and has no
+		// unique key, so the result is a duplicate record rather than an error. Both
+		// copies are written before the scrub, so both hold the real address and
+		// either can be used — recovery tooling must simply tolerate more than one
+		// record per user, which is the safe direction (the alternative is deleting an
+		// account with no recoverable copy at all).
 		if s.recoveryPub != nil {
 			if err := s.escrow(ctx, user, deletedBy, reason); err != nil {
 				return err
@@ -165,12 +177,22 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	}
 
 	if s.auditLog != nil {
-		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", map[string]interface{}{ // #nosec G104 -- audit is best-effort
-			"email":      maskEmail(user.Email),
+		meta := map[string]interface{}{
 			"deleted_by": deletedBy,
 			"reason":     reason,
 			"recovered":  s.recoveryPub != nil,
-		}, 50)
+		}
+		// On a retry of an interrupted erasure the row already holds the tombstone,
+		// so user.Email is "deleted-<id>@deleted.invalid". Masking that and filing it
+		// as the erased address would put a fabricated value in the one record an
+		// investigator would trust. Say what actually happened instead.
+		if tombstoned {
+			meta["email"] = maskEmail(user.Email)
+		} else {
+			meta["retry"] = true
+			meta["note"] = "cascade completed on re-run; address was recorded by the original attempt"
+		}
+		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", meta, 50) // #nosec G104 -- audit is best-effort
 	}
 
 	return nil

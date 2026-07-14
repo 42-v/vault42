@@ -195,7 +195,7 @@ func loginUser(t *testing.T, client *http.Client, r *testReplica, email, pw stri
 	if chTok == "" {
 		t.Fatalf("no access_token and no challenge_token: %v", lbody)
 	}
-	code := r.email.getOTP(email)
+	code := r.email.waitOTP(email, 5*time.Second)
 	if code == "" {
 		t.Fatalf("MFA required but no OTP captured for %s", email)
 	}
