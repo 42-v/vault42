@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.9.4 (2026-07-14)
+
+Coverage **92.42% → 94.67%** (7641 of 8071 statements), which is where the version comes
+from. Nothing was deleted to reach it: every point is a test that did not exist.
+
+94.69% is not reachable at this statement count — one statement is 0.0124 points, so the
+total steps 94.68 → 94.70 and skips it. 94.67 is the nearest reachable figure on the scheme.
+
+### Testing
+
+The theme is unchanged from 0.9.2 and it is the only theme worth having here: **the
+failures that matter are the silent ones.** Almost every branch below returns a zero value
+that is indistinguishable from a legitimate answer, so nothing anywhere reports a problem —
+the feature simply stops working, and the first person to find out is the attacker.
+
+* **A decompression bomb.** Blobs are deflate-compressed *before* they are encrypted, so
+  the database — and the upload limit, and the per-user quota — only ever see the compressed
+  size. The test builds the real thing: **11,222 bytes stored, expanding to 11,534,336**, a
+  thousandfold amplification that every upstream check waves through. It also asserts the
+  download *fails* rather than returning a truncated 10 MB prefix, which is what a
+  `LimitReader` hands back if nobody checks whether it hit the limit.
+* **Refresh-token replay.** `MarkUsed` is the atomic compare-and-set that decides whether a
+  refresh token has already been spent — that single bool is the entire replay defence. On a
+  database failure it must not return `(true, nil)`.
+* **HTTP response splitting.** A blob label is user-supplied and is echoed into a response
+  header on download. A label carrying CR or LF ends the header and begins another one: the
+  attacker writes their own headers into a response the victim's browser trusts.
+* **An open redirect in the OAuth authorize flow.** The authorize URL comes from the
+  provider and is reflected straight back to the browser. `javascript:`, `data:` and
+  off-site URLs are all refused — now with a test that says so.
+* **HIBP k-anonymity.** Only the first five characters of the password's SHA-1 may leave the
+  process. The test fails if the hash suffix or the plaintext is ever sent upstream;
+  without it, every registration could quietly be handing a crackable credential to a third
+  party. The documented fail-open on an HIBP outage is pinned too.
+* **The Argon2 overload guard.** Each hash costs ~46 MB, which is what makes Argon2id a good
+  password hash and also a denial-of-service primitive aimed at yourself. The semaphore is
+  what turns "the process is OOM-killed" into "the server answers 503", and its rejection
+  path had no test — a `("", nil)` from `HashPassword` would have stored an empty password
+  hash.
+* **The 2FA challenge device binding.** A challenge token is bound to the device that
+  triggered it. Without the check, an attacker who lifts the challenge out of a victim's
+  browser mid-flow finishes the second factor from their own machine and walks away with a
+  full session, having never touched the victim's authenticator.
+* **Backup-code brute force.** A backup code is 16 hex characters. A per-IP limit costs an
+  attacker rotating addresses nothing, so the shared per-account lockout is the only thing
+  protecting them. A locked account is now refused *before the codes are even fetched*, and
+  a wrong guess consumes nothing — otherwise an attacker could burn a victim's codes simply
+  by guessing at them.
+* **The admin lockout counter fallback.** If the counter write fails, the handler falls back
+  to the count it already holds in memory. That fallback is what stops an attacker buying
+  unlimited guesses at the break-glass admin by knocking the counter over.
+* **`EnsureFirstAdmin` on a failed count.** It decides at boot whether to mint a bootstrap
+  admin. A swallowed error reads as "zero admins exist" — so a database blip would create a
+  fresh privileged account, and print its password to the logs, on a vault that already has
+  admins.
+* **Key rotation and revocation, against a real Postgres.** The success paths are
+  unreachable from a unit test with a dead keystore, so they had never run. The test asserts
+  the key *actually moves* — a new kid comes back, the revoked one stops being active —
+  rather than that the endpoint answered 200. A rotate that reports success while the old
+  key keeps signing is the exact failure this surface exists to prevent.
+* **The erasure endpoint exists only when a recovery escrow is configured.** The fail-closed
+  design made structural, and now asserted: erasure must not be reachable on a deployment
+  with nowhere to write the recoverable record.
+* **The consent compare-and-set returns 409.** The CAS added in 0.9.0 stops a profile update
+  silently reverting an unsubscribe — but its *HTTP mapping* was never tested. A 200 there
+  is the same defect the CAS exists to prevent, moved one layer up.
+* **Redis, both ways it dies**; **Postgres repositories against a dead pool** (a silent
+  `IncrementFailedLogin` means the lockout counter never advances — brute force with no
+  ceiling and no error in the logs); **the Art. 15 export never returns a partial**; and the
+  erasure cascade fails closed at every one of its nine stores.
+
+Not covered, deliberately: the rate-limiter eviction loop. Reaching it needs a production
+refactor that would move the statement count, and destabilising the number to chase nine
+statements is a bad trade.
+
 ## 0.9.2 (2026-07-14)
 
 Coverage lands at **92.42%** (from 90.12%), which is where the version number comes
