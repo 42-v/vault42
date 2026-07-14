@@ -36,6 +36,18 @@ fixing it was past the range 0.9.1 could occupy.
   `keystore.Stop()` already used (`stopOnce` + `wg.Wait()`), which is why keystore's
   shutdown was never flaky and retention's was.
 
+* **The version badges advertised the floor, not what ships.** `scripts/readme-gen.sh`
+  read the `go` directive from `go.mod`, which is the *language floor* and does not move
+  when `toolchain` is bumped — so the README still said Go 1.26.0 while 0.9.0 shipped on
+  the 1.26.5 toolchain it was bumped to specifically to clear GO-2026-5856 and
+  CVE-2026-39822. A badge is at its most wrong precisely when it matters most: on a
+  security bump. (0.6.9 shipped the same way, on a 1.26.3 toolchain.) It now prefers
+  `toolchain` and falls back to the directive.
+
+  The Vue badge had the identical bug and was correct only by luck: it parsed the
+  *range* from `package.json` (`^3.5.38`), so a project running 3.5.42 would still have
+  advertised 3.5.38. It now reports the installed version, falling back to the range.
+
 * **Erasure filed a fabricated email address in its own audit record.** On a retry of an
   interrupted erasure the user row already holds the tombstone, so `maskEmail(user.Email)`
   masked `deleted-<id>@deleted.invalid` and recorded *that* as the erased address — a

@@ -5,7 +5,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 <!-- badges -->
 | | | |
 |---|---|---|
-| ![Go](https://img.shields.io/badge/Go-1.26.0-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
 | ![Go Tests](https://img.shields.io/badge/Go_Tests-2777-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-190-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-2967_tests-155724?style=flat&labelColor=000) |
 | ![Go Lines](https://img.shields.io/badge/Go-26997_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5098_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-92.42%25-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
