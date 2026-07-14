@@ -238,4 +238,21 @@ type IdentityResponse struct {
 	UpdatedAt       string                     `json:"updated_at"`
 	Billing         any                        `json:"billing,omitempty"`
 	Dynamic         map[string]json.RawMessage `json:"dynamic,omitempty"`
+
+	// MarketingConsent exposes the provenance behind MarketingEmails, read-only.
+	// Without it a client cannot tell an affirmative opt-in from an imported or
+	// legacy value that merely looks like one, and so cannot know to ask the user
+	// to confirm. It is never read back off a PUT.
+	MarketingConsent *MarketingConsentView `json:"marketing_consent,omitempty"`
+}
+
+// MarketingConsentView is the read-only projection of a consent record.
+type MarketingConsentView struct {
+	Granted bool   `json:"granted"`
+	Source  string `json:"source"`
+	At      string `json:"at,omitempty"`
+	// Affirmative is false for imported and legacy values: the preference is
+	// known, but it is not consent that could be demonstrated under Art. 7, and
+	// nothing may be sent on the strength of it.
+	Affirmative bool `json:"affirmative"`
 }

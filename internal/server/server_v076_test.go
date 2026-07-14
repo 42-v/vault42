@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/config"
@@ -22,6 +23,10 @@ type stubIdentityRepo struct{}
 func (stubIdentityRepo) Upsert(context.Context, *model.IdentityProfile) error { return nil }
 func (stubIdentityRepo) GetByPseudonym(context.Context, string) (*model.IdentityProfile, error) {
 	return nil, nil
+}
+
+func (stubIdentityRepo) UpsertCAS(context.Context, *model.IdentityProfile, time.Time) (bool, error) {
+	return true, nil
 }
 func (stubIdentityRepo) Delete(context.Context, string) error { return nil }
 

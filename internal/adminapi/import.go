@@ -104,14 +104,26 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 			results = append(results, importResult{Email: email, Status: "error", Error: "create_failed"})
 			continue
 		}
-		if u.MarketingEmails != nil && h.identity != nil {
-			data := &service.IdentityData{}
-			data.StampMarketingConsent(*u.MarketingEmails, service.ConsentSourceImport, source)
-			if err := h.identity.Upsert(r.Context(), id, data); err != nil {
-				// The account is already created; a lost preference must not fail
-				// the import. Record it and move on — a dropped flag fails closed
-				// (no consent), which is the safe direction.
+		if u.MarketingEmails != nil {
+			switch {
+			case h.identity == nil:
+				// No identity service wired, so the preference cannot be stored with
+				// its provenance. Count it and say so per-row rather than silently
+				// dropping it: the operator would otherwise see imported/0-failed and
+				// believe a marketing list migrated when none of it did.
 				consentFailed++
+				results = append(results, importResult{Email: email, Status: "imported", Error: "consent_not_stored"})
+				imported++
+				continue
+			default:
+				data := &service.IdentityData{}
+				data.StampMarketingConsent(*u.MarketingEmails, service.ConsentSourceImport, source)
+				if err := h.identity.Upsert(r.Context(), id, data); err != nil {
+					// The account is already created; a lost preference must not fail
+					// the import. Record it and move on — a dropped flag fails closed
+					// (no consent), which is the safe direction.
+					consentFailed++
+				}
 			}
 		}
 		imported++

@@ -78,6 +78,74 @@ func TestNormalizeConsent_LegacyBoolIsNotBackfilled(t *testing.T) {
 
 // The record is authoritative: if the two ever disagree, the bool must follow
 // the record, or a stale bool could re-grant a withdrawn consent.
+// The laundering hole: GET returns a bare marketing_emails bool with no
+// provenance, so any client that round-trips the profile form re-submits an
+// imported (pre-ticked, never affirmed) true. If PUT stamped that as
+// source=profile, a value the user never chose would silently become
+// demonstrable Art. 7 consent — defeating the entire point of the record.
+// Re-submitting an unchanged value is not an act of consent.
+func TestReconcileMarketingConsent_UnchangedValueKeepsProvenance(t *testing.T) {
+	tests := []struct {
+		name       string
+		prior      *ConsentRecord
+		submitted  bool
+		wantSource string
+		wantAffirm bool
+		wantEvent  bool
+	}{
+		{"imported true echoed back stays imported", &ConsentRecord{Granted: true, Source: ConsentSourceImport, Origin: "beon3"}, true, ConsentSourceImport, false, false},
+		{"legacy true echoed back stays legacy", &ConsentRecord{Granted: true, Source: ConsentSourceLegacy}, true, ConsentSourceLegacy, false, false},
+		{"imported true actually unticked is a real withdrawal", &ConsentRecord{Granted: true, Source: ConsentSourceImport}, false, ConsentSourceProfile, false, true},
+		{"imported false actually ticked is a real opt-in", &ConsentRecord{Granted: false, Source: ConsentSourceImport}, true, ConsentSourceProfile, true, true},
+		{"first ever opt-in is affirmative", nil, true, ConsentSourceProfile, true, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &IdentityData{}
+			submitted := tc.submitted
+			gotEvent := d.ReconcileMarketingConsent(&submitted, tc.prior)
+
+			if d.MarketingConsent == nil {
+				t.Fatal("no consent record produced")
+			}
+			if d.MarketingConsent.Source != tc.wantSource {
+				t.Errorf("source = %q, want %q", d.MarketingConsent.Source, tc.wantSource)
+			}
+			if got := d.MarketingConsent.Affirmative(); got != tc.wantAffirm {
+				t.Errorf("Affirmative() = %v, want %v", got, tc.wantAffirm)
+			}
+			if gotEvent != tc.wantEvent {
+				t.Errorf("consent event = %v, want %v", gotEvent, tc.wantEvent)
+			}
+		})
+	}
+}
+
+// A client that omits marketing_emails (a partial-update client, or one whose
+// form has no checkbox) must not blank the stored record. PUT is a full replace,
+// so without this a save from any such client would destroy a recorded
+// withdrawal — and the controller could no longer show it had been honoured.
+func TestReconcileMarketingConsent_OmittedFieldPreservesWithdrawal(t *testing.T) {
+	prior := &ConsentRecord{Granted: false, Source: ConsentSourceUnsubscribe, At: time.Now().UTC()}
+
+	d := &IdentityData{}
+	gotEvent := d.ReconcileMarketingConsent(nil, prior)
+
+	if gotEvent {
+		t.Error("omitting the field is not a consent change and must not emit an event")
+	}
+	if d.MarketingConsent == nil {
+		t.Fatal("the stored withdrawal was destroyed by an update that never mentioned it")
+	}
+	if d.MarketingConsent.Granted || d.MarketingConsent.Source != ConsentSourceUnsubscribe {
+		t.Errorf("withdrawal not preserved: %+v", d.MarketingConsent)
+	}
+	if d.MarketingEmails == nil || *d.MarketingEmails {
+		t.Error("preference bool must follow the preserved record")
+	}
+}
+
 func TestNormalizeConsent_RecordWinsOverBool(t *testing.T) {
 	yes := true
 	d := &IdentityData{

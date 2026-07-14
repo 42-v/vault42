@@ -129,15 +129,6 @@ func main() {
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
 	defer auditLogger.Close(ctx)
 
-	// Audit retention sweeper (Art. 5(1)(e)). No-op unless
-	// VAULT_AUDIT_RETENTION_DAYS is set.
-	auditRetention := audit.NewRetention(auditRepo, cfg.AuditRetentionPeriod)
-	if auditRetention.Enabled() {
-		auditRetention.Start(ctx)
-		defer auditRetention.Stop()
-		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
-	}
-
 	// CLI commands (check before starting server)
 	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper)
 
@@ -161,6 +152,20 @@ func main() {
 	// Check if this is a CLI invocation
 	if cliHandler.Run(ctx, os.Args) {
 		return
+	}
+
+	// Audit retention sweeper (Art. 5(1)(e)). No-op unless
+	// VAULT_AUDIT_RETENTION_DAYS is set.
+	//
+	// Started only once we know this is the server and not a CLI invocation:
+	// the sweep runs immediately on start, so starting it above would make every
+	// `vault add-client`, `vault rotate-jwks`, … silently purge the audit log as a
+	// side effect of running an unrelated subcommand.
+	auditRetention := audit.NewRetention(auditRepo, cfg.AuditRetentionPeriod)
+	if auditRetention.Enabled() {
+		auditRetention.Start(ctx)
+		defer auditRetention.Stop()
+		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
 	}
 
 	// Signing key initialization — two modes:

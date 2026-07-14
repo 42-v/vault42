@@ -2,6 +2,46 @@
 
 ## 0.9.0 (2026-07-14)
 
+### Fixed in review
+
+Ten defects found by an adversarial review of this release's own changes, before merge:
+
+* **The admin gateway encrypted imported consent with an all-zero key.** `NewIdentityService`
+  retains the slice it is given, and `config.ZeroBytes(cfg.MasterKey)` wipes that backing
+  array in place a few lines later. 32 zero bytes is still a valid AES-256 key, so `Encrypt`
+  succeeded and wrote ciphertext no one could ever read. `cmd/vault` copies the key first;
+  the gateway now does too.
+* **Backup codes were not actually erased.** `BackupCodeRepo.DeleteAllForUser` is the
+  *regeneration* path — it runs `UPDATE ... SET used=true`, leaving the hash and the user ID
+  in the table. Erasure called it and reported success. Added `PurgeAllForUser`, and the
+  integration test now asserts a **row count**, not that a mock method was called.
+* **Consent could be laundered by a profile save.** `GET` returns the bare `marketing_emails`
+  bool with no provenance, so any client that round-trips the form re-submits an imported
+  (pre-ticked, never affirmed) `true` — which was then stamped `source=profile`, i.e.
+  affirmative consent. A re-submitted value that has not changed is no longer treated as an
+  act of consent, and the response now exposes the provenance so a client can tell the
+  difference.
+* **A profile save could destroy a withdrawal.** `PUT` is a full replace, so a client that
+  omitted `marketing_emails` blanked the stored `ConsentRecord` — including a recorded
+  unsubscribe — with no audit entry. Omitted now means "unchanged".
+* **Erasure could leave a live account with no second factor.** The cascade spans nine stores
+  with no transaction; the user row was scrubbed *last*, so a failure part-way left an account
+  that still authenticated but whose TOTP secret, WebAuthn credentials and backup codes were
+  already gone — the user locked out, and nothing erased. The account is now tombstoned
+  first, and the cascade is idempotent so an interrupted erasure is finished by re-running it.
+* Unsubscribe was a lock-free read-modify-write over a single encrypted blob: a concurrent
+  profile write could drop the withdrawal, and the no-profile branch could replace a real
+  profile with an empty one. It now uses a compare-and-set with retry.
+* The audit retention sweeper ran on **every CLI subcommand** (it starts with an immediate
+  sweep, and was started before the CLI dispatch), and in **every replica** with no
+  coordination — each sweep takes an `ACCESS EXCLUSIVE` lock on the audit table and briefly
+  disables the append-only trigger. It now starts only for the server, and serialises across
+  replicas on a Postgres advisory lock.
+* Import silently discarded every marketing flag when the identity service was not wired,
+  while still reporting `consent_failed: 0`. It now counts and reports per row.
+* The consent audit entry was written *before* the profile write, so a failed write still
+  left a trail claiming consent had changed.
+
 ### Privacy / GDPR
 
 * **Account erasure retained the MFA authenticators.** `DeleteAccount` cascaded the

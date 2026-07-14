@@ -221,6 +221,10 @@ func (m *mockAuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64
 	return 0, nil
 }
 
+func (*mockAuditRepo) CleanupLocked(context.Context, time.Time) (int64, bool, error) {
+	return 0, true, nil
+}
+
 // Compile-time interface checks.
 var (
 	_ repository.ClientRepository       = (*mockClientRepo)(nil)

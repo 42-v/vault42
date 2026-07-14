@@ -73,6 +73,17 @@ func (m *mockBackupCodeRepo) DeleteAllForUser(_ context.Context, userID string) 
 	return nil
 }
 
+func (m *mockBackupCodeRepo) PurgeAllForUser(_ context.Context, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, c := range m.codes {
+		if c.UserID == userID {
+			delete(m.codes, id)
+		}
+	}
+	return nil
+}
+
 // Verify interface compliance at compile time.
 var _ repository.BackupCodeRepository = (*mockBackupCodeRepo)(nil)
 

@@ -243,8 +243,15 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   credentials, backup codes, and social-account links, plus the pseudonym-keyed identity profile
   and blobs. The MFA authenticators are deleted explicitly rather than by database cascade: the
   account row is scrubbed in place (an `UPDATE`) so that foreign keys stay valid, which means the
-  `ON DELETE CASCADE` on those tables never fires. Account erasure is requested through the
-  Operator (§8) where no self-service account-deletion endpoint is exposed in the deployment.
+  `ON DELETE CASCADE` on those tables never fires. Backup codes are **purged**, not merely marked
+  used — invalidating a code leaves its hash and the user ID in the table, which is enough to end
+  a session but not to erase a person. Account erasure is requested through the Operator (§8)
+  where no self-service account-deletion endpoint is exposed in the deployment.
+- **Order of operations.** The cascade spans nine stores with no transaction across them, so the
+  account is tombstoned **before** any personal data is destroyed, never after. A failure part-way
+  therefore leaves an account that has already stopped authenticating and still holds some data
+  pending deletion — not a live, loginable account whose second factors have already been
+  destroyed. Every step is idempotent, so an interrupted erasure is completed by re-running it.
 - **Audit records are an exception to immediate erasure.** Security audit entries are retained
   for their retention period (§4) and for any applicable legal-hold or legal-obligation reason
   (Art. 17(3)(b)/(e)); they are minimized (identifiers are limited to what is needed for the

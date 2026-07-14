@@ -40,6 +40,11 @@ func (m *mockAuditRepo) Cleanup(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }
 
+func (m *mockAuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (int64, bool, error) {
+	n, err := m.Cleanup(ctx, olderThan)
+	return n, true, err
+}
+
 func TestLogImmediate(t *testing.T) {
 	repo := &mockAuditRepo{}
 	logger := NewLogger(repo, 0) // no batching

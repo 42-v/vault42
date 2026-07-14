@@ -187,7 +187,15 @@ func main() {
 		))
 		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
 		// the profile ciphertext an import writes are readable by the main server.
-		apiHandler.SetIdentityService(service.NewIdentityService(identityRepo, cfg.MasterKey, cfg.HMACSecret))
+		//
+		// The key MUST be copied: NewIdentityService retains the slice, and
+		// config.ZeroBytes(cfg.MasterKey) below wipes that backing array in place.
+		// Handing it the config slice directly would leave the service holding 32
+		// zero bytes — still a valid AES-256 key length, so Encrypt would succeed
+		// and every imported profile would be written under an all-zero key that
+		// the main server (holding the real key) can never decrypt.
+		identityKey := append([]byte(nil), cfg.MasterKey...)
+		apiHandler.SetIdentityService(service.NewIdentityService(identityRepo, identityKey, cfg.HMACSecret))
 	} else {
 		log.Println("admin-gateway: HMAC_SECRET_FILE not set — account erasure endpoint disabled")
 	}

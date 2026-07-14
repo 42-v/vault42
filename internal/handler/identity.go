@@ -106,6 +106,17 @@ func (h *IdentityHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Billing:         data.Billing,
 		Dynamic:         data.Dynamic,
 	}
+	if c := data.MarketingConsent; c != nil {
+		view := &MarketingConsentView{
+			Granted:     c.Granted,
+			Source:      c.Source,
+			Affirmative: c.Affirmative(),
+		}
+		if !c.At.IsZero() {
+			view.At = c.At.Format(time.RFC3339)
+		}
+		resp.MarketingConsent = view
+	}
 	WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -138,12 +149,17 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 		Sex:         truncate(input.Sex, 50),
 		Dynamic:     input.Dynamic,
 	}
-	// The user actively submitted this preference, so it is affirmative consent —
-	// stamp it with its provenance rather than storing a bare bool.
-	if input.MarketingEmails != nil {
-		data.StampMarketingConsent(*input.MarketingEmails, service.ConsentSourceProfile, "")
-		h.logConsent(r, claims.Subject, *input.MarketingEmails, service.ConsentSourceProfile)
+	// PUT is a full replace, so the consent record has to be reconciled against
+	// what is already stored: an omitted field must not erase a withdrawal, and a
+	// re-submitted value that has not changed is not a fresh act of consent (see
+	// ReconcileMarketingConsent). Only a real change is stamped, and only then is
+	// a consent event logged — after the write succeeds.
+	var prior *service.ConsentRecord
+	if existing, _, err := h.svc.Get(r.Context(), claims.Subject); err == nil && existing != nil {
+		prior = existing.MarketingConsent
 	}
+	consentChanged := data.ReconcileMarketingConsent(input.MarketingEmails, prior)
+
 	if input.Billing != nil {
 		data.Billing = &service.BillingInfo{
 			AddressLine1: truncate(input.Billing.AddressLine1, 200),
@@ -164,6 +180,13 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 		}
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
+	}
+
+	// Logged only once the write has landed: an audit trail that records a consent
+	// change which never persisted is worse than no entry at all, because it is
+	// the thing the controller would produce as proof.
+	if consentChanged && data.MarketingConsent != nil {
+		h.logConsent(r, claims.Subject, data.MarketingConsent.Granted, service.ConsentSourceProfile)
 	}
 
 	if h.auditLog != nil {
@@ -209,20 +232,17 @@ func (h *IdentityHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, _, err := h.svc.Get(r.Context(), claims.Subject)
+	// Compare-and-set: changes only the consent field and leaves the rest of the
+	// profile alone, so a concurrent profile write can neither lose the withdrawal
+	// nor be overwritten by it. A user with no profile still gets the withdrawal
+	// recorded — otherwise a later account import could land a legacy opt-in on an
+	// account that has already refused.
+	err := h.svc.UpdateMarketingConsent(r.Context(), claims.Subject, false, service.ConsentSourceUnsubscribe, "")
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
-	if data == nil {
-		// No profile yet. Still record the withdrawal rather than no-opping: an
-		// account import could otherwise land a legacy opt-in on this user later
-		// and silently re-grant a consent they have already refused.
-		data = &service.IdentityData{}
-	}
-
-	data.StampMarketingConsent(false, service.ConsentSourceUnsubscribe, "")
-	if err := h.svc.Upsert(r.Context(), claims.Subject, data); err != nil {
+		if errors.Is(err, service.ErrConcurrentUpdate) {
+			WriteError(w, http.StatusConflict, "concurrent_update")
+			return
+		}
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}

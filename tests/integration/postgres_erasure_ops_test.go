@@ -111,6 +111,47 @@ func TestPostgresBulkDeleteOps(t *testing.T) {
 		}
 	})
 
+	// The bug this exists to prevent: BackupCodeRepo.DeleteAllForUser is named like
+	// a delete but runs `UPDATE ... SET used=true` (the regeneration path). Erasure
+	// used it, so the code hashes and their user_id survived the erasure while both
+	// the code and docs/PRIVACY.md claimed they were removed. A mock asserting "the
+	// method was called" passes either way — only a real row count catches it.
+	t.Run("BackupCodeRepo.PurgeAllForUser removes the rows", func(t *testing.T) {
+		repo := postgres.NewBackupCodeRepo(db)
+		codes := []*model.BackupCode{
+			{ID: randomID(), UserID: user.ID, CodeHash: "$argon2id$hash1", CreatedAt: time.Now().UTC()},
+			{ID: randomID(), UserID: user.ID, CodeHash: "$argon2id$hash2", CreatedAt: time.Now().UTC()},
+		}
+		if err := repo.CreateBatch(ctx, codes); err != nil {
+			t.Fatalf("create backup codes: %v", err)
+		}
+
+		// DeleteAllForUser only marks them used — the rows, and the hashes, remain.
+		if err := repo.DeleteAllForUser(ctx, user.ID); err != nil {
+			t.Fatalf("DeleteAllForUser: %v", err)
+		}
+		var remaining int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM auth.backup_codes WHERE user_id=$1`, user.ID).Scan(&remaining); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if remaining != 2 {
+			t.Fatalf("precondition: DeleteAllForUser should invalidate but keep rows, got %d", remaining)
+		}
+
+		// PurgeAllForUser is what erasure uses, and it must actually remove them.
+		if err := repo.PurgeAllForUser(ctx, user.ID); err != nil {
+			t.Fatalf("PurgeAllForUser: %v", err)
+		}
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM auth.backup_codes WHERE user_id=$1`, user.ID).Scan(&remaining); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if remaining != 0 {
+			t.Errorf("backup code hashes survived erasure: %d rows remain", remaining)
+		}
+	})
+
 	t.Run("RefreshTokenRepo.DeleteAllForUser", func(t *testing.T) {
 		repo := postgres.NewRefreshTokenRepo(db)
 		now := time.Now().UTC()

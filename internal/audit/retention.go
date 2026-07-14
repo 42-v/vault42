@@ -41,12 +41,25 @@ func NewRetention(repo repository.AuditRepository, period time.Duration) *Retent
 func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
 
 // Sweep deletes every audit entry older than the retention horizon and returns
-// how many rows went. Safe to call directly (the CLI does).
+// how many rows went.
+//
+// Serialised across replicas: the underlying cleanup takes an ACCESS EXCLUSIVE
+// lock on the audit table (it disables the append-only trigger to delete), so
+// only one replica may sweep at a time. A replica that does not get the lock
+// returns (0, nil) and tries again next tick — the work is idempotent, so there
+// is nothing to catch up on.
 func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	if !r.Enabled() {
 		return 0, nil
 	}
-	return r.repo.Cleanup(ctx, time.Now().Add(-r.period))
+	deleted, acquired, err := r.repo.CleanupLocked(ctx, time.Now().Add(-r.period))
+	if err != nil {
+		return 0, err
+	}
+	if !acquired {
+		return 0, nil
+	}
+	return deleted, nil
 }
 
 // Start runs the sweeper until Stop is called. It sweeps once immediately: a

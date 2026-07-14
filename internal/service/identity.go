@@ -208,6 +208,73 @@ func (s *IdentityService) Get(ctx context.Context, userID string) (*IdentityData
 	return &data, profile.UpdatedAt, nil
 }
 
+// ErrConcurrentUpdate is returned when a profile kept changing underneath a
+// read-modify-write for more than consentUpdateAttempts tries.
+var ErrConcurrentUpdate = errors.New("identity profile changed concurrently")
+
+const consentUpdateAttempts = 3
+
+// UpdateMarketingConsent changes only the marketing consent, leaving every other
+// field of the profile as it was.
+//
+// It is a compare-and-set loop rather than a plain Get/Upsert because the profile
+// is one encrypted blob: a writer must decrypt the whole thing, change its field
+// and re-encrypt, so two concurrent writers would each persist their own stale
+// view and one change would vanish. Losing a withdrawal that way is not an
+// acceptable outcome — the user would be told they had unsubscribed while the
+// stored record still said otherwise.
+func (s *IdentityService) UpdateMarketingConsent(ctx context.Context, userID string, granted bool, source, origin string) error {
+	for attempt := 0; attempt < consentUpdateAttempts; attempt++ {
+		data, updatedAt, err := s.Get(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if data == nil {
+			// No profile: record the withdrawal anyway, but as an insert that must
+			// not clobber a profile created in the race window (a blind Upsert here
+			// would replace a real profile with an empty one carrying only consent).
+			data = &IdentityData{}
+			updatedAt = time.Time{}
+		}
+		data.StampMarketingConsent(granted, source, origin)
+
+		ok, err := s.upsertCAS(ctx, userID, data, updatedAt)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		// Lost the race: re-read and re-apply on top of whatever landed.
+	}
+	return ErrConcurrentUpdate
+}
+
+// upsertCAS encrypts and writes a profile only if the stored row is unchanged.
+func (s *IdentityService) upsertCAS(ctx context.Context, userID string, data *IdentityData, expectedUpdatedAt time.Time) (bool, error) {
+	if err := data.Validate(); err != nil {
+		return false, err
+	}
+	data.normalizeConsent()
+	plaintext, err := json.Marshal(data)
+	if err != nil {
+		return false, fmt.Errorf("identity marshal: %w", err)
+	}
+	pseudo := s.Pseudonym(userID)
+	enc, err := vaultcrypto.Encrypt(plaintext, s.masterKey, []byte(pseudo))
+	if err != nil {
+		return false, fmt.Errorf("identity encrypt: %w", err)
+	}
+	now := time.Now()
+	return s.repo.UpsertCAS(ctx, &model.IdentityProfile{
+		PseudonymID: pseudo,
+		DataEnc:     enc,
+		Version:     1,
+		UpdatedAt:   now,
+		CreatedAt:   now,
+	}, expectedUpdatedAt)
+}
+
 // MarketingAllowed reports whether marketing email may be sent to a user, and is
 // the only thing a campaign sender should consult. It fails closed: no profile,
 // no consent record, or a non-affirmative (imported/legacy) record all mean no.
@@ -234,6 +301,47 @@ func (d *IdentityData) StampMarketingConsent(granted bool, source, origin string
 		Source:  source,
 		Origin:  origin,
 	}
+}
+
+// ReconcileMarketingConsent decides what consent record an incoming profile
+// update should carry, given what is already stored. It exists because
+// PUT /user/identity is a full replace fed by a form the client round-trips:
+// without it, two things go wrong.
+//
+//   - Laundering. GET returns the bare bool with no provenance, so a client
+//     re-submits marketing_emails=true for an imported (pre-ticked, never
+//     affirmed) opt-in. Stamping that as source=profile would turn a value the
+//     user never chose into demonstrable Art. 7 consent. So a submitted value
+//     that is unchanged from the stored one is NOT a fresh act of consent: the
+//     existing record, and its provenance, is kept exactly as it was.
+//   - Erasure. A client that omits marketing_emails entirely (a partial-update
+//     client, or one whose form has no checkbox) would otherwise blank the
+//     stored record — destroying a recorded withdrawal along with it.
+//
+// Only a value that actually differs from what is stored is an affirmative act,
+// and only then is it stamped with source=profile. Returns true when the caller
+// should emit a consent audit event.
+func (d *IdentityData) ReconcileMarketingConsent(submitted *bool, prior *ConsentRecord) (changed bool) {
+	// Omitted: preserve whatever is on record, including a withdrawal.
+	if submitted == nil {
+		d.MarketingConsent = prior
+		if prior != nil {
+			granted := prior.Granted
+			d.MarketingEmails = &granted
+		}
+		return false
+	}
+	// Unchanged: not a fresh act of consent — keep the original provenance, so an
+	// imported or legacy value cannot be promoted by an echo of itself.
+	if prior != nil && prior.Granted == *submitted {
+		d.MarketingConsent = prior
+		granted := prior.Granted
+		d.MarketingEmails = &granted
+		return false
+	}
+	// Genuinely changed (or first ever): the user acted, so this is affirmative.
+	d.StampMarketingConsent(*submitted, ConsentSourceProfile, "")
+	return true
 }
 
 // normalizeConsent keeps the legacy bool and the consent record from drifting.
