@@ -324,6 +324,12 @@ func TestPostgresBlobPseudonymOps(t *testing.T) {
 		}
 	})
 
+	t.Run("DeleteByRefAndPseudonym missing ref errors", func(t *testing.T) {
+		if err := repo.DeleteByRefAndPseudonym(ctx, "no-such-ref", pseudonym); err == nil {
+			t.Error("deleting a missing ref reported success")
+		}
+	})
+
 	t.Run("DeleteAllForPseudonym", func(t *testing.T) {
 		if err := repo.DeleteAllForPseudonym(ctx, pseudonym); err != nil {
 			t.Fatalf("DeleteAllForPseudonym: %v", err)

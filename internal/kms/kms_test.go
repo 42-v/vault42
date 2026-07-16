@@ -88,6 +88,20 @@ func TestUnwrap_UniformFailure(t *testing.T) {
 	}
 }
 
+// TestWrap_EmptyKid asserts Wrap rejects an empty kid before any key
+// derivation: the kid is both the HKDF info suffix and the GCM AAD, so an
+// empty kid would collapse domain separation between wrapped artifacts.
+func TestWrap_EmptyKid(t *testing.T) {
+	s := newService(t, 0x33)
+	env, err := s.Wrap("", []byte("payload"))
+	if env != nil {
+		t.Fatalf("Wrap with empty kid returned an envelope: %x", env)
+	}
+	if err == nil || err.Error() != "kms: empty kid" {
+		t.Fatalf("Wrap with empty kid: err = %v, want %q", err, "kms: empty kid")
+	}
+}
+
 func TestClose_WipesRoot(t *testing.T) {
 	root := make([]byte, 32)
 	for i := range root {

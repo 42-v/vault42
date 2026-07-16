@@ -107,9 +107,10 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
             return AuthenticateResult.Fail("invalid_token");
         }
 
-        // Reject 2FA challenge tokens — they are not full auth tokens
+        // CS-4: every Vault-issued access token carries token_type=Bearer,
+        // so a missing claim is rejected the same as a 2FA challenge token.
         var tokenTypeClaim = principal.FindFirst(VaultClaimTypes.TokenType);
-        if (tokenTypeClaim is not null && tokenTypeClaim.Value != "Bearer")
+        if (tokenTypeClaim is null || tokenTypeClaim.Value != "Bearer")
             return AuthenticateResult.Fail("Invalid token type");
 
         // Fingerprint validation (optional)

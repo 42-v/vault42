@@ -3,6 +3,8 @@ package redis
 import (
 	"context"
 	"net"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -189,4 +191,45 @@ func TestClient_ConnectionDroppedMidCommandSurfaces(t *testing.T) {
 			t.Error("Eval reported success after the connection was dropped")
 		}
 	})
+}
+
+// The hang-up server above makes the *read* fail: on loopback the command
+// write usually lands in the kernel buffer before the RST arrives, so the
+// write-error branch of exec is a scheduling race there. Closing the socket
+// under a checked-out connection makes the write itself fail deterministically.
+// A connection whose write failed sent a truncated frame; it must be removed
+// from the pool, not returned, and the pool must recover with a fresh dial.
+func TestClient_WriteFailureRemovesConnection(t *testing.T) {
+	m := newMockRedis(t)
+	defer m.close()
+
+	c := NewClient(&Options{Addr: m.addr(), PoolSize: 1, DialTimeout: time.Second, IOTimeout: time.Second})
+	t.Cleanup(func() { _ = c.Close() })
+	ctx := context.Background()
+
+	cn, err := c.pool.get(ctx)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	// Kill the socket while the connection is checked out.
+	if err := cn.netConn.Close(); err != nil {
+		t.Fatalf("close netConn: %v", err)
+	}
+
+	_, err = c.exec(ctx, cn, "PING")
+	if err == nil {
+		t.Fatal("a command written to a dead connection was reported as success")
+	}
+	if !strings.Contains(err.Error(), "redis: write PING") {
+		t.Errorf("error %q does not identify the failed write", err)
+	}
+	if total := atomic.LoadInt32(&c.pool.total); total != 0 {
+		t.Errorf("dead connection was not removed from the pool, total=%d", total)
+	}
+
+	// The semaphore slot was released, so the pool must dial fresh and recover.
+	if err := c.Ping(ctx); err != nil {
+		t.Errorf("pool did not recover after removing the dead connection: %v", err)
+	}
 }

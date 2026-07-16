@@ -3,6 +3,7 @@ package redis
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -212,5 +213,91 @@ func TestPool_IdleConnectionPastTimeoutIsDiscarded(t *testing.T) {
 
 	if _, err := c.Get(ctx, "k"); err != nil && err != Nil {
 		t.Fatalf("an expired idle connection must be replaced transparently: %v", err)
+	}
+}
+
+// The fake servers above always accept the handshake bytes; on loopback a write
+// lands in the kernel buffer even when the peer is gone, so the *write* failing
+// is a race no TCP fixture can stage. A pre-closed net.Pipe fails the first
+// write deterministically.
+func newClosedPipeConn(t *testing.T) *conn {
+	t.Helper()
+	cli, srv := net.Pipe()
+	_ = cli.Close()
+	_ = srv.Close()
+	return &conn{netConn: cli, rd: bufio.NewReader(cli), wr: bufio.NewWriter(cli)}
+}
+
+// If the AUTH command never reaches the server, the connection was never
+// authenticated. The handshake must fail with an error naming the AUTH write,
+// not hand the connection out.
+func TestPool_AuthWriteFailureRejectsConnection(t *testing.T) {
+	p := newPool(&Options{Password: "hunter2"})
+	defer close(p.done)
+
+	err := p.initAuth(newClosedPipeConn(t))
+	if err == nil {
+		t.Fatal("an AUTH that was never sent was treated as success")
+	}
+	if !strings.Contains(err.Error(), "auth write") {
+		t.Errorf("error %q does not identify the AUTH write as the failure", err)
+	}
+}
+
+// Same for SELECT: a database switch that never reached the server means every
+// later command would land in database 0.
+func TestPool_SelectWriteFailureRejectsConnection(t *testing.T) {
+	p := newPool(&Options{DB: 3})
+	defer close(p.done)
+
+	err := p.initSelect(newClosedPipeConn(t))
+	if err == nil {
+		t.Fatal("a SELECT that was never sent was treated as success")
+	}
+	if !strings.Contains(err.Error(), "select write") {
+		t.Errorf("error %q does not identify the SELECT write as the failure", err)
+	}
+}
+
+// A reused connection whose health-check PING cannot even be written is dead;
+// healthCheck must report the write error so get() discards it.
+func TestPool_HealthCheckWriteFailure(t *testing.T) {
+	p := newPool(&Options{})
+	defer close(p.done)
+
+	err := p.healthCheck(newClosedPipeConn(t))
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("expected io.ErrClosedPipe from the health-check write, got %v", err)
+	}
+	// A closed pipe fails the reply read with the same sentinel, so errors.Is
+	// alone cannot tell the two paths apart. The write path returns the error
+	// raw; the read path wraps it in readLine's "redis: read line:" prefix.
+	if strings.Contains(err.Error(), "read line") {
+		t.Fatalf("error %q came from the reply read, not the PING write", err)
+	}
+}
+
+// A connection the server drops after the PING was written fails on the reply
+// read instead. The hang-up fixtures never pool a connection, so this is staged
+// directly: consume the PING frame, then close before answering.
+func TestPool_HealthCheckReadFailure(t *testing.T) {
+	cli, srv := net.Pipe()
+	t.Cleanup(func() { _ = cli.Close() })
+	cn := &conn{netConn: cli, rd: bufio.NewReader(cli), wr: bufio.NewWriter(cli)}
+
+	go func() {
+		_, _ = io.ReadFull(srv, make([]byte, len("*1\r\n$4\r\nPING\r\n")))
+		_ = srv.Close()
+	}()
+
+	p := newPool(&Options{})
+	defer close(p.done)
+
+	err := p.healthCheck(cn)
+	if err == nil {
+		t.Fatal("a health check that got no reply was treated as healthy")
+	}
+	if !strings.Contains(err.Error(), "read line") {
+		t.Errorf("error %q does not surface the failed reply read", err)
 	}
 }

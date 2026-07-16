@@ -149,6 +149,20 @@ TLS config uses `RequireAndVerifyClientCert` with the CA pool but does not check
 
 ---
 
+### AR-11: Unmaintained `openpgp` Package Inside the `x/crypto` Module
+
+**Severity:** Informational | **Source:** govulncheck GO-2026-5932 (0.9.6 release scan)
+
+govulncheck flags `golang.org/x/crypto@v0.53.0` because the module contains `golang.org/x/crypto/openpgp`, which upstream declares unmaintained and unsafe by design. The advisory has no fixed version (`Fixed in: N/A`) -- the package is frozen, not patched, so the finding persists for every version of the module.
+
+**Why this is accepted:**
+
+- **Never called:** Vault42 imports only `argon2` and `hkdf` from `x/crypto`. govulncheck symbol analysis confirms 0 vulnerabilities in called code; the advisory is module-level only.
+- **Unfixable by upgrade:** No `x/crypto` release removes the package, so bumping the dependency can never clear the finding.
+- **Guarded against regression:** `openpgp` would have to be imported deliberately for the risk to materialize; the minimal-dependency rule (three direct deps, reviewed in every PR) is the control.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

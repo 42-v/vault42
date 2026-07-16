@@ -22,7 +22,7 @@ remediation prioritization.
 | OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8) | 34 | 3 | 0 | 3 | 96% |
 | NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
 | OWASP Top 10 (2021) | 47 | 1 | 0 | 0 | 97% |
-| RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC | 50 | 1 | 0 | 3 | 96% |
+| RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC | 50 | 1 | 0 | 3 | 96% |
 | GDPR -- General Data Protection Regulation (EU 2016/679) | 12 | 3 | 0 | 0 | 93% |
 | **Totals** | **242** | **15** | **0** | **9** | -- |
 
@@ -158,9 +158,14 @@ endpoints.
 
 ---
 
-## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC
+## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC
 
 **Coverage: 96%** -- 50 met, 1 partial, 0 gap, 3 N/A
+
+*Since 0.9.6 the family's core requirements are pinned as clause-numbered regression
+tests in `tests/compliance/rfc9700_oauth_bcp_test.go`: PKCE S256 on every provider
+(§2.1.1/§4.8.2), HMAC state integrity (§4.1.1), OIDC nonce binding (§4.5.3), tokens
+kept out of URLs (§4.3.2), and DPoP sender-constraining (§4.10.1).*
 
 The implementation adheres strongly to the JWT and OAuth2 protocol family with
 defense-in-depth against well-known attacks (algorithm confusion, header injection,
@@ -179,7 +184,7 @@ on rotation.
 
 | ID | Requirement | Status | Severity | Recommended fix |
 |---|---|---|---|---|
-| OAUTH2-TOKEN-001 | Token rotation on refresh: a new refresh token must be issued and the old token invalidated (RFC 6749 §6 best practice) | Partial | Low | A new refresh token is issued on refresh and family-based tracking exists; explicitly verify that the prior refresh token is revoked in the refresh code path, and add immediate revocation of the old token after the new one is issued if not already guaranteed. |
+| OAUTH2-TOKEN-001 | Token rotation on refresh: a new refresh token must be issued and the old token invalidated (RFC 6749 §6 best practice) | Partial | Low | A new refresh token is issued on refresh and family-based tracking exists; explicitly verify that the prior refresh token is revoked in the refresh code path, and add immediate revocation of the old token after the new one is issued if not already guaranteed. Since 0.9.6 the single-use mechanism itself is asserted under real Postgres (`tests/compliance/rfc9700_oauth_bcp_test.go` section 4.14.2: second `MarkUsed` fails, replay revokes the family); the service-level ordering assertion is what keeps this Partial. |
 
 *Not Applicable (3): organizational controls (e.g., rate-limiting and audit-logging
 infrastructure, JWKS endpoint operation) and unused `crit` header handling.*
@@ -203,18 +208,27 @@ in one call, and federated links can be unlinked individually. The three remaini
 the breach-notification *code path* (the procedure is documented but no risk-threshold alerting
 exists), cryptographic audit-log chaining, and a DPIA template.
 
+*Since 0.9.6 the claims above are asserted by a dedicated compliance suite rather than
+scattered unit tests: `tests/compliance/gdpr_erasure_test.go` runs the assembled
+`ErasureService` cascade against a real Postgres and proves Art. 17 with row counts
+(completeness, tombstone scrub, purge-not-mark, idempotency, the Art. 17(3)(b)/(e) audit
+exemption, and the recovery escrow); `tests/compliance/gdpr_consent_test.go` pins the
+Art. 7 consent-provenance contract (affirmative-only sources, fail-closed gating,
+anti-laundering, one-call withdrawal); `tests/compliance/gdpr_retention_test.go` covers
+Art. 5(1)(e) retention defaults and the Art. 5(1)(c) audit-metadata scrubbing.*
+
 | ID | Requirement | Status | Severity | Notes / remaining work |
 |---|---|---|---|---|
-| GDPR-1 | Lawful basis for processing (Art. 6) | Met | -- | Per-purpose bases P1–P10 in PRIVACY.md §2. Consent is stored as a record (`granted`/`at`/`source`/`origin`), not a bare flag, and every change writes a `consent_granted` / `consent_withdrawn` audit entry — Art. 7(1) requires the controller to be able to *demonstrate* consent. |
-| GDPR-2 | Data minimization (Art. 5(1)(c)) | Met | -- | Per-field necessity rationale in PRIVACY.md §3.2. |
-| GDPR-5 | Right to erasure (Art. 17) | Met | -- | **Was a live defect, not merely undocumented.** Erasure cascades identity, blobs, devices, social links, password history and refresh tokens — but silently retained the TOTP secret, WebAuthn credentials and backup codes. The schema carries `ON DELETE CASCADE` on all three, so it *looked* correct; the cascade never fired because the account row is scrubbed with an `UPDATE`, not deleted. Now deleted explicitly, and refresh tokens are hard-deleted rather than revoked (a revoked row keeps its fingerprint hash and device reference). Regression-tested in `erasure_test.go`. |
+| GDPR-1 | Lawful basis for processing (Art. 6) | Met | -- | Per-purpose bases P1–P10 in PRIVACY.md §2. Consent is stored as a record (`granted`/`at`/`source`/`origin`), not a bare flag, and every change writes a `consent_granted` / `consent_withdrawn` audit entry — Art. 7(1) requires the controller to be able to *demonstrate* consent. Asserted: `tests/compliance/gdpr_consent_test.go` (Art. 7(1) provenance record). |
+| GDPR-2 | Data minimization (Art. 5(1)(c)) | Met | -- | Per-field necessity rationale in PRIVACY.md §3.2. Asserted: `tests/compliance/gdpr_retention_test.go` (Art. 5(1)(c) audit-metadata scrubbing). |
+| GDPR-5 | Right to erasure (Art. 17) | Met | -- | **Was a live defect, not merely undocumented.** Erasure cascades identity, blobs, devices, social links, password history and refresh tokens — but silently retained the TOTP secret, WebAuthn credentials and backup codes. The schema carries `ON DELETE CASCADE` on all three, so it *looked* correct; the cascade never fired because the account row is scrubbed with an `UPDATE`, not deleted. Now deleted explicitly, and refresh tokens are hard-deleted rather than revoked (a revoked row keeps its fingerprint hash and device reference). Regression-tested in `erasure_test.go`. Asserted: `tests/compliance/gdpr_erasure_test.go` (row counts across every user-linked store, real Postgres). |
 | GDPR-7 | Purpose limitation (Art. 5(1)(b)) | Met | -- | PRIVACY.md §2 + §3.2. |
 | GDPR-8 | Access & portability (Arts. 15, 20) | Met | -- | `GET /user/data-export` returns profile, identity, blob metadata, devices and user-scoped audit events as machine-readable JSON. |
 | GDPR-9 | Accountability (Art. 5(2), Recital 76) | Met | -- | `docs/PRIVACY.md` is the processing policy: roles, bases, inventory, retention, rights, processors, breach procedure. |
-| GDPR-10 | Data retention limits (Art. 5(1)(e)) | Met | -- | `VAULT_AUDIT_RETENTION_DAYS` + a sweeper (`internal/audit/retention.go`) purging every 6h and at startup. Disabled by default: deleting security logs is not a safe default, so the horizon is an explicit operator choice. Audit entries are exempt from the erasure cascade under Art. 17(3)(b)/(e), which is why they need a time-based purge. |
+| GDPR-10 | Data retention limits (Art. 5(1)(e)) | Met | -- | `VAULT_AUDIT_RETENTION_DAYS` + a sweeper (`internal/audit/retention.go`) purging every 6h and at startup. Disabled by default: deleting security logs is not a safe default, so the horizon is an explicit operator choice. Audit entries are exempt from the erasure cascade under Art. 17(3)(b)/(e), which is why they need a time-based purge. Asserted: `tests/compliance/gdpr_retention_test.go` (disabled-by-default sweeper, config horizon). |
 | GDPR-11 | Third-party sharing and transfers (Arts. 4, 6, 28) | Met | -- | Processors documented in PRIVACY.md §6. `DELETE /user/social/{id}` unlinks a federated identity and removes the encrypted provider tokens with it; previously this was only possible by erasing the whole account. |
 | GDPR-13 | Data subject rights (Arts. 15–21) | Met | -- | Access/portability, rectification, erasure, restriction, objection and withdrawal all have endpoints; each writes to the audit trail. |
-| GDPR-15 | Consent for marketing (Arts. 5, 7) | Met | -- | `POST /user/marketing/unsubscribe` withdraws in one call with no confirmation step (Art. 7(3): withdrawal must be as easy as granting). `IdentityService.MarketingAllowed` is the sole send gate and fails closed: `import` and `legacy` provenance are **not** affirmative consent, so a migrated default-true flag or a pre-ticked checkbox cannot become a lawful basis for sending (Recital 32; *Planet49*, C-673/17). |
+| GDPR-15 | Consent for marketing (Arts. 5, 7) | Met | -- | `POST /user/marketing/unsubscribe` withdraws in one call with no confirmation step (Art. 7(3): withdrawal must be as easy as granting). `IdentityService.MarketingAllowed` is the sole send gate and fails closed: `import` and `legacy` provenance are **not** affirmative consent, so a migrated default-true flag or a pre-ticked checkbox cannot become a lawful basis for sending (Recital 32; *Planet49*, C-673/17). Asserted: `tests/compliance/gdpr_consent_test.go` (Affirmative()-only gate, anti-laundering, one-call withdrawal). |
 | GDPR-3 | Security of processing (Art. 32) | Met | -- | Covered in depth by the ASVS/NIST sections above. |
 | GDPR-4 | Records of processing (Art. 30) | Met | -- | PRIVACY.md §2/§3 constitute the processor-side record. |
 | GDPR-12 | Breach notification (Arts. 33–34) | Partial | Medium | PRIVACY.md §7 documents the 72-hour procedure and the processor→controller duty (Art. 33(2)), but nothing raises an alert from code. `riskScore` is computed and stored on every audit entry and no consumer reads it; the honeypot `Alerter` fires only on trap-user login, which is an intrusion tripwire, not a breach detector. **Fix:** risk-threshold webhook reusing the honeypot dispatcher. |

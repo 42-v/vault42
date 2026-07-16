@@ -231,6 +231,29 @@ func TestPostgresBackupCodeRepo(t *testing.T) {
 			t.Fatalf("CreateBatch empty: %v", err)
 		}
 	})
+
+	t.Run("CreateBatch is all-or-nothing on mid-batch failure", func(t *testing.T) {
+		user4 := makeUser("backup-batch-fail@test.com")
+		if err := userRepo.Create(ctx, user4); err != nil {
+			t.Fatalf("create user4: %v", err)
+		}
+		dupID := randomID()
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		codes := []*model.BackupCode{
+			{ID: dupID, UserID: user4.ID, CodeHash: "failhash1", CreatedAt: now},
+			{ID: dupID, UserID: user4.ID, CodeHash: "failhash2", CreatedAt: now},
+		}
+		if err := repo.CreateBatch(ctx, codes); err == nil {
+			t.Fatal("CreateBatch reported success for a batch with a duplicate primary key")
+		}
+		unused, err := repo.ListUnusedByUser(ctx, user4.ID)
+		if err != nil {
+			t.Fatalf("ListUnusedByUser: %v", err)
+		}
+		if len(unused) != 0 {
+			t.Errorf("%d codes of a failed batch were committed, want 0", len(unused))
+		}
+	})
 }
 
 // =============================================================================
@@ -326,6 +349,30 @@ func TestPostgresSocialAccountRepo(t *testing.T) {
 		}
 		if len(accounts) != 0 {
 			t.Errorf("len = %d, want 0", len(accounts))
+		}
+	})
+
+	t.Run("ListByUser surfaces a NULL access_token_enc", func(t *testing.T) {
+		user3 := makeUser("social-null@test.com")
+		if err := userRepo.Create(ctx, user3); err != nil {
+			t.Fatalf("create user3: %v", err)
+		}
+		// access_token_enc is nullable in the schema but scanned into a plain
+		// string. The repo never writes NULL, so this models an out-of-band write;
+		// the list must fail loudly rather than return partial data.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO auth.social_accounts (id, user_id, provider, provider_user_id, access_token_enc, refresh_token_enc)
+			VALUES ($1, $2, 'google', $3, NULL, '')`,
+			randomID(), user3.ID, "google-null-"+randomID())
+		if err != nil {
+			t.Fatalf("insert NULL row: %v", err)
+		}
+		accounts, err := repo.ListByUser(ctx, user3.ID)
+		if err == nil {
+			t.Fatal("ListByUser returned no error for a row with NULL access_token_enc")
+		}
+		if accounts != nil {
+			t.Errorf("ListByUser returned %d accounts alongside an error", len(accounts))
 		}
 	})
 
@@ -554,6 +601,30 @@ func TestPostgresWebAuthnRepo(t *testing.T) {
 		}
 		if len(creds) != 0 {
 			t.Errorf("len = %d, want 0", len(creds))
+		}
+	})
+
+	t.Run("ListByUser surfaces a NULL friendly_name", func(t *testing.T) {
+		user3 := makeUser("webauthn-null@test.com")
+		if err := userRepo.Create(ctx, user3); err != nil {
+			t.Fatalf("create user3: %v", err)
+		}
+		// friendly_name is nullable in the schema but scanned into a plain string.
+		// The repo never writes NULL, so this models an out-of-band write; the list
+		// must fail loudly rather than return partial data.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO auth.webauthn_credentials (id, user_id, credential_id, public_key, sign_count, friendly_name)
+			VALUES ($1, $2, $3, $4, 0, NULL)`,
+			randomID(), user3.ID, []byte("null-name-cred"), []byte("pk"))
+		if err != nil {
+			t.Fatalf("insert NULL row: %v", err)
+		}
+		creds, err := repo.ListByUser(ctx, user3.ID)
+		if err == nil {
+			t.Fatal("ListByUser returned no error for a row with NULL friendly_name")
+		}
+		if creds != nil {
+			t.Errorf("ListByUser returned %d credentials alongside an error", len(creds))
 		}
 	})
 

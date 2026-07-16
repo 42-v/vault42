@@ -131,24 +131,24 @@ func NewTemplateRenderer(overrideDir string) (*TemplateRenderer, error) {
 			return nil, fmt.Errorf("email: read template %s: %w", name, err)
 		}
 
-		// Check for override (reject symlinks and path traversal to prevent arbitrary file read)
+		// Check for override (reject symlinks and path traversal to prevent arbitrary file read).
+		// A tripped guard skips only the override read; the embedded default still registers.
 		if overrideDir != "" {
 			overridePath := filepath.Clean(filepath.Join(overrideDir, name+".html"))
 			cleanDir := filepath.Clean(overrideDir) + string(os.PathSeparator)
-			if !strings.HasPrefix(overridePath, cleanDir) {
-				continue // path traversal attempt
-			}
-			// Atomic open with O_NOFOLLOW to prevent symlink TOCTOU race.
-			// This replaces the previous Lstat+ReadFile pattern where a symlink
-			// could be swapped in between the check and the read.
-			if f, err := os.OpenFile(overridePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0); err == nil { // #nosec G304 -- path validated: Clean + HasPrefix against override directory
-				data, readErr := io.ReadAll(f)
-				f.Close() // #nosec G104 -- closing read-only file; error is non-actionable
-				if readErr == nil {
-					if err := validateTemplate(data); err != nil {
-						return nil, fmt.Errorf("email: unsafe template %s: %w", overridePath, err)
+			if strings.HasPrefix(overridePath, cleanDir) {
+				// Atomic open with O_NOFOLLOW to prevent symlink TOCTOU race.
+				// This replaces the previous Lstat+ReadFile pattern where a symlink
+				// could be swapped in between the check and the read.
+				if f, err := os.OpenFile(overridePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0); err == nil { // #nosec G304 -- path validated: Clean + HasPrefix against override directory
+					data, readErr := io.ReadAll(f)
+					f.Close() // #nosec G104 -- closing read-only file; error is non-actionable
+					if readErr == nil {
+						if err := validateTemplate(data); err != nil {
+							return nil, fmt.Errorf("email: unsafe template %s: %w", overridePath, err)
+						}
+						contentData = data
 					}
-					contentData = data
 				}
 			}
 		}

@@ -132,6 +132,42 @@ func TestAuditCleanupLocked(t *testing.T) {
 
 }
 
+// A deployment whose migrations drifted can lose audit.cleanup_old_entries().
+// The sweep must then surface the failure rather than report an empty successful
+// sweep: a silent no-op here means the retention promise in docs/PRIVACY.md
+// quietly stops being kept. Own container, because the function stays dropped.
+func TestAuditCleanupLockedMissingFunction(t *testing.T) {
+	pool, _, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repo := postgres.NewAuditRepo(&postgres.DB{Pool: pool})
+	seedAuditEntry(t, repo, time.Now().UTC().Add(-90*24*time.Hour))
+
+	if _, err := pool.Exec(ctx, `DROP FUNCTION audit.cleanup_old_entries(interval)`); err != nil {
+		t.Fatalf("drop cleanup function: %v", err)
+	}
+
+	deleted, acquired, err := repo.CleanupLocked(ctx, time.Now().UTC().Add(-30*24*time.Hour))
+	if err == nil {
+		t.Fatal("CleanupLocked reported success with the cleanup function missing")
+	}
+	if !acquired {
+		t.Error("the advisory lock is taken before the cleanup call, acquired must be true")
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit.audit_log`).Scan(&remaining); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if remaining != 1 {
+		t.Errorf("a failed sweep changed the audit log: %d rows remain, want 1", remaining)
+	}
+}
+
 // sweeperAgainstPostgres: the sweeper on top of the repo — disabled means inert,
 // enabled means it purges. A subtest so it shares the container above rather than
 // standing up another Postgres.

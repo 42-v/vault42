@@ -95,6 +95,7 @@ func TestValidateTemplateContent(t *testing.T) {
 		{"empty subject", "   ", "<p>ok</p>", true},
 		{"empty html", "Subject", "   ", true},
 		{"script tag", "Subject", "<script>alert(1)</script>", true},
+		{"script in subject", "<script>alert(1)</script>", "<p>ok</p>", true},
 		{"broken template", "Subject", "<p>{{.Unclosed</p>", true},
 	}
 	for _, tt := range tests {
@@ -126,6 +127,24 @@ func TestRenderPreview(t *testing.T) {
 	t.Run("invalid content is rejected", func(t *testing.T) {
 		if _, _, _, err := RenderPreview("S", "<script>x</script>", SampleData()); err == nil {
 			t.Fatal("RenderPreview accepted a script tag")
+		}
+	})
+	t.Run("subject execute error is surfaced", func(t *testing.T) {
+		subj, html, text, err := RenderPreview("{{.Missing}}", "<p>ok</p>", SampleData())
+		if err == nil || !strings.Contains(err.Error(), "Missing") {
+			t.Fatalf("err = %v, want an execute error mentioning Missing", err)
+		}
+		if subj != "" || html != "" || text != "" {
+			t.Errorf("outputs = %q/%q/%q, want all empty on error", subj, html, text)
+		}
+	})
+	t.Run("html execute error is surfaced", func(t *testing.T) {
+		subj, html, text, err := RenderPreview("S", "<p>{{.Missing}}</p>", SampleData())
+		if err == nil || !strings.Contains(err.Error(), "Missing") {
+			t.Fatalf("err = %v, want an execute error mentioning Missing", err)
+		}
+		if subj != "" || html != "" || text != "" {
+			t.Errorf("outputs = %q/%q/%q, want all empty on error", subj, html, text)
 		}
 	})
 }

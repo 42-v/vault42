@@ -51,8 +51,10 @@ GOSEC_JSON=$(mktemp)
 trap 'rm -f "$GOSEC_JSON"' EXIT
 gosec -quiet -fmt=json -out="$GOSEC_JSON" ./... 2>/dev/null || true
 HIGH=$(python3 -c "
-import json
-d = json.load(open('$GOSEC_JSON'))
+import json, os
+# gosec -quiet writes nothing when there are no findings; an empty file is a pass
+p = '$GOSEC_JSON'
+d = json.load(open(p)) if os.path.getsize(p) > 0 else {}
 issues = d.get('Issues', [])
 high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
 print(len(high))

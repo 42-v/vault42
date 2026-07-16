@@ -1,9 +1,13 @@
 package keystore
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"log"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,4 +103,72 @@ func TestNew_RejectsWrongMasterKeyLength(t *testing.T) {
 			t.Errorf("New accepted a %d-byte master key", n)
 		}
 	}
+}
+
+// Encrypt refuses any master key that is not 32 bytes. New rejects those too,
+// so this branch is reachable only through direct construction, the shape of
+// a master key corrupted after startup. Import must fail before touching the
+// database: a key that cannot be encrypted must never be persisted.
+func TestKeyStore_ImportFailsBeforeDBOnUnusableMasterKey(t *testing.T) {
+	ks := &KeyStore{
+		masterKey:  make([]byte, 16),
+		publicKeys: make(map[string]*rsa.PublicKey),
+		stopCh:     make(chan struct{}),
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	// pool is nil: if Import ever reached the database with an unencryptable
+	// key, this test would panic instead of pass.
+	_, err = ks.Import(context.Background(), key)
+	if err == nil {
+		t.Fatal("Import reported success with an unusable master key")
+	}
+	if !strings.Contains(err.Error(), "encrypt private key") {
+		t.Errorf("Import error = %q, want it to surface the encrypt failure", err)
+	}
+}
+
+// keystoreLogBuffer is a mutex-guarded log sink safe to read while the refresh
+// loop goroutine is still writing lines.
+type keystoreLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *keystoreLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *keystoreLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A ticker-driven refresh that fails must be logged, not silently dropped: the
+// pod keeps serving its last known keys, and the log line is the only signal
+// that it is drifting from the database.
+func TestKeyStore_RefreshLoopLogsFailedRefresh(t *testing.T) {
+	var logBuf keystoreLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	ks := deadKeyStore(t)
+	ks.StartRefreshLoop(context.Background(), 5*time.Millisecond)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(logBuf.String(), "refresh failed") {
+		if time.Now().After(deadline) {
+			ks.Stop()
+			t.Fatal("refresh loop never logged its failed refresh")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ks.Stop()
 }

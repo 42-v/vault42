@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -329,6 +330,170 @@ THIS IS INVALID SQL;`
 		}
 		if !exists {
 			t.Error("partial_test table should still exist")
+		}
+	})
+
+	t.Run("Canceled context fails creating tracking table", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := migrate.Run(ctx, conn, t.TempDir())
+		if err == nil {
+			t.Fatal("expected error for canceled context, got nil")
+		}
+		if !strings.Contains(err.Error(), "create schema_migrations") {
+			t.Errorf("error = %q, want it to contain %q", err, "create schema_migrations")
+		}
+	})
+
+	t.Run("Malformed tracking table fails applied query", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// Pre-create a tracking table without a version column so
+		// CREATE TABLE IF NOT EXISTS skips and the SELECT fails
+		if _, err := conn.Exec(ctx, `CREATE TABLE public.schema_migrations (nope INT)`); err != nil {
+			t.Fatalf("create divergent table: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, t.TempDir())
+		if err == nil {
+			t.Fatal("expected error for missing version column, got nil")
+		}
+		if !strings.Contains(err.Error(), "query applied") {
+			t.Errorf("error = %q, want it to contain %q", err, "query applied")
+		}
+	})
+
+	t.Run("NULL version fails scan", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// Pre-create the tracking table with a nullable version and a NULL row
+		if _, err := conn.Exec(ctx, `CREATE TABLE public.schema_migrations (version VARCHAR(255), applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`); err != nil {
+			t.Fatalf("create nullable table: %v", err)
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO public.schema_migrations (version) VALUES (NULL)`); err != nil {
+			t.Fatalf("insert NULL version: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, t.TempDir())
+		if err == nil {
+			t.Fatal("expected error scanning NULL version, got nil")
+		}
+		if !strings.Contains(err.Error(), "scan version") {
+			t.Errorf("error = %q, want it to contain %q", err, "scan version")
+		}
+	})
+
+	t.Run("Failing tracking view surfaces iterate error", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// A view named schema_migrations makes CREATE TABLE IF NOT EXISTS skip;
+		// the SELECT prepares fine but raises during execution, which pgx
+		// defers to rows.Err()
+		if _, err := conn.Exec(ctx, `CREATE FUNCTION public.migrate_boom() RETURNS SETOF text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$`); err != nil {
+			t.Fatalf("create function: %v", err)
+		}
+		if _, err := conn.Exec(ctx, `CREATE VIEW public.schema_migrations AS SELECT public.migrate_boom() AS version`); err != nil {
+			t.Fatalf("create view: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, t.TempDir())
+		if err == nil {
+			t.Fatal("expected error from failing view, got nil")
+		}
+		if !strings.Contains(err.Error(), "iterate migrations") {
+			t.Errorf("error = %q, want it to contain %q", err, "iterate migrations")
+		}
+	})
+
+	t.Run("Unreadable migration file returns error", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// A dangling symlink lists in ReadDir but fails ReadFile
+		tmpDir := t.TempDir()
+		if err := os.Symlink(filepath.Join(tmpDir, "missing-target"), filepath.Join(tmpDir, "001_broken.sql")); err != nil {
+			t.Fatalf("create symlink: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, tmpDir)
+		if err == nil {
+			t.Fatal("expected error for unreadable migration, got nil")
+		}
+		if !strings.Contains(err.Error(), "read 001_broken.sql") {
+			t.Errorf("error = %q, want it to contain %q", err, "read 001_broken.sql")
+		}
+	})
+
+	t.Run("Duplicate version record rolls back", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// The migration inserts its own version, so Run's tracking INSERT
+		// hits the primary key inside the same tx
+		tmpDir := t.TempDir()
+		selfSQL := `INSERT INTO public.schema_migrations (version) VALUES ('001_self.sql');`
+		if err := os.WriteFile(filepath.Join(tmpDir, "001_self.sql"), []byte(selfSQL), 0o644); err != nil {
+			t.Fatalf("write migration: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, tmpDir)
+		if err == nil {
+			t.Fatal("expected error recording duplicate version, got nil")
+		}
+		if !strings.Contains(err.Error(), "record 001_self.sql") {
+			t.Errorf("error = %q, want it to contain %q", err, "record 001_self.sql")
+		}
+
+		// Verify the migration's own insert rolled back too
+		var count int
+		if err := conn.QueryRow(ctx, `SELECT COUNT(*) FROM public.schema_migrations`).Scan(&count); err != nil {
+			t.Fatalf("count migrations: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("migration count = %d, want 0 (should have rolled back)", count)
+		}
+	})
+
+	t.Run("Deferred constraint violation fails at commit", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// The deferred unique check passes tx.Exec and only fires inside tx.Commit
+		tmpDir := t.TempDir()
+		deferredSQL := `CREATE TABLE public.deferred_test (id INT, CONSTRAINT deferred_test_uq UNIQUE (id) DEFERRABLE INITIALLY DEFERRED);
+INSERT INTO public.deferred_test VALUES (1), (1);`
+		if err := os.WriteFile(filepath.Join(tmpDir, "001_deferred.sql"), []byte(deferredSQL), 0o644); err != nil {
+			t.Fatalf("write migration: %v", err)
+		}
+
+		err := migrate.Run(ctx, conn, tmpDir)
+		if err == nil {
+			t.Fatal("expected error committing deferred violation, got nil")
+		}
+		if !strings.Contains(err.Error(), "commit 001_deferred.sql") {
+			t.Errorf("error = %q, want it to contain %q", err, "commit 001_deferred.sql")
+		}
+
+		// Verify nothing was recorded
+		var count int
+		if err := conn.QueryRow(ctx, `SELECT COUNT(*) FROM public.schema_migrations`).Scan(&count); err != nil {
+			t.Fatalf("count migrations: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("migration count = %d, want 0 (commit failed)", count)
 		}
 	})
 }

@@ -83,12 +83,22 @@ func TestNew_RejectsMalformedConnString(t *testing.T) {
 // out of their own account at the next login.
 func TestTOTPRepo_SurfacesDatabaseFailures(t *testing.T) {
 	repo := NewTOTPRepo(deadPool(t))
+	ctx := context.Background()
 
-	err := repo.Create(context.Background(), &model.TOTPSecret{
+	err := repo.Create(ctx, &model.TOTPSecret{
 		ID: "t-1", UserID: "u-1", SecretEnc: "enc",
 	})
 	if err == nil {
 		t.Error("Create reported success against an unreachable database")
+	}
+	if _, err := repo.GetByUserID(ctx, "u-1"); err == nil {
+		t.Error("GetByUserID returned no error, an enrolled user would look like they have no TOTP")
+	}
+	if err := repo.MarkVerified(ctx, "t-1"); err == nil {
+		t.Error("MarkVerified reported success against an unreachable database")
+	}
+	if err := repo.DeleteByUserID(ctx, "u-1"); err == nil {
+		t.Error("DeleteByUserID reported success, a user disabling TOTP would keep the old secret")
 	}
 }
 
@@ -183,14 +193,27 @@ func TestAccountRecoveryRepo_SurfacesDatabaseFailures(t *testing.T) {
 // Increment silently returned a zero count on failure, every request would look
 // like the first one in its window and the limiter would stop limiting — the
 // login endpoint would be wide open to brute force with no error anywhere.
-func TestRateLimitRepo_IncrementSurfacesDatabaseFailures(t *testing.T) {
+func TestRateLimitRepo_SurfacesDatabaseFailures(t *testing.T) {
 	repo := NewRateLimitRepo(deadPool(t))
+	ctx := context.Background()
 
-	n, err := repo.Increment(context.Background(), "login:203.0.113.1", time.Now())
+	n, err := repo.Increment(ctx, "login:203.0.113.1", time.Now())
 	if err == nil {
 		t.Error("Increment reported success against an unreachable database — the rate limiter would fail open")
 	}
 	if n > 0 {
 		t.Errorf("a failed Increment returned a count of %d", n)
+	}
+
+	got, err := repo.Get(ctx, "login:203.0.113.1", time.Now())
+	if err == nil {
+		t.Error("Get returned no error, every window would read as empty and the limiter would fail open")
+	}
+	if got > 0 {
+		t.Errorf("a failed Get returned a count of %d", got)
+	}
+
+	if err := repo.DeleteExpired(ctx, time.Now()); err == nil {
+		t.Error("DeleteExpired reported success against an unreachable database")
 	}
 }
