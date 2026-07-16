@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -250,6 +251,7 @@ type mockSMTPServer struct {
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	received []mockSMTPMessage
+	auths    []string
 	failData bool
 }
 
@@ -289,6 +291,12 @@ func (s *mockSMTPServer) messages() []mockSMTPMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]mockSMTPMessage{}, s.received...)
+}
+
+func (s *mockSMTPServer) authAttempts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.auths...)
 }
 
 func (s *mockSMTPServer) serve() {
@@ -349,7 +357,13 @@ func (s *mockSMTPServer) handleConn(conn net.Conn) {
 		switch {
 		case strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO"):
 			write("250-localhost Hello")
+			write("250-AUTH PLAIN")
 			write("250 OK")
+		case strings.HasPrefix(upper, "AUTH"):
+			s.mu.Lock()
+			s.auths = append(s.auths, line)
+			s.mu.Unlock()
+			write("235 Authentication succeeded")
 		case strings.HasPrefix(upper, "MAIL FROM:"):
 			msg.from = extractAddr(line)
 			write("250 Ok")
@@ -472,6 +486,53 @@ func TestSendNoAuth(t *testing.T) {
 	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err != nil {
 		t.Fatalf("Send without auth should succeed: %v", err)
+	}
+}
+
+func TestSendWithAuthAndFromOverride(t *testing.T) {
+	srv := newMockSMTPServer(t)
+	defer srv.close()
+
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "user", "secret", "default@test.com")
+	err := sender.Send(context.Background(), Address{Email: "tenant@acme.test"}, "r@t.com", "Sub", "<b>h</b>", "t")
+	if err != nil {
+		t.Fatalf("Send with auth should succeed: %v", err)
+	}
+
+	msgs := srv.messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].from != "tenant@acme.test" {
+		t.Errorf("envelope from = %q, want the per-app override tenant@acme.test", msgs[0].from)
+	}
+
+	wantAuth := "AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte("\x00user\x00secret"))
+	auths := srv.authAttempts()
+	if len(auths) != 1 || auths[0] != wantAuth {
+		t.Errorf("auth exchange = %v, want [%s]", auths, wantAuth)
+	}
+}
+
+func TestSendContextCanceled(t *testing.T) {
+	// A listener that never accepts: the TCP handshake completes via the kernel
+	// backlog and the client blocks waiting for the greeting, so the pre-canceled
+	// context deterministically wins the select.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	sender := NewSMTPSender("127.0.0.1", port, "", "", "s@t.com")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = sender.Send(ctx, Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Send with canceled context = %v, want context.Canceled", err)
 	}
 }
 

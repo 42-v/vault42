@@ -148,6 +148,37 @@ func TestLoadSecretsAllFields(t *testing.T) {
 	}
 }
 
+// The KMS root key and the recovery public key are loaded through the same
+// _FILE convention but land in []byte fields, which the table above cannot
+// express. Asserted separately so both loadSecrets branches are pinned.
+func TestLoadSecretsKMSAndRecoveryKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeSecret := func(name, value string) {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(name+"_FILE", path)
+	}
+
+	t.Setenv("VAULT_PROFILE", "dev")
+
+	writeSecret("KMS_ROOT_KEY", "0123456789abcdef0123456789abcdef")
+	writeSecret("VAULT_RECOVERY_PUBLIC_KEY", "-----BEGIN PUBLIC KEY-----\nstub\n-----END PUBLIC KEY-----")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := string(cfg.KMSRootKey); got != "0123456789abcdef0123456789abcdef" {
+		t.Errorf("KMSRootKey = %q, want the file contents", got)
+	}
+	if got := string(cfg.RecoveryPublicKeyPEM); got != "-----BEGIN PUBLIC KEY-----\nstub\n-----END PUBLIC KEY-----" {
+		t.Errorf("RecoveryPublicKeyPEM = %q, want the file contents", got)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

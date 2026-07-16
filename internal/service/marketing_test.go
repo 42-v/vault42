@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,6 +197,80 @@ func TestUpdateMarketingConsent_GivesUpRatherThanClobber(t *testing.T) {
 	}
 	if repo.commits != 0 {
 		t.Error("a losing CAS must never commit")
+	}
+}
+
+// The CAS loop retries only on losing the race. A hard read error must surface
+// immediately, not be retried into ErrConcurrentUpdate.
+func TestUpdateMarketingConsent_GetErrorAborts(t *testing.T) {
+	boom := errors.New("db down")
+	repo := &mocks.MockIdentityRepo{
+		GetByPseudonymFn: func(context.Context, string) (*model.IdentityProfile, error) {
+			return nil, boom
+		},
+	}
+
+	err := testIdentitySvc(repo).UpdateMarketingConsent(context.Background(), "user-1", false, ConsentSourceUnsubscribe, "")
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the read error", err)
+	}
+}
+
+// Same for a hard write error: it is not contention and must not be masked as it.
+func TestUpdateMarketingConsent_UpsertHardErrorAborts(t *testing.T) {
+	boom := errors.New("db down")
+	repo := &mocks.MockIdentityRepo{
+		UpsertCASFn: func(context.Context, *model.IdentityProfile, time.Time) (bool, error) {
+			return false, boom
+		},
+	}
+
+	err := testIdentitySvc(repo).UpdateMarketingConsent(context.Background(), "user-1", false, ConsentSourceUnsubscribe, "")
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the write error", err)
+	}
+	if errors.Is(err, ErrConcurrentUpdate) {
+		t.Error("a hard write error must not be reported as contention")
+	}
+}
+
+func TestPutProfile_UpsertHardErrorAborts(t *testing.T) {
+	boom := errors.New("db down")
+	repo := &mocks.MockIdentityRepo{
+		UpsertCASFn: func(context.Context, *model.IdentityProfile, time.Time) (bool, error) {
+			return false, boom
+		},
+	}
+
+	yes := true
+	stored, changed, err := testIdentitySvc(repo).PutProfile(context.Background(), "user-1", &IdentityData{}, &yes)
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the write error", err)
+	}
+	if stored != nil || changed {
+		t.Errorf("a failed write must not report a persisted consent: stored=%+v changed=%v", stored, changed)
+	}
+}
+
+// The CAS write path encrypts before it writes; with an unusable master key the
+// write must be refused entirely (the same invariant identity_encrypt_test.go
+// pins for the plain Upsert path).
+func TestUpdateMarketingConsent_EncryptFailureNeverWrites(t *testing.T) {
+	wrote := false
+	repo := &mocks.MockIdentityRepo{
+		UpsertCASFn: func(context.Context, *model.IdentityProfile, time.Time) (bool, error) {
+			wrote = true
+			return true, nil
+		},
+	}
+	svc := NewIdentityService(repo, bytes.Repeat([]byte{0x42}, 7), testHMAC)
+
+	err := svc.UpdateMarketingConsent(context.Background(), "user-1", true, ConsentSourceProfile, "")
+	if err == nil || !strings.Contains(err.Error(), "identity encrypt") {
+		t.Fatalf("err = %v, want an identity encrypt failure", err)
+	}
+	if wrote {
+		t.Error("the repository was written despite the encryption failing")
 	}
 }
 

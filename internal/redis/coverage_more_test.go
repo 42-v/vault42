@@ -283,3 +283,39 @@ func TestExec_ContextDeadlineShortensTimeout(t *testing.T) {
 func atomicClosed(p *pool) bool {
 	return atomic.LoadInt32(&p.closed) == 1
 }
+
+// close must surface the first error from tearing down idle connections
+// instead of swallowing it. An already-dead pooled socket is exactly the case
+// where teardown fails, and double-closing it must not panic.
+func TestClose_SurfacesIdleConnCloseError(t *testing.T) {
+	m := newMockRedis(t)
+	defer m.close()
+
+	c := NewClient(&Options{Addr: m.addr(), PoolSize: 1})
+	ctx := context.Background()
+
+	if err := c.Ping(ctx); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+
+	c.pool.mu.Lock()
+	if len(c.pool.idle) != 1 {
+		c.pool.mu.Unlock()
+		t.Fatal("expected exactly one idle connection after ping")
+	}
+	nc := c.pool.idle[0].netConn
+	c.pool.mu.Unlock()
+
+	// Kill the pooled socket, leaving the conn in the idle list.
+	if err := nc.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+
+	err := c.Close()
+	if err == nil {
+		t.Fatal("pool close swallowed the connection teardown error")
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Errorf("error %q is not the underlying close failure", err)
+	}
+}

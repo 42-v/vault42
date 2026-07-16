@@ -169,6 +169,85 @@ func TestTemplateRendererOverride(t *testing.T) {
 	}
 }
 
+func TestTemplateRendererOverrideExecuteErrors(t *testing.T) {
+	t.Run("subject execute error falls back to Notification", func(t *testing.T) {
+		dir := t.TempDir()
+		custom := `{{define "subject"}}{{.Nope}}{{end}}{{define "content"}}<p>x</p>{{end}}`
+		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
+
+		r, err := NewTemplateRenderer(dir)
+		if err != nil {
+			t.Fatalf("NewTemplateRenderer: %v", err)
+		}
+		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
+		if subject != "Notification" {
+			t.Errorf("subject = %q, want Notification", subject)
+		}
+		if html != "" || text != "" {
+			t.Errorf("html/text = %q/%q, want empty on subject execute error", html, text)
+		}
+	})
+	t.Run("content execute error keeps subject drops body", func(t *testing.T) {
+		dir := t.TempDir()
+		custom := `{{define "subject"}}RealSubject{{end}}{{define "content"}}{{.Nope}}{{end}}`
+		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
+
+		r, err := NewTemplateRenderer(dir)
+		if err != nil {
+			t.Fatalf("NewTemplateRenderer: %v", err)
+		}
+		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
+		if subject != "RealSubject" {
+			t.Errorf("subject = %q, want RealSubject", subject)
+		}
+		if html != "" || text != "" {
+			t.Errorf("html/text = %q/%q, want empty on content execute error", html, text)
+		}
+	})
+}
+
+func TestTemplateRendererRejectsBrokenOverrideSyntax(t *testing.T) {
+	dir := t.TempDir()
+	broken := `{{define "subject"}}S{{end}}{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(broken), 0o644)
+
+	_, err := NewTemplateRenderer(dir)
+	if err == nil {
+		t.Fatal("should reject a syntactically invalid override")
+	}
+	if !strings.Contains(err.Error(), "parse content") {
+		t.Errorf("err = %v, want a parse content error", err)
+	}
+}
+
+// The overrideDir "." trips the path-traversal guard (Clean drops the "./"
+// prefix). The guard must skip only the override read, keeping the embedded
+// default, and must not read files from the working directory.
+func TestTemplateRendererRelativeOverrideDirIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	custom := `{{define "subject"}}Hijacked{{end}}{{define "content"}}<p>hijacked</p>{{end}}`
+	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
+	t.Chdir(dir)
+
+	r, err := NewTemplateRenderer(".")
+	if err != nil {
+		t.Fatalf("NewTemplateRenderer: %v", err)
+	}
+	subject, html, _ := r.Render(TemplateVerification, TemplateData{
+		AppName: "Vault",
+		URL:     "https://vault.test/v",
+	})
+	if strings.Contains(subject, "Hijacked") || strings.Contains(html, "hijacked") {
+		t.Error("guard tripped but the working-directory override was read")
+	}
+	if !strings.Contains(subject, "Verify") {
+		t.Errorf("subject = %q, want the embedded default", subject)
+	}
+	if !strings.Contains(html, "<!DOCTYPE html>") {
+		t.Error("html should be the embedded default template")
+	}
+}
+
 func TestTemplateRendererRejectsUnsafeScript(t *testing.T) {
 	dir := t.TempDir()
 	unsafe := `{{define "subject"}}Bad{{end}}

@@ -105,6 +105,34 @@ func TestKeyStore_StopWaitsForRefreshLoop(t *testing.T) {
 	}
 }
 
+// TestKeyStore_RefreshLoopExitsOnContextCancel verifies the refresh loop honors
+// context cancellation, not just Stop(). stopCh is never closed here and the
+// hour-long tick never fires, so the only way the WaitGroup can settle is the
+// ctx.Done exit path.
+func TestKeyStore_RefreshLoopExitsOnContextCancel(t *testing.T) {
+	ks := &KeyStore{
+		masterKey:  make([]byte, 32),
+		publicKeys: make(map[string]*rsa.PublicKey),
+		stopCh:     make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ks.StartRefreshLoop(ctx, time.Hour)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		ks.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh loop did not exit on context cancellation")
+	}
+	ks.Stop()
+}
+
 // TestKeyStore_StopIsIdempotent verifies a second Stop() does not panic by
 // re-closing stopCh. Shutdown paths call Stop from both a defer and an error
 // branch, so a double call must be harmless.

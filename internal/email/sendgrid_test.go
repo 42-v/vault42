@@ -97,6 +97,63 @@ func TestSendGridSender_Send(t *testing.T) {
 	}
 }
 
+func TestSendGridSender_FromOverride(t *testing.T) {
+	var receivedBody sendGridPayload
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &receivedBody); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	origURL := sendGridURL
+	sendGridURL = srv.URL
+	defer func() { sendGridURL = origURL }()
+
+	sender := NewSendGridSender("key", "default@example.com")
+	err := sender.Send(
+		context.Background(),
+		Address{Email: "tenant@acme.test", Name: "Acme\r\nSupport"},
+		"to@example.com",
+		"Subj",
+		"<p>body</p>",
+		"body",
+	)
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+
+	if receivedBody.From.Email != "tenant@acme.test" {
+		t.Errorf("From.Email = %q, want the per-app override %q", receivedBody.From.Email, "tenant@acme.test")
+	}
+	// The display name passes through sanitizeHeader, so the CRLF is stripped.
+	if receivedBody.From.Name != "AcmeSupport" {
+		t.Errorf("From.Name = %q, want %q", receivedBody.From.Name, "AcmeSupport")
+	}
+}
+
+func TestSendGridSender_InvalidURL(t *testing.T) {
+	origURL := sendGridURL
+	sendGridURL = "://missing-scheme"
+	defer func() { sendGridURL = origURL }()
+
+	sender := NewSendGridSender("key", "sender@example.com")
+	err := sender.Send(context.Background(), Address{}, "to@example.com", "Subj", "<p>body</p>", "body")
+
+	if err == nil {
+		t.Fatal("expected error for unparseable URL, got nil")
+	}
+	if want := "create request"; !contains(err.Error(), want) {
+		t.Errorf("error %q should contain %q", err.Error(), want)
+	}
+}
+
 func TestSendGridSender_ErrorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

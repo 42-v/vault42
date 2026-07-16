@@ -1219,6 +1219,68 @@ func TestRun(t *testing.T) {
 			t.Error("expected revoke-all-sessions to be routed")
 		}
 	})
+
+	t.Run("routes to seed", func(t *testing.T) {
+		c, _, _, _, _, token := setupAuthenticatedCLI(t)
+		path := filepath.Join(t.TempDir(), "seed.json")
+		if err := os.WriteFile(path, []byte(`{"clients":[],"users":[]}`), 0o600); err != nil {
+			t.Fatalf("write seed file: %v", err)
+		}
+
+		args := []string{"vault", "seed", "--admin-token", token, "--file", path}
+		out := captureStdout(t, func() {
+			result := c.Run(context.Background(), args)
+			if !result {
+				t.Error("expected true")
+			}
+		})
+
+		if !strings.Contains(out, "Seeding complete.") {
+			t.Errorf("expected seed to be routed and complete, got %q", out)
+		}
+	})
+
+	t.Run("routes to cleanup-audit", func(t *testing.T) {
+		c, _, _, _, _, token := setupAuthenticatedCLI(t)
+		cleanupCalled := false
+		c.audit.(*mockAuditRepo).CleanupFn = func(_ context.Context, _ time.Time) (int64, error) {
+			cleanupCalled = true
+			return 0, nil
+		}
+
+		args := []string{"vault", "cleanup-audit", "--admin-token", token, "--retention-days", "30"}
+		captureStdout(t, func() {
+			result := c.Run(context.Background(), args)
+			if !result {
+				t.Error("expected true")
+			}
+		})
+
+		if !cleanupCalled {
+			t.Error("expected cleanup-audit to be routed")
+		}
+	})
+
+	t.Run("routes to export-audit", func(t *testing.T) {
+		c, _, _, _, _, token := setupAuthenticatedCLI(t)
+		queryCalled := false
+		c.audit.(*mockAuditRepo).QueryFn = func(_ context.Context, _ repository.AuditFilter) ([]*model.AuditEntry, error) {
+			queryCalled = true
+			return nil, nil
+		}
+
+		args := []string{"vault", "export-audit", "--admin-token", token}
+		captureStdout(t, func() {
+			result := c.Run(context.Background(), args)
+			if !result {
+				t.Error("expected true")
+			}
+		})
+
+		if !queryCalled {
+			t.Error("expected export-audit to be routed")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

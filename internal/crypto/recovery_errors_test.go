@@ -3,9 +3,12 @@ package crypto
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +78,21 @@ func TestDecryptRecovery_TamperedAESPayload(t *testing.T) {
 	}
 }
 
+// An undersized recovery public key must fail at the RSA-OAEP wrap: Go rejects
+// sub-1024-bit moduli outright, and even a permissive build could not fit the
+// wrapped AES key into 64 bytes. Either way, no escrow blob may be produced.
+func TestEncryptRecovery_UndersizedPublicKey(t *testing.T) {
+	n := new(big.Int).Lsh(big.NewInt(1), 512)
+	n.Sub(n, big.NewInt(1)) // 2^512 - 1: an odd 512-bit modulus
+	pub := &rsa.PublicKey{N: n, E: 65537}
+
+	if _, err := EncryptRecovery(pub, []byte("payload")); err == nil {
+		t.Error("expected an error for a 512-bit recovery key")
+	} else if !strings.Contains(err.Error(), "wrap aes key") {
+		t.Errorf("error = %v, want wrap aes key", err)
+	}
+}
+
 // A structurally valid PKCS#8 key that is not RSA must be rejected by name, not
 // panic on the type assertion.
 func TestLoadRSAPrivateKeyPEM_NotRSA(t *testing.T) {
@@ -92,4 +110,3 @@ func TestLoadRSAPrivateKeyPEM_NotRSA(t *testing.T) {
 		t.Error("expected a non-RSA PKCS#8 key to be rejected")
 	}
 }
-

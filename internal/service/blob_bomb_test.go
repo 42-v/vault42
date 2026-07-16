@@ -109,6 +109,99 @@ func TestBlobDownload_UndecryptableBlobFails(t *testing.T) {
 	}
 }
 
+// Upload's mirror of the identity-service invariant: with an unusable master key
+// nothing may reach the repository. The alternative to ciphertext is not "no write",
+// it is whatever the failing path left behind.
+func TestBlobUpload_UnusableMasterKeyRefusesToStore(t *testing.T) {
+	created := false
+	repo := &mocks.MockBlobRepo{
+		CreateFn: func(context.Context, *model.Blob) error {
+			created = true
+			return nil
+		},
+	}
+	svc := NewBlobService(repo, bytes.Repeat([]byte{0x42}, 7), []byte("hmac"), defaultBlobConfig())
+
+	_, err := svc.Upload(context.Background(), "user-1", []byte("hello"), "note")
+	if err == nil || !strings.Contains(err.Error(), "blob encrypt") {
+		t.Fatalf("err = %v, want a blob encrypt failure", err)
+	}
+	if created {
+		t.Error("the repository was written despite the encryption failing")
+	}
+}
+
+// A stored blob that decrypts fine but is not a deflate stream (bit rot behind a
+// valid AEAD tag cannot happen, but a writer bug can) must fail as corrupt, not
+// be returned raw or truncated.
+func TestBlobDownload_CorruptCompressedDataFails(t *testing.T) {
+	masterKey := bytes.Repeat([]byte{0x42}, 32)
+	svc := NewBlobService(&mocks.MockBlobRepo{}, masterKey, []byte("hmac"), BlobConfig{})
+	pseudo := svc.Pseudonym("user-1")
+
+	// 0xff opens a block with the reserved BTYPE=3, which flate always rejects.
+	enc, err := vaultcrypto.Encrypt(bytes.Repeat([]byte{0xff}, 16), masterKey, []byte("b-1:"+pseudo))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	repo := &mocks.MockBlobRepo{
+		GetByIDAndPseudonymFn: func(context.Context, string, string) (*model.Blob, error) {
+			return &model.Blob{ID: "b-1", PseudonymID: pseudo, DataEnc: enc}, nil
+		},
+	}
+	svc = NewBlobService(repo, masterKey, []byte("hmac"), BlobConfig{})
+
+	data, _, _, err := svc.Download(context.Background(), "user-1", "b-1")
+	if err == nil {
+		t.Fatalf("corrupt compressed data was served: %d bytes returned", len(data))
+	}
+	if !strings.Contains(err.Error(), "blob decompress:") || strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("err = %v, want a decompression corruption failure", err)
+	}
+}
+
+// The label is encrypted separately from the data. A blob whose data round-trips
+// but whose label ciphertext is garbage must fail loudly rather than hand back
+// the document under a missing name.
+func TestBlobDownload_CorruptLabelFails(t *testing.T) {
+	masterKey := bytes.Repeat([]byte{0x42}, 32)
+	svc := NewBlobService(&mocks.MockBlobRepo{}, masterKey, []byte("hmac"), BlobConfig{})
+	pseudo := svc.Pseudonym("user-1")
+
+	var compressed bytes.Buffer
+	zw, err := flate.NewWriter(&compressed, flate.BestCompression)
+	if err != nil {
+		t.Fatalf("flate writer: %v", err)
+	}
+	if _, err := zw.Write([]byte("hello")); err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close compressor: %v", err)
+	}
+	enc, err := vaultcrypto.Encrypt(compressed.Bytes(), masterKey, []byte("b-1:"+pseudo))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	repo := &mocks.MockBlobRepo{
+		GetByIDAndPseudonymFn: func(context.Context, string, string) (*model.Blob, error) {
+			return &model.Blob{ID: "b-1", PseudonymID: pseudo, DataEnc: enc, LabelEnc: []byte("garbage")}, nil
+		},
+	}
+	svc = NewBlobService(repo, masterKey, []byte("hmac"), BlobConfig{})
+
+	_, label, _, err := svc.Download(context.Background(), "user-1", "b-1")
+	if err == nil {
+		t.Fatal("a blob with an undecryptable label was served")
+	}
+	if !strings.Contains(err.Error(), "blob label decrypt") {
+		t.Errorf("err = %v, want a label decrypt failure", err)
+	}
+	if label != "" {
+		t.Errorf("failed download still returned label %q", label)
+	}
+}
+
 // The repository failing is not the same as the blob not existing, and the difference
 // matters: "not found" is a 404 the user acts on, a database outage is a 500 they retry.
 func TestBlobService_SurfacesRepositoryFailures(t *testing.T) {

@@ -98,6 +98,73 @@ func TestPostgresIdentityRepo(t *testing.T) {
 		}
 	})
 
+	t.Run("UpsertCAS zero time inserts a fresh profile", func(t *testing.T) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pseudonymID := randomID()
+		profile := &model.IdentityProfile{
+			PseudonymID: pseudonymID,
+			DataEnc:     []byte("cas-insert"),
+			Version:     1,
+			UpdatedAt:   now,
+			CreatedAt:   now,
+		}
+		won, err := repo.UpsertCAS(ctx, profile, time.Time{})
+		if err != nil {
+			t.Fatalf("UpsertCAS insert: %v", err)
+		}
+		if !won {
+			t.Fatal("UpsertCAS returned false for a fresh pseudonym")
+		}
+		got, err := repo.GetByPseudonym(ctx, pseudonymID)
+		if err != nil {
+			t.Fatalf("GetByPseudonym: %v", err)
+		}
+		if got == nil {
+			t.Fatal("GetByPseudonym returned nil after CAS insert")
+		}
+		if !bytes.Equal(got.DataEnc, []byte("cas-insert")) {
+			t.Errorf("DataEnc = %q, want %q", got.DataEnc, "cas-insert")
+		}
+	})
+
+	t.Run("UpsertCAS zero time must not overwrite an existing row", func(t *testing.T) {
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		pseudonymID := randomID()
+		first := &model.IdentityProfile{
+			PseudonymID: pseudonymID,
+			DataEnc:     []byte("first-writer"),
+			Version:     1,
+			UpdatedAt:   now,
+			CreatedAt:   now,
+		}
+		won, err := repo.UpsertCAS(ctx, first, time.Time{})
+		if err != nil || !won {
+			t.Fatalf("UpsertCAS first insert: won=%v err=%v", won, err)
+		}
+
+		second := &model.IdentityProfile{
+			PseudonymID: pseudonymID,
+			DataEnc:     []byte("second-writer"),
+			Version:     1,
+			UpdatedAt:   now.Add(time.Second),
+			CreatedAt:   now,
+		}
+		won, err = repo.UpsertCAS(ctx, second, time.Time{})
+		if err != nil {
+			t.Fatalf("UpsertCAS second insert: %v", err)
+		}
+		if won {
+			t.Fatal("UpsertCAS reported a win for a pseudonym that already exists")
+		}
+		got, err := repo.GetByPseudonym(ctx, pseudonymID)
+		if err != nil {
+			t.Fatalf("GetByPseudonym: %v", err)
+		}
+		if !bytes.Equal(got.DataEnc, []byte("first-writer")) {
+			t.Errorf("DataEnc = %q, the losing insert overwrote the first writer", got.DataEnc)
+		}
+	})
+
 	t.Run("GetByPseudonym not found returns nil", func(t *testing.T) {
 		got, err := repo.GetByPseudonym(ctx, randomID())
 		if err != nil {

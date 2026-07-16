@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"strings"
 	"testing"
 	"time"
 
@@ -346,6 +347,47 @@ func TestKeyStoreRefreshResilience(t *testing.T) {
 		}
 		if _, ok := pubs["kid-ed25519"]; ok {
 			t.Error("non-RSA public key published to JWKS")
+		}
+	})
+
+	t.Run("active key that decrypts but does not parse fails closed", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x25)
+		defer ks.Stop()
+
+		// The private key decrypts under the store's master key, but the
+		// plaintext is not a PKCS#8 PEM: the failure must surface at parse,
+		// after decrypt already succeeded.
+		rsaKey, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		pubDER, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+		if err != nil {
+			t.Fatalf("MarshalPKIXPublicKey: %v", err)
+		}
+		const kid = "kid-bad-priv"
+		encPriv, err := vaultcrypto.Encrypt([]byte("not a pem"), masterKey(0x25), []byte(kid))
+		if err != nil {
+			t.Fatalf("Encrypt: %v", err)
+		}
+		_, err = pool.Exec(ctx, `
+			INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at)
+			VALUES ($1, $2, $3, 'RS256', 'active', NOW())
+		`, kid, encPriv, pubDER)
+		if err != nil {
+			t.Fatalf("insert active key: %v", err)
+		}
+
+		err = ks.Refresh(ctx)
+		if err == nil {
+			t.Fatal("Refresh accepted an active key whose plaintext is not a signing key")
+		}
+		if !strings.Contains(err.Error(), "parse key") {
+			t.Errorf("Refresh error = %q, want it to surface the parse failure", err)
+		}
+		if key, _ := ks.ActiveKey(); key != nil {
+			t.Error("a failed Refresh published an active key")
 		}
 	})
 

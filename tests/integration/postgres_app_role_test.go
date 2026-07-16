@@ -64,6 +64,19 @@ func TestPostgresAppRoleRepo(t *testing.T) {
 		}
 	})
 
+	t.Run("Create defaults empty namespace to app", func(t *testing.T) {
+		if err := repo.Create(ctx, &model.AppRole{Name: "nsless_role"}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.Get(ctx, "nsless_role")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got == nil || got.Namespace != "app" {
+			t.Fatalf("role created without a namespace should land in \"app\", got %+v", got)
+		}
+	})
+
 	t.Run("Delete reserved role is refused", func(t *testing.T) {
 		if err := repo.Delete(ctx, "user"); !errors.Is(err, repository.ErrRoleReserved) {
 			t.Fatalf("deleting reserved role should return ErrRoleReserved, got %v", err)

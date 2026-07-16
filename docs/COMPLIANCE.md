@@ -22,7 +22,7 @@ remediation prioritization.
 | OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8) | 34 | 3 | 0 | 3 | 96% |
 | NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
 | OWASP Top 10 (2021) | 47 | 1 | 0 | 0 | 97% |
-| RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC | 50 | 1 | 0 | 3 | 96% |
+| RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC | 50 | 1 | 0 | 3 | 96% |
 | GDPR -- General Data Protection Regulation (EU 2016/679) | 12 | 3 | 0 | 0 | 93% |
 | **Totals** | **242** | **15** | **0** | **9** | -- |
 
@@ -158,9 +158,14 @@ endpoints.
 
 ---
 
-## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + OIDC
+## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC
 
 **Coverage: 96%** -- 50 met, 1 partial, 0 gap, 3 N/A
+
+*Since 0.9.6 the family's core requirements are pinned as clause-numbered regression
+tests in `tests/compliance/rfc9700_oauth_bcp_test.go`: PKCE S256 on every provider
+(§2.1.1/§4.8.2), HMAC state integrity (§4.1.1), OIDC nonce binding (§4.5.3), tokens
+kept out of URLs (§4.3.2), and DPoP sender-constraining (§4.10.1).*
 
 The implementation adheres strongly to the JWT and OAuth2 protocol family with
 defense-in-depth against well-known attacks (algorithm confusion, header injection,
@@ -202,6 +207,15 @@ enforced by a background sweeper, marketing consent is stored with provenance an
 in one call, and federated links can be unlinked individually. The three remaining partials are
 the breach-notification *code path* (the procedure is documented but no risk-threshold alerting
 exists), cryptographic audit-log chaining, and a DPIA template.
+
+*Since 0.9.6 the claims above are asserted by a dedicated compliance suite rather than
+scattered unit tests: `tests/compliance/gdpr_erasure_test.go` runs the assembled
+`ErasureService` cascade against a real Postgres and proves Art. 17 with row counts
+(completeness, tombstone scrub, purge-not-mark, idempotency, the Art. 17(3)(b)/(e) audit
+exemption, and the recovery escrow); `tests/compliance/gdpr_consent_test.go` pins the
+Art. 7 consent-provenance contract (affirmative-only sources, fail-closed gating,
+anti-laundering, one-call withdrawal); `tests/compliance/gdpr_retention_test.go` covers
+Art. 5(1)(e) retention defaults and the Art. 5(1)(c) audit-metadata scrubbing.*
 
 | ID | Requirement | Status | Severity | Notes / remaining work |
 |---|---|---|---|---|

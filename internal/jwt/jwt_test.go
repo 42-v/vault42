@@ -132,6 +132,17 @@ func TestSignRS256_NilKey(t *testing.T) {
 	}
 }
 
+func TestSignRS256_UnmarshalableClaims(t *testing.T) {
+	_, err := SignRS256(MapClaims{"ch": make(chan int)}, nil, "kid")
+	if err == nil {
+		t.Fatal("expected error for unmarshalable claims")
+	}
+	want := "marshal claims: json: unsupported type: chan int"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestSignRS256_ClaimsIntegrity(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	now := time.Now()

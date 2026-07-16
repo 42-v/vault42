@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -268,6 +270,40 @@ func TestServer_VariantsMore(t *testing.T) {
 				t.Error("nil mux")
 			}
 		})
+	}
+}
+
+// An Origin whose host is a single label (not an IP, not localhost) yields an
+// RPID that fails go-webauthn's domain validation. Route registration must
+// survive that: the failure is logged and the WebAuthn endpoints are wired
+// with a nil instance (disabled) instead of aborting startup.
+func TestSetupRoutes_WebAuthnInitFailureDisablesEndpoints(t *testing.T) {
+	memCache := cache.NewMemoryCache()
+	defer memCache.Close()
+
+	var logBuf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	cfg := &config.Config{
+		Origin:            "https://vault",
+		AppName:           "Vault Test",
+		PasswordMinLength: 15,
+	}
+	deps := &Deps{
+		Config:    cfg,
+		Cache:     memCache,
+		ReadyDeps: &handler.ReadyzDeps{},
+	}
+	mux := New(deps).setupRoutes()
+	if mux == nil {
+		t.Fatal("setupRoutes() returned nil after WebAuthn init failure")
+	}
+
+	want := "WebAuthn init failed (endpoints disabled): error occurred validating the configuration: field 'RPID' is not a valid domain string: the domain component must actually be a domain"
+	if !strings.Contains(logBuf.String(), want) {
+		t.Errorf("log = %q, want it to contain %q", logBuf.String(), want)
 	}
 }
 
