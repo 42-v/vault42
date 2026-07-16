@@ -81,6 +81,25 @@ func TestLoadSigningKeyPEMTooSmall(t *testing.T) {
 	}
 }
 
+// MarshalSigningKeyPEM must surface the PKCS#8 marshal error: x509 validates
+// RSA keys during marshaling, so a structurally inconsistent key (a single
+// prime) has to be rejected instead of encoded.
+func TestMarshalSigningKeyPEMInvalidKey(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := &rsa.PrivateKey{PublicKey: key.PublicKey, D: key.D, Primes: key.Primes[:1]}
+
+	_, err = MarshalSigningKeyPEM(bad)
+	if err == nil {
+		t.Fatal("expected marshal error for a single-prime key")
+	}
+	if !strings.Contains(err.Error(), "marshal signing key") {
+		t.Errorf("error = %v, want marshal signing key", err)
+	}
+}
+
 // encodeRSAExponent must emit four big-endian bytes for exponents that do not
 // fit in three bytes.
 func TestEncodeRSAExponentFourBytes(t *testing.T) {

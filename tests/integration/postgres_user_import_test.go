@@ -71,4 +71,21 @@ func TestPostgresUserImport(t *testing.T) {
 			t.Error("import_pending should be cleared after claim")
 		}
 	})
+
+	t.Run("CreateImported with nil roles stores an empty array", func(t *testing.T) {
+		nilRoles := &model.User{
+			ID: randomID(), Email: "imported-nil-roles@legacy.test", Locale: "en",
+			ImportedFrom: "legacy", LegacyID: randomID(), CreatedAt: now, UpdatedAt: now,
+		}
+		if err := repo.CreateImported(ctx, nilRoles); err != nil {
+			t.Fatalf("CreateImported: %v", err)
+		}
+		got, err := repo.GetByEmail(ctx, nilRoles.Email)
+		if err != nil || got == nil {
+			t.Fatalf("GetByEmail: %v / %v", got, err)
+		}
+		if len(got.Roles) != 0 {
+			t.Errorf("Roles = %v, want empty", got.Roles)
+		}
+	})
 }

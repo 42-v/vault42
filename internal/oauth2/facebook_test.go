@@ -261,6 +261,23 @@ func TestFacebookExchange_PostBody(t *testing.T) {
 	}
 }
 
+func TestFacebookExchange_BuildRequestError(t *testing.T) {
+	p := &FacebookProvider{
+		clientID:     "cid",
+		clientSecret: "csec",
+		redirectURI:  "https://example.com/cb",
+		tokenURL:     ":",
+	}
+	_, err := p.Exchange(context.Background(), "code", "verifier")
+	if err == nil {
+		t.Fatal("expected build request error, got nil")
+	}
+	want := `facebook token exchange: build request: parse ":": missing protocol scheme`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestFacebookExchange_ConnectionRefused(t *testing.T) {
 	p := &FacebookProvider{
 		clientID:     "cid",

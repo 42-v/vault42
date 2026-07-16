@@ -118,6 +118,34 @@ func TestCLI_RunSeed(t *testing.T) {
 		}
 		cliWith(&mockAuditRepo{}).runSeed(ctx, []string{"--file", path})
 	})
+
+	t.Run("seed run failure is reported", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "seed.json")
+		content := `{"clients": [{"name":"frontend","role":"frontend","scopes":["user:read"]}]}`
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write seed file: %v", err)
+		}
+		clients := &mockClientRepo{GetByNameFn: func(context.Context, string) (*model.Client, error) {
+			return nil, errors.New("db down")
+		}}
+		c := New(clients, &mockUserRepo{}, nil, nil, &mockAuditRepo{}, "")
+
+		var stdout string
+		stderr := captureStderr(t, func() {
+			stdout = captureStdout(t, func() {
+				if !c.runSeed(ctx, []string{"--file", path}) {
+					t.Error("expected handled=true")
+				}
+			})
+		})
+		if !strings.Contains(stderr, "ERROR:") || !strings.Contains(stderr, `seed client "frontend"`) {
+			t.Errorf("expected seed failure for client frontend on stderr, got %q", stderr)
+		}
+		if strings.Contains(stdout, "Seeding complete.") {
+			t.Error("seeding reported complete after a failure")
+		}
+	})
 }
 
 func TestCLI_RotateAdminToken(t *testing.T) {

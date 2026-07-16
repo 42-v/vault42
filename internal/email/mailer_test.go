@@ -2,7 +2,9 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 )
 
 // captureSender records the last message the Mailer handed to the transport.
@@ -108,6 +110,88 @@ func TestMailer_SendPerAppOverride(t *testing.T) {
 	if store.brandHit != brandBefore || store.tmplHit != tmplBefore {
 		t.Errorf("cache miss on second send: branding %d->%d, template %d->%d",
 			brandBefore, store.brandHit, tmplBefore, store.tmplHit)
+	}
+}
+
+func TestMailer_BadOverrideFallsBackToGlobal(t *testing.T) {
+	tests := []struct {
+		name string
+		tmpl TemplateOverride
+	}{
+		{"subject execute error", TemplateOverride{Subject: "{{.Missing}}", HTMLContent: "<p>x</p>"}},
+		{"html execute error", TemplateOverride{Subject: "S", HTMLContent: "{{.Missing}}"}},
+		{"subject parse error", TemplateOverride{Subject: "{{if}}", HTMLContent: "<p>x</p>"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cap := &captureSender{}
+			store := &staticStore{app: "acme", tmpl: tt.tmpl, tmplOK: true}
+			m := testMailer(t, cap, store, Branding{AppName: "Vault"}, nil)
+
+			if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			wantSubject, wantHTML, _ := m.renderer.Render(TemplateVerification, TemplateData{AppName: "Vault", URL: "https://vault.test/v"})
+			if cap.subject != wantSubject {
+				t.Errorf("subject = %q, want the global %q", cap.subject, wantSubject)
+			}
+			if cap.html != wantHTML {
+				t.Error("html did not fall back to the global render")
+			}
+		})
+	}
+}
+
+func TestMailer_BrandingLogoAndColorOverlay(t *testing.T) {
+	cap := &captureSender{}
+	store := &staticStore{
+		app:      "acme",
+		branding: Branding{AppName: "Acme", LogoURL: "https://cdn.acme.test/logo.png", PrimaryColor: "#123456"},
+		brandOK:  true,
+	}
+	m := testMailer(t, cap, store, Branding{AppName: "Vault"}, nil)
+
+	if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if !contains(cap.html, "https://cdn.acme.test/logo.png") {
+		t.Error("html missing the per-app logo URL")
+	}
+	if !contains(cap.html, "#123456") {
+		t.Error("html missing the per-app primary color")
+	}
+}
+
+func TestOverrideCache_ResetOnMaxEntries(t *testing.T) {
+	c := newOverrideCache()
+	exp := time.Now().Add(time.Hour)
+
+	for i := 0; i < maxCacheEntries; i++ {
+		c.putBranding(fmt.Sprintf("app-%d", i), Branding{}, exp)
+	}
+	if len(c.branding) != maxCacheEntries {
+		t.Fatalf("branding entries = %d, want %d", len(c.branding), maxCacheEntries)
+	}
+	c.putBranding("overflow", Branding{AppName: "Over"}, exp)
+	if len(c.branding) != 1 {
+		t.Errorf("branding entries after overflow = %d, want 1 (map reset)", len(c.branding))
+	}
+	if b, ok := c.getBranding("overflow"); !ok || b.AppName != "Over" {
+		t.Errorf("overflow branding entry = %+v (ok=%v), want it stored after the reset", b, ok)
+	}
+
+	for i := 0; i < maxCacheEntries; i++ {
+		c.putTemplate(fmt.Sprintf("app-%d", i), TemplateVerification, cachedTemplate{exp: exp})
+	}
+	if len(c.templates) != maxCacheEntries {
+		t.Fatalf("template entries = %d, want %d", len(c.templates), maxCacheEntries)
+	}
+	c.putTemplate("overflow", TemplateVerification, cachedTemplate{ok: true, exp: exp})
+	if len(c.templates) != 1 {
+		t.Errorf("template entries after overflow = %d, want 1 (map reset)", len(c.templates))
+	}
+	if e, ok := c.getTemplate("overflow", TemplateVerification); !ok || !e.ok {
+		t.Errorf("overflow template entry = %+v (ok=%v), want it stored after the reset", e, ok)
 	}
 }
 

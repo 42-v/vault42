@@ -75,6 +75,26 @@ func TestPostgresAuditRepo(t *testing.T) {
 		}
 	})
 
+	t.Run("InsertBatch is all-or-nothing on mid-batch failure", func(t *testing.T) {
+		dupID := randomID()
+		entries := []*model.AuditEntry{
+			makeEntry("batch_fail", userID1, 5*time.Second),
+			makeEntry("batch_fail", userID1, 6*time.Second),
+		}
+		entries[0].ID = dupID
+		entries[1].ID = dupID
+		if err := repo.InsertBatch(ctx, entries); err == nil {
+			t.Fatal("InsertBatch reported success for a batch with a duplicate primary key")
+		}
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit.audit_log WHERE id=$1`, dupID).Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("%d entries of a failed batch were committed, want 0", count)
+		}
+	})
+
 	t.Run("Query no filter", func(t *testing.T) {
 		entries, err := repo.Query(ctx, repository.AuditFilter{})
 		if err != nil {

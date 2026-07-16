@@ -108,6 +108,22 @@ func TestExportAudit_RejectsBadFilters(t *testing.T) {
 	}
 }
 
+func TestExportAudit_AppliesValidLimit(t *testing.T) {
+	var got repository.AuditFilter
+	audit := &mockAuditRepo{
+		QueryFn: func(_ context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error) {
+			got = filter
+			return nil, nil
+		},
+	}
+	if !auditCLI(audit).exportAudit(context.Background(), []string{"export-audit", "--limit", "5"}) {
+		t.Fatal("command not handled")
+	}
+	if got.Limit != 5 {
+		t.Errorf("filter.Limit = %d, want 5 (the 1000 default must be overridden)", got.Limit)
+	}
+}
+
 func TestExportAudit_ReportsQueryFailure(t *testing.T) {
 	audit := &mockAuditRepo{
 		QueryFn: func(context.Context, repository.AuditFilter) ([]*model.AuditEntry, error) {

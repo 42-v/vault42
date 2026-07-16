@@ -301,6 +301,42 @@ func TestParseUnverified_ExtractsClaims(t *testing.T) {
 	}
 }
 
+func TestParseWithClaims_RS256WrongKeyType(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user"}`))
+	sig := base64.RawURLEncoding.EncodeToString([]byte("sig"))
+	tokenStr := header + "." + payload + "." + sig
+
+	_, err := ParseWithClaims(tokenStr, &RegisteredClaims{}, func(t *Token) (any, error) {
+		return "not-an-rsa-key", nil
+	})
+	if !errors.Is(err, ErrInvalidKeyType) {
+		t.Fatalf("got %v, want ErrInvalidKeyType", err)
+	}
+	want := "key is of invalid type: expected *rsa.PublicKey"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestParseWithClaims_ES256WrongKeyType(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user"}`))
+	sig := base64.RawURLEncoding.EncodeToString([]byte("sig"))
+	tokenStr := header + "." + payload + "." + sig
+
+	_, err := ParseWithClaims(tokenStr, &RegisteredClaims{}, func(t *Token) (any, error) {
+		return "not-an-ecdsa-key", nil
+	})
+	if !errors.Is(err, ErrInvalidKeyType) {
+		t.Fatalf("got %v, want ErrInvalidKeyType", err)
+	}
+	want := "key is of invalid type: expected *ecdsa.PublicKey"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestParseWithClaims_KeyfuncError(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	tokenStr := makeValidToken(t, key, "k")

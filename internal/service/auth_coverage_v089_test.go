@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,6 +144,144 @@ func TestSendImportClaimLink_NilDepsNoEmail(t *testing.T) {
 		t.Error("no email should be sent when cache is nil")
 	case <-time.After(200 * time.Millisecond):
 		// expected: nothing happened
+	}
+}
+
+// claimLogBuffer is a mutex-guarded log sink. The failure branches of the
+// sendImportClaimLink goroutine end in a log line, so waiting for that line is
+// the deterministic way to observe the goroutine's tail.
+type claimLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *claimLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *claimLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func waitForClaimLog(t *testing.T, buf *claimLogBuffer, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(buf.String(), substr) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for log line containing %q", substr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Each login of an import-pending account mints a fresh claim link, and the
+// previous one must stop working: the reverse-map entry names the prior token
+// hash, and its reset entry is deleted before the new pair is stored.
+func TestSendImportClaimLink_InvalidatesPriorOutstandingToken(t *testing.T) {
+	svc, _ := newMockAuthService(t)
+
+	svc.cache.(*mocks.MockCache).GetAndDeleteFn = func(_ context.Context, key string) (string, error) {
+		if key == "pwreset_user:user-42" {
+			return "stale-hash", nil
+		}
+		return "", nil
+	}
+	deleted := make(chan string, 1)
+	svc.cache.(*mocks.MockCache).DeleteFn = func(_ context.Context, key string) error {
+		deleted <- key
+		return nil
+	}
+	sent := make(chan struct{}, 1)
+	svc.emailSender.(*mocks.MockEmailSender).SendFn = func(_ context.Context, _, _, _, _ string) error {
+		sent <- struct{}{}
+		return nil
+	}
+
+	svc.sendImportClaimLink("user-42", "rider@legacy.test", "")
+
+	select {
+	case key := <-deleted:
+		if key != "reset:stale-hash" {
+			t.Errorf("invalidated key = %q, want reset:stale-hash", key)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the stale claim token to be invalidated")
+	}
+
+	// Drain the goroutine to its terminal state: the send is its last call, so
+	// once it fires, the token mint and both cache writes have already run
+	// inside the test rather than racing past its end.
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the claim email send")
+	}
+}
+
+// A claim token that cannot be persisted must not be emailed: the link would be
+// dead on arrival at the reset-confirm handler. The store-failure branch logs
+// and returns before the send.
+func TestSendImportClaimLink_StoreFailureSendsNoEmail(t *testing.T) {
+	var logBuf claimLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	svc, _ := newMockAuthService(t)
+	svc.cache.(*mocks.MockCache).SetFn = func(_ context.Context, key, _ string, _ time.Duration) error {
+		if strings.HasPrefix(key, "reset:") {
+			return errors.New("cache down")
+		}
+		return nil
+	}
+	sent := make(chan struct{}, 1)
+	svc.emailSender.(*mocks.MockEmailSender).SendFn = func(_ context.Context, _, _, _, _ string) error {
+		sent <- struct{}{}
+		return nil
+	}
+
+	svc.sendImportClaimLink("user-42", "rider@legacy.test", "")
+
+	waitForClaimLog(t, &logBuf, "import claim token store failed")
+	select {
+	case <-sent:
+		t.Error("no claim email may be sent when the token store fails")
+	default:
+	}
+}
+
+// A failed send is logged, never surfaced (anti-enumeration), and both cache
+// entries have already been written, so a later resend still invalidates them.
+func TestSendImportClaimLink_SendFailureIsLoggedNotFatal(t *testing.T) {
+	var logBuf claimLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	svc, _ := newMockAuthService(t)
+	var mu sync.Mutex
+	var setKeys []string
+	svc.cache.(*mocks.MockCache).SetFn = func(_ context.Context, key, _ string, _ time.Duration) error {
+		mu.Lock()
+		setKeys = append(setKeys, key)
+		mu.Unlock()
+		return nil
+	}
+	svc.emailSender.(*mocks.MockEmailSender).SendFn = func(_ context.Context, _, _, _, _ string) error {
+		return errors.New("smtp down")
+	}
+
+	svc.sendImportClaimLink("user-42", "rider@legacy.test", "")
+
+	waitForClaimLog(t, &logBuf, "failed to send import claim email")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(setKeys) != 2 || !strings.HasPrefix(setKeys[0], "reset:") || setKeys[1] != "pwreset_user:user-42" {
+		t.Errorf("cache writes = %v, want [reset:<hash> pwreset_user:user-42]", setKeys)
 	}
 }
 

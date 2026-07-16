@@ -51,7 +51,7 @@ public sealed class VaultAuthService : IAsyncDisposable
     {
         var verifier = Pkce.GenerateVerifier();
         var challenge = Pkce.ComputeChallenge(verifier);
-        var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
         await _store.SetPkceVerifierAsync(verifier);
         await _store.SetStateAsync(state);

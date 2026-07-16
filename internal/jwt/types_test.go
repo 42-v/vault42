@@ -179,3 +179,26 @@ func TestClaimStrings_ArrayWithNonString(t *testing.T) {
 		t.Error("expected error for mixed types, got nil")
 	}
 }
+
+func TestNumericDate_UnmarshalJSON_OutOfRange(t *testing.T) {
+	var d NumericDate
+	err := d.UnmarshalJSON([]byte("1e400"))
+	if err == nil {
+		t.Fatal("expected error for out-of-range number")
+	}
+	want := `could not convert json number to float: strconv.ParseFloat: parsing "1e400": value out of range`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestClaimStrings_UnmarshalJSON_InvalidJSON(t *testing.T) {
+	var cs ClaimStrings
+	err := cs.UnmarshalJSON([]byte("{"))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if err.Error() != "unexpected end of JSON input" {
+		t.Errorf("error = %q, want %q", err.Error(), "unexpected end of JSON input")
+	}
+}

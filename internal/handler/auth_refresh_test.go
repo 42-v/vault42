@@ -990,11 +990,15 @@ func TestMFAStatus_ServiceError(t *testing.T) {
 
 		h.Status(rec, req)
 
-		// MFA service accumulates errors; it might still return a partial result
-		// or the handler returns 500 if the service errors
-		// Based on service code: errors are logged but it returns what it can
-		if rec.Code != http.StatusOK && rec.Code != http.StatusInternalServerError {
-			t.Fatalf("expected 200 or 500, got %d; body: %s", rec.Code, rec.Body.String())
+		// Both primary MFA lookups failing makes GetStatus fail closed, so the
+		// handler must answer exactly 500 internal_error.
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		var result map[string]string
+		decodeResponse(t, rec, &result)
+		if result["error"] != "internal_error" {
+			t.Fatalf("expected error=internal_error, got %q", result["error"])
 		}
 	})
 }

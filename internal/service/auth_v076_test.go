@@ -3,9 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	vjwt "github.com/42-v/vault42/internal/jwt"
+	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
 )
@@ -48,6 +53,83 @@ func TestCompleteMFALoginCacheFailsClosed(t *testing.T) {
 
 	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1"); err == nil {
 		t.Fatal("expected fail-closed error when cache is unavailable")
+	}
+}
+
+// A user row that vanished between challenge and completion still gets tokens
+// (the challenge was already verified), but only with the default "user" role.
+func TestCompleteMFALoginNilUserDefaultsRoles(t *testing.T) {
+	svc, o := newMockAuthService(t)
+	o.userRepo.GetByIDFn = func(_ context.Context, _ string) (*model.User, error) {
+		return nil, nil
+	}
+
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	token, err := vjwt.ParseUnverified(res.AccessToken, &vaultcrypto.VaultClaims{})
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	claims, ok := token.Claims.(*vaultcrypto.VaultClaims)
+	if !ok {
+		t.Fatal("unexpected claims type")
+	}
+	if len(claims.Roles) != 1 || claims.Roles[0] != "user" {
+		t.Errorf("roles = %v, want [user]", claims.Roles)
+	}
+}
+
+// A refresh-token store failure after MFA verification aborts the login.
+func TestCompleteMFALoginStoreTokenError(t *testing.T) {
+	dbErr := errors.New("token storage failed")
+	svc, o := newMockAuthService(t)
+	o.tokenRepo.CreateFn = func(_ context.Context, _ *model.RefreshToken) error {
+		return dbErr
+	}
+
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); !errors.Is(err, dbErr) {
+		t.Fatalf("want the store error, got %v", err)
+	}
+}
+
+// A SetLastLogin failure is logged but must not block the MFA completion.
+func TestCompleteMFALoginSetLastLoginNonFatal(t *testing.T) {
+	svc, o := newMockAuthService(t)
+	o.userRepo.SetLastLoginFn = func(_ context.Context, _ string) error {
+		return errors.New("db down")
+	}
+
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "")
+	if err != nil {
+		t.Fatalf("SetLastLogin error must not block MFA completion, got %v", err)
+	}
+	if res.AccessToken == "" {
+		t.Fatal("expected access token despite SetLastLogin error")
+	}
+}
+
+// A successful MFA completion with a collector wired in bumps the login-success
+// and tokens-issued counters, same as the password login path.
+func TestCompleteMFALoginMetricsRecorded(t *testing.T) {
+	svc, _ := newMockAuthService(t)
+	zero := func() int64 { return 0 }
+	collector := metrics.NewCollector(zero, zero, func() int { return 0 })
+	svc.SetMetrics(collector)
+
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	collector.Handler()(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "vault_login_success_total 1") {
+		t.Error("login success counter not recorded on MFA completion")
+	}
+	if !strings.Contains(body, "vault_tokens_issued_total 1") {
+		t.Error("tokens issued counter not recorded on MFA completion")
 	}
 }
 

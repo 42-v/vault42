@@ -237,6 +237,14 @@ func TestIdentityRepo_SurfacesDatabaseFailures(t *testing.T) {
 		t.Error("UpsertCAS returned true on failure — the caller would believe its write landed and stop retrying")
 	}
 
+	won, err = repo.UpsertCAS(ctx, profile, time.Time{})
+	if err == nil {
+		t.Error("UpsertCAS insert reported success against an unreachable database")
+	}
+	if won {
+		t.Error("UpsertCAS insert returned true on failure")
+	}
+
 	if err := repo.Upsert(ctx, profile); err == nil {
 		t.Error("Upsert reported success against an unreachable database")
 	}

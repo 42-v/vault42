@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.9.6 (2026-07-16)
+
+Coverage **94.67% → 96.67%** (7812 of 8081 statements), which is where the version comes
+from. Same story as last release, one rung up: 96.69 is not reachable at this statement
+count -- one statement is 0.0124 points, so the total steps 96.68 → 96.70 and skips it.
+96.67 is the nearest reachable figure on the scheme, and it lands exactly.
+
+### Compliance
+
+The suite gained its first privacy standard. `docs/COMPLIANCE.md` has claimed 93% GDPR
+coverage since 0.8.x and `docs/PRIVACY.md` promises it clause by clause, yet
+`tests/compliance/` contained zero GDPR tests -- the marquee posture of the whole project
+was the one thing the compliance suite never asserted.
+
+* **GDPR Art. 17, proven with row counts.** `gdpr_erasure_test.go` assembles the real
+  `ErasureService` against a real Postgres (all migrations, grants stripped), seeds a user
+  into every user-linked store, erases, and counts rows: zero everywhere except the two
+  stores that are *supposed* to survive -- the tombstoned account row (referential
+  integrity) and the audit trail (Art. 17(3)(b)/(e)). A mock records that a method was
+  called; only a row count proves the data is gone. Idempotency, tombstone-first ordering,
+  purge-not-mark on backup codes, and the recovery escrow are pinned in the same suite.
+* **GDPR Art. 7 consent provenance.** `gdpr_consent_test.go` turns the consent invariants
+  from CLAUDE.md prose into clause-numbered regressions: `import` and `legacy` are not
+  consent (Recital 32; *Planet49*), `MarketingAllowed` fails closed on absent profiles and
+  repo errors, an unchanged round-trip cannot launder imported provenance into
+  `source=profile`, and unsubscribe is one call with no confirmation step (Art. 7(3)).
+* **Art. 5(1)(e) retention + 5(1)(c) minimization.** `gdpr_retention_test.go` pins the
+  disabled-by-default sweeper (deleting security logs must be an operator choice) and the
+  audit-metadata scrubbing of password/secret/token keys.
+* **RFC 9700 (OAuth 2.0 Security BCP).** `rfc9700_oauth_bcp_test.go` closes the other
+  claim gap: COMPLIANCE.md counts 50 met OAuth-family requirements, and the compliance
+  suite held exactly one Google-only PKCE test. Now clause-numbered: S256 on every
+  provider, HMAC state integrity, OIDC nonce binding, tokens out of URLs by reflection,
+  DPoP htm/htu/ath rejection, refresh rotation replay.
+
+### Fixed
+
+* **Email templates could silently not exist.** The path-traversal guard in
+  `NewTemplateRenderer` used `continue` on trip, skipping the whole loop iteration instead
+  of just the override read. With `VAULT_EMAIL_TEMPLATES_DIR=.` the renderer registered
+  zero templates and returned success: every verification, password-reset, OTP and lockout
+  email rendered as a bare "Notification" stub with no token URL, and nothing anywhere
+  reported a problem. Fail-closed restructure: a tripped guard now skips only the override
+  file; the embedded default always registers. A test plants a hijack template in the
+  working directory and asserts it is ignored while the default renders.
+* **.NET handler accepted tokens with no `token_type` at all** (audit CS-4). The check was
+  `is not null && != "Bearer"` -- a claim that was simply absent passed. The Go issuer
+  always emits `token_type=Bearer`, so the handler now requires it, with regression tests
+  in both directions.
+* **A-7: the anti-enumeration dummy hash now rotates hourly.** One salt per process
+  lifetime meant a deterministic Argon2id memory-access pattern. The naive fix (reassign
+  the exported var from a timer) would race three packages that read it unsynchronized;
+  instead the exported sentinel never changes and `VerifyPassword` substitutes a rotating
+  hash held in an `atomic.Value`. Regeneration failure keeps the previous valid hash, so
+  the constant-time burn never degrades.
+* **OAuth state width** in the Blazor client raised from 16 to 32 bytes to match the PKCE
+  verifier (CS-12). CS-14 resolved as no-change: `/auth/logout` is an authed route that
+  revokes by `claims.Subject`, so the Authorization header is required by design.
+
+### Testing
+
+The 0.9.4 theme continues -- the failures that matter are the silent ones -- with a twist:
+this round also hunted the tests themselves for silent failure.
+
+* **Migrations that fail at COMMIT.** A deferred-constraint migration passes every
+  `tx.Exec` and dies inside `tx.Commit`; a plpgsql view masquerading as the tracking table
+  fails mid-iteration after a clean `Query`. Both error paths now assert rollback with row
+  counts, alongside the canceled-context, malformed-tracking-table, NULL-version,
+  unreadable-file and duplicate-version branches. `internal/migrate` sits at its 39/40
+  reachable ceiling.
+* **Redis pool handshake failures.** AUTH/SELECT/health-check write and read errors on
+  dead connections, pinned with `net.Pipe` so they are deterministic instead of racing a
+  kernel buffer. One of these branches was the suite's known coverage flake; it no longer
+  is.
+* **Signing keys that stop signing.** Keystore decrypt/parse failures after a healthy
+  startup, CAS races on identity upserts, scan errors across thirteen list loops, CLI
+  entropy failures, HIBP body-read failures, WebAuthn finish paths, KMS wrap with an
+  empty kid -- every one asserts the exact wrapped error, not just "an error".
+* **Tests that could not fail, fixed.** A pre-existing MFA status test accepted both 200
+  and 500; a goroutine tail ran past test end and made its coverage timing-dependent; a
+  compliance subtest depended on a sibling having run first. All three are now
+  deterministic -- a test that passes either way is a coverage number wearing a trench
+  coat.
+
+### Docs
+
+`docs/security.md` gains AR-11 (the unmaintained `openpgp` package inside `x/crypto`:
+module-level advisory, never imported, unfixable by upgrade, guarded by the
+three-direct-deps rule). COMPLIANCE.md cross-references the new suites; TODO items A-7,
+CS-4, CS-12 and CS-14 are closed.
+
 ## 0.9.4 (2026-07-14)
 
 Coverage **92.42% → 94.67%** (7641 of 8071 statements), which is where the version comes

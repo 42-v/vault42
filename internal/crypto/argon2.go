@@ -92,17 +92,63 @@ func Argon2MaxConcurrent() int {
 // prevention. When a user is not found, VerifyPassword is called with this
 // hash to burn the same CPU time as a real verification. Generated at startup
 // with a random salt to avoid recognizable memory patterns.
+//
+// The variable is assigned once in init and never reassigned, so the
+// unsynchronized reads in other packages are race-free. It acts as a sentinel:
+// VerifyPassword substitutes the current rotating dummy hash for it, and a
+// background loop re-derives that hash on a slow timer so the dummy salt does
+// not stay fixed for the process lifetime.
 var DummyHash string
 
+// dummyHashPassword is the fixed input the dummy hash is derived from; the
+// per-process variability comes from the random salt.
+const dummyHashPassword = "vault-anti-enumeration-dummy" // #nosec G101 -- not a credential: public dummy input for the constant-time burn, secrecy is irrelevant by design
+
+// dummyHashRotationPeriod is how often the rotating dummy hash is re-derived.
+const dummyHashRotationPeriod = time.Hour
+
+// rotatingDummyHash holds the dummy hash currently in use. The rotation
+// goroutine replaces it while request goroutines read it, hence atomic.
+var rotatingDummyHash atomic.Value
+
 func init() {
-	h, err := HashPassword("vault-anti-enumeration-dummy")
+	h, err := HashPassword(dummyHashPassword)
 	if err != nil {
 		// Fallback: valid PHC format with static salt. Timing is still constant
 		// since Argon2id with the same parameters takes the same time regardless.
-		DummyHash = "$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-		return
+		h = "$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	}
 	DummyHash = h
+	rotatingDummyHash.Store(h)
+	go rotateDummyHashLoop()
+}
+
+// regenerateDummyHash re-derives the rotating dummy hash with a fresh random
+// salt. On failure (ErrArgon2Overloaded under load, or an entropy error) the
+// previous hash is kept: it is still a valid spec-parameter hash, so the
+// constant-time property holds and the next tick simply retries.
+func regenerateDummyHash() error {
+	h, err := HashPassword(dummyHashPassword)
+	if err != nil {
+		return err
+	}
+	rotatingDummyHash.Store(h)
+	return nil
+}
+
+// rotateDummyHashLoop regenerates the dummy hash on a slow timer for the life
+// of the process so its salt and memory pattern are not deterministic per
+// process.
+func rotateDummyHashLoop() {
+	for range time.Tick(dummyHashRotationPeriod) {
+		_ = regenerateDummyHash()
+	}
+}
+
+// currentDummyHash returns the dummy hash the enumeration-prevention burn
+// actually runs against.
+func currentDummyHash() string {
+	return rotatingDummyHash.Load().(string)
 }
 
 // applyPepper pre-hashes a password with HMAC-SHA256(pepper, password) if a
@@ -157,6 +203,13 @@ func HashPassword(password string, pepper ...string) (string, error) {
 // Concurrent calls are limited by an internal semaphore (4 max) to prevent OOM
 // under load. Returns ErrArgon2Overloaded if the semaphore cannot be acquired.
 func VerifyPassword(password, encoded string, pepper ...string) (bool, error) {
+	// Callers signal the user-not-found burn by passing the DummyHash
+	// sentinel; substitute the current rotating hash so the dummy salt does
+	// not stay fixed for the process lifetime. Parameters are identical, so
+	// the computation time is unchanged.
+	if encoded == DummyHash {
+		encoded = currentDummyHash()
+	}
 	if err := acquireArgon2(); err != nil {
 		return false, err
 	}

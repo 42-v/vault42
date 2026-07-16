@@ -288,6 +288,23 @@ func TestGitHubExchange_ConnectionRefused(t *testing.T) {
 	}
 }
 
+func TestGitHubExchange_BuildRequestError(t *testing.T) {
+	p := &GitHubProvider{
+		clientID:     "cid",
+		clientSecret: "csec",
+		redirectURI:  "https://example.com/cb",
+		tokenURL:     ":",
+	}
+	_, err := p.Exchange(context.Background(), "code", "verifier")
+	if err == nil {
+		t.Fatal("expected build request error, got nil")
+	}
+	want := `github token exchange: build request: parse ":": missing protocol scheme`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestGitHubExchange_RefreshAndIDTokenNotSet(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -491,6 +508,18 @@ func TestGitHubUserInfo_EmailVerified(t *testing.T) {
 				t.Errorf("Email = %q, want %q", info.Email, tt.wantEmail)
 			}
 		})
+	}
+}
+
+func TestGitHubUserInfo_BuildRequestError(t *testing.T) {
+	p := &GitHubProvider{clientID: "cid", userInfoURL: ":"}
+	_, err := p.UserInfo(context.Background(), "tok")
+	if err == nil {
+		t.Fatal("expected build request error, got nil")
+	}
+	want := `github userinfo: build request: parse ":": missing protocol scheme`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
 	}
 }
 

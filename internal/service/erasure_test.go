@@ -5,6 +5,8 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/42-v/vault42/internal/audit"
@@ -293,6 +295,40 @@ func TestDeleteAccount_EscrowFailureAborts(t *testing.T) {
 	}
 	if scrubbed {
 		t.Error("user was scrubbed despite escrow failure — must fail closed")
+	}
+}
+
+// The encrypt step of the escrow fails closed exactly like the Append step: no
+// recovery record, no deletion. An RSA public key too small to wrap the AES key
+// (Go rejects sub-1024-bit keys outright) makes the wrap fail deterministically.
+func TestDeleteAccount_EscrowEncryptFailureAborts(t *testing.T) {
+	m := newErasureMocks()
+	scrubbed := false
+	m.users.SoftDeleteScrubFn = func(context.Context, string, string) error {
+		scrubbed = true
+		return nil
+	}
+	appended := false
+	m.recovery.AppendFn = func(context.Context, *model.AccountRecovery) error {
+		appended = true
+		return nil
+	}
+
+	pub := &rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), 511), E: 65537}
+	svc := newErasureService(t, pub, m)
+
+	err := svc.DeleteAccount(context.Background(), "user-1", "self", "user_request")
+	if err == nil {
+		t.Fatal("expected DeleteAccount to fail when the recovery payload cannot be encrypted")
+	}
+	if !strings.Contains(err.Error(), "encrypt recovery payload") {
+		t.Errorf("err = %v, want an encrypt recovery payload failure", err)
+	}
+	if appended {
+		t.Error("no recovery record may be appended when its encryption failed")
+	}
+	if scrubbed {
+		t.Error("user was scrubbed despite escrow failure, must fail closed")
 	}
 }
 
