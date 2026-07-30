@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,6 +36,11 @@ const (
 
 //go:embed templates/*.html
 var defaultTemplates embed.FS
+
+// templateFS is the source of the built-in templates. It is a variable rather
+// than the embed.FS directly so a test can substitute a corrupt filesystem and
+// pin what NewTemplateRenderer does when the defaults cannot be loaded.
+var templateFS fs.FS = defaultTemplates
 
 // TemplateData holds the parameters used to render email templates.
 // Not all fields are used by every template.
@@ -113,7 +119,7 @@ func NewTemplateRenderer(overrideDir string) (*TemplateRenderer, error) {
 	}
 
 	// Read the base layout
-	baseData, err := defaultTemplates.ReadFile("templates/base.html")
+	baseData, err := fs.ReadFile(templateFS, "templates/base.html")
 	if err != nil {
 		return nil, fmt.Errorf("email: read base template: %w", err)
 	}
@@ -126,7 +132,7 @@ func NewTemplateRenderer(overrideDir string) (*TemplateRenderer, error) {
 
 	for _, name := range names {
 		// Read default template
-		contentData, err := defaultTemplates.ReadFile("templates/" + name + ".html")
+		contentData, err := fs.ReadFile(templateFS, "templates/"+name+".html")
 		if err != nil {
 			return nil, fmt.Errorf("email: read template %s: %w", name, err)
 		}

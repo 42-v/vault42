@@ -14,6 +14,11 @@ var (
 	fakeJWTIssuer   = "vault"
 	fakeJWTAudience = "vault"
 	configOnce      sync.Once
+
+	// randRead is the entropy source for the fake credentials. It is a variable
+	// so a test can starve it and pin that a token is never emitted from bytes
+	// the CSPRNG did not actually produce.
+	randRead = rand.Read
 )
 
 // ConfigureFakeJWT sets the iss/aud claims for honeypot fake JWTs.
@@ -61,7 +66,7 @@ func GenerateFakeJWT() (string, error) {
 
 	// Random 256-byte signature (looks like RS256 but is gibberish)
 	sig := make([]byte, 256)
-	if _, err := rand.Read(sig); err != nil {
+	if _, err := randRead(sig); err != nil {
 		return "", fmt.Errorf("honeypot: crypto/rand failed: %w", err)
 	}
 	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
@@ -73,7 +78,7 @@ func GenerateFakeJWT() (string, error) {
 // refresh token.
 func GenerateFakeRefresh() (string, error) {
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", fmt.Errorf("honeypot: crypto/rand failed: %w", err)
 	}
 	return hex.EncodeToString(b), nil
@@ -81,7 +86,7 @@ func GenerateFakeRefresh() (string, error) {
 
 func fakeUUID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", fmt.Errorf("honeypot: crypto/rand failed: %w", err)
 	}
 	// Set UUID v4 version and RFC 4122 variant bits
