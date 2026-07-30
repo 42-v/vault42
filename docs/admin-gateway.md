@@ -223,13 +223,18 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 | Table | `vault_app` | `vault_admin` |
 |-------|-------------|---------------|
-| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`) | SELECT + column-level UPDATE (`locked_until`, `failed_login_count` only) |
-| `auth.clients` | SELECT only | SELECT, INSERT, UPDATE |
-| `auth.admin_config` | SELECT only | SELECT, INSERT, UPDATE |
-| `auth.admin_users` | SELECT only | Full CRUD |
-| `auth.admin_sessions` | SELECT only | Full CRUD |
+| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `created_at`) | SELECT, INSERT (import) + column-level UPDATE (lock/unlock and the erasure tombstone) |
+| `auth.clients` | SELECT, INSERT | SELECT, INSERT, UPDATE |
+| `auth.admin_config` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE, DELETE |
+| `auth.admin_users` | none (revoked in 002) | Full CRUD |
+| `auth.admin_sessions` | none (revoked in 002) | Full CRUD |
+| `auth.app_roles` | SELECT | SELECT, INSERT, DELETE |
 | `auth.signing_keys` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
 | `audit.audit_log` | SELECT, INSERT | SELECT, INSERT |
+
+The erasure cascade behind `DELETE /admin/users/{id}` additionally gives `vault_admin` DELETE on the per-user tables plus column-level `SELECT (user_id)` on `auth.social_accounts`, `auth.password_history`, `auth.totp_secrets`, `auth.webauthn_credentials` and `auth.backup_codes`. PostgreSQL requires SELECT on every column read in a `WHERE` clause, so DELETE alone is not enough to run `DELETE ... WHERE user_id = $1`; the grant is column-level so the role still cannot read the encrypted TOTP secret, the WebAuthn public keys, the backup-code hashes or the password history it is allowed to destroy.
+
+Neither role may purge the audit log: `EXECUTE` on `audit.cleanup_old_entries()` is revoked from `PUBLIC` and granted to `vault_app` alone, which is where the retention sweeper runs.
 
 This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is intentionally restricted from modifying user identity data (password, email, display name, avatar) -- it can only lock/unlock accounts.
 
