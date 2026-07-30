@@ -256,6 +256,10 @@ func (n *noopAuditRepo) Query(_ context.Context, _ repository.AuditFilter) ([]*m
 	return nil, nil
 }
 
+func (n *noopAuditRepo) CountByUser(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
 func (n *noopAuditRepo) Cleanup(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }

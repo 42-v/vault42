@@ -13,7 +13,8 @@ import (
 // maxExportAuditEvents bounds the number of audit events included in a data
 // export. The right of access covers the data held, but an unbounded query
 // would risk large responses and memory pressure; the most recent events are
-// the relevant ones for a subject access request.
+// the relevant ones for a subject access request. Hitting the cap is reported in
+// the response so the export is never silently partial.
 const maxExportAuditEvents = 1000
 
 // DataExportHandler serves the GDPR data-portability endpoint. It aggregates
@@ -175,8 +176,15 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// User-scoped audit events.
+	// User-scoped audit events. The list is capped, so the total held is reported
+	// alongside it: an export that is silently partial reads as complete, and the
+	// subject never learns there is more to ask for.
 	if h.auditEvents != nil {
+		total, countErr := h.auditEvents.CountByUser(r.Context(), userID)
+		if countErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
 		entries, auditErr := h.auditEvents.Query(r.Context(), repository.AuditFilter{
 			UserID: userID,
 			Limit:  maxExportAuditEvents,
@@ -185,6 +193,9 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
+		resp.AuditEventsTotal = total
+		resp.AuditEventsLimit = maxExportAuditEvents
+		resp.AuditEventsTruncated = total > len(entries)
 		for _, e := range entries {
 			resp.AuditEvents = append(resp.AuditEvents, DataExportAuditEvent{
 				Timestamp: e.Timestamp,

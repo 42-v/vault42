@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -125,6 +126,108 @@ func TestDataExport_Aggregate(t *testing.T) {
 	// Blob contents must never appear in the export.
 	if bytes.Contains(rec.Body.Bytes(), []byte("data_enc")) {
 		t.Fatal("export response leaked blob ciphertext field")
+	}
+}
+
+// An export capped at maxExportAuditEvents that says nothing about the cap is
+// indistinguishable from a complete one: the subject reads 1000 events, concludes
+// that is everything the service holds, and never asks for the rest. Art. 15 is
+// only satisfied if the response admits what it left out.
+func TestDataExport_DeclaresAuditTruncation(t *testing.T) {
+	const userID = "user-123"
+
+	newExport := func(t *testing.T, held int) DataExportResponse {
+		t.Helper()
+
+		returned := held
+		if returned > maxExportAuditEvents {
+			returned = maxExportAuditEvents
+		}
+		entries := make([]*model.AuditEntry, returned)
+		for i := range entries {
+			entries[i] = &model.AuditEntry{EventType: "login_success", UserID: userID}
+		}
+
+		users := &mocks.MockUserRepo{
+			GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+				return &model.User{ID: id, Email: "subject@example.com"}, nil
+			},
+		}
+		auditEvents := &mocks.MockAuditRepo{
+			CountByUserFn: func(_ context.Context, _ string) (int, error) { return held, nil },
+			QueryFn: func(_ context.Context, _ repository.AuditFilter) ([]*model.AuditEntry, error) {
+				return entries, nil
+			},
+		}
+
+		h := newTestDataExportHandler(users, &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
+			auditEvents, &mocks.MockIdentityRepo{}, &mocks.MockBlobRepo{})
+
+		req := setAuthContext(httptest.NewRequest(http.MethodGet, "/user/data-export", nil), userID)
+		rec := httptest.NewRecorder()
+		h.Export(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		var resp DataExportResponse
+		decodeResponse(t, rec, &resp)
+		return resp
+	}
+
+	t.Run("complete export is not flagged", func(t *testing.T) {
+		resp := newExport(t, 3)
+		if resp.AuditEventsTruncated {
+			t.Error("a complete export was flagged as truncated, which would send the subject chasing data that is already in front of them")
+		}
+		if resp.AuditEventsTotal != 3 || len(resp.AuditEvents) != 3 {
+			t.Errorf("total = %d, returned = %d, want 3 and 3", resp.AuditEventsTotal, len(resp.AuditEvents))
+		}
+		if resp.AuditEventsLimit != maxExportAuditEvents {
+			t.Errorf("limit = %d, want %d", resp.AuditEventsLimit, maxExportAuditEvents)
+		}
+	})
+
+	t.Run("partial export declares the total held", func(t *testing.T) {
+		resp := newExport(t, maxExportAuditEvents+7)
+		if !resp.AuditEventsTruncated {
+			t.Fatal("an export missing 7 events reported itself as complete")
+		}
+		if resp.AuditEventsTotal != maxExportAuditEvents+7 {
+			t.Errorf("total = %d, want %d: without it the subject cannot tell how much is missing",
+				resp.AuditEventsTotal, maxExportAuditEvents+7)
+		}
+		if len(resp.AuditEvents) != maxExportAuditEvents {
+			t.Errorf("returned %d events, want the cap of %d", len(resp.AuditEvents), maxExportAuditEvents)
+		}
+	})
+}
+
+// A failed count must not degrade to zero: total=0 alongside a full page of
+// events would read as a complete export of nothing.
+func TestDataExport_AuditCountFailure(t *testing.T) {
+	const userID = "user-123"
+
+	users := &mocks.MockUserRepo{
+		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, Email: "subject@example.com"}, nil
+		},
+	}
+	auditEvents := &mocks.MockAuditRepo{
+		CountByUserFn: func(_ context.Context, _ string) (int, error) {
+			return 0, errors.New("audit unavailable")
+		},
+	}
+
+	h := newTestDataExportHandler(users, &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
+		auditEvents, &mocks.MockIdentityRepo{}, &mocks.MockBlobRepo{})
+
+	req := setAuthContext(httptest.NewRequest(http.MethodGet, "/user/data-export", nil), userID)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
 

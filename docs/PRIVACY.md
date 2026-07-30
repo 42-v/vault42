@@ -258,6 +258,12 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   deployment exposes it; otherwise the Operator produces the same export on request. The export
   is delivered in a structured, commonly used, machine-readable format (JSON) so it can be ported
   to another controller.
+- The audit events in that export are capped at the **most recent 1000** so a single request
+  cannot pull an unbounded history into memory. The export is never silently partial: it always
+  carries `audit_events_total` (how many events are held), `audit_events_limit` (the cap) and
+  `audit_events_truncated`. Where `audit_events_truncated` is `true`, the remaining events are
+  part of the same right of access and the Operator supplies them on request through the contact
+  in §8. Every other category in the export is complete and uncapped.
 
 ### 5.2 Right to rectification (Art. 16)
 

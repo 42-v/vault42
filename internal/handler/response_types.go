@@ -223,6 +223,15 @@ type DataExportResponse struct {
 	Blobs          []DataExportBlob          `json:"blobs"`
 	SocialAccounts []DataExportSocialAccount `json:"social_accounts"`
 	AuditEvents    []DataExportAuditEvent    `json:"audit_events"`
+
+	// AuditEventsTotal is how many user-scoped audit events are held, which can
+	// exceed the number in AuditEvents: the export caps the list at
+	// AuditEventsLimit. AuditEventsTruncated states whether that cap was reached,
+	// so a subject can tell a partial export from a complete one and ask the
+	// Operator for the remainder instead of assuming this is everything.
+	AuditEventsTotal     int  `json:"audit_events_total"`
+	AuditEventsLimit     int  `json:"audit_events_limit"`
+	AuditEventsTruncated bool `json:"audit_events_truncated"`
 }
 
 // IdentityResponse is returned by GET /user/identity.
