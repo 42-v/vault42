@@ -24,7 +24,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Encrypted identity store**: AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
 - **DB-backed signing keys**: encrypted at rest (AES-256-GCM, kid as AAD), multi-pod refresh, zero-downtime rotation via the admin gateway
 - **Encrypted blob storage**: compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
-- **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key)
+- **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key), bounded by `VAULT_RECOVERY_RETENTION_DAYS` + sweeper
 - **IP access control and geo-fencing**: allowlist/blocklist, dynamic runtime bans, proxy-agnostic
 - **Append-only audit log**: DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
 - **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA

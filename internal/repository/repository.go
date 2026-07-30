@@ -325,6 +325,23 @@ type AccountRecoveryRepository interface {
 	List(ctx context.Context, limit, offset int) ([]model.AccountRecovery, error)
 }
 
+// AccountRecoveryPruner removes escrow records past their retention horizon.
+//
+// Deliberately separate from AccountRecoveryRepository: the escrow is
+// append-only for everything that writes to it, and the erasure service, the
+// admin gateway and the server wiring all hold the append-only interface. Only
+// the retention sweeper and `vault cleanup-recovery` are handed a pruner, so a
+// delete cannot be reached from a request path by accident.
+type AccountRecoveryPruner interface {
+	// Prune removes recovery records written before olderThan and returns how
+	// many rows went.
+	Prune(ctx context.Context, olderThan time.Time) (int64, error)
+	// PruneLocked is Prune serialised across replicas by a Postgres advisory
+	// lock. acquired=false means another replica is already sweeping and this one
+	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
+	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
+}
+
 // AdminUserRepository manages admin gateway user persistence.
 type AdminUserRepository interface {
 	// Create inserts a new admin user.

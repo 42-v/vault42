@@ -45,6 +45,7 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 | P8 | **Account import** -- migrating a pre-existing account from a prior system | Email, source-system tag, source-system id, import-pending flag | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in service continuity |
 | P9 | **Transactional email** -- verification, password reset, MFA codes, security notices | Email address | Art. 6(1)(b) contract (necessary to operate the account) |
 | P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
+| P11 | **Account-deletion recovery escrow** -- keeping a recoverable record of an erased account so an accidental or malicious deletion can be reversed | Encrypted payload (email, creation date, roles, display name) + HMAC pseudonym of the user id, requester and reason tag | Art. 6(1)(f) legitimate interest in the integrity and availability of user accounts. Only when the Operator configures a recovery key; see §3.1, §4 and §5.3 |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
 consent does not affect the lawfulness of processing carried out before withdrawal. Marketing
@@ -81,10 +82,12 @@ sender and fails closed on everything except the two affirmative sources.
 
 ## 3. Data Inventory
 
-Personal data is held in four logical stores: the **auth** store (account and credential
+Personal data is held in five logical stores: the **auth** store (account and credential
 records), the **identity** store (encrypted personal profile, keyed by pseudonym), the
-**objects** store (encrypted user blobs, keyed by pseudonym), and the **audit** store
-(append-only security log).
+**objects** store (encrypted user blobs, keyed by pseudonym), the **audit** store
+(append-only security log), and the **recovery escrow** (`auth.account_recovery`, an
+append-only log of encrypted deletion records, written only when the Operator configures a
+recovery key).
 
 ### 3.1 Sensitivity and protection notes
 
@@ -97,9 +100,20 @@ records), the **identity** store (encrypted personal profile, keyed by pseudonym
   logger scrubs those keys from any blob event as a backstop.
 - **Hashed, not recoverable:** passwords (and password history), backup codes, refresh tokens,
   device fingerprints, and admin/admin-session tokens are stored as hashes only.
-- **Append-only:** the audit log is enforced append-only at the database layer (UPDATE and
-  DELETE are blocked by triggers); bulk removal is possible only through the dedicated
-  retention-cleanup routine.
+- **Append-only:** the audit log and the recovery escrow are enforced append-only at the
+  database layer (UPDATE and DELETE are blocked by triggers); bulk removal is possible only
+  through the dedicated retention-cleanup routine for each.
+- **Recovery escrow (`auth.account_recovery`):** written on account erasure **only when the
+  Operator has configured `VAULT_RECOVERY_PUBLIC_KEY_FILE`**. Each record holds the erased
+  user's email, account creation date, roles and display name in a single payload encrypted
+  with an RSA public key, plus the HMAC pseudonym of the user id, who requested the deletion
+  and a short reason tag. The running service holds only the **public** key: it can write an
+  escrow record but cannot read one back. Decryption requires the private key, which the
+  Operator keeps offline (`cmd/recover`), so a compromised server or database cannot recover
+  the erased addresses. Its purpose is to reverse an accidental or malicious deletion; it is
+  bounded by the retention horizon in §4 and disclosed as a limitation of erasure in §5.3.
+  Where the Operator does not configure a recovery key, nothing is written and the store does
+  not exist for that deployment.
 
 ### 3.2 Inventory table
 
@@ -159,6 +173,10 @@ records), the **identity** store (encrypted personal profile, keyed by pseudonym
 | user_id, client_id | P4 | Per audit retention (§4) | 6(1)(f)/6(1)(c) |
 | ip, user_agent, fingerprint_hash, device_id | P4 | Per audit retention (§4) | 6(1)(f) |
 | event_type, metadata, risk_score, timestamp | P4 | Per audit retention (§4) | 6(1)(f)/6(1)(c) |
+| **auth.account_recovery** (append-only, encrypted; only when a recovery key is configured) | | | |
+| pseudonym (HMAC of the user id) | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
+| payload (encrypted: email, created_at, roles, display_name) | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
+| deleted_at, deleted_by, reason | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
 
 Administrator/operator accounts (used to run the service rather than to consume it) are out of
 the end-user scope of this policy and are addressed in the operational documentation.
@@ -187,6 +205,22 @@ or the session they belong to. The following periods apply:
   under Art. 5(1)(e) must set a horizon explicitly. Audit entries are deliberately exempt from the
   account-erasure cascade (Art. 17(3)(b)/(e)), which is precisely why they need a time-based
   purge of their own.
+- **Account-recovery escrow:** where the Operator configures a recovery key
+  (`VAULT_RECOVERY_PUBLIC_KEY_FILE`), one encrypted record per erasure is retained so the
+  deletion can be reversed, then purged. The retention horizon is **operator-set** via
+  `VAULT_RECOVERY_RETENTION_DAYS`; a background sweeper runs every 6 hours (and once at
+  startup) and removes records older than the horizon, and `vault cleanup-recovery
+  --retention-days N` performs the same purge on demand. Because the escrow is append-only,
+  those are the only sanctioned removal paths. **The sweeper is disabled by default**
+  (`VAULT_RECOVERY_RETENTION_DAYS=0`): the escrow holds the only recoverable copy of an erased
+  account, so destroying it must be an explicit operator choice — but left at `0` nothing is
+  ever purged, and an Operator that enables the escrow at all must set a horizon to satisfy
+  Art. 5(1)(e). The horizon should be no longer than the window in which an erroneous or
+  malicious deletion would still plausibly be noticed and reversed. Escrow records are
+  deliberately exempt from the account-erasure cascade (they exist to survive it — see §5.3),
+  which is precisely why they need a time-based purge of their own. An Operator that does not
+  want this retention at all simply leaves `VAULT_RECOVERY_PUBLIC_KEY_FILE` unset, in which
+  case no escrow record is ever written.
 - **Signing keys:** retired keys remain published only for a short overlap window (default **1
   hour**, operator-configurable) so in-flight tokens validate, then are removed from the
   published key set.
@@ -254,6 +288,21 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   therefore leaves an account that has already stopped authenticating and still holds some data
   pending deletion — not a live, loginable account whose second factors have already been
   destroyed. Every step is idempotent, so an interrupted erasure is completed by re-running it.
+- **The recovery escrow is a second exception to immediate erasure.** Where the Operator has
+  configured a recovery key, full account erasure **first writes one encrypted record** to
+  `auth.account_recovery` holding the user's email, account creation date, roles and display
+  name, and erasure is refused if that write fails. The account record is then scrubbed as
+  described above, so the plaintext email no longer exists anywhere the service can read: the
+  escrow payload is encrypted to a public key whose private half the Operator holds offline,
+  and the running service cannot decrypt it. The retained copy exists so an accidental or
+  malicious deletion can be reversed (P11, Art. 6(1)(f)), which the Operator relies on under
+  Art. 17(3)(e) where a deletion is disputed and under its own Art. 5(1)(f) integrity
+  obligation. It is not indefinite: it is bounded by the retention horizon in §4 and removed
+  when that horizon passes. A data subject who does not want any recoverable copy retained
+  should be told which of the two configurations their deployment runs — an Operator that
+  leaves `VAULT_RECOVERY_PUBLIC_KEY_FILE` unset writes no escrow record at all, and erasure is
+  then final at the moment the cascade completes. Operators must reflect the configuration
+  they actually run in their end-user privacy notice.
 - **Audit records are an exception to immediate erasure.** Security audit entries are retained
   for their retention period (§4) and for any applicable legal-hold or legal-obligation reason
   (Art. 17(3)(b)/(e)); they are minimized (identifiers are limited to what is needed for the

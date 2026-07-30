@@ -890,6 +890,17 @@ silently deleting security logs is not a safe default, so the horizon is an expl
 operator choice. Because the log is append-only, this is the only sanctioned removal
 path (`vault cleanup-audit` runs the same purge on demand).
 
+**Recovery-escrow retention** (`internal/service/recovery_retention.go`): the
+account-recovery escrow (`auth.account_recovery`) has the same shape as the audit log --
+append-only at the database layer, exempt from the erasure cascade by design, and holding
+personal data (an encrypted copy of the erased user's email, creation date, roles and
+display name) -- so it is bounded the same way. A sweeper deletes records older than
+`VAULT_RECOVERY_RETENTION_DAYS` at startup and every 6 hours, disabled by default, and
+`vault cleanup-recovery` runs the same purge on demand. Both go through
+`auth.cleanup_old_recovery()` (migration 011), a SECURITY DEFINER function that briefly
+disables the append-only trigger: neither application role holds DELETE on the table, so
+this is the only path that can remove an escrow record.
+
 ### Cache Interface
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:

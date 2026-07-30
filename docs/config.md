@@ -230,6 +230,13 @@ The bridge is a separate binary (`cmd/bridge/`) that sits in front of two Vault4
 | `VAULT_BLOB_MAX_PER_USER` | int | `50` | No | Maximum number of blobs per user. |
 | `VAULT_BLOB_QUOTA_BYTES` | int | `10485760` (10MB) | No | Total storage quota per user in bytes. Set to `0` to disable the blob storage feature entirely. |
 
+### Account Erasure & Recovery Escrow
+
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `VAULT_RECOVERY_PUBLIC_KEY_FILE` | string | *(none)* | No | Path to an RSA **public** key (PEM) that account erasure encrypts recovery records to. When set, every erasure first appends one record to `auth.account_recovery` holding the erased user's email, account creation date, roles and display name, encrypted to this key, and the erasure is refused if that write fails. The service holds only the public half, so it can write a record but never read one back; decryption needs the private key, which is kept offline and used by `cmd/recover`. When unset, no escrow record is written and erasure is final at the moment the cascade completes -- startup logs a warning so the choice is deliberate. Enabling it means retaining personal data past an erasure request: set `VAULT_RECOVERY_RETENTION_DAYS` too, and disclose it in the end-user privacy notice (see `docs/PRIVACY.md` §3.1, §4, §5.3). |
+| `VAULT_RECOVERY_RETENTION_DAYS` | int (days) | `0` (disabled) | No | Retention horizon for account-recovery escrow records. A background sweeper runs at startup and every 6h, deleting records older than this. The escrow is append-only and exempt from the erasure cascade, so GDPR Art. 5(1)(e) is what caps its lifetime -- an Operator that configures a recovery key should set a horizon covering the window in which a mistaken or malicious deletion would still be noticed and reversed. Left at `0`, nothing is ever purged: the escrow holds the only recoverable copy of an erased account, so destroying it is an explicit operator choice. `vault cleanup-recovery --retention-days N` performs the same purge on demand, and is the only other supported removal path (both application roles have DELETE revoked on the table). |
+
 ### Seeding
 
 | Variable | Type | Default | Required | Description |
@@ -312,6 +319,7 @@ This design ensures secrets never appear in environment variable listings (`/pro
 | Pepper | `VAULT_PEPPER_FILE` | Server-side secret added to password hashes |
 | HMAC Secret | `HMAC_SECRET_FILE` | HMAC-SHA256 signing key (min 32 bytes in production) |
 | Signing Key | `SIGNING_KEY_FILE` | RSA-2048 private key (PKCS#8 PEM) for JWT signing |
+| Recovery Public Key | `VAULT_RECOVERY_PUBLIC_KEY_FILE` | RSA **public** key (PEM) that account-erasure recovery records are encrypted to |
 | DB Migration Password | `DB_MIG_PASSWORD_FILE` | Password for the `vault_mig` PostgreSQL role |
 | DB App Password | `DB_APP_PASSWORD_FILE` | Password for the `vault_app` PostgreSQL role |
 | Redis Password | `REDIS_PASS_FILE` | Redis authentication password |
