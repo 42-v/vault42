@@ -1545,6 +1545,7 @@ Create or replace a **named blob**. Named blobs are addressed by a human-readabl
 | 400 | `empty_blob` | No data provided |
 | 400 | `missing_name` | No name in path |
 | 400 | `name_too_long` | Name exceeds 255 characters |
+| 400 | `invalid_name` | Name contains characters outside `[a-zA-Z0-9_-]` |
 | 400 | `blob_too_small` | Below minimum size (disabled by default) |
 | 401 | `unauthorized` | Not authenticated |
 | 409 | `quota_exceeded` | File count or byte quota exceeded |
