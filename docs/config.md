@@ -254,6 +254,8 @@ The bridge is a separate binary (`cmd/bridge/`) that sits in front of two Vault4
 
 When `VAULT_KEY_ROTATION_DB=true`, signing keys are stored encrypted (AES-256-GCM with master key) in PostgreSQL. On first boot, if `SIGNING_KEY_FILE` is present, the key is imported into the database; otherwise, a new RSA-2048 key is generated. All pods share the same keys via periodic database polling. Runtime key management (rotate, list, revoke) is performed via the admin gateway (`cmd/admin-gateway/`), which provides mTLS + RBAC + session authentication. CLI admin commands remain available via pod exec.
 
+Revocation is terminal. The kid is derived from the public key, so an import of the same PEM always addresses the same row; a revoked row is never reactivated by it. If `SIGNING_KEY_FILE` is still mounted when the key it holds is revoked, the next startup fails with `keystore: key is revoked` naming the kid instead of bringing the revoked key back as active. Rotate to a new key (which writes a new kid) rather than re-importing the revoked one. Revoking the only active key also leaves the deployment with nothing to sign with: pods stop issuing tokens and log `keystore: no active signing key` until a rotation supplies one. Rotate first, then revoke.
+
 ### OAuth2
 
 All OAuth2 providers are optional. Configure only the providers you want to support. PKCE S256 is enforced on all flows with strict redirect URI matching (no wildcards).

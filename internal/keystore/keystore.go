@@ -22,6 +22,11 @@ import (
 // ErrNoActiveKey is returned when no active signing key exists in the database.
 var ErrNoActiveKey = errors.New("keystore: no active signing key")
 
+// ErrRevokedKey is returned when an import would reactivate a revoked key.
+// Revocation is terminal: the realistic reason to revoke a signing key is that
+// its private material leaked, so it must never come back as active.
+var ErrRevokedKey = errors.New("keystore: key is revoked")
+
 // KeyRecord represents a signing key row from auth.signing_keys.
 type KeyRecord struct {
 	KID        string
@@ -141,8 +146,10 @@ func (ks *KeyStore) Import(ctx context.Context, key *rsa.PrivateKey) (string, er
 		return "", fmt.Errorf("keystore: retire active key: %w", err)
 	}
 
-	// Insert new active key
-	_, err = tx.Exec(ctx, `
+	// Insert new active key. The kid is derived from the public key, so
+	// re-importing the same PEM always conflicts with the existing row; the
+	// WHERE guard stops that upsert from reactivating a revoked key.
+	result, err := tx.Exec(ctx, `
 		INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at)
 		VALUES ($1, $2, $3, 'RS256', 'active', $4)
 		ON CONFLICT (kid) DO UPDATE SET
@@ -151,9 +158,13 @@ func (ks *KeyStore) Import(ctx context.Context, key *rsa.PrivateKey) (string, er
 			status = 'active',
 			retired_at = NULL,
 			expires_at = NULL
+		WHERE signing_keys.status != 'revoked'
 	`, kid, encPriv, pubDER, now)
 	if err != nil {
 		return "", fmt.Errorf("keystore: insert key: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return "", fmt.Errorf("%w: %s cannot be reactivated", ErrRevokedKey, kid)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -253,7 +264,19 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 		return fmt.Errorf("keystore: iterate rows: %w", err)
 	}
 
-	// Update in-memory state
+	ks.applyKeys(activeKey, activeKID, publicKeys)
+
+	return nil
+}
+
+// applyKeys swaps in a freshly loaded key set and notifies the subscriber when
+// the active kid changed.
+//
+// The loss of the active key propagates too. Revoking the sole active key drops
+// it from the verification set immediately, so a signer left holding it would
+// mint tokens that fail validation on arrival: a total token outage reported as
+// success. Handing the subscriber a nil key instead makes issuance fail closed.
+func (ks *KeyStore) applyKeys(activeKey *rsa.PrivateKey, activeKID string, publicKeys map[string]*rsa.PublicKey) {
 	ks.mu.Lock()
 	prevKID := ks.activeKID
 	ks.activeKey = activeKey
@@ -261,12 +284,15 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 	ks.publicKeys = publicKeys
 	ks.mu.Unlock()
 
-	// Notify if active key changed
-	if activeKID != prevKID && activeKey != nil && ks.onKeyChange != nil {
+	if activeKID == prevKID {
+		return
+	}
+	if activeKey == nil {
+		log.Printf("%v: previous kid=%s was revoked or removed, token issuance fails closed until a key is activated", ErrNoActiveKey, prevKID)
+	}
+	if ks.onKeyChange != nil {
 		ks.onKeyChange(activeKey, activeKID, publicKeys)
 	}
-
-	return nil
 }
 
 // ListKeys returns metadata about all signing keys (no private key material).
