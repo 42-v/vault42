@@ -132,9 +132,9 @@ func (l *localRateLimiter) increment(key string, window time.Duration) int64 {
 // evictOnce guards the eviction goroutine so only one is started per process.
 var evictOnce sync.Once
 
-// startEviction launches a background goroutine that removes expired entries
-// from all localRateLimiter instances registered via addLimiter. Runs once per
-// process (guarded by sync.Once) and sweeps every 60 seconds.
+// evictInterval is the sweep period of the eviction goroutine addLimiter starts.
+// A variable, not a constant, so tests can drive a sweep without a minute's wait.
+var evictInterval = 60 * time.Second
 var activeLimiters struct {
 	mu       sync.Mutex
 	limiters []*localRateLimiter
@@ -146,8 +146,8 @@ func addLimiter(l *localRateLimiter) {
 	activeLimiters.mu.Unlock()
 
 	evictOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(60 * time.Second)
+		go func(interval time.Duration) {
+			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 			for range ticker.C {
 				now := time.Now()
@@ -163,7 +163,7 @@ func addLimiter(l *localRateLimiter) {
 				}
 				activeLimiters.mu.Unlock()
 			}
-		}()
+		}(evictInterval)
 	})
 }
 
