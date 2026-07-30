@@ -26,7 +26,7 @@ func NewMemoryCache() *MemoryCache {
 		data: make(map[string]memEntry),
 		done: make(chan struct{}),
 	}
-	go mc.cleanup()
+	go mc.cleanup(30 * time.Second)
 	return mc
 }
 
@@ -129,8 +129,8 @@ func (m *MemoryCache) Close() error {
 	return nil
 }
 
-func (m *MemoryCache) cleanup() {
-	ticker := time.NewTicker(30 * time.Second)
+func (m *MemoryCache) cleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
