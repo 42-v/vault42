@@ -2,7 +2,6 @@ package adminapi
 
 import (
 	"context"
-	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -40,13 +39,11 @@ func (r *adminapiBrokenEntropy) Read(p []byte) (int, error) {
 }
 
 // adminapiBreakEntropy replaces the process CSPRNG for the duration of one test.
-// Nothing else in this binary draws from it concurrently, and it is restored
-// before the test returns.
+// The swap goes through the atomic switch installed by TestMain, so a goroutine
+// that outlives the test never observes a torn write to crypto/rand.Reader.
 func adminapiBreakEntropy(t *testing.T, okBytes int) {
 	t.Helper()
-	original := crand.Reader
-	crand.Reader = &adminapiBrokenEntropy{remaining: okBytes}
-	t.Cleanup(func() { crand.Reader = original })
+	adminapiRandUse(t, &adminapiBrokenEntropy{remaining: okBytes})
 }
 
 func adminapiBodyHasField(t *testing.T, body, field string) bool {
