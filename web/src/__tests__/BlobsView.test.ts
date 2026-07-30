@@ -14,6 +14,8 @@ const mockQuota = ref<{ used_bytes: number; max_bytes: number; used_count: numbe
 const mockIsLoading = ref(false)
 const mockIsUploading = ref(false)
 const mockError = ref<{ code: string } | null>(null)
+// Drives the VaultAuthGuard stub: true = auth session still resolving.
+const mockGuardLoading = ref(false)
 
 vi.mock('@vault42/vue', () => ({
   useBlobs: () => ({
@@ -37,7 +39,11 @@ vi.mock('@vault42/vue', () => ({
   }),
   VaultAuthGuard: defineComponent({
     setup(_, { slots }) {
-      return () => slots.default ? slots.default() : h('div')
+      // Renders the loading slot while the session resolves, the default slot once authenticated.
+      return () => {
+        if (mockGuardLoading.value) return slots.loading ? slots.loading() : h('div')
+        return slots.default ? slots.default() : h('div')
+      }
     },
   }),
 }))
@@ -52,6 +58,32 @@ function mountView() {
   })
 }
 
+// Intercepts the throwaway <a download> the view builds so the resulting filename can be asserted.
+function captureDownload() {
+  const anchor = { href: '', download: '', click: vi.fn() } as unknown as HTMLAnchorElement
+  const originalCreateObjectURL = URL.createObjectURL
+  const originalRevokeObjectURL = URL.revokeObjectURL
+  URL.createObjectURL = vi.fn(() => 'blob:http://localhost/fake-url')
+  URL.revokeObjectURL = vi.fn()
+
+  const originalCreateElement = document.createElement.bind(document)
+  const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) =>
+    tag === 'a' ? anchor : originalCreateElement(tag))
+  const appendSpy = vi.spyOn(document.body, 'appendChild').mockImplementation(() => anchor as never)
+  const removeSpy = vi.spyOn(document.body, 'removeChild').mockImplementation(() => anchor as never)
+
+  return {
+    anchor,
+    restore() {
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+      createSpy.mockRestore()
+      appendSpy.mockRestore()
+      removeSpy.mockRestore()
+    },
+  }
+}
+
 describe('BlobsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -60,6 +92,7 @@ describe('BlobsView', () => {
     mockIsLoading.value = false
     mockIsUploading.value = false
     mockError.value = null
+    mockGuardLoading.value = false
     mockFetchBlobs.mockResolvedValue(undefined)
     mockUploadBlob.mockResolvedValue(true)
     mockDownloadBlob.mockResolvedValue({ data: new ArrayBuffer(0) })
@@ -362,6 +395,23 @@ describe('BlobsView', () => {
     expect((wrapper.find('input[placeholder="my-document.pdf"]').element as HTMLInputElement).value).toBe('')
   })
 
+  it('keeps the typed label when the upload fails so the user does not have to retype it', async () => {
+    mockUploadBlob.mockResolvedValue(false)
+    const wrapper = mountView()
+
+    const fileContent = new ArrayBuffer(10)
+    const mockFile = new File([fileContent], 'doc.txt')
+    Object.defineProperty(mockFile, 'arrayBuffer', { value: () => Promise.resolve(fileContent) })
+    Object.defineProperty(wrapper.find('input[type="file"]').element, 'files', { value: [mockFile], writable: false })
+
+    await wrapper.find('input[placeholder="my-document.pdf"]').setValue('quarterly-report')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(mockUploadBlob).toHaveBeenCalledExactlyOnceWith(fileContent, 'quarterly-report')
+    expect((wrapper.find('input[placeholder="my-document.pdf"]').element as HTMLInputElement).value).toBe('quarterly-report')
+  })
+
   it('calls downloadBlob and creates anchor for download', async () => {
     mockBlobs.value = [
       { id: 'blob-dl', label: 'report.pdf', size_bytes: 2048, stored_bytes: 1500, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
@@ -436,6 +486,85 @@ describe('BlobsView', () => {
 
     // Modal should be gone (deleteConfirmId reset)
     expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+  })
+
+  it('shows a spinner instead of the file list while the session is still resolving', () => {
+    mockGuardLoading.value = true
+    const wrapper = mountView()
+
+    expect(wrapper.find('.vault42-spinner-lg').exists()).toBe(true)
+    expect(wrapper.find('h1').exists()).toBe(false)
+    expect(wrapper.find('form').exists()).toBe(false)
+  })
+
+  it('renders a 0% quota bar instead of NaN when the account has no byte allowance', () => {
+    mockQuota.value = { used_bytes: 0, max_bytes: 0, used_count: 0, max_count: 0 }
+    const wrapper = mountView()
+
+    const progressBar = wrapper.findAll('div').find(d => d.classes().includes('h-2') && d.attributes('style') !== undefined)
+    expect(progressBar!.attributes('style')).toContain('0%')
+    expect(progressBar!.attributes('style')).not.toContain('NaN')
+    expect(progressBar!.classes()).toContain('bg-vault42-primary')
+  })
+
+  it('names the download after the blob label when the server response carries none', async () => {
+    mockBlobs.value = [
+      { id: 'blob-1', label: 'invoice.pdf', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    mockDownloadBlob.mockResolvedValue({ data: new ArrayBuffer(8) })
+
+    const dl = captureDownload()
+    const wrapper = mountView()
+    await wrapper.findAll('button').find(b => b.text() === 'Download')!.trigger('click')
+    await flushPromises()
+
+    expect(dl.anchor.download).toBe('invoice.pdf')
+    dl.restore()
+  })
+
+  it('names the download after the blob id when nothing carries a label', async () => {
+    mockBlobs.value = [
+      { id: 'blob-unlabelled', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    mockDownloadBlob.mockResolvedValue({ data: new ArrayBuffer(8) })
+
+    const dl = captureDownload()
+    const wrapper = mountView()
+    await wrapper.findAll('button').find(b => b.text() === 'Download')!.trigger('click')
+    await flushPromises()
+
+    expect(dl.anchor.download).toBe('blob-unlabelled')
+    dl.restore()
+  })
+
+  it('strips path separators and control characters from the download filename', async () => {
+    mockBlobs.value = [
+      { id: 'blob-evil', label: 'x', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    mockDownloadBlob.mockResolvedValue({ data: new ArrayBuffer(8), label: '../../etc/pa ss:wd?.txt' })
+
+    const dl = captureDownload()
+    const wrapper = mountView()
+    await wrapper.findAll('button').find(b => b.text() === 'Download')!.trigger('click')
+    await flushPromises()
+
+    expect(dl.anchor.download).toBe('.._.._etc_pa_ss_wd_.txt')
+    dl.restore()
+  })
+
+  it('truncates an over-long download filename to 255 characters', async () => {
+    mockBlobs.value = [
+      { id: 'blob-long', label: 'x', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    mockDownloadBlob.mockResolvedValue({ data: new ArrayBuffer(8), label: 'a'.repeat(300) + '.txt' })
+
+    const dl = captureDownload()
+    const wrapper = mountView()
+    await wrapper.findAll('button').find(b => b.text() === 'Download')!.trigger('click')
+    await flushPromises()
+
+    expect(dl.anchor.download).toBe('a'.repeat(255))
+    dl.restore()
   })
 
   it('closes delete modal on Cancel click', async () => {

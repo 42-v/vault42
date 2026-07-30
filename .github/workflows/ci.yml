@@ -78,11 +78,15 @@ jobs:
       - name: Build web frontend
         run: pnpm -C web build
 
+      # Coverage thresholds are configured in each package's vite.config.ts and are
+      # enforced here. `vitest run` alone exits 0 no matter how little of the SDK or
+      # the SPA a change leaves covered, so the frontend half of the suite was gated
+      # only on the tests that happened to exist.
       - name: Test @vault/vue
-        run: pnpm -C packages/vue test
+        run: pnpm -C packages/vue test:coverage
 
       - name: Test web
-        run: pnpm -C web test
+        run: pnpm -C web test:coverage
 
   changes:
     name: Detect Go changes
