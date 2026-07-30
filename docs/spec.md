@@ -800,7 +800,7 @@ Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encryp
 | `refresh_tokens` | Stored refresh tokens (SHA-256 hashed, family ID, device binding) |
 | `devices` | Known devices/fingerprints per user |
 | `totp_secrets` | AES-256-GCM encrypted TOTP secrets |
-| `webauthn_credentials` | WebAuthn credential IDs, public keys, sign counts |
+| `webauthn_credentials` | WebAuthn credential IDs, public keys, sign counts, authenticator flags |
 | `backup_codes` | HMAC-SHA256-hashed single-use backup codes |
 | `rate_limits` | Rate limit counters (PostgreSQL cache fallback) |
 | `admin_config` | Key-value admin settings (admin token hash) |

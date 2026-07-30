@@ -297,6 +297,7 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 		{"tokens.DeleteExpired", func() error { _, err := tokens.DeleteExpired(ctx); return err }},
 
 		{"webauthn.UpdateSignCount", func() error { return webauthn.UpdateSignCount(ctx, credID, 7) }},
+		{"webauthn.UpdateFlags", func() error { return webauthn.UpdateFlags(ctx, credID, 0x1d) }},
 		{"webauthn.Delete", func() error { return webauthn.Delete(ctx, credID, user.ID) }},
 
 		{"backups.DeleteAllForUser", func() error { return backups.DeleteAllForUser(ctx, user.ID) }},

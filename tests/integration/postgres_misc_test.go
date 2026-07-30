@@ -651,6 +651,37 @@ func TestPostgresWebAuthnRepo(t *testing.T) {
 		}
 	})
 
+	t.Run("Flags round-trip", func(t *testing.T) {
+		credID := []byte("credential-for-flags")
+		c := &model.WebAuthnCredential{
+			ID:           randomID(),
+			UserID:       user.ID,
+			CredentialID: credID,
+			PublicKey:    []byte("pk-flags"),
+			SignCount:    0,
+			Flags:        0x4d,
+			FriendlyName: "Synced Passkey",
+			CreatedAt:    time.Now().UTC().Truncate(time.Microsecond),
+		}
+		if err := repo.Create(ctx, c); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.GetByCredentialID(ctx, credID)
+		if err != nil {
+			t.Fatalf("GetByCredentialID: %v", err)
+		}
+		if got.Flags != 0x4d {
+			t.Errorf("Flags = %#x after Create, want 0x4d -- a lost BackupEligible flag locks the passkey out", got.Flags)
+		}
+		if err := repo.UpdateFlags(ctx, c.ID, 0x1d); err != nil {
+			t.Fatalf("UpdateFlags: %v", err)
+		}
+		got, _ = repo.GetByCredentialID(ctx, credID)
+		if got.Flags != 0x1d {
+			t.Errorf("Flags = %#x after UpdateFlags, want 0x1d", got.Flags)
+		}
+	})
+
 	t.Run("Delete", func(t *testing.T) {
 		credID := []byte("credential-for-delete")
 		c := &model.WebAuthnCredential{
