@@ -220,7 +220,7 @@ func seedClient(ctx context.Context, cs ClientSeed, clients repository.ClientRep
 	if err != nil {
 		return fmt.Errorf("generate client secret: %w", err)
 	}
-	secretHash, err := vaultcrypto.HashPassword(secret)
+	secretHash, err := hashPassword(secret)
 	if err != nil {
 		return fmt.Errorf("hash client secret: %w", err)
 	}
@@ -276,7 +276,7 @@ func seedAdmin(ctx context.Context, as AdminSeed, admins repository.AdminUserRep
 	if err != nil {
 		return fmt.Errorf("generate admin ID: %w", err)
 	}
-	passwordHash, err := vaultcrypto.HashPassword(as.Password, pepper)
+	passwordHash, err := hashPassword(as.Password, pepper)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -313,7 +313,7 @@ func seedUser(ctx context.Context, us UserSeed, users repository.UserRepository,
 	if err != nil {
 		return fmt.Errorf("generate user ID: %w", err)
 	}
-	passwordHash, err := vaultcrypto.HashPassword(us.Password, pepper)
+	passwordHash, err := hashPassword(us.Password, pepper)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -348,3 +348,9 @@ func seedUser(ctx context.Context, us UserSeed, users repository.UserRepository,
 	fmt.Printf("seed: user %q created (id=%s)\n", us.Email, userID)
 	return nil
 }
+
+// hashPassword is the Argon2id hasher used for every seeded credential. It is
+// a variable so tests can drive the hashing-failure paths, which are otherwise
+// only reachable when the process-wide argon2 semaphore is saturated.
+// Production never reassigns it.
+var hashPassword = vaultcrypto.HashPassword

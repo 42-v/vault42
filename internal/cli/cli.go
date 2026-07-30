@@ -58,7 +58,7 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 	// Verify admin token
 	if !c.verifyAdminToken(ctx, adminToken) {
 		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required.")
-		os.Exit(1)
+		exitProcess(1)
 	}
 
 	switch args[1] {
@@ -124,7 +124,7 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	secretHash, err := vaultcrypto.HashPassword(secret)
+	secretHash, err := hashPassword(secret)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
@@ -201,7 +201,7 @@ func (c *CLI) rotateClientSecret(ctx context.Context, args []string) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	newHash, err := vaultcrypto.HashPassword(newSecret)
+	newHash, err := hashPassword(newSecret)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
@@ -270,7 +270,7 @@ func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	hash, err := vaultcrypto.HashPassword(newToken)
+	hash, err := hashPassword(newToken)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
@@ -336,7 +336,7 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("generate admin token: %w", err)
 	}
-	hash, err := vaultcrypto.HashPassword(token)
+	hash, err := hashPassword(token)
 	if err != nil {
 		return fmt.Errorf("hash admin token: %w", err)
 	}
@@ -452,3 +452,14 @@ func getFlag(args []string, flag string) string {
 	}
 	return ""
 }
+
+// exitProcess terminates the process when admin authentication fails. It is a
+// variable so tests can observe the denial without killing the test binary;
+// production never reassigns it, and a replacement must not return.
+var exitProcess = os.Exit
+
+// hashPassword is the Argon2id hasher used for generated credentials. It is a
+// variable so tests can drive the hashing-failure paths, which are otherwise
+// only reachable when the process-wide argon2 semaphore is saturated.
+// Production never reassigns it.
+var hashPassword = vaultcrypto.HashPassword
