@@ -32,8 +32,8 @@ func TestBlobUploadNamed_Success(t *testing.T) {
 	}
 	h := newTestBlobHandler(repo)
 
-	req := httptest.NewRequest(http.MethodPut, "/user/blobs/named/config.json", strings.NewReader(strings.Repeat("x", 1024)))
-	req.SetPathValue("name", "config.json")
+	req := httptest.NewRequest(http.MethodPut, "/user/blobs/named/config-json", strings.NewReader(strings.Repeat("x", 1024)))
+	req.SetPathValue("name", "config-json")
 	req = setAuthContext(req, "user-123")
 	rec := httptest.NewRecorder()
 
@@ -47,7 +47,7 @@ func TestBlobUploadNamed_Success(t *testing.T) {
 	}
 	var result map[string]interface{}
 	decodeResponse(t, rec, &result)
-	if result["label"] != "config.json" {
+	if result["label"] != "config-json" {
 		t.Errorf("expected label to echo the name, got %v", result["label"])
 	}
 }

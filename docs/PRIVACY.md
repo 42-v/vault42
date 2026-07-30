@@ -92,7 +92,9 @@ records), the **identity** store (encrypted personal profile, keyed by pseudonym
   TOTP secrets, and stored OAuth/OIDC provider tokens.
 - **Pseudonymization:** the identity profile and blobs are stored under a deterministic
   **pseudonym** derived by HMAC from the user id, not under the user id or email. The plaintext
-  reference name of a named blob never reaches the database -- only its HMAC is stored.
+  reference name of a named blob never reaches the database -- only its HMAC is stored. Audit
+  metadata for blob events carries the blob id, never the reference name or the label; the
+  logger scrubs those keys from any blob event as a backstop.
 - **Hashed, not recoverable:** passwords (and password history), backup codes, refresh tokens,
   device fingerprints, and admin/admin-session tokens are stored as hashes only.
 - **Append-only:** the audit log is enforced append-only at the database layer (UPDATE and

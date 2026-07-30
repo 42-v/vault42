@@ -51,7 +51,7 @@ func TestBlobUploadNamed_UnreadableBodyStoresNothing(t *testing.T) {
 	}
 	h := newBlobTestHandler(repo, 0, 1024*1024)
 
-	req, w, keys := authedRequest(t, http.MethodPut, "/user/blobs/named/notes.txt", nil)
+	req, w, keys := authedRequest(t, http.MethodPut, "/user/blobs/named/notes-txt", nil)
 	req.Body = blobClientTornBody{}
 	req.ContentLength = 4096
 	serveWithAuth(t, "PUT /user/blobs/named/{name}", h.UploadNamed, keys, w, req)

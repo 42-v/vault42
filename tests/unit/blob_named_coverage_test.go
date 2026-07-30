@@ -65,7 +65,7 @@ func TestBlobHandler_UploadNamed_Success(t *testing.T) {
 	h := newBlobTestHandler(repo, 0, 1024*1024)
 
 	body := strings.Repeat("x", 128)
-	req, w, keys := authedRequest(t, http.MethodPut, "/user/blobs/named/photo.png", nil)
+	req, w, keys := authedRequest(t, http.MethodPut, "/user/blobs/named/photo-png", nil)
 	req.Body = &readCloserImpl{Reader: strings.NewReader(body)}
 	req.ContentLength = int64(len(body))
 	serveWithAuth(t, "PUT /user/blobs/named/{name}", h.UploadNamed, keys, w, req)

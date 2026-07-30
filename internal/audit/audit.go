@@ -121,6 +121,20 @@ var sensitiveKeys = map[string]bool{
 	"client_secret": true, "api_key": true,
 }
 
+// blobSensitiveKeys are metadata keys that must NEVER be stored on a blob
+// event. The plaintext reference name of a named blob and a blob label are
+// exactly what the objects store keeps out of the database (docs/PRIVACY.md
+// 3.1: only the HMAC of the name and the AES-GCM ciphertext of the label are
+// persisted), and audit rows survive account erasure under Art. 17(3)(b)/(e).
+// "name" is scrubbed per event class rather than globally because admin role
+// and client events legitimately record a non-personal object name.
+var blobSensitiveKeys = map[string]bool{
+	"name": true, "blob_name": true, "ref_name": true, "label": true,
+}
+
+// blobEventPrefix identifies the event types the blob key set applies to.
+const blobEventPrefix = "blob_"
+
 // Logger handles audit event logging with optional batching. When flushEvery
 // is greater than zero, entries are buffered in memory and flushed periodically.
 // Sensitive metadata keys are automatically scrubbed before storage.
@@ -198,7 +212,7 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		UserAgent:       ua,
 		FingerprintHash: fpHash,
 		DeviceID:        deviceID,
-		Metadata:        scrubMetadata(metadata),
+		Metadata:        scrubEventMetadata(eventType, metadata),
 		RiskScore:       riskScore,
 	}
 
@@ -261,6 +275,33 @@ func (l *Logger) batchLoop() {
 			_ = l.Flush(context.Background())
 		}
 	}
+}
+
+// scrubEventMetadata removes the globally sensitive keys plus any key set
+// scoped to the event class.
+func scrubEventMetadata(eventType string, m map[string]interface{}) map[string]interface{} {
+	clean := scrubMetadata(m)
+	if !strings.HasPrefix(eventType, blobEventPrefix) {
+		return clean
+	}
+	return dropKeys(clean, blobSensitiveKeys)
+}
+
+// dropKeys recursively deletes the given keys from an already-scrubbed map.
+func dropKeys(m map[string]interface{}, drop map[string]bool) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	for k, v := range m {
+		if drop[strings.ToLower(k)] {
+			delete(m, k)
+			continue
+		}
+		if nested, ok := v.(map[string]interface{}); ok {
+			dropKeys(nested, drop)
+		}
+	}
+	return m
 }
 
 // scrubMetadata recursively removes sensitive keys from metadata.
