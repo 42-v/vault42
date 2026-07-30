@@ -244,11 +244,49 @@ func GeneralRateLimitKey(r *http.Request) string {
 	return fmt.Sprintf("anon:%s", ClientIP(r))
 }
 
+// normalizeIP validates a proxy-supplied address and returns it in canonical
+// textual form, or "" when it is not an IP at all. Accepts surrounding
+// whitespace, an appended port and bracketed IPv6. Canonicalising matters
+// because the result is a rate-limit bucket key: without it "::1" and
+// "0:0:0:0:0:0:0:1" would be two different buckets for one client.
+func normalizeIP(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(v); err == nil {
+		v = strings.TrimSpace(host)
+	}
+	v = strings.TrimSuffix(strings.TrimPrefix(v, "["), "]")
+	ip := net.ParseIP(v)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
+}
+
+// lastRealIP returns the rightmost non-empty element of a possibly comma-joined
+// header value, validated as an IP ("" if it does not parse). Rightmost, because
+// a proxy appends the peer address it observed, so everything to the left of it
+// is attacker-supplied.
+func lastRealIP(value string) string {
+	parts := strings.Split(value, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if strings.TrimSpace(parts[i]) == "" {
+			continue
+		}
+		return normalizeIP(parts[i])
+	}
+	return ""
+}
+
 // ClientIP extracts the client IP from a request, respecting X-Forwarded-For
 // only when the direct connection comes from a trusted proxy.
 // When trustedProxyCIDRs is empty, XFF is never trusted and RemoteAddr is used.
 // When trustedProxyCIDRs is set and the remote address is trusted, the rightmost
 // non-trusted IP from XFF is returned.
+// Every header-derived value is validated with net.ParseIP; anything that is not
+// an IP is discarded and the next candidate (ultimately RemoteAddr) is used.
 func ClientIP(r *http.Request) string {
 	remoteIP := stripPort(r.RemoteAddr)
 
@@ -270,10 +308,17 @@ func ClientIP(r *http.Request) string {
 	// prepend a spoofed value via their own header and the proxy's value is
 	// the last one. Using r.Header.Values + last entry treats the proxy as
 	// authoritative regardless.
+	//
+	// The header may itself be comma-joined: the embedded profile configures
+	// REAL_IP_HEADER=X-Forwarded-For, so a client-supplied prefix arrives on the
+	// same line as the address the proxy appended. Take the rightmost element and
+	// validate it, otherwise the whole "spoofed, 10.0.0.5" string becomes the
+	// rate-limit bucket key, the fingerprint IP and the audit ip column, and an
+	// attacker mints a fresh bucket per request.
 	if h := loadRealIPHeader(); h != "" {
 		if values := r.Header.Values(h); len(values) > 0 {
-			if v := strings.TrimSpace(values[len(values)-1]); v != "" {
-				return v
+			if ip := lastRealIP(values[len(values)-1]); ip != "" {
+				return ip
 			}
 		}
 	}
@@ -287,7 +332,7 @@ func ClientIP(r *http.Request) string {
 	// return the first (rightmost) IP that is NOT a trusted proxy
 	parts := strings.Split(xff, ",")
 	for i := len(parts) - 1; i >= 0; i-- {
-		ip := strings.TrimSpace(parts[i])
+		ip := normalizeIP(parts[i])
 		if ip == "" {
 			continue
 		}
@@ -297,7 +342,7 @@ func ClientIP(r *http.Request) string {
 	}
 
 	// All XFF entries are trusted proxies — use the leftmost
-	if first := strings.TrimSpace(parts[0]); first != "" {
+	if first := normalizeIP(parts[0]); first != "" {
 		return first
 	}
 	return remoteIP
