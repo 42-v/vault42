@@ -16,6 +16,7 @@ Vault42 is a production-grade Go authentication and authorization service. All e
 | `Authorization` | Authenticated endpoints | `Bearer <access_token>` |
 | `User-Agent` | Recommended | Included in device fingerprint computation |
 | `Accept-Language` | Recommended | Included in device fingerprint computation |
+| `X-Vault-App` | No | White-label tenant slug (`^[a-z0-9][a-z0-9_-]{0,63}$`), proxy-set only. Selects the per-app branding and template overrides applied to auth emails sent while handling the request. See [White-Label Tenant Selection](#white-label-tenant-selection). |
 
 **Global request limits:**
 
@@ -34,6 +35,14 @@ Vault42 is a production-grade Go authentication and authorization service. All e
 | `Referrer-Policy` | `no-referrer` |
 | `Cache-Control` | `no-store` |
 | `Pragma` | `no-cache` |
+
+### White-Label Tenant Selection
+
+`X-Vault-App` names the tenant whose app name, logo, primary colour, From display name and template overrides an auth email (verification, password reset, new device, email OTP, ...) is rendered with. An absent, malformed or unknown slug renders the global branding, and with no branding rows configured the header has no effect at all.
+
+The endpoints that send those emails are unauthenticated by design, so the header is **not** a client-supplied value: it is only honoured when the request reaches Vault42 from a peer inside `TRUSTED_PROXIES`. The gateway or BFF in front of Vault42 sets it per tenant and overwrites whatever the client sent. A request arriving directly, or through an untrusted peer, selects no tenant and gets the global branding -- otherwise any outside caller could make a genuine password-reset email for a victim on one tenant arrive wearing a different tenant's identity.
+
+The slug is validated for shape only; it is never an authorization decision, which is why the trust boundary is the proxy and not the value. There is no `?app=` query parameter: a proxy forwards the client's query string verbatim, so a query parameter can never be an operator-controlled channel.
 
 ---
 
