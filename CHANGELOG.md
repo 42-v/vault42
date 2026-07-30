@@ -1,5 +1,196 @@
 # Changelog
 
+## 0.9.9 (2026-07-31)
+
+Coverage **96.67% → 99.42%** (8178 of 8226 statements), which is where the version
+comes from. 99.69 is not reachable here and was not reachable at any point during the
+release: one statement is 0.0122 points at this count, so the total steps 99.68 → 99.70 and
+skips it. The frontend moved further than the backend: `@vault42/vue` went from 25.43% to
+100% of statements, functions and lines, and the SPA from 24.38% to 99.52%.
+
+The release started as "the nightly security scan has been red for nine days" and became a
+security review, because taking the frontend from a quarter covered to fully covered kept
+finding real defects in the code the new tests were covering. Thirty-seven findings were
+raised across the review; four survived three-lens adversarial verification, and a
+completeness pass over the surfaces no reviewer had opened found eight more. Everything
+below was verified against the source before it was fixed, and several plausible findings
+were discarded on the way: the SMTP transport was reported as falling back to cleartext,
+which is simply wrong, because `net/smtp.SendMail` negotiates STARTTLS and returns the
+error rather than continuing.
+
+### Security
+
+* **Every synced passkey was permanently unusable after registration.** Nothing persisted
+  the WebAuthn credential flags: `model.WebAuthnCredential` had no field, the table had no
+  column, and `modelCredsToWebAuthn` rebuilt every credential with `BackupEligible=false`
+  on every login. go-webauthn compares that stored flag against the assertion and rejects a
+  mismatch unconditionally, so a credential registered from iCloud Keychain, Google Password
+  Manager, Windows Hello or 1Password (all of which set BE=1) enrolled successfully, flipped
+  `RequiresMFA` to true, and then failed every single verification. A user whose only second
+  factor was a synced passkey, holding no backup codes, could not get back into their
+  account at all: `emailOTPAllowed` deliberately refuses email OTP once a strong factor is
+  enrolled, and deleting the credential needs an access token they cannot obtain. The suites
+  never saw it because they only ever construct BE=0 credentials. Flags are now stored,
+  rehydrated and re-stored on each assertion, and a credential enrolled before this release
+  adopts its flags from the first assertion that verifies rather than being bricked.
+  Adoption is not a downgrade: the signature is checked against the stored public key before
+  anything is written, so only the credential holder can influence the adopted value, and
+  they can already authenticate.
+* **The SDK kept a bearer token armed through an incomplete authentication.**
+  `VaultClient.login` stores any `access_token` it is handed and `useAuth.login` took the
+  `requires_2fa` early return without clearing it, so a server answering the password step
+  with both fields left a usable token on every subsequent request while the UI correctly
+  showed the user as signed out. `complete2FAVerification` had the mirror of the same bug:
+  it guarded the token assignment but cleared the second-factor gate unconditionally, so a
+  200 with no token dismissed the 2FA screen with nobody signed in and left the challenge
+  token standing as the bearer.
+* **The append-only audit log could be erased by the application role.**
+  `audit.cleanup_old_entries` is `SECURITY DEFINER` and owned by the role that runs the
+  migrations, nothing revoked `EXECUTE` from `PUBLIC`, and it trusted its argument, so
+  `SELECT audit.cleanup_old_entries(interval '0 seconds')` deleted the entire log. `vault_app`
+  is refused a direct `DELETE` on that table precisely to make it append-only, and then
+  reached the same result through the function. `EXECUTE` is now revoked from `PUBLIC` and
+  granted only to the role that runs the sweeper, the function refuses a horizon under one
+  day, and it has an explicit `search_path`, which it lacked (CVE-2018-1058).
+* **Four admin-gateway surfaces were dead in production for want of a grant, and one of
+  them half-erased accounts.** Every table added after migration 001 has to be granted to
+  `vault_admin` explicitly. `auth.app_roles` never was, so all three `/admin/roles` endpoints
+  returned 500. `POST /admin/users/import` had no `INSERT` on `auth.users`.
+  `DELETE /admin/config/{key}` had no `DELETE`, under a comment reserving it for the admin
+  gateway. Worst, the erasure cascade behind `DELETE /admin/users/{id}` was granted `DELETE`
+  on five tables but `SELECT` on none of them, and PostgreSQL requires both for
+  `DELETE ... WHERE user_id = $1`, so erasure tombstoned the account and then failed
+  partway through with 42501, leaving a half-erased user. The integration suite cannot see
+  any of this: `stripRoleGrants()` removes every `GRANT` and `REVOKE` before the migrations
+  are applied, so the privilege model is never exercised. The new grants are column-level
+  where they can be, so the admin role still cannot read the encrypted TOTP secrets,
+  WebAuthn public keys, backup-code hashes or password history it is allowed to delete.
+* **A revoked signing key came back to life on the next restart.** The keystore's import
+  upsert had no `WHERE`, so re-importing a PEM whose kid already existed set
+  `status='active'` and cleared `retired_at` regardless of what the row said. The kid is
+  derived from the modulus, so a re-import always collides, and the chart keeps
+  `SIGNING_KEY_FILE` mounted after a migration to database-backed rotation, which makes the
+  dangerous precondition the default state rather than an exotic one. Revoking the only
+  active key also never reached the token service, because the change callback was gated on
+  the new key being non-nil, so it kept minting with a kid the verification path had already
+  dropped. Revocation is now terminal and propagates, and token issuance fails closed
+  instead of signing with a revoked key.
+* **The honeypot inherited the production database.** A Kubernetes `podSelector` is a subset
+  match, and the base NetworkPolicy selected on name and instance only. The honeypot and
+  bridge pods carry those same two labels, so the policy selected them too and the
+  production PostgreSQL ingress accepted them. The entire point of the separate
+  `honeypot-postgres` was void: code execution in the deliberately attackable pod reached
+  the real database. The main deployment now carries an explicit component label and every
+  policy names it.
+* **`X-Forwarded-For` was used without being parsed.** In the embedded profile `ClientIP`
+  returned the whole comma-joined header value as if it were an address, so it became the
+  rate-limit bucket key, the fingerprint component and the audit `ip` column, and varying
+  the spoofed prefix per request minted unlimited buckets. The second code path was wrong in
+  the same way: it returned an entry that did not parse, and an existing test asserted that
+  behaviour. Both paths now split, trim, validate with `net.ParseIP`, and fall back to
+  `RemoteAddr`.
+* **White-label tenant selection was unauthenticated.** `X-Vault-App` and `?app=` were read
+  from any caller, and the slug was checked for shape but never for membership, so an
+  outside caller could make a genuine password-reset or verification email arrive wearing
+  another tenant's name, logo and colours. The header is now honoured only when the request
+  arrived through a trusted proxy, and the query-parameter fallback is removed: a proxy
+  forwards the client's query string verbatim, so it can never be an operator-controlled
+  channel.
+
+### Privacy
+
+* **Plaintext blob names were written to the audit log.** `docs/PRIVACY.md` states as a
+  guarantee that the reference name of a named blob never reaches the database and that only
+  its HMAC is stored, and the service honours it. All three named-blob handlers then put the
+  raw name into audit metadata, where `scrubMetadata` did not drop it, so it landed in the
+  same database the encryption exists to protect, keyed to the user, and outlived the
+  erasure of the account it belonged to. The handlers now log the blob ID, `name` is on the
+  scrub list as a backstop, and the charset `docs/spec.md` already claimed is now enforced.
+* **The recovery escrow kept erased users' addresses forever, and no document mentioned it.**
+  Every erasure with a recovery key configured appends the subject's real email, creation
+  date, roles and display name, encrypted to an offline operator key. The table had no expiry
+  column, append-only triggers block `UPDATE` and `DELETE`, and both application roles have
+  those revoked, so there was no supported way to ever remove a row. It appeared in none of
+  the four logical stores `docs/PRIVACY.md` enumerates, had no entry in the Art. 30
+  inventory, and no retention horizon while every other store had one. It is now documented
+  in all four places and bounded by `VAULT_RECOVERY_RETENTION_DAYS`, disabled by default in
+  the same way the audit sweeper is, because deleting data has to be an operator's choice.
+* **The Art. 15 export truncated in silence.** It caps audit events and said nothing about
+  it, so a long-lived account received a partial export presented as complete. The cap
+  stays; the response now carries the total and a truncation marker, and `docs/PRIVACY.md`
+  describes what actually happens.
+
+### Fixed
+
+* **The nightly security scan, red every night since 2026-07-22.** `golang.org/x/text` 0.38.0
+  carries CVE-2026-56852, and although it is an indirect dependency govulncheck reports it as
+  reachable through `pgx.Connect`, so it failed the source scan, both image scans and the
+  vulnerability check. postcss 8.5.15 carries GHSA-r28c-9q8g-f849; the pnpm override was
+  pinned at `>=8.5.10`, which resolved happily to the vulnerable version, so raising the
+  direct dependency alone would not have held.
+* **The pre-commit gate could not see a test run that never finished.** `cov_run`
+  deliberately swallows `go test`'s exit code and `cov_check_failures` exists to gate on it,
+  and the gate called the first and never the second. Its only failure signal was a grep for
+  `--- FAIL`, and a run killed by the 30-minute timeout or the OOM killer emits
+  `FAIL pkg 1800s` with no such line, so the verdict read OK and the badge,
+  `docs/badges.json` and `docs/test-coverage.md` were regenerated from a truncated profile.
+  A suite that never completed was published as a coverage regression.
+* **A data race in the new entropy tests.** They drove failures by assigning to
+  `crypto/rand.Reader` and restoring it in `t.Cleanup`, which raced the goroutine
+  `Register` spawns to finish its verification email. CI runs `./internal/...` with `-race`.
+  The global is now written once before any test starts and the source behind it is swapped
+  atomically.
+* **The login page never offered registration.** `showRegisterLink` was declared as a
+  type-only boolean prop, so Vue cast the absent prop to `false` and the guard never passed.
+* **Unmapped server errors were rendered to the user verbatim.** Both auth forms fell
+  through to displaying the raw code, so an overloaded server showed the literal string
+  `server_busy`. Every code the handlers emit now has copy in all 38 locales and the
+  fallback is generic, since a server-controlled string in the DOM is also an injection
+  surface. The register form also carried a message confirming that an address was already
+  registered, which the handler deliberately never sends; it is gone rather than left
+  waiting for a proxy to surface it.
+
+### Tests
+
+The suite grew from 2968 to 3115. Go gained 42 files and about 7,400 lines, and the
+frontend went from 182 tests to 1,160.
+
+The redirect validator was rebuilt as a fail-closed allowlist and is pinned by a table of
+hostile inputs. It rejects dot segments rather than normalising them, because vue-router
+resolves `/..//evil.com` verbatim while `new URL()` collapses it to `//evil.com`, and a
+validator whose idea of the final path disagrees with the router's is one that can be talked
+around.
+
+Covering the WebAuthn handler needed a software FIDO2 authenticator, so the test file now
+contains one: a P-256 key, a CTAP2-shaped COSE encoder and real ES256 signatures over
+`authData || SHA-256(clientDataJSON)`. It produces exactly what a browser posts, so
+go-webauthn's real verifier runs against it, and no dependency was added.
+
+Coverage thresholds are declared in both frontend packages and CI now runs `test:coverage`
+rather than `test`, which exits 0 regardless. The frontend half of the suite was previously
+gated only on whichever tests happened to exist.
+
+Forty-eight statements remain uncovered and are documented as unreachable rather than
+chased: guarded-then-rechecked errors that cannot fire (`Encrypt` validates the key length
+before handing it to `aes.NewCipher`, so the cipher and GCM branches below are dead by
+construction), `json.Marshal` of structs with no unmarshalable field, `flate` writes to a
+`bytes.Buffer`, and mid-stream `rows.Err()` paths that need a real connection to drop
+between `Query` and `Next`. An honest figure was preferred to a manufactured one.
+
+### Breaking
+
+* SDK client-side validation failures and malformed response bodies now reject with
+  `VaultAPIError` rather than a bare `Error`, `SyntaxError` or `TypeError`. Messages are
+  unchanged and `VaultAPIError` is still an `Error`, so matching on message or on
+  `instanceof Error` is unaffected; matching on `instanceof SyntaxError` is not.
+* The binary blob methods now auto-refresh on 401 like every other endpoint, so an expired
+  token costs a round trip instead of failing, and they can emit `session_expired`.
+* `?app=` no longer selects a white-label tenant, and `X-Vault-App` is honoured only from a
+  peer in `TRUSTED_PROXIES`. With `TRUSTED_PROXIES` unset, all auth email uses the global
+  branding.
+* Revoking a signing key is terminal. A restart with a revoked `SIGNING_KEY_FILE` now fails
+  loudly instead of silently reactivating the key. Rotate before revoking.
+
 ## 0.9.6 (2026-07-16)
 
 Coverage **94.67% → 96.67%** (7812 of 8081 statements), which is where the version comes
