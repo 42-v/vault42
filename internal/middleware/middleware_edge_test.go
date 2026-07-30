@@ -620,10 +620,10 @@ func TestClientIP_XFFWithGarbage(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "not-a-valid-ip")
 
 	ip := ClientIP(req)
-	// "not-a-valid-ip" is not a trusted proxy (isTrustedProxy returns false for invalid IPs)
-	// so it should be returned as the rightmost non-trusted entry
-	if ip != "not-a-valid-ip" {
-		t.Errorf("ClientIP with garbage XFF = %q, want %q", ip, "not-a-valid-ip")
+	// "not-a-valid-ip" is not an IP, so it is discarded rather than returned as
+	// the rightmost non-trusted entry: RemoteAddr is the fallback.
+	if ip != "10.0.0.1" {
+		t.Errorf("ClientIP with garbage XFF = %q, want %q", ip, "10.0.0.1")
 	}
 }
 
