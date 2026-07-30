@@ -30,6 +30,10 @@ else
   cov_require_runtime
   echo "Running full-suite tests (DOCKER_HOST=$DOCKER_HOST)..."
   cov_run "$COVER_FILE" "$TEST_OUT"
+  # Without this a killed or timed-out run writes a partial profile and the
+  # README badge is regenerated from it, reporting a coverage figure no run
+  # actually produced.
+  cov_check_failures "$TEST_OUT"
 fi
 
 PASSED=$(grep -c '^--- PASS' "$TEST_OUT" || true)
