@@ -1,29 +1,82 @@
 import { useT } from '@vault42/vue'
 
-/** Maps API error codes to i18n translation keys. */
+/**
+ * Maps API error codes to i18n translation keys.
+ *
+ * The keys are every code the Go handlers, the server mux and the request
+ * middleware can put in the `error` field of a JSON error body, plus the few
+ * codes the client synthesises itself (session_expired, verification_failed,
+ * the webauthn_* browser failures). Codes that share a user-visible meaning
+ * deliberately share one translation key rather than duplicating copy.
+ *
+ * Anything not listed here renders error.fallback. The code string is
+ * server-controlled and must never reach the rendered message.
+ */
 const errorKeys: Record<string, string> = {
   invalid_credentials: 'error.invalid_credentials',
+  invalid_client_credentials: 'error.invalid_credentials',
   unauthorized: 'error.unauthorized',
+  missing_authorization: 'error.unauthorized',
+  invalid_authorization: 'error.unauthorized',
+  unable_to_identify_user: 'error.unauthorized',
   session_expired: 'error.session_expired',
   token_expired: 'error.token_expired',
+  invalid_token: 'error.session_expired',
+  invalid_token_type: 'error.session_expired',
+  missing_refresh_token: 'error.session_expired',
+  challenge_consumed: 'error.session_expired',
   account_locked: 'error.account_locked',
+  account_banned: 'error.account_banned',
+  account_disabled: 'error.account_disabled',
+  account_unavailable: 'error.account_disabled',
   too_many_attempts: 'error.too_many_attempts',
+  too_many_sessions: 'error.too_many_sessions',
+  server_busy: 'error.server_busy',
+  rate_limiter_unavailable: 'error.server_busy',
+  dpop_replay_check_unavailable: 'error.server_busy',
+  registration_disabled: 'error.registration_disabled',
   email_already_registered: 'error.email_already_registered',
+  email_not_verified: 'error.email_not_verified',
   password_too_short: 'error.password_too_short',
   password_breached: 'error.password_breached',
+  password_recently_used: 'error.password_recently_used',
   invalid_email: 'error.invalid_email',
   invalid_password: 'error.invalid_password',
+  invalid_current_password: 'error.invalid_password',
   password_same_as_current: 'error.password_same_as_current',
   invalid_or_expired_token: 'error.invalid_or_expired_token',
+  invalid_or_expired_code: 'error.invalid_or_expired_token',
+  invalid_code: 'error.invalid_code',
   invalid_totp_code: 'error.invalid_totp_code',
   totp_already_enabled: 'error.totp_already_enabled',
+  totp_already_setup: 'error.totp_already_enabled',
   totp_not_enabled: 'error.totp_not_enabled',
+  totp_not_setup: 'error.totp_not_enabled',
+  totp_code_already_used: 'error.code_already_used',
+  backup_code_already_used: 'error.code_already_used',
   invalid_backup_code: 'error.invalid_backup_code',
   webauthn_not_supported: 'error.webauthn_not_supported',
+  webauthn_not_configured: 'error.provider_not_configured',
   webauthn_registration_failed: 'error.webauthn_registration_failed',
   webauthn_authentication_failed: 'error.webauthn_authentication_failed',
+  webauthn_verification_failed: 'error.webauthn_authentication_failed',
+  webauthn_error: 'error.webauthn_failed',
+  cloned_authenticator_detected: 'error.webauthn_failed',
+  no_webauthn_credentials: 'error.no_webauthn_credentials',
   oauth_failed: 'error.oauth_failed',
+  provider_denied: 'error.oauth_failed',
+  provider_error: 'error.oauth_failed',
   provider_not_configured: 'error.provider_not_configured',
+  unknown_provider: 'error.provider_not_configured',
+  invalid_state: 'error.request_expired',
+  invalid_or_reused_state: 'error.request_expired',
+  missing_state: 'error.request_expired',
+  state_expired: 'error.request_expired',
+  replay_detected: 'error.request_expired',
+  concurrent_update: 'error.request_expired',
+  no_pending_registration: 'error.request_expired',
+  no_pending_verification: 'error.request_expired',
+  dpop_proof_reused: 'error.request_expired',
   blob_too_large: 'error.blob_too_large',
   blob_too_small: 'error.blob_too_small',
   quota_exceeded: 'error.quota_exceeded',
@@ -32,8 +85,40 @@ const errorKeys: Record<string, string> = {
   missing_name: 'error.missing_name',
   name_too_long: 'error.name_too_long',
   identity_not_found: 'error.identity_not_found',
+  not_found: 'error.not_found',
+  device_not_found: 'error.not_found',
+  session_not_found: 'error.not_found',
+  credential_not_found: 'error.not_found',
+  forbidden: 'error.forbidden',
+  access_denied: 'error.forbidden',
+  insufficient_scope: 'error.forbidden',
   rate_limited: 'error.rate_limited',
+  rate_limit_exceeded: 'error.rate_limited',
+  invalid_request: 'error.invalid_request',
+  invalid_input: 'error.invalid_request',
+  invalid_profile: 'error.invalid_request',
+  invalid_label: 'error.invalid_request',
+  invalid_scope: 'error.invalid_request',
+  invalid_country: 'error.invalid_request',
+  invalid_billing_country: 'error.invalid_request',
+  invalid_date_of_birth: 'error.invalid_request',
+  name_required: 'error.invalid_request',
+  name_invalid_chars: 'error.invalid_request',
+  password_required: 'error.invalid_request',
+  code_required: 'error.invalid_request',
+  missing_code: 'error.invalid_request',
+  missing_id: 'error.invalid_request',
+  missing_file: 'error.invalid_request',
+  missing_credential_id: 'error.invalid_request',
+  missing_device_id: 'error.invalid_request',
+  missing_session_id: 'error.invalid_request',
+  unwrap_failed: 'error.invalid_request',
+  dpop_proof_required: 'error.invalid_request',
+  invalid_dpop_proof: 'error.invalid_request',
+  dpop_thumbprint_mismatch: 'error.invalid_request',
   internal_error: 'error.internal_error',
+  internal_server_error: 'error.internal_error',
+  import_claim_failed: 'error.internal_error',
   verification_failed: 'error.verification_failed',
   missing_token: 'error.missing_token',
 }
@@ -41,7 +126,10 @@ const errorKeys: Record<string, string> = {
 export function friendlyError(code: string | undefined): string {
   const { t } = useT()
   if (!code) return t('error.unknown')
-  const key = errorKeys[code]
+  // hasOwnProperty, not a bare index: a server sending "toString" or
+  // "constructor" would otherwise pull a function off Object.prototype and
+  // hand it to t(), which throws while rendering the error banner.
+  const key = Object.prototype.hasOwnProperty.call(errorKeys, code) ? errorKeys[code] : undefined
   if (key) return t(key)
   return t('error.fallback')
 }

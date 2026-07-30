@@ -89,13 +89,19 @@ describe('useIdentity', () => {
     })
 
     it('handles 404 gracefully (no identity)', async () => {
-      mockFetch.mockResolvedValueOnce(errorResponse('identity_not_found', 404))
-
+      // Start from a loaded identity so the 404 has something to clear: a
+      // "no identity yet" 404 must reset the ref, not leave stale data on screen.
+      mockFetch.mockResolvedValueOnce(jsonResponse({ given_name: 'Jane', country: 'US' }))
       const { composable } = mountComposable()
+      await composable.fetchIdentity()
+      expect(composable.identity.value).not.toBeNull()
+
+      mockFetch.mockResolvedValueOnce(errorResponse('identity_not_found', 404))
       await composable.fetchIdentity()
 
       expect(composable.identity.value).toBeNull()
       expect(composable.error.value).toBeNull()
+      expect(composable.isLoading.value).toBe(false)
     })
 
     it('sets error on non-404 errors', async () => {

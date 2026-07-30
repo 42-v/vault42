@@ -344,5 +344,17 @@
   "error.fallback": "Kaut kas nogāja greizi. Lūdzu, mēģiniet vēlreiz.",
   "error.email_not_verified": "Lūdzu, verificējiet savu e-pastu pirms pierakstīšanās.",
   "error.invalid_code": "Nederīgs verifikācijas kods.",
-  "error.webauthn_failed": "Drošības atslēgas verificēšana neizdevās. Lūdzu, mēģiniet vēlreiz."
+  "error.webauthn_failed": "Drošības atslēgas verificēšana neizdevās. Lūdzu, mēģiniet vēlreiz.",
+  "error.server_busy": "Serveris pašlaik ir noslogots. Lūdzu, mēģiniet pēc brīža vēlreiz.",
+  "error.account_banned": "Šis konts ir bloķēts. Ja uzskatāt, ka tā ir kļūda, sazinieties ar atbalsta dienestu.",
+  "error.account_disabled": "Šis konts ir atspējots. Lai saņemtu palīdzību, sazinieties ar atbalsta dienestu.",
+  "error.too_many_sessions": "Jums ir pārāk daudz aktīvu sesiju. Izrakstieties citā ierīcē un mēģiniet vēlreiz.",
+  "error.registration_disabled": "Jaunu kontu reģistrācija pašlaik ir atspējota.",
+  "error.invalid_request": "Pieprasījums nebija derīgs. Lūdzu, pārbaudiet datus un mēģiniet vēlreiz.",
+  "error.not_found": "Mēs neatradām to, ko meklējāt.",
+  "error.request_expired": "Šis pieprasījums vairs nav derīgs. Lūdzu, sāciet no jauna.",
+  "error.forbidden": "Jums nav atļaujas to darīt.",
+  "error.code_already_used": "Šis kods jau ir izmantots. Lūdzu, izmantojiet jaunu.",
+  "error.password_recently_used": "Jūs nesen izmantojāt šo paroli. Lūdzu, izvēlieties citu.",
+  "error.no_webauthn_credentials": "Šim kontam nav reģistrēta neviena drošības atslēga."
 }

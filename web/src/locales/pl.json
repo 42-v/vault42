@@ -344,5 +344,17 @@
   "error.fallback": "Coś poszło nie tak. Spróbuj ponownie.",
   "error.email_not_verified": "Zweryfikuj swój adres e-mail przed zalogowaniem.",
   "error.invalid_code": "Nieprawidłowy kod weryfikacyjny.",
-  "error.webauthn_failed": "Weryfikacja klucza bezpieczeństwa nie powiodła się. Spróbuj ponownie."
+  "error.webauthn_failed": "Weryfikacja klucza bezpieczeństwa nie powiodła się. Spróbuj ponownie.",
+  "error.server_busy": "Serwer jest teraz obciążony. Spróbuj ponownie za chwilę.",
+  "error.account_banned": "To konto zostało zablokowane. Skontaktuj się z pomocą techniczną, jeśli uważasz, że to pomyłka.",
+  "error.account_disabled": "To konto zostało wyłączone. Skontaktuj się z pomocą techniczną.",
+  "error.too_many_sessions": "Masz zbyt wiele aktywnych sesji. Wyloguj się na innym urządzeniu i spróbuj ponownie.",
+  "error.registration_disabled": "Rejestracja nowych kont jest obecnie wyłączona.",
+  "error.invalid_request": "Żądanie było nieprawidłowe. Sprawdź dane i spróbuj ponownie.",
+  "error.not_found": "Nie znaleźliśmy tego, czego szukasz.",
+  "error.request_expired": "To żądanie nie jest już ważne. Zacznij od nowa.",
+  "error.forbidden": "Nie masz uprawnień do tej operacji.",
+  "error.code_already_used": "Ten kod został już użyty. Użyj nowego.",
+  "error.password_recently_used": "Niedawno używałeś tego hasła. Wybierz inne.",
+  "error.no_webauthn_credentials": "Do tego konta nie przypisano żadnych kluczy bezpieczeństwa."
 }

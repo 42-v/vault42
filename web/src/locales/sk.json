@@ -344,5 +344,17 @@
   "error.fallback": "Niečo sa pokazilo. Skúste to znova.",
   "error.email_not_verified": "Pred prihlásením si overte e-mail.",
   "error.invalid_code": "Nesprávny overovací kód.",
-  "error.webauthn_failed": "Overenie bezpečnostným kľúčom zlyhalo. Skúste to znova."
+  "error.webauthn_failed": "Overenie bezpečnostným kľúčom zlyhalo. Skúste to znova.",
+  "error.server_busy": "Server je momentálne vyťažený. Skúste to prosím o chvíľu.",
+  "error.account_banned": "Tento účet bol zablokovaný. Ak si myslíte, že ide o omyl, kontaktujte podporu.",
+  "error.account_disabled": "Tento účet bol deaktivovaný. O pomoc požiadajte podporu.",
+  "error.too_many_sessions": "Máte príliš veľa aktívnych relácií. Odhláste sa na inom zariadení a skúste to znova.",
+  "error.registration_disabled": "Registrácia nových účtov je momentálne vypnutá.",
+  "error.invalid_request": "Požiadavka nebola platná. Skontrolujte prosím údaje a skúste to znova.",
+  "error.not_found": "Nenašli sme, čo ste hľadali.",
+  "error.request_expired": "Táto požiadavka už nie je platná. Začnite prosím znova.",
+  "error.forbidden": "Na túto akciu nemáte oprávnenie.",
+  "error.code_already_used": "Tento kód už bol použitý. Použite prosím nový.",
+  "error.password_recently_used": "Toto heslo ste nedávno použili. Zvoľte prosím iné.",
+  "error.no_webauthn_credentials": "K tomuto účtu nie sú zaregistrované žiadne bezpečnostné kľúče."
 }

@@ -344,5 +344,17 @@
   "error.fallback": "Đã xảy ra lỗi. Vui lòng thử lại.",
   "error.email_not_verified": "Vui lòng xác minh email của quý vị trước khi đăng nhập.",
   "error.invalid_code": "Mã xác minh không hợp lệ.",
-  "error.webauthn_failed": "Xác minh khóa bảo mật thất bại. Vui lòng thử lại."
+  "error.webauthn_failed": "Xác minh khóa bảo mật thất bại. Vui lòng thử lại.",
+  "error.server_busy": "Máy chủ đang bận. Vui lòng thử lại sau giây lát.",
+  "error.account_banned": "Tài khoản này đã bị cấm. Vui lòng liên hệ bộ phận hỗ trợ nếu quý vị cho rằng đây là nhầm lẫn.",
+  "error.account_disabled": "Tài khoản này đã bị vô hiệu hóa. Vui lòng liên hệ bộ phận hỗ trợ để được trợ giúp.",
+  "error.too_many_sessions": "Quý vị có quá nhiều phiên đang hoạt động. Vui lòng đăng xuất trên thiết bị khác và thử lại.",
+  "error.registration_disabled": "Việc đăng ký tài khoản mới hiện đang bị tắt.",
+  "error.invalid_request": "Yêu cầu không hợp lệ. Vui lòng kiểm tra thông tin và thử lại.",
+  "error.not_found": "Chúng tôi không tìm thấy nội dung quý vị cần.",
+  "error.request_expired": "Yêu cầu này không còn hiệu lực. Vui lòng bắt đầu lại.",
+  "error.forbidden": "Quý vị không có quyền thực hiện thao tác này.",
+  "error.code_already_used": "Mã này đã được sử dụng. Vui lòng dùng mã mới.",
+  "error.password_recently_used": "Quý vị vừa sử dụng mật khẩu này gần đây. Vui lòng chọn mật khẩu khác.",
+  "error.no_webauthn_credentials": "Không có khóa bảo mật nào được đăng ký cho tài khoản này."
 }

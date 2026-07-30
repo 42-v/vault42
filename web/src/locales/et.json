@@ -344,5 +344,17 @@
   "error.fallback": "Midagi läks valesti. Palun proovige uuesti.",
   "error.email_not_verified": "Palun kinnitage oma e-post enne sisselogimist.",
   "error.invalid_code": "Vale kinnituskood.",
-  "error.webauthn_failed": "Turvavõtme kinnitamine ebaõnnestus. Palun proovige uuesti."
+  "error.webauthn_failed": "Turvavõtme kinnitamine ebaõnnestus. Palun proovige uuesti.",
+  "error.server_busy": "Server on hetkel hõivatud. Palun proovige hetke pärast uuesti.",
+  "error.account_banned": "See konto on blokeeritud. Kui arvate, et tegemist on veaga, võtke ühendust toega.",
+  "error.account_disabled": "See konto on välja lülitatud. Abi saamiseks võtke ühendust toega.",
+  "error.too_many_sessions": "Teil on liiga palju aktiivseid seansse. Logige teises seadmes välja ja proovige uuesti.",
+  "error.registration_disabled": "Uute kontode registreerimine on hetkel välja lülitatud.",
+  "error.invalid_request": "Päring ei olnud kehtiv. Palun kontrollige andmeid ja proovige uuesti.",
+  "error.not_found": "Me ei leidnud seda, mida otsisite.",
+  "error.request_expired": "See päring ei kehti enam. Palun alustage uuesti.",
+  "error.forbidden": "Teil ei ole selleks õigust.",
+  "error.code_already_used": "Seda koodi on juba kasutatud. Palun kasutage uut.",
+  "error.password_recently_used": "Olete seda parooli hiljuti kasutanud. Palun valige teine.",
+  "error.no_webauthn_credentials": "Selle konto jaoks pole ühtegi turvavõtit registreeritud."
 }

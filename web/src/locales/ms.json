@@ -344,5 +344,17 @@
   "error.fallback": "Sesuatu telah berlaku. Sila cuba lagi.",
   "error.email_not_verified": "Sila sahkan e-mel anda sebelum log masuk.",
   "error.invalid_code": "Kod pengesahan tidak sah.",
-  "error.webauthn_failed": "Pengesahan kunci keselamatan gagal. Sila cuba lagi."
+  "error.webauthn_failed": "Pengesahan kunci keselamatan gagal. Sila cuba lagi.",
+  "error.server_busy": "Pelayan sedang sibuk. Sila cuba lagi sebentar lagi.",
+  "error.account_banned": "Akaun ini telah disekat. Hubungi sokongan jika anda rasa ini satu kesilapan.",
+  "error.account_disabled": "Akaun ini telah dinyahaktifkan. Hubungi sokongan untuk bantuan.",
+  "error.too_many_sessions": "Anda mempunyai terlalu banyak sesi aktif. Log keluar pada peranti lain dan cuba lagi.",
+  "error.registration_disabled": "Pendaftaran akaun baharu sedang dimatikan.",
+  "error.invalid_request": "Permintaan tidak sah. Sila semak maklumat anda dan cuba lagi.",
+  "error.not_found": "Kami tidak menemui apa yang anda cari.",
+  "error.request_expired": "Permintaan ini tidak lagi sah. Sila mulakan semula.",
+  "error.forbidden": "Anda tiada kebenaran untuk berbuat demikian.",
+  "error.code_already_used": "Kod ini telah digunakan. Sila gunakan kod baharu.",
+  "error.password_recently_used": "Anda baru sahaja menggunakan kata laluan ini. Sila pilih yang lain.",
+  "error.no_webauthn_credentials": "Tiada kunci keselamatan didaftarkan pada akaun ini."
 }

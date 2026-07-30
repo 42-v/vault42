@@ -344,5 +344,17 @@
   "error.fallback": "Noget gik galt. Prøv igen.",
   "error.email_not_verified": "Verificer venligst din e-mail, før du logger ind.",
   "error.invalid_code": "Ugyldig bekræftelseskode.",
-  "error.webauthn_failed": "Verificering af sikkerhedsnøgle mislykkedes. Prøv igen."
+  "error.webauthn_failed": "Verificering af sikkerhedsnøgle mislykkedes. Prøv igen.",
+  "error.server_busy": "Serveren er travl lige nu. Prøv igen om et øjeblik.",
+  "error.account_banned": "Denne konto er blevet udelukket. Kontakt supporten, hvis du mener, det er en fejl.",
+  "error.account_disabled": "Denne konto er blevet deaktiveret. Kontakt supporten for at få hjælp.",
+  "error.too_many_sessions": "Du har for mange aktive sessioner. Log ud på en anden enhed, og prøv igen.",
+  "error.registration_disabled": "Oprettelse af nye konti er slået fra i øjeblikket.",
+  "error.invalid_request": "Anmodningen var ikke gyldig. Kontrollér dine oplysninger, og prøv igen.",
+  "error.not_found": "Vi kunne ikke finde det, du ledte efter.",
+  "error.request_expired": "Denne anmodning er ikke længere gyldig. Start forfra.",
+  "error.forbidden": "Du har ikke tilladelse til det.",
+  "error.code_already_used": "Denne kode er allerede brugt. Brug en ny.",
+  "error.password_recently_used": "Du har brugt denne adgangskode for nylig. Vælg en anden.",
+  "error.no_webauthn_credentials": "Der er ikke registreret nogen sikkerhedsnøgler på denne konto."
 }

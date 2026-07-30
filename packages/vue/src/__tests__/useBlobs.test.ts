@@ -83,21 +83,31 @@ describe('useBlobs', () => {
     })
 
     it('handles empty list', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ blobs: [], count: 0, quota: sampleQuota }))
-
+      // Load a blob first, so an empty refetch has something to clear.
+      mockFetch.mockResolvedValueOnce(jsonResponse(sampleListResult))
       const { composable } = mountComposable()
+      await composable.fetchBlobs()
+      expect(composable.blobs.value).toHaveLength(1)
+
+      mockFetch.mockResolvedValueOnce(jsonResponse({ blobs: [], count: 0, quota: sampleQuota }))
       await composable.fetchBlobs()
 
       expect(composable.blobs.value).toEqual([])
+      expect(composable.quota.value).toEqual(sampleQuota)
+      expect(composable.error.value).toBeNull()
     })
 
     it('handles missing blobs array', async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({ count: 0, quota: sampleQuota }))
-
+      mockFetch.mockResolvedValueOnce(jsonResponse(sampleListResult))
       const { composable } = mountComposable()
+      await composable.fetchBlobs()
+      expect(composable.blobs.value).toHaveLength(1)
+
+      mockFetch.mockResolvedValueOnce(jsonResponse({ count: 0, quota: sampleQuota }))
       await composable.fetchBlobs()
 
       expect(composable.blobs.value).toEqual([])
+      expect(composable.error.value).toBeNull()
     })
 
     it('sets isLoading during fetch', async () => {

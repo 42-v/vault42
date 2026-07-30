@@ -344,5 +344,17 @@
   "error.fallback": "Něco se pokazilo. Zkuste to prosím znovu.",
   "error.email_not_verified": "Před přihlášením prosím ověřte svůj e-mail.",
   "error.invalid_code": "Neplatný ověřovací kód.",
-  "error.webauthn_failed": "Ověření bezpečnostním klíčem se nezdařilo. Zkuste to prosím znovu."
+  "error.webauthn_failed": "Ověření bezpečnostním klíčem se nezdařilo. Zkuste to prosím znovu.",
+  "error.server_busy": "Server je právě vytížený. Zkuste to prosím za chvíli.",
+  "error.account_banned": "Tento účet byl zablokován. Pokud si myslíte, že jde o omyl, kontaktujte podporu.",
+  "error.account_disabled": "Tento účet byl deaktivován. O pomoc požádejte podporu.",
+  "error.too_many_sessions": "Máte příliš mnoho aktivních relací. Odhlaste se na jiném zařízení a zkuste to znovu.",
+  "error.registration_disabled": "Registrace nových účtů je momentálně vypnutá.",
+  "error.invalid_request": "Požadavek nebyl platný. Zkontrolujte prosím údaje a zkuste to znovu.",
+  "error.not_found": "Nepodařilo se nám najít, co hledáte.",
+  "error.request_expired": "Tento požadavek už není platný. Začněte prosím znovu.",
+  "error.forbidden": "K této akci nemáte oprávnění.",
+  "error.code_already_used": "Tento kód už byl použit. Použijte prosím nový.",
+  "error.password_recently_used": "Toto heslo jste nedávno použili. Zvolte prosím jiné.",
+  "error.no_webauthn_credentials": "K tomuto účtu nejsou registrovány žádné bezpečnostní klíče."
 }

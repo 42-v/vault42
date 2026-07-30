@@ -344,5 +344,17 @@
   "error.fallback": "發生錯誤。請重試。",
   "error.email_not_verified": "請在登入前驗證您的電子郵件。",
   "error.invalid_code": "驗證碼無效。",
-  "error.webauthn_failed": "安全金鑰驗證失敗。請重試。"
+  "error.webauthn_failed": "安全金鑰驗證失敗。請重試。",
+  "error.server_busy": "伺服器目前忙碌中。請稍後再試。",
+  "error.account_banned": "此帳戶已遭封禁。若您認為這是誤判，請聯絡支援團隊。",
+  "error.account_disabled": "此帳戶已停用。請聯絡支援團隊尋求協助。",
+  "error.too_many_sessions": "您的活動工作階段過多。請在其他裝置上登出後再試。",
+  "error.registration_disabled": "目前已關閉新帳戶註冊。",
+  "error.invalid_request": "請求無效。請檢查您的資訊後再試。",
+  "error.not_found": "找不到您要尋找的內容。",
+  "error.request_expired": "此請求已失效。請重新開始。",
+  "error.forbidden": "您沒有執行此操作的權限。",
+  "error.code_already_used": "此代碼已被使用。請使用新的代碼。",
+  "error.password_recently_used": "您最近使用過此密碼。請選擇其他密碼。",
+  "error.no_webauthn_credentials": "此帳戶未註冊任何安全金鑰。"
 }
