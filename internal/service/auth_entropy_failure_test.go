@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"io"
 	"strings"
@@ -43,14 +42,12 @@ func (r *serviceAuthScriptedReader) Read(p []byte) (int, error) {
 }
 
 // serviceAuthStarveEntropy installs a reader that dies after budget reads and
-// restores the previous one when the test ends.
+// puts the real entropy source back when the test ends.
 func serviceAuthStarveEntropy(t *testing.T, budget int64) {
 	t.Helper()
 	r := &serviceAuthScriptedReader{}
 	r.left.Store(budget)
-	previous := rand.Reader
-	rand.Reader = r
-	t.Cleanup(func() { rand.Reader = previous })
+	serviceRandUse(t, r)
 }
 
 var _ io.Reader = (*serviceAuthScriptedReader)(nil)

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"io"
 	"strings"
@@ -58,9 +57,7 @@ func TestDeleteAccount_RecoveryIDFailureFailsClosed(t *testing.T) {
 
 	svc := newErasureService(t, &priv.PublicKey, m)
 
-	orig := rand.Reader
-	rand.Reader = apUUIDStarvedReader{real: orig}
-	t.Cleanup(func() { rand.Reader = orig })
+	serviceRandUse(t, apUUIDStarvedReader{real: serviceRandReal})
 
 	err = svc.DeleteAccount(context.Background(), "user-1", "self", "user_request")
 	if err == nil {

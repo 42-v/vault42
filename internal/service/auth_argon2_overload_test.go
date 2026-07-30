@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -44,8 +43,7 @@ func serviceAuthSaturateArgon2(t *testing.T) {
 	t.Helper()
 
 	release := make(chan struct{})
-	previous := rand.Reader
-	rand.Reader = serviceAuthBlockedReader{release: release}
+	serviceRandUse(t, serviceAuthBlockedReader{release: release})
 
 	var wg sync.WaitGroup
 	for i := 0; i < vaultcrypto.Argon2MaxConcurrent(); i++ {
@@ -55,10 +53,11 @@ func serviceAuthSaturateArgon2(t *testing.T) {
 			_, _ = vaultcrypto.HashPassword("hold-an-argon2-slot")
 		}()
 	}
+	// Registered after serviceRandUse, so LIFO cleanup releases the blocked
+	// readers and drains the goroutines before the entropy source is restored.
 	t.Cleanup(func() {
 		close(release)
 		wg.Wait()
-		rand.Reader = previous
 	})
 
 	deadline := time.Now().Add(30 * time.Second)
