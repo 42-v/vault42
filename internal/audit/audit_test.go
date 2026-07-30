@@ -36,6 +36,12 @@ func (m *mockAuditRepo) Query(_ context.Context, _ repository.AuditFilter) ([]*m
 	return m.entries, nil
 }
 
+func (m *mockAuditRepo) CountByUser(_ context.Context, _ string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.entries), nil
+}
+
 func (m *mockAuditRepo) Cleanup(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
 }

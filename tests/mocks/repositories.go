@@ -534,6 +534,7 @@ type MockAuditRepo struct {
 	InsertFn      func(ctx context.Context, entry *model.AuditEntry) error
 	InsertBatchFn func(ctx context.Context, entries []*model.AuditEntry) error
 	QueryFn       func(ctx context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error)
+	CountByUserFn func(ctx context.Context, userID string) (int, error)
 	CleanupFn       func(ctx context.Context, olderThan time.Time) (int64, error)
 	CleanupLockedFn func(ctx context.Context, olderThan time.Time) (int64, bool, error)
 }
@@ -570,6 +571,13 @@ func (m *MockAuditRepo) Query(ctx context.Context, filter repository.AuditFilter
 		return m.QueryFn(ctx, filter)
 	}
 	return nil, nil
+}
+
+func (m *MockAuditRepo) CountByUser(ctx context.Context, userID string) (int, error) {
+	if m.CountByUserFn != nil {
+		return m.CountByUserFn(ctx, userID)
+	}
+	return 0, nil
 }
 
 func (m *MockAuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64, error) {

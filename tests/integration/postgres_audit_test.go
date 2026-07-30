@@ -127,6 +127,40 @@ func TestPostgresAuditRepo(t *testing.T) {
 		}
 	})
 
+	// The Art. 15 export reports CountByUser as the total held and compares it
+	// against the capped Query result to decide whether the export is partial.
+	// A count that is not user-scoped, or that inherits Query's LIMIT, would
+	// make that comparison lie.
+	t.Run("CountByUser is user-scoped and uncapped", func(t *testing.T) {
+		count1, err := repo.CountByUser(ctx, userID1)
+		if err != nil {
+			t.Fatalf("CountByUser: %v", err)
+		}
+		entries1, err := repo.Query(ctx, repository.AuditFilter{UserID: userID1})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if count1 != len(entries1) {
+			t.Errorf("CountByUser = %d, Query returned %d for the same user", count1, len(entries1))
+		}
+
+		count2, err := repo.CountByUser(ctx, userID2)
+		if err != nil {
+			t.Fatalf("CountByUser: %v", err)
+		}
+		if count2 == 0 {
+			t.Error("CountByUser returned 0 for a user with entries")
+		}
+
+		all, err := repo.Query(ctx, repository.AuditFilter{})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if count1 >= len(all) && count2 > 0 {
+			t.Errorf("CountByUser(%q) = %d counted entries belonging to other users", userID1, count1)
+		}
+	})
+
 	t.Run("Query by EventType", func(t *testing.T) {
 		entries, err := repo.Query(ctx, repository.AuditFilter{EventType: "token_refresh"})
 		if err != nil {

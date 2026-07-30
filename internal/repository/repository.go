@@ -212,6 +212,10 @@ type AuditRepository interface {
 	InsertBatch(ctx context.Context, entries []*model.AuditEntry) error
 	// Query retrieves audit log entries matching the given filter criteria.
 	Query(ctx context.Context, filter AuditFilter) ([]*model.AuditEntry, error)
+	// CountByUser returns how many audit entries are held for a user. Query is
+	// capped, so a caller that must report completeness (the Art. 15 export)
+	// needs the unbounded total separately.
+	CountByUser(ctx context.Context, userID string) (int, error)
 	// Cleanup removes audit entries older than the given time using the
 	// SECURITY DEFINER function that temporarily disables append-only triggers.
 	Cleanup(ctx context.Context, olderThan time.Time) (int64, error)

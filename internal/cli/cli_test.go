@@ -214,6 +214,10 @@ func (m *mockAuditRepo) Query(ctx context.Context, filter repository.AuditFilter
 	return nil, nil
 }
 
+func (*mockAuditRepo) CountByUser(context.Context, string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockAuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64, error) {
 	if m.CleanupFn != nil {
 		return m.CleanupFn(ctx, olderThan)

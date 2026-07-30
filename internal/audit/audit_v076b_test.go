@@ -27,6 +27,7 @@ func (m *hookAuditRepo) InsertBatch(_ context.Context, _ []*model.AuditEntry) er
 func (m *hookAuditRepo) Query(_ context.Context, _ repository.AuditFilter) ([]*model.AuditEntry, error) {
 	return nil, nil
 }
+func (m *hookAuditRepo) CountByUser(_ context.Context, _ string) (int, error)  { return 0, nil }
 func (m *hookAuditRepo) Cleanup(_ context.Context, _ time.Time) (int64, error) { return 0, nil }
 
 // A full buffer drops a non-critical event (counted, not written).

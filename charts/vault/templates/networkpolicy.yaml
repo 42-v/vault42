@@ -1,6 +1,9 @@
 {{- if .Values.networkPolicy.enabled }}
 ---
-# Vault: allow ingress on 8080, egress to postgres + redis + DNS only
+# Vault: allow ingress on 8080, egress to postgres + redis + DNS only.
+# A podSelector is a subset match, so this must name the component as well:
+# selectorLabels alone also match the bridge and honeypot pods, which would hand
+# the honeypot egress to the production database.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -12,6 +15,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vault
   policyTypes:
     - Ingress
     - Egress
@@ -75,6 +79,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: vault
         {{- if .Values.adminGateway.enabled }}
         - podSelector:
             matchLabels:
@@ -105,6 +110,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: vault
       {{- if and .Values.bridge.enabled .Values.bridge.redis.enabled }}
         - podSelector:
             matchLabels:
@@ -143,6 +149,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: vault
       ports:
         - port: {{ .Values.service.port | int }}
           protocol: TCP
