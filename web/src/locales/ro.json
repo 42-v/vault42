@@ -344,5 +344,17 @@
   "error.fallback": "Ceva nu a funcționat corect. Vă rugăm să încercați din nou.",
   "error.email_not_verified": "Vă rugăm să vă verificați adresa de e-mail înainte de autentificare.",
   "error.invalid_code": "Cod de verificare invalid.",
-  "error.webauthn_failed": "Verificarea cheii de securitate a eșuat. Vă rugăm să încercați din nou."
+  "error.webauthn_failed": "Verificarea cheii de securitate a eșuat. Vă rugăm să încercați din nou.",
+  "error.server_busy": "Serverul este ocupat în acest moment. Vă rugăm să încercați din nou peste puțin timp.",
+  "error.account_banned": "Acest cont a fost blocat. Contactați asistența dacă credeți că este o greșeală.",
+  "error.account_disabled": "Acest cont a fost dezactivat. Contactați asistența pentru ajutor.",
+  "error.too_many_sessions": "Aveți prea multe sesiuni active. Deconectați-vă de pe alt dispozitiv și încercați din nou.",
+  "error.registration_disabled": "Înregistrarea conturilor noi este momentan dezactivată.",
+  "error.invalid_request": "Cererea nu a fost validă. Vă rugăm să verificați datele și să încercați din nou.",
+  "error.not_found": "Nu am găsit ceea ce căutați.",
+  "error.request_expired": "Această cerere nu mai este validă. Vă rugăm să reluați.",
+  "error.forbidden": "Nu aveți permisiunea să faceți acest lucru.",
+  "error.code_already_used": "Acest cod a fost deja folosit. Vă rugăm să folosiți unul nou.",
+  "error.password_recently_used": "Ați folosit recent această parolă. Vă rugăm să alegeți alta.",
+  "error.no_webauthn_credentials": "Nu există chei de securitate înregistrate pentru acest cont."
 }

@@ -344,5 +344,17 @@
   "error.fallback": "Kažkas nutiko. Prašome bandyti dar kartą.",
   "error.email_not_verified": "Prašome patvirtinti savo el. paštą prieš prisijungiant.",
   "error.invalid_code": "Neteisingas patvirtinimo kodas.",
-  "error.webauthn_failed": "Saugumo rakto patvirtinimas nepavyko. Prašome bandyti dar kartą."
+  "error.webauthn_failed": "Saugumo rakto patvirtinimas nepavyko. Prašome bandyti dar kartą.",
+  "error.server_busy": "Serveris šiuo metu apkrautas. Prašome pabandyti po akimirkos.",
+  "error.account_banned": "Ši paskyra užblokuota. Jei manote, kad tai klaida, susisiekite su pagalbos tarnyba.",
+  "error.account_disabled": "Ši paskyra išjungta. Dėl pagalbos susisiekite su pagalbos tarnyba.",
+  "error.too_many_sessions": "Turite per daug aktyvių seansų. Atsijunkite kitame įrenginyje ir bandykite dar kartą.",
+  "error.registration_disabled": "Naujų paskyrų registracija šiuo metu išjungta.",
+  "error.invalid_request": "Užklausa buvo netinkama. Prašome patikrinti duomenis ir bandyti dar kartą.",
+  "error.not_found": "Neradome to, ko ieškojote.",
+  "error.request_expired": "Ši užklausa nebegalioja. Prašome pradėti iš naujo.",
+  "error.forbidden": "Neturite teisės to atlikti.",
+  "error.code_already_used": "Šis kodas jau panaudotas. Prašome naudoti naują.",
+  "error.password_recently_used": "Neseniai naudojote šį slaptažodį. Prašome pasirinkti kitą.",
+  "error.no_webauthn_credentials": "Šioje paskyroje neužregistruota jokių saugos raktų."
 }

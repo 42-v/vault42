@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { watch } from 'vue'
 import { getAuthState } from '@vault42/vue'
 
 const routes = [
@@ -127,12 +128,34 @@ router.beforeEach(async (to) => {
 
   // Block register route when registration is disabled
   if (to.name === 'register') {
-    const { registrationEnabled, initialized, init } = getAuthState()
-    if (!initialized.value) {
-      try { await init() } catch { /* ignore */ }
-    }
+    const { registrationEnabled, init } = getAuthState()
+    // init() is idempotent and returns the in-flight promise, so this is safe to
+    // await unconditionally. Doing it unconditionally matters: `initialized` can
+    // already be true from an earlier navigation whose capabilities fetch had not
+    // landed yet, and gating on it would read the optimistic default instead.
+    try { await init() } catch { /* offline: fall through, the server still enforces */ }
     if (!registrationEnabled.value) {
       return { path: '/login' }
     }
   }
 })
+
+// Second line of defence for the registration toggle.
+//
+// `registrationEnabled` starts optimistic (true) and only becomes authoritative
+// once GET /auth/capabilities has answered. The guard above reads it at
+// navigation time, which cannot be the whole story: the answer may land after
+// init() resolves, and a visitor already sitting on /register was never guarded
+// at all. Watching the flag closes both holes without depending on init()
+// settling capabilities first, so the guard never has to win a race.
+//
+// Fail-open on the way in, fail-closed the moment the server actually says no:
+// blocking sign up because capabilities could not be fetched would be worse than
+// briefly showing a form the server would reject anyway.
+const { registrationEnabled } = getAuthState()
+
+watch(registrationEnabled, (enabled) => {
+  if (!enabled && router.currentRoute.value.name === 'register') {
+    void router.replace('/login')
+  }
+}, { flush: 'sync' })

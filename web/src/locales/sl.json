@@ -344,5 +344,17 @@
   "error.fallback": "Nekaj je šlo narobe. Poskusite znova.",
   "error.email_not_verified": "Pred prijavo potrdite svojo e-pošto.",
   "error.invalid_code": "Neveljavna potrditvena koda.",
-  "error.webauthn_failed": "Preverjanje varnostnega ključa ni uspelo. Poskusite znova."
+  "error.webauthn_failed": "Preverjanje varnostnega ključa ni uspelo. Poskusite znova.",
+  "error.server_busy": "Strežnik je trenutno obremenjen. Poskusite znova čez trenutek.",
+  "error.account_banned": "Ta račun je blokiran. Če menite, da gre za napako, se obrnite na podporo.",
+  "error.account_disabled": "Ta račun je onemogočen. Za pomoč se obrnite na podporo.",
+  "error.too_many_sessions": "Imate preveč aktivnih sej. Odjavite se na drugi napravi in poskusite znova.",
+  "error.registration_disabled": "Registracija novih računov je trenutno onemogočena.",
+  "error.invalid_request": "Zahteva ni bila veljavna. Preverite podatke in poskusite znova.",
+  "error.not_found": "Nismo našli tega, kar ste iskali.",
+  "error.request_expired": "Ta zahteva ni več veljavna. Začnite znova.",
+  "error.forbidden": "Za to nimate dovoljenja.",
+  "error.code_already_used": "Ta koda je že bila uporabljena. Uporabite novo.",
+  "error.password_recently_used": "To geslo ste nedavno uporabili. Izberite drugo.",
+  "error.no_webauthn_credentials": "Za ta račun ni registriranih varnostnih ključev."
 }

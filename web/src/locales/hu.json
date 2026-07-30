@@ -344,5 +344,17 @@
   "error.fallback": "Valami hiba történt. Próbálja újra.",
   "error.email_not_verified": "Kérjük, először erősítse meg e-mail címét.",
   "error.invalid_code": "Érvénytelen ellenőrző kód.",
-  "error.webauthn_failed": "A biztonsági kulccsal történő ellenőrzés sikertelen. Próbálja újra."
+  "error.webauthn_failed": "A biztonsági kulccsal történő ellenőrzés sikertelen. Próbálja újra.",
+  "error.server_busy": "A kiszolgáló jelenleg túlterhelt. Próbálja újra egy pillanat múlva.",
+  "error.account_banned": "Ezt a fiókot letiltottuk. Ha úgy gondolja, hogy tévedés történt, forduljon az ügyfélszolgálathoz.",
+  "error.account_disabled": "Ezt a fiókot kikapcsoltuk. Segítségért forduljon az ügyfélszolgálathoz.",
+  "error.too_many_sessions": "Túl sok aktív munkamenete van. Jelentkezzen ki egy másik eszközön, majd próbálja újra.",
+  "error.registration_disabled": "Új fiókok regisztrációja jelenleg ki van kapcsolva.",
+  "error.invalid_request": "A kérés érvénytelen volt. Ellenőrizze az adatokat, és próbálja újra.",
+  "error.not_found": "Nem találtuk, amit keresett.",
+  "error.request_expired": "Ez a kérés már nem érvényes. Kezdje elölről.",
+  "error.forbidden": "Nincs jogosultsága ehhez.",
+  "error.code_already_used": "Ezt a kódot már felhasználták. Használjon újat.",
+  "error.password_recently_used": "Ezt a jelszót nemrég használta. Válasszon másikat.",
+  "error.no_webauthn_credentials": "Ehhez a fiókhoz nincs biztonsági kulcs regisztrálva."
 }

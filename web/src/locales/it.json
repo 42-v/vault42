@@ -344,5 +344,17 @@
   "error.fallback": "Qualcosa è andato storto. Riprovi.",
   "error.email_not_verified": "Verifichi la Sua email prima di accedere.",
   "error.invalid_code": "Codice di verifica non valido.",
-  "error.webauthn_failed": "Verifica della chiave di sicurezza non riuscita. Riprovi."
+  "error.webauthn_failed": "Verifica della chiave di sicurezza non riuscita. Riprovi.",
+  "error.server_busy": "Il server è occupato in questo momento. Riprovi tra un istante.",
+  "error.account_banned": "Questo account è stato bandito. Contatti l'assistenza se ritiene si tratti di un errore.",
+  "error.account_disabled": "Questo account è stato disattivato. Contatti l'assistenza per ricevere aiuto.",
+  "error.too_many_sessions": "Ha troppe sessioni attive. Esca da un altro dispositivo e riprovi.",
+  "error.registration_disabled": "La registrazione di nuovi account è attualmente disattivata.",
+  "error.invalid_request": "La richiesta non era valida. Controlli i dati e riprovi.",
+  "error.not_found": "Non abbiamo trovato quello che cercava.",
+  "error.request_expired": "Questa richiesta non è più valida. Ricominci da capo.",
+  "error.forbidden": "Non ha il permesso di eseguire questa azione.",
+  "error.code_already_used": "Questo codice è già stato usato. Ne usi uno nuovo.",
+  "error.password_recently_used": "Ha usato questa password di recente. Ne scelga una diversa.",
+  "error.no_webauthn_credentials": "Non ci sono chiavi di sicurezza registrate su questo account."
 }

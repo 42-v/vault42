@@ -344,5 +344,17 @@
   "error.fallback": "エラーが発生しました。もう一度お試しください。",
   "error.email_not_verified": "ログインする前にメールアドレスを認証してください。",
   "error.invalid_code": "無効な認証コードです。",
-  "error.webauthn_failed": "セキュリティキーの検証に失敗しました。もう一度お試しください。"
+  "error.webauthn_failed": "セキュリティキーの検証に失敗しました。もう一度お試しください。",
+  "error.server_busy": "サーバーが混み合っています。しばらくしてからもう一度お試しください。",
+  "error.account_banned": "このアカウントは利用停止されています。誤りだと思われる場合はサポートにお問い合わせください。",
+  "error.account_disabled": "このアカウントは無効化されています。サポートにお問い合わせください。",
+  "error.too_many_sessions": "アクティブなセッションが多すぎます。他のデバイスでサインアウトしてからもう一度お試しください。",
+  "error.registration_disabled": "現在、新規アカウントの登録は無効になっています。",
+  "error.invalid_request": "リクエストが正しくありません。入力内容を確認してもう一度お試しください。",
+  "error.not_found": "お探しのものは見つかりませんでした。",
+  "error.request_expired": "このリクエストは無効になりました。最初からやり直してください。",
+  "error.forbidden": "この操作を行う権限がありません。",
+  "error.code_already_used": "このコードはすでに使用されています。新しいコードをご使用ください。",
+  "error.password_recently_used": "このパスワードは最近使用されています。別のパスワードを選んでください。",
+  "error.no_webauthn_credentials": "このアカウントにはセキュリティキーが登録されていません。"
 }

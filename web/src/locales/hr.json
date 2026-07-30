@@ -344,5 +344,17 @@
   "error.fallback": "Nešto je pošlo po krivu. Pokušajte ponovno.",
   "error.email_not_verified": "Potvrdite svoju e-poštu prije prijave.",
   "error.invalid_code": "Neispravan potvrdni kôd.",
-  "error.webauthn_failed": "Provjera sigurnosnog ključa nije uspjela. Pokušajte ponovno."
+  "error.webauthn_failed": "Provjera sigurnosnog ključa nije uspjela. Pokušajte ponovno.",
+  "error.server_busy": "Poslužitelj je trenutno zauzet. Pokušajte ponovno za koji trenutak.",
+  "error.account_banned": "Ovaj račun je blokiran. Obratite se podršci ako mislite da je riječ o pogrešci.",
+  "error.account_disabled": "Ovaj račun je onemogućen. Obratite se podršci za pomoć.",
+  "error.too_many_sessions": "Imate previše aktivnih sesija. Odjavite se na drugom uređaju i pokušajte ponovno.",
+  "error.registration_disabled": "Registracija novih računa trenutno je onemogućena.",
+  "error.invalid_request": "Zahtjev nije bio valjan. Provjerite podatke i pokušajte ponovno.",
+  "error.not_found": "Nismo pronašli ono što ste tražili.",
+  "error.request_expired": "Ovaj zahtjev više nije valjan. Započnite ponovno.",
+  "error.forbidden": "Nemate dopuštenje za to.",
+  "error.code_already_used": "Ovaj kod je već iskorišten. Upotrijebite novi.",
+  "error.password_recently_used": "Nedavno ste koristili ovu lozinku. Odaberite drugu.",
+  "error.no_webauthn_credentials": "Na ovom računu nije registriran nijedan sigurnosni ključ."
 }

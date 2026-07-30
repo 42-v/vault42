@@ -344,5 +344,17 @@
   "error.fallback": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
   "error.email_not_verified": "Bitte verifizieren Sie Ihre E-Mail vor der Anmeldung.",
   "error.invalid_code": "Ungültiger Verifizierungscode.",
-  "error.webauthn_failed": "Sicherheitsschlüssel-Verifizierung fehlgeschlagen. Bitte erneut versuchen."
+  "error.webauthn_failed": "Sicherheitsschlüssel-Verifizierung fehlgeschlagen. Bitte erneut versuchen.",
+  "error.server_busy": "Der Server ist gerade ausgelastet. Bitte versuchen Sie es gleich erneut.",
+  "error.account_banned": "Dieses Konto wurde gesperrt. Wenden Sie sich an den Support, wenn Sie dies für einen Fehler halten.",
+  "error.account_disabled": "Dieses Konto wurde deaktiviert. Wenden Sie sich an den Support.",
+  "error.too_many_sessions": "Sie haben zu viele aktive Sitzungen. Melden Sie sich auf einem anderen Gerät ab und versuchen Sie es erneut.",
+  "error.registration_disabled": "Die Registrierung neuer Konten ist derzeit deaktiviert.",
+  "error.invalid_request": "Die Anfrage war ungültig. Bitte prüfen Sie Ihre Angaben und versuchen Sie es erneut.",
+  "error.not_found": "Wir konnten nicht finden, wonach Sie gesucht haben.",
+  "error.request_expired": "Diese Anfrage ist nicht mehr gültig. Bitte beginnen Sie von vorn.",
+  "error.forbidden": "Sie haben keine Berechtigung dafür.",
+  "error.code_already_used": "Dieser Code wurde bereits verwendet. Bitte verwenden Sie einen neuen.",
+  "error.password_recently_used": "Sie haben dieses Passwort kürzlich verwendet. Bitte wählen Sie ein anderes.",
+  "error.no_webauthn_credentials": "Für dieses Konto sind keine Sicherheitsschlüssel registriert."
 }

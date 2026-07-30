@@ -344,5 +344,17 @@
   "error.fallback": "Algo correu mal. Tente novamente.",
   "error.email_not_verified": "Verifique o seu e-mail antes de iniciar sessão.",
   "error.invalid_code": "Código de verificação inválido.",
-  "error.webauthn_failed": "A verificação da chave de segurança falhou. Tente novamente."
+  "error.webauthn_failed": "A verificação da chave de segurança falhou. Tente novamente.",
+  "error.server_busy": "O servidor está ocupado neste momento. Tente novamente dentro de instantes.",
+  "error.account_banned": "Esta conta foi banida. Contacte o suporte se considerar que se trata de um erro.",
+  "error.account_disabled": "Esta conta foi desativada. Contacte o suporte para obter ajuda.",
+  "error.too_many_sessions": "Tem demasiadas sessões ativas. Termine sessão noutro dispositivo e tente novamente.",
+  "error.registration_disabled": "O registo de novas contas está atualmente desativado.",
+  "error.invalid_request": "O pedido não era válido. Verifique os seus dados e tente novamente.",
+  "error.not_found": "Não encontrámos o que procurava.",
+  "error.request_expired": "Este pedido já não é válido. Comece de novo.",
+  "error.forbidden": "Não tem permissão para fazer isso.",
+  "error.code_already_used": "Este código já foi utilizado. Utilize um novo.",
+  "error.password_recently_used": "Utilizou esta palavra-passe recentemente. Escolha outra.",
+  "error.no_webauthn_credentials": "Não existem chaves de segurança registadas nesta conta."
 }

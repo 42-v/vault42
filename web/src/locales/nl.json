@@ -344,5 +344,17 @@
   "error.fallback": "Er is iets misgegaan. Probeer het opnieuw.",
   "error.email_not_verified": "Verifieer uw e-mail voordat u inlogt.",
   "error.invalid_code": "Ongeldige verificatiecode.",
-  "error.webauthn_failed": "Verificatie van beveiligingssleutel mislukt. Probeer het opnieuw."
+  "error.webauthn_failed": "Verificatie van beveiligingssleutel mislukt. Probeer het opnieuw.",
+  "error.server_busy": "De server is momenteel druk. Probeer het zo meteen opnieuw.",
+  "error.account_banned": "Dit account is geblokkeerd. Neem contact op met de support als u denkt dat dit een vergissing is.",
+  "error.account_disabled": "Dit account is uitgeschakeld. Neem contact op met de support voor hulp.",
+  "error.too_many_sessions": "U hebt te veel actieve sessies. Log uit op een ander apparaat en probeer het opnieuw.",
+  "error.registration_disabled": "Registratie van nieuwe accounts is momenteel uitgeschakeld.",
+  "error.invalid_request": "Het verzoek was niet geldig. Controleer uw gegevens en probeer het opnieuw.",
+  "error.not_found": "We konden niet vinden wat u zocht.",
+  "error.request_expired": "Dit verzoek is niet langer geldig. Begin opnieuw.",
+  "error.forbidden": "U hebt daar geen toestemming voor.",
+  "error.code_already_used": "Deze code is al gebruikt. Gebruik een nieuwe.",
+  "error.password_recently_used": "U hebt dit wachtwoord onlangs gebruikt. Kies een ander wachtwoord.",
+  "error.no_webauthn_credentials": "Er zijn geen beveiligingssleutels geregistreerd op dit account."
 }
