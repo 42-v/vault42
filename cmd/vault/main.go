@@ -142,7 +142,8 @@ func main() {
 	defer auditLogger.Close(ctx)
 
 	// CLI commands (check before starting server)
-	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper)
+	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper).
+		WithRecoveryPruner(recoveryRepo)
 
 	// Initialize admin token on first boot
 	if err := cliHandler.InitAdminToken(ctx); err != nil {
@@ -178,6 +179,17 @@ func main() {
 		auditRetention.Start(ctx)
 		defer auditRetention.Stop()
 		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
+	}
+
+	// Account-recovery escrow retention (Art. 5(1)(e)). No-op unless
+	// VAULT_RECOVERY_RETENTION_DAYS is set. Started here for the same reason as
+	// the audit sweeper: it sweeps immediately, so starting it before the CLI
+	// check would make every unrelated subcommand purge escrow records.
+	recoveryRetention := service.NewRecoveryRetention(recoveryRepo, cfg.RecoveryRetentionPeriod)
+	if recoveryRetention.Enabled() {
+		recoveryRetention.Start(ctx)
+		defer recoveryRetention.Stop()
+		log.Printf("recovery retention: purging escrow records older than %s", cfg.RecoveryRetentionPeriod)
 	}
 
 	// Signing key initialization — two modes:

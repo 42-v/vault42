@@ -199,6 +199,12 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 }
 
 // escrow writes one encrypted recovery record. Any failure aborts deletion.
+//
+// The record outlives the erasure on purpose, so it is bounded by time instead:
+// VAULT_RECOVERY_RETENTION_DAYS + RecoveryRetention, the same shape as the audit
+// log (Art. 5(1)(e)). Do not put anything in the payload that the retention
+// horizon would not eventually clear, and keep docs/PRIVACY.md §3.2 in step with
+// what recoveryPayload actually carries.
 func (s *ErasureService) escrow(ctx context.Context, user *model.User, deletedBy, reason string) error {
 	payload, err := json.Marshal(recoveryPayload{
 		Email:       user.Email,

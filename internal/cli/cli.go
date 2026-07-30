@@ -2,7 +2,7 @@
 // All commands require authentication via --admin-token. Available commands:
 // add-client, list-clients, revoke-client, rotate-client-secret, lock-user,
 // unlock-user, revoke-all-sessions, rotate-admin-token, rotate-jwks, seed,
-// cleanup-audit, and export-audit.
+// cleanup-audit, cleanup-recovery, and export-audit.
 package cli
 
 import (
@@ -30,6 +30,11 @@ type CLI struct {
 	tokens      repository.RefreshTokenRepository
 	adminConfig repository.AdminConfigRepository
 	audit       repository.AuditRepository
+	// recovery prunes the account-recovery escrow. Attached separately via
+	// WithRecoveryPruner, not taken by New: everything else that touches the
+	// escrow holds the append-only interface, and only this command and the
+	// retention sweeper are handed something that can delete from it.
+	recovery repository.AccountRecoveryPruner
 	// pepper is forwarded to seed.Run so CLI-driven seeding produces hashes
 	// that match the runtime auth-service's pepper. Empty = no pepper.
 	pepper string
@@ -38,6 +43,14 @@ type CLI struct {
 // New creates a new CLI handler with the given repositories.
 func New(clients repository.ClientRepository, users repository.UserRepository, tokens repository.RefreshTokenRepository, adminConfig repository.AdminConfigRepository, audit repository.AuditRepository, pepper string) *CLI {
 	return &CLI{clients: clients, users: users, tokens: tokens, adminConfig: adminConfig, audit: audit, pepper: pepper}
+}
+
+// WithRecoveryPruner attaches the account-recovery escrow pruner that
+// `vault cleanup-recovery` needs. Without it the command reports that the
+// repository is unavailable rather than silently doing nothing.
+func (c *CLI) WithRecoveryPruner(pruner repository.AccountRecoveryPruner) *CLI {
+	c.recovery = pruner
+	return c
 }
 
 // Run executes a CLI command from the given args. It returns true if a command
@@ -84,6 +97,8 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 		return c.runSeed(ctx, args)
 	case "cleanup-audit":
 		return c.cleanupAudit(ctx, args)
+	case "cleanup-recovery":
+		return c.cleanupRecovery(ctx, args)
 	case "export-audit":
 		return c.exportAudit(ctx, args)
 	default:
@@ -391,6 +406,36 @@ func (c *CLI) cleanupAudit(ctx context.Context, args []string) bool {
 		return true
 	}
 	fmt.Printf("Deleted %d audit entries older than %d days.\n", deleted, days)
+	return true
+}
+
+// cleanupRecovery purges account-recovery escrow records past a horizon. It is
+// the on-demand half of VAULT_RECOVERY_RETENTION_DAYS, and the only supported
+// way to remove an escrow record: the table is append-only and both application
+// roles have DELETE revoked, so an Operator honouring a later erasure of the
+// escrow itself has nothing else to reach for.
+func (c *CLI) cleanupRecovery(ctx context.Context, args []string) bool {
+	daysStr := getFlag(args, "--retention-days")
+	if daysStr == "" {
+		fmt.Fprintln(os.Stderr, "Usage: vault cleanup-recovery --admin-token <token> --retention-days <N>")
+		return true
+	}
+	days, err := strconv.Atoi(daysStr)
+	if err != nil || days < 1 {
+		fmt.Fprintln(os.Stderr, "ERROR: --retention-days must be a positive integer")
+		return true
+	}
+	if c.recovery == nil {
+		fmt.Fprintln(os.Stderr, "ERROR: account recovery repository not available")
+		return true
+	}
+	olderThan := time.Now().AddDate(0, 0, -days)
+	deleted, err := c.recovery.Prune(ctx, olderThan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
+	fmt.Printf("Deleted %d recovery escrow records older than %d days.\n", deleted, days)
 	return true
 }
 

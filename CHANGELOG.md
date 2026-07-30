@@ -151,9 +151,13 @@ the feature simply stops working, and the first person to find out is the attack
   the key *actually moves* — a new kid comes back, the revoked one stops being active —
   rather than that the endpoint answered 200. A rotate that reports success while the old
   key keeps signing is the exact failure this surface exists to prevent.
-* **The erasure endpoint exists only when a recovery escrow is configured.** The fail-closed
-  design made structural, and now asserted: erasure must not be reachable on a deployment
-  with nowhere to write the recoverable record.
+* **The erasure endpoint exists only when a recovery *store* is wired.** The gate is
+  `d.Recovery`, the repository — not `VAULT_RECOVERY_PUBLIC_KEY_FILE`, and `cmd/vault`
+  always wires the repository, so on a real deployment the endpoint is always mounted.
+  Without a recovery key the escrow is simply skipped and erasure proceeds unrecoverably;
+  the fail-closed behaviour is inside the service, which refuses to erase if a *configured*
+  escrow cannot be written. What the test asserts is the wiring, and that is what it now
+  says.
 * **The consent compare-and-set returns 409.** The CAS added in 0.9.0 stops a profile update
   silently reverting an unsubscribe — but its *HTTP mapping* was never tested. A 200 there
   is the same defect the CAS exists to prevent, moved one layer up.

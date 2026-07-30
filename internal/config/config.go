@@ -275,6 +275,16 @@ type Config struct {
 	// retention table in docs/PRIVACY.md §4.
 	AuditRetentionPeriod time.Duration
 
+	// RecoveryRetentionPeriod is how long account-recovery escrow records are kept
+	// before the sweeper purges them (VAULT_RECOVERY_RETENTION_DAYS, in days). Each
+	// record holds the erased user's email, creation date, roles and display name
+	// encrypted to the offline recovery key, and the escrow is exempt from the
+	// erasure cascade by design, so Art. 5(1)(e) caps how long it may live.
+	// Default: 0 — disabled. The escrow is the only recoverable copy of an erased
+	// account, so destroying it is an explicit operator choice, consistent with the
+	// retention table in docs/PRIVACY.md §4.
+	RecoveryRetentionPeriod time.Duration
+
 	// KeyRefreshInterval is how often pods refresh signing keys from the database
 	// (VAULT_KEY_REFRESH_INTERVAL). Default: 60s.
 	KeyRefreshInterval time.Duration
@@ -364,7 +374,9 @@ func Load() (*Config, error) {
 		KeyRotationDB:      envBool("VAULT_KEY_ROTATION_DB"),
 		KeyRetentionPeriod: envDuration("VAULT_KEY_RETENTION_PERIOD", time.Hour),
 
-		AuditRetentionPeriod: time.Duration(envInt("VAULT_AUDIT_RETENTION_DAYS", 0)) * 24 * time.Hour,
+		AuditRetentionPeriod:    time.Duration(envInt("VAULT_AUDIT_RETENTION_DAYS", 0)) * 24 * time.Hour,
+		RecoveryRetentionPeriod: time.Duration(envInt("VAULT_RECOVERY_RETENTION_DAYS", 0)) * 24 * time.Hour,
+
 		KeyRefreshInterval: envDuration("VAULT_KEY_REFRESH_INTERVAL", 60*time.Second),
 
 		SeedFile: os.Getenv("VAULT_SEED_FILE"),

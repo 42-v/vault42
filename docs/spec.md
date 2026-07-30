@@ -448,6 +448,7 @@ All commands require `--admin-token`:
 | `rotate-jwks` | Rotate the JWKS signing key |
 | `seed` | Declarative client + user creation from JSON file |
 | `cleanup-audit` | Delete audit entries older than N days |
+| `cleanup-recovery` | Delete account-recovery escrow records older than N days |
 | `export-audit` | Export audit log entries as JSONL to stdout |
 
 **Admin token lifecycle:**
