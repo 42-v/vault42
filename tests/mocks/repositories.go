@@ -425,6 +425,7 @@ type MockWebAuthnRepo struct {
 	GetByCredentialIDFn func(ctx context.Context, credID []byte) (*model.WebAuthnCredential, error)
 	ListByUserFn        func(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	UpdateSignCountFn   func(ctx context.Context, id string, count int) error
+	UpdateFlagsFn       func(ctx context.Context, id string, flags int) error
 	DeleteFn            func(ctx context.Context, id, userID string) error
 	DeleteAllForUserFn  func(ctx context.Context, userID string) error
 }
@@ -453,6 +454,13 @@ func (m *MockWebAuthnRepo) ListByUser(ctx context.Context, userID string) ([]*mo
 func (m *MockWebAuthnRepo) UpdateSignCount(ctx context.Context, id string, count int) error {
 	if m.UpdateSignCountFn != nil {
 		return m.UpdateSignCountFn(ctx, id, count)
+	}
+	return nil
+}
+
+func (m *MockWebAuthnRepo) UpdateFlags(ctx context.Context, id string, flags int) error {
+	if m.UpdateFlagsFn != nil {
+		return m.UpdateFlagsFn(ctx, id, flags)
 	}
 	return nil
 }

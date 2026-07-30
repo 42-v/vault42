@@ -132,9 +132,17 @@ func wanfidoB64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b
 // configured for no attestation conveyance would.
 func (a *wanfidoAuthenticator) attestationRequest(t *testing.T, challenge string, counter uint32) *http.Request {
 	t.Helper()
+	return a.attestationRequestWithFlags(t, challenge, counter, wanfidoFlagUP|wanfidoFlagUV|wanfidoFlagAT)
+}
+
+// attestationRequestWithFlags is attestationRequest with the authenticator data
+// flags chosen by the caller, so a backup-eligible (synced) passkey can be
+// enrolled as well as a device-bound one.
+func (a *wanfidoAuthenticator) attestationRequestWithFlags(t *testing.T, challenge string, counter uint32, flags byte) *http.Request {
+	t.Helper()
 
 	clientData := wanfidoClientData(t, "webauthn.create", challenge, wanfidoOrigin)
-	authData := a.authData(wanfidoRPID, wanfidoFlagUP|wanfidoFlagUV|wanfidoFlagAT, counter, true)
+	authData := a.authData(wanfidoRPID, flags, counter, true)
 
 	att := []byte{0xa3}
 	att = append(att, wanfidoCBORText("fmt")...)

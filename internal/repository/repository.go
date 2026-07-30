@@ -178,6 +178,10 @@ type WebAuthnRepository interface {
 	ListByUser(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	// UpdateSignCount updates the signature counter for clone detection.
 	UpdateSignCount(ctx context.Context, id string, count int) error
+	// UpdateFlags stores the raw authenticator flags byte from the last verified
+	// ceremony. A stale BackupEligible flag makes go-webauthn reject every
+	// subsequent login for that credential.
+	UpdateFlags(ctx context.Context, id string, flags int) error
 	// Delete removes a single WebAuthn credential. The userID parameter provides
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error

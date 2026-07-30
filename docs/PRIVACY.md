@@ -136,7 +136,7 @@ records), the **identity** store (encrypted personal profile, keyed by pseudonym
 | **auth.totp_secrets** | | | |
 | secret_enc, verified | P2 | Until MFA removed or account erased | 6(1)(b)/6(1)(f) |
 | **auth.webauthn_credentials** | | | |
-| credential_id, public_key, sign_count, friendly_name | P2 | Until credential removed or account erased | 6(1)(b)/6(1)(f) |
+| credential_id, public_key, sign_count, flags, friendly_name | P2 | Until credential removed or account erased | 6(1)(b)/6(1)(f) |
 | **auth.backup_codes** | | | |
 | code_hash, used, used_at | P2 | Until regenerated or account erased | 6(1)(f) |
 | **auth.rate_limits** | | | |
