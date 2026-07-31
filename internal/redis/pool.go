@@ -58,7 +58,7 @@ func newPool(opts *Options) *pool {
 		opts:     opts,
 		done:     make(chan struct{}),
 	}
-	go p.reaper()
+	go p.reaper(reapInterval)
 	return p
 }
 
@@ -282,8 +282,8 @@ func (p *pool) healthCheck(cn *conn) error {
 }
 
 // reaper periodically closes idle connections that have expired.
-func (p *pool) reaper() {
-	ticker := time.NewTicker(reapInterval)
+func (p *pool) reaper(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

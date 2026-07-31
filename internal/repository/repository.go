@@ -178,6 +178,10 @@ type WebAuthnRepository interface {
 	ListByUser(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	// UpdateSignCount updates the signature counter for clone detection.
 	UpdateSignCount(ctx context.Context, id string, count int) error
+	// UpdateFlags stores the raw authenticator flags byte from the last verified
+	// ceremony. A stale BackupEligible flag makes go-webauthn reject every
+	// subsequent login for that credential.
+	UpdateFlags(ctx context.Context, id string, flags int) error
 	// Delete removes a single WebAuthn credential. The userID parameter provides
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error
@@ -208,6 +212,10 @@ type AuditRepository interface {
 	InsertBatch(ctx context.Context, entries []*model.AuditEntry) error
 	// Query retrieves audit log entries matching the given filter criteria.
 	Query(ctx context.Context, filter AuditFilter) ([]*model.AuditEntry, error)
+	// CountByUser returns how many audit entries are held for a user. Query is
+	// capped, so a caller that must report completeness (the Art. 15 export)
+	// needs the unbounded total separately.
+	CountByUser(ctx context.Context, userID string) (int, error)
 	// Cleanup removes audit entries older than the given time using the
 	// SECURITY DEFINER function that temporarily disables append-only triggers.
 	Cleanup(ctx context.Context, olderThan time.Time) (int64, error)
@@ -319,6 +327,23 @@ type AccountRecoveryRepository interface {
 	// List returns recovery records ordered by deleted_at descending. Used by the
 	// offline recovery tool to enumerate and decrypt escrowed accounts.
 	List(ctx context.Context, limit, offset int) ([]model.AccountRecovery, error)
+}
+
+// AccountRecoveryPruner removes escrow records past their retention horizon.
+//
+// Deliberately separate from AccountRecoveryRepository: the escrow is
+// append-only for everything that writes to it, and the erasure service, the
+// admin gateway and the server wiring all hold the append-only interface. Only
+// the retention sweeper and `vault cleanup-recovery` are handed a pruner, so a
+// delete cannot be reached from a request path by accident.
+type AccountRecoveryPruner interface {
+	// Prune removes recovery records written before olderThan and returns how
+	// many rows went.
+	Prune(ctx context.Context, olderThan time.Time) (int64, error)
+	// PruneLocked is Prune serialised across replicas by a Postgres advisory
+	// lock. acquired=false means another replica is already sweeping and this one
+	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
+	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
 
 // AdminUserRepository manages admin gateway user persistence.

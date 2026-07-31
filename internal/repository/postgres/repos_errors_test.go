@@ -211,6 +211,9 @@ func TestWebAuthnRepo_SurfacesDatabaseFailures(t *testing.T) {
 	if err := repo.UpdateSignCount(ctx, "w-1", 42); err == nil {
 		t.Error("UpdateSignCount reported success — clone detection depends on this counter persisting")
 	}
+	if err := repo.UpdateFlags(ctx, "w-1", 0x1d); err == nil {
+		t.Error("UpdateFlags reported success -- a stale BackupEligible flag rejects every later login")
+	}
 	if err := repo.Delete(ctx, "w-1", "u-1"); err == nil {
 		t.Error("Delete reported success against an unreachable database")
 	}

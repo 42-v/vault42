@@ -136,6 +136,18 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 	return entries, nil
 }
 
+// CountByUser returns the total number of audit entries held for a user,
+// unaffected by the LIMIT that Query applies.
+func (r *AuditRepo) CountByUser(ctx context.Context, userID string) (int, error) {
+	var count int
+	if err := r.db.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM audit.audit_log WHERE user_id = $1", userID,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count audit entries for user: %w", err)
+	}
+	return count, nil
+}
+
 // auditRetentionLockKey is the advisory-lock key the retention sweep serialises
 // on. Arbitrary but fixed: every replica must pick the same number.
 const auditRetentionLockKey int64 = 4242

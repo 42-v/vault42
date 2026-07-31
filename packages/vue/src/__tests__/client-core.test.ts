@@ -248,6 +248,35 @@ describe('VaultClient — Core', () => {
       expect(mockFetch.mock.calls[0][0]).toContain('/auth/2fa/totp')
       expect(mockFetch.mock.calls[0][1].method).toBe('DELETE')
     })
+
+    it('resendEmailOTP posts to the resend endpoint with the challenge bearer and no body', async () => {
+      client.accessToken = 'challenge-tok'
+      mockFetch.mockResolvedValueOnce(jsonResponse({ status: 'sent' }))
+
+      const result = await client.resendEmailOTP()
+
+      expect(result.status).toBe('sent')
+      const [url, init] = mockFetch.mock.calls[0]
+      expect(url).toBe('https://vault42.example.com/auth/2fa/email-otp/resend')
+      expect(init.method).toBe('POST')
+      expect(init.headers.Authorization).toBe('Bearer challenge-tok')
+      expect(Object.prototype.hasOwnProperty.call(init, 'body')).toBe(false)
+    })
+
+    it('resendEmailOTP does not auto-refresh on 401', async () => {
+      // The bearer during a 2FA challenge is the challenge token. Refreshing
+      // here would trade it for a fully authenticated token before the second
+      // factor was ever presented, so this call must opt out of the retry.
+      client.accessToken = 'challenge-tok'
+      mockFetch.mockResolvedValueOnce(errorResponse('invalid_challenge', 401))
+
+      await expect(client.resendEmailOTP()).rejects.toMatchObject({
+        code: 'invalid_challenge',
+        status: 401,
+      })
+      expect(mockFetch).toHaveBeenCalledOnce()
+      expect(client.accessToken).toBe('challenge-tok')
+    })
   })
 
   describe('confirmPassword', () => {

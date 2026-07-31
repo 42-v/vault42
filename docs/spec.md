@@ -448,6 +448,7 @@ All commands require `--admin-token`:
 | `rotate-jwks` | Rotate the JWKS signing key |
 | `seed` | Declarative client + user creation from JSON file |
 | `cleanup-audit` | Delete audit entries older than N days |
+| `cleanup-recovery` | Delete account-recovery escrow records older than N days |
 | `export-audit` | Export audit log entries as JSONL to stdout |
 
 **Admin token lifecycle:**
@@ -581,11 +582,13 @@ Encrypted blob storage allows users to upload, download, and manage encrypted fi
 - `GET /user/blobs/named/{name}` -- download a blob by name
 - `DELETE /user/blobs/named/{name}` -- delete a blob by name
 
-**Named blobs:** Addressed by a human-readable name (e.g. `session-data`) instead of UUID. The name is stored as HMAC hash -- the plaintext name never persists to the database. PUT replaces any existing blob with the same name (atomic delete + insert, preserving the immutability trigger). Names must match `[a-zA-Z0-9_-]+` (max 255 chars).
+**Named blobs:** Addressed by a human-readable name (e.g. `session-data`) instead of UUID. The name is stored as HMAC hash -- the plaintext name never persists to the database. PUT replaces any existing blob with the same name (atomic delete + insert, preserving the immutability trigger). Names must match `[a-zA-Z0-9_-]+` (max 255 chars); an upload with a name outside that charset is rejected with 400 `invalid_name`.
 
 **Response headers on download:** `Content-Type: application/octet-stream`, `X-Blob-Checksum`, `X-Blob-Label` (if set)
 
 **Audit events:** `blob_upload`, `blob_upload_named`, `blob_download`, `blob_download_named`, `blob_delete`, `blob_delete_named`
+
+Blob audit metadata records the blob id and a `named` flag, never the reference name or the label. The audit logger drops the `name`, `blob_name`, `ref_name` and `label` keys from any `blob_*` event so a future caller cannot reintroduce them.
 
 **Source:** `internal/handler/blob.go`, `internal/service/blob.go`
 
@@ -800,7 +803,7 @@ Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encryp
 | `refresh_tokens` | Stored refresh tokens (SHA-256 hashed, family ID, device binding) |
 | `devices` | Known devices/fingerprints per user |
 | `totp_secrets` | AES-256-GCM encrypted TOTP secrets |
-| `webauthn_credentials` | WebAuthn credential IDs, public keys, sign counts |
+| `webauthn_credentials` | WebAuthn credential IDs, public keys, sign counts, authenticator flags |
 | `backup_codes` | HMAC-SHA256-hashed single-use backup codes |
 | `rate_limits` | Rate limit counters (PostgreSQL cache fallback) |
 | `admin_config` | Key-value admin settings (admin token hash) |

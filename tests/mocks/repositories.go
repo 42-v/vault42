@@ -425,6 +425,7 @@ type MockWebAuthnRepo struct {
 	GetByCredentialIDFn func(ctx context.Context, credID []byte) (*model.WebAuthnCredential, error)
 	ListByUserFn        func(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error)
 	UpdateSignCountFn   func(ctx context.Context, id string, count int) error
+	UpdateFlagsFn       func(ctx context.Context, id string, flags int) error
 	DeleteFn            func(ctx context.Context, id, userID string) error
 	DeleteAllForUserFn  func(ctx context.Context, userID string) error
 }
@@ -453,6 +454,13 @@ func (m *MockWebAuthnRepo) ListByUser(ctx context.Context, userID string) ([]*mo
 func (m *MockWebAuthnRepo) UpdateSignCount(ctx context.Context, id string, count int) error {
 	if m.UpdateSignCountFn != nil {
 		return m.UpdateSignCountFn(ctx, id, count)
+	}
+	return nil
+}
+
+func (m *MockWebAuthnRepo) UpdateFlags(ctx context.Context, id string, flags int) error {
+	if m.UpdateFlagsFn != nil {
+		return m.UpdateFlagsFn(ctx, id, flags)
 	}
 	return nil
 }
@@ -526,6 +534,7 @@ type MockAuditRepo struct {
 	InsertFn      func(ctx context.Context, entry *model.AuditEntry) error
 	InsertBatchFn func(ctx context.Context, entries []*model.AuditEntry) error
 	QueryFn       func(ctx context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error)
+	CountByUserFn func(ctx context.Context, userID string) (int, error)
 	CleanupFn       func(ctx context.Context, olderThan time.Time) (int64, error)
 	CleanupLockedFn func(ctx context.Context, olderThan time.Time) (int64, bool, error)
 }
@@ -562,6 +571,13 @@ func (m *MockAuditRepo) Query(ctx context.Context, filter repository.AuditFilter
 		return m.QueryFn(ctx, filter)
 	}
 	return nil, nil
+}
+
+func (m *MockAuditRepo) CountByUser(ctx context.Context, userID string) (int, error) {
+	if m.CountByUserFn != nil {
+		return m.CountByUserFn(ctx, userID)
+	}
+	return 0, nil
 }
 
 func (m *MockAuditRepo) Cleanup(ctx context.Context, olderThan time.Time) (int64, error) {

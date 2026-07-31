@@ -132,6 +132,12 @@ type WebAuthnCredential struct {
 	CredentialID []byte
 	PublicKey    []byte
 	SignCount    int
+	// Flags is the raw authenticator flags byte (UP/UV/BE/BS) from the last
+	// verified ceremony. go-webauthn rejects a login whose BackupEligible flag
+	// disagrees with the stored one, so this has to survive round trips. Zero
+	// means no flags were ever recorded: user presence is mandatory in every
+	// ceremony, so a genuine value always has at least bit 0 set.
+	Flags        int
 	FriendlyName string
 	CreatedAt    time.Time
 }

@@ -344,5 +344,17 @@
   "error.fallback": "Une erreur est survenue. Veuillez réessayer.",
   "error.email_not_verified": "Veuillez vérifier votre e-mail avant de vous connecter.",
   "error.invalid_code": "Code de vérification invalide.",
-  "error.webauthn_failed": "La vérification de la clé de sécurité a échoué. Veuillez réessayer."
+  "error.webauthn_failed": "La vérification de la clé de sécurité a échoué. Veuillez réessayer.",
+  "error.server_busy": "Le serveur est actuellement surchargé. Veuillez réessayer dans un instant.",
+  "error.account_banned": "Ce compte a été banni. Contactez le support si vous pensez qu'il s'agit d'une erreur.",
+  "error.account_disabled": "Ce compte a été désactivé. Contactez le support pour obtenir de l'aide.",
+  "error.too_many_sessions": "Vous avez trop de sessions actives. Déconnectez-vous sur un autre appareil et réessayez.",
+  "error.registration_disabled": "La création de nouveaux comptes est actuellement désactivée.",
+  "error.invalid_request": "La requête n'était pas valide. Veuillez vérifier vos informations et réessayer.",
+  "error.not_found": "Nous n'avons pas trouvé ce que vous cherchiez.",
+  "error.request_expired": "Cette requête n'est plus valide. Veuillez recommencer.",
+  "error.forbidden": "Vous n'avez pas la permission de faire cela.",
+  "error.code_already_used": "Ce code a déjà été utilisé. Veuillez en utiliser un nouveau.",
+  "error.password_recently_used": "Vous avez utilisé ce mot de passe récemment. Veuillez en choisir un autre.",
+  "error.no_webauthn_credentials": "Aucune clé de sécurité n'est enregistrée sur ce compte."
 }

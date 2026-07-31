@@ -26,14 +26,14 @@ func LoadSecret(envKey string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 	if os.Getenv("VAULT_SECRET_FILE_CONSUME") == "true" {
-		// path comes from an operator-controlled env var. Quote it so a path
-		// containing CR/LF cannot forge additional log records (CWE-117).
+		// path comes from an operator-controlled env var. Quote it, and the error
+		// text repeating it, so CR/LF cannot forge extra log records (CWE-117).
 		safePath := strconv.Quote(path)
 		if werr := os.WriteFile(path, make([]byte, len(data)), 0o400); werr != nil { // #nosec G104,G306 -- best-effort zeroing; path from operator env var
-			log.Printf("WARNING: failed to zero secret file %s (defense-in-depth wipe skipped): %v", safePath, werr)
+			log.Printf("WARNING: failed to zero secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(werr.Error()))
 		}
 		if rerr := os.Remove(path); rerr != nil {
-			log.Printf("WARNING: failed to remove secret file %s (defense-in-depth wipe skipped): %v", safePath, rerr)
+			log.Printf("WARNING: failed to remove secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(rerr.Error()))
 		}
 	}
 	return strings.TrimSpace(string(data)), nil

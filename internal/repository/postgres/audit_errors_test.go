@@ -36,6 +36,12 @@ func TestAuditRepo_SurfacesDatabaseFailures(t *testing.T) {
 	if _, err := repo.Query(ctx, repository.AuditFilter{Limit: 10}); err == nil {
 		t.Error("Query returned no error — an empty result would read as 'no such events', which is what an investigator would conclude")
 	}
+	// CountByUser feeds the "your export is partial" flag on the data export. A
+	// zero passed off as a real count would tell the subject their export is
+	// complete when nothing was counted at all.
+	if count, err := repo.CountByUser(ctx, "u-1"); err == nil {
+		t.Errorf("CountByUser returned %d and no error against an unreachable database", count)
+	}
 	if _, err := repo.Cleanup(ctx, time.Now().Add(-24*time.Hour)); err == nil {
 		t.Error("Cleanup reported success against an unreachable database")
 	}

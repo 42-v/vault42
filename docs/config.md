@@ -137,8 +137,8 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | `VAULT_DPOP_ENABLED` | bool | `false` | No | Enable DPoP (Demonstrating Proof-of-Possession) validation on token endpoints per RFC 9449. When enabled, the DPoP middleware validates proof headers on `/auth/login`, `/auth/refresh`, the 2FA verify endpoints, and the `POST /kms/unwrap` key-release oracle (single-use anti-replay). |
 | `KMS_ROOT_KEY_FILE` | string | *(none)* | No | Path to a file containing the KMS root secret (at least 32 bytes). Per-kid KEKs are derived from it via HKDF-SHA256, kept cryptographically separate from the master key. When unset, the `POST /kms/unwrap` envelope-unwrap oracle is not mounted. See [Secret Loading](#secret-loading-_file-convention). |
 | `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. Useful when running behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading). |
-| `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). |
-| `REAL_IP_HEADER` | string | *(none)* | No | HTTP header containing the real client IP from a trusted proxy. Only read when the direct connection is from a trusted proxy. Examples: `CF-Connecting-IP` (Cloudflare), `X-Real-IP` (nginx). Empty = use XFF parsing only. |
+| `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). Also gates the `X-Vault-App` white-label tenant header: the slug is only honoured when the direct peer is on this list, so an outside caller cannot dress an auth email in another tenant's branding. Empty = white-label tenant selection is off and all auth emails use the global branding. See [API Reference -- White-Label Tenant Selection](api.md#white-label-tenant-selection). |
+| `REAL_IP_HEADER` | string | *(none)* | No | HTTP header containing the real client IP from a trusted proxy. Only read when the direct connection is from a trusted proxy. Examples: `CF-Connecting-IP` (Cloudflare), `X-Real-IP` (nginx). Empty = use XFF parsing only. A comma-joined value (the embedded profile sets this to `X-Forwarded-For`) is split and the rightmost address wins; a value that is not an IP is discarded and resolution falls back to XFF parsing, then `RemoteAddr`. |
 | `VAULT_TLS_FINGERPRINT_HEADER` | string | *(none)* | No | HTTP header containing the client's TLS fingerprint (e.g. JA4) set by the TLS-terminating proxy. Since Vault42 runs behind a reverse proxy, it cannot compute TLS fingerprints directly; the proxy must extract the fingerprint during the TLS handshake and pass it as a header. The value is included in the device fingerprint hash. Empty = TLS fingerprint field remains empty (backward compatible). Example: `X-TLS-Fingerprint`. |
 
 ### IP Access Control & Geo-Fencing
@@ -230,6 +230,13 @@ The bridge is a separate binary (`cmd/bridge/`) that sits in front of two Vault4
 | `VAULT_BLOB_MAX_PER_USER` | int | `50` | No | Maximum number of blobs per user. |
 | `VAULT_BLOB_QUOTA_BYTES` | int | `10485760` (10MB) | No | Total storage quota per user in bytes. Set to `0` to disable the blob storage feature entirely. |
 
+### Account Erasure & Recovery Escrow
+
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `VAULT_RECOVERY_PUBLIC_KEY_FILE` | string | *(none)* | No | Path to an RSA **public** key (PEM) that account erasure encrypts recovery records to. When set, every erasure first appends one record to `auth.account_recovery` holding the erased user's email, account creation date, roles and display name, encrypted to this key, and the erasure is refused if that write fails. The service holds only the public half, so it can write a record but never read one back; decryption needs the private key, which is kept offline and used by `cmd/recover`. When unset, no escrow record is written and erasure is final at the moment the cascade completes -- startup logs a warning so the choice is deliberate. Enabling it means retaining personal data past an erasure request: set `VAULT_RECOVERY_RETENTION_DAYS` too, and disclose it in the end-user privacy notice (see `docs/PRIVACY.md` §3.1, §4, §5.3). |
+| `VAULT_RECOVERY_RETENTION_DAYS` | int (days) | `0` (disabled) | No | Retention horizon for account-recovery escrow records. A background sweeper runs at startup and every 6h, deleting records older than this. The escrow is append-only and exempt from the erasure cascade, so GDPR Art. 5(1)(e) is what caps its lifetime -- an Operator that configures a recovery key should set a horizon covering the window in which a mistaken or malicious deletion would still be noticed and reversed. Left at `0`, nothing is ever purged: the escrow holds the only recoverable copy of an erased account, so destroying it is an explicit operator choice. `vault cleanup-recovery --retention-days N` performs the same purge on demand, and is the only other supported removal path (both application roles have DELETE revoked on the table). |
+
 ### Seeding
 
 | Variable | Type | Default | Required | Description |
@@ -246,6 +253,8 @@ The bridge is a separate binary (`cmd/bridge/`) that sits in front of two Vault4
 | `VAULT_KEY_REFRESH_INTERVAL` | duration | `60s` | No | How often pods refresh signing keys from the database. Lower values provide faster rotation propagation at the cost of more DB queries. |
 
 When `VAULT_KEY_ROTATION_DB=true`, signing keys are stored encrypted (AES-256-GCM with master key) in PostgreSQL. On first boot, if `SIGNING_KEY_FILE` is present, the key is imported into the database; otherwise, a new RSA-2048 key is generated. All pods share the same keys via periodic database polling. Runtime key management (rotate, list, revoke) is performed via the admin gateway (`cmd/admin-gateway/`), which provides mTLS + RBAC + session authentication. CLI admin commands remain available via pod exec.
+
+Revocation is terminal. The kid is derived from the public key, so an import of the same PEM always addresses the same row; a revoked row is never reactivated by it. If `SIGNING_KEY_FILE` is still mounted when the key it holds is revoked, the next startup fails with `keystore: key is revoked` naming the kid instead of bringing the revoked key back as active. Rotate to a new key (which writes a new kid) rather than re-importing the revoked one. Revoking the only active key also leaves the deployment with nothing to sign with: pods stop issuing tokens and log `keystore: no active signing key` until a rotation supplies one. Rotate first, then revoke.
 
 ### OAuth2
 
@@ -312,6 +321,7 @@ This design ensures secrets never appear in environment variable listings (`/pro
 | Pepper | `VAULT_PEPPER_FILE` | Server-side secret added to password hashes |
 | HMAC Secret | `HMAC_SECRET_FILE` | HMAC-SHA256 signing key (min 32 bytes in production) |
 | Signing Key | `SIGNING_KEY_FILE` | RSA-2048 private key (PKCS#8 PEM) for JWT signing |
+| Recovery Public Key | `VAULT_RECOVERY_PUBLIC_KEY_FILE` | RSA **public** key (PEM) that account-erasure recovery records are encrypted to |
 | DB Migration Password | `DB_MIG_PASSWORD_FILE` | Password for the `vault_mig` PostgreSQL role |
 | DB App Password | `DB_APP_PASSWORD_FILE` | Password for the `vault_app` PostgreSQL role |
 | Redis Password | `REDIS_PASS_FILE` | Redis authentication password |

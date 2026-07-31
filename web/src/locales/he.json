@@ -344,5 +344,17 @@
   "error.fallback": "משהו השתבש. אנא נסו שנית.",
   "error.email_not_verified": "אנא אמתו את הדוא\"ל שלכם לפני הכניסה.",
   "error.invalid_code": "קוד אימות לא תקין.",
-  "error.webauthn_failed": "אימות מפתח האבטחה נכשל. אנא נסו שנית."
+  "error.webauthn_failed": "אימות מפתח האבטחה נכשל. אנא נסו שנית.",
+  "error.server_busy": "השרת עמוס כעת. אנא נסו שנית בעוד רגע.",
+  "error.account_banned": "החשבון הזה נחסם. פנו לתמיכה אם לדעתכם מדובר בטעות.",
+  "error.account_disabled": "החשבון הזה הושבת. פנו לתמיכה לקבלת עזרה.",
+  "error.too_many_sessions": "יש לכם יותר מדי הפעלות פעילות. התנתקו במכשיר אחר ונסו שנית.",
+  "error.registration_disabled": "הרשמת חשבונות חדשים מושבתת כעת.",
+  "error.invalid_request": "הבקשה אינה תקינה. אנא בדקו את הפרטים ונסו שנית.",
+  "error.not_found": "לא הצלחנו למצוא את מה שחיפשתם.",
+  "error.request_expired": "בקשה זו אינה תקפה עוד. אנא התחילו מחדש.",
+  "error.forbidden": "אין לכם הרשאה לבצע פעולה זו.",
+  "error.code_already_used": "הקוד הזה כבר נוצל. אנא השתמשו בקוד חדש.",
+  "error.password_recently_used": "השתמשתם בסיסמה זו לאחרונה. אנא בחרו סיסמה אחרת.",
+  "error.no_webauthn_credentials": "לא רשומים מפתחות אבטחה בחשבון הזה."
 }

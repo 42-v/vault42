@@ -344,5 +344,17 @@
   "error.fallback": "Jokin meni pieleen. Yritä uudelleen.",
   "error.email_not_verified": "Vahvista sähköpostiosoitteesi ennen kirjautumista.",
   "error.invalid_code": "Virheellinen vahvistuskoodi.",
-  "error.webauthn_failed": "Suojausavaimen vahvistus epäonnistui. Yritä uudelleen."
+  "error.webauthn_failed": "Suojausavaimen vahvistus epäonnistui. Yritä uudelleen.",
+  "error.server_busy": "Palvelin on juuri nyt ruuhkautunut. Yritä hetken kuluttua uudelleen.",
+  "error.account_banned": "Tämä tili on estetty. Ota yhteyttä tukeen, jos uskot tämän olevan virhe.",
+  "error.account_disabled": "Tämä tili on poistettu käytöstä. Ota yhteyttä tukeen.",
+  "error.too_many_sessions": "Sinulla on liian monta aktiivista istuntoa. Kirjaudu ulos toisella laitteella ja yritä uudelleen.",
+  "error.registration_disabled": "Uusien tilien luonti on tällä hetkellä poistettu käytöstä.",
+  "error.invalid_request": "Pyyntö ei ollut kelvollinen. Tarkista tiedot ja yritä uudelleen.",
+  "error.not_found": "Emme löytäneet etsimääsi.",
+  "error.request_expired": "Tämä pyyntö ei ole enää voimassa. Aloita alusta.",
+  "error.forbidden": "Sinulla ei ole oikeutta tehdä tätä.",
+  "error.code_already_used": "Tämä koodi on jo käytetty. Käytä uutta.",
+  "error.password_recently_used": "Olet käyttänyt tätä salasanaa hiljattain. Valitse jokin muu.",
+  "error.no_webauthn_credentials": "Tälle tilille ei ole rekisteröity suojausavaimia."
 }

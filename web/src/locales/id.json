@@ -344,5 +344,17 @@
   "error.fallback": "Terjadi kesalahan. Silakan coba lagi.",
   "error.email_not_verified": "Silakan verifikasi email Anda sebelum masuk.",
   "error.invalid_code": "Kode verifikasi tidak valid.",
-  "error.webauthn_failed": "Verifikasi kunci keamanan gagal. Silakan coba lagi."
+  "error.webauthn_failed": "Verifikasi kunci keamanan gagal. Silakan coba lagi.",
+  "error.server_busy": "Server sedang sibuk. Silakan coba lagi sebentar lagi.",
+  "error.account_banned": "Akun ini telah diblokir. Hubungi dukungan jika Anda merasa ini keliru.",
+  "error.account_disabled": "Akun ini telah dinonaktifkan. Hubungi dukungan untuk mendapat bantuan.",
+  "error.too_many_sessions": "Anda memiliki terlalu banyak sesi aktif. Keluar di perangkat lain lalu coba lagi.",
+  "error.registration_disabled": "Pendaftaran akun baru sedang dinonaktifkan.",
+  "error.invalid_request": "Permintaan tidak valid. Silakan periksa data Anda dan coba lagi.",
+  "error.not_found": "Kami tidak menemukan apa yang Anda cari.",
+  "error.request_expired": "Permintaan ini sudah tidak berlaku. Silakan mulai lagi.",
+  "error.forbidden": "Anda tidak memiliki izin untuk melakukan itu.",
+  "error.code_already_used": "Kode ini sudah digunakan. Silakan gunakan kode baru.",
+  "error.password_recently_used": "Anda baru saja menggunakan kata sandi ini. Silakan pilih yang lain.",
+  "error.no_webauthn_credentials": "Tidak ada kunci keamanan yang terdaftar pada akun ini."
 }

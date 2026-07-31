@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -282,6 +283,121 @@ func TestKeyStoreImport(t *testing.T) {
 		}
 		if seen[1].pubs != 2 {
 			t.Errorf("second OnKeyChange saw %d public keys, want 2 (active + retired)", seen[1].pubs)
+		}
+	})
+}
+
+// TestKeyStoreRevocationIsTerminal pins what revocation means. A key is revoked
+// because its private material leaked, so it must never be signing again, and
+// the deployment must never keep signing with it after the fact.
+func TestKeyStoreRevocationIsTerminal(t *testing.T) {
+	pool, _, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// The kid is a hash of the modulus, so re-importing the same PEM always
+	// lands on the existing row. With SIGNING_KEY_FILE still mounted (the state
+	// the chart leaves behind after a file-to-DB migration), the restart that
+	// follows a revocation would otherwise upsert the leaked key back to active.
+	t.Run("re-import cannot resurrect a revoked key", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x31)
+		defer ks.Stop()
+
+		key, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		kid, err := ks.Import(ctx, key)
+		if err != nil {
+			t.Fatalf("Import: %v", err)
+		}
+		if err := ks.Revoke(ctx, kid); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+
+		if _, err := ks.Import(ctx, key); !errors.Is(err, keystore.ErrRevokedKey) {
+			t.Fatalf("Import(revoked key) err = %v, want ErrRevokedKey", err)
+		}
+		// The restart itself: SIGNING_KEY_FILE is still mounted, so EnsureKey
+		// finds no active key and reaches for the revoked PEM. It must refuse
+		// loudly, naming the kid, rather than boot on a leaked key.
+		err = ks.EnsureKey(ctx, key)
+		if !errors.Is(err, keystore.ErrRevokedKey) {
+			t.Fatalf("EnsureKey(revoked key) err = %v, want ErrRevokedKey", err)
+		}
+		if !strings.Contains(err.Error(), kid) {
+			t.Errorf("EnsureKey error %q does not name the offending kid %q", err, kid)
+		}
+
+		keys, err := ks.ListKeys(ctx)
+		if err != nil {
+			t.Fatalf("ListKeys: %v", err)
+		}
+		if len(keys) != 1 || keys[0].Status != "revoked" {
+			t.Fatalf("after refused imports ListKeys = %v, want one revoked row", keys)
+		}
+		if pubs := ks.AllPublicKeys(); pubs[kid] != nil {
+			t.Error("revoked key returned to JWKS")
+		}
+	})
+
+	// A rotation away from a revoked kid is the sanctioned recovery, and it must
+	// still work: only the revoked row is frozen, not the table.
+	t.Run("rotation after revocation still works", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x32)
+		defer ks.Stop()
+
+		leaked, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		if err := ks.Revoke(ctx, leaked); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		fresh, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate (recovery): %v", err)
+		}
+		if key, kid := ks.ActiveKey(); key == nil || kid != fresh {
+			t.Fatalf("ActiveKey = (%v, %q), want the fresh kid %q", key, kid, fresh)
+		}
+	})
+
+	// Revoking the only active key leaves nothing to sign with. AuthDynamic has
+	// already dropped that kid from verification, so a signer left holding it
+	// mints tokens that fail on arrival. The loss must reach the subscriber.
+	t.Run("revoking the sole active key propagates a nil signing key", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x33)
+		defer ks.Stop()
+
+		type change struct {
+			kid    string
+			hasKey bool
+		}
+		var seen []change
+		ks.SetOnKeyChange(func(k *rsa.PrivateKey, kid string, _ map[string]*rsa.PublicKey) {
+			seen = append(seen, change{kid: kid, hasKey: k != nil})
+		})
+
+		kid, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		if err := ks.Revoke(ctx, kid); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+
+		if len(seen) != 2 {
+			t.Fatalf("OnKeyChange fired %d times (%v), want 2 — the revocation never reached the signer", len(seen), seen)
+		}
+		if seen[1].hasKey || seen[1].kid != "" {
+			t.Errorf("revocation notified %+v, want an empty kid and no key", seen[1])
+		}
+		if key, active := ks.ActiveKey(); key != nil || active != "" {
+			t.Errorf("ActiveKey = (%v, %q) after revoking the only key", key, active)
 		}
 	})
 }

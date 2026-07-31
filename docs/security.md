@@ -163,6 +163,21 @@ govulncheck flags `golang.org/x/crypto@v0.53.0` because the module contains `gol
 
 ---
 
+### AR-12: `vault_app` Can Still Purge Audit Entries Past the Retention Horizon
+
+**Severity:** Low | **Source:** privilege review of `audit.cleanup_old_entries()` (0.9.8)
+
+The audit log is append-only at the database level: a trigger refuses DELETE and UPDATE, and 001 revokes both from `vault_app`. The retention sweeper is the one sanctioned exception, and it runs in-process in `cmd/vault` under `vault_app` -- so that role must hold EXECUTE on `audit.cleanup_old_entries()`, a SECURITY DEFINER function owned by `vault_mig` that disables the trigger to delete. Anything that reaches the database as `vault_app` can therefore still remove entries older than the horizon it passes.
+
+**Why this is accepted:**
+
+- **Bounded, not unbounded.** Migration 012 makes the function refuse any horizon shorter than a day (the setting is configured in whole days), so the freshest entries -- including the record of the intrusion doing the calling -- cannot be destroyed. Before 012 a zero or negative interval wiped the entire table.
+- **No wider than it has to be.** EXECUTE is revoked from `PUBLIC` and granted to `vault_app` alone. `vault_admin` and every other role in the cluster are refused, and the function carries an explicit `search_path` (CVE-2018-1058).
+- **The alternative costs more than it buys.** Closing it fully means moving the sweeper out of the API process into a separately-credentialed job, which trades one narrow purge path for another deployment unit, another secret and another failure mode.
+- **Guarded against regression.** `TestAuditPurgeFunctionPrivileges` connects as the real roles with the real grants and asserts the whole model: PUBLIC denied, `vault_admin` denied, degenerate horizons rejected with the log intact, and the trigger re-enabled after a legitimate sweep.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

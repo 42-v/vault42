@@ -20,9 +20,9 @@ func NewWebAuthnRepo(db *DB) repository.WebAuthnRepository { return &WebAuthnRep
 // Create inserts a new WebAuthn credential into the auth.webauthn_credentials table.
 func (r *WebAuthnRepo) Create(ctx context.Context, c *model.WebAuthnCredential) error {
 	_, err := r.db.Pool.Exec(ctx,
-		`INSERT INTO auth.webauthn_credentials (id, user_id, credential_id, public_key, sign_count, friendly_name, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		c.ID, c.UserID, c.CredentialID, c.PublicKey, c.SignCount, c.FriendlyName, c.CreatedAt)
+		`INSERT INTO auth.webauthn_credentials (id, user_id, credential_id, public_key, sign_count, flags, friendly_name, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		c.ID, c.UserID, c.CredentialID, c.PublicKey, c.SignCount, c.Flags, c.FriendlyName, c.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("create webauthn credential: %w", err)
 	}
@@ -32,10 +32,10 @@ func (r *WebAuthnRepo) Create(ctx context.Context, c *model.WebAuthnCredential) 
 // GetByCredentialID retrieves a credential by its raw credential ID bytes.
 func (r *WebAuthnRepo) GetByCredentialID(ctx context.Context, credID []byte) (*model.WebAuthnCredential, error) {
 	row := r.db.Pool.QueryRow(ctx,
-		`SELECT id, user_id, credential_id, public_key, sign_count, friendly_name, created_at
+		`SELECT id, user_id, credential_id, public_key, sign_count, flags, friendly_name, created_at
 		 FROM auth.webauthn_credentials WHERE credential_id=$1`, credID)
 	c := &model.WebAuthnCredential{}
-	err := row.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &c.FriendlyName, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &c.Flags, &c.FriendlyName, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -48,7 +48,7 @@ func (r *WebAuthnRepo) GetByCredentialID(ctx context.Context, credID []byte) (*m
 // ListByUser returns all WebAuthn credentials for a user, ordered by creation time.
 func (r *WebAuthnRepo) ListByUser(ctx context.Context, userID string) ([]*model.WebAuthnCredential, error) {
 	rows, err := r.db.Pool.Query(ctx,
-		`SELECT id, user_id, credential_id, public_key, sign_count, friendly_name, created_at
+		`SELECT id, user_id, credential_id, public_key, sign_count, flags, friendly_name, created_at
 		 FROM auth.webauthn_credentials WHERE user_id=$1 ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list webauthn credentials: %w", err)
@@ -57,7 +57,7 @@ func (r *WebAuthnRepo) ListByUser(ctx context.Context, userID string) ([]*model.
 	var creds []*model.WebAuthnCredential
 	for rows.Next() {
 		c := &model.WebAuthnCredential{}
-		if err := rows.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &c.FriendlyName, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &c.Flags, &c.FriendlyName, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan webauthn credential: %w", err)
 		}
 		creds = append(creds, c)
@@ -73,6 +73,18 @@ func (r *WebAuthnRepo) UpdateSignCount(ctx context.Context, id string, count int
 	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.webauthn_credentials SET sign_count=$1 WHERE id=$2`, count, id)
 	if err != nil {
 		return fmt.Errorf("update sign count: %w", err)
+	}
+	return nil
+}
+
+// UpdateFlags stores the authenticator flags from the last verified ceremony.
+// The BackupState flag legitimately changes between assertions and go-webauthn
+// rejects a login whose BackupEligible flag disagrees with the stored one, so a
+// stale value locks the credential out.
+func (r *WebAuthnRepo) UpdateFlags(ctx context.Context, id string, flags int) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.webauthn_credentials SET flags=$1 WHERE id=$2`, flags, id)
+	if err != nil {
+		return fmt.Errorf("update credential flags: %w", err)
 	}
 	return nil
 }

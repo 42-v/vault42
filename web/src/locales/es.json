@@ -344,5 +344,17 @@
   "error.fallback": "Algo salió mal. Inténtelo de nuevo.",
   "error.email_not_verified": "Verifique su correo electrónico antes de iniciar sesión.",
   "error.invalid_code": "Código de verificación no válido.",
-  "error.webauthn_failed": "La verificación de la clave de seguridad falló. Inténtelo de nuevo."
+  "error.webauthn_failed": "La verificación de la clave de seguridad falló. Inténtelo de nuevo.",
+  "error.server_busy": "El servidor está ocupado en este momento. Inténtelo de nuevo en unos instantes.",
+  "error.account_banned": "Esta cuenta ha sido bloqueada. Contacte con el soporte si cree que se trata de un error.",
+  "error.account_disabled": "Esta cuenta ha sido desactivada. Contacte con el soporte para obtener ayuda.",
+  "error.too_many_sessions": "Tiene demasiadas sesiones activas. Cierre sesión en otro dispositivo e inténtelo de nuevo.",
+  "error.registration_disabled": "El registro de nuevas cuentas está desactivado en este momento.",
+  "error.invalid_request": "La solicitud no era válida. Compruebe sus datos e inténtelo de nuevo.",
+  "error.not_found": "No hemos podido encontrar lo que buscaba.",
+  "error.request_expired": "Esta solicitud ya no es válida. Vuelva a empezar.",
+  "error.forbidden": "No tiene permiso para hacer eso.",
+  "error.code_already_used": "Este código ya se ha utilizado. Utilice uno nuevo.",
+  "error.password_recently_used": "Ha utilizado esta contraseña recientemente. Elija una diferente.",
+  "error.no_webauthn_credentials": "No hay ninguna llave de seguridad registrada en esta cuenta."
 }

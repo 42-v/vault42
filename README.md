@@ -6,8 +6,8 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 | | | |
 |---|---|---|
 | ![Go](https://img.shields.io/badge/Go-1.26.0-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-2968-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-190-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-3158_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-27050_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5098_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-96.67%25-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Go_Tests-3115-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1160-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-4275_tests-155724?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Go-27362_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5503_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-99.42%25-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
@@ -24,7 +24,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Encrypted identity store**: AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
 - **DB-backed signing keys**: encrypted at rest (AES-256-GCM, kid as AAD), multi-pod refresh, zero-downtime rotation via the admin gateway
 - **Encrypted blob storage**: compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
-- **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key)
+- **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key), bounded by `VAULT_RECOVERY_RETENTION_DAYS` + sweeper
 - **IP access control and geo-fencing**: allowlist/blocklist, dynamic runtime bans, proxy-agnostic
 - **Append-only audit log**: DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
 - **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA

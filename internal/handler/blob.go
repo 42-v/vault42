@@ -135,6 +135,10 @@ func (h *BlobHandler) UploadNamed(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "name_too_long")
 		return
 	}
+	if !validRefName(name) {
+		WriteError(w, http.StatusBadRequest, "invalid_name")
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(h.maxBlobSize)+1024)
 
@@ -164,7 +168,7 @@ func (h *BlobHandler) UploadNamed(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "blob_upload_named", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"blob_id": blob.ID,
-				"name":    name,
+				"named":   true,
 			}, 0)
 	}
 
@@ -205,7 +209,7 @@ func (h *BlobHandler) DownloadNamed(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "blob_download_named", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
-				"name": name,
+				"named": true,
 			}, 0)
 	}
 
@@ -245,7 +249,7 @@ func (h *BlobHandler) DeleteNamed(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "blob_delete_named", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
-				"name": name,
+				"named": true,
 			}, 0)
 	}
 
@@ -364,6 +368,19 @@ func (h *BlobHandler) writeUploadError(w http.ResponseWriter, err error) {
 // sanitizeLabelForHeader strips all control characters (U+0000–U+001F) from a
 // blob label before setting it as an HTTP response header value. This prevents
 // header injection via tabs, null bytes, or other non-printable characters.
+// validRefName reports whether a named-blob reference matches the documented
+// [a-zA-Z0-9_-]+ charset (docs/spec.md, docs/api.md).
+func validRefName(name string) bool {
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func sanitizeLabelForHeader(label string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 {

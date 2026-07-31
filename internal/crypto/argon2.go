@@ -120,7 +120,7 @@ func init() {
 	}
 	DummyHash = h
 	rotatingDummyHash.Store(h)
-	go rotateDummyHashLoop()
+	go rotateDummyHashLoop(time.Tick(dummyHashRotationPeriod))
 }
 
 // regenerateDummyHash re-derives the rotating dummy hash with a fresh random
@@ -136,11 +136,11 @@ func regenerateDummyHash() error {
 	return nil
 }
 
-// rotateDummyHashLoop regenerates the dummy hash on a slow timer for the life
-// of the process so its salt and memory pattern are not deterministic per
-// process.
-func rotateDummyHashLoop() {
-	for range time.Tick(dummyHashRotationPeriod) {
+// rotateDummyHashLoop regenerates the dummy hash on every tick so its salt and
+// memory pattern are not deterministic per process. init passes the slow timer;
+// the channel is a parameter so the loop can also be driven directly.
+func rotateDummyHashLoop(tick <-chan time.Time) {
+	for range tick {
 		_ = regenerateDummyHash()
 	}
 }

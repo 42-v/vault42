@@ -13,6 +13,8 @@ const mockIdentity = ref<Record<string, unknown> | null>(null)
 const mockIsLoading = ref(false)
 const mockIsSaving = ref(false)
 const mockError = ref<{ code: string } | null>(null)
+// Drives the VaultAuthGuard stub: true = auth session still resolving.
+const mockGuardLoading = ref(false)
 
 vi.mock('@vault42/vue', () => ({
   useIdentity: () => ({
@@ -34,8 +36,11 @@ vi.mock('@vault42/vue', () => ({
   }),
   VaultAuthGuard: defineComponent({
     setup(_, { slots }) {
-      // Always render the default slot (simulates authenticated state)
-      return () => slots.default ? slots.default() : h('div')
+      // Renders the loading slot while the session resolves, the default slot once authenticated.
+      return () => {
+        if (mockGuardLoading.value) return slots.loading ? slots.loading() : h('div')
+        return slots.default ? slots.default() : h('div')
+      }
     },
   }),
 }))
@@ -57,6 +62,7 @@ describe('IdentityView', () => {
     mockIsLoading.value = false
     mockIsSaving.value = false
     mockError.value = null
+    mockGuardLoading.value = false
     mockFetchIdentity.mockResolvedValue(undefined)
     mockSaveIdentity.mockResolvedValue(true)
     mockDeleteIdentity.mockResolvedValue(true)
@@ -441,5 +447,191 @@ describe('IdentityView', () => {
     const options = select.findAll('option')
     expect(options.length).toBe(4) // not specified + 3 options
     expect(options[0].text()).toBe('-- Not specified --')
+  })
+
+  it('sends every basic-info field the user typed, not just the names', async () => {
+    const wrapper = mountView()
+
+    await wrapper.find('#identity-given-name').setValue('Jane')
+    await wrapper.find('#identity-family-name').setValue('Doe')
+    await wrapper.find('#identity-country').setValue('SK')
+    await wrapper.find('#identity-dob').setValue('1988-11-02')
+    await wrapper.find('#identity-sex').setValue('female')
+
+    await wrapper.find('form').trigger('submit')
+
+    expect(mockSaveIdentity).toHaveBeenCalledExactlyOnceWith({
+      given_name: 'Jane',
+      family_name: 'Doe',
+      country: 'SK',
+      date_of_birth: '1988-11-02',
+      sex: 'female',
+    })
+  })
+
+  it('sends every billing field the user typed', async () => {
+    const wrapper = mountView()
+
+    const toggleBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === 'Add billing info')
+    await toggleBtn!.trigger('click')
+
+    await wrapper.find('#billing-address-1').setValue('221B Baker Street')
+    await wrapper.find('#billing-address-2').setValue('Flat 2')
+    await wrapper.find('#billing-city').setValue('Bratislava')
+    await wrapper.find('#billing-postal-code').setValue('81101')
+    await wrapper.find('#billing-country').setValue('SK')
+    await wrapper.find('#billing-vat-id').setValue('SK2020123456')
+
+    await wrapper.find('form').trigger('submit')
+
+    expect(mockSaveIdentity.mock.calls[0][0].billing).toEqual({
+      address_line_1: '221B Baker Street',
+      address_line_2: 'Flat 2',
+      city: 'Bratislava',
+      postal_code: '81101',
+      country: 'SK',
+      vat_id: 'SK2020123456',
+    })
+  })
+
+  it('populates every billing input from the fetched identity', async () => {
+    mockFetchIdentity.mockImplementation(async () => {
+      mockIdentity.value = {
+        given_name: 'Jane',
+        billing: {
+          address_line_1: '221B Baker Street',
+          address_line_2: 'Flat 2',
+          city: 'Bratislava',
+          postal_code: '81101',
+          country: 'SK',
+          vat_id: 'SK2020123456',
+        },
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const value = (sel: string) => (wrapper.find(sel).element as HTMLInputElement).value
+    expect(value('#billing-address-1')).toBe('221B Baker Street')
+    expect(value('#billing-address-2')).toBe('Flat 2')
+    expect(value('#billing-city')).toBe('Bratislava')
+    expect(value('#billing-postal-code')).toBe('81101')
+    expect(value('#billing-country')).toBe('SK')
+    expect(value('#billing-vat-id')).toBe('SK2020123456')
+  })
+
+  it('re-submits fetched billing data unchanged instead of dropping it', async () => {
+    mockFetchIdentity.mockImplementation(async () => {
+      mockIdentity.value = {
+        given_name: 'Jane',
+        billing: {
+          address_line_1: '221B Baker Street',
+          address_line_2: 'Flat 2',
+          city: 'Bratislava',
+          postal_code: '81101',
+          country: 'SK',
+          vat_id: 'SK2020123456',
+        },
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('form').trigger('submit')
+
+    expect(mockSaveIdentity.mock.calls[0][0].billing).toEqual({
+      address_line_1: '221B Baker Street',
+      address_line_2: 'Flat 2',
+      city: 'Bratislava',
+      postal_code: '81101',
+      country: 'SK',
+      vat_id: 'SK2020123456',
+    })
+  })
+
+  it('renders blank inputs, not the string "undefined", when the server omits fields', async () => {
+    mockFetchIdentity.mockImplementation(async () => {
+      mockIdentity.value = { billing: {} }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const selectors = [
+      '#identity-given-name', '#identity-family-name', '#identity-country', '#identity-dob',
+      '#billing-address-1', '#billing-address-2', '#billing-city',
+      '#billing-postal-code', '#billing-country', '#billing-vat-id',
+    ]
+    for (const sel of selectors) {
+      expect((wrapper.find(sel).element as HTMLInputElement).value).toBe('')
+    }
+    expect((wrapper.find('#identity-sex').element as HTMLSelectElement).value).toBe('')
+  })
+
+  it('omits absent fields from the save payload after a partial fetch', async () => {
+    mockFetchIdentity.mockImplementation(async () => {
+      mockIdentity.value = { billing: {} }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('form').trigger('submit')
+
+    const saved = mockSaveIdentity.mock.calls[0][0]
+    expect(saved.given_name).toBeUndefined()
+    expect(saved.country).toBeUndefined()
+    expect(saved.billing).toEqual({
+      address_line_1: undefined,
+      address_line_2: undefined,
+      city: undefined,
+      postal_code: undefined,
+      country: undefined,
+      vat_id: undefined,
+    })
+  })
+
+  it('cancelling the delete dialog dismisses it without deleting', async () => {
+    mockIdentity.value = { given_name: 'Jane' }
+    const wrapper = mountView()
+
+    await wrapper.find('#identity-given-name').setValue('Jane')
+
+    const outerDeleteBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === 'Delete')
+    await outerDeleteBtn!.trigger('click')
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(true)
+
+    const cancelBtn = wrapper.findAll('button').find(b => b.text() === 'Cancel')
+    await cancelBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+    expect(mockDeleteIdentity).not.toHaveBeenCalled()
+    expect((wrapper.find('#identity-given-name').element as HTMLInputElement).value).toBe('Jane')
+  })
+
+  it('clears a stale success banner when a later save fails', async () => {
+    const wrapper = mountView()
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('.vault42-alert-success').exists()).toBe(true)
+
+    mockSaveIdentity.mockResolvedValue(false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('.vault42-alert-success').exists()).toBe(false)
+  })
+
+  it('shows a spinner instead of an empty form while the session is still resolving', () => {
+    mockGuardLoading.value = true
+    const wrapper = mountView()
+
+    expect(wrapper.find('.vault42-spinner-lg').exists()).toBe(true)
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.find('h1').exists()).toBe(false)
   })
 })

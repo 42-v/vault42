@@ -847,7 +847,7 @@ and use `pgx/v5` for connection pooling and query execution.
 
 ### Database Roles (Least Privilege)
 
-Two PostgreSQL roles enforce separation of concerns:
+Three PostgreSQL roles enforce separation of concerns:
 
 ```
 vault_mig (migration role)
@@ -861,6 +861,12 @@ vault_app (application role)
   - auth schema: SELECT, INSERT, UPDATE (no DELETE, no TRUNCATE, no DDL)
   - audit schema: INSERT, SELECT only (no UPDATE, no DELETE)
   - Cannot modify the schema, cannot delete audit records
+  - The only holder of EXECUTE on audit.cleanup_old_entries(), because the
+    retention sweeper runs in-process under this role
+
+vault_admin (admin gateway role)
+  - Used only by cmd/admin-gateway; see docs/admin-gateway.md for the table
+  - No EXECUTE on the audit purge function
 ```
 
 ### Append-Only Audit Log
@@ -874,7 +880,13 @@ Each entry includes: event type, user ID, client ID, IP, user agent, fingerprint
 hash, device ID, scrubbed metadata, risk score, and timestamp.
 
 **Security properties**:
-- Append-only at the database level (vault_app has INSERT + SELECT only)
+- Append-only at the database level (vault_app has INSERT + SELECT only, and a
+  trigger refuses DELETE and UPDATE regardless)
+- The one function that can remove a row, `audit.cleanup_old_entries()`, is
+  SECURITY DEFINER because it has to disable that trigger. EXECUTE is revoked
+  from `PUBLIC` and granted only to `vault_app`, it runs with an explicit
+  `search_path`, and it refuses any horizon shorter than a day -- so the purge
+  cannot be turned into a wipe by a caller that reaches the database directly
 - Sensitive metadata keys (password, token, secret, etc.) are automatically
   scrubbed before storage
 - Optional batching for high-throughput deployments (configurable flush interval)
@@ -889,6 +901,17 @@ exactly why they need a purge of their own. A sweeper deletes entries older than
 silently deleting security logs is not a safe default, so the horizon is an explicit
 operator choice. Because the log is append-only, this is the only sanctioned removal
 path (`vault cleanup-audit` runs the same purge on demand).
+
+**Recovery-escrow retention** (`internal/service/recovery_retention.go`): the
+account-recovery escrow (`auth.account_recovery`) has the same shape as the audit log --
+append-only at the database layer, exempt from the erasure cascade by design, and holding
+personal data (an encrypted copy of the erased user's email, creation date, roles and
+display name) -- so it is bounded the same way. A sweeper deletes records older than
+`VAULT_RECOVERY_RETENTION_DAYS` at startup and every 6 hours, disabled by default, and
+`vault cleanup-recovery` runs the same purge on demand. Both go through
+`auth.cleanup_old_recovery()` (migration 011), a SECURITY DEFINER function that briefly
+disables the append-only trigger: neither application role holds DELETE on the table, so
+this is the only path that can remove an escrow record.
 
 ### Cache Interface
 

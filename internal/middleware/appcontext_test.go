@@ -20,21 +20,26 @@ func captureApp(t *testing.T, r *http.Request) string {
 
 func TestAppContext(t *testing.T) {
 	tests := []struct {
-		name   string
-		header string
-		query  string
-		want   string
+		name    string
+		proxies []string
+		header  string
+		query   string
+		want    string
 	}{
-		{"header sets app", "acme", "", "acme"},
-		{"query fallback when no header", "", "?app=beta", "beta"},
-		{"header wins over query", "acme", "?app=beta", "acme"},
-		{"invalid header ignored", "Bad App!", "", ""},
-		{"invalid query ignored", "", "?app=Bad!", ""},
-		{"absent leaves global branding", "", "", ""},
+		{"trusted proxy header sets app", []string{"192.0.2.0/24"}, "acme", "", "acme"},
+		{"untrusted peer header ignored", []string{"198.51.100.1"}, "beta", "", ""},
+		{"no trusted proxies configured", nil, "beta", "", ""},
+		{"query parameter never selects a tenant", []string{"192.0.2.0/24"}, "", "?app=beta", ""},
+		{"query parameter cannot override header", []string{"192.0.2.0/24"}, "acme", "?app=beta", "acme"},
+		{"invalid header ignored", []string{"192.0.2.0/24"}, "Bad App!", "", ""},
+		{"absent leaves global branding", []string{"192.0.2.0/24"}, "", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			SetTrustedProxies(tt.proxies)
+			defer SetTrustedProxies(nil)
 			r := httptest.NewRequest(http.MethodGet, "/auth/login"+tt.query, nil)
+			r.RemoteAddr = "192.0.2.10:44321"
 			if tt.header != "" {
 				r.Header.Set("X-Vault-App", tt.header)
 			}

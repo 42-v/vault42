@@ -344,5 +344,17 @@
   "error.fallback": "出现错误。请重试。",
   "error.email_not_verified": "请在登录前验证您的电子邮件。",
   "error.invalid_code": "验证代码无效。",
-  "error.webauthn_failed": "安全密钥验证失败。请重试。"
+  "error.webauthn_failed": "安全密钥验证失败。请重试。",
+  "error.server_busy": "服务器当前繁忙。请稍后再试。",
+  "error.account_banned": "此账户已被封禁。如果您认为这是误判，请联系支持团队。",
+  "error.account_disabled": "此账户已被停用。请联系支持团队寻求帮助。",
+  "error.too_many_sessions": "您的活动会话过多。请在其他设备上退出登录后重试。",
+  "error.registration_disabled": "新账户注册当前已关闭。",
+  "error.invalid_request": "请求无效。请检查您的信息后重试。",
+  "error.not_found": "未能找到您要查找的内容。",
+  "error.request_expired": "此请求已失效。请重新开始。",
+  "error.forbidden": "您没有执行此操作的权限。",
+  "error.code_already_used": "此代码已被使用。请使用新的代码。",
+  "error.password_recently_used": "您最近使用过此密码。请选择其他密码。",
+  "error.no_webauthn_credentials": "此账户未注册任何安全密钥。"
 }

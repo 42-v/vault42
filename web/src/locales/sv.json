@@ -344,5 +344,17 @@
   "error.fallback": "Något gick fel. Försök igen.",
   "error.email_not_verified": "Verifiera din e-postadress innan du loggar in.",
   "error.invalid_code": "Ogiltig verifieringskod.",
-  "error.webauthn_failed": "Verifiering av säkerhetsnyckel misslyckades. Försök igen."
+  "error.webauthn_failed": "Verifiering av säkerhetsnyckel misslyckades. Försök igen.",
+  "error.server_busy": "Servern är upptagen just nu. Försök igen om ett ögonblick.",
+  "error.account_banned": "Det här kontot har stängts av. Kontakta supporten om du tror att det är ett misstag.",
+  "error.account_disabled": "Det här kontot har inaktiverats. Kontakta supporten för hjälp.",
+  "error.too_many_sessions": "Du har för många aktiva sessioner. Logga ut på en annan enhet och försök igen.",
+  "error.registration_disabled": "Registrering av nya konton är avstängd för tillfället.",
+  "error.invalid_request": "Begäran var inte giltig. Kontrollera dina uppgifter och försök igen.",
+  "error.not_found": "Vi hittade inte det du sökte.",
+  "error.request_expired": "Den här begäran är inte längre giltig. Börja om.",
+  "error.forbidden": "Du har inte behörighet att göra det.",
+  "error.code_already_used": "Den här koden har redan använts. Använd en ny.",
+  "error.password_recently_used": "Du har använt det här lösenordet nyligen. Välj ett annat.",
+  "error.no_webauthn_credentials": "Inga säkerhetsnycklar är registrerade på det här kontot."
 }
