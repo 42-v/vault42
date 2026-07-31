@@ -18,6 +18,11 @@ cd "$(dirname "$0")/.."
 export PATH="${HOME}/go/bin:${PATH}"
 export TESTCONTAINERS_RYUK_DISABLED=true
 
+# Keep these in step with .github/workflows/nightly-security.yml, or a clean run
+# here stops predicting a clean run there.
+GOVULNCHECK_VERSION=v1.1.4
+GOSEC_VERSION=v2.28.0
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -31,7 +36,7 @@ fail()    { echo -e "${RED}FAIL${NC}: $1"; exit 1; }
 section "govulncheck"
 if ! command -v govulncheck >/dev/null; then
   echo "Installing govulncheck..."
-  go install golang.org/x/vuln/cmd/govulncheck@latest
+  go install golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION"
 fi
 OUT=$(govulncheck ./... 2>&1) || true
 if echo "$OUT" | grep -q "No vulnerabilities found"; then
@@ -45,7 +50,7 @@ fi
 section "gosec (HIGH/CRITICAL only)"
 if ! command -v gosec >/dev/null; then
   echo "Installing gosec..."
-  go install github.com/securego/gosec/v2/cmd/gosec@latest
+  go install github.com/securego/gosec/v2/cmd/gosec@"$GOSEC_VERSION"
 fi
 GOSEC_JSON=$(mktemp)
 trap 'rm -f "$GOSEC_JSON"' EXIT
