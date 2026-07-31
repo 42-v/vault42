@@ -40,6 +40,9 @@ const NO_HTTP_STATUS = 0
 /** Printable ASCII only: fetch rejects header values outside latin-1 and any CR/LF. */
 const PRINTABLE_ASCII = /^[\x20-\x7E]*$/
 
+/** Character code of "/", used to trim a base URL without a backtracking regex. */
+const SLASH = 0x2f
+
 export class VaultClient {
   private baseURL: string
   private options: VaultClientOptions
@@ -47,7 +50,13 @@ export class VaultClient {
   private _refreshing: Promise<RefreshResult> | null = null
 
   constructor(baseURL: string, options?: VaultClientOptions) {
-    this.baseURL = baseURL.replace(/\/+$/, '')
+    // Trailing slashes are stripped by scanning rather than with /\/+$/, which
+    // is unanchored at the start and therefore retries from every position: on
+    // a base URL of many slashes that backtracking is quadratic. This is linear
+    // and the input is caller-supplied, so it should not be a regex at all.
+    let end = baseURL.length
+    while (end > 0 && baseURL.charCodeAt(end - 1) === SLASH) end--
+    this.baseURL = baseURL.slice(0, end)
     this.options = options || {}
   }
 
