@@ -78,6 +78,87 @@ func TestCollectorHandler(t *testing.T) {
 	}
 }
 
+// The mint and document-store counters are the only signal an operator has that
+// a signing oracle or a service-scoped store is in use, and each has to move on
+// its own: a Record call that bumped a neighbour would make an alert fire on the
+// wrong subsystem. Counting is half the job, so the exposition output is checked
+// too, with values rather than names alone. A counter that increments but never
+// reaches /metrics is invisible to every scrape.
+func TestCollectorMintAndServiceDocumentCounters(t *testing.T) {
+	c := NewCollector(
+		func() int64 { return 0 },
+		func() int64 { return 0 },
+		func() int { return 4 },
+	)
+
+	// Distinct counts per counter, so a Record wired to the wrong field cannot
+	// pass by coincidence.
+	c.RecordMintIssued()
+	c.RecordMintIssued()
+	c.RecordMintRejected()
+	c.RecordSvcDocWrite()
+	c.RecordSvcDocWrite()
+	c.RecordSvcDocWrite()
+	c.RecordSvcDocRead()
+	c.RecordSvcDocRead()
+	c.RecordSvcDocRead()
+	c.RecordSvcDocRead()
+	c.RecordSvcDocRejected()
+	c.RecordSvcDocRejected()
+	c.RecordSvcDocRejected()
+	c.RecordSvcDocRejected()
+	c.RecordSvcDocRejected()
+
+	counters := []struct {
+		name string
+		got  int64
+		want int64
+	}{
+		{"mintIssued", c.mintIssued.Load(), 2},
+		{"mintRejected", c.mintRejected.Load(), 1},
+		{"svcDocWrites", c.svcDocWrites.Load(), 3},
+		{"svcDocReads", c.svcDocReads.Load(), 4},
+		{"svcDocRejects", c.svcDocRejects.Load(), 5},
+	}
+	for _, tc := range counters {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	exposition := []string{
+		"# TYPE vault_mint_issued_total counter",
+		"vault_mint_issued_total 2",
+		"# TYPE vault_mint_rejected_total counter",
+		"vault_mint_rejected_total 1",
+		"# TYPE vault_svcdoc_writes_total counter",
+		"vault_svcdoc_writes_total 3",
+		"# TYPE vault_svcdoc_reads_total counter",
+		"vault_svcdoc_reads_total 4",
+		"# TYPE vault_svcdoc_rejected_total counter",
+		"vault_svcdoc_rejected_total 5",
+	}
+	for _, want := range exposition {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing from /metrics output: %q", want)
+		}
+	}
+
+	// A minted token asserts a subject vault42 never authenticated. Folding it
+	// into the ordinary issuance counter would hide exactly the number an
+	// operator wants to alert on, so the two must stay separate.
+	if !strings.Contains(body, "vault_tokens_issued_total 0") {
+		t.Error("minting moved vault_tokens_issued_total: mint counts must not be folded into ordinary token issuance")
+	}
+}
+
 func TestCollectorCounterIncrements(t *testing.T) {
 	c := NewCollector(
 		func() int64 { return 0 },

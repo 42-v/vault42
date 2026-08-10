@@ -129,7 +129,6 @@ func TestAuditCleanupLocked(t *testing.T) {
 	t.Run("the sweeper on top of the repo", func(t *testing.T) {
 		sweeperAgainstPostgres(t, pool)
 	})
-
 }
 
 // A deployment whose migrations drifted can lose audit.cleanup_old_entries().

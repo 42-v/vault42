@@ -24,6 +24,7 @@ type seedClientRepo struct {
 func (m *seedClientRepo) Create(ctx context.Context, c *model.Client) error {
 	return m.create(ctx, c)
 }
+
 func (m *seedClientRepo) GetByName(ctx context.Context, n string) (*model.Client, error) {
 	return m.getByName(ctx, n)
 }
@@ -45,7 +46,10 @@ type seedAdminRepo struct {
 	create        func(context.Context, *model.AdminUser) error
 }
 
-func (m *seedAdminRepo) Create(ctx context.Context, a *model.AdminUser) error { return m.create(ctx, a) }
+func (m *seedAdminRepo) Create(ctx context.Context, a *model.AdminUser) error {
+	return m.create(ctx, a)
+}
+
 func (m *seedAdminRepo) GetByUsername(ctx context.Context, u string) (*model.AdminUser, error) {
 	return m.getByUsername(ctx, u)
 }

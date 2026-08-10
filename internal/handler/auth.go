@@ -108,13 +108,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Imported account first login: no session issued — a magic claim link was
-	// emailed. 202 Accepted with the flag, no token fields.
-	if result.ImportClaimRequired {
-		WriteJSON(w, http.StatusAccepted, map[string]any{"import_claim_required": true})
-		return
-	}
-
 	// Set refresh token as HttpOnly cookie (only when tokens were issued, not on 2FA challenge)
 	if result.RefreshToken != "" {
 		setRefreshCookie(w, result.RefreshToken, h.secureCookies, result.CookieMaxAge)

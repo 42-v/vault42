@@ -40,6 +40,20 @@ type ErasureService struct {
 	auditLog    *audit.Logger
 	recoveryPub *rsa.PublicKey
 	hmacSecret  []byte
+
+	// svcDocs is optional and set separately rather than through the constructor,
+	// which already carries fourteen positional repositories. Nil when the service
+	// document store is disabled, in which case the cascade skips it.
+	svcDocs repository.ServiceDocumentRepository
+}
+
+// SetServiceDocs attaches the service-scoped document store to the erasure
+// cascade. Documents written about a user by other services are personal data
+// under Art. 4(1) regardless of which service authored them, so erasure must
+// reach them; without this the store would silently retain data across an
+// erasure that reported success.
+func (s *ErasureService) SetServiceDocs(repo repository.ServiceDocumentRepository) {
+	s.svcDocs = repo
 }
 
 // NewErasureService constructs an ErasureService. recoveryPub may be nil, in
@@ -143,6 +157,16 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	}
 	if err := s.blobs.DeleteAllForPseudonym(ctx, s.blobPseudonym(userID)); err != nil {
 		return fmt.Errorf("erasure: delete blobs: %w", err)
+	}
+	// Service documents are written about the user BY other services and span every
+	// owning client, so the delete is keyed by subject rather than by owner.
+	// Idempotent like the rest of the cascade, so an interrupted erasure re-runs
+	// cleanly. Documents filed under the global sentinel belong to a service rather
+	// than a user and carry a different hash, so they are correctly untouched.
+	if s.svcDocs != nil {
+		if err := s.svcDocs.DeleteAllForSubject(ctx, s.svcDocPseudonym(userID)); err != nil {
+			return fmt.Errorf("erasure: delete service documents: %w", err)
+		}
 	}
 	if err := s.devices.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete devices: %w", err)
@@ -251,4 +275,11 @@ func (s *ErasureService) blobPseudonym(userID string) string {
 
 func (s *ErasureService) recoveryPseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":recovery"), s.hmacSecret)
+}
+
+// svcDocPseudonym must derive exactly what ServiceDocumentService.SubjectPseudonym
+// derives. A divergence would not fail loudly: the delete would match no rows and
+// the erasure would report success while the documents survived.
+func (s *ErasureService) svcDocPseudonym(userID string) string {
+	return vaultcrypto.HMACSign([]byte(userID+":svcdoc"), s.hmacSecret)
 }

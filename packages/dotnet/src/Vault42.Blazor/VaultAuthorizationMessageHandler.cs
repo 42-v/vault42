@@ -15,6 +15,19 @@ public sealed class VaultAuthorizationMessageHandler : DelegatingHandler
         _authService = authService;
     }
 
+    /// <summary>
+    /// Attaches the current access token and, for safe methods, retries once after refreshing on a 401.
+    /// </summary>
+    /// <param name="request">The outgoing request. Any existing <c>Authorization</c> header is replaced when a token is held.</param>
+    /// <param name="cancellationToken">Cancels the send and any retry.</param>
+    /// <returns>The server's response, or the response to the retried request when a refresh succeeded.</returns>
+    /// <remarks>
+    /// The retry is limited to <c>GET</c>, <c>HEAD</c> and <c>OPTIONS</c>. An unsafe method may
+    /// already have taken effect server-side before the 401 was written, so replaying it could
+    /// duplicate a state change; those methods surface the 401 to the caller instead. There is at
+    /// most one retry, and only when a token was already held, so an anonymous request that gets a
+    /// 401 is returned as-is.
+    /// </remarks>
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

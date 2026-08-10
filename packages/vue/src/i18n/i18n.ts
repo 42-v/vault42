@@ -22,6 +22,43 @@ function interpolate(template: string, params?: Record<string, string | number>)
   })
 }
 
+/**
+ * Creates a standalone i18n instance: message lookup with interpolation, plus
+ * locale-aware date and number formatting.
+ *
+ * Use this directly when you want translation without the Vue plugin, for
+ * example in a test or a non-component module. To make `t` available to
+ * components and as `$t` in templates, use {@link createI18nPlugin}.
+ *
+ * @param options - Initial locale, fallback locale and the message catalogues.
+ * @returns An {@link I18nInstance}.
+ *
+ * Keys resolve either flat or by dot path, so a catalogue may hold
+ * `'login.title'` as a single key or nest `login: { title }`; both answer
+ * `t('login.title')`. Placeholders are `{name}` and are replaced from `params`;
+ * a placeholder with no matching param is left in the output verbatim rather
+ * than blanked, which makes the gap visible instead of silent.
+ *
+ * A missing key falls back to the fallback locale and then returns **the key
+ * itself**. Translation therefore never throws and never renders empty, and a
+ * caller that needs to detect a miss compares the result against the key, which
+ * is what the bundled components do to fall back to their English copy.
+ *
+ * `t` is reactive: it reads the locale ref on every call, so a template calling
+ * it re-renders on `setLocale`. Calling it once and caching the string does not.
+ *
+ * `setLocale` ignores a locale that has no catalogue, leaving the current one
+ * in place rather than switching to a locale that would render only keys.
+ *
+ * @example
+ * ```ts
+ * const i18n = createI18n({
+ *   locale: 'en',
+ *   messages: { en: { greeting: 'Hello, {name}' } },
+ * })
+ * i18n.t('greeting', { name: 'Ada' })
+ * ```
+ */
 export function createI18n(options: I18nOptions): I18nInstance {
   const locale = ref(options.locale)
   const fallbackLocale = options.fallbackLocale ?? 'en'

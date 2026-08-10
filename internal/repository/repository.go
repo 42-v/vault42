@@ -317,6 +317,95 @@ type BlobRepository interface {
 	DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error
 }
 
+// ServiceDocumentVisibility controls which clients may read a service document.
+//
+// It is an integer enum rather than a boolean so a third tier (an explicit
+// grantee allow-list) can be added by widening a CHECK constraint instead of
+// changing a column's type, and so the wire representation stays a string enum
+// rather than a field whose meaning inverts. The zero value is the closed one:
+// a document whose visibility was never set is private.
+type ServiceDocumentVisibility int16
+
+const (
+	// VisibilityPrivate documents are readable and writable only by the client
+	// that owns them. This is the default for every write.
+	VisibilityPrivate ServiceDocumentVisibility = 0
+	// VisibilityShared documents are readable by any authenticated client
+	// holding the read scope, and writable only by the owning client. There is
+	// deliberately no shared-mutable tier: two services writing one document
+	// with no locking loses data.
+	VisibilityShared ServiceDocumentVisibility = 1
+)
+
+// ServiceDocument is one AES-GCM encrypted JSON document owned by a service
+// client and scoped to a subject.
+//
+// The row type lives here rather than in model because the store has no
+// plaintext-carrying representation worth sharing: DataEnc is the only payload
+// field and it is opaque outside the service layer.
+//
+// SubjectHash is an HMAC pseudonym, never a raw user id, so a database reader
+// cannot enumerate which users a service holds documents for. DocKey is stored
+// in plaintext, unlike objects.blobs.ref_hash: blob reference names are chosen
+// by users and may be personal data, whereas document keys are chosen by the
+// writing service from a constrained charset and are configuration identifiers.
+type ServiceDocument struct {
+	ID          string
+	ClientID    string
+	SubjectHash string
+	DocKey      string
+	Visibility  ServiceDocumentVisibility
+	DataEnc     []byte
+	SizeBytes   int
+	StoredBytes int
+	Version     int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ServiceDocumentRepository manages encrypted, service-scoped JSON documents
+// (objects.service_documents), keyed by (client_id, subject_hash, doc_key).
+//
+// Every read method that a request path can reach takes the caller's client id,
+// so ownership is enforced in SQL rather than by a comparison the handler could
+// forget. The two methods that span clients, ListSharedByKey and the erasure
+// and export helpers, say so in their names.
+type ServiceDocumentRepository interface {
+	// Get returns one document owned by clientID, or nil, nil if absent.
+	Get(ctx context.Context, clientID, subjectHash, docKey string) (*ServiceDocument, error)
+	// ListSharedByKey returns every shared document at (subjectHash, docKey)
+	// that is NOT owned by excludeClientID. More than one row can come back:
+	// two services may each publish a shared document under the same key, and
+	// the caller has to resolve that rather than the store guessing an owner.
+	ListSharedByKey(ctx context.Context, subjectHash, docKey, excludeClientID string) ([]*ServiceDocument, error)
+	// Upsert creates or fully replaces a document. created reports whether a new
+	// row was inserted, so the handler can answer 201 versus 200.
+	Upsert(ctx context.Context, doc *ServiceDocument) (created bool, err error)
+	// Delete removes one document owned by clientID. Returns false when there
+	// was nothing to remove.
+	Delete(ctx context.Context, clientID, subjectHash, docKey string) (deleted bool, err error)
+	// ListByOwner returns the caller's own documents for a subject, without
+	// data_enc.
+	ListByOwner(ctx context.Context, clientID, subjectHash string) ([]*ServiceDocument, error)
+	// ListSharedForSubject returns shared documents for a subject owned by other
+	// clients, without data_enc.
+	ListSharedForSubject(ctx context.Context, subjectHash, excludeClientID string) ([]*ServiceDocument, error)
+	// ListAllForSubject returns every document held for a subject across all
+	// owning clients, WITH data_enc. It exists for the Art. 15 export, which
+	// must return the document bodies a service wrote about the data subject.
+	ListAllForSubject(ctx context.Context, subjectHash string) ([]*ServiceDocument, error)
+	// CountForOwner returns how many documents clientID holds for a subject.
+	CountForOwner(ctx context.Context, clientID, subjectHash string) (int, error)
+	// SumBytesForSubject returns the total stored bytes held for a subject
+	// across every owning client, for the per-subject quota.
+	SumBytesForSubject(ctx context.Context, subjectHash string) (int, error)
+	// DeleteAllForSubject removes every document for a subject across all
+	// owning clients (account erasure). It is idempotent: erasing a subject
+	// that never had a document is not an error, so an interrupted cascade can
+	// be re-run.
+	DeleteAllForSubject(ctx context.Context, subjectHash string) error
+}
+
 // AccountRecoveryRepository manages the append-only account-recovery escrow log
 // (auth.account_recovery). Records are written on account erasure and can only
 // be decrypted with the offline recovery private key. The table is append-only:

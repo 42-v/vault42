@@ -252,6 +252,69 @@ type Config struct {
 	// Default: false.
 	DPoPEnabled bool
 
+	// MaxSessionLifetime bounds the total age of a refresh-token family, measured
+	// from its creation and independent of how often it is refreshed
+	// (VAULT_MAX_SESSION_LIFETIME). Without it, rotation grants a fresh full TTL
+	// every time and a continuously-refreshing client holds a session forever.
+	// Default 720h, matching RememberMeTTL so a session may live as long as the
+	// longest single token and never longer. NIST SP 800-63B-4 AAL2 wants 12h;
+	// that is a deployment decision, not the default. 0 disables the bound.
+	MaxSessionLifetime time.Duration
+
+	// MintEnabled mounts POST /mint (VAULT_MINT_ENABLED). Off by default: the endpoint
+	// signs assertions for subjects vault42 never authenticated, so enabling it by
+	// accident is an authentication bypass rather than a degraded control. When false
+	// the route is not registered at all.
+	MintEnabled bool
+
+	// MintAudience is the aud claim stamped on minted tokens (VAULT_MINT_AUDIENCE).
+	// Required when MintEnabled, and MUST differ from Origin: a minted token carrying
+	// vault42's own audience would authenticate against vault42 itself, turning the
+	// oracle into account takeover for every user.
+	MintAudience string
+
+	// MintTokenTTL is the lifetime of a minted token when the caller names none
+	// (VAULT_MINT_TOKEN_TTL). Default 5m. Minted tokens cannot be revoked, so the
+	// lifetime is the only bound on a leaked one.
+	MintTokenTTL time.Duration
+
+	// MintMaxTTL caps the caller-requested lifetime (VAULT_MINT_MAX_TTL). Default 5m,
+	// with a hard 15m ceiling enforced in service.NewMintService. A request above the
+	// cap is refused rather than clamped, so a misconfigured caller is visible.
+	MintMaxTTL time.Duration
+
+	// MintAllowedRoles is the allow-list of roles a minted token may carry
+	// (VAULT_MINT_ROLES, comma-separated). Empty by default, meaning no role may be
+	// minted. The admin-reserved names are refused at construction regardless.
+	MintAllowedRoles []string
+
+	// MintAllowedScopes is the allow-list of scopes a minted token may carry
+	// (VAULT_MINT_SCOPES, comma-separated). Empty by default. Capability scopes such
+	// as kms:unwrap and mint:token are refused regardless of configuration.
+	MintAllowedScopes []string
+
+	// SvcDocEnabled mounts the service-scoped JSON document store (VAULT_SVCDOC_ENABLED).
+	// Off by default: it is new surface reachable by every existing client-credentials
+	// holder, so enabling it is an explicit operator decision.
+	SvcDocEnabled bool
+
+	// SvcDocSharedEnabled allows a service to publish a document readable by all other
+	// services (VAULT_SVCDOC_SHARED_ENABLED). Off by default; documents are private to
+	// the writing service unless this is set and the write asks for it.
+	SvcDocSharedEnabled bool
+
+	// SvcDocMaxSize is the per-document ceiling in bytes (VAULT_SVCDOC_MAX_SIZE).
+	// Default 65536.
+	SvcDocMaxSize int
+
+	// SvcDocMaxPerSubject is the document count ceiling per (subject, service)
+	// (VAULT_SVCDOC_MAX_PER_SUBJECT). Default 32.
+	SvcDocMaxPerSubject int
+
+	// SvcDocQuotaBytes is the total stored-byte ceiling per subject
+	// (VAULT_SVCDOC_QUOTA_BYTES). Default 1 MiB.
+	SvcDocQuotaBytes int
+
 	// MetricsEnabled enables the Prometheus-compatible /metrics endpoint (VAULT_METRICS_ENABLED).
 	// When enabled, operational counters (argon2 semaphore, login, token) are exposed in
 	// Prometheus text exposition format. Protect with NetworkPolicy in production.
@@ -371,6 +434,19 @@ func Load() (*Config, error) {
 		DPoPEnabled:    envBool("VAULT_DPOP_ENABLED"),
 		MetricsEnabled: envBool("VAULT_METRICS_ENABLED"),
 
+		MaxSessionLifetime: envDuration("VAULT_MAX_SESSION_LIFETIME", 720*time.Hour),
+
+		MintEnabled:  envBool("VAULT_MINT_ENABLED"),
+		MintAudience: strings.TrimSpace(os.Getenv("VAULT_MINT_AUDIENCE")),
+		MintTokenTTL: envDuration("VAULT_MINT_TOKEN_TTL", 5*time.Minute),
+		MintMaxTTL:   envDuration("VAULT_MINT_MAX_TTL", 5*time.Minute),
+
+		SvcDocEnabled:       envBool("VAULT_SVCDOC_ENABLED"),
+		SvcDocSharedEnabled: envBool("VAULT_SVCDOC_SHARED_ENABLED"),
+		SvcDocMaxSize:       envInt("VAULT_SVCDOC_MAX_SIZE", 64*1024),
+		SvcDocMaxPerSubject: envInt("VAULT_SVCDOC_MAX_PER_SUBJECT", 32),
+		SvcDocQuotaBytes:    envInt("VAULT_SVCDOC_QUOTA_BYTES", 1024*1024),
+
 		KeyRotationDB:      envBool("VAULT_KEY_ROTATION_DB"),
 		KeyRetentionPeriod: envDuration("VAULT_KEY_RETENTION_PERIOD", time.Hour),
 
@@ -410,6 +486,26 @@ func Load() (*Config, error) {
 
 	// TLS fingerprint header (proxy-specific, e.g. "X-TLS-Fingerprint")
 	c.TLSFingerprintHeader = strings.TrimSpace(os.Getenv("VAULT_TLS_FINGERPRINT_HEADER"))
+
+	// Mint allow-lists. Absent means empty, which denies every role and scope: a
+	// signing oracle that grants nothing is the safe failure, so no default is
+	// substituted here.
+	if v := os.Getenv("VAULT_MINT_ROLES"); v != "" {
+		for _, entry := range strings.Split(v, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry != "" {
+				c.MintAllowedRoles = append(c.MintAllowedRoles, entry)
+			}
+		}
+	}
+	if v := os.Getenv("VAULT_MINT_SCOPES"); v != "" {
+		for _, entry := range strings.Split(v, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry != "" {
+				c.MintAllowedScopes = append(c.MintAllowedScopes, entry)
+			}
+		}
+	}
 
 	// Load IP allowlist/blocklist from comma-separated CIDR/IP list
 	if v := os.Getenv("IP_ALLOWLIST"); v != "" {
@@ -510,6 +606,18 @@ func Load() (*Config, error) {
 // signing), empty pepper (weakens password hashing), empty origin (disables JWT
 // issuer/audience binding), or plaintext serving (drops the Secure cookie flag).
 func (c *Config) Validate() error {
+	// Checked ahead of the dev short-circuit: a mint audience equal to the issuer
+	// makes every minted token valid against vault42 itself, so the oracle becomes
+	// account takeover for any subject. That is not a production-only hazard, and a
+	// dev deployment that teaches the wrong configuration gets copied.
+	if c.MintEnabled {
+		if c.MintAudience == "" {
+			return fmt.Errorf("VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set")
+		}
+		if c.MintAudience == c.Origin {
+			return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
+		}
+	}
 	if c.Profile == ProfileDev {
 		return nil
 	}

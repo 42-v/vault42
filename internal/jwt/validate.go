@@ -18,6 +18,14 @@ type validationConfig struct {
 
 // validateClaims checks registered claims according to the config.
 // All errors are collected (not short-circuited).
+//
+// No clock skew leeway is applied to any time-based claim, and the exp
+// comparison is inclusive: a token whose exp equals the current second is
+// already expired. This is a policy choice, not an oversight: leeway extends
+// the life of a stolen token past the TTL an operator configured. The
+// deployment obligation that follows is that clock skew between the issuing
+// and verifying pods must stay well below the token TTL, which for the access
+// token TTLs vault42 issues means NTP, not a hand-set clock.
 func validateClaims(claims Claims, cfg *validationConfig) error {
 	now := time.Now()
 	var errs []error

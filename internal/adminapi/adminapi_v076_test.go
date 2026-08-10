@@ -148,8 +148,8 @@ func (m *fakeAdminRepo) Revoke(_ context.Context, id string) error {
 var _ repository.AdminUserRepository = (*fakeAdminRepo)(nil)
 
 type fakeSessionRepo struct {
-	sessions   map[string]*model.AdminSession
-	errCreate  error
+	sessions     map[string]*model.AdminSession
+	errCreate    error
 	errRevokeAll error
 }
 
@@ -197,7 +197,7 @@ func (m *fakeSessionRepo) RevokeAll(_ context.Context) error {
 	}
 	return nil
 }
-func (m *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error)            { return 0, nil }
+func (m *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error) { return 0, nil }
 
 var _ repository.AdminSessionRepository = (*fakeSessionRepo)(nil)
 
@@ -212,7 +212,8 @@ func testAuditLog() *audit.Logger {
 // newTestHandler wires a Handler from injectable mocks. keyStore stays nil; the
 // key endpoints are exercised elsewhere via their 503 branch.
 func newTestHandler(admins repository.AdminUserRepository, users repository.UserRepository,
-	clients repository.ClientRepository, auditRepo repository.AuditRepository) *Handler {
+	clients repository.ClientRepository, auditRepo repository.AuditRepository,
+) *Handler {
 	if users == nil {
 		users = &mocks.MockUserRepo{}
 	}
@@ -321,13 +322,14 @@ func TestQueryAudit_IgnoresInvalidLimitAndTime(t *testing.T) {
 	}}
 	h := newTestHandler(nil, nil, nil, auditRepo)
 	rec := httptest.NewRecorder()
-	// limit out of range (>500), garbage offset, unparsable since → all defaults kept.
+	// An oversized limit is clamped to the gateway-wide cap rather than trusted;
+	// a garbage offset and an unparsable since fall back to their defaults.
 	h.QueryAudit(rec, httptest.NewRequest(http.MethodGet, "/admin/audit?limit=9999&offset=abc&since=notatime", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if captured.Limit != 50 || captured.Offset != 0 || captured.Since != nil {
-		t.Fatalf("invalid params should be ignored, got %+v", captured)
+	if captured.Limit != maxListLimit || captured.Offset != 0 || captured.Since != nil {
+		t.Fatalf("invalid params should be clamped or ignored, got %+v", captured)
 	}
 }
 
@@ -995,9 +997,9 @@ func TestLocalOnly_MalformedRemoteAddrForbidden(t *testing.T) {
 
 func TestHandler_ListKeys(t *testing.T) {
 	tests := []struct {
-		name   string
-		ks     *keystore.KeyStore
-		want   int
+		name string
+		ks   *keystore.KeyStore
+		want int
 	}{
 		{"nil keystore", nil, http.StatusServiceUnavailable},
 	}

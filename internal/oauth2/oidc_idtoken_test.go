@@ -128,4 +128,13 @@ func TestVerifyIDToken_Rejections(t *testing.T) {
 			t.Fatal("nonce mismatch must be rejected")
 		}
 	})
+
+	// An absent expected nonce must fail the login, not silently skip the
+	// binding check: a token that verifies without one is an injected token.
+	t.Run("empty expected nonce is rejected", func(t *testing.T) {
+		tok := signIDToken(t, key, "k1", baseClaims(srv.URL, "client-1"))
+		if _, err := p.VerifyIDToken(ctx, tok, ""); err == nil {
+			t.Fatal("an otherwise-valid token must be rejected when no nonce is expected")
+		}
+	})
 }

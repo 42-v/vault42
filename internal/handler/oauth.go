@@ -465,6 +465,17 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.tokens != nil {
+		// The concurrent-session cap applies here for the same reason it applies to a
+		// password login: this path writes a refresh-token family. The MFA-completing
+		// OAuth path is already covered because it finishes through CompleteMFALogin.
+		// Client credentials are structurally exempt rather than missing, since that
+		// path discards its refresh token and creates no family at all.
+		if h.authSvc != nil {
+			if err := h.authSvc.CheckSessionLimit(r.Context(), userID); err != nil {
+				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
+				return
+			}
+		}
 		if err := h.tokens.Create(r.Context(), &model.RefreshToken{
 			ID:              rtID,
 			UserID:          userID,

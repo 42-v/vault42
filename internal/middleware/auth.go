@@ -21,32 +21,72 @@ const (
 	ClaimsKey ctxKey = "claims"
 )
 
-// Auth validates JWT Bearer tokens from the Authorization header.
-func Auth(keys map[string]*rsa.PublicKey, issuer, audience string) func(http.Handler) http.Handler {
-	return authWithTypes(func() map[string]*rsa.PublicKey { return keys }, issuer, audience, "Bearer")
+// AuthOption configures an authentication middleware constructor.
+type AuthOption func(*authOptions)
+
+type authOptions struct {
+	acceptDPoPScheme bool
+}
+
+// WithDPoPScheme controls whether the "DPoP" HTTP authentication scheme
+// (RFC 9449 §7.1) is accepted on the Authorization header. It is off by
+// default, so only "Bearer" is accepted.
+//
+// RFC 9449 reserves the scheme for sender-constrained tokens. vault42 issues
+// no such token: nothing populates the "cnf.jkt" confirmation claim, so a
+// token presented under the DPoP scheme is bearer-equivalent, which is the
+// confusion the separate scheme exists to prevent. Enable this only when
+// VAULT_DPOP_ENABLED is set, and only while DPoP is understood to be
+// experimental and unsupported.
+func WithDPoPScheme(enabled bool) AuthOption {
+	return func(o *authOptions) { o.acceptDPoPScheme = enabled }
+}
+
+func (o authOptions) schemeAllowed(scheme string) bool {
+	return scheme == "Bearer" || (o.acceptDPoPScheme && scheme == "DPoP")
+}
+
+// Auth validates JWT bearer tokens from the Authorization header.
+//
+// Only the "Bearer" scheme is accepted unless WithDPoPScheme(true) is passed.
+// Even then, this middleware validates the JWT alone and performs no
+// proof-of-possession check, so a DPoP-scheme token is bearer-equivalent here.
+// Sender-constraint enforcement lives in DPoP, which must be chained after
+// this middleware, and which can only bind a token carrying "cnf.jkt", a claim
+// vault42 does not currently issue.
+func Auth(keys map[string]*rsa.PublicKey, issuer, audience string, opts ...AuthOption) func(http.Handler) http.Handler {
+	return authWithTypes(func() map[string]*rsa.PublicKey { return keys }, issuer, audience, opts, "Bearer")
 }
 
 // AuthChallenge validates JWT tokens allowing both Bearer and 2fa_challenge types.
 // Use this for 2FA verify endpoints that accept challenge tokens.
-func AuthChallenge(keys map[string]*rsa.PublicKey, issuer, audience string) func(http.Handler) http.Handler {
-	return authWithTypes(func() map[string]*rsa.PublicKey { return keys }, issuer, audience, "Bearer", "2fa_challenge")
+// See Auth for which authentication schemes are accepted.
+func AuthChallenge(keys map[string]*rsa.PublicKey, issuer, audience string, opts ...AuthOption) func(http.Handler) http.Handler {
+	return authWithTypes(func() map[string]*rsa.PublicKey { return keys }, issuer, audience, opts, "Bearer", "2fa_challenge")
 }
 
-// AuthDynamic validates JWT Bearer tokens using a dynamic key provider.
+// AuthDynamic validates JWT bearer tokens using a dynamic key provider.
 // Used when keys are managed by a KeyStore that rotates keys at runtime.
-func AuthDynamic(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string) func(http.Handler) http.Handler {
-	return authWithTypes(keyProvider, issuer, audience, "Bearer")
+// See Auth for which authentication schemes are accepted.
+func AuthDynamic(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string, opts ...AuthOption) func(http.Handler) http.Handler {
+	return authWithTypes(keyProvider, issuer, audience, opts, "Bearer")
 }
 
 // AuthChallengeDynamic validates JWT tokens (Bearer + 2fa_challenge) using a dynamic key provider.
-func AuthChallengeDynamic(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string) func(http.Handler) http.Handler {
-	return authWithTypes(keyProvider, issuer, audience, "Bearer", "2fa_challenge")
+// See Auth for which authentication schemes are accepted.
+func AuthChallengeDynamic(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string, opts ...AuthOption) func(http.Handler) http.Handler {
+	return authWithTypes(keyProvider, issuer, audience, opts, "Bearer", "2fa_challenge")
 }
 
-func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string, allowedTypes ...string) func(http.Handler) http.Handler {
+func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audience string, opts []AuthOption, allowedTypes ...string) func(http.Handler) http.Handler {
 	allowed := make(map[string]bool, len(allowedTypes))
 	for _, t := range allowedTypes {
 		allowed[t] = true
+	}
+
+	var o authOptions
+	for _, opt := range opts {
+		opt(&o)
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -58,7 +98,7 @@ func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audienc
 			}
 
 			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || (parts[0] != "Bearer" && parts[0] != "DPoP") {
+			if len(parts) != 2 || !o.schemeAllowed(parts[0]) {
 				httputil.WriteError(w, http.StatusUnauthorized, "invalid_authorization")
 				return
 			}

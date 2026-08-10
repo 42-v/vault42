@@ -948,12 +948,12 @@ func TestModelCredsToWebAuthn_ManyCredentials(t *testing.T) {
 // TestWebAuthn_ListCredentials_Table covers ListCredentials handler error and happy paths.
 func TestWebAuthn_ListCredentials_Table(t *testing.T) {
 	tests := []struct {
-		name       string
-		setupRepo  func(*mocks.MockWebAuthnRepo)
-		setClaims  bool
-		wantCode   int
-		wantErr    string
-		wantCount  int
+		name      string
+		setupRepo func(*mocks.MockWebAuthnRepo)
+		setClaims bool
+		wantCode  int
+		wantErr   string
+		wantCount int
 	}{
 		{
 			name:      "unauthorized no claims",

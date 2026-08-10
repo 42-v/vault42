@@ -134,11 +134,13 @@ var evictOnce sync.Once
 
 // evictInterval is the sweep period of the eviction goroutine addLimiter starts.
 // A variable, not a constant, so tests can drive a sweep without a minute's wait.
-var evictInterval = 60 * time.Second
-var activeLimiters struct {
-	mu       sync.Mutex
-	limiters []*localRateLimiter
-}
+var (
+	evictInterval  = 60 * time.Second
+	activeLimiters struct {
+		mu       sync.Mutex
+		limiters []*localRateLimiter
+	}
+)
 
 func addLimiter(l *localRateLimiter) {
 	activeLimiters.mu.Lock()

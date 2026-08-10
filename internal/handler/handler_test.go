@@ -1698,19 +1698,10 @@ func TestWellKnown_OpenIDConfig(t *testing.T) {
 	if result["jwks_uri"] != "https://vault.test/.well-known/jwks.json" {
 		t.Fatalf("expected jwks_uri=https://vault.test/.well-known/jwks.json, got %v", result["jwks_uri"])
 	}
-	if result["authorization_endpoint"] == nil {
-		t.Fatal("expected authorization_endpoint in discovery document")
-	}
-	if result["token_endpoint"] == nil {
-		t.Fatal("expected token_endpoint in discovery document")
-	}
-	if result["userinfo_endpoint"] == nil {
-		t.Fatal("expected userinfo_endpoint in discovery document")
-	}
 
-	algValues, ok := result["id_token_signing_alg_values_supported"].([]interface{})
+	algValues, ok := result["access_token_signing_alg_values_supported"].([]interface{})
 	if !ok || len(algValues) == 0 {
-		t.Fatal("expected id_token_signing_alg_values_supported array")
+		t.Fatal("expected access_token_signing_alg_values_supported array")
 	}
 	if algValues[0] != "RS256" {
 		t.Fatalf("expected RS256 in signing alg values, got %v", algValues[0])

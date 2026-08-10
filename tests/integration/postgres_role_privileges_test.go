@@ -191,7 +191,6 @@ func TestVaultAppRolePrivileges(t *testing.T) {
 	t.Run("the pseudonym-keyed stores", func(t *testing.T) {
 		pseudonymStoresUnderVaultApp(t, adminPool)
 	})
-
 }
 
 // writePathsUnderVaultApp: every write path the running server takes, executed as

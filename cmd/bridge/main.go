@@ -1,3 +1,28 @@
+// Command bridge is vault42's deception reverse proxy. It sits in front of two
+// upstreams, the real vault and a honeypot vault, and decides per request which
+// one answers.
+//
+// The decision is a per-IP score accumulated from automation-looking user
+// agents, request rate, and failed logins observed in the real upstream's
+// responses. An IP that crosses the configured threshold is flagged, and every
+// subsequent request from it goes to the honeypot instead of the real service.
+// Touching one of the decoy login paths this binary serves itself skips the
+// score entirely and flags on the first request, since no legitimate client
+// asks vault42 for /wp-admin. Flags carry a TTL and optionally persist in Redis
+// so a fleet of bridges shares one view and a restart does not clear an
+// attacker's status.
+//
+// The routing decision is invisible to the client on purpose: a flagged
+// attacker gets plausible responses from the honeypot rather than a block page,
+// so probing continues against a system with nothing real behind it. The cost
+// of a false positive is that a legitimate user is quietly served fake data,
+// which is why the client-IP source is configurable and why trusted proxy
+// ranges must be set correctly in any deployment behind a load balancer.
+//
+// A small token-authenticated admin API on the same listener exposes the flag
+// list for manual flag and unflag, alongside liveness and readiness probes that
+// report on both upstreams. Configuration is entirely BRIDGE_* environment
+// variables; see Config and docs/bridge.md.
 package main
 
 import (

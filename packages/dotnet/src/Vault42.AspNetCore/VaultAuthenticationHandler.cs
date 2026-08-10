@@ -20,6 +20,21 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
     // Dangerous JWT headers that must be rejected to prevent key injection attacks
     private static readonly string[] DangerousHeaders = ["jku", "x5u", "x5c", "jwk"];
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="VaultAuthenticationHandler"/> class.
+    /// </summary>
+    /// <param name="options">Monitor supplying the options for the resolved authentication scheme.</param>
+    /// <param name="logger">Factory for the handler's logger. Validation failures are logged here at debug level.</param>
+    /// <param name="encoder">URL encoder used by the base handler.</param>
+    /// <param name="jwks">
+    /// The singleton JWKS manager that resolves signing keys.
+    /// <see cref="VaultJwksManager.InitializeAsync"/> must have run before the first request, or
+    /// every token is rejected for an unknown key.
+    /// </param>
+    /// <remarks>
+    /// Constructed by the ASP.NET Core authentication middleware, not by application code. Register
+    /// the handler with <see cref="VaultAuthenticationExtensions.AddVault(AuthenticationBuilder, Action{VaultAuthenticationOptions})"/>.
+    /// </remarks>
     public VaultAuthenticationHandler(
         IOptionsMonitor<VaultAuthenticationOptions> options,
         ILoggerFactory logger,
@@ -30,6 +45,29 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
         _jwks = jwks;
     }
 
+    /// <summary>
+    /// Validates the request's <c>Authorization: Bearer</c> token and builds the authenticated principal.
+    /// </summary>
+    /// <returns>
+    /// <see cref="AuthenticateResult.NoResult"/> when the request carries no Bearer token, so other
+    /// schemes still get a turn; <see cref="AuthenticateResult.Fail(string)"/> when a token is
+    /// present but does not validate; otherwise a success result whose principal carries the mapped
+    /// role and scope claims.
+    /// </returns>
+    /// <remarks>
+    /// <para>The token must clear every one of these, in order: it is within
+    /// <see cref="VaultAuthenticationOptions.MaxTokenSize"/>; it is syntactically a JWT; it carries
+    /// none of the <c>jku</c>, <c>x5u</c>, <c>x5c</c> or <c>jwk</c> headers, each of which would let
+    /// a caller nominate its own verification key; it names a <c>kid</c> the JWKS manager knows; it
+    /// verifies under RS256 alone against that key, with issuer, audience and lifetime checked and
+    /// 30 seconds of clock skew allowed; and its <c>token_type</c> claim is exactly <c>Bearer</c>,
+    /// which is what excludes the <c>2fa_challenge</c> token issued between the password step and
+    /// the second factor.</para>
+    /// <para>Failure messages are deliberately uninformative. A validation failure surfaces as
+    /// <c>invalid_token</c> whether the cause was expiry, a bad signature or the wrong issuer, and
+    /// the specific reason is logged at debug rather than returned, so the response cannot be used
+    /// to probe why a token was refused.</para>
+    /// </remarks>
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         // Extract Bearer token
@@ -139,6 +177,14 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
     /// so Blazor Server auth flows can render their own login UI. API clients
     /// still get a clean 401 + WWW-Authenticate header.
     /// </summary>
+    /// <param name="properties">Challenge properties supplied by the authorization middleware. Not consulted.</param>
+    /// <returns>A completed task; the response is written synchronously.</returns>
+    /// <remarks>
+    /// The redirect is suppressed for <see cref="VaultAuthenticationOptions.LoginPath"/> itself and
+    /// for the <c>/_blazor</c>, <c>/_framework</c>, <c>/_content</c> and <c>/healthz</c> prefixes,
+    /// so an unauthenticated login page cannot redirect to itself. Prefix matching is boundary-aware:
+    /// <c>/login</c> exempts <c>/login</c> and <c>/login/reset</c> but not <c>/login-other-route</c>.
+    /// </remarks>
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
         var accept = Request.Headers.Accept.ToString();

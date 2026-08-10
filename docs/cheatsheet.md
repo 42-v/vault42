@@ -358,11 +358,67 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `tests/attack/dpop_mismatch_test.go` -- TestDPoPWrongKey
 
+**Status: this defense is not reachable.** The thumbprint comparison in `middleware.DPoP` only runs when the access token carries `cnf.jkt`, and no vault42 issuance path sets that claim (see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`). Every request therefore takes the unbound path: a presented proof is checked against method, URI and access-token hash but never against a thumbprint the token committed to, and a request with **no** proof passes through. Treat `VAULT_DPOP_ENABLED` as experimental. Nothing in this section may be cited as a live mitigation until issuance populates `cnf.jkt`.
+
 ---
 
-## 8. Infrastructure & Deployment Attacks
+## 8. KMS Unwrap Oracle (`POST /kms/unwrap`)
 
-### 8.1 Secret Exfiltration via Environment Variables
+`POST /kms/unwrap` is a key-release endpoint: every reachable request releases a plaintext. It is mounted only when `KMS_ROOT_KEY_FILE` is set (`internal/server/server.go`). Its whole design is a decryption-oracle defense, so it gets its own section.
+
+### 8.1 Decryption Oracle via Differentiated Errors
+
+**Attack:** Submit envelopes that fail at different stages -- unknown kid, malformed base64, truncated ciphertext, flipped GCM tag, correct ciphertext under the wrong kid -- and read the differences in status code, error string, response timing or audit outcome to learn which stage failed. That is a padding-oracle-shaped primitive against a KEK.
+
+**Defense:** Every post-authorization failure collapses to one identical `400 unwrap_failed`. `kms.Unwrap` returns a single opaque `kms.ErrUnwrap` for all of them, and the handler discards it rather than surfacing it (`handler.unwrapFailed`, `KMSHandler.Unwrap`). Each attempt is audited with the same shape whatever the cause, so the audit log is not an oracle either. The endpoint reveals success versus failure and nothing more.
+
+**Tests:** `internal/kms/kms_test.go` -- TestUnwrap_UniformFailure; `internal/handler/kms_test.go` -- TestKMSUnwrap_UniformFailure
+
+### 8.2 Cross-kid Envelope Confusion
+
+**Attack:** Take an envelope wrapped under `kid=A` and submit it as `kid=B`, hoping the two derived KEKs collide or that the kid is decorative.
+
+**Defense:** Per-kid KEKs are HKDF-SHA256 derivations from the root secret under a versioned, domain-separated label (`kms.kekInfoPrefix`), and the kid is bound as AES-GCM AAD, so a ciphertext wrapped under one kid fails authentication under another even if the derived keys somehow collided. The failure is `ErrUnwrap` like every other, so the attempt does not confirm the kid exists.
+
+**Test:** `internal/kms/kms_test.go` -- TestWrapUnwrap_RoundTrip, TestUnwrap_UniformFailure
+
+### 8.3 Scope Bypass on a Machine Endpoint
+
+**Attack:** Reach the unwrap oracle with an ordinary user access token, or with a client-credential token that was never granted `kms:unwrap`. The token is validly signed, so anything checking only "is this authenticated" lets it through.
+
+**Defense:** The route chains `authMw` then `middleware.RequireScope("kms:unwrap")` at the mount site in `internal/server/server.go`. `RequireScope` reads the validated claims from context and returns `403 insufficient_scope` unless the exact scope string is present; it must be chained after an `Auth` middleware, and a missing claims value is `401`, not a pass. `KMSHandler.Unwrap` re-checks for nil claims as defense in depth.
+
+**Tests:** `internal/middleware/requirescope_test.go` -- TestRequireScope; `internal/handler/kms_test.go` -- TestKMSUnwrap_AuthzChain, TestKMSUnwrap_Unauthenticated
+
+### 8.4 Bearer Token Replay Against the Oracle
+
+**Attack:** Capture one authorized unwrap request (token plus body) and replay it to re-release the plaintext for as long as the access token lives.
+
+**Defense:** Incomplete, and accepted as such -- see [security.md](security.md) AR-10. What actually stands: a short access-token TTL, TLS, per-IP rate limiting that fails closed, and a synchronous audit record of every attempt. DPoP would close it by sender-constraining the token, but does not (§7.3). Do not deploy this endpoint on the assumption that replay is prevented.
+
+**Test:** `internal/handler/kms_test.go` -- TestKMSUnwrap_DPoPRequiredWhenEnabled (covers the middleware wiring, not token binding)
+
+### 8.5 Rate-Limit Amplification via Cache Outage
+
+**Attack:** Take Redis down, then hammer the oracle. If the limiter degrades to a per-pod in-memory fallback, the effective release rate is multiplied by the replica count; if it degrades to "allow", it is unbounded.
+
+**Defense:** The unwrap limiter is configured `FailClosed: true` (30/min per IP, at the mount site in `internal/server/server.go`), unlike the graceful-degradation policy used on ordinary auth endpoints. A cache failure rejects unwraps rather than widening the release rate (audit finding L4).
+
+**Tests:** `internal/middleware/ratelimit_failclosed_test.go`; `tests/attack/rate_limit_bypass_test.go`
+
+### 8.6 Key Material Extraction via Logs or Errors
+
+**Attack:** Induce an error path or a verbose log line that echoes the envelope, the plaintext, the derived KEK or the root secret.
+
+**Defense:** The audit record carries only the kid and the boolean outcome (`KMSHandler.audit`). The KEK is never returned in, or derivable from, any response, and the root secret is wiped on close (`internal/kms/kms_test.go` -- TestClose_WipesRoot). `kms.Unwrap` releases the wrapped payload only, never the Key-Encryption-Key.
+
+**Tests:** `internal/kms/kms_test.go` -- TestClose_WipesRoot; `internal/handler/kms_test.go` -- TestKMSUnwrap_RoundTrip
+
+---
+
+## 9. Infrastructure & Deployment Attacks
+
+### 9.1 Secret Exfiltration via Environment Variables
 
 **Attack:** Environment variables are visible in `/proc/self/environ`, `docker inspect`, crash dumps, and log aggregators.
 
@@ -370,7 +426,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `tests/compliance/nist_800_63b_test.go` (secret loading tested indirectly)
 
-### 8.2 Database Privilege Escalation
+### 9.2 Database Privilege Escalation
 
 **Attack:** SQL injection or application bug allows attacker to `DELETE FROM audit_log` to cover tracks, or `ALTER TABLE` to weaken schema.
 
@@ -378,7 +434,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** Architecture-level defense; tested via integration tests
 
-### 8.3 Container Escape / Filesystem Write
+### 9.3 Container Escape / Filesystem Write
 
 **Attack:** If the container has a writable filesystem, an attacker who gains code execution can modify the binary, drop a web shell, or tamper with data.
 
@@ -386,7 +442,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** Dockerfile/K8s manifest review
 
-### 8.4 Cache Poisoning
+### 9.4 Cache Poisoning
 
 **Attack:** If Redis is shared or unprotected, inject malicious data into the rate limit or session cache.
 
@@ -394,7 +450,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** Cache interface tests in `internal/cache/`
 
-### 8.5 IP Spoofing via Header Injection
+### 9.5 IP Spoofing via Header Injection
 
 **Attack:** Bypass IP-based access control by injecting a fake `X-Forwarded-For` or `CF-Connecting-IP` header to impersonate an allowed IP.
 
@@ -402,7 +458,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `internal/middleware/ipaccess_test.go` -- TestClientIPRealIPHeaderNotTrusted, TestClientIPRealIPHeaderDisabled
 
-### 8.6 Geo-Fence Bypass via Missing Header
+### 9.6 Geo-Fence Bypass via Missing Header
 
 **Attack:** Connect without the geo header (e.g. bypass Cloudflare via direct IP) to avoid country-based blocking.
 
@@ -410,7 +466,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessGeoNoHeaderSkipsCheck, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
 
-### 8.7 IP Blocklist Evasion via IPv4/IPv6 Duality
+### 9.7 IP Blocklist Evasion via IPv4/IPv6 Duality
 
 **Attack:** Access from the IPv6-mapped form of a blocked IPv4 address (e.g. `::ffff:192.0.2.1` when `192.0.2.0/24` is blocked).
 
@@ -418,7 +474,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessIPv6CIDR
 
-### 8.8 Health Endpoint Abuse Past IP Access Control
+### 9.8 Health Endpoint Abuse Past IP Access Control
 
 **Attack:** Use `/healthz` or `/readyz` (which bypass IP access control) to probe the service or extract information.
 
@@ -428,9 +484,9 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 ---
 
-## 9. Password Attacks
+## 10. Password Attacks
 
-### 9.1 Weak Password Acceptance
+### 10.1 Weak Password Acceptance
 
 **Attack:** Register with `password123` or other common passwords.
 
@@ -438,7 +494,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Tests:** `tests/attack/password_breach_test.go`, `tests/compliance/nist_800_63b_test.go`
 
-### 9.2 Password Hash Offline Attack
+### 10.2 Password Hash Offline Attack
 
 **Attack:** Exfiltrate password hashes from the database and crack offline.
 
@@ -446,7 +502,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `tests/attack/password_breach_test.go` -- TestPasswordHashUniqueSalts
 
-### 9.3 Password Truncation
+### 10.3 Password Truncation
 
 **Attack:** Some hashing implementations silently truncate passwords at 72 bytes (bcrypt). Passwords differing only after byte 72 would have the same hash.
 
@@ -454,7 +510,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Tests:** `tests/compliance/nist_800_63b_test.go` -- TestNIST_PasswordNoTruncation, `tests/compliance/owasp_asvs_test.go` -- TestASVS_V2_1_3_PasswordNoTruncation
 
-### 9.4 Password Reset Token Prediction
+### 10.4 Password Reset Token Prediction
 
 **Attack:** If reset tokens are sequential or time-based, an attacker can predict the next token.
 
@@ -464,9 +520,9 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 ---
 
-## 10. Supply Chain & Dependency Attacks
+## 11. Supply Chain & Dependency Attacks
 
-### 10.1 Dependency Confusion / Typosquatting
+### 11.1 Dependency Confusion / Typosquatting
 
 **Attack:** Publish a malicious package with a similar name to a legitimate dependency.
 
@@ -474,7 +530,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `go.sum` integrity; CI runs `govulncheck`
 
-### 10.2 Known Vulnerability in Dependencies
+### 11.2 Known Vulnerability in Dependencies
 
 **Attack:** Exploit CVEs in outdated dependencies (e.g., CVE-2025-30204 in golang-jwt < v5.2.2).
 
@@ -525,7 +581,14 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 | XSS | `attack/xss_injection_test.go` | Covered |
 | CSRF | `attack/csrf_test.go` | Covered |
 | Header injection (CRLF) | `attack/header_injection_test.go` | Covered |
-| DPoP mismatch | `attack/dpop_mismatch_test.go` | Covered |
+| DPoP mismatch (htm/htu) | `attack/dpop_mismatch_test.go` | Covered |
+| DPoP key substitution (`cnf.jkt`) | `attack/dpop_mismatch_test.go` | Not reachable -- issuance never sets `cnf.jkt` (§7.3) |
+| KMS unwrap oracle uniformity | `kms/kms_test.go`, `handler/kms_test.go` | Covered |
+| KMS cross-kid envelope confusion | `kms/kms_test.go` | Covered |
+| KMS scope bypass (`kms:unwrap`) | `middleware/requirescope_test.go`, `handler/kms_test.go` | Covered |
+| KMS bearer replay | `handler/kms_test.go` | Accepted risk (security.md AR-10) |
+| KMS rate limit fail-closed | `middleware/ratelimit_failclosed_test.go` | Covered |
+| KMS root key wipe on close | `kms/kms_test.go` | Covered |
 | Password breach check | `attack/password_breach_test.go` | Covered |
 | Password attack vectors | `attack/password_attack_test.go` | Covered |
 | Password reset + HIBP | `attack/password_reset_hibp_test.go` | Covered |

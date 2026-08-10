@@ -17,6 +17,11 @@ import (
 // idTokenAlgs is the allowlist for OIDC ID-token signatures. Asymmetric RSA only
 // — this rejects "none" (unsigned) and HMAC algs (which would enable key-confusion
 // against the public JWKS material).
+//
+// It narrows; it never widens. jwt.ParseWithClaims verifies only the algorithms
+// its own signature switch implements, so RS384 and RS512 are accepted by this
+// list and then rejected as unverifiable one layer down. Adding an entry here
+// cannot make an algorithm verifiable that the verifier does not implement.
 var idTokenAlgs = []string{"RS256", "RS384", "RS512"}
 
 // jwksCache holds the issuer's signing keys, indexed by kid.
@@ -26,11 +31,27 @@ type jwksCache struct {
 }
 
 // VerifyIDToken validates an OIDC ID token's signature (against the issuer's
-// JWKS) and claims (iss, aud, exp, and nonce), returning the normalized profile.
-// It rejects unsigned/HMAC tokens and embedded-key headers (jku/x5u/x5c/jwk).
+// JWKS) and its iss, aud, exp and nonce claims, returning the normalized
+// profile. It rejects unsigned/HMAC tokens and embedded-key headers
+// (jku/x5u/x5c/jwk).
+//
+// expectedNonce is the nonce minted for this login attempt and is mandatory.
+// An empty value is rejected rather than read as "skip the nonce check": the
+// nonce is the only claim binding the token to this browser's authorization
+// request, so skipping it would reopen the ID-token / code-injection attack
+// that RFC 9700 §4.5.3 requires the nonce to close. The obligation is
+// discharged by the authorization-code flow in internal/handler/oauth.go,
+// which mints the nonce at /authorize and round-trips it through the
+// HMAC-signed state parameter.
+//
+// Every failure path returns a nil profile: there is no partial result a
+// caller could mistake for a verified identity.
 func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce string) (*UserInfo, error) {
 	if idToken == "" {
 		return nil, fmt.Errorf("oidc id_token: empty")
+	}
+	if expectedNonce == "" {
+		return nil, fmt.Errorf("oidc id_token: no expected nonce for this login attempt")
 	}
 	claims := vjwt.MapClaims{}
 	_, err := vjwt.ParseWithClaims(idToken, &claims, func(t *vjwt.Token) (any, error) {
@@ -57,10 +78,10 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 	}
 
 	// Nonce binds the token to this login attempt (replay/injection defense).
-	if expectedNonce != "" {
-		if n, _ := claims["nonce"].(string); n != expectedNonce {
-			return nil, fmt.Errorf("oidc id_token: nonce mismatch")
-		}
+	// expectedNonce is guaranteed non-empty above, so an issuer that omits the
+	// claim entirely compares "" against it and is rejected here.
+	if n, _ := claims["nonce"].(string); n != expectedNonce {
+		return nil, fmt.Errorf("oidc id_token: nonce mismatch")
 	}
 
 	sub, _ := claims["sub"].(string)

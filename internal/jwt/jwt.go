@@ -12,15 +12,39 @@ import (
 )
 
 // Token represents a parsed or constructed JWT.
+//
+// A Token obtained from parsing is only trustworthy when the parse returned a
+// nil error. [ParseWithClaims] returns a populated Token alongside most of its
+// errors so callers can log the offending kid or alg, and [ParseUnverified]
+// returns one that was never checked at all. Read Valid, or better, read the
+// error.
 type Token struct {
-	Header    map[string]any
-	Claims    Claims
+	// Header is the decoded JOSE header. It is attacker-controlled until the
+	// signature verifies, so a Keyfunc reading it must treat every value as
+	// untrusted input; that is where the jku/x5u/x5c/jwk rejections belong.
+	Header map[string]any
+	// Claims is the decoded payload, unmarshaled into the caller's type. It is
+	// populated before verification, so it is attacker-controlled whenever
+	// Valid is false.
+	Claims Claims
+	// Signature is the raw decoded signature bytes.
 	Signature []byte
-	Raw       string
-	Valid     bool
+	// Raw is the original compact serialization exactly as received.
+	Raw string
+	// Valid reports that the signature verified against the key the Keyfunc
+	// returned and that claims validation passed. It is set at the very end of
+	// [ParseWithClaims] and is false on every error path, including the ones
+	// that still return a non-nil Token.
+	Valid bool
 }
 
-// Keyfunc receives the unverified token (for kid lookup) and returns the verification key.
+// Keyfunc receives the unverified token and returns the key to verify it with.
+//
+// It runs before any signature check, so token.Header is attacker-controlled at
+// this point. A Keyfunc must select the key from data it trusts, typically by
+// looking the kid up in a local key set, and must never fetch or construct a
+// key from a URL or an embedded JWK found in the header. Returning an error
+// makes the parse fail with ErrTokenUnverifiable.
 type Keyfunc func(token *Token) (any, error)
 
 // encodeSegment base64url-encodes a byte slice (no padding).

@@ -28,12 +28,14 @@ type DataExportHandler struct {
 	auditEvents repository.AuditRepository
 	identitySvc *service.IdentityService
 	blobSvc     *service.BlobService
+	svcDocSvc   *service.ServiceDocumentService
 	auditLog    *audit.Logger
 }
 
 // NewDataExportHandler creates a new data export handler. blobSvc may be nil
 // when blob storage is disabled; identitySvc may be nil when the identity store
-// is disabled. The handler degrades gracefully in either case.
+// is disabled; svcDocSvc may be nil when the service document store is disabled.
+// The handler degrades gracefully in every case.
 func NewDataExportHandler(
 	users repository.UserRepository,
 	devices repository.DeviceRepository,
@@ -41,6 +43,7 @@ func NewDataExportHandler(
 	auditEvents repository.AuditRepository,
 	identitySvc *service.IdentityService,
 	blobSvc *service.BlobService,
+	svcDocSvc *service.ServiceDocumentService,
 	auditLog *audit.Logger,
 ) *DataExportHandler {
 	return &DataExportHandler{
@@ -50,6 +53,7 @@ func NewDataExportHandler(
 		auditEvents: auditEvents,
 		identitySvc: identitySvc,
 		blobSvc:     blobSvc,
+		svcDocSvc:   svcDocSvc,
 		auditLog:    auditLog,
 	}
 }
@@ -92,10 +96,11 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:     user.UpdatedAt,
 			LastLoginAt:   user.LastLoginAt,
 		},
-		Devices:        []DataExportDevice{},
-		Blobs:          []DataExportBlob{},
-		SocialAccounts: []DataExportSocialAccount{},
-		AuditEvents:    []DataExportAuditEvent{},
+		Devices:          []DataExportDevice{},
+		Blobs:            []DataExportBlob{},
+		SocialAccounts:   []DataExportSocialAccount{},
+		AuditEvents:      []DataExportAuditEvent{},
+		ServiceDocuments: []*service.ServiceDocumentExport{},
 	}
 
 	// Identity profile (decrypted PII). Absent profile is not an error.
@@ -157,6 +162,20 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 				CreatedAt: m.CreatedAt,
 			})
 		}
+	}
+
+	// Service documents, decrypted. A deliberate divergence from the blob section
+	// above, which exports metadata only: blobs are opaque files the user uploaded
+	// and already holds, whereas these are bounded structured records another
+	// service wrote ABOUT the user, which the user has no other way to see.
+	// Documents under the global sentinel are excluded by the subject-keyed lookup.
+	if h.svcDocSvc != nil {
+		docs, docErr := h.svcDocSvc.ExportForSubject(r.Context(), userID)
+		if docErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		resp.ServiceDocuments = append(resp.ServiceDocuments, docs...)
 	}
 
 	// Linked social accounts (provider tokens are deliberately excluded).

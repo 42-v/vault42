@@ -1,7 +1,8 @@
 # Vault42 -- Security Decisions & Accepted Risks
 
-> Complements the [Security Review](security-review.md) and [Spec section 13](spec.md#13-security-mitigations).
-> Documents deliberate security tradeoffs and platform limitations that have been reviewed and accepted.
+> Complements [Spec section 13](spec.md#13-security-mitigations) and the
+> [standards mapping](COMPLIANCE.md). Documents deliberate security tradeoffs and platform
+> limitations that have been reviewed and accepted.
 
 ---
 
@@ -57,20 +58,61 @@ No code change is planned. This is a fundamental Go runtime constraint.
 
 ---
 
-### AR-5: User Roles Hardcoded to `["user"]` by Design
+### AR-5: User Roles in an Access Token Are a Snapshot, and the Role Catalog Fails Open
 
-**Severity:** Medium (architectural decision) | **Source:** M-6
+**Severity:** Medium (architectural decision) | **Source:** M-6, revised for the 2026-08-09 RBAC work
 
-Token issuance always assigns `["user"]` roles without consulting the database. If roles were modified between refreshes, the stale role would persist until the refresh family expires.
+Vault42 runs two independent authorization planes. This risk covers the user plane only; the
+admin plane is described below because the two are routinely confused.
+
+**User plane (JWT roles).** This risk covers the three end-user issuance paths: login, refresh
+and MFA completion. Any other issuance path enforces its own configured role allow-list rather
+than inheriting this behaviour.
+
+Roles are read from the user row at token issuance and passed through
+`AuthService.effectiveRoles`, which is called from all three paths in
+`internal/service/auth.go`. It strips the admin-reserved names `admin` and `super_admin`
+(`seed.ReservedAdminRoles`, applied by `seed.FilterUserRoles`), then keeps only roles present
+in the `auth.app_roles` catalog (`RoleCatalog.Filter`), falling back to `["user"]` when nothing
+survives. The resulting list is embedded in the access token
+(`TokenService.IssueTokenPair`). Nothing re-reads the database on a per-request basis.
+
+Two consequences are accepted:
+
+1. **Revocation is not immediate.** A role removed from a user row stays effective in any
+   already-issued access token until that token expires.
+2. **The catalog cache fails open.** `RoleCatalog` refreshes on a TTL (default 60 s) and, when
+   the catalog has never loaded and a refresh errors, returns its input unchanged
+   (`RoleCatalog.current` and `RoleCatalog.Filter`, `internal/service/role_catalog.go`).
 
 **Why this is accepted:**
 
-- **Single-tenant, no admin interface:** Vault42 is designed as a single-tenant authentication service. All users are self-service and equal. There is no admin UI, no role management API, and no privileged user class.
-- **No RBAC consumers:** No endpoint in Vault42 checks for roles beyond the base `"user"` role. Adding dynamic role fetching would add complexity and a database round-trip with zero current benefit.
-- **Short access token TTL:** Access tokens live 5-15 minutes. Even if roles changed, stale claims expire quickly.
-- **v2 feature if needed:** If RBAC is required (multi-tenant, admin panel), it will be implemented as a full feature with DB schema, role management API, and token claim population. Tracked in `docs/TODO.md`.
+- **Bounded staleness.** Access tokens live 5-15 minutes, and refresh re-reads the user row on
+  every rotation (`AuthService.Refresh`), which also revokes the whole family if the account has
+  since been deleted, banned or disabled. The window is one access-token TTL, not the refresh
+  family lifetime.
+- **Privilege escalation is still closed on the fail-open path.** The catalog filter narrows;
+  it never adds. `seed.FilterUserRoles` runs upstream of it and is unconditional, so a catalog
+  outage cannot let `admin` or `super_admin` reach a JWT even if a row is poked directly by SQL.
+- **The alternative is a database round-trip per request** on the hot authenticated path, for a
+  claim that is advisory to relying parties rather than load-bearing inside Vault42: no vault42
+  route authorizes on `claims.Roles`. Machine authorization uses scopes
+  (`middleware.RequireScope`, `internal/middleware/auth.go`), not roles.
+- **Operators who need immediate revocation have a mechanism.** Revoking the user's sessions
+  (`POST /admin/sessions/revoke-all`, or locking the account) invalidates the refresh family
+  and caps exposure at the remaining access-token TTL.
 
-No code change is planned for v1.
+**Not covered by this risk: the admin plane.** The admin gateway does not use JWT roles. Its
+authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 29
+`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 37 admin endpoints
+are permission-gated in `adminapi.NewRouter` (`internal/adminapi/router.go`), including a
+role-catalog management API (`GET`/`POST`/`DELETE /admin/roles`), admin user management
+(`/admin/admins`) and an HTML dashboard. Every check re-reads the admin row from the database
+inside the request (`adminapi.SessionAuth`) before `adminapi.RBACCheck` evaluates it, so an
+admin role change or revocation takes effect on the next request. See
+[Admin Gateway](admin-gateway.md#rbac-model).
+
+No code change is planned for 1.0.0.
 
 ---
 
@@ -134,18 +176,38 @@ TLS config uses `RequireAndVerifyClientCert` with the CA pool but does not check
 
 ---
 
-### AR-10: KMS Unwrap Oracle Accepts Plain-Bearer Tokens When DPoP Is Disabled
+### AR-10: KMS Unwrap Oracle Authorizes on a Bearer Token That Is Not Sender-Constrained
 
-**Severity:** Low (by design) | **Source:** KMS unwrap review (0.8.6)
+**Severity:** Low (by design) | **Source:** KMS unwrap review (0.8.6), revised for 1.0.0
 
-`POST /kms/unwrap` is a key-release endpoint. When `VAULT_DPOP_ENABLED=false`, it authorizes on a plain Bearer client-credential token carrying the `kms:unwrap` scope, so a captured token could be replayed within its (short) TTL to re-release the plaintext.
+`POST /kms/unwrap` is a key-release endpoint. It authorizes on a plain Bearer
+client-credential token carrying the `kms:unwrap` scope, so a captured token could be replayed
+within its (short) TTL to re-release the plaintext.
+
+**DPoP does not currently close this.** Sender-constraining a token requires the access token
+to carry a `cnf.jkt` confirmation claim (RFC 9449 §6.1), and no vault42 issuance path sets one
+(see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`). With
+`VAULT_DPOP_ENABLED=true` a presented proof is
+still checked for structure, method, URI, `iat` freshness, access-token hash and JTI single-use,
+but it is never compared against a thumbprint the token committed to, and a request presenting
+no proof at all is passed through. Treat `VAULT_DPOP_ENABLED` as experimental. Do not count it
+as a mitigation for this risk.
 
 **Why this is accepted:**
 
-- **DPoP closes it when enabled:** with `VAULT_DPOP_ENABLED=true` the handler is wrapped so a fresh, single-use DPoP proof is mandatory; a captured Bearer token plus body cannot be replayed. Deployments that hold DPoP-bound kms tokens should enable it.
-- **Defense in depth already applied:** the endpoint is scope-gated (`kms:unwrap`), per-IP rate limited with fail-closed behaviour, mounted only when `KMS_ROOT_KEY_FILE` is set, and every attempt is synchronously audited.
-- **Oracle-resistant by construction:** all post-authorization failures collapse to one opaque `400 unwrap_failed`, so the endpoint leaks only success vs failure, never why an envelope was rejected, and never the KEK.
-- **Backward compatibility:** the plain-Bearer path keeps clients that cannot yet present DPoP proofs (e.g. the initial life42 kms client) working; the trade-off is documented at the mount site in `internal/server/server.go`.
+- **Defense in depth already applied:** the endpoint is scope-gated (`kms:unwrap`), per-IP rate
+  limited with fail-closed behaviour, mounted only when `KMS_ROOT_KEY_FILE` is set, and every
+  attempt is synchronously audited.
+- **Oracle-resistant by construction:** all post-authorization failures collapse to one opaque
+  `400 unwrap_failed`, so the endpoint leaks only success vs failure, never why an envelope was
+  rejected, and never the KEK.
+- **Replay costs the attacker nothing new:** an attacker who can capture the token can also
+  capture the request body, and unwrapping the same envelope twice yields the same plaintext.
+  The exposure is the plaintext already released to the legitimate caller, bounded by the
+  access-token TTL, TLS and the per-IP limit.
+- **The KEK never leaves the process:** unwrap releases a wrapped data key, not the
+  Key-Encryption-Key, and per-kid KEKs are HKDF-derived from a root secret that is never
+  returned in or derivable from any response (see the `internal/kms` package doc).
 
 ---
 

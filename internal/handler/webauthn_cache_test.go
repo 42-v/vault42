@@ -47,8 +47,10 @@ func TestWebAuthnBegin_CacheFailureIsNotSilent(t *testing.T) {
 		path    string
 		handler func(*WebAuthnHandler) func(http.ResponseWriter, *http.Request)
 	}{
-		{"RegisterBegin", "/auth/2fa/webauthn/register/begin",
-			func(h *WebAuthnHandler) func(http.ResponseWriter, *http.Request) { return h.RegisterBegin }},
+		{
+			"RegisterBegin", "/auth/2fa/webauthn/register/begin",
+			func(h *WebAuthnHandler) func(http.ResponseWriter, *http.Request) { return h.RegisterBegin },
+		},
 	}
 
 	for _, tc := range tests {

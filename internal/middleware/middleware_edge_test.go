@@ -49,7 +49,7 @@ func TestAuth_MalformedAuthorizationHeaders(t *testing.T) {
 		{"token_scheme", "Token abc123", http.StatusUnauthorized, "invalid_authorization"},
 		{"negotiate_scheme", "Negotiate base64data", http.StatusUnauthorized, "invalid_authorization"},
 
-		// Case sensitivity — only "Bearer" and "DPoP" are accepted
+		// Case sensitivity — only "Bearer" is accepted
 		{"lowercase_bearer", "bearer valid-token", http.StatusUnauthorized, "invalid_authorization"},
 		{"uppercase_bearer", "BEARER valid-token", http.StatusUnauthorized, "invalid_authorization"},
 		{"mixed_case_bearer", "BeArEr valid-token", http.StatusUnauthorized, "invalid_authorization"},
@@ -65,7 +65,7 @@ func TestAuth_MalformedAuthorizationHeaders(t *testing.T) {
 		{"bearer_empty_token", "Bearer ", http.StatusUnauthorized, "invalid_token"},
 		{"bearer_single_char", "Bearer x", http.StatusUnauthorized, "invalid_token"},
 		{"bearer_null_byte", "Bearer \x00", http.StatusUnauthorized, "invalid_token"},
-		{"dpop_garbage", "DPoP not-a-jwt", http.StatusUnauthorized, "invalid_token"},
+		{"dpop_scheme_rejected", "DPoP not-a-jwt", http.StatusUnauthorized, "invalid_authorization"},
 	}
 
 	for _, tc := range cases {

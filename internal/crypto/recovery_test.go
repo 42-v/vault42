@@ -6,7 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"testing"
 )
@@ -46,6 +48,45 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, plaintext) {
 		t.Fatalf("round-trip mismatch: got %q want %q", got, plaintext)
+	}
+}
+
+// EncryptRecovery draws its one-time AES key with crypto/rand.Read, which has no
+// error return to check on this toolchain: a Reader failure calls the runtime
+// fatal handler and terminates the process. The property the removed check was
+// nominally guarding is asserted here directly instead, by unwrapping the RSA
+// envelope and looking at the key itself: it is full length, never a zero
+// buffer, and never repeated. A zero or repeated escrow key would let anyone
+// holding one recovered blob decrypt every other one.
+func TestEncryptRecoveryUsesFreshNonZeroAESKey(t *testing.T) {
+	priv, err := GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	unwrap := func() []byte {
+		t.Helper()
+		blob, err := EncryptRecovery(&priv.PublicKey, []byte("user@example.com"))
+		if err != nil {
+			t.Fatalf("encrypt: %v", err)
+		}
+		wrappedLen := binary.BigEndian.Uint32(blob[:4])
+		key, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, blob[4:4+wrappedLen], nil)
+		if err != nil {
+			t.Fatalf("unwrap aes key: %v", err)
+		}
+		return key
+	}
+
+	k1, k2 := unwrap(), unwrap()
+	if len(k1) != recoveryAESKeySize {
+		t.Errorf("aes key is %d bytes, want %d: rand.Read returned a short fill", len(k1), recoveryAESKeySize)
+	}
+	if bytes.Equal(k1, make([]byte, recoveryAESKeySize)) {
+		t.Error("aes key is all zero: the buffer was never filled with entropy")
+	}
+	if bytes.Equal(k1, k2) {
+		t.Error("two escrow blobs share an aes key")
 	}
 }
 

@@ -26,10 +26,10 @@ func RenderPreview(subject, htmlContent string, data TemplateData) (renderedSubj
 	if err = ValidateTemplateContent(subject, htmlContent); err != nil {
 		return "", "", "", err
 	}
-	st, ht, cerr := compileOverride(subject, htmlContent)
-	if cerr != nil {
-		return "", "", "", cerr
-	}
+	// ValidateTemplateContent above runs compileOverride on the same subject and
+	// body and returns its error, so this compile cannot fail. Discarding the
+	// error keeps the invariant in one place instead of implying two outcomes.
+	st, ht, _ := compileOverride(subject, htmlContent)
 	var sb, hb bytes.Buffer
 	if err = st.Execute(&sb, data); err != nil {
 		return "", "", "", err

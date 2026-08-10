@@ -19,7 +19,7 @@
 | `github.com/go-logr/logr` | v1.4.3 |  | ![stars](https://img.shields.io/github/stars/go-logr/logr?style=flat&label=) | 2026-07-20 |
 | `github.com/go-logr/stdr` | v1.2.2 |  | ![stars](https://img.shields.io/github/stars/go-logr/stdr?style=flat&label=) | 2021-12-14 |
 | `github.com/go-viper/mapstructure/v2` | v2.5.0 | webauthn | ![stars](https://img.shields.io/github/stars/go-viper/mapstructure?style=flat&label=) | 2026-01-12 |
-| `github.com/go-webauthn/x` | v0.2.6 | webauthn | ![stars](https://img.shields.io/github/stars/go-webauthn/x?style=flat&label=) | 2026-05-22 |
+| `github.com/go-webauthn/x` | v0.2.6 | webauthn | ![stars](https://img.shields.io/github/stars/go-webauthn/x?style=flat&label=) | 2026-08-09 |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 |  | ![stars](https://img.shields.io/github/stars/golang-jwt/jwt?style=flat&label=) | 2026-01-28 |
 | `github.com/google/go-tpm` | v0.9.8 | webauthn (TPM attestation) | ![stars](https://img.shields.io/github/stars/google/go-tpm?style=flat&label=) | 2025-12-29 |
 | `github.com/google/uuid` | v1.6.0 | webauthn | ![stars](https://img.shields.io/github/stars/google/uuid?style=flat&label=) | 2024-01-23 |
@@ -41,6 +41,7 @@
 | `internal/server` | 100.00% |
 | `internal/seed` | 100.00% |
 | `internal/sanitize` | 100.00% |
+| `internal/redis` | 100.00% |
 | `internal/rbac` | 100.00% |
 | `internal/model` | 100.00% |
 | `internal/migrate` | 100.00% |
@@ -53,16 +54,15 @@
 | `internal/cli` | 100.00% |
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
-| `internal/adminapi` | 99.72% |
+| `internal/repository/postgres` | 99.90% |
+| `internal/adminapi` | 99.81% |
 | `internal/oauth2` | 99.71% |
-| `internal/handler` | 99.61% |
-| `internal/service` | 99.34% |
+| `internal/handler` | 99.65% |
 | `internal/jwt` | 99.20% |
-| `internal/redis` | 99.11% |
-| `internal/repository/postgres` | 99.10% |
-| `internal/email` | 98.68% |
-| `internal/keystore` | 98.03% |
-| `internal/crypto` | 97.74% |
+| `internal/email` | 99.01% |
+| `internal/service` | 99.00% |
+| `internal/keystore` | 98.70% |
+| `internal/crypto` | 98.19% |
 | `internal/kms` | 91.67% |
 ## Maintainers
 
@@ -71,11 +71,11 @@
 | Creator | Type | Packages | Repos | Followers | Since |
 |---|---|---|---|---|---|
 | [cespare](https://github.com/cespare) | User | xxhash | 150 | ![followers](https://img.shields.io/github/followers/cespare?style=flat&label=) | 2010-06-30 |
-| [fxamacker](https://github.com/fxamacker) | User | cbor | 37 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
+| [fxamacker](https://github.com/fxamacker) | User | cbor | 38 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
 | [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2888 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2890 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
 | [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 190 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |

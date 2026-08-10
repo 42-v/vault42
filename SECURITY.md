@@ -37,9 +37,118 @@ Hosted on Tuta (end-to-end encrypted). If you prefer, you can encrypt your repor
 - Vulnerabilities that require physical access to the server
 - Social engineering
 
+## How a security fix ships
+
+Reports are handled privately; fixes are not.
+
+1. **Fix privately.** Work happens off the public tracker until a release is ready. No issue, no
+   branch name, no commit message describes the vulnerability before the fix is published.
+2. **Publish a release.** Fixes ship in a normal release, not as a patch attached to an email.
+   The version bump follows the policy below.
+3. **Say so in the changelog.** Every release that contains a security fix carries a
+   `### Security` section in [CHANGELOG.md](CHANGELOG.md) describing what was wrong, what an
+   attacker could do, and what changed. That section is the signal that a release is a security
+   release. Read it before deciding whether an upgrade is urgent.
+4. **Advisory when it affects deployed users.** Vulnerabilities that a deployed instance is
+   exposed to are published as a
+   [GitHub Security Advisory](https://github.com/42-v/vault42/security/advisories) on the
+   repository, which is also how a CVE is requested. Findings that require a configuration a
+   deployment cannot reach, or that only affect the development tree, are documented in the
+   changelog without an advisory.
+5. **Credit.** Reporters are credited by name in the changelog and the advisory unless they ask
+   not to be. There is no bounty.
+
+Accepted risks -- things Vault42 deliberately does not defend against, with the reasoning -- are
+enumerated in [docs/security.md](docs/security.md). Read that before reporting; a finding already
+listed there is not a new vulnerability, though an argument that the acceptance is wrong is
+welcome.
+
+## Verifying releases
+
+Every release is signed with keyless cosign (Sigstore, OIDC identity, no long-lived key).
+Nothing is trustworthy that you have not checked, so check it. Four artifact classes ship:
+
+| Artifact | Where | Signature |
+|---|---|---|
+| `vault42`, `vault42-admin-gateway`, `vault42-bridge` images | `ghcr.io/42-v/…:<version>` | cosign keyless, plus buildx SLSA provenance and SBOM attestations |
+| Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest |
+| Binaries and per-archive SBOMs | GitHub release assets | covered by the checksum file |
+| `vault42_<version>_SHA256SUMS` | GitHub release assets | detached cosign signature (`.sig`) plus its Fulcio certificate (`.pem`) |
+
+```bash
+VERSION=1.0.0
+IDENTITY='^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$'
+ISSUER=https://token.actions.githubusercontent.com
+
+# Images. Tags carry no leading "v".
+for img in vault42 vault42-admin-gateway vault42-bridge; do
+  cosign verify --certificate-identity-regexp "$IDENTITY" \
+    --certificate-oidc-issuer "$ISSUER" "ghcr.io/42-v/$img:$VERSION"
+done
+
+# Helm chart.
+cosign verify --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" "ghcr.io/42-v/charts/vault-auth:$VERSION"
+
+# Binaries: verify the checksum file's signature, then the binaries against it.
+cosign verify-blob "vault42_${VERSION}_SHA256SUMS" \
+  --signature   "vault42_${VERSION}_SHA256SUMS.sig" \
+  --certificate "vault42_${VERSION}_SHA256SUMS.pem" \
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER"
+sha256sum -c "vault42_${VERSION}_SHA256SUMS" --ignore-missing
+
+# SBOM and SLSA provenance for the images ride along as buildx attestations.
+docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .SBOM }}'
+docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .Provenance }}'
+```
+
+Verify the checksum file's signature **before** trusting `sha256sum -c`: an attacker who can
+replace a binary can replace an unsigned checksum file alongside it. Each release archive also
+ships its own `.sbom.json` next to it.
+
+A `cosign verify` that fails, or a certificate identity that is not
+`.github/workflows/release.yml` in this repository at a `v*` tag, means the artifact did not
+come from this project. Do not run it. The verified output prints the signing certificate's
+subject, so you can read the exact workflow and ref rather than trusting the regex above.
+
+Building from source is the supported alternative. `go build ./cmd/vault` produces a working
+server, but the SPA it embeds is the committed development placeholder
+(`internal/frontend/dist/`); a real frontend requires building `web/` first, which
+`scripts/build-all.sh` and the Dockerfile do.
+
 ## Supported Versions
 
-Only the latest release on `main` is supported. There are no LTS branches.
+Only the latest release is supported. There are no LTS branches and no backports: a security fix
+ships in the next release from `main`, and upgrading to it is the mitigation.
+
+## Versioning and compatibility
+
+Vault42 follows [semantic versioning](https://semver.org/) from 1.0.0 onward. The version number
+also encodes the statement-coverage figure, which is why 1.0.0 is the first release that can
+claim a fully covered tree.
+
+**The public surface, where a breaking change costs a major bump:**
+
+| Surface | Covered |
+|---|---|
+| HTTP API | Routes, request and response field names, error codes and HTTP status codes documented in [docs/api.md](docs/api.md). The root paths are v1; a major bump is the API version. |
+| JWT claim set | The claims Vault42 issues and the values it accepts, as documented in [docs/spec.md](docs/spec.md). |
+| Environment variables | Every variable in [docs/config.md](docs/config.md): removing one, renaming one, or changing its default is breaking. |
+| Database schema | The migration sequence. Migrations are additive and forward-only; a destructive migration is a major bump. |
+| Helm chart values | The `values.yaml` keys in `charts/vault`. |
+| Client packages | `@vault42/vue`, `Vault42.AspNetCore`, `Vault42.Blazor`. |
+
+**Not covered, and explicitly not stable:** every Go package lives under `internal/`, so there is
+no importable Go API and none is promised. `VAULT_DPOP_ENABLED` is experimental (see
+[docs/security.md](docs/security.md) AR-10) and may change or be removed in a minor release. The
+honeypot bridge's scoring heuristics are tuning, not contract.
+
+**Client package versions.** The release workflow packs both NuGet packages with the release
+version, so `Vault42.AspNetCore` and `Vault42.Blazor` on nuget.org always match the server
+version they were built from; the `<Version>` in each `.csproj` is a local-build fallback only.
+`@vault42/vue` is built and tested in CI but is not published to npm, and its `package.json`
+version does not track the server.
 
 ## Disclaimer
 

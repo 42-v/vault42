@@ -1,3 +1,30 @@
+<!--
+  VaultLoginForm: a ready-made sign-in form covering the password step and all
+  four second factors (TOTP, WebAuthn, backup code, email OTP).
+
+  Props:
+    redirectUrl        where to send the user after a completed sign-in
+    showRegisterLink   render the "create account" link (default true)
+    errorMessages      per-code copy overrides, merged over the built-in map
+
+  Emits:
+    success               (user)  sign-in completed, second factor included
+    error                 (err)   sign-in failed
+    register-click                the register link was activated
+    forgot-password-click         the reset link was activated
+
+  The form drives the whole two-step flow itself: on a `requires_2fa` response
+  it switches to the factor the server offered, so `success` fires only once the
+  user is fully authenticated. Which factors appear is decided by the server's
+  `available_methods`, with WebAuthn additionally gated on browser support.
+
+  Translates through the i18n plugin when one is installed and falls back to
+  built-in English copy otherwise, so it renders standalone.
+
+  Server error codes are mapped to fixed copy and the raw code is never
+  rendered. The account-state codes deliberately share one neutral message, so
+  the form does not disclose a distinction the server withheld.
+-->
 <script setup lang="ts">
 import { ref, computed, inject } from 'vue'
 

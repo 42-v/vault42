@@ -90,11 +90,15 @@ func TestLogin_AccountStateMapsToTheRightStatus(t *testing.T) {
 	}
 }
 
-// An imported account's first login issues no session at all: a claim link is emailed and
-// the response is a 202 carrying only the flag. If tokens leaked into this response, an
-// account whose password we never imported — and whose owner has not proven anything —
-// would be handed a live session.
-func TestLogin_ImportPendingIssuesNoTokens(t *testing.T) {
+// An imported account's first login must be indistinguishable from a wrong password.
+// The 202 this once returned was three primitives in one unauthenticated request: it
+// confirmed the address was registered AND that it was an unclaimed import, it fired an
+// email to the victim on demand, and because each send invalidated the previous claim
+// token it let an attacker block a legitimate user's claim link indefinitely.
+//
+// Still asserts the original property too: no session may be issued for an account whose
+// owner has proven nothing.
+func TestLogin_ImportPendingIsIndistinguishableFromABadPassword(t *testing.T) {
 	users := &mocks.MockUserRepo{
 		GetByEmailFn: func(_ context.Context, email string) (*model.User, error) {
 			return &model.User{
@@ -121,13 +125,13 @@ func TestLogin_ImportPendingIssuesNoTokens(t *testing.T) {
 
 	h.Login(rec, req)
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: an import-pending account must not be distinguishable from a wrong password", rec.Code)
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "import_claim_required") {
-		t.Errorf("body = %s, want import_claim_required", body)
+	if strings.Contains(body, "import_claim_required") {
+		t.Errorf("body = %s, still discloses that the account is an unclaimed import", body)
 	}
 	if strings.Contains(body, "access_token") || strings.Contains(body, "refresh_token") {
 		t.Error("an imported account was handed a session before it was ever claimed")

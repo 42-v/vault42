@@ -18,14 +18,18 @@ import (
 )
 
 // =============================================================================
-// NIST SP 800-63B — Digital Identity Guidelines: Authentication & Lifecycle
+// NIST SP 800-63B-4 — Digital Identity Guidelines: Authentication and
+// Authenticator Management (July 2025). Supersedes SP 800-63B (March 2020).
 // https://pages.nist.gov/800-63-4/sp800-63b.html
 // =============================================================================
 
-// --- Section 5.1.1.1: Memorized Secret (Password) Requirements ---
+// --- Section 3.1.1: Passwords (Rev 3 called these "memorized secrets") ---
 
 func TestNIST_PasswordMinLength(t *testing.T) {
-	// NIST 800-63B §5.1.1.1: "Memorized secrets SHALL be at least 8 characters."
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers and CSPs SHALL require passwords that
+	// are used as a single-factor authentication mechanism to be a minimum of 15
+	// characters in length." Rev 3 set this floor at 8; Rev 4 raised it to 15,
+	// which vault42 already enforces.
 	// Vault enforces 15 characters minimum (exceeds NIST minimum).
 	// Argon2id layer accepts any length; enforcement is at service layer.
 	short := "12345678901234"  // 14 chars
@@ -48,7 +52,8 @@ func TestNIST_PasswordMinLength(t *testing.T) {
 }
 
 func TestNIST_PasswordMaxLength(t *testing.T) {
-	// NIST 800-63B §5.1.1.1: "Verifiers SHOULD permit at least 64 characters."
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers and CSPs SHOULD permit a maximum
+	// password length of at least 64 characters."
 	// Vault uses Argon2id which accepts arbitrary length — verify 64, 128, 256, 1000 chars.
 	lengths := []int{64, 128, 256, 1000}
 
@@ -69,7 +74,8 @@ func TestNIST_PasswordMaxLength(t *testing.T) {
 }
 
 func TestNIST_PasswordNoTruncation(t *testing.T) {
-	// NIST 800-63B §5.1.1.1: "The verifier SHALL NOT truncate the secret."
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers and CSPs SHALL verify the entire
+	// submitted password" without truncation.
 	// Verify that passwords differing only past common truncation points produce
 	// different hashes and do NOT cross-verify.
 	cases := []struct {
@@ -103,7 +109,7 @@ func TestNIST_PasswordNoTruncation(t *testing.T) {
 }
 
 func TestNIST_UnicodePasswords(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: "All printing ASCII characters as well as the
+	// NIST SP 800-63B-4 §3.1.1.2: "All printing ASCII characters as well as the
 	// space character SHOULD be acceptable. Unicode characters SHOULD be accepted."
 	passwords := []struct {
 		name string
@@ -140,7 +146,8 @@ func TestNIST_UnicodePasswords(t *testing.T) {
 }
 
 func TestNIST_NoCompositionRules(t *testing.T) {
-	// NIST 800-63B §5.1.1.1: "Verifiers SHOULD NOT impose other composition rules
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers and CSPs SHALL NOT impose other
+	// composition rules
 	// (e.g., requiring mixtures of different character types)."
 	// Vault enforces only minimum length + breach check — no uppercase/digit/special required.
 	passwords := []struct {
@@ -168,10 +175,10 @@ func TestNIST_NoCompositionRules(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.1.2: Memorized Secret Verifier Requirements ---
+// --- Section 3.1.1.2: Password Verifier Requirements ---
 
 func TestNIST_Argon2idParameters(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: "Memorized secrets SHALL be salted and hashed
+	// NIST SP 800-63B-4 §3.1.1.2: "Passwords SHALL be salted and hashed
 	// using a suitable one-way key derivation function."
 	// OWASP recommends Argon2id with >=19 MiB memory.
 	hash, err := vaultcrypto.HashPassword("test-password-nist")
@@ -204,7 +211,7 @@ func TestNIST_Argon2idParameters(t *testing.T) {
 }
 
 func TestNIST_SaltLength(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: "A salt of at least 32 bits."
+	// NIST SP 800-63B-4 §3.1.1.2: "A salt of at least 32 bits."
 	// Vault uses 128-bit (16 bytes) salts.
 	hash, _ := vaultcrypto.HashPassword("test-password-salt")
 	parts := strings.Split(hash, "$")
@@ -221,7 +228,7 @@ func TestNIST_SaltLength(t *testing.T) {
 }
 
 func TestNIST_UniqueSaltsPerHash(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: "A new salt is chosen for each credential."
+	// NIST SP 800-63B-4 §3.1.1.2: "A new salt is chosen for each credential."
 	pw := "identical-password!"
 	hashes := make(map[string]bool)
 	for i := 0; i < 5; i++ {
@@ -247,7 +254,7 @@ func TestNIST_HashOutputLength(t *testing.T) {
 }
 
 func TestNIST_PasswordHashIsolation(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: Compromised verifier table should not reveal passwords.
+	// NIST SP 800-63B-4 §3.1.1.2: Compromised verifier table should not reveal passwords.
 	// Identical passwords produce different hashes (unique salts), defeating rainbow tables.
 	pw := "rainbow-table-test!"
 	h1, _ := vaultcrypto.HashPassword(pw)
@@ -257,10 +264,10 @@ func TestNIST_PasswordHashIsolation(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.2: Look-Up Secrets (Backup Codes) ---
+// --- Section 3.1.2: Look-Up Secrets (Backup Codes) ---
 
 func TestNIST_BackupCodeEntropy(t *testing.T) {
-	// NIST 800-63B §5.1.2: "Look-up secrets SHALL have at least 20 bits of entropy."
+	// NIST SP 800-63B-4 §3.1.2: "Look-up secrets SHALL have at least 20 bits of entropy."
 	// Vault: RandomHex(6) = 6 random bytes = 48 bits (exceeds 20-bit minimum).
 	for i := 0; i < 10; i++ {
 		code, err := vaultcrypto.RandomHex(6)
@@ -289,7 +296,7 @@ func TestNIST_BackupCodeUniqueness(t *testing.T) {
 }
 
 func TestNIST_BackupCodesHashedNotPlaintext(t *testing.T) {
-	// NIST 800-63B §5.1.2.2: "Look-up secrets SHALL be hashed."
+	// NIST SP 800-63B-4 §3.1.2.2: "Look-up secrets SHALL be hashed."
 	// Vault hashes backup codes with Argon2id before storage.
 	code, _ := vaultcrypto.RandomHex(6)
 	hash, err := vaultcrypto.HashPassword(code)
@@ -311,10 +318,10 @@ func TestNIST_BackupCodesHashedNotPlaintext(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.4: Single-Factor OTP (TOTP) ---
+// --- Section 3.1.4: Single-Factor OTP (TOTP) ---
 
 func TestNIST_TOTPSecretEntropy(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: "The secret key SHALL be at least 128 bits."
+	// NIST SP 800-63B-4 §3.1.4.1: "The secret key SHALL be at least 128 bits."
 	// Vault uses 160-bit (20-byte) secrets.
 	secret, err := vaultcrypto.GenerateTOTPSecret()
 	if err != nil {
@@ -334,7 +341,7 @@ func TestNIST_TOTPSecretEntropy(t *testing.T) {
 }
 
 func TestNIST_TOTPSecretEncryptedAtRest(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: Secrets must be protected at rest.
+	// NIST SP 800-63B-4 §3.1.4.1: Secrets must be protected at rest.
 	// Vault encrypts with AES-256-GCM before DB storage.
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	masterKey := make([]byte, 32)
@@ -365,7 +372,7 @@ func TestNIST_TOTPSecretEncryptedAtRest(t *testing.T) {
 }
 
 func TestNIST_TOTPTimeWindow(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: OTP accepted only within a limited time window.
+	// NIST SP 800-63B-4 §3.1.4.1: OTP accepted only within a limited time window.
 	// Vault allows ±1 period (30s), so window is 90 seconds total.
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	now := time.Now()
@@ -392,10 +399,10 @@ func TestNIST_TOTPTimeWindow(t *testing.T) {
 	}
 }
 
-// --- Section 5.2: General Authenticator Requirements ---
+// --- Section 3.2: General Authenticator Requirements ---
 
 func TestNIST_ConstantTimePasswordVerification(t *testing.T) {
-	// NIST 800-63B §5.2: Verification must not leak information via timing.
+	// NIST SP 800-63B-4 §3.2: Verification must not leak information via timing.
 	hash, _ := vaultcrypto.HashPassword("correct-password!")
 
 	match, _ := vaultcrypto.VerifyPassword("correct-password!", hash)
@@ -419,7 +426,7 @@ func TestNIST_ConstantTimePasswordVerification(t *testing.T) {
 }
 
 func TestNIST_CSPRNGForRandomGeneration(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: Salts from approved random bit generator.
+	// NIST SP 800-63B-4 §3.1.1.2: Salts from approved random bit generator.
 	// Verify RandomBytes and RandomUUID produce unique output over 100 calls.
 	bytes := make(map[string]bool)
 	for i := 0; i < 100; i++ {
@@ -447,10 +454,12 @@ func TestNIST_CSPRNGForRandomGeneration(t *testing.T) {
 	}
 }
 
-// --- Section 7.1/7.2: Session Management ---
+// --- Section 5 (Session Management) / Section 2.2.3 (AAL2 Reauthentication) ---
 
 func TestNIST_AccessTokenTTLBound(t *testing.T) {
-	// NIST 800-63B §7.2: Reauthentication at least every 30 minutes.
+	// NIST SP 800-63B-4 §2.2.3 (AAL2 Reauthentication): a definite overall
+	// reauthentication timeout SHALL be established and SHOULD be no more than
+	// 24 hours, with an inactivity timeout of no more than 1 hour.
 	// Vault access tokens = 15 minutes (within bound).
 	accessTTL := 15 * time.Minute
 	if accessTTL > 30*time.Minute {
@@ -477,7 +486,7 @@ func TestNIST_AccessTokenTTLBound(t *testing.T) {
 }
 
 func TestNIST_FingerprintSessionBinding(t *testing.T) {
-	// NIST 800-63B §7.1: Tokens bound to authenticated session.
+	// NIST SP 800-63B-4 §5.1 (Session Bindings): tokens bound to authenticated session.
 	fp1 := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
 		IP: "1.2.3.4", UserAgent: "Chrome/120", AcceptLanguage: "en-US",
 	})
@@ -503,10 +512,12 @@ func TestNIST_FingerprintSessionBinding(t *testing.T) {
 	}
 }
 
-// --- Section 5.2.4: User Enumeration Prevention ---
+// --- ASVS 5.0.0 V6.3.8: User Enumeration Prevention ---
 
 func TestNIST_DummyHashTimingProtection(t *testing.T) {
-	// NIST 800-63B §5.2.4: Verifiers SHALL NOT indicate which factor failed
+	// ASVS 5.0.0 V6.3.8 (Rev 4 of SP 800-63B carries no successor to the
+	// Rev 3 §5.2.4 statement): valid users must not be deducible from failed
+	// authentication challenges, including by different response times
 	// during authentication. The user-not-found code path must execute the same
 	// Argon2id computation as a valid-user-wrong-password path.
 	// Vault uses a pre-computed dummyHash for this purpose.
@@ -533,7 +544,7 @@ func TestNIST_DummyHashTimingProtection(t *testing.T) {
 }
 
 func TestNIST_RefreshTokenHashedStorage(t *testing.T) {
-	// NIST 800-63B §5.2.7: Verifiers SHALL store the hash of the authenticator
+	// NIST SP 800-63B-4 §3.1.1.2: Verifiers SHALL store the hash of the authenticator
 	// rather than the authenticator itself.
 	// Vault hashes refresh tokens with SHA-256 before storage.
 	token, _ := vaultcrypto.RandomHex(32) // 256-bit refresh token
@@ -563,10 +574,10 @@ func TestNIST_RefreshTokenHashedStorage(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.1.1: Password Policy Configuration ---
+// --- Section 3.1.1.1: Password Policy Configuration ---
 
 func TestNIST_PasswordMinLengthDefault(t *testing.T) {
-	// NIST 800-63B §5.1.1.1: Minimum 8 characters for subscriber-chosen passwords.
+	// NIST SP 800-63B-4 §3.1.1.2: minimum 15 characters for single-factor use.
 	// OWASP ASVS V2.1.1: Minimum 12 characters.
 	// Vault defaults to 15 characters (exceeds both).
 	cfg, err := config.Load()
@@ -581,10 +592,10 @@ func TestNIST_PasswordMinLengthDefault(t *testing.T) {
 	}
 }
 
-// --- Section 5.2.2: Rate Limiting / Account Lockout ---
+// --- Section 3.2.2: Rate Limiting / Account Lockout ---
 
 func TestNIST_AccountLockoutFunction(t *testing.T) {
-	// NIST 800-63B §5.2.2: "Verifiers SHALL limit consecutive failed authentication
+	// NIST SP 800-63B-4 §3.2.2: "Verifiers SHALL limit consecutive failed authentication
 	// attempts on a single account to no more than 100."
 	// Vault uses CheckAccountLockout with a configurable threshold.
 	mc := cache.NewMemoryCache()
@@ -624,7 +635,7 @@ func TestNIST_AccountLockoutFunction(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.1.2: Master Key Requirements ---
+// --- Section 3.1.1.2: Master Key Requirements ---
 
 func TestNIST_AES256KeyLengthEnforced(t *testing.T) {
 	// NIST: AES-256 requires exactly 256-bit (32-byte) keys.

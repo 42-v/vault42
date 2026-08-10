@@ -109,8 +109,11 @@ func TestOpenIDConfig_Valid(t *testing.T) {
 	if config["jwks_uri"] != wkIssuer+"/.well-known/jwks.json" {
 		t.Errorf("expected jwks_uri=%q, got %v", wkIssuer+"/.well-known/jwks.json", config["jwks_uri"])
 	}
-	if config["token_endpoint"] != wkIssuer+"/auth/login" {
-		t.Errorf("expected token_endpoint=%q, got %v", wkIssuer+"/auth/login", config["token_endpoint"])
+	// token_endpoint is deliberately absent: it used to point at /auth/login, a JSON
+	// email/password handler that never reads grant_type. vault42 is not an OIDC
+	// provider, and the discovery document now publishes only what is true of it.
+	if _, present := config["token_endpoint"]; present {
+		t.Error("token_endpoint is advertised again; vault42 has no OAuth2 token endpoint")
 	}
 }
 
@@ -129,54 +132,51 @@ func TestOpenIDConfig_RequiredFields(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// OIDC Discovery 1.0 required fields
+	// vault42 is not an OpenID Provider, so this document is issuer metadata rather
+	// than an OIDC discovery response. It publishes only claims that are true of
+	// this server: who issues the tokens, where the key set lives, and what signs
+	// them. Everything a relying party needs to verify a token, and nothing that
+	// promises an authorization-code flow that does not exist.
 	requiredFields := []string{
 		"issuer",
-		"authorization_endpoint",
-		"token_endpoint",
 		"jwks_uri",
-		"response_types_supported",
-		"subject_types_supported",
-		"id_token_signing_alg_values_supported",
+		"access_token_signing_alg_values_supported",
 	}
 
 	for _, field := range requiredFields {
 		if _, ok := config[field]; !ok {
-			t.Errorf("missing required OIDC field %q", field)
+			t.Errorf("missing required field %q", field)
 		}
 	}
 
-	// Verify array fields have expected values
-	algValues, ok := config["id_token_signing_alg_values_supported"].([]interface{})
+	algValues, ok := config["access_token_signing_alg_values_supported"].([]interface{})
 	if !ok || len(algValues) == 0 {
-		t.Fatal("id_token_signing_alg_values_supported missing or empty")
+		t.Fatal("access_token_signing_alg_values_supported missing or empty")
 	}
 	if algValues[0] != "RS256" {
 		t.Errorf("expected RS256 in signing alg values, got %v", algValues[0])
 	}
 
-	// S256 must be the only supported PKCE method
-	codeMethods, ok := config["code_challenge_methods_supported"].([]interface{})
-	if !ok || len(codeMethods) == 0 {
-		t.Fatal("code_challenge_methods_supported missing or empty")
-	}
-	if codeMethods[0] != "S256" {
-		t.Errorf("expected S256 as PKCE method, got %v", codeMethods[0])
-	}
-
-	// Verify scopes_supported includes openid
-	scopes, ok := config["scopes_supported"].([]interface{})
-	if !ok || len(scopes) == 0 {
-		t.Fatal("scopes_supported missing or empty")
-	}
-	foundOpenID := false
-	for _, s := range scopes {
-		if s == "openid" {
-			foundOpenID = true
-			break
+	// Each of these described an OpenID Provider vault42 never implemented. They
+	// are asserted absent rather than simply dropped from the list above, because
+	// re-advertising any of them after 1.0.0 is a capability claim a standards-aware
+	// client is entitled to act on.
+	for _, retracted := range []string{
+		"authorization_endpoint",
+		"token_endpoint",
+		"registration_endpoint",
+		"userinfo_endpoint",
+		"id_token_signing_alg_values_supported",
+		"response_types_supported",
+		"subject_types_supported",
+		"scopes_supported",
+		"grant_types_supported",
+		"code_challenge_methods_supported",
+		"token_endpoint_auth_methods_supported",
+		"dpop_signing_alg_values_supported",
+	} {
+		if _, present := config[retracted]; present {
+			t.Errorf("retracted key %q is advertised again", retracted)
 		}
-	}
-	if !foundOpenID {
-		t.Error("scopes_supported does not include 'openid'")
 	}
 }

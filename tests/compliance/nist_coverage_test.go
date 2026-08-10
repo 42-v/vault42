@@ -11,7 +11,7 @@ import (
 )
 
 // =============================================================================
-// NIST SP 800-63B Coverage Tests — additional requirements verification
+// NIST SP 800-63B-4 Coverage Tests — additional requirements verification
 // =============================================================================
 
 // TestNIST_PasswordMinLength15 verifies that the system is designed for a
@@ -50,7 +50,7 @@ func TestNIST_PasswordMinLength15(t *testing.T) {
 // TestNIST_NoCompositionRulesExtended verifies that passwords with any character
 // class are accepted at the crypto layer.
 func TestNIST_NoCompositionRulesExtended(t *testing.T) {
-	// NIST 800-63B: No composition rules (no uppercase/digit/special requirements)
+	// NIST SP 800-63B-4: No composition rules (no uppercase/digit/special requirements)
 	passwords := []struct {
 		name string
 		pw   string

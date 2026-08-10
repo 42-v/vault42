@@ -57,27 +57,103 @@ func TestAuth_BearerPrefixVariations(t *testing.T) {
 	}
 }
 
-func TestAuth_DPoPSchemeAccepted(t *testing.T) {
+// RFC 9449 §7.1 reserves the DPoP scheme for sender-constrained tokens.
+// vault42 issues none, so the scheme is rejected unless an operator opts in.
+func TestAuth_DPoPScheme(t *testing.T) {
 	key := newTestKey(t)
 	kid := "aa00bb11-cc22"
 	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
 
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
 	tokenStr := signTestToken(t, key, kid, "test-issuer", "test-audience", "user-dpop", 5*time.Minute)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "DPoP "+tokenStr)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	serve := func(mw func(http.Handler) http.Handler) *httptest.ResponseRecorder {
+		handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "DPoP "+tokenStr)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
 
-	t.Run("DPoP scheme is accepted", func(t *testing.T) {
+	t.Run("rejected by default", func(t *testing.T) {
+		rec := serve(Auth(keys, "test-issuer", "test-audience"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+		if body := rec.Body.String(); !strings.Contains(body, "invalid_authorization") {
+			t.Errorf("body = %q, want invalid_authorization", body)
+		}
+	})
+
+	t.Run("rejected when explicitly disabled", func(t *testing.T) {
+		rec := serve(Auth(keys, "test-issuer", "test-audience", WithDPoPScheme(false)))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("accepted when enabled", func(t *testing.T) {
+		rec := serve(Auth(keys, "test-issuer", "test-audience", WithDPoPScheme(true)))
 		if rec.Code != http.StatusOK {
 			t.Errorf("status = %d, want 200", rec.Code)
 		}
 	})
+
+	t.Run("Bearer still accepted when enabled", func(t *testing.T) {
+		handler := Auth(keys, "test-issuer", "test-audience", WithDPoPScheme(true))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenStr)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", rec.Code)
+		}
+	})
+}
+
+// The option must reach every constructor, not only Auth.
+func TestAuth_DPoPSchemeOptionOnAllConstructors(t *testing.T) {
+	key := newTestKey(t)
+	kid := "aa00bb11-dd33"
+	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
+	provider := func() map[string]*rsa.PublicKey { return keys }
+	tokenStr := signTestToken(t, key, kid, "test-issuer", "test-audience", "user-dpop-all", 5*time.Minute)
+
+	constructors := map[string]func(bool) func(http.Handler) http.Handler{
+		"AuthChallenge": func(on bool) func(http.Handler) http.Handler {
+			return AuthChallenge(keys, "test-issuer", "test-audience", WithDPoPScheme(on))
+		},
+		"AuthDynamic": func(on bool) func(http.Handler) http.Handler {
+			return AuthDynamic(provider, "test-issuer", "test-audience", WithDPoPScheme(on))
+		},
+		"AuthChallengeDynamic": func(on bool) func(http.Handler) http.Handler {
+			return AuthChallengeDynamic(provider, "test-issuer", "test-audience", WithDPoPScheme(on))
+		},
+	}
+
+	for name, build := range constructors {
+		for _, tc := range []struct {
+			enabled bool
+			want    int
+		}{{false, http.StatusUnauthorized}, {true, http.StatusOK}} {
+			t.Run(name, func(t *testing.T) {
+				handler := build(tc.enabled)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+				req.Header.Set("Authorization", "DPoP "+tokenStr)
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != tc.want {
+					t.Errorf("dpopScheme=%v: status = %d, want %d", tc.enabled, rec.Code, tc.want)
+				}
+			})
+		}
+	}
 }
 
 func TestAuth_WrongIssuer(t *testing.T) {

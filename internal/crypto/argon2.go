@@ -179,9 +179,11 @@ func HashPassword(password string, pepper ...string) (string, error) {
 	pw := applyPepper(password, pepper...)
 
 	salt := make([]byte, argon2SaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("generate salt: %w", err)
-	}
+	// crypto/rand.Read has no error path to handle: since Go 1.24 a Reader
+	// failure calls the runtime fatal handler and terminates the process
+	// instead of returning ($GOROOT/src/crypto/rand/rand.go). Callers that
+	// need a recoverable entropy error use io.ReadFull(rand.Reader, ...).
+	_, _ = rand.Read(salt)
 
 	hash := argon2.IDKey(pw, salt, argon2Iterations, argon2Memory, argon2Parallelism, argon2KeyLen)
 

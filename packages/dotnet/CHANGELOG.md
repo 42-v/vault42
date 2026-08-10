@@ -2,7 +2,7 @@
 
 ## 0.2.0 — 2026-04-25
 
-Security re-audit ship. **Breaking** for net8 consumers; defense-in-depth + dependency uplift for everyone else. See full audit at `docs/security-audit-2026-04-25.md`.
+Security re-audit ship. **Breaking** for net8 consumers; defense-in-depth + dependency uplift for everyone else. The audit findings this release closes are itemised under **Security** below.
 
 ### Breaking
 

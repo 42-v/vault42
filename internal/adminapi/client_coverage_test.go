@@ -5,9 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"testing"
-
 	"strings"
+	"testing"
 
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"

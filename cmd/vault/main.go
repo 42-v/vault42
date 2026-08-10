@@ -134,6 +134,7 @@ func main() {
 	socialAccountRepo := postgres.NewSocialAccountRepo(db)
 	identityRepo := postgres.NewIdentityRepo(db)
 	blobRepo := postgres.NewBlobRepo(db)
+	serviceDocRepo := postgres.NewServiceDocumentRepo(db)
 	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
 	rateLimitRepo := postgres.NewRateLimitRepo(db)
 
@@ -313,6 +314,7 @@ func main() {
 	authSvc.SetRateLimitRepo(rateLimitRepo)
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
 	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
+	tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)
 	// Catalog-aware role validation: JWT issuance keeps only roles defined in
 	// auth.app_roles (in addition to the admin-reserved filter).
 	authSvc.SetRoleCatalog(service.NewRoleCatalog(postgres.NewAppRoleRepo(db), 60*time.Second))
@@ -371,6 +373,36 @@ func main() {
 		)
 		authSvc.SetMetrics(metricsCollector)
 		log.Println("Prometheus metrics enabled at GET /metrics")
+	}
+
+	// Mint is built here rather than in setupRoutes because an unsafe mint policy
+	// must abort startup and setupRoutes cannot return an error. When minting is
+	// off this stays nil and the route is never registered.
+	var mintSvc *service.MintService
+	if cfg.MintEnabled {
+		signer := func() (*rsa.PrivateKey, string) { return signingKey, kid }
+		if ks != nil {
+			signer = ks.ActiveKey
+		}
+		// A nil *metrics.Collector must be passed as a nil interface, not as a
+		// typed nil: the latter is non-nil at the interface and panics on first
+		// use, so a deployment with metrics off would crash on its first mint.
+		var mintMetrics service.MintMetrics
+		if metricsCollector != nil {
+			mintMetrics = metricsCollector
+		}
+		mintSvc, err = service.NewMintService(signer, service.MintConfig{
+			Issuer:        cfg.Origin,
+			Audience:      cfg.MintAudience,
+			DefaultTTL:    cfg.MintTokenTTL,
+			MaxTTL:        cfg.MintMaxTTL,
+			AllowedRoles:  cfg.MintAllowedRoles,
+			AllowedScopes: cfg.MintAllowedScopes,
+		}, mintMetrics)
+		if err != nil {
+			log.Fatalf("Failed to initialize mint service: %v", err)
+		}
+		log.Printf("Mint enabled: signing for audience %q", cfg.MintAudience)
 	}
 
 	// Initialize OAuth2 providers
@@ -459,6 +491,8 @@ func main() {
 		Recovery:          recoveryRepo,
 		RecoveryPublicKey: recoveryPub,
 		AuditEvents:       auditRepo,
+		ServiceDocs:       serviceDocRepo,
+		Mint:              mintSvc,
 	}
 
 	srv := server.New(deps)

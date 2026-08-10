@@ -4,7 +4,7 @@
 
 ## Overview
 
-This guide covers deploying Vault42 on a Raspberry Pi 5 or similar ARM64 device running Ubuntu Core with MicroK8s. For production x86 Kubernetes deployments, see the Helm chart documentation in `charts/vault42/values.yaml`.
+This guide covers deploying Vault42 on a Raspberry Pi 5 or similar ARM64 device running Ubuntu Core with MicroK8s. For production x86 Kubernetes deployments, see the Helm chart documentation in `charts/vault/values.yaml`.
 
 ## Prerequisites
 
@@ -18,12 +18,16 @@ This guide covers deploying Vault42 on a Raspberry Pi 5 or similar ARM64 device 
 The automated setup script handles everything:
 
 ```bash
-# Download the release tarball
-curl -LO https://github.com/42-v/vault42/releases/latest/download/vault_*_linux_arm64.tar.gz
-tar xzf vault_*_linux_arm64.tar.gz
+VERSION=1.0.0
 
-# Run the setup script
-./scripts/setup-microk8s.sh v1.0.0
+# Download the release tarball and verify it before unpacking. See
+# ../SECURITY.md for the full signature-verification procedure.
+curl -LO "https://github.com/42-v/vault42/releases/download/v${VERSION}/vault42_${VERSION}_linux_arm64.tar.gz"
+tar xzf "vault42_${VERSION}_linux_arm64.tar.gz"
+
+# Run the setup script. The argument is a container image tag, which carries
+# no leading "v"; it defaults to "latest".
+./scripts/setup-microk8s.sh "$VERSION"
 ```
 
 This will:
@@ -72,13 +76,47 @@ microk8s kubectl -n vault42 create secret generic vault42-secrets \
 
 **Note:** The `signing-key` is required for multi-pod deployments -- all pods must share the same signing key so that JWTs issued by one pod can be validated by any other. Without it, each pod generates an ephemeral key at startup.
 
+The whole Secret is mounted as a directory at `secrets.mountPath` (default `/run/secrets`), so any additional key you add to it appears as a file there without a chart change. What the chart does *not* do is invent the matching `_FILE` environment variable -- see [KMS root key](#kms-root-key-optional) below.
+
+### KMS root key (optional)
+
+The KEK envelope-unwrap oracle `POST /kms/unwrap` is mounted **only** when `KMS_ROOT_KEY_FILE` points at a readable file of at least 32 bytes (the `POST /kms/unwrap` mount in `internal/server/server.go`). Leave it unset and the endpoint does not exist, which is the right default for a deployment that has no envelope-encryption consumer.
+
+`scripts/generate-secrets.sh` does not generate this key and the Helm chart does not template the variable. Both steps are manual:
+
+```bash
+# 1. Generate the root secret. It is a KDF input, not a key: 32 random bytes.
+openssl rand 32 > ./secrets/kms-root-key
+
+# 2. Add it to the same Secret the chart already mounts.
+microk8s kubectl -n vault42 create secret generic vault42-secrets \
+  --from-file=./secrets/kms-root-key \
+  --dry-run=client -o yaml | microk8s kubectl apply -f -
+
+# 3. Point the server at it. The chart has no values key for this, so set it on
+#    the Deployment directly and re-apply after every `helm upgrade`.
+microk8s kubectl -n vault42 set env deployment/vault42 \
+  KMS_ROOT_KEY_FILE=/run/secrets/kms-root-key
+```
+
+Operational properties worth knowing before you enable it:
+
+- **Per-kid KEKs are derived, not stored.** One root secret produces every KEK via HKDF-SHA256 under a versioned, domain-separated label, cryptographically separate from `MASTER_KEY_FILE`. You do not provision a secret per kid.
+- **Losing the root secret is unrecoverable.** Every envelope wrapped under it becomes permanently unopenable. Back it up the way you back up the master key, which is to say offline.
+- **Rotating it invalidates every existing envelope.** There is no dual-root overlap window. Re-wrap with `vault kms wrap` before swapping the root.
+- **The endpoint is a key-release oracle**, so it ships with a fail-closed per-IP rate limit (30/min) and a synchronous audit record per attempt. A Redis outage rejects unwraps rather than degrading to a per-pod counter. Read [security.md](security.md) AR-10 before exposing it: the authorizing token is a plain Bearer token and is not sender-constrained.
+
+### DPoP
+
+`VAULT_DPOP_ENABLED` is **experimental and is not a deployment control.** Turning it on mounts the DPoP middleware, but no token-issuance path emits the `cnf.jkt` confirmation claim that binds a token to a key (see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`), so nothing is sender-constrained: a presented proof is checked for shape, method, URI, freshness and single-use JTI, and a request with no proof passes through untouched. Do not enable it expecting replay protection, and do not record it as a mitigation in a threat model. Leave it at its default (`false`) for 1.0.0.
+
 ### 4. Install the Helm Chart
 
 ```bash
-microk8s helm3 upgrade --install vault42 charts/vault42 \
+microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
-  -f charts/vault42/values-embedded.yaml \
-  --set image.tag=v1.0.0 \
+  -f charts/vault/values-embedded.yaml \
+  --set image.tag=1.0.0 \
   --set secrets.existingSecret=vault42-secrets \
   --set origin=https://vault42.local
 ```
@@ -94,7 +132,7 @@ microk8s kubectl -n vault42 logs deploy/vault42
 
 ### Production
 
-Production defaults (in `charts/vault42/values.yaml`):
+Production defaults (in `charts/vault/values.yaml`):
 
 | Component | CPU Request | Memory Request | CPU Limit | Memory Limit |
 |-----------|-----------|---------------|-----------|-------------|
@@ -126,26 +164,34 @@ The embedded profile uses:
 
 ### IP Access Control (Cloudflare / Proxy)
 
-When deployed behind a reverse proxy, configure IP-based access control and geo-fencing:
+When deployed behind a reverse proxy, configure IP-based access control and geo-fencing. **Only `TRUSTED_PROXIES` has a chart value today**; the rest are read by the server but are not templated by `charts/vault`, so setting them takes a second step.
 
 ```yaml
-env:
-  TRUSTED_PROXIES: "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22"
-  REAL_IP_HEADER: "CF-Connecting-IP"    # or "X-Real-IP" for nginx
-  GEO_IP_HEADER: "CF-IPCountry"        # or custom header from your proxy
-  IP_ALLOWLIST: "203.0.113.0/24"       # optional: restrict to known IPs
-  GEO_ALLOWLIST: "SK,CZ,HU"           # optional: restrict to countries
-  GEO_BLOCKLIST: "T1"                  # optional: block Tor exit nodes
+# my-overrides.yaml -- this one the chart understands
+trustedProxies: "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22"
 ```
 
-The `REAL_IP_HEADER` and `GEO_IP_HEADER` settings are proxy-agnostic -- set them to whatever header your proxy injects. The IP blocklist supports runtime updates for dynamic banning.
+```bash
+# The rest go on the Deployment directly, and must be re-applied after every
+# `helm upgrade`, which regenerates the pod spec from the chart.
+microk8s kubectl -n vault42 set env deployment/vault42 \
+  REAL_IP_HEADER=CF-Connecting-IP \
+  GEO_IP_HEADER=CF-IPCountry \
+  IP_ALLOWLIST=203.0.113.0/24 \
+  GEO_ALLOWLIST=SK,CZ,HU \
+  GEO_BLOCKLIST=T1
+```
+
+`REAL_IP_HEADER` and `GEO_IP_HEADER` are proxy-agnostic: set them to whatever header your proxy injects (`X-Real-IP` for nginx, a custom header for anything else). Geo-fencing is inert without `GEO_IP_HEADER` -- an absent header is not a country match, so `GEO_ALLOWLIST` alone blocks nobody. Use `T1` in `GEO_BLOCKLIST` for Cloudflare's Tor exit-node code. The IP blocklist supports runtime updates for dynamic banning.
+
+**Get `TRUSTED_PROXIES` right or the rest is theatre.** Client IP resolution only honours `REAL_IP_HEADER` and `X-Forwarded-For` when the direct peer is on the trusted list; leave the list empty and every header is ignored, so rate limiting and audit attribution both key on the proxy's own address. Set it too wide and a caller can forge its own IP. The evaluation order is IP allowlist, IP blocklist, geo allowlist, geo blocklist; `/healthz` and `/readyz` bypass all four.
 
 To customize, create a values override file:
 
 ```bash
-microk8s helm3 upgrade vault42 charts/vault42 \
+microk8s helm3 upgrade vault42 charts/vault \
   -n vault42 \
-  -f charts/vault42/values-embedded.yaml \
+  -f charts/vault/values-embedded.yaml \
   -f my-overrides.yaml
 ```
 
@@ -160,7 +206,7 @@ Quick start:
 scripts/build-all.sh
 
 # Deploy with Helm (bridge mode: dual vaults + bridge proxy)
-helm install vault42 charts/vault42 -f charts/vault42/values-bridge.yaml \
+helm install vault42 charts/vault -f charts/vault/values-bridge.yaml \
   --set origin=https://auth.example.com \
   --set secrets.existingSecret=vault42-secrets
 ```
@@ -172,34 +218,99 @@ The bridge deployment creates three components: a real Vault42 (production DB), 
 To deploy as a standalone honeypot for threat observation:
 
 ```bash
-microk8s helm3 upgrade --install vault42-honeypot charts/vault42 \
+microk8s helm3 upgrade --install vault42-honeypot charts/vault \
   -n vault42-honeypot \
-  -f charts/vault42/values-embedded.yaml \
+  -f charts/vault/values-embedded.yaml \
   --set profile=honeypot \
   --set secrets.existingSecret=vault42-secrets \
   --set origin=https://honeypot.example.com
 ```
 
-Set trap users and webhook via ConfigMap or values override:
+Trap users and the alert webhook are not chart values either. Set them on the Deployment, and re-apply after each `helm upgrade`:
 
-```yaml
-# honeypot-values.yaml
-profile: honeypot
-env:
-  VAULT_HONEYPOT_WEBHOOK: "https://your-webhook.example.com/alerts"
-  VAULT_HONEYPOT_TRAP_USERS: "admin@example.com,root@example.com,test@example.com"
+```bash
+microk8s kubectl -n vault42-honeypot set env deployment/vault42-honeypot \
+  VAULT_HONEYPOT_WEBHOOK=https://your-webhook.example.com/alerts \
+  VAULT_HONEYPOT_TRAP_USERS=admin@example.com,root@example.com,test@example.com
 ```
+
+Both are required for alerting: the webhook fires only on a login attempt against a name in the trap list, and an unset webhook means the attempt is audited (risk 100) but nothing is pushed anywhere. Never point a honeypot at a real SMTP relay -- use Mailpit or discard.
 
 ## Upgrades
 
+### The mechanics
+
 ```bash
-microk8s helm3 upgrade vault42 charts/vault42 \
+microk8s helm3 upgrade vault42 charts/vault \
   -n vault42 \
-  -f charts/vault42/values-embedded.yaml \
-  --set image.tag=v1.1.0
+  -f charts/vault/values-embedded.yaml \
+  --set image.tag=1.1.0
 
 microk8s kubectl -n vault42 rollout status deployment/vault42
 ```
+
+`helm upgrade` regenerates the whole pod spec from the chart. Anything you applied with
+`kubectl set env` -- the KMS root key path, the IP and geo settings, honeypot trap users --
+is discarded and must be re-applied before the rollout completes. Check with
+`kubectl -n vault42 set env deployment/vault42 --list` after every upgrade.
+
+### Migrations
+
+Migrations are numbered, forward-only and applied in filename order against the
+`public.schema_migrations` ledger (`migrate.Run`, `internal/migrate/migrate.go`). They run as the
+`vault_mig` role, whose connection is closed once they finish; there is no down-migration and
+no rollback path. Two ways to run them:
+
+- **`VAULT_AUTO_MIGRATE=true`** (the default in the `embedded`, `dev` and `honeypot` profiles):
+  each pod migrates at startup. Fine for a single replica.
+- **Manually, before the rollout** (the default in `production`, where `autoMigrate` is
+  `false`): several replicas racing the same DDL is not a supported configuration. Run the new
+  image once as a job, or exec a single pod, then roll the rest.
+
+Take a database backup before an upgrade that adds migrations. See [Backup](#backup).
+
+### Upgrading 0.9.x to 1.0.0
+
+1.0.0 is the first release under the semantic-versioning commitment in
+[SECURITY.md](../SECURITY.md#versioning-and-compatibility). Read the `CHANGELOG.md` entry in
+full before upgrading; the notes below are the deployment-affecting parts.
+
+**Order of operations.**
+
+1. Back up PostgreSQL. Migrations are forward-only.
+2. Verify the new images (`cosign verify`, see
+   [SECURITY.md](../SECURITY.md#verifying-releases)). An unverified image is not an upgrade.
+3. Apply migrations, then roll the Deployment.
+4. Re-apply any `kubectl set env` values.
+5. Confirm `/readyz` is green and that logins and refreshes both succeed before removing the
+   old replica set.
+
+**Things that need a decision, not just a rollout.**
+
+- **Signing keys: file to database.** If you are still on `SIGNING_KEY_FILE` alone, setting
+  `VAULT_KEY_ROTATION_DB=true` imports the mounted key into `auth.signing_keys` on first boot
+  and every pod then polls the table (`VAULT_KEY_REFRESH_INTERVAL`, default 60s). This is the
+  prerequisite for zero-downtime rotation from the admin gateway. Two traps: revocation is
+  terminal and keyed by a kid derived from the public key, so re-importing a revoked PEM fails
+  startup with `keystore: key is revoked` rather than reactivating it; and revoking the only
+  active key stops token issuance entirely (`keystore: no active signing key`). Rotate first,
+  then revoke. Once the key is in the database you can unmount `SIGNING_KEY_FILE`.
+- **`VAULT_AUDIT_RETENTION_DAYS` and `VAULT_RECOVERY_RETENTION_DAYS` both default to `0`,
+  meaning never purge.** Audit rows and account-recovery escrow records both hold personal
+  data, so an operator processing personal data under GDPR needs a horizon on each. Set them
+  deliberately; see [PRIVACY.md](PRIVACY.md) §4.
+- **Check for undocumented escape hatches in your own manifests.** If your 0.9.x deployment
+  set `VAULT_ALLOW_PLAINTEXT`, `VAULT_ALLOW_RATE_LIMIT_DISABLED` or
+  `VAULT_EMBEDDED_TRUSTED_UPSTREAM`, each is a security guard you are running without. They
+  are now documented together in
+  [config.md](config.md#fail-closed-overrides-read-this-before-production). 1.0.0 is a good
+  moment to remove them.
+- **`VAULT_DPOP_ENABLED` should be `false`.** It is experimental and binds nothing; see
+  [DPoP](#dpop) above.
+
+**What does not change.** Route paths, the JWT claim set and the error-code vocabulary are the
+1.0.0 stability contract, so a 0.9.x client keeps working. Root paths are v1; there is no
+`/v1` prefix and adding one would be a major bump.
 
 ## Backup
 

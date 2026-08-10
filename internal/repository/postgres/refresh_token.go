@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -21,10 +22,18 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 }
 
 // Create inserts a new refresh token into the auth.refresh_tokens table.
+//
+// SECURITY INVARIANT (absolute session lifetime, migration 013): family_created_at
+// is the family's birth date and a rotation must never be able to move it. The
+// column is therefore not taken from the caller — it is read back from the family
+// inside the same statement, and only a family with no rows yet (a genuine new
+// session) falls back to this token's own created_at. A caller cannot extend a
+// session by lying about it, because it never supplies the value.
 func (r *RefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
 	_, err := r.db.Pool.Exec(ctx, `
-		INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+		        COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9))`,
 		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
 		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
 		token.ExpiresAt, token.CreatedAt,
@@ -33,6 +42,25 @@ func (r *RefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
 	return nil
+}
+
+// FamilyOrigin returns the instant the given rotation family was created, which
+// is what the absolute session lifetime is measured from.
+//
+// A family with no rows yields the zero time and no error: the family is gone, so
+// there is no session to date. Callers enforcing the bound must treat a zero time
+// as "age unknown" and fail closed — see AuthService.Refresh.
+func (r *RefreshTokenRepo) FamilyOrigin(ctx context.Context, familyID string) (time.Time, error) {
+	var origin *time.Time
+	err := r.db.Pool.QueryRow(ctx, `
+		SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $1`, familyID).Scan(&origin)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("family origin: %w", err)
+	}
+	if origin == nil {
+		return time.Time{}, nil
+	}
+	return *origin, nil
 }
 
 // GetByTokenHash retrieves a refresh token by its SHA-256 hash. Returns nil, nil if not found.

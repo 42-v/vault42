@@ -30,9 +30,15 @@ import (
 	"github.com/42-v/vault42/internal/service"
 )
 
+// Build stamps, set at link time with -ldflags -X. The defaults below are what
+// an unstamped local build reports, so a binary claiming "dev" did not come off
+// the release pipeline. They are printed by --version and nowhere else.
 var (
-	Version   = "dev"
+	// Version is the release version this binary was built from.
+	Version = "dev"
+	// GitCommit is the commit SHA this binary was built from.
 	GitCommit = "unknown"
+	// BuildTime is the UTC timestamp of the build.
 	BuildTime = "unknown"
 )
 

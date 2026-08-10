@@ -33,7 +33,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 					GetByIDFn: func(context.Context, string) (*model.User, error) { return nil, boom },
 				}
 				return NewDataExportHandler(users, &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
-					&mocks.MockAuditRepo{}, nil, nil, newTestAuditLogger())
+					&mocks.MockAuditRepo{}, nil, nil, nil, newTestAuditLogger())
 			},
 		},
 		{
@@ -46,7 +46,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 					GetByIDFn: func(context.Context, string) (*model.User, error) { return nil, nil },
 				}
 				return NewDataExportHandler(users, &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
-					&mocks.MockAuditRepo{}, nil, nil, newTestAuditLogger())
+					&mocks.MockAuditRepo{}, nil, nil, nil, newTestAuditLogger())
 			},
 		},
 		{
@@ -57,7 +57,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 					ListByUserFn: func(context.Context, string) ([]*model.Device, error) { return nil, boom },
 				}
 				return NewDataExportHandler(exportUserRepo(), devices, &mocks.MockSocialAccountRepo{},
-					&mocks.MockAuditRepo{}, nil, nil, newTestAuditLogger())
+					&mocks.MockAuditRepo{}, nil, nil, nil, newTestAuditLogger())
 			},
 		},
 		{
@@ -68,7 +68,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 					ListByUserFn: func(context.Context, string) ([]*model.SocialAccount, error) { return nil, boom },
 				}
 				return NewDataExportHandler(exportUserRepo(), &mocks.MockDeviceRepo{}, social,
-					&mocks.MockAuditRepo{}, nil, nil, newTestAuditLogger())
+					&mocks.MockAuditRepo{}, nil, nil, nil, newTestAuditLogger())
 			},
 		},
 		{
@@ -81,7 +81,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 					},
 				}
 				return NewDataExportHandler(exportUserRepo(), &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
-					auditRepo, nil, nil, newTestAuditLogger())
+					auditRepo, nil, nil, nil, newTestAuditLogger())
 			},
 		},
 	}
@@ -100,7 +100,7 @@ func TestDataExport_PartialFailureNeverReturns200(t *testing.T) {
 
 func TestDataExport_RequiresAuth(t *testing.T) {
 	h := NewDataExportHandler(exportUserRepo(), &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
-		&mocks.MockAuditRepo{}, nil, nil, newTestAuditLogger())
+		&mocks.MockAuditRepo{}, nil, nil, nil, newTestAuditLogger())
 
 	rec := httptest.NewRecorder()
 	h.Export(rec, httptest.NewRequest(http.MethodGet, "/user/data-export", nil))

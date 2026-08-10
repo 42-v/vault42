@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
@@ -27,16 +28,37 @@ var ErrNoActiveKey = errors.New("keystore: no active signing key")
 // its private material leaked, so it must never come back as active.
 var ErrRevokedKey = errors.New("keystore: key is revoked")
 
-// KeyRecord represents a signing key row from auth.signing_keys.
+// KeyRecord is the decrypted, in-memory shape of an auth.signing_keys row.
+// Unlike [KeyInfo] it carries private key material and must never be logged,
+// serialized to a response, or written anywhere but memory.
 type KeyRecord struct {
-	KID        string
+	// KID is the key identifier published in JWKS and in the JWT kid header.
+	// It is derived from the public key, so the same key always yields the same
+	// kid and re-importing a key updates its row rather than creating a second.
+	KID string
+	// PrivateKey is the signing key, decrypted from the row's AES-256-GCM
+	// ciphertext under the master key with KID as AAD. Populated only for the
+	// active key; retired keys are loaded for verification only.
 	PrivateKey *rsa.PrivateKey
-	PublicKey  *rsa.PublicKey
-	Algorithm  string
-	Status     string // "active", "retired", "revoked"
-	CreatedAt  time.Time
-	RetiredAt  *time.Time
-	ExpiresAt  *time.Time
+	// PublicKey is the verification key published in JWKS.
+	PublicKey *rsa.PublicKey
+	// Algorithm is the JWS signing algorithm for this key. Only "RS256" is
+	// issued today.
+	Algorithm string
+	// Status is one of exactly "active", "retired" or "revoked". At most one
+	// key is "active" and it is the only one that signs; "retired" keys still
+	// verify until ExpiresAt so tokens outlive a rotation; "revoked" is
+	// terminal and drops the key from JWKS immediately, on the assumption that
+	// the private material leaked. Import refuses to move a row back out of
+	// "revoked" (see [ErrRevokedKey]).
+	Status string
+	// CreatedAt is when the key was first stored.
+	CreatedAt time.Time
+	// RetiredAt is when the key stopped being active, nil while it still is.
+	RetiredAt *time.Time
+	// ExpiresAt is when a retired key stops verifying and becomes eligible for
+	// deletion by CleanupExpired. Nil for the active key.
+	ExpiresAt *time.Time
 }
 
 // OnKeyChangeFunc is a callback invoked when the active key changes.
@@ -124,6 +146,7 @@ func (ks *KeyStore) Import(ctx context.Context, key *rsa.PrivateKey) (string, er
 
 	// Encrypt private key with master key, using kid as AAD
 	encPriv, err := vaultcrypto.Encrypt(privPEM, ks.masterKey, []byte(kid))
+	config.ZeroBytes(privPEM)
 	if err != nil {
 		return "", fmt.Errorf("keystore: encrypt private key: %w", err)
 	}
@@ -206,6 +229,25 @@ func (ks *KeyStore) Revoke(ctx context.Context, kid string) error {
 
 // Refresh loads all non-revoked, non-expired keys from the database and
 // updates the in-memory state. Notifies OnKeyChange if the active key changed.
+//
+// The two partial-failure paths differ, deliberately, and neither is silent to
+// an operator reading logs:
+//
+//   - A row whose public key will not parse, or is not RSA, is logged and
+//     skipped. The rest of the key set still loads, so one corrupt row cannot
+//     take the whole JWKS down; the cost is that the skipped kid disappears
+//     from JWKS and live tokens signed by it start failing verification. This
+//     is the intentional trade: a partial verification set beats none.
+//
+//   - A decrypt or parse failure on the active key aborts before applyKeys, so
+//     the previously loaded key set stays in memory untouched. The process
+//     keeps signing and verifying with what it already had rather than dropping
+//     to no keys at all. Callers see the error; StartRefreshLoop only logs it,
+//     so a persistently failing active key surfaces as a stale-key warning in
+//     the log and not as an outage.
+//
+// A successful Refresh always replaces the whole set: keys are never merged
+// with what was loaded before.
 func (ks *KeyStore) Refresh(ctx context.Context) error {
 	rows, err := ks.pool.Query(ctx, `
 		SELECT kid, private_key, public_key, algorithm, status, created_at, retired_at, expires_at
@@ -233,7 +275,10 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 			return fmt.Errorf("keystore: scan row: %w", err)
 		}
 
-		// Parse public key (always needed for JWKS)
+		// Parse public key (always needed for JWKS). An unusable row is dropped
+		// from this refresh rather than failing it: the kid vanishes from JWKS
+		// and its live tokens stop verifying, which is preferable to a bad row
+		// blocking every other key from loading.
 		pubKeyRaw, err := x509.ParsePKIXPublicKey(pubDER)
 		if err != nil {
 			log.Printf("keystore: skip key %s: parse public key: %v", kid, err)
@@ -246,13 +291,24 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 		}
 		publicKeys[kid] = rsaPub
 
-		// Decrypt private key only for active key
+		// Decrypt the private key only for the active key. Unlike the skip
+		// above, this returns before applyKeys, so the in-memory set from the
+		// last good refresh survives: a wrong master key or a corrupt row
+		// leaves the process serving stale keys instead of no keys.
 		if status == "active" {
 			privPEM, err := vaultcrypto.Decrypt(encPriv, ks.masterKey, []byte(kid))
 			if err != nil {
 				return fmt.Errorf("keystore: decrypt key %s: %w", kid, err)
 			}
+			// The plaintext PEM of the signing key exists in this buffer and nowhere
+			// else in the process. LoadSigningKeyPEM parses it into its own structure,
+			// so afterwards the bytes are dead weight that would otherwise sit in a
+			// heap block until it happened to be reused. Wiped inline rather than by
+			// defer: this is a loop body, so a defer would hold every decrypted key
+			// until Refresh returned. Wiped on the error path too, which is when a
+			// core dump is most likely.
 			privKey, _, err := vaultcrypto.LoadSigningKeyPEM(privPEM)
+			config.ZeroBytes(privPEM)
 			if err != nil {
 				return fmt.Errorf("keystore: parse key %s: %w", kid, err)
 			}
@@ -318,18 +374,34 @@ func (ks *KeyStore) ListKeys(ctx context.Context) ([]KeyInfo, error) {
 	return keys, rows.Err()
 }
 
-// KeyInfo is a metadata-only view of a signing key (no private key material).
+// KeyInfo is a metadata-only view of a signing key. It deliberately has no
+// field for key material: it is the shape returned to admin API clients, and
+// omitting the private key from the type makes leaking it a compile error
+// rather than a review catch.
 type KeyInfo struct {
-	KID       string     `json:"kid"`
-	Algorithm string     `json:"algorithm"`
-	Status    string     `json:"status"`
-	CreatedAt time.Time  `json:"created_at"`
+	// KID is the key identifier as published in JWKS.
+	KID string `json:"kid"`
+	// Algorithm is the JWS signing algorithm, "RS256" for keys this store issues.
+	Algorithm string `json:"algorithm"`
+	// Status is "active", "retired" or "revoked"; see [KeyRecord.Status] for
+	// what each state permits.
+	Status string `json:"status"`
+	// CreatedAt is when the key was first stored.
+	CreatedAt time.Time `json:"created_at"`
+	// RetiredAt is when the key stopped being active, absent while it still is.
 	RetiredAt *time.Time `json:"retired_at,omitempty"`
+	// ExpiresAt is when a retired key stops verifying, absent for the active key.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // StartRefreshLoop starts a background goroutine that refreshes keys from the
-// database at the given interval. Call Stop() to terminate the loop.
+// database at the given interval, which is how a pod picks up a rotation
+// performed by another pod. Call Stop to terminate the loop.
+//
+// A failing Refresh is logged and the loop continues. Since Refresh leaves the
+// previous key set in place on an active-key failure, a pod whose refreshes
+// keep failing serves stale keys indefinitely rather than losing the ability to
+// sign; the log line is the only signal, so it belongs in an alert.
 func (ks *KeyStore) StartRefreshLoop(ctx context.Context, interval time.Duration) {
 	ks.wg.Add(1)
 	go func() {

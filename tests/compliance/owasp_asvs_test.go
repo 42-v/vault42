@@ -876,7 +876,7 @@ func TestASVS_V2_1_1_PasswordMinLengthConfigured(t *testing.T) {
 func TestASVS_V2_2_1_AccountLockoutMechanism(t *testing.T) {
 	// V2.2.1: Verify that anti-automation controls are effective at mitigating
 	// breached credential testing, brute force, and account lockout attacks.
-	// NIST §5.2.2: Max 100 consecutive failed attempts per account.
+	// NIST SP 800-63B-4 §3.2.2: Max 100 consecutive failed attempts per account.
 	mc := cache.NewMemoryCache()
 	defer mc.Close()
 

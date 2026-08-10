@@ -258,8 +258,8 @@ func TestMemoryCache_Methods_Table(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name string
-		run  func() (interface{}, error)
+		name         string
+		run          func() (interface{}, error)
 		wantNotFound bool
 	}{
 		{"Get missing", func() (interface{}, error) { return c.Get(ctx, "nope") }, true},

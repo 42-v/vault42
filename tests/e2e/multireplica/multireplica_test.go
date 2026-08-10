@@ -144,7 +144,7 @@ func TestMultiReplica(t *testing.T) {
 					}
 				}
 				stB, _ := jsonPost(t, httpClient, replB.URL+"/auth/register", map[string]string{
-					"email": uniqueEmail("rlb-"+prof), "password": testPassword, "display_name": "r2",
+					"email": uniqueEmail("rlb-" + prof), "password": testPassword, "display_name": "r2",
 				})
 				if stB == 429 {
 					saw429 = true

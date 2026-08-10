@@ -2,6 +2,38 @@ import { ref, type Ref } from 'vue'
 import { useVaultClient } from '../plugin'
 import type { Session, Device, VaultError } from '../types'
 
+/**
+ * Lists and revokes the user's active sessions and known devices.
+ *
+ * State is created per call; separate `useSessions()` callers do not share
+ * lists, and each must fetch its own.
+ *
+ * Calls `GET`/`DELETE /user/sessions`, `DELETE /user/sessions/{id}`,
+ * `GET /user/devices`, `PATCH`/`DELETE /user/devices/{id}`.
+ *
+ * @returns
+ * - `sessions`: the active {@link Session} list, empty until fetched.
+ * - `devices`: the known {@link Device} list, empty until fetched.
+ * - `isLoading`: true while a fetch is outstanding. It is a boolean, not a
+ *   counter, so a `fetchSessions` and a `fetchDevices` running concurrently
+ *   clear it as soon as the first of them finishes.
+ * - `error`: the last `VaultError`, or null.
+ * - `fetchSessions`, `fetchDevices`: load the respective list.
+ * - `revokeSession`: revokes one session by id, then refetches **both** lists,
+ *   because revoking a session also revokes that device's tokens.
+ * - `revokeAllSessions`: revokes every session and empties both lists locally.
+ *   This includes the caller's own session, so the current token stops working
+ *   and the app must send the user back to sign-in.
+ * - `renameDevice`: renames a device and patches the local list in place
+ *   without refetching.
+ * - `removeDevice`: removes a device, then refetches both lists.
+ *
+ * None of these throw. Every failure lands in `error` and leaves the lists at
+ * their previous values, so a revoke that silently failed looks like a revoke
+ * that changed nothing; check `error` after each call.
+ *
+ * @throws Error if `createVaultPlugin` was never installed.
+ */
 export function useSessions() {
   const client = useVaultClient()
   const sessions: Ref<Session[]> = ref([])

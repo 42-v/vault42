@@ -31,6 +31,7 @@ type fakeTemplateRepo struct {
 func (f *fakeTemplateRepo) Get(context.Context, string, string) (*model.EmailTemplate, error) {
 	return f.t, f.err
 }
+
 func (f *fakeTemplateRepo) ListByApp(context.Context, string) ([]*model.EmailTemplate, error) {
 	return nil, f.err
 }

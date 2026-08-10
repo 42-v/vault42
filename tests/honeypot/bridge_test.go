@@ -24,12 +24,12 @@ import (
 
 // testEnv holds references to all containers for a bridge E2E test.
 type testEnv struct {
-	realPG      *postgres.PostgresContainer
-	honeypotPG  *postgres.PostgresContainer
-	realVault   testcontainers.Container
+	realPG        *postgres.PostgresContainer
+	honeypotPG    *postgres.PostgresContainer
+	realVault     testcontainers.Container
 	honeypotVault testcontainers.Container
-	bridge      testcontainers.Container
-	bridgeURL   string
+	bridge        testcontainers.Container
+	bridgeURL     string
 }
 
 func setupTestEnv(t *testing.T) *testEnv {
@@ -72,21 +72,21 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	// Common Vault env
 	commonEnv := map[string]string{
-		"VAULT_AUTO_MIGRATE":       "true",
-		"VAULT_TLS_ENABLED":        "false",
-		"VAULT_ORIGIN":             "http://localhost",
-		"VAULT_APP_NAME":           "Test Vault",
+		"VAULT_AUTO_MIGRATE":        "true",
+		"VAULT_TLS_ENABLED":         "false",
+		"VAULT_ORIGIN":              "http://localhost",
+		"VAULT_APP_NAME":            "Test Vault",
 		"VAULT_PASSWORD_MIN_LENGTH": "15",
-		"DB_PORT":                  "5432",
-		"DB_SSLMODE":              "disable",
-		"DB_MAX_CONNS":            "5",
-		"DB_MIG_USER":             "vault_mig",
-		"DB_MIG_PASSWORD":         "test-mig-password",
-		"DB_APP_USER":             "vault_mig",
-		"DB_APP_PASSWORD":         "test-mig-password",
-		"CACHE_BACKEND":           "memory",
-		"LISTEN_ADDR":             ":8080",
-		"VAULT_RATE_LIMIT_ENABLED": "false",
+		"DB_PORT":                   "5432",
+		"DB_SSLMODE":                "disable",
+		"DB_MAX_CONNS":              "5",
+		"DB_MIG_USER":               "vault_mig",
+		"DB_MIG_PASSWORD":           "test-mig-password",
+		"DB_APP_USER":               "vault_mig",
+		"DB_APP_PASSWORD":           "test-mig-password",
+		"CACHE_BACKEND":             "memory",
+		"LISTEN_ADDR":               ":8080",
+		"VAULT_RATE_LIMIT_ENABLED":  "false",
 	}
 
 	// Real Vault

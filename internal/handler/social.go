@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/middleware"
@@ -28,11 +29,15 @@ func NewSocialHandler(social repository.SocialAccountRepository, auditLog *audit
 // socialAccountView is the safe projection of a link. The encrypted provider
 // tokens are deliberately absent: the user needs to know a provider is linked,
 // not hold its credentials.
+//
+// CreatedAt is a time.Time so it encodes exactly like every other timestamp in
+// the API. Hand-formatting it truncated the value to whole seconds, which made
+// this the one endpoint whose timestamps a client had to parse differently.
 type socialAccountView struct {
-	ID        string `json:"id"`
-	Provider  string `json:"provider"`
-	Email     string `json:"email,omitempty"`
-	CreatedAt string `json:"created_at"`
+	ID        string    `json:"id"`
+	Provider  string    `json:"provider"`
+	Email     string    `json:"email,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // List handles GET /user/social — the linked providers for the caller.
@@ -55,10 +60,10 @@ func (h *SocialHandler) List(w http.ResponseWriter, r *http.Request) {
 			ID:        a.ID,
 			Provider:  a.Provider,
 			Email:     a.Email,
-			CreatedAt: a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			CreatedAt: a.CreatedAt.UTC(),
 		})
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"accounts": out})
+	WriteJSON(w, http.StatusOK, map[string]any{"accounts": out, "total": len(out)})
 }
 
 // Unlink handles DELETE /user/social/{id} — removes one federated link and the

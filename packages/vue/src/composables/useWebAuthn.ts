@@ -3,6 +3,53 @@ import { useVaultClient } from '../plugin'
 import { base64urlToBuffer, bufferToBase64url } from '../base64url'
 import type { VaultError, LoginResult, WebAuthnCredential } from '../types'
 
+/**
+ * WebAuthn / FIDO2 credential enrolment, assertion and management.
+ *
+ * Handles the base64url-to-`ArrayBuffer` conversion the browser credential API
+ * requires in both directions, so the server's JSON options can be passed
+ * straight through.
+ *
+ * State is created per call and is not shared between callers.
+ *
+ * Calls `POST /auth/2fa/webauthn/register/{begin,finish}`,
+ * `POST /auth/2fa/webauthn/verify/{begin,finish}`, and
+ * `GET`/`DELETE /auth/2fa/webauthn/credentials`.
+ *
+ * @returns
+ * - `isSupported`: computed, whether the browser exposes
+ *   `window.PublicKeyCredential`. Gate any WebAuthn UI on this: the API is also
+ *   unavailable in non-secure contexts and in SSR, where it is false.
+ * - `isLoading`: true while a call is outstanding, including the time the
+ *   browser is waiting for the user to touch their authenticator.
+ * - `error`: the last `VaultError`, or null. A user who dismisses the browser
+ *   prompt produces code `webauthn_cancelled`, which is a normal outcome rather
+ *   than a failure to report as one.
+ * - `isRegistered`: true after a successful `register()` in this composable's
+ *   lifetime. Local bookkeeping, not server state.
+ * - `credentials`: the {@link WebAuthnCredential} list, empty until fetched.
+ * - `register()`: enrols a new credential for the signed-in user.
+ * - `verify(challengeToken?)`: performs an assertion and returns the
+ *   {@link LoginResult}.
+ * - `listCredentials()`: loads and returns the credential list. Swallows its
+ *   error and returns the previous value, so an empty result does not
+ *   distinguish "none enrolled" from "the call failed".
+ * - `deleteCredential(id)`: removes one credential and drops it from the local
+ *   list.
+ *
+ * `verify(challengeToken)` temporarily replaces the shared client's access
+ * token with the challenge token for the duration of the call, and on success
+ * leaves the **real** access token from the server in place. It restores the
+ * previous token only on the error path. That mutation is global to the client,
+ * so a request issued from elsewhere while an assertion is in flight travels
+ * with the challenge token, which authorises nothing but the verification
+ * route. During login, prefer `verify2FAWebAuthn()` on {@link useAuth}, which
+ * sequences this correctly and keeps the session refs consistent.
+ *
+ * `register`, `verify` and `deleteCredential` set `error` and rethrow.
+ *
+ * @throws Error if `createVaultPlugin` was never installed.
+ */
 export function useWebAuthn() {
   const client = useVaultClient()
   const isLoading: Ref<boolean> = ref(false)

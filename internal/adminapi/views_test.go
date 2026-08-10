@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/tests/mocks"
 )
 
@@ -134,5 +136,122 @@ func TestListUsers_NoMatchIsAnEmptyList(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "[]") {
 		t.Errorf("an empty search did not serialise as []: %s", body)
+	}
+}
+
+// GET /admin/audit was serialising []*model.AuditEntry directly, so the wire
+// format was Go field names, PascalCase in an API that is snake_case
+// everywhere else, and it carried FingerprintHash: an HMAC that correlates
+// events across accounts. The projection is what fixes both, and it is only a
+// fix as long as nothing serialises the row again.
+func TestQueryAudit_ProjectsSnakeCaseAndDropsTheFingerprint(t *testing.T) {
+	const fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+	auditRepo := &mocks.MockAuditRepo{
+		QueryFn: func(context.Context, repository.AuditFilter) ([]*model.AuditEntry, error) {
+			return []*model.AuditEntry{{
+				ID:              "evt-1",
+				Timestamp:       time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+				EventType:       "login",
+				UserID:          "usr-1",
+				IP:              "203.0.113.7",
+				FingerprintHash: fingerprint,
+				DeviceID:        "dev-1",
+				RiskScore:       3,
+			}}, nil
+		},
+	}
+
+	h := newTestHandler(nil, nil, nil, auditRepo)
+	rec := httptest.NewRecorder()
+	h.QueryAudit(rec, httptest.NewRequest(http.MethodGet, "/admin/audit", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, fingerprint) {
+		t.Error("the device fingerprint hash was returned to the admin, putting a cross-account correlator on the wire")
+	}
+	for _, goName := range []string{`"ID"`, `"Timestamp"`, `"EventType"`, `"FingerprintHash"`, `"RiskScore"`} {
+		if strings.Contains(body, goName) {
+			t.Errorf("Go field name %s reached the wire: %s", goName, body)
+		}
+	}
+	if strings.Contains(body, `"filter"`) {
+		t.Errorf("the internal repository filter struct was echoed back to the client: %s", body)
+	}
+
+	var resp struct {
+		Entries []map[string]any `json:"entries"`
+		Total   int              `json:"total"`
+		Limit   int              `json:"limit"`
+		Offset  int              `json:"offset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(resp.Entries))
+	}
+	if resp.Total != 1 || resp.Limit != defaultListLimit || resp.Offset != 0 {
+		t.Errorf("envelope = {total:%d limit:%d offset:%d}, want the standard list envelope", resp.Total, resp.Limit, resp.Offset)
+	}
+	for _, key := range []string{"id", "timestamp", "event_type", "user_id", "ip", "device_id", "risk_score"} {
+		if _, ok := resp.Entries[0][key]; !ok {
+			t.Errorf("entry is missing %q: %v", key, resp.Entries[0])
+		}
+	}
+}
+
+// An empty audit query is an empty array, never null: a strongly-typed client
+// that models entries as a list cannot decode null into one.
+func TestQueryAudit_NoResultsIsAnEmptyArray(t *testing.T) {
+	auditRepo := &mocks.MockAuditRepo{
+		QueryFn: func(context.Context, repository.AuditFilter) ([]*model.AuditEntry, error) { return nil, nil },
+	}
+
+	h := newTestHandler(nil, nil, nil, auditRepo)
+	rec := httptest.NewRecorder()
+	h.QueryAudit(rec, httptest.NewRequest(http.MethodGet, "/admin/audit", nil))
+
+	if body := rec.Body.String(); !strings.Contains(body, `"entries":[]`) {
+		t.Errorf("an empty audit query did not serialise entries as []: %s", body)
+	}
+}
+
+// GET /admin/clients/{id} returned the model.Client row itself, which carries
+// SecretHash, the argon2id hash of the client secret. An operator's browser,
+// and everything in front of it, was being handed offline-crackable credential
+// material for every service client.
+func TestGetClient_DoesNotLeakTheClientSecretHash(t *testing.T) {
+	const secretHash = "$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+	h := &Handler{clients: &mocks.MockClientRepo{
+		GetByIDFn: func(context.Context, string) (*model.Client, error) {
+			return &model.Client{ID: "c1", Name: "billing", SecretHash: secretHash, Active: true}, nil
+		},
+	}}
+
+	rec := httptest.NewRecorder()
+	h.GetClient(rec, withPathValue(adminReq(http.MethodGet, "/admin/clients/c1", ""), map[string]string{"id": "c1"}))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "billing") {
+		t.Errorf("the client was not returned at all: %s", body)
+	}
+	if strings.Contains(body, secretHash) || strings.Contains(body, "argon2") {
+		t.Error("the client secret hash was serialised to the admin, handing an offline cracking target out over HTTP")
+	}
+	if strings.Contains(body, `"SecretHash"`) || strings.Contains(body, `"ID"`) {
+		t.Errorf("Go field names reached the wire: %s", body)
+	}
+	if !strings.Contains(body, `"scopes":[]`) || !strings.Contains(body, `"redirect_uris":[]`) {
+		t.Errorf("an unset scope or redirect list serialised as null rather than []: %s", body)
 	}
 }

@@ -167,7 +167,7 @@ func TestSecurityHeaders(t *testing.T) {
 	resp.Body.Close()
 
 	headers := map[string]string{
-		"X-Frame-Options":       "DENY",
+		"X-Frame-Options":        "DENY",
 		"X-Content-Type-Options": "nosniff",
 		"Cache-Control":          "no-store",
 	}

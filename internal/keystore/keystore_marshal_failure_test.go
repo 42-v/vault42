@@ -29,7 +29,7 @@ func cryptoKeysBrokenRSAKey(t *testing.T) *rsa.PrivateKey {
 }
 
 // Import must reject a key it cannot serialize before it touches the database.
-// Persisting a half-marshalled or unusable key would put a row in
+// Persisting a half-marshaled or unusable key would put a row in
 // auth.signing_keys that every pod then fails to load on refresh -- and if the
 // row were written as the active key while the retire UPDATE had already run,
 // the deployment would be left with no usable signing key at all.
@@ -43,7 +43,7 @@ func TestKeyStore_ImportRejectsUnmarshalableKey(t *testing.T) {
 
 	kid, err := ks.Import(context.Background(), cryptoKeysBrokenRSAKey(t))
 	if err == nil {
-		t.Fatal("Import reported success for a key that cannot be marshalled")
+		t.Fatal("Import reported success for a key that cannot be marshaled")
 	}
 	if !strings.Contains(err.Error(), "marshal private key") {
 		t.Errorf("error = %q, want it to surface the private key marshal failure", err)

@@ -10,7 +10,19 @@ import (
 )
 
 // VerifyES256 verifies an ES256 signature. Returns nil on success.
-// Handles both raw R||S (64 bytes for P-256) and ASN.1 DER signature formats.
+//
+// RFC 7515 §3.4 mandates the raw R‖S form for JWS, and that is what vault42
+// emits. This function additionally accepts ASN.1 DER because the ES256 tokens
+// it must verify include DPoP proofs and third-party OIDC ID tokens produced by
+// libraries and HSMs that hand back the DER form their signing API returns.
+// Rejecting those would fail interoperability, not close an attack.
+//
+// The discriminator is length alone: [isRawRS] treats a signature of exactly
+// twice the curve's coordinate size as raw. A DER signature that happens to be
+// 64 bytes is therefore misclassified, reinterpreted as R‖S, and fails
+// verification. That direction is safe, because the only path out of this
+// function is ecdsa.VerifyASN1 over a signature the caller must have produced
+// with the private key: a misclassified signature is rejected, never accepted.
 func VerifyES256(signingString string, sig []byte, key *ecdsa.PublicKey) error {
 	if key == nil {
 		return fmt.Errorf("%w: nil public key", ErrInvalidKeyType)

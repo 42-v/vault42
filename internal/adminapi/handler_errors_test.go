@@ -78,9 +78,11 @@ func (s *stubAdminSessionRepo) Create(context.Context, *model.AdminSession) erro
 func (s *stubAdminSessionRepo) GetByTokenHash(context.Context, string) (*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (s *stubAdminSessionRepo) ListByAdmin(context.Context, string) ([]*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (s *stubAdminSessionRepo) ListActive(ctx context.Context) ([]*model.AdminSession, error) {
 	if s.listActiveFn != nil {
 		return s.listActiveFn(ctx)

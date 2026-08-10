@@ -258,7 +258,7 @@ A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders pr
 
 ### Accepted Risks
 
-Full rationale in [`docs/security.md`](security.md) (AR-6 through AR-9) and the Admin Gateway section of [`docs/security-review.md`](security-review.md).
+Full rationale in [Security Decisions & Accepted Risks](security.md) (AR-6 through AR-9).
 
 - **Session timing oracle (AR-6)**: Invalid session tokens return slightly faster than valid ones
 - **Session token in sessionStorage (AR-7)**: Required for JS API calls; protected by CSP + 6-layer enforcement
@@ -283,11 +283,11 @@ Generates CA, server, and client certificates in `secrets/admin-gateway/`:
 
 ### Kubernetes (Helm)
 
-The admin gateway is deployed via Vault42 Helm chart (`charts/vault42/templates/admin-gateway.yaml`):
+The admin gateway is deployed via Vault42 Helm chart (`charts/vault/templates/admin-gateway.yaml`):
 
 ```bash
-helm upgrade --install vault42 charts/vault42/ \
-  -f charts/vault42/values.yaml
+helm upgrade --install vault42 charts/vault/ \
+  -f charts/vault/values.yaml
 ```
 
 Access via SSH tunnel to the node:

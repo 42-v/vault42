@@ -40,10 +40,14 @@ const (
 // blobClientRowScript is the answer the fake backend gives to one query. A query is
 // matched by substring, so each script names the fragment that identifies it.
 type blobClientRowScript struct {
-	match    string
-	fields   []pgproto3.FieldDescription
-	rows     [][][]byte
-	failWith *pgproto3.ErrorResponse
+	match string
+	// paramOIDs types the query's placeholders. Empty means every placeholder is
+	// text, which is what a query whose arguments are all strings needs; a query
+	// that binds a number has to say so or pgx has no encode plan for it.
+	paramOIDs []uint32
+	fields    []pgproto3.FieldDescription
+	rows      [][][]byte
+	failWith  *pgproto3.ErrorResponse
 }
 
 func blobClientField(name string, oid uint32) pgproto3.FieldDescription {
@@ -172,12 +176,15 @@ func blobClientServeConn(conn net.Conn, find func(string) *blobClientRowScript) 
 			be.Send(&pgproto3.ParseComplete{})
 		case *pgproto3.Describe:
 			query := statements[m.Name]
+			script := find(query)
 			oids := make([]uint32, strings.Count(query, "$"))
 			for i := range oids {
 				oids[i] = blobClientOIDText
 			}
+			if script != nil && len(script.paramOIDs) == len(oids) {
+				oids = script.paramOIDs
+			}
 			be.Send(&pgproto3.ParameterDescription{ParameterOIDs: oids})
-			script := find(query)
 			switch {
 			case script == nil:
 				unscripted(query)
@@ -203,6 +210,19 @@ func blobClientServeConn(conn net.Conn, find func(string) *blobClientRowScript) 
 				break
 			}
 			be.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
+		case *pgproto3.Query:
+			// pgx sends begin, commit and rollback on the simple protocol
+			// because they carry no arguments, so a transaction test scripts
+			// them by name the same way it scripts a statement.
+			if script := find(m.String); script != nil && script.failWith != nil {
+				be.Send(script.failWith)
+			} else {
+				be.Send(&pgproto3.CommandComplete{CommandTag: []byte(strings.ToUpper(strings.TrimSpace(m.String)))})
+			}
+			be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+			if err := be.Flush(); err != nil {
+				return
+			}
 		case *pgproto3.Sync:
 			be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 			if err := be.Flush(); err != nil {

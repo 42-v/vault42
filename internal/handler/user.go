@@ -38,27 +38,39 @@ func (h *UserHandler) Profile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine actual MFA status from configured methods
-	mfaEnabled := false
-	var mfaMethods []string
-	if h.mfaSvc != nil {
-		if status, err := h.mfaSvc.GetStatus(r.Context(), user.ID); err == nil && status != nil {
-			mfaEnabled = status.TOTPEnabled || status.WebAuthnEnabled
-			mfaMethods = status.Methods
-		}
-	}
+	mfaEnabled, mfaMethods := h.mfaState(r, user.ID)
 
 	WriteJSON(w, http.StatusOK, ProfileResponse{
 		ID:            user.ID,
 		Email:         user.Email,
 		EmailVerified: user.EmailVerified,
 		DisplayName:   user.DisplayName,
+		AvatarURL:     user.AvatarURL,
 		Locale:        user.Locale,
 		MFARequired:   h.mfaSvc != nil && h.mfaSvc.IsRequired(),
 		MFAEnabled:    mfaEnabled,
 		MFAMethods:    mfaMethods,
 		CreatedAt:     user.CreatedAt,
 	})
+}
+
+// mfaState reports whether the user has a factor configured and which ones.
+// The method list is always a slice, never nil: with no factor configured, with
+// no MFA service wired, and on a failed lookup the profile still has to answer
+// with an empty array rather than null.
+func (h *UserHandler) mfaState(r *http.Request, userID string) (enabled bool, methods []string) {
+	methods = []string{}
+	if h.mfaSvc == nil {
+		return false, methods
+	}
+	status, err := h.mfaSvc.GetStatus(r.Context(), userID)
+	if err != nil || status == nil {
+		return false, methods
+	}
+	if status.Methods != nil {
+		methods = status.Methods
+	}
+	return status.TOTPEnabled || status.WebAuthnEnabled, methods
 }
 
 // UpdateProfile handles PUT /user/profile.
@@ -97,21 +109,14 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine actual MFA status from configured methods
-	mfaEnabled := false
-	var mfaMethods []string
-	if h.mfaSvc != nil {
-		if status, err := h.mfaSvc.GetStatus(r.Context(), user.ID); err == nil && status != nil {
-			mfaEnabled = status.TOTPEnabled || status.WebAuthnEnabled
-			mfaMethods = status.Methods
-		}
-	}
+	mfaEnabled, mfaMethods := h.mfaState(r, user.ID)
 
 	WriteJSON(w, http.StatusOK, ProfileResponse{
 		ID:            user.ID,
 		Email:         user.Email,
 		EmailVerified: user.EmailVerified,
 		DisplayName:   user.DisplayName,
+		AvatarURL:     user.AvatarURL,
 		Locale:        user.Locale,
 		MFARequired:   h.mfaSvc != nil && h.mfaSvc.IsRequired(),
 		MFAEnabled:    mfaEnabled,
@@ -147,7 +152,7 @@ func (h *UserHandler) Sessions(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	WriteJSON(w, http.StatusOK, SessionsResponse{Sessions: sessions})
+	WriteJSON(w, http.StatusOK, SessionsResponse{Sessions: sessions, Total: len(sessions)})
 }
 
 // RevokeSession handles DELETE /user/sessions/{id}.
@@ -229,7 +234,7 @@ func (h *UserHandler) Devices(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	WriteJSON(w, http.StatusOK, DevicesResponse{Devices: result})
+	WriteJSON(w, http.StatusOK, DevicesResponse{Devices: result, Total: len(result)})
 }
 
 // RenameDevice handles PATCH /user/devices/{id}.

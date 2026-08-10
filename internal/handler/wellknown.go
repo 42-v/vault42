@@ -51,24 +51,32 @@ func (h *WellKnownHandler) JWKS(w http.ResponseWriter, r *http.Request) {
 }
 
 // OpenIDConfig handles GET /.well-known/openid-configuration.
+//
+// vault42 is not an OpenID Connect provider. It has no authorization-code
+// token endpoint, it issues no ID token to a relying party, its user profile
+// is not a UserInfo response, and /auth/register is end-user signup rather
+// than RFC 7591 dynamic client registration. The document therefore states
+// only what is true of this server: the issuer stamped into every token it
+// signs, where the verification keys for those tokens live, and the signature
+// algorithm those tokens use.
+//
+// The algorithm is also published per key in the JWKS, which stays correct if
+// a key of another algorithm is ever added; the summary key here exists so a
+// consumer can pin an expected algorithm before it fetches the key set. It is
+// deliberately not named id_token_signing_alg_values_supported, because no ID
+// token is ever issued.
+//
+// Keys are omitted rather than faked. Once POST /client/token reads
+// grant_type and reports RFC 6749 error codes, token_endpoint,
+// grant_types_supported and token_endpoint_auth_methods_supported can be added
+// back, which is an additive change.
 func (h *WellKnownHandler) OpenIDConfig(w http.ResponseWriter, r *http.Request) {
 	issuer := h.issuer
 
 	discovery := map[string]interface{}{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/auth/oauth2/authorize",
-		"token_endpoint":                        issuer + "/auth/login",
-		"userinfo_endpoint":                     issuer + "/user/profile",
-		"jwks_uri":                              issuer + "/.well-known/jwks.json",
-		"registration_endpoint":                 issuer + "/auth/register",
-		"scopes_supported":                      []string{"openid", "profile", "email"},
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token", "client_credentials"},
-		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"dpop_signing_alg_values_supported":     []string{"RS256", "ES256"},
+		"issuer":   issuer,
+		"jwks_uri": issuer + "/.well-known/jwks.json",
+		"access_token_signing_alg_values_supported": []string{"RS256"},
 	}
 
 	WriteJSON(w, http.StatusOK, discovery)

@@ -19,6 +19,23 @@ public class VaultAuthenticationStateProvider : AuthenticationStateProvider
         _store = store;
     }
 
+    /// <summary>
+    /// Builds the current authentication state from the stored access token.
+    /// </summary>
+    /// <returns>
+    /// A state carrying the token's claims, or an anonymous state when no token is stored, the
+    /// stored token has expired, or its payload could not be parsed.
+    /// </returns>
+    /// <remarks>
+    /// <para>The claims come from decoding the JWT payload in the browser. The signature is
+    /// <em>not</em> verified here, and cannot be: the app has no signing key. Trust rests on the
+    /// token having been obtained over TLS from the Vault token endpoint during the code exchange.
+    /// Treat these claims as UI state only. Every authorization decision that matters belongs on
+    /// the server, which validates the same token properly.</para>
+    /// <para>The <c>roles</c> and <c>scopes</c> arrays are expanded into individual
+    /// <see cref="ClaimTypes.Role"/> and <c>scope</c> claims; any other array claim is kept as its
+    /// raw JSON text.</para>
+    /// </remarks>
     public override Task<AuthenticationState> GetAuthenticationStateAsync()
     {
         if (!_store.IsAccessTokenValid)

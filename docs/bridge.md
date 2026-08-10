@@ -40,7 +40,7 @@ The bridge sits in front of two fully isolated Vault42 instances. Both run the s
 scripts/build-all.sh
 
 # Deploy with Helm
-helm install vault42 charts/vault42 -f charts/vault42/values-bridge.yaml \
+helm install vault42 charts/vault -f charts/vault/values-bridge.yaml \
   --set origin="https://auth.example.com" \
   --set secrets.existingSecret=vault42-secrets
 ```
@@ -184,8 +184,8 @@ ingress:
 In the Helm chart, set `cloudflared.enabled=true` with the bridge overlay:
 
 ```bash
-helm install vault42 charts/vault42 \
-  -f charts/vault42/values-bridge.yaml \
+helm install vault42 charts/vault \
+  -f charts/vault/values-bridge.yaml \
   --set cloudflared.enabled=true \
   --set cloudflared.tunnelToken="$TUNNEL_TOKEN"
 ```

@@ -23,13 +23,24 @@ type Config struct {
 	MaxFailed  int           // ADMIN_GW_MAX_FAILED_LOGINS — default: 5
 	LockoutDur time.Duration // ADMIN_GW_LOCKOUT_DURATION — default: 30m
 
-	// Database (shared with vault)
-	DBHost     string
-	DBPort     string
-	DBName     string
-	DBSSLMode  string
+	// Database (shared with vault, reached as the vault_admin role)
+	// DBHost is the PostgreSQL hostname (DB_HOST). Default: "localhost".
+	DBHost string
+	// DBPort is the PostgreSQL port (DB_PORT). Default: "5432".
+	DBPort string
+	// DBName is the PostgreSQL database name (DB_NAME). Default: "vault".
+	DBName string
+	// DBSSLMode is the PostgreSQL SSL mode (DB_SSLMODE). Default: "require".
+	DBSSLMode string
+	// DBMaxConns is the maximum number of database connections (DB_MAX_CONNS).
+	// Default: 5, an order of magnitude below the vault server's pool because
+	// this is a single-operator admin plane, not a request-serving path.
 	DBMaxConns int
-	DBPassword string // vault_admin role password (from DB_ADMIN_PASSWORD_FILE)
+	// DBPassword is the vault_admin role password (DB_ADMIN_PASSWORD_FILE).
+	// vault_admin is a separate, more privileged role than the vault_app role
+	// the server uses, which is why the admin gateway is a separate binary on
+	// loopback rather than a route on the public server.
+	DBPassword string
 
 	// Master key for TOTP encryption (same as vault)
 	MasterKey []byte

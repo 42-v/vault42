@@ -5,9 +5,9 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 <!-- badges -->
 | | | |
 |---|---|---|
-| ![Go](https://img.shields.io/badge/Go-1.26.0-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-3123-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1207-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-4330_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-27639_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-5512_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-99.42%25-155724?style=flat&labelColor=000) |
+| ![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Go_Tests-3385-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1207-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-4592_tests-155724?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Go-31410_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6334_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
@@ -16,8 +16,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **RS256 JWT**: algorithm whitelist (rejects `none`, `HS256`, all others), fingerprint-bound, 8KB size limit
 - **Argon2id**: 46 MiB / 1 iteration, NIST SP 800-63B compliant, 15-char minimum, HIBP breach check
 - **Refresh token rotation**: family tracking, single-use, replay detection nukes the entire family
-- **DPoP proof-of-possession** (RFC 9449): sender-constrained tokens with single-use anti-replay, enforced on login, refresh, 2FA verify, and the KMS unwrap oracle
-- **KMS unwrap oracle**: `POST /kms/unwrap` KEK envelope-unwrap, gated by the `kms:unwrap` scope, DPoP-bound, fail-closed rate limit, synchronous audit; the `vault kms wrap` CLI produces envelopes
+- **KMS unwrap oracle**: `POST /kms/unwrap` KEK envelope-unwrap, gated by the `kms:unwrap` scope, fail-closed rate limit, synchronous audit, every failure collapsed to one opaque error; the `vault kms wrap` CLI produces envelopes
 - **WebAuthn/FIDO2**: passkey registration and authentication
 - **TOTP 2FA**: RFC 6238, hand-rolled (~80 lines), backup codes for recovery
 - **OAuth2/OIDC**: GitHub, Google, Facebook, plus generic OIDC (Okta, Auth0, Keycloak, Entra via `VAULT_OIDC_PROVIDERS`); PKCE S256 enforced, strict redirect URI matching
@@ -32,6 +31,12 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Honeypot bridge**: transparent reverse proxy with attacker detection, decoy pages, score-based routing
 - **Client credentials**: service-to-service auth grant
 - **Device tracking**: session management with fingerprint verification
+
+DPoP (RFC 9449) is present but **experimental and not a working control**: `VAULT_DPOP_ENABLED`
+mounts middleware that validates a presented proof's structure, method, URI, freshness and
+single-use JTI, but no issuance path emits the `cnf.jkt` claim that would bind a token to a key,
+so nothing is sender-constrained and a request with no proof passes through. Do not count it as
+replay protection. See [docs/security.md](docs/security.md) AR-10.
 
 ## Architecture
 
@@ -55,12 +60,12 @@ internal/
   config/               Env vars, _FILE secret loading, profiles
   server/               HTTP server, TLS 1.3, middleware wiring
   migrate/              SQL migration runner
-  model/                Domain types + WebAuthn adapter
+  model/                Domain types + WebAuthn adapter (there is no internal/webauthn
+                        package; WebAuthn lives in model, repository, service and handler)
   rbac/                 Admin role/permission checks
   metrics/              Hand-rolled Prometheus text exposition
   audit/                Append-only audit logger
   email/                SMTP + SendGrid, go:embed HTML templates, per-app white-label
-  webauthn/             WebAuthn/FIDO2 config + adapters
   cli/                  Admin CLI (add-client, rotate-jwks, lock-user, seed, etc.)
   seed/                 Declarative JSON seeding for clients and users
   oauth2/               GitHub, Google, Facebook, and generic OIDC providers
@@ -70,6 +75,7 @@ internal/
   sanitize/             Input validation
   useragent/            User-Agent parser
 packages/vue/           @vault42/vue: composables + i18n (38 locales)
+packages/dotnet/        Vault42.AspNetCore + Vault42.Blazor (published to nuget.org)
 web/                    Vue 3 + Vite + Tailwind SPA
 charts/vault/           Helm chart (production, embedded, honeypot profiles)
 migrations/             PostgreSQL DDL (auth, audit, identity, objects schemas)
@@ -147,21 +153,52 @@ Coverage tooling lives in `scripts/`:
 
 ## Docs
 
+Full index with one line on each document: [docs/README.md](docs/README.md).
+
 | | |
 |---|---|
-| [API Reference](docs/api.md) | 54 endpoints, schemas, curl examples |
-| [Architecture](docs/architecture.md) | Auth flows, middleware chain, token architecture |
-| [Configuration](docs/config.md) | All env vars, profiles, `_FILE` convention |
-| [Attack Cheatsheet](docs/cheatsheet.md) | JWT/auth attack vectors with defenses |
 | [Specification](docs/spec.md) | Authoritative spec (verified against implementation) |
+| [Architecture](docs/architecture.md) | Auth flows, middleware chain, token architecture |
+| [Configuration](docs/config.md) | Every env var, profiles, `_FILE` convention, fail-closed overrides |
+| [API Reference](docs/api.md) | 54 endpoints, schemas, curl examples |
+| [Deployment Guide](docs/deployment-guide.md) | Kubernetes install, KMS root key, upgrades, backup |
+| [Admin Gateway](docs/admin-gateway.md) | mTLS admin plane, RBAC model, admin endpoints |
+| [Bridge Deployment](docs/bridge.md) | Honeypot bridge proxy |
+| [Security & Accepted Risks](docs/security.md) | AR-1 through AR-12: what is deliberately not defended |
+| [Attack Cheatsheet](docs/cheatsheet.md) | Attack vectors with defenses and the tests that prove them |
+| [Standards Compliance](docs/COMPLIANCE.md) | NIST SP 800-63B, OWASP ASVS, Top 10, RFC family |
+| [Privacy Policy](docs/PRIVACY.md) | GDPR posture, data inventory, retention, breach procedure |
 | [Test Coverage](docs/test-coverage.md) | Per-package coverage breakdown |
 | [Dependencies](docs/deps.md) | Full dependency table with stars + versions |
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. `scripts/precommit.sh` is the gate and no hook
+runs it, commits are commitlint-enforced, and a commit subject that starts with a version number
+cuts a release.
 
 ## Security
 
 Found a vulnerability? **Do not open a public issue.**
 
-Email **vault@42-v.com** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md).
+Email **vault@42-v.com** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md) for the
+intake process, how a security fix ships, the supported-version and semver policy, and how to
+verify a release with `cosign`.
+
+### Verifying a release
+
+Images, the Helm chart and the release checksum file are all signed with keyless cosign, and
+the images carry SBOM and SLSA provenance attestations:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/42-v/vault42:1.0.0
+```
+
+Full instructions, covering all four artifact classes, are in
+[SECURITY.md](SECURITY.md#verifying-releases).
 
 ## Disclaimer
 

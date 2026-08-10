@@ -78,8 +78,10 @@ func freshConnClient() *http.Client {
 	}
 }
 
-var emailCounter int64
-var emailMu sync.Mutex
+var (
+	emailCounter int64
+	emailMu      sync.Mutex
+)
 
 // spoofIP returns a unique fake IP via X-Forwarded-For to bypass per-IP rate limits.
 // The dev deployment trusts 10.0.0.0/8 as proxy network, so XFF is respected.

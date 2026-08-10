@@ -1,10 +1,18 @@
 # API Reference
 
 > Vault42 -- JWT Authentication & Authorization Microservice
+> **API v1 · document version 1.0.0**
 
 ## Overview
 
-Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies. All endpoints are prefixed at the root (no `/api/v1` prefix).
+Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies.
+
+**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
+
+Two rules from that contract that change how a client is written:
+
+- **Clients MUST ignore response fields they do not recognise.** New response fields are added in minor releases.
+- **Clients MUST NOT feature-probe by sending an optional request field.** The main binary decodes with `DisallowUnknownFields()`, so an unknown key in a request body is a hard `400` and the whole request fails, not just the unknown part. Use `GET /auth/capabilities` instead. No endpoint reports the running version -- `GET /healthz` omits it deliberately, so as not to hand an attacker a version to match against a CVE -- which makes capability discovery the only in-band channel. The admin gateway is looser and ignores unknown keys; do not rely on either behaviour beyond what the contract states.
 
 **Base URL convention:** `https://vault42.example.com`
 
@@ -58,9 +66,13 @@ Authorization: Bearer <access_token>
 
 Access tokens are RS256-signed JWTs with a short TTL (typically 5-15 minutes). They are stateless and fingerprint-bound.
 
+Only the `Bearer` scheme is accepted. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set: RFC 9449 section 7.1 reserves it for sender-constrained tokens, and vault42 issues none.
+
 ### 2FA Challenge Tokens
 
-When a user has MFA enabled, the login endpoint returns a `challenge_token` instead of a full access token. This short-lived token must be presented to 2FA verify endpoints (`POST /auth/2fa/totp/verify`, `POST /auth/2fa/webauthn/verify/begin`, `POST /auth/2fa/webauthn/verify/finish`, `POST /auth/2fa/email-otp/verify`) to complete authentication.
+When a user has MFA enabled, the login endpoint returns a `challenge_token` instead of a full access token. This short-lived token (5-minute TTL, `token_type: "2fa_challenge"`) must be presented to a 2FA verify endpoint to complete authentication: `POST /auth/2fa/totp/verify`, `POST /auth/2fa/webauthn/verify/begin`, `POST /auth/2fa/webauthn/verify/finish`, `POST /auth/2fa/backup-code/verify`, `POST /auth/2fa/email-otp/verify`, or `POST /auth/2fa/email-otp/resend`.
+
+A challenge token is not accepted by any other endpoint, so it cannot be used for ordinary API access.
 
 ### Client Credentials (Basic Auth)
 
@@ -94,7 +106,12 @@ Status: `401 Unauthorized`
 
 ### Success responses
 
-Success responses have an appropriate HTTP status code (200, 201) and a JSON body whose shape is endpoint-specific.
+Success responses have an appropriate HTTP status code (200, 201) and a JSON body whose shape is endpoint-specific. Four conventions hold everywhere:
+
+- **Field names are `snake_case`.** No response carries a Go field name or a camelCase key.
+- **Timestamps are RFC 3339 in UTC.** Fractional seconds may be present, so parse RFC 3339 generally rather than matching a fixed layout.
+- **A list field is always an array.** An empty collection is `[]`, never `null`. Changing that in either direction is a breaking change.
+- **List responses carry `{<collection>, total, limit, offset}`** where the endpoint is paged. `total` is present even on an empty result. On the admin gateway `limit` defaults to 50 and is clamped to 100; an out-of-range value falls back to the default rather than erroring. Unpaged collections return the collection key alone.
 
 ### Error responses
 
@@ -129,7 +146,18 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-Rate limits degrade gracefully -- if the cache backend is unavailable, requests are allowed through.
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, every 2FA verify and resend, and `POST /kms/unwrap` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+
+```
+HTTP/1.1 503 Service Unavailable
+Retry-After: <window_seconds>
+```
+
+```json
+{"error": "rate_limiter_unavailable"}
+```
+
+`spec.md` section 8.1 lists which limiter each endpoint carries.
 
 ---
 
@@ -440,6 +468,10 @@ The response also sets an `HttpOnly` cookie named `refresh_token` on the `/auth`
 ```
 
 No refresh token cookie is set until MFA is completed.
+
+**Field naming.** `mfa_methods` is the canonical name for this list, and `GET /auth/2fa/status` emits it. This endpoint still emits the pre-1.0.0 `available_methods` and `requires_2fa`. Clients SHOULD read `mfa_methods` where it is present and fall back to `available_methods`; both name the same list. The `mfa_` names are canonical because the product supports more than two factors, while the URL paths keep `2fa` (`/auth/2fa/*`) because renaming a route is a breaking change. `available_methods` is deprecated and will be removed at 2.0.0. See `spec.md` section 4.4.
+
+Both fields carry `omitempty`, so on a non-MFA login they are absent rather than `null`.
 
 **Error responses:**
 
@@ -761,11 +793,18 @@ Retrieve the authenticated user's profile information.
   "email": "user@example.com",
   "email_verified": true,
   "display_name": "Jane Doe",
+  "avatar_url": "https://cdn.example.com/avatars/jane.png",
   "locale": "en",
   "mfa_required": false,
+  "mfa_enabled": true,
+  "mfa_methods": ["totp"],
   "created_at": "2025-01-15T10:30:00Z"
 }
 ```
+
+`avatar_url` is readable here as well as writable through `PUT /user/profile`. Before 1.0.0 it was write-only: a client could set it and could only read it back through the GDPR export.
+
+`mfa_methods` is always an array; a user with no configured factor gets `[]`, never `null`.
 
 **Error responses:**
 
@@ -1088,6 +1127,150 @@ curl -X DELETE https://vault42.example.com/user/devices/device-uuid-1 \
   -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
   -H "User-Agent: MyApp/1.0" \
   -H "Accept-Language: en-US"
+```
+
+---
+
+### Account Lifecycle
+
+Self-service erasure and data portability. Both are subject rights under the GDPR, and both are reachable by the account holder without an operator in the loop.
+
+---
+
+#### DELETE /user/account
+
+Erase the authenticated user's account. **This is the most destructive endpoint in the API.** It is irreversible from the service's own side: the only path back is an offline recovery key that the server does not hold.
+
+**Mounted only when an account-recovery repository is wired.** Where it is not, the route does not exist and answers a `text/plain` 404 rather than the JSON error envelope.
+
+**Authentication:** Bearer token **and** the current password in the request body. A stolen access token alone cannot erase an account.
+**Fingerprint:** Verified
+**Rate limit:** 3 requests per hour (per IP), fail-closed
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `password` | string | Yes | The account's current password, re-entered |
+
+**What is erased:** the identity profile, all blobs, devices, linked social accounts, password history, refresh tokens, TOTP secrets, WebAuthn credentials and backup codes. The user row is scrubbed and soft-deleted (tombstoned) so that foreign keys stay intact and the account stops authenticating immediately.
+
+**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`cleanup-audit`, `cleanup-recovery`). The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
+
+**Order matters:** escrow, then tombstone, then purge. The account stops authenticating before any PII is destroyed, so an interrupted erasure leaves an account that is dead but not yet fully purged -- never one that is still loginable but has already lost its second factors. Every step is idempotent; re-issuing the request finishes an interrupted erasure.
+
+**Success response (200 OK):**
+
+```json
+{
+  "status": "deleted"
+}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `password_required` | Body missing or `password` empty |
+| 401 | `invalid_password` | Wrong password (audited as a failed login) |
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 404 | `not_found` | Account already erased |
+| 429 | `rate_limit_exceeded` | Deletion rate limit exceeded |
+| 500 | `internal_error` | Erasure failed; the account may be tombstoned but not fully purged. Retry. |
+| 503 | `server_busy` | Argon2id semaphore full (load shedding) |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+**curl example:**
+
+```bash
+curl -X DELETE https://vault42.example.com/user/account \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -d '{"password": "my-secure-passphrase-here"}'
+```
+
+---
+
+#### GET /user/data-export
+
+Return every category of personal data the service holds for the authenticated user, in one JSON document. Satisfies the right of access (GDPR Article 15) and the right to data portability (Article 20).
+
+The endpoint aggregates the live repositories and stores nothing of its own, so an export cannot drift from what is actually held.
+
+**Authentication:** Bearer token
+**Fingerprint:** Verified
+**Rate limit:** 5 requests per minute (per IP)
+
+**Success response (200 OK):**
+
+```json
+{
+  "generated_at": "2026-08-10T12:00:00Z",
+  "account": {
+    "id": "user-uuid",
+    "email": "user@example.com",
+    "email_verified": true,
+    "display_name": "Alice",
+    "avatar_url": "",
+    "locale": "en",
+    "roles": ["user"],
+    "mfa_required": true,
+    "disabled": false,
+    "banned": false,
+    "created_at": "2026-01-04T09:12:00Z",
+    "updated_at": "2026-08-01T18:40:00Z",
+    "last_login_at": "2026-08-10T08:03:00Z"
+  },
+  "identity": { "given_name": "Alice", "family_name": "Example", "country": "SK" },
+  "devices": [
+    {"id": "device-uuid", "friendly_name": "Firefox on Linux", "trusted": false,
+     "ip": "203.0.113.10", "user_agent": "Mozilla/5.0 ...",
+     "first_seen_at": "2026-01-04T09:12:00Z", "last_seen_at": "2026-08-10T08:03:00Z"}
+  ],
+  "blobs": [
+    {"id": "blob-uuid", "label": "notes", "named": false, "size_bytes": 2048,
+     "checksum": "sha256:...", "created_at": "2026-03-02T11:00:00Z"}
+  ],
+  "social_accounts": [
+    {"provider": "google", "provider_user_id": "1234567890",
+     "email": "user@example.com", "created_at": "2026-01-04T09:14:00Z"}
+  ],
+  "audit_events": [
+    {"timestamp": "2026-08-10T08:03:00Z", "event_type": "login_success",
+     "ip": "203.0.113.10", "user_agent": "Mozilla/5.0 ..."}
+  ],
+  "audit_events_total": 4210,
+  "audit_events_limit": 1000,
+  "audit_events_truncated": true
+}
+```
+
+**Blob contents are never included** -- only metadata (id, label, size, checksum, created_at). Provider access and refresh tokens on linked social accounts are excluded by design.
+
+**Audit events are capped at 1000, most recent first.** Because a silently truncated export is indistinguishable from a complete one, the response always states the shape of the truncation: `audit_events_total` is how many exist, `audit_events_limit` is the cap, and `audit_events_truncated` says whether it was reached. A subject who sees `true` can ask the Operator for the remainder rather than assuming this is everything.
+
+`identity` is `null` when the identity store is disabled or the user has set no profile. `blobs` is `[]` when blob storage is disabled.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 429 | `rate_limit_exceeded` | Export rate limit exceeded |
+| 500 | `internal_error` | Server error |
+
+**curl example:**
+
+```bash
+curl https://vault42.example.com/user/data-export \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -o my-vault42-data.json
 ```
 
 ---
@@ -1669,10 +1852,15 @@ Retrieve the MFA status for the authenticated user, including which methods are 
   "totp_enabled": true,
   "webauthn_enabled": false,
   "backup_codes_remaining": 8,
+  "mfa_methods": ["totp", "backup_code"],
   "available_methods": ["totp", "backup_code"],
   "mfa_required": false
 }
 ```
+
+`mfa_methods` and `available_methods` are the same list under two names. `mfa_methods` is canonical; `available_methods` is retained as a deprecated alias for clients written before 1.0.0 and will be removed at 2.0.0. New clients MUST read `mfa_methods`.
+
+Both are always arrays. A user with no configured factor gets `[]`, never `null` -- the guarantee is enforced in `MFAStatus.MarshalJSON`, so it holds for every code path that returns a status, not only this one.
 
 **Error responses:**
 
@@ -2162,6 +2350,70 @@ curl -X POST https://vault42.example.com/auth/2fa/backup-codes \
 
 ---
 
+#### POST /auth/2fa/backup-code/verify
+
+Consume a single-use backup code. Like the TOTP and email-OTP verify endpoints, this has two modes:
+
+1. **Standard verification:** with a normal Bearer token, confirms the code.
+2. **Login MFA challenge:** with a `2fa_challenge` token from the login flow, completes authentication and issues full access and refresh tokens.
+
+Codes are stored as HMAC-SHA256 hashes and compared in constant time. Consumption is atomic (compare-and-swap on `used`), so a code cannot be spent twice even under concurrent requests.
+
+**Authentication:** Bearer token or 2FA challenge token
+**Fingerprint:** Verified
+**Rate limit:** 5 requests per 5 minutes (per IP), fail-closed
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | Yes | One backup code from the set issued by `POST /auth/2fa/backup-codes` |
+
+**Success response -- standard verification (200 OK):**
+
+```json
+{
+  "verified": true
+}
+```
+
+**Success response -- MFA login completion (200 OK):**
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+Sets the `refresh_token` cookie.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_request` | Malformed JSON or missing code |
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `invalid_code` | Code is wrong or already used |
+| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 429 | `rate_limit_exceeded` | Verify rate limit exceeded |
+| 500 | `internal_error` | Server error |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+**curl example:**
+
+```bash
+curl -X POST https://vault42.example.com/auth/2fa/backup-code/verify \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -d '{"code": "a1b2c3d4e5f6"}'
+```
+
+---
+
 #### POST /auth/2fa/email-otp/verify
 
 Verify an email one-time password code. Has two modes of operation:
@@ -2421,12 +2673,14 @@ Authenticate a service client and issue an access token using the OAuth2 client 
 
 Requested scopes are intersected with the client's allowed scopes. If no scopes are requested, all allowed scopes are granted.
 
+**Two deviations from RFC 6749, both frozen until 2.0.0.** The endpoint does not read `grant_type` at all -- sending `grant_type=client_credentials` is harmless but not required -- and it reports `invalid_client_credentials` where RFC 6749 section 5.2 specifies `invalid_client`. Requiring the parameter and renaming the code are both breaking changes under the stability contract, so they wait for a major version. Write clients against what is documented here, not against the RFC.
+
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `invalid_scope` | Requested scopes have no overlap with allowed scopes |
-| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials |
+| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials. RFC 6749 calls this `invalid_client`; see above |
 | 401 | `client_revoked` | Client has been deactivated |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
@@ -2454,7 +2708,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. When `VAULT_DPOP_ENABLED=true` the request must also carry a fresh, single-use DPoP proof (anti-replay).
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. When `VAULT_DPOP_ENABLED=true` the request must additionally carry a syntactically fresh, single-use DPoP proof -- but that proof is **bound to nothing**, because no vault42 token carries a `cnf.jkt` confirmation claim, so the flag adds no replay protection here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. `VAULT_DPOP_ENABLED` is experimental, unsupported and excluded from the stability contract; see `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2481,7 +2735,7 @@ Every post-authorization failure (malformed body, bad base64, empty `kid`, tampe
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `unwrap_failed` | Any envelope that does not unwrap. The status, body, and audit outcome are identical across all failure modes. |
-| 401 | `unauthorized` | Missing or invalid access token (or missing DPoP proof when enabled) |
+| 401 | `unauthorized` | Missing or invalid access token, or a missing/malformed DPoP proof when `VAULT_DPOP_ENABLED=true` |
 | 403 | `insufficient_scope` | Token lacks the `kms:unwrap` scope |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 503 | `service_unavailable` | Rate-limiter backing store is down (fail-closed) |
@@ -2573,6 +2827,252 @@ Delete a custom role from the catalog. Reserved roles cannot be deleted.
 
 **Permission:** `roles:delete`
 
+#### POST /admin/clients/{id}/rotate
+
+Issue a new secret for a service client and invalidate the old one immediately. The new secret is returned once and never again; only its Argon2id hash is stored.
+
+**Permission:** `clients:rotate`
+
+The path is `/rotate`. It is **not** `/rotate-secret` -- that is the name of the CLI verb (`rotate-client-secret`), and it was documented as a path by mistake before 1.0.0. A request to `/rotate-secret` 404s.
+
+**Success response (200 OK):**
+
+```json
+{"status": "rotated", "secret": "64-hex-character-secret"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_id` | No client id in the path |
+| 404 | `client_not_found` | No such client |
+| 500 | `internal_error` | Server error |
+
+Audited as `admin_client_rotate`.
+
+#### GET /admin/config
+
+Read the runtime key-value configuration entries held in `auth.admin_config`. This is a small runtime store; environment variables remain the primary configuration mechanism and are not editable through it.
+
+**Permission:** `config:read`
+
+**Success response (200 OK):**
+
+```json
+{"entries": [{"key": "maintenance_banner", "value": "..."}]}
+```
+
+#### PUT /admin/config/{key}
+
+Set one configuration key. The key is in the path and is shape-validated.
+
+**Permission:** `config:write`
+
+`PUT /admin/config` without a key is not a route and never was; it 404s.
+
+**Request body:**
+
+```json
+{"value": "some-value"}
+```
+
+**Success response (200 OK):**
+
+```json
+{"status": "updated", "key": "maintenance_banner"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_key` | No key in the path |
+| 400 | `invalid_key_format` | Key fails shape validation |
+| 400 | `invalid_request` | Malformed JSON body |
+| 500 | `internal_error` | Server error |
+
+Audited as `admin_config_change`.
+
+#### DELETE /admin/config/{key}
+
+Delete one configuration key.
+
+**Permission:** `config:write`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted", "key": "maintenance_banner"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_key` | No key in the path |
+| 500 | `internal_error` | Server error |
+
+#### GET /admin/metrics
+
+**Not implemented. Answers `501 not_implemented`.**
+
+The route is mounted and gated on `metrics:read` with nothing behind it. It previously answered `200 OK` with a placeholder body while being documented as "get operational metrics", which is the worst of the available options: monitoring reads it as healthy and a caller cannot tell an empty feed from a working one.
+
+Prometheus metrics for the main binary are at `GET /metrics`, gated on `VAULT_METRICS_ENABLED`. This endpoint is excluded from the stability contract (`spec.md` section 0.6), so implementing it later is not a breaking change.
+
+**Permission:** `metrics:read`
+
+### Admin Endpoints -- Email Branding
+
+Nine routes managing per-app white-label branding and template overrides for outbound auth email. `spec.md` section 10.3 describes the resolution order; `spec.md` section 0.9 states, at length, what the per-app model does **not** guarantee -- it is a branding selector, not a tenancy boundary.
+
+`email:read`, `email:write` and `email:delete` are service-wide permissions. They are not app-scoped: an admin who can edit one app's branding can edit every app's.
+
+`{app}` is a slug matching `^[a-z0-9][a-z0-9_-]{0,63}$`. `{name}` is one of the seven template names: `verification`, `password_reset`, `new_device`, `account_locked`, `2fa_setup`, `suspicious_activity`, `email_otp`.
+
+#### GET /admin/email-branding
+
+List every stored branding row.
+
+**Permission:** `email:read`
+
+**Success response (200 OK):**
+
+```json
+{"branding": [
+  {"app": "beon3", "app_name": "BeOn3", "logo_url": "https://cdn.example.com/beon3.png",
+   "primary_color": "#00FF42", "from_name": "BeOn3 Security", "from_address": "no-reply@beon3.example",
+   "updated_at": "2026-08-01T10:00:00Z", "updated_by": "admin@example.com"}
+]}
+```
+
+#### GET /admin/email-branding/{app}
+
+Read one app's branding row.
+
+**Permission:** `email:read`
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_app` | Slug fails shape validation |
+| 404 | `not_found` | No branding row for that app |
+
+#### PUT /admin/email-branding/{app}
+
+Create or replace one app's branding row. Any omitted or empty column falls back to the global branding at render time, so a partial row is valid.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"app_name": "BeOn3", "logo_url": "https://cdn.example.com/beon3.png",
+ "primary_color": "#00FF42", "from_name": "BeOn3 Security",
+ "from_address": "no-reply@beon3.example"}
+```
+
+`from_address` is constrained by `VAULT_EMAIL_FROM_ALLOWED_DOMAINS`, so an admin cannot point a tenant's mail at a domain the deployment does not control.
+
+**Success response (200 OK):** the stored row, in the shape `GET /admin/email-branding/{app}` returns.
+
+#### DELETE /admin/email-branding/{app}
+
+Remove one app's branding row. That app falls back to the global branding; there is no separate disable step.
+
+**Permission:** `email:delete`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
+#### GET /admin/email-templates
+
+List every stored template override across all apps.
+
+**Permission:** `email:read`
+
+**Success response (200 OK):**
+
+```json
+{"templates": [
+  {"app": "beon3", "template_name": "verification", "subject": "Confirm your BeOn3 account",
+   "html_content": "<p>...</p>", "text_content": "...", "enabled": true,
+   "updated_at": "2026-08-01T10:00:00Z", "updated_by": "admin@example.com"}
+]}
+```
+
+#### POST /admin/email-templates/preview
+
+Validate candidate template content and render it against sample data. Stores nothing.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"subject": "Confirm your {{.AppName}} account", "html_content": "<p>Hello {{.DisplayName}}</p>"}
+```
+
+**Success response (200 OK):**
+
+```json
+{"valid": true, "subject": "Confirm your BeOn3 account", "html": "<p>Hello Alice</p>", "text": "Hello Alice"}
+```
+
+Content that fails validation also returns `200`, with the failure in the body rather than as a status code -- this is a linter, not a write:
+
+```json
+{"valid": false, "error": "forbidden pattern: <script>"}
+```
+
+#### GET /admin/email-templates/{app}/{name}
+
+Read one template override.
+
+**Permission:** `email:read`
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_app` | Slug fails shape validation |
+| 400 | `invalid_template` | Not one of the seven known template names |
+| 404 | `not_found` | No override stored for that app and template |
+
+#### PUT /admin/email-templates/{app}/{name}
+
+Create or replace one template override.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"subject": "Confirm your BeOn3 account", "html_content": "<p>...</p>",
+ "text_content": "...", "enabled": true}
+```
+
+Content passes the same forbidden-pattern validation as filesystem overrides: `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form action=...>`, `javascript:` URIs, `on*=` event handlers, and the Go template `call` and `js` directives are all rejected. Size is capped by `VAULT_MAX_EMAIL_TEMPLATE_SIZE`. `enabled` is a pointer field: omitting it leaves the current value unchanged.
+
+**Success response (200 OK):** the stored override.
+
+#### DELETE /admin/email-templates/{app}/{name}
+
+Remove one template override. That app falls back to the embedded default for that template.
+
+**Permission:** `email:delete`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
 ---
 
 ### Well-Known
@@ -2625,7 +3125,9 @@ curl https://vault42.example.com/.well-known/jwks.json
 
 #### GET /.well-known/openid-configuration
 
-Return the OpenID Connect Discovery document.
+Return the issuer metadata document.
+
+**vault42 is not an OpenID Connect provider.** There is no authorization-code token endpoint, no ID token is issued to a relying party, `GET /user/profile` is not a UserInfo response, and `POST /auth/register` is end-user signup rather than RFC 7591 dynamic client registration. The document therefore states only what is true of this server, and is served at the conventional path so that a consumer looking for the key set finds it.
 
 **Authentication:** None
 
@@ -2634,21 +3136,16 @@ Return the OpenID Connect Discovery document.
 ```json
 {
   "issuer": "https://vault42.example.com",
-  "authorization_endpoint": "https://vault42.example.com/auth/oauth2/authorize",
-  "token_endpoint": "https://vault42.example.com/auth/login",
-  "userinfo_endpoint": "https://vault42.example.com/user/profile",
   "jwks_uri": "https://vault42.example.com/.well-known/jwks.json",
-  "registration_endpoint": "https://vault42.example.com/auth/register",
-  "scopes_supported": ["openid", "profile", "email"],
-  "response_types_supported": ["code"],
-  "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
-  "subject_types_supported": ["public"],
-  "id_token_signing_alg_values_supported": ["RS256"],
-  "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
-  "code_challenge_methods_supported": ["S256"],
-  "dpop_signing_alg_values_supported": ["RS256", "ES256"]
+  "access_token_signing_alg_values_supported": ["RS256"]
 }
 ```
+
+`access_token_signing_alg_values_supported` is deliberately not named `id_token_signing_alg_values_supported`, because no ID token is ever issued. The algorithm is also published per key in the JWKS, which stays correct if a key of another algorithm is added; the summary key exists so a consumer can pin an expected algorithm before fetching the key set.
+
+Keys that were previously advertised and are now absent -- `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `registration_endpoint`, `scopes_supported`, `response_types_supported`, `grant_types_supported`, `subject_types_supported`, `code_challenge_methods_supported`, `token_endpoint_auth_methods_supported`, `dpop_signing_alg_values_supported` -- were each untrue of this server. `spec.md` section 20 lists why, one by one. They can be added back once the corresponding behaviour exists, which is an additive change; removing them later would not have been.
+
+Clients that only need to verify a vault42-issued token should fetch `/.well-known/jwks.json` directly.
 
 **curl example:**
 
@@ -2660,64 +3157,144 @@ curl https://vault42.example.com/.well-known/openid-configuration
 
 ## Endpoint Summary
 
-| Method | Path | Auth | Rate Limit | Description |
-|--------|------|------|------------|-------------|
-| `GET` | `/healthz` | None | -- | Liveness probe |
-| `GET` | `/readyz` | None | -- | Readiness probe |
-| `GET` | `/metrics` | None | -- | Prometheus metrics (requires `VAULT_METRICS_ENABLED=true`) |
-| `POST` | `/auth/register` | None | 3/hour | Register new user |
-| `GET` | `/auth/verify-email` | None | 10/hour | Verify email address |
-| `POST` | `/auth/login` | None | 5/15min | Authenticate user |
-| `POST` | `/auth/refresh` | Cookie | 30/min | Refresh access token |
-| `POST` | `/auth/logout` | Bearer | -- | Revoke all sessions |
-| `POST` | `/auth/confirm` | Bearer | 5/15min | Confirm password for elevated access |
-| `POST` | `/auth/password/reset` | None | 3/hour | Request password reset |
-| `POST` | `/auth/password/reset/confirm` | None | 3/hour | Complete password reset |
-| `POST` | `/user/password` | Bearer | -- | Change password |
-| `GET` | `/user/profile` | Bearer | -- | Get user profile |
-| `GET` | `/user/sessions` | Bearer | -- | List active sessions |
-| `DELETE` | `/user/sessions/{id}` | Bearer | -- | Revoke a session |
-| `DELETE` | `/user/sessions` | Bearer | -- | Revoke all sessions |
-| `GET` | `/user/devices` | Bearer | -- | List devices |
-| `PATCH` | `/user/devices/{id}` | Bearer | -- | Rename device |
-| `DELETE` | `/user/devices/{id}` | Bearer | -- | Remove device |
-| `GET` | `/auth/2fa/status` | Bearer | -- | Get MFA status |
-| `POST` | `/auth/2fa/totp/setup` | Bearer + Confirm | -- | Begin TOTP setup |
-| `POST` | `/auth/2fa/totp/verify` | Bearer/Challenge | 5/5min | Verify TOTP code |
-| `DELETE` | `/auth/2fa/totp` | Bearer + Confirm | -- | Disable TOTP |
-| `POST` | `/auth/2fa/webauthn/register/begin` | Bearer + Confirm | -- | Begin WebAuthn registration |
-| `POST` | `/auth/2fa/webauthn/register/finish` | Bearer + Confirm | -- | Complete WebAuthn registration |
-| `POST` | `/auth/2fa/webauthn/verify/begin` | Bearer/Challenge | -- | Begin WebAuthn verification |
-| `POST` | `/auth/2fa/webauthn/verify/finish` | Bearer/Challenge | -- | Complete WebAuthn verification |
-| `GET` | `/auth/2fa/webauthn/credentials` | Bearer | -- | List WebAuthn credentials |
-| `DELETE` | `/auth/2fa/webauthn/credentials/{id}` | Bearer + Confirm | -- | Delete WebAuthn credential |
-| `POST` | `/auth/2fa/backup-codes` | Bearer + Confirm | -- | Generate backup codes |
-| `POST` | `/auth/2fa/email-otp/verify` | Bearer/Challenge | 5/5min | Verify email OTP code |
-| `POST` | `/auth/2fa/email-otp/resend` | Bearer/Challenge | 5/5min | Resend email OTP code |
-| `GET` | `/user/identity` | Bearer | -- | Get identity profile |
-| `PUT` | `/user/identity` | Bearer | -- | Upsert identity profile |
-| `DELETE` | `/user/identity` | Bearer | -- | Delete identity profile |
-| `POST` | `/user/blobs` | Bearer | -- | Upload encrypted blob |
-| `GET` | `/user/blobs` | Bearer | -- | List blobs + quota |
-| `GET` | `/user/blobs/{id}` | Bearer | -- | Download decrypted blob |
-| `DELETE` | `/user/blobs/{id}` | Bearer | -- | Delete blob |
-| `GET` | `/auth/oauth2/authorize` | None | -- | Start OAuth2 flow |
-| `GET` | `/auth/oauth2/callback/{provider}` | None | -- | OAuth2 callback |
-| `POST` | `/auth/oauth2/exchange` | None | -- | Exchange OAuth2 one-time code for tokens |
-| `POST` | `/client/token` | Basic | 10/min | Client credentials grant |
-| `POST` | `/kms/unwrap` | Scope `kms:unwrap` | per-IP | KEK envelope-unwrap oracle (only when `KMS_ROOT_KEY_FILE` set) |
-| `GET` | `/.well-known/jwks.json` | None | -- | JWKS public keys |
-| `GET` | `/.well-known/openid-configuration` | None | -- | OpenID Connect discovery |
+**98 API routes: 57 on the main binary, 41 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
+
+The **Mounted when** column is the answer to "why does this endpoint 404 in production". A route in a group that is not mounted does not exist, and `net/http.ServeMux` answers `404` in `text/plain` -- not the JSON error envelope.
 
 **Auth column key:**
-- **None** -- Public endpoint, no authentication required
-- **Cookie** -- Requires `refresh_token` HttpOnly cookie
-- **Bearer** -- Requires `Authorization: Bearer <token>` header with fingerprint verification
-- **Bearer + Confirm** -- Requires Bearer token + recent password confirmation via `POST /auth/confirm`
-- **Bearer/Challenge** -- Accepts both standard Bearer tokens and 2FA challenge tokens
+
+- **None** -- public endpoint, no authentication required
+- **Cookie** -- requires the `refresh_token` HttpOnly cookie
 - **Basic** -- HTTP Basic authentication with client credentials
-- **Scope `kms:unwrap`** -- Bearer client-credential token carrying the `kms:unwrap` scope; DPoP-bound when `VAULT_DPOP_ENABLED=true`
-- **Admin** -- Key management is handled by the admin gateway (mTLS + RBAC); not exposed on the main vault42 binary
+- **Bearer** -- requires `Authorization: Bearer <token>` with fingerprint verification
+- **Bearer + Confirm** -- Bearer token plus a recent password confirmation via `POST /auth/confirm`
+- **Bearer/Challenge** -- accepts both standard Bearer tokens and 2FA challenge tokens
+- **Bearer + password** -- Bearer token plus the current password re-submitted in the request body
+- **Scope `kms:unwrap`** -- Bearer client-credential token carrying the `kms:unwrap` scope
+- **Session** -- admin gateway session cookie, behind mTLS and loopback-only enforcement. The permission the session's role must hold is in the Permission column.
+
+<!-- BEGIN ENDPOINT SUMMARY -->
+
+### Main binary
+
+| Method | Path | Auth | Rate limit | Mounted when | Description |
+|--------|------|------|------------|--------------|-------------|
+| `GET` | `/healthz` | None | -- | Always | Liveness probe |
+| `GET` | `/readyz` | None | -- | Always | Readiness probe (pings DB + cache) |
+| `GET` | `/metrics` | None | -- | `VAULT_METRICS_ENABLED` | Prometheus metrics |
+| `GET` | `/auth/capabilities` | None | -- | Always | Server capability discovery |
+| `POST` | `/auth/register` | None | 3/hour | Always | Register a new user; `403 registration_disabled` unless enabled |
+| `POST` | `/auth/login` | None | 5/15min | Always | Authenticate; may return a 2FA challenge |
+| `POST` | `/auth/refresh` | Cookie | 30/min | Always | Rotate the refresh family |
+| `POST` | `/auth/logout` | Bearer | -- | Always | Revoke every session |
+| `GET` | `/auth/verify-email` | None | 10/hour | Always | Verify an email address |
+| `POST` | `/auth/confirm` | Bearer | 5/15min | Always | Confirm password for elevated access |
+| `POST` | `/auth/password/reset` | None | 3/hour | Always | Request a password reset |
+| `POST` | `/auth/password/reset/confirm` | None | 3/hour | Always | Complete a password reset |
+| `POST` | `/user/password` | Bearer | 5/15min | Always | Change password |
+| `GET` | `/user/profile` | Bearer | -- | Always | Get user profile |
+| `PUT` | `/user/profile` | Bearer | -- | Always | Partial profile update |
+| `GET` | `/user/sessions` | Bearer | -- | Always | List active sessions |
+| `DELETE` | `/user/sessions` | Bearer | -- | Always | Revoke all sessions |
+| `DELETE` | `/user/sessions/{id}` | Bearer | -- | Always | Revoke one session |
+| `GET` | `/user/devices` | Bearer | -- | Always | List devices |
+| `PATCH` | `/user/devices/{id}` | Bearer | -- | Always | Rename a device |
+| `DELETE` | `/user/devices/{id}` | Bearer | -- | Always | Remove a device |
+| `DELETE` | `/user/account` | Bearer + password | 3/hour, fail-closed | Account-recovery repository wired | Self-service erasure with escrow |
+| `GET` | `/user/data-export` | Bearer | 5/min | Always | GDPR Art. 15/20 data export |
+| `GET` | `/user/social` | Bearer | -- | Always | List linked federated identities |
+| `DELETE` | `/user/social/{id}` | Bearer | 5/15min | Always | Unlink a provider and its stored tokens |
+| `GET` | `/auth/2fa/status` | Bearer | -- | Always | MFA status and `mfa_methods` |
+| `POST` | `/auth/2fa/totp/setup` | Bearer + Confirm | -- | Always | Begin TOTP setup |
+| `POST` | `/auth/2fa/totp/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Verify a TOTP code |
+| `DELETE` | `/auth/2fa/totp` | Bearer + Confirm | -- | Always | Disable TOTP |
+| `POST` | `/auth/2fa/webauthn/register/begin` | Bearer + Confirm | -- | Always | Begin WebAuthn registration |
+| `POST` | `/auth/2fa/webauthn/register/finish` | Bearer + Confirm | -- | Always | Complete WebAuthn registration |
+| `POST` | `/auth/2fa/webauthn/verify/begin` | Bearer/Challenge | -- | Always | Begin WebAuthn verification |
+| `POST` | `/auth/2fa/webauthn/verify/finish` | Bearer/Challenge | -- | Always | Complete WebAuthn verification |
+| `GET` | `/auth/2fa/webauthn/credentials` | Bearer | -- | Always | List WebAuthn credentials |
+| `DELETE` | `/auth/2fa/webauthn/credentials/{id}` | Bearer + Confirm | -- | Always | Delete a WebAuthn credential |
+| `POST` | `/auth/2fa/backup-codes` | Bearer + Confirm | -- | Always | Generate backup codes |
+| `POST` | `/auth/2fa/backup-code/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Consume a backup code |
+| `POST` | `/auth/2fa/email-otp/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Verify an email OTP code |
+| `POST` | `/auth/2fa/email-otp/resend` | Bearer/Challenge | 5/5min, fail-closed | Always | Resend an email OTP code |
+| `GET` | `/user/identity` | Bearer | 30/min | Identity store enabled | Get identity profile |
+| `PUT` | `/user/identity` | Bearer | 10/min | Identity store enabled | Upsert identity profile |
+| `DELETE` | `/user/identity` | Bearer + Confirm | 5/15min | Identity store enabled | Delete identity profile |
+| `POST` | `/user/marketing/unsubscribe` | Bearer | 30/min | Identity store enabled | Withdraw marketing consent |
+| `POST` | `/user/blobs` | Bearer | 10/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Upload an encrypted blob |
+| `GET` | `/user/blobs` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | List blobs and quota |
+| `GET` | `/user/blobs/{id}` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob |
+| `DELETE` | `/user/blobs/{id}` | Bearer + Confirm | 5/15min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob |
+| `PUT` | `/user/blobs/named/{name}` | Bearer | 10/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Create or replace a named blob |
+| `GET` | `/user/blobs/named/{name}` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob by name |
+| `DELETE` | `/user/blobs/named/{name}` | Bearer + Confirm | 5/15min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob by name |
+| `GET` | `/auth/oauth2/authorize` | None | 10/min | >= 1 provider configured | Start a social login |
+| `GET` | `/auth/oauth2/callback/{provider}` | None | 5/15min, fail-closed | >= 1 provider configured | Provider redirect target |
+| `POST` | `/auth/oauth2/exchange` | None | 10/min | >= 1 provider configured | Exchange the one-time code for tokens |
+| `POST` | `/client/token` | Basic | 10/min | Always | Client-credentials grant |
+| `POST` | `/kms/unwrap` | Scope `kms:unwrap` | 30/min, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle |
+| `POST` | `/mint` | Scope `mint:token` | 60/min per client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
+| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
+| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
+| `GET` | `/.well-known/jwks.json` | None | -- | Always | JWKS public keys |
+| `GET` | `/.well-known/openid-configuration` | None | -- | Always | Issuer metadata |
+
+### Admin gateway
+
+Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md` covers deployment, the killswitch and the full RBAC matrix.
+
+| Method | Path | Auth | Permission | Mounted when | Description |
+|--------|------|------|------------|--------------|-------------|
+| `POST` | `/admin/auth/login` | None | -- | Always | Password + optional TOTP, 10/min/IP |
+| `POST` | `/admin/auth/logout` | Session | -- | Always | Revoke the current admin session |
+| `GET` | `/admin/status` | Session | -- | Always | Current admin identity and 2FA state |
+| `POST` | `/admin/admins/me/totp/setup` | Session | -- | Always | Provision the caller's TOTP secret |
+| `POST` | `/admin/admins/me/totp/verify` | Session | -- | Always | Verify and enable the caller's TOTP |
+| `GET` | `/admin/keys` | Session | `keys:list` | Always | List signing key metadata |
+| `POST` | `/admin/keys/rotate` | Session | `keys:rotate` | Always | Generate a key, retire the old one |
+| `DELETE` | `/admin/keys/{kid}` | Session | `keys:revoke` | Always | Remove a key from the JWKS |
+| `GET` | `/admin/users` | Session | `users:list` | Always | Look a user up by `?q=` (id or email) |
+| `GET` | `/admin/users/{id}` | Session | `users:read` | Always | User detail |
+| `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
+| `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
+| `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
+| `GET` | `/admin/sessions` | Session | `sessions:list` | Always | List active refresh families |
+| `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
+| `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log |
+| `GET` | `/admin/clients` | Session | `clients:list` | Always | List service clients |
+| `GET` | `/admin/clients/{id}` | Session | `clients:read` | Always | Client detail |
+| `POST` | `/admin/clients` | Session | `clients:create` | Always | Create a client, secret shown once |
+| `POST` | `/admin/clients/{id}/revoke` | Session | `clients:revoke` | Always | Deactivate a client |
+| `POST` | `/admin/clients/{id}/rotate` | Session | `clients:rotate` | Always | Rotate the client secret |
+| `GET` | `/admin/roles` | Session | `roles:list` | Always | Application-role catalog |
+| `POST` | `/admin/roles` | Session | `roles:create` | Always | Create a custom application role |
+| `DELETE` | `/admin/roles/{name}` | Session | `roles:delete` | Always | Delete a non-reserved role |
+| `GET` | `/admin/email-branding` | Session | `email:read` | Always | All per-app branding rows |
+| `GET` | `/admin/email-branding/{app}` | Session | `email:read` | Always | One app's branding |
+| `PUT` | `/admin/email-branding/{app}` | Session | `email:write` | Always | Upsert one app's branding |
+| `DELETE` | `/admin/email-branding/{app}` | Session | `email:delete` | Always | Drop back to global branding |
+| `GET` | `/admin/email-templates` | Session | `email:read` | Always | All template overrides |
+| `POST` | `/admin/email-templates/preview` | Session | `email:write` | Always | Validate and render against sample data |
+| `GET` | `/admin/email-templates/{app}/{name}` | Session | `email:read` | Always | One template override |
+| `PUT` | `/admin/email-templates/{app}/{name}` | Session | `email:write` | Always | Upsert one template override |
+| `DELETE` | `/admin/email-templates/{app}/{name}` | Session | `email:delete` | Always | Drop back to the default template |
+| `GET` | `/admin/config` | Session | `config:read` | Always | Read runtime config entries |
+| `PUT` | `/admin/config/{key}` | Session | `config:write` | Always | Set one config key |
+| `DELETE` | `/admin/config/{key}` | Session | `config:write` | Always | Delete one config key |
+| `GET` | `/admin/metrics` | Session | `metrics:read` | Always | **Unimplemented; answers `501 not_implemented`** |
+| `GET` | `/admin/admins` | Session | `admins:manage` | Always | List admin accounts |
+| `POST` | `/admin/admins` | Session | `admins:create` | Always | Create an admin (20-char minimum password) |
+| `POST` | `/admin/admins/{id}/revoke` | Session | `admins:revoke` | Always | Revoke an admin; self-revocation refused |
+
+<!-- END ENDPOINT SUMMARY -->
+
+### Surfaces that are not API routes
+
+Thirteen further registrations exist and are outside this table and outside the stability contract: the embedded SPA catch-all `/` on the main binary (only when `VAULT_SERVE_FRONTEND` is set or the honeypot profile is active), and the admin gateway's ten HTML console pages plus `GET /admin/static/`. `spec.md` section 16.3 lists them.
 
 ---
 

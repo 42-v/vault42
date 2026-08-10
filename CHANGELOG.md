@@ -1,5 +1,154 @@
 # Changelog
 
+## 1.0.0 (2026-08-10)
+
+The version number is the coverage figure, so 1.0.0 could only ever mean a fully covered
+tree. It turned out not to be honestly reachable, and saying why is most of what this
+release is about.
+
+Of the 48 statements uncovered at 0.9.9, six were reachable by tests nobody had written,
+seven needed a production seam whose only consumer would have been a test, and thirty-five
+were defensive branches that cannot execute given inputs the surrounding code has already
+validated. Four were not defensive at all but dead: `readReply` never returns `Nil` as an
+error, and `crypto/rand.Read` cannot fail on the Go 1.26 toolchain, because it terminates
+the process instead. Those are deleted. The rest are covered, or recorded in a reviewed
+exclusion set with the source line frozen and a justification a reviewer can check. So the
+claim is **100.00% of reachable statements**, CI-gated on `covered + excluded == total`, and
+the exclusion set cannot grow or rot without failing the build.
+
+1.0.0 is also the semver commitment, which made this the last cheap moment to fix the API
+shape. Everything under Public API below is breaking-after-1.0.0 and free before it.
+
+### Security
+
+* **No maximum session lifetime existed.** Refresh rotation issued a fresh full TTL every
+  time and `auth.refresh_tokens` had no family-creation column, so a client that kept
+  refreshing held a session forever. Migration 013 adds `family_created_at`, backfilled per
+  family from its oldest token; the origin is read back inside the `INSERT` rather than
+  accepted from the caller, so a rotation cannot move it. `VAULT_MAX_SESSION_LIFETIME`
+  (default 720h) bounds total family age independently of activity, and the reissued expiry
+  is clamped to the deadline so the last rotation before it cannot walk out with a full
+  window.
+* **`GET /admin/clients/{id}` returned the argon2id client secret hash.** It serialized
+  `*model.Client` directly. Tests already proved the session-token and password hashes did
+  not leak; nobody had written the equivalent for clients. All 22 model structs now carry
+  JSON tags, with credential material and the fingerprint HMAC marked `json:"-"` so
+  accidental serialization cannot put them on the wire at all.
+* **The import-claim login path was an unauthenticated oracle.** A `202
+  import_claim_required` disclosed both that an address was registered and that it was an
+  unclaimed import, fired an email to the victim on demand, and, because each send
+  invalidated the previous claim token, let an attacker block a legitimate user's claim link
+  indefinitely. It now burns the same dummy Argon2id verification and returns the same
+  `401 invalid_credentials` as a wrong password, with the shared bookkeeping extracted so the
+  two paths cannot drift into distinguishable side effects.
+* the concurrent-session cap now applies to OAuth logins, which wrote a refresh-token family
+  without it. Client credentials remain exempt because that path discards its refresh token
+  and creates no family, which is a structural exemption rather than a gap.
+* the RSA private key rotated out of the token service is now zeroed, and the decrypted
+  signing-key PEM in the keystore is wiped on both the success and the parse-failure paths.
+  The wipe is only sound because signing now holds the read lock for the whole of
+  `SignToken`, so acquiring the write lock drains in-flight signers first; those two facts
+  are documented together because they must change together.
+
+### Public API
+
+* **DPoP is no longer advertised.** `cnf.jkt` is declared and assigned nowhere, so no token
+  is sender-constrained and the thumbprint comparison is dead code; the flag bought nothing
+  in either position while the discovery document claimed RS256 and ES256 support
+  unconditionally. The key is removed rather than gated, because gating would still be false
+  in the ON position, and absent-then-added is compatible where advertised-then-retracted is
+  breaking. The `DPoP` authorization scheme is now rejected unless the flag is set, instead
+  of silently degrading to Bearer.
+* **The OIDC provider claim is retracted.** The discovery document advertised an
+  authorization endpoint, a `token_endpoint` pointing at a JSON email/password handler that
+  ignores `grant_type`, and a `registration_endpoint` pointing at end-user signup. It now
+  publishes only what is true: `issuer`, `jwks_uri`, and the access-token signing algorithm.
+* `GET /admin/audit` emitted Go field names (`ID`, `FingerprintHash`, `RiskScore`) into an
+  otherwise snake_case API, leaked a cross-account correlatable fingerprint hash, and echoed
+  an internal repository filter struct. It now returns a snake_case projection without the
+  fingerprint. As a side effect the admin SPA's audit table, which has been reading
+  snake_case keys against a PascalCase API, renders again.
+* list envelopes unified on `total`; `available_methods` and `mfa_methods` standardised on
+  `mfa_*` with the old key kept as a documented alias; nil slices serialize as `[]`;
+  timestamps use one encoding; `avatar_url` is readable on `GET /user/profile`;
+  `GET /admin/metrics` returns 501 rather than a 200-OK stub documented as real.
+
+### Features
+
+* **`POST /mint`** signs a token for a subject the calling service authenticated elsewhere,
+  so a service owning its own user identifiers can obtain a vault42-signed token without
+  proxying an end-user credential. Off by default and not mounted unless configured. A
+  minted token is structurally rejected by vault42 itself: its `token_type` is outside the
+  accepted set and its audience must differ from the issuer, which the config refuses to
+  start without. Without that second control a mint credential would be account takeover for
+  every vault42 user rather than a delegation mechanism.
+* **A service-scoped JSON document store** lets a registered service hold arbitrary JSON
+  against a subject, private to the writing service by default and optionally readable by
+  all services. Encrypted with AES-GCM, bounded at 64 KiB per document, 32 documents and
+  1 MiB per subject, and validated by a token walk for depth and duplicate keys before any
+  unmarshal. Off by default. Erasure reaches these documents across every owning service,
+  and the data export returns them decrypted, including private ones: a service's privacy
+  from other services is not privacy from the data subject.
+
+### Compliance
+
+The report was the liability. 242 requirements were claimed Met, enumerated nowhere, behind
+a "94.2% weighted coverage" figure with no published weighting model. Five of the fifteen
+Partial findings were factually wrong, and four were filed under IDs whose actual
+requirement text is about something else.
+
+* `docs/compliance-register.json` enumerates every requirement with its verbatim text, its
+  `file:line` evidence and the name of the test that proves it. Statuses are Met, Accepted
+  Risk or N/A, with nothing unclassified and no percentages. CI fails if a Met row names a
+  test that does not exist.
+* re-baselined onto OWASP ASVS 5.0.0, NIST SP 800-63B-4 and OWASP Top 10:2025. The NIST
+  citations were the urgent ones: the document used the withdrawn title while the tests cited
+  Rev 3 section numbers against a Rev 4 URL.
+* NIST 800-53 Rev 5 and the Top 10 had no test carrying any control ID between them, so 67
+  of the claimed 242 rested on nothing executable. They now have suites.
+* **`docs/security.md` and `docs/PRIVACY.md` each claimed a control that does not exist.**
+  AR-5 described a service with no admin UI, no role-management API and no RBAC consumers,
+  written before roughly 30 RBAC-gated endpoints shipped. PRIVACY §7.1 asserted breach
+  detection via elevated risk scores; every `risk_score` reference is a write or a read-back
+  for display, with no threshold and no alert anywhere. Both rewritten to describe what the
+  code does.
+
+### Documentation
+
+* `docs/spec.md` claimed authority "as of 2026-03-02" while three commits had edited its body
+  since, making it a partially-updated hybrid rather than cleanly stale. It is rewritten
+  around the real 98-route surface, with a normative section 0 stating the stability
+  contract: the semver major is the API version, root paths are v1 permanently, and the
+  asymmetry that clients must ignore unknown response fields while the server rejects unknown
+  request fields is written down, because it means clients cannot feature-probe.
+* a route-drift test parses the real registrations with `go/ast` and fails when a route
+  exists in source but not in the docs, or the reverse. It caught the five routes this
+  release added while they were still undocumented.
+* 20 environment variables were missing from `docs/config.md`, three of which disable a
+  fail-closed guarantee. They now have a prominent section of their own.
+* godoc on every exported identifier in the security-critical packages, with the invariant
+  documented at the code that enforces it. Three doc comments actively described behaviour
+  the code does not have, including one claiming unconditional OIDC nonce validation that is
+  skipped on an empty nonce.
+* `docs/localhost-profile.md` is not published. It documents a specific workstation.
+
+### Release engineering
+
+* **releases are tag-driven.** `release.yml` fired only on a head commit starting with a bare
+  version while commitlint rejected exactly that title, so a PR that passed CI produced a
+  commit that never triggered a release. That silently swallowed 0.8.6, which has no tag, no
+  release, and a NuGet gap between 0.8.0 and 0.9.0.
+* **the Helm chart never installed.** `appVersion` was pinned at `0.1.0`, a tag that has
+  never existed, and `image.tag` defaults to it, so every default `helm install` has been an
+  ImagePullBackOff since 0.4.2. The bridge image the chart references is now actually
+  published.
+* `.golangci.yml` and `eslint.config.mjs` were invoked nowhere; both now run, blocking on new
+  findings and reporting the backlog. There was no Go coverage gate at all.
+* release artifacts, checksums and an SBOM are attached to the release, and `SECURITY.md`
+  documents how to verify the cosign signatures that were already being produced.
+* `packages/dotnet` had 82% of its XML documentation written and shipped none of it: three
+  separate switches suppressed it.
+
 ## 0.9.9-B (2026-08-09)
 
 The nightly security scan went red on 2026-08-08 against a tree that had not changed since

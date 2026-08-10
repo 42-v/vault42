@@ -81,7 +81,7 @@ func TestRSAPublicKeyFromJWK_Branches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("valid JWK rejected: %v", err)
 		}
-		if pub.N.Cmp(key.PublicKey.N) != 0 || pub.E != key.PublicKey.E {
+		if pub.N.Cmp(key.N) != 0 || pub.E != key.E {
 			t.Fatalf("decoded key mismatch: got N/E %v/%d", pub.N, pub.E)
 		}
 	})
@@ -194,10 +194,10 @@ func TestRefreshJWKS_SkipsUnusableKeysButLoadsGood(t *testing.T) {
 	goodN, goodE := rsaJWKParts(&key.PublicKey)
 	srv := configurableIssuer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(jwksBody(
-			jwkEntry{Kty: "EC", Kid: "ec-1", N: goodN, E: goodE},                          // non-RSA -> skipped
-			jwkEntry{Kty: "RSA", Kid: "enc-1", N: goodN, E: goodE, Use: "enc"},             // wrong use -> skipped
-			jwkEntry{Kty: "RSA", Kid: "bad-1", N: "@@@bad@@@", E: goodE, Use: "sig"},       // malformed -> skipped
-			jwkEntry{Kty: "RSA", Kid: "good-1", N: goodN, E: goodE, Use: "sig"},            // usable
+			jwkEntry{Kty: "EC", Kid: "ec-1", N: goodN, E: goodE},                     // non-RSA -> skipped
+			jwkEntry{Kty: "RSA", Kid: "enc-1", N: goodN, E: goodE, Use: "enc"},       // wrong use -> skipped
+			jwkEntry{Kty: "RSA", Kid: "bad-1", N: "@@@bad@@@", E: goodE, Use: "sig"}, // malformed -> skipped
+			jwkEntry{Kty: "RSA", Kid: "good-1", N: goodN, E: goodE, Use: "sig"},      // usable
 		))
 	}, nil, false, true)
 	p := NewOIDCProvider("okta", srv.URL, "cid", "secret", "https://app/cb", "")

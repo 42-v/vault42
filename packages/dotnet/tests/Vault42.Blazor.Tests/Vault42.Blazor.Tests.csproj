@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- SA0001: StyleCop reports XML comment analysis as disabled whenever a project does not
+         emit a documentation file. Test assemblies are never consumed through IntelliSense, so
+         they deliberately do not emit one. The shipped projects under src/ do. -->
+    <NoWarn>$(NoWarn);SA0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
-	vjwt "github.com/42-v/vault42/internal/jwt"
 )
 
 func challengeAuthService(t *testing.T, users *mocks.MockUserRepo, tokens *mocks.MockRefreshTokenRepo) *service.AuthService {

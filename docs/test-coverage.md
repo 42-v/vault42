@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-09 | Tests: 3123 | Total: 99.42% statement coverage
+Generated: 2026-08-11 | Tests: 3385 | Total: 99.55% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -13,6 +13,7 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/server` | 100.00% |
 | `internal/seed` | 100.00% |
 | `internal/sanitize` | 100.00% |
+| `internal/redis` | 100.00% |
 | `internal/rbac` | 100.00% |
 | `internal/model` | 100.00% |
 | `internal/migrate` | 100.00% |
@@ -25,16 +26,15 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/cli` | 100.00% |
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
-| `internal/adminapi` | 99.72% |
+| `internal/repository/postgres` | 99.90% |
+| `internal/adminapi` | 99.81% |
 | `internal/oauth2` | 99.71% |
-| `internal/handler` | 99.61% |
-| `internal/service` | 99.34% |
+| `internal/handler` | 99.65% |
 | `internal/jwt` | 99.20% |
-| `internal/redis` | 99.11% |
-| `internal/repository/postgres` | 99.10% |
-| `internal/email` | 98.68% |
-| `internal/keystore` | 98.03% |
-| `internal/crypto` | 97.74% |
+| `internal/email` | 99.01% |
+| `internal/service` | 99.00% |
+| `internal/keystore` | 98.70% |
+| `internal/crypto` | 98.19% |
 | `internal/kms` | 91.67% |
 
 ## Uncovered Functions

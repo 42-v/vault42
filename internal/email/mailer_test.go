@@ -41,6 +41,7 @@ func (s *staticStore) Branding(_ context.Context, app string) (Branding, bool) {
 	}
 	return Branding{}, false
 }
+
 func (s *staticStore) Template(_ context.Context, app, _ string) (TemplateOverride, bool) {
 	s.tmplHit++
 	if app == s.app && s.tmplOK {

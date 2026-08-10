@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,49 @@ func TestHashPasswordUniqueSalts(t *testing.T) {
 	h2, _ := HashPassword(password)
 	if h1 == h2 {
 		t.Error("same password should produce different hashes (different salts)")
+	}
+}
+
+// HashPassword draws its salt with crypto/rand.Read, which has no error return
+// to check on this toolchain: a Reader failure calls the runtime fatal handler
+// and terminates the process. The property the removed check was nominally
+// guarding is asserted here directly instead: the encoded salt is the full
+// argon2SaltLen of material and is never a zero buffer. An all-zero salt would
+// make every hash of a given password identical across the fleet, which is
+// exactly what a rainbow table needs.
+func TestHashPasswordSaltIsFullLengthAndNonZero(t *testing.T) {
+	salt := func(hash string) []byte {
+		t.Helper()
+		parts := strings.Split(hash, "$")
+		if len(parts) != 6 {
+			t.Fatalf("hash %q does not have the 6 PHC fields", hash)
+		}
+		raw, err := base64.RawStdEncoding.DecodeString(parts[4])
+		if err != nil {
+			t.Fatalf("decode salt %q: %v", parts[4], err)
+		}
+		return raw
+	}
+
+	h1, err := HashPassword("salt-entropy-probe-password!!")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	h2, err := HashPassword("salt-entropy-probe-password!!")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+
+	s1, s2 := salt(h1), salt(h2)
+	if len(s1) != argon2SaltLen {
+		t.Errorf("salt is %d bytes, want %d: rand.Read returned a short fill", len(s1), argon2SaltLen)
+	}
+	zero := make([]byte, argon2SaltLen)
+	if string(s1) == string(zero) {
+		t.Error("salt is all zero: the buffer was never filled with entropy")
+	}
+	if string(s1) == string(s2) {
+		t.Error("two hashes of the same password share a salt")
 	}
 }
 

@@ -257,12 +257,11 @@ func (c *Client) exec(ctx context.Context, cn *conn, args ...string) (reply, err
 
 	r, err := readReply(cn.rd)
 	if err != nil {
-		// Nil is a valid Redis response (key not found), not a connection error
-		if errors.Is(err, Nil) {
-			cn.netConn.SetDeadline(time.Time{}) // #nosec G104 -- deadline clear; errors surface on next I/O op //nolint:errcheck
-			c.pool.put(cn)
-			return reply{}, err
-		}
+		// A key that does not exist is never an error here: readReply turns the
+		// $-1 bulk reply into reply{isNil: true} with a nil error (resp.go), and
+		// the Nil sentinel is produced by Get/GetDel from r.isNil after exec has
+		// already returned. So err is always a real failure at this point.
+		//
 		// RedisError is a server error (e.g., WRONGTYPE), connection is still healthy
 		var redisErr *RedisError
 		if errors.As(err, &redisErr) {

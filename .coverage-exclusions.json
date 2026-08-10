@@ -1,0 +1,439 @@
+{
+  "version": 1,
+  "module": "github.com/42-v/vault42",
+  "policy": [
+    "vault42 1.0.0 ships as 100.00% of REACHABLE statements. This file is the",
+    "denominator's fine print: every statement listed here is uncovered on",
+    "purpose, and the release gate asserts covered + excluded == total, so the",
+    "set cannot grow without someone noticing.",
+    "",
+    "bucket B: reachable only by adding a production seam whose sole consumer",
+    "would be the test. Refused on design grounds, not on effort.",
+    "bucket C: unreachable, because a check earlier in the same call path",
+    "already excluded the input that would trigger it.",
+    "",
+    "Rules. The count may only ever go down. A new entry needs the same review",
+    "as a security change, and its justification must be checkable by reading",
+    "the cited call sites and nothing else. Deleting the branch outright always",
+    "beats listing it here: six statements that qualified were deleted rather",
+    "than excluded (the Nil branch in redis exec, the dead crypto/rand.Read",
+    "error checks in crypto/argon2.go and crypto/recovery.go, and the duplicate",
+    "template compile in email/preview.go).",
+    "",
+    "confirmed=false means the entry was identified by elimination against a",
+    "container-free profile, not measured: the DB-backed suites could not run",
+    "when the set was written. cov-gaps.py --verify-exclusions fails on any",
+    "unconfirmed entry once it is given a real coverage profile, so one",
+    "canonical scripts/coverage.sh run on a host with a container runtime",
+    "settles them.",
+    "",
+    "line is advisory and occurrence is authoritative: source is the frozen",
+    "text, and occurrence says which identical line in the file it is. Use",
+    "--relocate after a refactor moves a statement, then re-review the diff.",
+    "",
+    "Verify:  python3 scripts/cov-gaps.py --verify-exclusions [PROFILE]",
+    "Measure: python3 scripts/cov-gaps.py PROFILE --exclude .coverage-exclusions.json"
+  ],
+  "entries": [
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/aes.go",
+      "line": 27,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"aes: new cipher: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "aes.NewCipher errors only for a key length outside {16,24,32}, and Encrypt returns early unless len(key) == 32."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/aes.go",
+      "line": 32,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"aes: new gcm: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "cipher.NewGCM errors only for a block size other than 16, and the block came from a successful aes.NewCipher."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/aes.go",
+      "line": 58,
+      "occurrence": 2,
+      "source": "\t\treturn nil, fmt.Errorf(\"aes: new cipher: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Decrypt's copy of the Encrypt guard, behind the same 32-byte key check."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/aes.go",
+      "line": 63,
+      "occurrence": 2,
+      "source": "\t\treturn nil, fmt.Errorf(\"aes: new gcm: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Decrypt's copy of the Encrypt guard, on a block that came from a successful aes.NewCipher."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/argon2.go",
+      "line": 119,
+      "occurrence": 1,
+      "source": "\t\th = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The fallback inside func init(). init runs before TestMain, so no test can install a HashPassword failure, and the only failure HashPassword has left is a 5s semaphore timeout on a semaphore nothing has touched yet."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/dpop.go",
+      "line": 110,
+      "occurrence": 1,
+      "source": "\t\treturn \"\", \"\", fmt.Errorf(\"dpop: thumbprint: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "pubKey came from parseJWKHeader, which admits only RSA 2048-4096 or a P-256/P-384 point it already validated with key.ECDH(). ComputeJWKThumbprint cannot fail on either."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/dpop.go",
+      "line": 136,
+      "occurrence": 1,
+      "source": "\t\t\treturn \"\", fmt.Errorf(\"unexpected ecdh pub length %d\", len(raw))",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "raw came from a successful ecdhPub.Bytes(), which is canonical SEC1 uncompressed by construction, so its length is fixed by the curve."
+    },
+    {
+      "package": "internal/crypto",
+      "file": "internal/crypto/recovery.go",
+      "line": 62,
+      "occurrence": 1,
+      "source": "\t\treturn nil, errors.New(\"recovery: wrapped key too large\")",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Self-documented gosec G115 guard: an RSA-OAEP ciphertext is exactly the modulus size, so exceeding math.MaxUint32 would need a 34-gigabit RSA key."
+    },
+    {
+      "package": "internal/email",
+      "file": "internal/email/mailer.go",
+      "line": 193,
+      "occurrence": 3,
+      "source": "\t\treturn false",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Reached only if the address has no @ or ends in one, after mail.ParseAddress already succeeded. RFC 5322 parsing guarantees both an @ and a non-empty domain."
+    },
+    {
+      "package": "internal/email",
+      "file": "internal/email/sendgrid.go",
+      "line": 82,
+      "occurrence": 1,
+      "source": "\t\treturn fmt.Errorf(\"sendgrid: marshal payload: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Marshal of sendGridPayload, a struct of strings and string slices with no channels, funcs, cycles or MarshalJSON implementations."
+    },
+    {
+      "package": "internal/email",
+      "file": "internal/email/templates.go",
+      "line": 258,
+      "occurrence": 1,
+      "source": "\t\tpanic(\"email: failed to initialize default templates: \" + err.Error())",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "func init() over an embed.FS. If those templates did not parse the binary would not start, so no test process can reach the panic."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
+      "line": 76,
+      "occurrence": 1,
+      "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Marshal(session), where session is the *webauthn.SessionData returned by BeginRegistration: strings, byte slices, a time, protocol enum strings, and one protocol.AuthenticationExtensions map. The map is the only member that could hold an unmarshalable value, and RegisterBegin passes no option to BeginRegistration, so nothing caller-supplied ever enters it."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
+      "line": 77,
+      "occurrence": 5,
+      "source": "\t\treturn",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The return of the same unreachable json.Marshal failure as the WriteError above it."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
+      "line": 189,
+      "occurrence": 6,
+      "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Marshal(session) for BeginLogin, the same *webauthn.SessionData as the registration path, and VerifyBegin passes it no option either."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
+      "line": 190,
+      "occurrence": 20,
+      "source": "\t\treturn",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The return of the same unreachable json.Marshal failure as the WriteError above it."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/wellknown.go",
+      "line": 43,
+      "occurrence": 1,
+      "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "SerializeJWKSJSON is json.Marshal(SerializeJWKS(keys)) over a JWKS of pure strings. A nil *rsa.PublicKey in the map would panic in pub.N.Bytes(), not return an error, so no input takes this branch."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/wellknown.go",
+      "line": 44,
+      "occurrence": 1,
+      "source": "\t\treturn",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The return of the same unreachable json.Marshal failure as the WriteError above it."
+    },
+    {
+      "package": "internal/jwt",
+      "file": "internal/jwt/es256.go",
+      "line": 40,
+      "occurrence": 1,
+      "source": "\t\t\treturn fmt.Errorf(\"%w: %w\", ErrTokenSignatureInvalid, err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "rawRSToDER is asn1.Marshal of a struct of two non-negative *big.Int, which has no failure mode."
+    },
+    {
+      "package": "internal/jwt",
+      "file": "internal/jwt/jwt.go",
+      "line": 76,
+      "occurrence": 1,
+      "source": "\t\treturn \"\", fmt.Errorf(\"marshal header: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Marshal of a map[string]string literal built two lines above: no channels, funcs, cycles or MarshalJSON implementations, so the encoder has no failure mode to reach."
+    },
+    {
+      "package": "internal/kms",
+      "file": "internal/kms/kms.go",
+      "line": 84,
+      "occurrence": 1,
+      "source": "\t\treturn nil, err",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "deriveKEK is hkdf.Key(sha256.New, root, nil, info, kekSize). hkdf.Key errors only for a key length above 8160, where kekSize is 32, or in FIPS-140-only mode with a secret under 112 bits, and New rejects a root under 32 bytes."
+    },
+    {
+      "package": "internal/kms",
+      "file": "internal/kms/kms.go",
+      "line": 101,
+      "occurrence": 2,
+      "source": "\t\treturn nil, ErrUnwrap",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The Unwrap path's copy of the Wrap guard, on the same deriveKEK call with the same constant key length."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/mint.go",
+      "line": 352,
+      "occurrence": 1,
+      "source": "\t\treturn nil, ErrMintRoleNotPermitted",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (seed/seed.go:75) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 102,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"blob compress init: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "flate.NewWriter errors only for a level outside -2..9, and the call passes the constant flate.BestCompression."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 105,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"blob compress write: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The sink is a bytes.Buffer, whose Write never returns an error."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 108,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"blob compress close: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "flate.Writer.Close surfaces only a sink error, and the sink is the same bytes.Buffer."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/identity.go",
+      "line": 145,
+      "occurrence": 1,
+      "source": "\t\t\treturn fmt.Errorf(\"%w: dynamic not serializable\", ErrInvalidProfile)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Marshal of a map[string]json.RawMessage in which every value already passed json.Valid."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/auth.go",
+      "line": 495,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/auth.go",
+      "line": 499,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token."
+    },
+    {
+      "package": "internal/adminapi",
+      "file": "internal/adminapi/frontend.go",
+      "line": 38,
+      "occurrence": 1,
+      "source": "\t\tlog.Fatalf(\"admin-gateway: failed to parse layout template: %v\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "template.ParseFS over the embedded templates/*.html, parsed by NewFrontendHandler at wiring time. A template that did not parse would take down every test binary that builds the gateway before any assertion ran, so the guard is a build-time assertion with no runtime input; and log.Fatalf calls os.Exit, so even a reachable failure leaves nothing in-process to observe."
+    },
+    {
+      "package": "internal/adminapi",
+      "file": "internal/adminapi/frontend.go",
+      "line": 50,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Fatalf(\"admin-gateway: failed to parse template %s: %v\", page, err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The per-page copy of the layout-template guard, same embed.FS and same log.Fatalf."
+    },
+    {
+      "package": "internal/keystore",
+      "file": "internal/keystore/keystore.go",
+      "line": 144,
+      "occurrence": 1,
+      "source": "\t\treturn \"\", fmt.Errorf(\"keystore: marshal public key: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "x509.MarshalPKIXPublicKey on an *rsa.PublicKey fails in exactly one case: asn1.Marshal rejects a nil modulus. Import derives the kid first via KIDFromPublicKey, which calls pub.N.Bytes() and panics on a nil modulus, so no key reaches this line holding the only value that could fail it. Every other malformed key is refused two lines earlier by MarshalSigningKeyPEM, which keystore_marshal_failure_test.go demonstrates."
+    },
+    {
+      "package": "internal/keystore",
+      "file": "internal/keystore/keystore.go",
+      "line": 209,
+      "occurrence": 1,
+      "source": "\t\treturn \"\", fmt.Errorf(\"keystore: generate key: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "vaultcrypto.GenerateRSAKeyPair is rsa.GenerateKey(rand.Reader, 2048). Its only input-dependent failure is checkKeySize, which passes at 1024 bits and above, and the size is a constant. The other failure is an entropy error, and rsa.GenerateKey passes its reader through crypto/internal/rand.CustomReader, which returns the default DRBG reader unless GODEBUG cryptocustomrand=1 is set; a crypto/rand.Reader a test swapped out is therefore ignored here, and the default reader calls the runtime fatal handler instead of returning (the same Go 1.24 change that removed the rand.Read error checks from crypto/argon2.go and crypto/recovery.go)."
+    },
+    {
+      "package": "internal/oauth2",
+      "file": "internal/oauth2/github.go",
+      "line": 155,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"github userinfo: build emails request: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "In production emailsURL is a constant. Under the test override it is g.userInfoURL + \"/emails\", and the same g.userInfoURL already built a successful request earlier in the call. Appending a safe literal to a string that already parsed cannot introduce a control character, bad escape or bad port. Covering it needs a second override field that exists only for the test."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 298,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, false, fmt.Errorf(\"svcdoc uuid: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "vaultcrypto.RandomUUID fails only when RandomBytes fails, which is io.ReadFull(crypto/rand.Reader). Since Go 1.24 crypto/rand.Read never returns an error (it terminates the program instead), and this module is go 1.26, so the branch has no failure mode to reach."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 652,
+      "occurrence": 3,
+      "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The decode failure inside canonicalize. ValidateDocumentStructure ran first on the same bytes, walking the identical json.Decoder token stream with UseNumber and requiring a well-formed top-level object; Decode re-reads those bytes with the same scanner into map[string]any, which has no type-mismatch failure mode. A search over 8 million random JSON-ish inputs found no body the walk accepts and Decode rejects."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 656,
+      "occurrence": 4,
+      "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The trailing-content check inside canonicalize, which ValidateDocumentStructure already made at its own line 712 with the same errors.Is(err, io.EOF) test after the same top-level object. A body with a second document behind the first is rejected before canonicalize decodes anything, as TestPut_RejectsAnEmptyOrStructurallyInvalidBody demonstrates."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 666,
+      "occurrence": 5,
+      "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "json.Encoder.Encode of the map[string]any that encoding/json itself just produced, into a bytes.Buffer whose Write never errors. The values can only be map, slice, string, bool, nil or json.Number, and a json.Number that came out of a successful decode always satisfies the encoder's isValidNumber check."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 732,
+      "occurrence": 2,
+      "source": "\t\t\treturn ErrSvcDocInvalidDocument",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The non-string object key in walkDocObject. The loop is guarded by dec.More(), which is false when the next byte is '}', and in object-key position json.Decoder.Token returns either a string or an error for every other byte. So a token reaching this line with a nil error is always a string, and the malformed cases land on the err != nil branch above instead, as TestValidateDocumentStructure_RejectsAMalformedTokenStream shows for {\"a\":1,} and {1:2}."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/servicedoc.go",
+      "line": 785,
+      "occurrence": 8,
+      "source": "\t\treturn ErrSvcDocInvalidDocument",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The default arm of walkDocValue, reached only if Token returned a closing json.Delim in value position. walkDocValue is called from walkDocObject after a key, where a '}' or ']' is an error and not a token ({\"a\":} and {\"a\":]} both error), and from walkDocArray behind dec.More(), which is false before a ']'. Mismatched closers like {\"a\":[1} error on the closing Token at line 787 instead."
+    },
+    {
+      "package": "internal/repository/postgres",
+      "file": "internal/repository/postgres/db.go",
+      "line": 31,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"create pool: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "pgxpool.NewWithConfig returns an error only from puddle.NewPool, which fails only for MaxSize < 1. MaxConns comes from pgxpool.ParseConfig, which rejects pool_max_conns below 1 and otherwise defaults to max(4, NumCPU), and New overwrites it only when maxConns is in [1, 1000]. Every other field New sets is a constant duration. The dial itself is lazy, so an unreachable database surfaces at the Ping three lines below, which is covered."
+    }
+  ]
+}

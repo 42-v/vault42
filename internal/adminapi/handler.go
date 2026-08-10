@@ -119,7 +119,10 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if keys == nil {
 		keys = []keystore.KeyInfo{}
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"keys":  keys,
+		"total": len(keys),
+	})
 }
 
 // RotateKey handles POST /admin/keys/rotate.
@@ -169,9 +172,14 @@ func (h *Handler) RevokeKey(w http.ResponseWriter, r *http.Request) {
 // ========== User Management ==========
 
 // listUsersResponse wraps paginated user list.
+//
+// Every admin list endpoint answers with the same four keys: the collection,
+// total, limit and offset. total is always present, including on an empty
+// result, so a client never has to distinguish "no matches" from "this
+// endpoint does not report a total".
 type listUsersResponse struct {
 	Users  []userSummary `json:"users"`
-	Total  int           `json:"total,omitempty"`
+	Total  int           `json:"total"`
 	Limit  int           `json:"limit"`
 	Offset int           `json:"offset"`
 }
@@ -189,10 +197,14 @@ type userSummary struct {
 // ListUsers handles GET /admin/users.
 // Accepts ?q= query param: UUID format → lookup by ID, contains @ → lookup by email.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	limit, offset := parsePagination(r)
+
 	q := r.URL.Query().Get("q")
 	if q == "" {
 		httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
-			Users: []userSummary{},
+			Users:  []userSummary{},
+			Limit:  limit,
+			Offset: offset,
 		})
 		return
 	}
@@ -241,10 +253,12 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		users = []userSummary{}
 	}
 
+	total := len(users)
 	httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
-		Users: users,
-		Total: len(users),
-		Limit: len(users),
+		Users:  paginate(users, limit, offset),
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
 	})
 }
 
@@ -482,25 +496,48 @@ func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
 
 // ========== Audit Log ==========
 
+// auditEntryView is the response projection of an audit row.
+//
+// FingerprintHash is deliberately absent. It is an HMAC of a device
+// fingerprint, so it correlates events across accounts and across users; an
+// operator investigating an event needs DeviceID, which identifies the same
+// device without being a cross-account correlator.
+//
+// RiskScore is a hardcoded per-event-type severity tag, not a computed score.
+// Treat it as an opaque label: values are not comparable between event types
+// and may change as the event catalog grows.
+type auditEntryView struct {
+	ID        string                 `json:"id"`
+	Timestamp time.Time              `json:"timestamp"`
+	EventType string                 `json:"event_type"`
+	UserID    string                 `json:"user_id,omitempty"`
+	ClientID  string                 `json:"client_id,omitempty"`
+	IP        string                 `json:"ip,omitempty"`
+	UserAgent string                 `json:"user_agent,omitempty"`
+	DeviceID  string                 `json:"device_id,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	RiskScore int                    `json:"risk_score"`
+}
+
 // QueryAudit handles GET /admin/audit.
+//
+// Pagination shares parsePagination with the other admin list endpoints, so one
+// default (50) and one cap (maxListLimit) apply across the whole gateway.
+//
+// total is the number of entries in the returned window: repository.AuditFilter
+// has no counterpart that counts matches without returning them. The key is
+// fixed here so that adding a true filtered count later changes a value, not the
+// response shape.
 func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	limit, offset := parsePagination(r)
 	filter := repository.AuditFilter{
 		UserID:    q.Get("user_id"),
 		EventType: q.Get("event_type"),
-		Limit:     50,
+		Limit:     limit,
+		Offset:    offset,
 	}
 
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
-			filter.Limit = n
-		}
-	}
-	if v := q.Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			filter.Offset = n
-		}
-	}
 	if v := q.Get("since"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			filter.Since = &t
@@ -517,18 +554,67 @@ func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
-	if entries == nil {
-		entries = []*model.AuditEntry{}
+
+	views := make([]auditEntryView, 0, len(entries))
+	for _, e := range entries {
+		views = append(views, auditEntryView{
+			ID:        e.ID,
+			Timestamp: e.Timestamp,
+			EventType: e.EventType,
+			UserID:    e.UserID,
+			ClientID:  e.ClientID,
+			IP:        e.IP,
+			UserAgent: e.UserAgent,
+			DeviceID:  e.DeviceID,
+			Metadata:  e.Metadata,
+			RiskScore: e.RiskScore,
+		})
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"entries": entries,
-		"count":   len(entries),
-		"filter":  filter,
+		"entries": views,
+		"total":   len(views),
+		"limit":   limit,
+		"offset":  offset,
 	})
 }
 
 // ========== Client Management ==========
+
+// clientView is the response projection of a service client. SecretHash is the
+// argon2id hash of the client secret and is never projected: GET on a client
+// must not hand an operator's browser offline-crackable credential material.
+type clientView struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Role         string    `json:"role"`
+	Scopes       []string  `json:"scopes"`
+	RedirectURIs []string  `json:"redirect_uris"`
+	Active       bool      `json:"active"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func toClientView(c *model.Client) clientView {
+	scopes := c.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	redirects := c.RedirectURIs
+	if redirects == nil {
+		redirects = []string{}
+	}
+	return clientView{
+		ID:           c.ID,
+		Name:         c.Name,
+		Role:         c.Role,
+		Scopes:       scopes,
+		RedirectURIs: redirects,
+		Active:       c.Active,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
+	}
+}
 
 // ListClients handles GET /admin/clients.
 func (h *Handler) ListClients(w http.ResponseWriter, r *http.Request) {
@@ -538,30 +624,15 @@ func (h *Handler) ListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type clientView struct {
-		ID           string    `json:"id"`
-		Name         string    `json:"name"`
-		Role         string    `json:"role"`
-		Scopes       []string  `json:"scopes"`
-		RedirectURIs []string  `json:"redirect_uris"`
-		Active       bool      `json:"active"`
-		CreatedAt    time.Time `json:"created_at"`
-	}
-
 	views := make([]clientView, 0, len(clients))
 	for _, c := range clients {
-		views = append(views, clientView{
-			ID:           c.ID,
-			Name:         c.Name,
-			Role:         c.Role,
-			Scopes:       c.Scopes,
-			RedirectURIs: c.RedirectURIs,
-			Active:       c.Active,
-			CreatedAt:    c.CreatedAt,
-		})
+		views = append(views, toClientView(c))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"clients": views})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"clients": views,
+		"total":   len(views),
+	})
 }
 
 // GetClient handles GET /admin/clients/{id}.
@@ -582,7 +653,7 @@ func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, client)
+	httputil.WriteJSON(w, http.StatusOK, toClientView(client))
 }
 
 // CreateClient handles POST /admin/clients.
@@ -713,12 +784,17 @@ func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
 
 // ========== Config Management ==========
 
-// GetConfig handles GET /admin/config.
+// GetConfig handles GET /admin/config. entries is a key/value object, not a
+// list, so it carries no list envelope; an empty store is an empty object
+// rather than null.
 func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.adminConfig.List(r.Context())
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
+	}
+	if entries == nil {
+		entries = map[string]string{}
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }

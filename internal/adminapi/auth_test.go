@@ -129,10 +129,10 @@ func TestDecryptTOTPSecret_RejectsLegacyCiphertext(t *testing.T) {
 
 func TestAuthHandler_Status(t *testing.T) {
 	tests := []struct {
-		name       string
-		admin      *model.AdminUser
-		wantCode   int
-		wantHasID  bool
+		name      string
+		admin     *model.AdminUser
+		wantCode  int
+		wantHasID bool
 	}{
 		{"no admin in ctx", nil, http.StatusUnauthorized, false},
 		{"with admin", &model.AdminUser{ID: "adm-xyz", Username: "bob", Role: "viewer", TOTPVerified: true}, http.StatusOK, true},
@@ -236,4 +236,3 @@ func (f *fakeSessionRepoWithErr) Revoke(ctx context.Context, id string) error {
 }
 
 var _ repository.AdminSessionRepository = (*fakeSessionRepoWithErr)(nil)
-

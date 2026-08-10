@@ -370,8 +370,37 @@ applies.
 
 ### 7.1 Detection and assessment
 
-1. **Detect.** Indicators include anomalous audit events and elevated risk scores in the audit
-   log, alerting from infrastructure monitoring, and external reports.
+**What Vault42 provides, stated precisely.** Vault42 records security-relevant events to the
+append-only audit log and tags each one with an integer severity in the `risk_score` column
+(`migrations/001_initial_schema.sql:163`), assigned by the call site that writes the event
+(`audit.Logger.Log`) -- for example 100 for a login attempt against a configured honeypot trap
+user (`AuthService.Login`), 100 for a non-loopback request reaching the admin gateway
+(`adminapi.LocalOnly`), 80 for a concurrent-session check that failed closed
+(`AuthService.checkSessionLimit`), 20 for a rejected KMS unwrap (`handler.KMSHandler.audit`).
+
+**Vault42 does not evaluate that score.** There is no threshold, no scoring engine, no anomaly
+detection and no alert derived from it. The value exists so a human reviewing the log can triage
+it: the admin dashboard colour-codes and sorts on it
+(`internal/adminapi/static/admin.js`), and it is returned by `GET /admin/audit`. The audit query
+filter (`repository.AuditFilter`) supports user, event type and time range, so filtering *by*
+risk score is done by the reviewer or by an external log pipeline, not by Vault42.
+
+The only automated reactions Vault42 performs are narrow, and none of them is breach detection:
+per-account lockout after 5 failed logins and per-IP lockout after 20 (`lockoutThreshold` and
+`ipLockoutThreshold`, `internal/service/auth.go`); the honeypot webhook, which fires on a login
+attempt against a name in `VAULT_HONEYPOT_TRAP_USERS` and only when `VAULT_HONEYPOT_WEBHOOK` is
+configured (wired in `cmd/vault/main.go`); and the admin gateway killswitch, which audits a
+non-loopback request and crashes the pod.
+
+**Detection is therefore the Operator's responsibility.** An Operator processing personal data
+should ship the audit log to its own monitoring and set the alerting rules there. Vault42 gives
+that pipeline a durable, append-only, severity-tagged record; it does not watch it.
+
+The procedure:
+
+1. **Detect.** Sources are the Operator's own monitoring and alerting over the exported audit log
+   and infrastructure telemetry, the honeypot webhook where configured, and external reports
+   (including reports received under the process in `SECURITY.md`).
 2. **Contain.** Take immediate containment steps (e.g. revoke affected sessions and refresh
    tokens, rotate signing keys, lock or disable affected accounts, rotate compromised secrets).
 3. **Assess.** Determine the nature of the breach, the categories and approximate number of data

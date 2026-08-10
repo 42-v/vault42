@@ -23,6 +23,17 @@ type Collector struct {
 	loginFailed     atomic.Int64
 	tokensIssued    atomic.Int64
 	tokensRefreshed atomic.Int64
+
+	// Mint counters are kept apart from the token counters above on purpose: a
+	// minted token asserts a subject vault42 never authenticated, so folding it
+	// into vault_tokens_issued_total would hide the one number an operator most
+	// wants to alert on.
+	mintIssued   atomic.Int64
+	mintRejected atomic.Int64
+
+	svcDocWrites  atomic.Int64
+	svcDocReads   atomic.Int64
+	svcDocRejects atomic.Int64
 }
 
 // NewCollector creates a new metrics collector. The argon2 accessor functions
@@ -49,6 +60,22 @@ func (c *Collector) RecordTokenIssued() { c.tokensIssued.Add(1) }
 
 // RecordTokenRefreshed increments the token refresh counter.
 func (c *Collector) RecordTokenRefreshed() { c.tokensRefreshed.Add(1) }
+
+// RecordMintIssued counts a token signed for a caller-asserted subject.
+func (c *Collector) RecordMintIssued() { c.mintIssued.Add(1) }
+
+// RecordMintRejected counts a mint refused by policy. A sustained rise here is
+// a misconfigured caller or someone probing the allow-lists.
+func (c *Collector) RecordMintRejected() { c.mintRejected.Add(1) }
+
+// RecordSvcDocWrite counts a stored service document.
+func (c *Collector) RecordSvcDocWrite() { c.svcDocWrites.Add(1) }
+
+// RecordSvcDocRead counts a served service document.
+func (c *Collector) RecordSvcDocRead() { c.svcDocReads.Add(1) }
+
+// RecordSvcDocRejected counts a document refused on validation, quota or scope.
+func (c *Collector) RecordSvcDocRejected() { c.svcDocRejects.Add(1) }
 
 // Handler returns an http.HandlerFunc that serves Prometheus text exposition format.
 func (c *Collector) Handler() http.HandlerFunc {
@@ -77,6 +104,26 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_login_success_total Total successful logins.\n")
 		fmt.Fprintf(w, "# TYPE vault_login_success_total counter\n")
 		fmt.Fprintf(w, "vault_login_success_total %d\n", c.loginSuccess.Load())
+
+		fmt.Fprintf(w, "# HELP vault_mint_issued_total Tokens signed for a caller-asserted subject via POST /mint.\n")
+		fmt.Fprintf(w, "# TYPE vault_mint_issued_total counter\n")
+		fmt.Fprintf(w, "vault_mint_issued_total %d\n", c.mintIssued.Load())
+
+		fmt.Fprintf(w, "# HELP vault_mint_rejected_total Mint requests refused by policy.\n")
+		fmt.Fprintf(w, "# TYPE vault_mint_rejected_total counter\n")
+		fmt.Fprintf(w, "vault_mint_rejected_total %d\n", c.mintRejected.Load())
+
+		fmt.Fprintf(w, "# HELP vault_svcdoc_writes_total Service documents stored.\n")
+		fmt.Fprintf(w, "# TYPE vault_svcdoc_writes_total counter\n")
+		fmt.Fprintf(w, "vault_svcdoc_writes_total %d\n", c.svcDocWrites.Load())
+
+		fmt.Fprintf(w, "# HELP vault_svcdoc_reads_total Service documents served.\n")
+		fmt.Fprintf(w, "# TYPE vault_svcdoc_reads_total counter\n")
+		fmt.Fprintf(w, "vault_svcdoc_reads_total %d\n", c.svcDocReads.Load())
+
+		fmt.Fprintf(w, "# HELP vault_svcdoc_rejected_total Service document requests refused on validation, quota or scope.\n")
+		fmt.Fprintf(w, "# TYPE vault_svcdoc_rejected_total counter\n")
+		fmt.Fprintf(w, "vault_svcdoc_rejected_total %d\n", c.svcDocRejects.Load())
 
 		fmt.Fprintf(w, "# HELP vault_login_failed_total Total failed logins.\n")
 		fmt.Fprintf(w, "# TYPE vault_login_failed_total counter\n")

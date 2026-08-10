@@ -39,9 +39,12 @@ func EncryptRecovery(pub *rsa.PublicKey, plaintext []byte) ([]byte, error) {
 	}
 
 	aesKey := make([]byte, recoveryAESKeySize)
-	if _, err := rand.Read(aesKey); err != nil {
-		return nil, fmt.Errorf("recovery: generate aes key: %w", err)
-	}
+	// crypto/rand.Read has no error path to handle: since Go 1.24 a Reader
+	// failure calls the runtime fatal handler and terminates the process
+	// instead of returning ($GOROOT/src/crypto/rand/rand.go). The recoverable
+	// entropy failure for this function is the GCM nonce draw inside Encrypt,
+	// which goes through io.ReadFull(rand.Reader, ...) and is handled below.
+	_, _ = rand.Read(aesKey)
 
 	aesBlob, err := Encrypt(plaintext, aesKey)
 	if err != nil {

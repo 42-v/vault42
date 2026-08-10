@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,12 +30,50 @@ import (
 // NIST SP 800-63B Integration Tests — Database & Concurrency Verification
 // =============================================================================
 
-// skipIfNoDocker skips integration tests when Docker is unavailable.
+// skipIfNoDocker skips integration tests when no container runtime is reachable.
+//
+// Probing rather than only honouring SKIP_INTEGRATION matters for the
+// compliance suite specifically: a reviewer who clones the repo and runs
+// `go test ./tests/compliance/` must get a clean result showing which
+// requirements are proven container-free and which need a database, not a wall
+// of connection errors that makes the whole report look broken.
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SKIP_INTEGRATION") == "1" {
 		t.Skip("SKIP_INTEGRATION=1")
 	}
+	if !containerRuntimeAvailable() {
+		t.Skip("no container runtime reachable; this requirement is verified against a real Postgres in CI")
+	}
+}
+
+// containerRuntimeAvailable reports whether a Docker-compatible socket answers.
+// The result is computed once: probing per test would add a syscall to every
+// skip in the suite.
+var containerRuntimeAvailable = sync.OnceValue(func() bool {
+	if host := os.Getenv("DOCKER_HOST"); host != "" {
+		if path, found := strings.CutPrefix(host, "unix://"); found {
+			return socketExists(path)
+		}
+		// A non-unix DOCKER_HOST (tcp://, ssh://) is a deliberate operator
+		// choice; assume it works and let testcontainers report the truth.
+		return true
+	}
+	candidates := []string{"/var/run/docker.sock", "/run/docker.sock"}
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		candidates = append(candidates, runtimeDir+"/docker.sock", runtimeDir+"/podman/podman.sock")
+	}
+	for _, path := range candidates {
+		if socketExists(path) {
+			return true
+		}
+	}
+	return false
+})
+
+func socketExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode()&os.ModeSocket != 0
 }
 
 // setupPostgres starts a PostgreSQL testcontainer and runs the initial migration.
@@ -85,20 +124,39 @@ func setupPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 		t.Fatalf("connect for migrations: %v", err)
 	}
 
-	migSQL, err := os.ReadFile("../../migrations/001_initial_schema.sql")
+	// Every migration, in order, not just the initial schema. Pinning this
+	// fixture to 001 meant the tests ran against a schema the application no
+	// longer writes: migration 013 added auth.refresh_tokens.family_created_at,
+	// and the refresh-token INSERT names it, so a 001-only fixture failed on a
+	// column error rather than on anything it was asserting.
+	migEntries, err := os.ReadDir("../../migrations")
 	if err != nil {
 		migConn.Close(ctx) //nolint:errcheck
 		pool.Close()
 		pgContainer.Terminate(ctx) //nolint:errcheck
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read migrations dir: %v", err)
 	}
-
-	migStr := stripRoleGrantsInteg(string(migSQL))
-	if _, err := migConn.Exec(ctx, migStr); err != nil {
-		migConn.Close(ctx) //nolint:errcheck
-		pool.Close()
-		pgContainer.Terminate(ctx) //nolint:errcheck
-		t.Fatalf("run migration: %v", err)
+	var migFiles []string
+	for _, e := range migEntries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			migFiles = append(migFiles, e.Name())
+		}
+	}
+	sort.Strings(migFiles)
+	for _, f := range migFiles {
+		migSQL, err := os.ReadFile("../../migrations/" + f)
+		if err != nil {
+			migConn.Close(ctx) //nolint:errcheck
+			pool.Close()
+			pgContainer.Terminate(ctx) //nolint:errcheck
+			t.Fatalf("read migration %s: %v", f, err)
+		}
+		if _, err := migConn.Exec(ctx, stripRoleGrantsInteg(string(migSQL))); err != nil {
+			migConn.Close(ctx) //nolint:errcheck
+			pool.Close()
+			pgContainer.Terminate(ctx) //nolint:errcheck
+			t.Fatalf("run migration %s: %v", f, err)
+		}
 	}
 	migConn.Close(ctx) //nolint:errcheck
 
@@ -142,7 +200,7 @@ func stripRoleGrantsInteg(sql string) string {
 // --- Test 1: HIBP Breach Check SHA-1 Prefix Logic ---
 
 func TestNIST_HIBPBreachCheck(t *testing.T) {
-	// NIST 800-63B Section 5.1.1.1: Check passwords against breach databases.
+	// NIST 800-63B Section 3.1.1.1: Check passwords against breach databases.
 	// The HIBP client uses k-anonymity: SHA-1 hash is split into a 5-char prefix
 	// and 35-char suffix. Only the prefix is sent to the API. We verify the
 	// SHA-1 prefix/suffix logic and mock suffix matching independently, since

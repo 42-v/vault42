@@ -56,6 +56,15 @@ type Deps struct {
 	PwHistory   repository.PasswordHistoryRepository
 	Social      repository.SocialAccountRepository
 
+	// ServiceDocs backs the service-scoped JSON document store. Nil unless
+	// VAULT_SVCDOC_ENABLED, in which case the routes are not mounted at all.
+	ServiceDocs repository.ServiceDocumentRepository
+
+	// Mint backs POST /mint. Built in main rather than here because
+	// service.NewMintService returns an error on an unsafe mint policy and
+	// setupRoutes cannot fail; nil unless minting is configured.
+	Mint *service.MintService
+
 	// Email
 	EmailSender email.Sender
 	// Mailer applies per-app white-label branding/templates. Optional: when nil,
@@ -140,8 +149,8 @@ func (s *Server) Start() error {
 	if cfg.Profile == config.ProfileHoneypot && s.deps.HoneypotAlerter != nil {
 		h = honeypot.LoggingMiddleware(s.deps.HoneypotAlerter)(h)
 	}
-	h = middleware.MaxBodyWithExemptions(8*1024, []string{"/user/blobs"})(h) // 8KB max body; blob uploads enforce their own limit
-	h = middleware.AppContext(h)                                             // resolve X-Vault-App tenant for white-label emails
+	h = middleware.MaxBodyWithExemptions(8*1024, []string{"/user/blobs", "/service/documents"})(h) // 8KB max body; blob uploads and service documents enforce their own limit
+	h = middleware.AppContext(h)                                                                   // resolve X-Vault-App tenant for white-label emails
 	h = middleware.CORS(cfg.Origin, parseCORSOrigins(cfg.CORSOrigins), cfg.CORSAllowAll)(h)
 	h = middleware.IPAccess()(h)
 	h = middleware.SecurityHeaders(cfg.ServeFrontend)(h)
@@ -385,6 +394,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 			d.TOTP, d.WebAuthn, d.BackupCodes,
 			d.Recovery, d.AuditLog, d.RecoveryPublicKey, d.HMACSecret,
 		)
+		erasureSvc.SetServiceDocs(d.ServiceDocs)
 		accountHandler := handler.NewAccountHandler(erasureSvc, d.Users, d.AuditLog, d.Pepper)
 		mux.Handle("DELETE /user/account", authMw(fingerprintMw(accountDeleteRL(http.HandlerFunc(accountHandler.Delete)))))
 	}
@@ -464,9 +474,53 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		mux.Handle("DELETE /user/blobs/named/{name}", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(blobHandler.DeleteNamed))))))
 	}
 
+	// Service-scoped JSON document store. Off by default: unlike blobs this is new
+	// surface reachable by every existing client-credentials holder, so enabling it
+	// is an explicit operator decision rather than a consequence of upgrading.
+	var svcDocSvc *service.ServiceDocumentService
+	if d.ServiceDocs != nil && cfg.SvcDocEnabled {
+		// A nil *metrics.Collector must reach the service as a nil interface. Passing
+		// the typed nil gives a non-nil interface that panics on first use, so a
+		// deployment with metrics off would crash on its first document write.
+		var svcDocMetrics service.ServiceDocumentMetrics
+		if d.Metrics != nil {
+			svcDocMetrics = d.Metrics
+		}
+		svcDocSvc = service.NewServiceDocumentService(
+			d.ServiceDocs, d.Clients, d.MasterKey, d.HMACSecret,
+			service.ServiceDocumentConfig{
+				MaxDocumentBytes:     cfg.SvcDocMaxSize,
+				MaxDocsPerSubject:    cfg.SvcDocMaxPerSubject,
+				QuotaBytesPerSubject: cfg.SvcDocQuotaBytes,
+				SharedEnabled:        cfg.SvcDocSharedEnabled,
+			}, svcDocMetrics)
+		svcDocHandler := handler.NewServiceDocumentHandler(svcDocSvc, d.AuditLog)
+
+		// Keyed by client, not IP: the caller is one in-cluster pod, so an IP bucket
+		// would throttle its whole fleet as a single tenant. Not fail-closed — this
+		// releases only what the caller itself wrote, and a cache blip must not take
+		// profile reads down across every consuming service.
+		svcDocWriteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
+		}, rlEnabled)
+		svcDocReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 300, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
+		}, rlEnabled)
+		docWrite := func(h http.HandlerFunc) http.Handler {
+			return svcDocWriteRL(authMw(middleware.RequireScope("svcdoc:write")(h)))
+		}
+		docRead := func(h http.HandlerFunc) http.Handler {
+			return svcDocReadRL(authMw(middleware.RequireScope("svcdoc:read")(h)))
+		}
+		mux.Handle("PUT /service/documents/{subject}/{key}", docWrite(svcDocHandler.Put))
+		mux.Handle("GET /service/documents/{subject}/{key}", docRead(svcDocHandler.Get))
+		mux.Handle("DELETE /service/documents/{subject}/{key}", docWrite(svcDocHandler.Delete))
+		mux.Handle("GET /service/documents/{subject}", docRead(svcDocHandler.List))
+	}
+
 	// Data portability (GDPR Articles 15/20) — aggregates all personal data
 	// held for the requesting user. Reuses the existing services/repositories.
-	dataExportHandler := handler.NewDataExportHandler(d.Users, d.Devices, d.Social, d.AuditEvents, identitySvc, blobSvc, d.AuditLog)
+	dataExportHandler := handler.NewDataExportHandler(d.Users, d.Devices, d.Social, d.AuditEvents, identitySvc, blobSvc, svcDocSvc, d.AuditLog)
 	dataExportRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
@@ -487,21 +541,32 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// in-memory fallback cannot multiply the effective limit across replicas and
 	// widen the release rate under a Redis failure (audit L4).
 	//
-	// When DPoP is enabled (VAULT_DPOP_ENABLED), wrap the handler in dpopWrap —
-	// applied INSIDE authMw+RequireScope so the DPoP middleware sees the resolved
-	// client claims. For a DPoP-bound kms token (cnf.jkt), this makes a fresh,
-	// per-request DPoP proof mandatory and single-use (JTI replay cache), so a
-	// captured Bearer token + body cannot be replayed within the access-token TTL
-	// to re-release the same plaintext. Trade-off: when the flag is off (or the
-	// life42 kms client cannot present a DPoP proof / holds a non-bound token) the
-	// plain-Bearer path stands, and replay protection then rests on the short
-	// access-token TTL + TLS + per-IP rate limit alone.
+	// dpopWrap is applied INSIDE authMw+RequireScope so the DPoP middleware sees
+	// the resolved client claims. Note what it does NOT buy today: no issuance path
+	// populates cnf.jkt, so no token is sender-constrained and the thumbprint
+	// comparison never runs. A presented proof is validated against nothing. Replay
+	// protection on this oracle therefore rests entirely on the short access-token
+	// TTL, TLS, and the fail-closed per-IP rate limit above. Sender-constraint
+	// arrives when issuance binds cnf.jkt, not when VAULT_DPOP_ENABLED is set.
 	if d.KMS != nil {
 		kmsHandler := handler.NewKMSHandler(d.KMS, d.AuditLog)
 		kmsUnwrapRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 		}, rlEnabled)
 		mux.Handle("POST /kms/unwrap", kmsUnwrapRL(authMw(middleware.RequireScope("kms:unwrap")(dpopWrap(http.HandlerFunc(kmsHandler.Unwrap))))))
+	}
+
+	// Subject-assertion signing oracle (POST /mint). Not mounted at all unless
+	// minting is configured: it signs subjects vault42 never authenticated, so a
+	// misconfiguration is an authentication bypass rather than a weakened control,
+	// and a vanilla vault42 must have no mint. Its own scope, never the KMS one.
+	// Fail closed on a cache outage like every other credential-release path.
+	if d.Mint != nil {
+		mintHandler := handler.NewMintHandler(d.Mint, d.AuditLog)
+		mintRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey, FailClosed: true,
+		}, rlEnabled)
+		mux.Handle("POST /mint", mintRL(authMw(middleware.RequireScope(handler.MintScope)(dpopWrap(http.HandlerFunc(mintHandler.Mint))))))
 	}
 
 	// Embedded frontend (SPA catch-all) — off by default, enabled via VAULT_SERVE_FRONTEND or honeypot profile

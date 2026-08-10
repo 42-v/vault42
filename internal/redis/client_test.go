@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -991,4 +992,155 @@ func TestPool_ConnectionReuse(t *testing.T) {
 	if total > 1 {
 		t.Errorf("expected at most 1 connection, got %d", total)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// $-1 (key not found) is a successful reply, never an exec error
+// ---------------------------------------------------------------------------
+
+// nilReplyAddr serves a Redis that answers every command with the RESP nil bulk
+// string, `$-1`. That is what a real server sends for GET on a missing key, for
+// GETDEL on a consumed one, and for SET ... NX when the key already exists.
+func nilReplyAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				rd := bufio.NewReader(c)
+				wr := bufio.NewWriter(c)
+				frames := &mockRedis{}
+				for {
+					if _, err := frames.readCommand(rd); err != nil {
+						return
+					}
+					if _, err := wr.WriteString("$-1\r\n"); err != nil {
+						return
+					}
+					if err := wr.Flush(); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// exec once carried a branch that treated a Nil error from readReply as a
+// healthy connection. No input reaches it: readReply turns `$-1` into
+// reply{isNil: true} with a nil error, and the Nil sentinel is minted by Get and
+// GetDel from r.isNil after exec has already returned. This pins that contract
+// from the wire up, so the branch cannot be reintroduced as "defensive".
+func TestClient_NilBulkReplyIsNotAnExecError(t *testing.T) {
+	c := NewClient(&Options{
+		Addr:        nilReplyAddr(t),
+		PoolSize:    1,
+		DialTimeout: time.Second,
+		IOTimeout:   time.Second,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	ctx := context.Background()
+
+	cn, err := c.pool.get(ctx)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	r, err := c.exec(ctx, cn, "GET", "missing")
+	if err != nil {
+		t.Fatalf("exec surfaced a missing key as an error: %v", err)
+	}
+	if !r.isNil {
+		t.Error("nil-ness did not come back in the reply struct")
+	}
+
+	// A nil reply is the success path, so the connection is returned to the
+	// pool rather than torn down: the deleted branch and the one below it did
+	// the same thing for different reasons.
+	if total := atomic.LoadInt32(&c.pool.total); total != 1 {
+		t.Errorf("pool total = %d after a nil reply, want 1", total)
+	}
+	if active := atomic.LoadInt32(&c.pool.active); active != 0 {
+		t.Errorf("pool active = %d after a nil reply, want 0", active)
+	}
+	c.pool.mu.Lock()
+	idle := len(c.pool.idle)
+	c.pool.mu.Unlock()
+	if idle != 1 {
+		t.Errorf("idle connections = %d after a nil reply, want 1", idle)
+	}
+}
+
+// The callers' view of the same wire reply. Only Get and GetDel translate it
+// into the Nil sentinel; the counting commands read it as a zero, and none of
+// them may report a transport failure.
+func TestClient_NilBulkReplyPerCommand(t *testing.T) {
+	c := NewClient(&Options{
+		Addr:        nilReplyAddr(t),
+		PoolSize:    1,
+		DialTimeout: time.Second,
+		IOTimeout:   time.Second,
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	ctx := context.Background()
+
+	t.Run("Get", func(t *testing.T) {
+		v, err := c.Get(ctx, "missing")
+		if !errors.Is(err, Nil) {
+			t.Fatalf("err = %v, want the Nil sentinel", err)
+		}
+		if v != "" {
+			t.Errorf("value = %q, want empty", v)
+		}
+	})
+
+	t.Run("GetDel", func(t *testing.T) {
+		v, err := c.GetDel(ctx, "missing")
+		if !errors.Is(err, Nil) {
+			t.Fatalf("err = %v, want the Nil sentinel", err)
+		}
+		if v != "" {
+			t.Errorf("value = %q, want empty", v)
+		}
+	})
+
+	t.Run("SetNX", func(t *testing.T) {
+		ok, err := c.SetNX(ctx, "taken", "v", time.Minute)
+		if err != nil {
+			t.Fatalf("SetNX reported a transport error for a lost race: %v", err)
+		}
+		if ok {
+			t.Error("SetNX claimed the key when the server declined")
+		}
+	})
+
+	t.Run("Exists", func(t *testing.T) {
+		found, err := c.Exists(ctx, "missing")
+		if err != nil {
+			t.Fatalf("Exists: %v", err)
+		}
+		if found {
+			t.Error("Exists reported a key the server said nothing about")
+		}
+	})
+
+	t.Run("Eval", func(t *testing.T) {
+		n, err := c.Eval(ctx, "return redis.call('GET', KEYS[1])", 1, "missing")
+		if err != nil {
+			t.Fatalf("Eval: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("Eval = %d, want 0 for a nil script result", n)
+		}
+	})
 }

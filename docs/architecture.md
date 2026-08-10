@@ -96,10 +96,12 @@ internal/
     security_headers.go      HSTS, CSP, X-Frame-Options, etc.
     cors.go                  Single-origin CORS (or allow-all in dev)
     maxbody.go               Request body size limit (8KB)
-    auth.go                  JWT Bearer validation, challenge token support
+    auth.go                  JWT Bearer validation, challenge token support, RequireScope,
+                             Confirmed (recent-password-confirmation gate)
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
-    dpop.go                  DPoP proof-of-possession validation (RFC 9449)
+    dpop.go                  DPoP proof validation (RFC 9449). Experimental: binds nothing
+                             until issuance populates cnf.jkt
   handler/
     auth.go                  Register, Login, Refresh, Logout, VerifyEmail, ConfirmPassword
     oauth.go                 OAuth2 Authorize + Callback (Google, GitHub, Facebook)
@@ -112,6 +114,7 @@ internal/
     user.go                  Profile, sessions, devices
     identity.go              Identity store: get, put (upsert), delete encrypted PII
     blob.go                  Blob storage: upload, list, download, delete encrypted files
+    kms.go                   POST /kms/unwrap: KEK envelope unwrap, uniform opaque failure
     wellknown.go             /.well-known/jwks.json and openid-configuration
     health.go                /healthz (liveness) and /readyz (readiness)
     response.go              JSON response/error helpers
@@ -164,7 +167,7 @@ internal/
   sanitize/                  Input sanitization (email, strings, URLs, locale)
   useragent/                 User-Agent parsing for device friendly names
 
-charts/vault42/                Helm chart (single chart for all environments)
+charts/vault/                Helm chart (single chart for all environments)
 migrations/                  SQL migration files (executed in sorted order)
 web/                         Vue 3 + Vite + Tailwind frontend SPA
   src/__tests__/             Vitest + Vue Test Utils frontend tests
@@ -247,6 +250,44 @@ When `VAULT_KEY_ROTATION_DB` is enabled, `authed` and `authedChallenge` use
 `AuthDynamic` / `AuthChallengeDynamic` variants that resolve signing keys from
 the keystore's dynamic key provider instead of the static file-based key map.
 
+**Scope gating (`RequireScope`).** Authentication answers "is this token valid"; it does not
+answer "may this token do this". `middleware.RequireScope(scope)`
+(`internal/middleware/auth.go`) reads the validated claims from context and returns
+`403 insufficient_scope` unless `claims.Scopes` contains the exact string. It **must** be
+chained after an `Auth` middleware -- absent claims are a `401`, never a pass -- and it is the
+only per-route authorization primitive on the user-facing plane. JWT `roles` are advisory to
+relying parties; no vault42 route authorizes on them.
+
+Its one current consumer is the KMS unwrap oracle, which is also the longest chain in the
+server and worth reading in full:
+
+```
+POST /kms/unwrap                        mounted only when KMS_ROOT_KEY_FILE is set
+  |
+  v
+kmsUnwrapRL          RateLimit(30/min, per IP, FailClosed: true)
+  |                  Fail-closed, unlike the auth endpoints: a cache outage must not
+  |                  let the per-pod in-memory fallback multiply the key-release rate
+  |                  across replicas (audit L4).
+  v
+authMw               Auth (or AuthDynamic under VAULT_KEY_ROTATION_DB). Resolves and
+  |                  validates the client-credential token, puts claims in context.
+  v
+RequireScope("kms:unwrap")
+  |                  403 insufficient_scope without the exact scope.
+  v
+dpopWrap             Identity when VAULT_DPOP_ENABLED=false. When true, the DPoP
+  |                  middleware runs INSIDE the auth wrappers so it sees resolved
+  |                  claims -- but binds nothing, because issuance never sets cnf.jkt.
+  v
+KMSHandler.Unwrap    Re-checks claims for nil (defense in depth), then unwraps.
+                     Every post-authorization failure collapses to one opaque
+                     400 unwrap_failed; the audit record carries kid + outcome only.
+```
+
+Wiring: the `POST /kms/unwrap` mount in `internal/server/server.go`. Rationale and threat
+model: the `internal/kms` package doc and [Attack Cheatsheet §8](cheatsheet.md).
+
 Rate limiting middleware is instantiated per-endpoint group with different limits
 and key functions, then wraps the appropriate routes:
 
@@ -259,10 +300,13 @@ and key functions, then wraps the appropriate routes:
 | `totpRL` | 5 | 5 min | IP | POST /auth/2fa/totp/verify |
 | `confirmRL` | 5 | 15 min | IP | POST /auth/confirm |
 | `clientTokenRL` | 10 | 1 min | IP | POST /client/token |
+| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap (**fail-closed**) |
 
 Rate limiting uses `cache.Increment()` with a sliding window. On cache failure,
 requests are **allowed through** (graceful degradation -- auth never fails because
-the cache is down).
+the cache is down). `kmsUnwrapRL` is the exception: it is configured `FailClosed: true`, so a
+cache outage rejects unwraps rather than falling back to a per-pod in-memory counter that
+would multiply the effective key-release rate by the replica count.
 
 See: `internal/server/server.go`, `internal/middleware/`
 
@@ -1064,10 +1108,10 @@ scripts/build-all.sh  →  copies web/dist → internal/frontend/dist (go:embed)
 
 ### Single Helm Chart
 
-The Helm chart at `charts/vault42/` serves all environments via value overlays:
+The Helm chart at `charts/vault/` serves all environments via value overlays:
 
 ```
-charts/vault42/
+charts/vault/
   values.yaml              Production defaults
   values-dev.yaml          Dev overlay (single replica, local images, in-cluster services)
   templates/
@@ -1096,7 +1140,7 @@ scripts/deploy-dev.sh
   2. Build Docker images: vault42:dev, vault42-frontend:dev
   3. Create vault42-dev namespace
   4. Create TLS secret + vault42 secrets
-  5. helm upgrade --install vault42 charts/vault42 -n vault42-dev -f charts/vault42/values-dev.yaml
+  5. helm upgrade --install vault42 charts/vault -n vault42-dev -f charts/vault/values-dev.yaml
 ```
 
 Access at `https://vault.localhost` via nginx ingress controller. Requires:
@@ -1112,4 +1156,4 @@ Multi-stage Dockerfile:
 ARM64 cross-compilation uses Go's native `GOARCH` instead of QEMU emulation,
 avoiding ~10x build overhead for ARM targets.
 
-See: `charts/vault42/`, `scripts/deploy-dev.sh`, `Dockerfile`
+See: `charts/vault/`, `scripts/deploy-dev.sh`, `Dockerfile`

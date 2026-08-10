@@ -2,6 +2,32 @@ import { ref, type Ref } from 'vue'
 import { useVaultClient } from '../plugin'
 import type { VaultError } from '../types'
 
+/**
+ * Password recovery for signed-out users, and password change for signed-in ones.
+ *
+ * State is created per call and is not shared between callers.
+ *
+ * Calls `POST /auth/password/reset`, `POST /auth/password/reset/confirm` and
+ * `POST /user/password`.
+ *
+ * @returns
+ * - `isLoading`: true while a call is outstanding.
+ * - `error`: the last `VaultError`, or null.
+ * - `requested`: true after `requestReset()` completed without error.
+ * - `confirmed`: true after `confirmReset()` succeeded.
+ * - `requestReset(email)`: asks the server to email a reset link. Never
+ *   throws. `requested` turning true means the request was accepted, **not**
+ *   that the address exists: the server answers identically either way so the
+ *   endpoint cannot be used to enumerate accounts. UI copy must not imply an
+ *   email was definitely sent.
+ * - `confirmReset(token, password)`: completes the reset with the emailed
+ *   token. Sets `error` and rethrows, so a form can keep the user on the step
+ *   for an expired token or a rejected password.
+ * - `changePassword(current, newPassword)`: changes the password for the
+ *   signed-in user. Sets `error` and rethrows.
+ *
+ * @throws Error if `createVaultPlugin` was never installed.
+ */
 export function usePasswordReset() {
   const client = useVaultClient()
   const isLoading: Ref<boolean> = ref(false)

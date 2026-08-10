@@ -11,9 +11,28 @@ import "context"
 // must handle authorization URL construction, authorization code exchange,
 // and user profile retrieval from the provider's API.
 type Provider interface {
+	// Name returns the provider key used in routes, the signed state parameter
+	// and the social-account rows, for example "google" or "github".
 	Name() string
+
+	// AuthURL builds the provider's authorization endpoint URL. state is the
+	// HMAC-signed CSRF/session binding, codeChallenge is the PKCE S256
+	// challenge, and nonce binds the resulting OIDC ID token to this login
+	// attempt. Non-OIDC providers ignore nonce, but callers must still pass a
+	// unique value: [OIDCProvider.VerifyIDToken] rejects a login whose nonce is
+	// empty. An implementation returns "" when it cannot build a URL, which the
+	// handler's redirect guard treats as a failure.
 	AuthURL(state, nonce, codeChallenge string) string
+
+	// Exchange swaps an authorization code for tokens, presenting codeVerifier
+	// as the PKCE proof. It never returns a partially populated TokenResponse:
+	// a non-nil result means the provider accepted the code.
 	Exchange(ctx context.Context, code, codeVerifier string) (*TokenResponse, error)
+
+	// UserInfo retrieves the profile behind accessToken and normalizes it to
+	// [UserInfo]. For OIDC issuers this is the fallback path; a verified ID
+	// token is preferred because it is signed and nonce-bound, while a userinfo
+	// response is only as trustworthy as the transport.
 	UserInfo(ctx context.Context, accessToken string) (*UserInfo, error)
 }
 

@@ -9,23 +9,69 @@ import (
 	"time"
 )
 
-// Config holds all bridge configuration.
+// Config holds all bridge configuration. Every field is sourced from a BRIDGE_*
+// environment variable named in its doc; see docs/bridge.md for the
+// operator-facing reference.
 type Config struct {
-	ListenAddr         string
-	RealUpstream       string
-	HoneypotUpstream   string
-	RateThreshold      int
-	RateWindow         time.Duration
+	// ListenAddr is the bind address for proxied traffic, the decoy pages and
+	// the /bridge/* admin and probe endpoints, which all share one listener
+	// (BRIDGE_LISTEN_ADDR). Default: ":8080".
+	ListenAddr string
+	// RealUpstream is the base URL of the real vault, where unflagged traffic
+	// goes (BRIDGE_REAL_UPSTREAM). Required.
+	RealUpstream string
+	// HoneypotUpstream is the base URL of the honeypot vault, where flagged
+	// traffic goes (BRIDGE_HONEYPOT_UPSTREAM). Required.
+	HoneypotUpstream string
+	// RateThreshold is the request count within RateWindow above which an IP
+	// takes a scoring penalty (BRIDGE_RATE_THRESHOLD). Default: 60.
+	RateThreshold int
+	// RateWindow is the sliding window over which requests are counted
+	// (BRIDGE_RATE_WINDOW). Default: 1m.
+	RateWindow time.Duration
+	// LoginFailThreshold is the number of 401s from POST /auth/login within
+	// LoginFailWindow before the failures start scoring
+	// (BRIDGE_LOGIN_FAIL_THRESHOLD). Default: 5.
 	LoginFailThreshold int
-	LoginFailWindow    time.Duration
-	FlagTTL            time.Duration
-	FlagThreshold      int
-	WebhookURL         string
-	AdminToken         string
-	RedisAddr          string
-	TrustedProxies     []*net.IPNet
-	RealIPHeader       string
-	LogLevel           string
+	// LoginFailWindow is the sliding window over which login failures are
+	// counted (BRIDGE_LOGIN_FAIL_WINDOW). Default: 15m.
+	LoginFailWindow time.Duration
+	// FlagTTL is how long a flag lasts before an IP is served the real vault
+	// again (BRIDGE_FLAG_TTL). Default: 24h. Lowering it shortens the blast
+	// radius of a false positive; raising it keeps an attacker in the honeypot
+	// across longer campaigns.
+	FlagTTL time.Duration
+	// FlagThreshold is the accumulated score at which an IP is flagged
+	// (BRIDGE_FLAG_THRESHOLD). Default: 100. Scores accumulate without decay,
+	// so this is a lifetime budget per IP, not a rate.
+	FlagThreshold int
+	// WebhookURL receives a JSON notification on each auto-flag and decoy hit
+	// (BRIDGE_WEBHOOK_URL). Empty disables notifications.
+	WebhookURL string
+	// AdminToken is the bearer token guarding /bridge/flag and /bridge/flags,
+	// read from the file named by BRIDGE_ADMIN_TOKEN_FILE. LoadConfig
+	// overwrites that file with zeros after reading it, so the secret does not
+	// outlive startup on disk. Empty fails closed: the admin API rejects every
+	// request rather than running unauthenticated.
+	AdminToken string
+	// RedisAddr enables shared, restart-surviving flag storage
+	// (BRIDGE_REDIS_ADDR). Empty keeps flags in this process's memory only,
+	// which means a restart clears them and each replica decides alone.
+	RedisAddr string
+	// TrustedProxies is the set of CIDRs whose RealIPHeader value is believed,
+	// parsed from the comma-separated BRIDGE_TRUSTED_PROXIES. Empty means no
+	// proxy is trusted and the peer address is always used. Listing a range
+	// that is not actually a proxy in front of this bridge lets a client set
+	// its own apparent IP, which both evades its own flag and lets it flag
+	// someone else's.
+	TrustedProxies []*net.IPNet
+	// RealIPHeader is the header carrying the client IP when the request
+	// arrives from a trusted proxy (BRIDGE_REAL_IP_HEADER). Empty disables
+	// header-based client IP entirely.
+	RealIPHeader string
+	// LogLevel controls log verbosity (BRIDGE_LOG_LEVEL). Default: "info".
+	// "debug" additionally logs every routing decision for a flagged IP.
+	LogLevel string
 }
 
 // LoadConfig reads configuration from environment variables.

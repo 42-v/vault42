@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/42-v/vault42/internal/repository"
@@ -98,20 +99,59 @@ func (s *MFAService) IsRequired() bool {
 	return s.mfaRequired
 }
 
-// MFAStatus describes the MFA state for a user.
+// MFAStatus describes the MFA state for a user. Its wire shape is defined by
+// mfaStatusWire below, which MarshalJSON produces; the tags here describe the
+// same fields for readers.
 type MFAStatus struct {
 	TOTPEnabled     bool     `json:"totp_enabled"`
 	WebAuthnEnabled bool     `json:"webauthn_enabled"`
 	BackupCodes     int      `json:"backup_codes_remaining"`
-	Methods         []string `json:"available_methods"`
+	Methods         []string `json:"mfa_methods"`
 	Required        bool     `json:"mfa_required"`
+}
+
+// mfaStatusWire is the serialized form of MFAStatus.
+//
+// The configured-factor list is emitted twice. mfa_methods is the canonical
+// name: it matches mfa_required, mfa_enabled and ProfileResponse.mfa_methods,
+// and the product has more than two factors, so "2fa" only survives in the URL
+// paths that BeOn3 is live on. available_methods is the pre-1.0.0 name and is
+// kept as a deprecated alias for clients written against it; remove it at the
+// next major version.
+type mfaStatusWire struct {
+	TOTPEnabled      bool     `json:"totp_enabled"`
+	WebAuthnEnabled  bool     `json:"webauthn_enabled"`
+	BackupCodes      int      `json:"backup_codes_remaining"`
+	Methods          []string `json:"mfa_methods"`
+	AvailableMethods []string `json:"available_methods"`
+	Required         bool     `json:"mfa_required"`
+}
+
+// MarshalJSON emits both method keys and guarantees the list is a JSON array.
+// A user with no factor configured has a nil Methods slice, and encoding that
+// directly yields null, which every strongly-typed client has to special-case.
+// Doing this here rather than at the call site means the invariant holds for
+// every MFAStatus, not only the ones GetStatus builds.
+func (s MFAStatus) MarshalJSON() ([]byte, error) {
+	methods := s.Methods
+	if methods == nil {
+		methods = []string{}
+	}
+	return json.Marshal(mfaStatusWire{
+		TOTPEnabled:      s.TOTPEnabled,
+		WebAuthnEnabled:  s.WebAuthnEnabled,
+		BackupCodes:      s.BackupCodes,
+		Methods:          methods,
+		AvailableMethods: methods,
+		Required:         s.Required,
+	})
 }
 
 // GetStatus returns the MFA status for a user.
 // Returns an error if the primary MFA methods (TOTP, WebAuthn) cannot be determined,
 // to ensure callers fail closed rather than silently skipping MFA.
 func (s *MFAService) GetStatus(ctx context.Context, userID string) (*MFAStatus, error) {
-	status := &MFAStatus{Required: s.mfaRequired}
+	status := &MFAStatus{Required: s.mfaRequired, Methods: []string{}}
 
 	totp, totpErr := s.totpRepo.GetByUserID(ctx, userID)
 	if totp != nil && totp.Verified {

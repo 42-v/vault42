@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
 )
@@ -88,8 +89,10 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("PUT /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.UpdateConfig))
 	mux.Handle("DELETE /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.DeleteConfig))
 
-	// Metrics
-	mux.Handle("GET /admin/metrics", withPerm(sessionAuth, rbac.MetricsRead, api.GetMetrics))
+	// Metrics: the route and its permission gate exist, the implementation does
+	// not. It answers 501 rather than a placeholder 200 so a caller cannot
+	// mistake an empty stub for a working metrics feed.
+	mux.Handle("GET /admin/metrics", withPerm(sessionAuth, rbac.MetricsRead, notImplemented))
 
 	// Admin user management
 	mux.Handle("GET /admin/admins", withPerm(sessionAuth, rbac.AdminsManage, api.ListAdmins))
@@ -140,4 +143,10 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 // withPerm applies SessionAuth + RBACCheck middleware to a handler.
 func withPerm(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
 	return sessionAuth(RBACCheck(perm)(h))
+}
+
+// notImplemented answers a route that is mounted and permission-gated but has
+// no implementation behind it, using the standard error envelope.
+func notImplemented(w http.ResponseWriter, _ *http.Request) {
+	httputil.WriteError(w, http.StatusNotImplemented, "not_implemented")
 }

@@ -37,6 +37,7 @@ func (stubBlobRepo) Create(context.Context, *model.Blob) error { return nil }
 func (stubBlobRepo) GetByIDAndPseudonym(context.Context, string, string) (*model.Blob, error) {
 	return nil, nil
 }
+
 func (stubBlobRepo) GetByRefAndPseudonym(context.Context, string, string) (*model.Blob, error) {
 	return nil, nil
 }
@@ -45,8 +46,8 @@ func (stubBlobRepo) ListByPseudonym(context.Context, string) ([]*model.Blob, err
 	return nil, nil
 }
 func (stubBlobRepo) GetQuota(context.Context, string) (*model.BlobQuota, error) { return nil, nil }
-func (stubBlobRepo) Delete(context.Context, string, string) error              { return nil }
-func (stubBlobRepo) DeleteAllForPseudonym(context.Context, string) error       { return nil }
+func (stubBlobRepo) Delete(context.Context, string, string) error               { return nil }
+func (stubBlobRepo) DeleteAllForPseudonym(context.Context, string) error        { return nil }
 
 var (
 	_ repository.IdentityRepository = stubIdentityRepo{}

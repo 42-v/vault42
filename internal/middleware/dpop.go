@@ -14,6 +14,14 @@ import (
 // DPoP validates DPoP proof-of-possession when a DPoP header is present.
 // The cache parameter is used for JTI replay prevention (RFC 9449 §11.1).
 //
+// It binds nothing today. Binding requires the access token to carry a
+// "cnf.jkt" confirmation claim (RFC 9449 §6.1), and no vault42 code path sets
+// one, so every request takes the unbound path: a request without a proof
+// passes through, and a request with a proof has that proof checked against the
+// method, URI and access-token hash but never compared against a thumbprint the
+// token committed to. VAULT_DPOP_ENABLED is therefore experimental and
+// unsupported until token issuance populates cnf.jkt.
+//
 //nolint:gocognit // RFC 9449 mandates a sequence of checks (typ, alg, jwk, htm, htu, iat, jti, ath); splitting them obscures the spec mapping
 func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

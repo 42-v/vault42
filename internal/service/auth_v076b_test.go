@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // uniqueViolationErr returns an error that isUniqueViolation recognizes (SQLSTATE 23505).

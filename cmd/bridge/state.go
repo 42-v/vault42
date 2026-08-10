@@ -10,12 +10,26 @@ import (
 	"time"
 )
 
-// FlagEntry represents a flagged IP with metadata.
+// FlagEntry represents a flagged IP with metadata. It is the shape returned by
+// the admin API and, when Redis is configured, the shape persisted there.
 type FlagEntry struct {
-	IP        string    `json:"ip"`
-	Reason    string    `json:"reason"`
-	Score     int       `json:"score"`
+	// IP is the client address the flag applies to, as resolved by the
+	// trusted-proxy rules in Config.
+	IP string `json:"ip"`
+	// Reason records what triggered the flag: "auto:automation_ua",
+	// "auto:rate_exceeded", "auto:score", "auto:login_failures",
+	// "decoy:<path>", or the operator's own string for a manual flag, which
+	// defaults to "manual flag" when none is supplied.
+	Reason string `json:"reason"`
+	// Score is the accumulated score at the moment of flagging. A decoy hit
+	// records 100 rather than a computed total, since it bypasses scoring.
+	Score int `json:"score"`
+	// FlaggedAt is when the flag was created.
 	FlaggedAt time.Time `json:"flagged_at"`
+	// ExpiresAt is when the flag lapses and the IP is served the real vault
+	// again. Set from Config.FlagTTL at creation. Traffic from a flagged IP
+	// does not extend it, so a flag ages out on wall-clock time rather than on
+	// silence; only a fresh Flag call for the same IP restarts the clock.
 	ExpiresAt time.Time `json:"expires_at"`
 }
 

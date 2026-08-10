@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/42-v/vault42/internal/service"
 )
 
 // StatusResponse is returned by endpoints that indicate success/failure with a single status field.
@@ -27,12 +29,19 @@ type VerifiedResponse struct {
 	Verified bool `json:"verified"`
 }
 
-// ProfileResponse is returned by GET /user/profile.
+// ProfileResponse is returned by GET /user/profile and PUT /user/profile.
+//
+// AvatarURL closes the write-only gap: PUT accepts avatar_url and the data
+// export returns it, so a client that set it had no way to read it back short
+// of an Art. 15 export.
+//
+// MFAMethods is always an array, never null.
 type ProfileResponse struct {
 	ID            string    `json:"id"`
 	Email         string    `json:"email"`
 	EmailVerified bool      `json:"email_verified"`
 	DisplayName   string    `json:"display_name"`
+	AvatarURL     string    `json:"avatar_url"`
 	Locale        string    `json:"locale"`
 	MFARequired   bool      `json:"mfa_required"`
 	MFAEnabled    bool      `json:"mfa_enabled"`
@@ -60,8 +69,13 @@ type SessionInfo struct {
 }
 
 // SessionsResponse is returned by GET /user/sessions.
+//
+// Total carries the standard list-envelope count. The endpoint is unpaged
+// today, so it equals the length of Sessions; carrying the key now means limit
+// and offset can be added later without changing the response shape.
 type SessionsResponse struct {
 	Sessions []SessionInfo `json:"sessions"`
+	Total    int           `json:"total"`
 }
 
 // DeviceInfo represents a single device in the devices list.
@@ -77,6 +91,7 @@ type DeviceInfo struct {
 // DevicesResponse is returned by GET /user/devices.
 type DevicesResponse struct {
 	Devices []DeviceInfo `json:"devices"`
+	Total   int          `json:"total"`
 }
 
 // RenameResponse is returned after renaming a device.
@@ -95,11 +110,34 @@ type BlobUploadResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// BlobListResponse is returned by GET /user/blobs.
+// BlobListResponse is returned by GET /user/blobs. Its wire shape is defined by
+// blobListWire below, which MarshalJSON produces; the tags here describe the
+// same fields for readers.
 type BlobListResponse struct {
 	Blobs any `json:"blobs"`
+	Count int `json:"total"`
+	Quota any `json:"quota"`
+}
+
+// blobListWire is the serialized form of BlobListResponse. The element count is
+// emitted twice: total is the name every list endpoint uses, and count is the
+// pre-1.0.0 name that the published Vue SDK reads (BlobListResult.count in
+// packages/vue/src/types.ts). Remove count at the next major version.
+type blobListWire struct {
+	Blobs any `json:"blobs"`
+	Total int `json:"total"`
 	Count int `json:"count"`
 	Quota any `json:"quota"`
+}
+
+// MarshalJSON publishes the element count under both names.
+func (r BlobListResponse) MarshalJSON() ([]byte, error) {
+	return json.Marshal(blobListWire{
+		Blobs: r.Blobs,
+		Total: r.Count,
+		Count: r.Count,
+		Quota: r.Quota,
+	})
 }
 
 // ClientTokenResponse is returned by POST /client/token.
@@ -223,6 +261,12 @@ type DataExportResponse struct {
 	Blobs          []DataExportBlob          `json:"blobs"`
 	SocialAccounts []DataExportSocialAccount `json:"social_accounts"`
 	AuditEvents    []DataExportAuditEvent    `json:"audit_events"`
+
+	// ServiceDocuments carries the decrypted service-scoped documents held about
+	// this subject, including ones marked private. A service's privacy from other
+	// services is not privacy from the data subject: Art. 15 entitles them to the
+	// personal data, not to the subset the authoring service chose to publish.
+	ServiceDocuments []*service.ServiceDocumentExport `json:"service_documents"`
 
 	// AuditEventsTotal is how many user-scoped audit events are held, which can
 	// exceed the number in AuditEvents: the export caps the list at

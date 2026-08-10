@@ -47,6 +47,16 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// Generates PKCE challenge and state, stores them in sessionStorage,
     /// then navigates the browser to Vault's login page.
     /// </summary>
+    /// <returns>
+    /// A task that completes once the PKCE verifier and state have been persisted and navigation
+    /// has been requested. It does not represent a completed login: the browser leaves the app, and
+    /// the flow resumes in <see cref="HandleCallbackAsync"/> on the redirect back.
+    /// </returns>
+    /// <remarks>
+    /// The verifier and the state nonce are written to sessionStorage before navigating, because
+    /// the full page load that follows discards everything held in memory. Both are required on
+    /// return: without them the callback cannot complete and fails closed.
+    /// </remarks>
     public async Task LoginAsync()
     {
         var verifier = Pkce.GenerateVerifier();
@@ -73,7 +83,18 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// Handle the callback after Vault redirects back with an authorization code.
     /// Validates state, exchanges code for tokens via PKCE, and establishes the session.
     /// </summary>
+    /// <param name="callbackUri">
+    /// The full redirect URI the browser landed on, including its query string. Pass
+    /// <c>NavigationManager.Uri</c> unmodified.
+    /// </param>
     /// <returns>True if authentication succeeded, false on error.</returns>
+    /// <remarks>
+    /// Every failure path returns false rather than throwing, including a provider-reported error,
+    /// a missing code, and a <c>state</c> that does not match the stored nonce. The state
+    /// comparison is constant-time and its mismatch clears the stored state, so a replayed or
+    /// injected callback cannot be retried against the same nonce. Callers must treat false as
+    /// "not signed in" and must not infer a reason from it.
+    /// </remarks>
     public async Task<bool> HandleCallbackAsync(string callbackUri)
     {
         var uri = new Uri(callbackUri);
@@ -213,6 +234,13 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// <summary>
     /// Log out — clears all tokens and optionally calls the Vault logout endpoint.
     /// </summary>
+    /// <returns>A task that completes once local state is cleared and navigation away has been requested.</returns>
+    /// <remarks>
+    /// Local tokens are cleared and the refresh timer stopped before the server is told anything,
+    /// so a server that is unreachable still leaves the app signed out. The server call is
+    /// best-effort and its failure is swallowed, which means the session may survive server-side
+    /// even though this returned successfully.
+    /// </remarks>
     public async Task LogoutAsync()
     {
         var accessToken = _store.AccessToken;
@@ -268,6 +296,16 @@ public sealed class VaultAuthService : IAsyncDisposable
         _refreshTimer = null;
     }
 
+    /// <summary>
+    /// Stops the background refresh timer and disposes the token store.
+    /// </summary>
+    /// <returns>A task that completes once the timer is stopped and the store has released its resources.</returns>
+    /// <remarks>
+    /// This does not sign the user out. Tokens persisted in browser storage survive disposal, so a
+    /// later <see cref="TryRestoreSessionAsync"/> can pick the session back up. Call
+    /// <see cref="LogoutAsync"/> when the intent is to end the session. The service is registered
+    /// as a singleton by <c>AddVaultAuth</c>, so in a normal app the container owns this call.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         StopRefreshTimer();

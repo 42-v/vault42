@@ -16,9 +16,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ repository.UserRepository         = (*mockUserRepo)(nil)
-	_ repository.ClientRepository       = (*mockClientRepo)(nil)
-	_ repository.AdminUserRepository    = (*mockAdminUserRepo)(nil)
+	_ repository.UserRepository      = (*mockUserRepo)(nil)
+	_ repository.ClientRepository    = (*mockClientRepo)(nil)
+	_ repository.AdminUserRepository = (*mockAdminUserRepo)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -462,9 +462,9 @@ func writeTemp(t *testing.T, content string) string {
 // Table for FilterUserRoles covering reserved stripping and edges.
 func TestFilterUserRoles_Table(t *testing.T) {
 	tests := []struct {
-		name  string
-		in    []string
-		want  []string
+		name string
+		in   []string
+		want []string
 	}{
 		{"nil", nil, nil},
 		{"empty", []string{}, nil},
@@ -504,21 +504,25 @@ func (m *mockAdminUserRepo) Create(_ context.Context, u *model.AdminUser) error 
 	m.users[u.Username] = u
 	return nil
 }
+
 func (m *mockAdminUserRepo) GetByUsername(_ context.Context, un string) (*model.AdminUser, error) {
 	return m.users[un], nil
 }
-func (m *mockAdminUserRepo) GetByID(context.Context, string) (*model.AdminUser, error) { return nil, nil }
-func (m *mockAdminUserRepo) List(context.Context) ([]*model.AdminUser, error)     { return nil, nil }
-func (m *mockAdminUserRepo) Count(context.Context) (int, error)                  { return 0, nil }
-func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error      { return nil }
+
+func (m *mockAdminUserRepo) GetByID(context.Context, string) (*model.AdminUser, error) {
+	return nil, nil
+}
+func (m *mockAdminUserRepo) List(context.Context) ([]*model.AdminUser, error) { return nil, nil }
+func (m *mockAdminUserRepo) Count(context.Context) (int, error)               { return 0, nil }
+func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error   { return nil }
 func (m *mockAdminUserRepo) IncrementFailedLogin(context.Context, string) (int, error) {
 	return 0, nil
 }
-func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error           { return nil }
-func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error       { return nil }
+func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error             { return nil }
+func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error         { return nil }
 func (m *mockAdminUserRepo) UpdateLastTOTPCounter(context.Context, string, int64) error { return nil }
-func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error            { return nil }
-func (m *mockAdminUserRepo) Revoke(context.Context, string) error                     { return nil }
+func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error              { return nil }
+func (m *mockAdminUserRepo) Revoke(context.Context, string) error                       { return nil }
 
 // TestLoad_Table covers happy and all error paths in Load/validate.
 func TestLoad_Table(t *testing.T) {
