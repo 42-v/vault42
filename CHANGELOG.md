@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.9.9-B (2026-08-09)
+
+The nightly security scan went red on 2026-08-08 against a tree that had not changed since
+0.9.9 shipped: CVE-2026-67213 was published against `nanoid`, which reaches this repository
+only as a transitive dependency of `postcss`. The vulnerable function is never called —
+`postcss` imports `nanoid/non-secure` and uses the plain generator for source-map input ids,
+not `customAlphabet` — but the Trivy source scan gates on the lockfile rather than on
+reachability, and `exit-code: 1` makes it a hard gate rather than a report.
+
+Fixing that took one line of `pnpm.overrides`, so the release became the compliance pass the
+red nightly kept pointing at: nothing was watching the dependency floors between scans, and
+pulling that thread found that Access Control had no compliance coverage at all. Coverage is
+unchanged at 99.42% — see the note under Tests for why it could not move — which is why this
+is a second cut of 0.9.9 and not a new rung.
+
+### Security
+
+* raise `nanoid` to 3.3.18 through a `pnpm.overrides` floor, clearing CVE-2026-67213 (HIGH,
+  an unbounded loop in `customAlphabet`). The floor is bounded to `<4` deliberately: nanoid 5
+  and 6 are ESM-only and expose no CommonJS entry point, while `postcss@8.5.25` reaches its
+  generator through `require('nanoid/non-secure')` and asks for the `^3.3.16` line. An
+  unbounded `>=3.3.17` would have resolved to 6.0.1 and broken the frontend build.
+
+### Compliance
+
+ASVS coverage goes from 70 checks to 76, opening two chapters the suite had never touched.
+
+* **V4 (Access Control) was entirely absent.** `internal/rbac` and `internal/middleware` both
+  sat at 100% statement coverage the whole time, which is exactly why the gap survived: line
+  coverage records that a permission table was read, not that it grants the right things.
+  Five checks now assert the properties instead of the lines. `viewer` may hold only `list`
+  and `read` verbs, so a state-changing permission added to the read-only role fails the
+  build rather than the next review. Roles must strictly widen from viewer through operator
+  to super_admin. An unrecognized role — empty, `root`, `SUPER_ADMIN`, or one with stray
+  whitespace — is granted nothing. `RequireScope`, which gates the KMS unwrap oracle, matches
+  scopes exactly: neither `kms` nor `kms:unwrap:readonly` opens `kms:unwrap`.
+* **Admin routes are now checked against the permissions they are wired to.** Every mutating
+  route in the admin gateway must be gated by a permission `viewer` does not hold. This is
+  the failure the RBAC tests structurally cannot see: the permission table stays perfectly
+  correct while an endpoint enforces the wrong entry, and `POST /admin/keys/rotate` wired to
+  `keys:list` reads as a normal line of router code. The check parses `router.go` with
+  `go/ast` rather than matching text, and validates each constant against the real permission
+  vocabulary so a rename fails loudly instead of silently resolving to nothing.
+* **V14.2 (Dependency)** — `TestASVS_V14_2_1_PnpmOverrideFloors` reads every `>=` floor
+  declared in `pnpm.overrides` and asserts each version resolved in `pnpm-lock.yaml` is at or
+  above it. Parent-scoped overrides (`eslint>ajv`) are excluded, because they exist precisely
+  to hold one consumer below the root floor. Until now a lockfile regenerated without the
+  overrides stayed invisible until the next 3 AM scan; the floors are enforced on every CI run.
+
+### Tests
+
+* statement coverage is unchanged at 99.42% and could not have moved: `internal/rbac` and
+  `internal/middleware` were already fully covered before these tests were written. Of the 48
+  statements still uncovered across `internal/`, effectively all are defensive branches that
+  cannot be reached with validated inputs — `aes.NewCipher` failing after a 32-byte key check,
+  `hkdf.Key` failing in `kms.Wrap`/`kms.Unwrap` at a fixed output length — or need fault
+  injection and a Redis container the coverage suite does not run. They were left alone rather
+  than reached for by restructuring production code around the metric.
+
 ## 0.9.9 (2026-07-31)
 
 Coverage **96.67% → 99.42%** (8178 of 8226 statements), which is where the version

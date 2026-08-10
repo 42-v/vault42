@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "tests": 3115,
-  "passed": "3115 passed",
+  "tests": 3123,
+  "passed": "3123 passed",
   "coverage": "99.42%",
   "coverageNum": 99.42,
-  "packages": 33,
-  "goFiles": 158,
-  "goLines": 27362,
-  "testFiles": 495,
+  "packages": 35,
+  "goFiles": 159,
+  "goLines": 27639,
+  "testFiles": 497,
   "directDeps": 3,
   "transitiveDeps": 18
 }
