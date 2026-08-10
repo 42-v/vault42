@@ -223,15 +223,32 @@ done < <(cut -f1 "$CREATOR_TMP" | sort -u)
 # ═══════════════════════════════════════════════════════════════
 COV_NUM=$(echo "$TOTAL_COV" | tr -d '%')
 
+# Reachable coverage comes from the same tool the release gate uses, so the badge
+# cannot claim a figure the gate would reject. Excluded statements are the ones no
+# test can reach; .coverage-exclusions.json records why, per statement.
+REACHABLE_COV=$(python3 scripts/cov-gaps.py "$COVER_FILE" --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+reach = d["total_statements"] - d["excluded_statements"]
+if reach:
+    print("%.2f" % (100.0 * d["covered_statements"] / reach))
+' 2>/dev/null || true)
+[ -n "$REACHABLE_COV" ] || REACHABLE_COV="$COV_NUM"
+
+VERSION_STR=$(cat VERSION 2>/dev/null || echo "0.0.0")
+
 mkdir -p docs
 
 cat > docs/badges.json <<EOF
 {
   "schemaVersion": 1,
+  "version": "${VERSION_STR}",
   "tests": ${PASSED},
   "passed": "${PASSED} passed",
   "coverage": "${TOTAL_COV}",
   "coverageNum": ${COV_NUM},
+  "reachableCoverage": "${REACHABLE_COV}%",
+  "reachableCoverageNum": ${REACHABLE_COV},
   "packages": ${PKGS},
   "goFiles": ${GO_FILES},
   "goLines": ${GO_LINES},
@@ -312,7 +329,10 @@ print(len(deps))
 #     Uses sentinel: <!-- badges -->...<!-- /badges -->
 # ═══════════════════════════════════════════════════════════════
 if [ -f README.md ]; then
-  COV_ENCODED=$(echo "$TOTAL_COV" | sed 's/%/%25/')
+  # The badge reports reachable coverage and says so, because the bare figure is
+  # the one a reader will quote back. The unqualified total is in docs/badges.json
+  # and docs/test-coverage.md for anyone who wants to check the difference.
+  COV_ENCODED="${REACHABLE_COV}%25_reachable"
   if [ "$(echo "$COV_NUM >= 80" | bc)" -eq 1 ]; then
     COV_COLOR="155724"
   elif [ "$(echo "$COV_NUM >= 60" | bc)" -eq 1 ]; then
@@ -321,7 +341,14 @@ if [ -f README.md ]; then
     COV_COLOR="red"
   fi
 
-  GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
+  # Report what ships, not the floor the module declares it can build against. The
+  # two differ exactly when it matters: a security bump moves `toolchain` and leaves
+  # the `go` directive alone, so deriving from `go` published Go-1.26.0 on releases
+  # cut specifically to clear a toolchain CVE.
+  GO_VER=$(grep '^toolchain ' go.mod | awk '{print $2}' | sed 's/^go//')
+  if [ -z "$GO_VER" ]; then
+    GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
+  fi
   NODE_VER=$(node --version 2>/dev/null | tr -d 'v' | cut -d. -f1)
   VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
   TOTAL_TESTS=$((PASSED + FE_TESTS))

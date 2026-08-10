@@ -1,9 +1,27 @@
-name: Nightly Security Scan
+name: Security Scan
 
+# Also the security gate for pull requests and for the release ref: ci.yml and
+# release.yml call this workflow instead of copying its jobs, so a PR cannot
+# introduce a HIGH CVE that only surfaces on main at 03:00 the next day.
+#
+# `full_scan` adds the image builds and the attack suite. Off for pull requests,
+# where they are the slowest jobs and the source scans carry the signal; on for
+# the nightly and for a release.
 on:
   schedule:
     - cron: '0 3 * * *' # 3 AM UTC daily
-  workflow_dispatch: # manual trigger
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: 'Also build and scan images, and run the attack suite'
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      full_scan:
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -46,7 +64,7 @@ jobs:
       - name: Check findings
         run: |
           if [ -s gosec-results.json ]; then
-            cat gosec-results.json | python3 -c "
+            python3 -c "
           import json, sys
           data = json.load(sys.stdin)
           issues = data.get('Issues', [])
@@ -56,7 +74,7 @@ jobs:
                   print(f\"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}\")
               sys.exit(1)
           print(f'No HIGH/CRITICAL findings ({len(issues)} total issues)')
-          "
+          " < gosec-results.json
           fi
 
   trivy-source:
@@ -75,6 +93,7 @@ jobs:
 
   trivy-image:
     name: Trivy Image Scan
+    if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
@@ -102,6 +121,7 @@ jobs:
 
   attack-suite:
     name: Attack Test Suite
+    if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

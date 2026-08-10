@@ -1,0 +1,116 @@
+# Release artifacts for the GitHub release: binaries, checksums, SBOMs and a
+# detached cosign signature over the checksum file.
+#
+# Container images are NOT built here. `.github/workflows/release.yml` builds
+# them with buildx so they keep their multi-arch index, BuildKit provenance and
+# SPDX attestations, and their existing cosign keyless signatures.
+#
+# `release.disable` is on because softprops/action-gh-release owns the GitHub
+# release object; goreleaser only produces dist/ and the workflow attaches it.
+version: 2
+
+project_name: vault42
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: vault
+    main: ./cmd/vault
+    binary: vault
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.GitCommit={{ .FullCommit }}
+      - -X main.BuildTime={{ .CommitDate }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: bridge
+    main: ./cmd/bridge
+    binary: bridge
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.GitCommit={{ .FullCommit }}
+      - -X main.BuildTime={{ .CommitDate }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: admin-gateway
+    main: ./cmd/admin-gateway
+    binary: admin-gateway
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.GitCommit={{ .FullCommit }}
+      - -X main.BuildTime={{ .CommitDate }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: vault42
+    ids: [vault, bridge, admin-gateway]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    # The archived server needs its schema and its mail templates; the embedded
+    # SPA in cmd/vault is the development placeholder unless the tree was built
+    # by Dockerfile or scripts/build-all.sh, which is documented in the release.
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - src: migrations/*
+        dst: migrations
+      - src: internal/email/templates/*
+        dst: templates
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - "${artifact}.sbom.json"
+
+# Keyless blob signing over the checksum file. One signature covers every
+# artifact, because every artifact's digest is in the file being signed.
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    artifacts: checksum
+    certificate: "${artifact}.pem"
+    output: true
+    args:
+      - sign-blob
+      - --yes
+      - --output-certificate=${certificate}
+      - --output-signature=${signature}
+      - ${artifact}
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  disable: true
+
+release:
+  disable: true

@@ -16,11 +16,15 @@ cp -r web/dist internal/frontend/dist
 echo "=== Go build + vet ==="
 scripts/check.sh
 
+# Stamp the same version the release pipeline stamps, so a locally built binary
+# does not report "dev" while claiming to be the thing that shipped.
+LDFLAGS="-s -w $(scripts/version-bump.sh --ldflags)"
+
 echo "=== Bridge binary ==="
-CGO_ENABLED=0 go build -ldflags="-s -w" -o bridge ./cmd/bridge
+CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o bridge ./cmd/bridge
 
 echo "=== Admin Gateway binary ==="
-CGO_ENABLED=0 go build -ldflags="-s -w" -o admin-gateway ./cmd/admin-gateway
+CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o admin-gateway ./cmd/admin-gateway
 
 echo "=== Docker images ==="
 docker build -t vault42:dev .

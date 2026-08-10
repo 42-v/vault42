@@ -77,3 +77,7 @@ docs/localhost-profile.md
 
 # Local tooling state (never published)
 .fleet/
+
+# Python bytecode from scripts/
+__pycache__/
+*.pyc

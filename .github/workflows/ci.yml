@@ -33,8 +33,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # -coverpkg attributes coverage to the internal packages under test rather
+      # than to the test binary, which is what makes the profile comparable with
+      # the canonical run in coverage-gate.
       - name: Unit + handler + middleware + service tests
-        run: go test ./internal/... -count=1 -race -v -coverprofile=coverage.out 2>&1 | tee test-output.txt
+        run: go test ./internal/... -count=1 -race -v -coverprofile=coverage-unit.out -coverpkg=./internal/... 2>&1 | tee test-output.txt
 
       - name: Attack tests
         run: go test ./tests/attack/... -count=1 -v -timeout 300s 2>&1 | tee -a test-output.txt
@@ -45,11 +48,11 @@ jobs:
       - name: E2E tests (skipped if no server)
         run: go test ./tests/e2e/... -count=1 -v 2>&1 | tee -a test-output.txt
 
-      - name: Upload coverage
+      - name: Upload unit coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage
-          path: coverage.out
+          name: coverage-unit
+          path: coverage-unit.out
 
       - name: Upload test output
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -58,11 +61,52 @@ jobs:
           name: test-output
           path: test-output.txt
 
+  # The coverage number is the version number: 0.9.2 was 92.42%, 0.9.9 was
+  # 99.42%. Until this job existed nothing checked it: the profile was uploaded
+  # as an artifact and release-check.sh printed the total and passed regardless.
+  coverage-gate:
+    name: Go coverage gate
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The canonical package set from scripts/lib/coverage-env.sh, so this
+      # profile, docs/test-coverage.md and the README badge always describe the
+      # same run. Includes the DB-backed suites, which need a container runtime.
+      - name: Canonical coverage run
+        shell: bash
+        run: |
+          set -eo pipefail
+          source scripts/lib/coverage-env.sh
+          cov_require_runtime
+          cov_run coverage.out coverage-test-output.txt
+          cov_check_failures coverage-test-output.txt
+
+      - name: Gate
+        run: scripts/release-check.sh --coverage-only coverage.out
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage-test-output.txt
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -88,6 +132,135 @@ jobs:
       - name: Test web
         run: pnpm -C web test:coverage
 
+      # eslint.config.mjs is 94 lines that nothing has ever run. The tree it
+      # inherits has 53 errors, so the blocking gate is scoped to the files a
+      # change touches; the full run below reports the rest without failing.
+      - name: Lint changed files
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -eo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD \
+            -- '*.js' '*.mjs' '*.cjs' '*.ts' '*.tsx' '*.vue')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no JS/TS/Vue files changed"
+            exit 0
+          fi
+          printf 'linting %d changed file(s)\n' "${#files[@]}"
+          pnpm exec eslint "${files[@]}"
+
+      - name: Lint whole tree (report only)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm exec eslint . -f json -o eslint.json || true
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import collections, json, os
+          data = json.load(open("eslint.json"))
+          errors = sum(f["errorCount"] for f in data)
+          warnings = sum(f["warningCount"] for f in data)
+          print(f"### eslint: {errors} errors, {warnings} warnings\n")
+          rules = collections.Counter(m.get("ruleId") for f in data for m in f["messages"])
+          print("| rule | count |\n|---|---|")
+          for rule, n in rules.most_common(20):
+              print(f"| `{rule}` | {n} |")
+          PY
+
+  # .golangci.yml is 119 lines of tuned configuration that no workflow, script or
+  # hook has ever invoked. `revive: exported` is on now, and it is the check that
+  # catches undocumented exported API, so the tree starts with a backlog. New
+  # findings block; the backlog is reported and burned down.
+  golangci:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.6.2
+          args: --timeout 15m --new-from-merge-base=origin/${{ github.base_ref || 'main' }}
+
+      - name: Full run (report only)
+        continue-on-error: true
+        shell: bash
+        run: |
+          golangci-lint run --timeout 15m --output.json.path=golangci.json ./... || true
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import collections, json, os
+          issues = json.load(open("golangci.json")).get("Issues") or []
+          print(f"### golangci-lint: {len(issues)} pre-existing issues\n")
+          by_linter = collections.Counter(i["FromLinter"] for i in issues)
+          by_pkg = collections.Counter(os.path.dirname(i["Pos"]["Filename"]) for i in issues)
+          print("| linter | count |\n|---|---|")
+          for k, n in by_linter.most_common():
+              print(f"| `{k}` | {n} |")
+          print("\n| package | count |\n|---|---|")
+          for k, n in by_pkg.most_common(25):
+              print(f"| `{k}` | {n} |")
+          PY
+
+  # govulncheck, gosec and Trivy used to run only at 03:00 UTC on main, so a PR
+  # could introduce a HIGH CVE and merge green.
+  security:
+    name: Security
+    uses: ./.github/workflows/nightly-security.yml
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      - name: Lint
+        run: helm lint charts/vault
+
+      - name: Render every values file
+        shell: bash
+        run: |
+          set -eu
+          helm template ci charts/vault > /dev/null
+          for values in charts/vault/values-*.yaml; do
+            echo "rendering $values"
+            helm template ci charts/vault -f "$values" > /dev/null
+          done
+
+      # values.yaml leaves image.tag empty and deployment.yaml:36 falls back to
+      # .Chart.AppVersion, so an appVersion naming a tag that was never published
+      # is an ImagePullBackOff on every default install. That was the state from
+      # 0.4.2 to 0.9.9.
+      - name: Default install resolves a published tag
+        shell: bash
+        run: |
+          set -eu
+          rendered=$(helm template ci charts/vault | grep -oE 'ghcr\.io/42-v/vault42:[^"]+' | head -1)
+          appversion=$(grep -oE '^appVersion: "?[^"]+' charts/vault/Chart.yaml | sed 's/^appVersion: "\?//')
+          echo "rendered=$rendered appVersion=$appversion"
+          [ "$rendered" = "ghcr.io/42-v/vault42:${appversion}" ]
+
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Every manifest agrees with VERSION
+        run: scripts/version-bump.sh --check
+
   changes:
     name: Detect Go changes
     runs-on: ubuntu-latest
@@ -103,6 +276,24 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+
+  modules:
+    name: Go module hygiene
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go mod verify
+        run: go mod verify
+
+      - name: go mod tidy is a no-op
+        run: go mod tidy -diff
 
   fuzz:
     name: Fuzz Tests
@@ -147,6 +338,28 @@ jobs:
 
       - name: Build admin-gateway
         run: CGO_ENABLED=0 go build -o /dev/null ./cmd/admin-gateway
+
+  # The release artifacts are built by goreleaser, not by the Dockerfiles, so a
+  # config error surfaces here rather than after a tag is already pushed.
+  goreleaser-config:
+    name: GoReleaser config
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: check
 
   lint:
     name: Hadolint

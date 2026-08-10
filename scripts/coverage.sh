@@ -7,21 +7,29 @@
 #
 # CI (and scripts/precommit) set TEST_OUTPUT_FILE + COVERAGE_FILE to reuse
 # artifacts from an earlier run instead of re-running the suite.
+#
+# The profile outlives the run. It is the only artifact that can answer "which
+# statements are uncovered", which is what scripts/cov-gaps.py and the exclusion
+# gate in .coverage-exclusions.json need; writing it to a mktemp deleted on exit
+# meant the canonical run destroyed its own evidence and left docs/test-coverage.md
+# as the sole record, at package granularity.
+#
+# COVERAGE_FILE and TEST_OUTPUT_FILE keep their meaning: when they name a
+# finished run they are reused as input; when they name a path that does not
+# exist yet, this run writes there. Unset, both default under coverage/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # shellcheck source=lib/coverage-env.sh
 source "$(dirname "$0")/lib/coverage-env.sh"
 
-COVER_FILE=$(mktemp)
-TEST_OUT=$(mktemp)
-trap 'rm -f "$COVER_FILE" "$TEST_OUT"' EXIT
+COVER_FILE="${COVERAGE_FILE:-coverage/coverage.out}"
+TEST_OUT="${TEST_OUTPUT_FILE:-coverage/test-output.txt}"
+mkdir -p "$(dirname "$COVER_FILE")" "$(dirname "$TEST_OUT")"
 
 if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
    [ -n "${COVERAGE_FILE:-}" ] && [ -f "${COVERAGE_FILE}" ]; then
   echo "Using pre-computed test artifacts"
-  cp "$TEST_OUTPUT_FILE" "$TEST_OUT"
-  cp "$COVERAGE_FILE" "$COVER_FILE"
 else
   cov_require_runtime
   echo "Running full-suite tests with coverage (DOCKER_HOST=$DOCKER_HOST)..."
@@ -78,6 +86,7 @@ TOTAL=$(cov_total "$COVER_FILE")
 } > docs/test-coverage.md
 
 echo "docs/test-coverage.md updated: $TESTS tests, $TOTAL coverage"
+echo "profile kept at $COVER_FILE (scripts/cov-gaps.py $COVER_FILE --json for file:line gaps)"
 
 # Gate last, so the report is written even on failure — but never exit 0 with a
 # number that a build break or failing test quietly deflated.

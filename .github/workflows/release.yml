@@ -1,18 +1,32 @@
 name: Release
 
-# Releases are commit-message-driven. The head commit of each push to
-# main is inspected; if its first line begins with a semantic version
-# (e.g. `0.4.2 …` or `v0.4.2 …`, optionally with a `-prerelease`
-# suffix), every artifact is built and published at that version.
-# Pushes whose head commit does not start with a version are no-ops.
+# Releases are tag-driven. Pushing an annotated `vX.Y.Z` tag publishes every
+# artifact at that version.
+#
+# The previous trigger read the version off the head commit's subject on main,
+# which commitlint rejects: a subject that fires the release cannot pass the
+# commit lint, and a subject that passes the lint cannot fire the release. Every
+# release to date was cut by hand-editing the squash subject in the merge
+# dialog, and 0.8.6 was lost when that edit was skipped once: no tag, no
+# release, no image, and nuget.org jumps 0.8.0 to 0.9.0.
+#
+# workflow_dispatch re-runs a release for a tag that already exists, so a
+# registry outage no longer costs a version number.
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without the leading v (e.g. 1.0.0)'
+        required: true
 
 permissions:
   contents: write
   packages: write
-  id-token: write # cosign keyless signing
+  id-token: write # cosign keyless signing and NuGet trusted publishing
 
 concurrency:
   group: release-${{ github.ref }}
@@ -20,35 +34,58 @@ concurrency:
 
 jobs:
   detect:
-    name: Detect release version
+    name: Resolve release version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.parse.outputs.version }}
       tag: ${{ steps.parse.outputs.tag }}
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
       - id: parse
         env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          REF_NAME: ${{ github.ref_name }}
+          DISPATCHED: ${{ inputs.version }}
         run: |
           set -eu
-          first=$(printf '%s' "$COMMIT_MESSAGE" | head -n1 | sed -E 's/^[[:space:]]+//')
-          if version=$(printf '%s' "$first" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' | head -n1); then
-            version=${version#v}
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$version"   >> "$GITHUB_OUTPUT"
-            echo "Detected release version: $version"
-          else
-            echo "Head commit does not start with a version; skipping release."
-          fi
+          version=${DISPATCHED:-${REF_NAME#v}}
+          printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' \
+            || { echo "::error::not a semantic version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version"    >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      # A tag on a branch that never merged would publish code main does not
+      # have, under a version number main will later reuse.
+      - name: Tag is an ancestor of main
+        run: |
+          set -eu
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_SHA is not an ancestor of origin/main"; exit 1; }
+
+      # The tag must agree with the version the tree ships, or the images, the
+      # NuGet packages and the chart all name different versions.
+      - name: Version consistency
+        run: scripts/release-check.sh --version-only "${{ steps.parse.outputs.version }}"
+
+  security:
+    name: Security
+    needs: detect
+    uses: ./.github/workflows/nightly-security.yml
+    with:
+      full_scan: true
 
   images:
     name: Build & push images (${{ needs.detect.outputs.version }})
-    needs: detect
-    if: needs.detect.outputs.version != ''
+    needs: [detect, security]
     runs-on: ubuntu-latest
     outputs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
       admin_digest: ${{ steps.build_admin.outputs.digest }}
+      bridge_digest: ${{ steps.build_bridge.outputs.digest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -61,6 +98,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve build timestamp
+        id: buildtime
+        run: echo "value=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push vault42
         id: build_vault
@@ -76,7 +117,7 @@ jobs:
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
@@ -97,7 +138,31 @@ jobs:
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      # charts/vault/values.yaml:357 has always pointed bridge mode at
+      # ghcr.io/42-v/vault42-bridge, which no release ever pushed, so
+      # values-bridge.yaml was undeployable from published artifacts.
+      - name: Build and push bridge
+        id: build_bridge
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.bridge
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/42-v/vault42-bridge:${{ needs.detect.outputs.version }}
+            ghcr.io/42-v/vault42-bridge:latest
+            ghcr.io/42-v/vault42-bridge:sha-${{ github.sha }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
@@ -110,14 +175,106 @@ jobs:
         env:
           VAULT_DIGEST: ${{ steps.build_vault.outputs.digest }}
           ADMIN_DIGEST: ${{ steps.build_admin.outputs.digest }}
+          BRIDGE_DIGEST: ${{ steps.build_bridge.outputs.digest }}
         run: |
-          cosign sign --yes ghcr.io/42-v/vault42@${VAULT_DIGEST}
-          cosign sign --yes ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}
+          cosign sign --yes "ghcr.io/42-v/vault42@${VAULT_DIGEST}"
+          cosign sign --yes "ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}"
+          cosign sign --yes "ghcr.io/42-v/vault42-bridge@${BRIDGE_DIGEST}"
+
+  # Every release before 1.0.0 shipped notes and nothing else: no binary, no
+  # SHA256SUMS, no SBOM, no detached signature.
+  artifacts:
+    name: Binaries, checksums & SBOMs
+    needs: [detect, security]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+
+      - name: Build release artifacts
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish,announce
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ needs.detect.outputs.tag }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS*
+            dist/*.sbom.json
+          if-no-files-found: error
+
+  chart:
+    name: Publish Helm chart
+    needs: [detect, security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      - name: Lint and render
+        run: |
+          set -eu
+          helm lint charts/vault
+          helm template release charts/vault > /dev/null
+          for values in charts/vault/values-*.yaml; do
+            helm template release charts/vault -f "$values" > /dev/null
+          done
+
+      - name: Package
+        run: |
+          helm package charts/vault \
+            --version "${{ needs.detect.outputs.version }}" \
+            --app-version "${{ needs.detect.outputs.version }}"
+
+      - name: Push to GHCR
+        id: push
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GHCR_USER" --password-stdin
+          helm push "vault-auth-${VERSION}.tgz" oci://ghcr.io/42-v/charts 2>&1 | tee push.log
+          digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign chart (keyless)
+        run: cosign sign --yes "ghcr.io/42-v/charts/vault-auth@${{ steps.push.outputs.digest }}"
 
   nuget:
     name: NuGet (${{ needs.detect.outputs.version }})
-    needs: detect
-    if: needs.detect.outputs.version != ''
+    needs: [detect, security]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -129,12 +286,19 @@ jobs:
             10.0.x
           dotnet-quality: preview
 
+      # packages/dotnet/tests/ existed for eleven releases and no workflow ever ran
+      # it: both NuGet packages were published without their tests executing.
+      - name: Test
+        run: dotnet test packages/dotnet/Vault42.sln -c Release
+
       - name: Pack
         run: |
           dotnet pack packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj \
-            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+            -c Release -o nupkgs --include-symbols -p:SymbolPackageFormat=snupkg \
+            -p:Version=${{ needs.detect.outputs.version }}
           dotnet pack packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj \
-            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+            -c Release -o nupkgs --include-symbols -p:SymbolPackageFormat=snupkg \
+            -p:Version=${{ needs.detect.outputs.version }}
 
       - name: Authenticate to NuGet (trusted publishing)
         id: nuget-login
@@ -149,32 +313,21 @@ jobs:
             --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --skip-duplicate
 
+  # nuget is deliberately not a dependency: nuget.org is a secondary consumer and
+  # is independently retryable, and making the GitHub release wait on it is how a
+  # registry hiccup used to cost the whole release.
   github-release:
-    name: GitHub release & tag
-    needs: [detect, images, nuget]
-    if: needs.detect.outputs.version != ''
+    name: GitHub release
+    needs: [detect, images, artifacts]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Tag commit
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          script: |
-            try {
-              await github.rest.git.createRef({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                ref:   `refs/tags/${{ needs.detect.outputs.tag }}`,
-                sha:   context.sha,
-              })
-            } catch (e) {
-              if (e.status === 422) {
-                core.info('Tag already exists, continuing')
-              } else {
-                throw e
-              }
-            }
+          name: release-artifacts
+          path: dist
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -183,10 +336,28 @@ jobs:
           name:        Vault42 ${{ needs.detect.outputs.version }}
           prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
           generate_release_notes: true
+          files: dist/*
           body: |
             **Commit:** ${{ github.sha }}
 
             ```
             docker pull ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
             docker pull ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
+            docker pull ghcr.io/42-v/vault42-bridge:${{ needs.detect.outputs.version }}
+            helm install vault oci://ghcr.io/42-v/charts/vault-auth --version ${{ needs.detect.outputs.version }}
+            ```
+
+            Images and the chart are signed with cosign keyless. The checksum file
+            carries a detached signature and its Fulcio certificate:
+
+            ```
+            cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
+              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+            cosign verify-blob vault42_${{ needs.detect.outputs.version }}_SHA256SUMS \
+              --signature vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.sig \
+              --certificate vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.pem \
+              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```

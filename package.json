@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "pnpm -C web dev",
     "build:vue": "pnpm -C packages/vue build",
-    "build:web": "pnpm -C web build"
+    "build:web": "pnpm -C web build",
+    "lint": "eslint ."
   },
   "pnpm": {
     "overrides": {
