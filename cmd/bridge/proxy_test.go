@@ -2684,6 +2684,118 @@ func TestWebhookCloseFlushesQueuedEvents(t *testing.T) {
 	ws.Close()
 }
 
+// TestWebhookDispatchStaysBoundedWhileAScannerFloodsTheDecoys covers what an
+// attacker can make the bridge do to somebody else. Every decoy hit raises an
+// event, the decoy branch runs ahead of the flag check so a repeat visitor
+// raises one on every request, and the caller chooses the request rate. If each
+// event gets its own goroutine and its own outbound POST, a scanner holds open
+// as many connections to the operator's alerting endpoint as it cares to open,
+// each for up to the client timeout. The bridge becomes an amplifier aimed at
+// the one service that is supposed to report the attack, and it costs the
+// attacker one cheap request per amplified connection.
+func TestWebhookDispatchStaysBoundedWhileAScannerFloodsTheDecoys(t *testing.T) {
+	const events = 200
+
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var inFlight, peak int
+
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+
+		<-release
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	ws := NewWebhookSender(hook.URL)
+
+	for i := 0; i < events; i++ {
+		ws.Send(map[string]interface{}{"event": "decoy_hit", "ip": "203.0.113.9"})
+	}
+
+	// Give the sender room to open everything it is willing to open. Nothing
+	// completes until release, so whatever it opened is still counted.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		seen := peak
+		mu.Unlock()
+		if seen > webhookWorkers {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := peak
+	mu.Unlock()
+
+	close(release)
+	ws.Close()
+
+	if got > webhookWorkers {
+		t.Errorf("the receiver saw %d concurrent deliveries for %d events, want at most %d; "+
+			"dispatch is unbounded, so a scanner sets how many connections the bridge opens against the alerting endpoint",
+			got, events, webhookWorkers)
+	}
+	if got == 0 {
+		t.Error("the receiver saw no deliveries at all, so the bound is not what this measured")
+	}
+}
+
+// TestWebhookSendAfterCloseIsInertRatherThanFatal guards the shutdown edge of a
+// worker pool. Bridge.Close runs after the HTTP server stops, but a handler that
+// is still unwinding can reach Send afterwards, and a queue-based sender that
+// hands that straight to a closed channel panics in a goroutine no recover can
+// reach, taking the process down during an orderly shutdown.
+func TestWebhookSendAfterCloseIsInertRatherThanFatal(t *testing.T) {
+	var calls int64
+	var mu sync.Mutex
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	ws := NewWebhookSender(hook.URL)
+	ws.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			ws.Send(map[string]interface{}{"event": "auto_flag", "ip": "203.0.113.9"})
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send blocked after Close, so a late handler would hang instead of returning")
+	}
+
+	ws.Close()
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 0 {
+		t.Errorf("the receiver was called %d times for events raised after Close, want 0", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency
 // ---------------------------------------------------------------------------

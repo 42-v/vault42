@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -348,11 +349,36 @@ func (b *Bridge) Close() {
 	b.webhook.Close()
 }
 
-// WebhookSender sends JSON webhook notifications.
+const (
+	// webhookWorkers caps how many deliveries are in flight at once. The
+	// request path raises events at whatever rate a caller can generate them,
+	// so without a cap the caller decides how many connections this process
+	// opens against the operator's alerting endpoint.
+	webhookWorkers = 8
+
+	// webhookQueueDepth is the burst a slow receiver may fall behind by before
+	// events are dropped. Deep enough that ordinary detection never reaches it,
+	// bounded so a flood costs fixed memory.
+	webhookQueueDepth = 1024
+)
+
+// WebhookSender sends JSON webhook notifications through a fixed pool of
+// delivery workers.
 type WebhookSender struct {
 	url    string
 	client *http.Client
+	queue  chan map[string]interface{}
 	wg     sync.WaitGroup
+
+	// mu guards closed against the queue send. Send holds it for read, Close
+	// takes it for write before closing the channel, so no send can be sitting
+	// in the select when the close happens.
+	mu     sync.RWMutex
+	closed bool
+
+	closeOnce sync.Once
+	dropOnce  sync.Once
+	dropped   atomic.Uint64
 }
 
 // NewWebhookSender creates a webhook sender. Returns nil-safe (all methods are no-ops if url is empty).
@@ -360,37 +386,79 @@ func NewWebhookSender(webhookURL string) *WebhookSender {
 	if webhookURL == "" {
 		return nil
 	}
-	return &WebhookSender{
+	ws := &WebhookSender{
 		url: webhookURL,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		queue: make(chan map[string]interface{}, webhookQueueDepth),
 	}
+
+	ws.wg.Add(webhookWorkers)
+	for i := 0; i < webhookWorkers; i++ {
+		go func() {
+			defer ws.wg.Done()
+			for payload := range ws.queue {
+				ws.deliver(payload)
+			}
+		}()
+	}
+
+	return ws
 }
 
-// Send queues a JSON payload for the webhook URL and returns immediately.
-// The request that triggered the alert must not wait on the receiver: a
-// scanner watching its own latency would otherwise see the moment it was
-// flagged. Errors are logged. Close waits for queued deliveries so a
-// shutdown does not drop the event.
+// Send hands a JSON payload to the delivery workers and returns without
+// waiting for the receiver. The request that triggered the alert must not
+// wait: a scanner watching its own latency would otherwise see the exact
+// moment it was flagged.
+//
+// An event is dropped rather than queued when the workers are saturated,
+// because the caller controls the event rate. Blocking here would put the
+// receiver's latency back on the request path, and growing without limit
+// would let a scanner decide how many connections this process opens against
+// the alerting endpoint. Drops are counted and reported once, not per event:
+// logging each one puts the log writes on that same request path.
 func (ws *WebhookSender) Send(payload map[string]interface{}) {
 	if ws == nil {
 		return
 	}
-	ws.wg.Add(1)
-	go func() {
-		defer ws.wg.Done()
-		ws.deliver(payload)
-	}()
+
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	if ws.closed {
+		return
+	}
+
+	select {
+	case ws.queue <- payload:
+	default:
+		ws.dropped.Add(1)
+		ws.dropOnce.Do(func() {
+			log.Printf("bridge: webhook receiver is not keeping up; events are being dropped")
+		})
+	}
 }
 
-// Close waits for in-flight deliveries. It is safe on a nil sender and
-// safe to call more than once.
+// Close stops accepting events, waits for the queued ones to be delivered and
+// reports anything that was dropped. It is safe on a nil sender and safe to
+// call more than once.
 func (ws *WebhookSender) Close() {
 	if ws == nil {
 		return
 	}
+
+	ws.closeOnce.Do(func() {
+		ws.mu.Lock()
+		ws.closed = true
+		ws.mu.Unlock()
+		close(ws.queue)
+	})
+
 	ws.wg.Wait()
+
+	if n := ws.dropped.Load(); n > 0 {
+		log.Printf("bridge: %d webhook events were dropped", n)
+	}
 }
 
 func (ws *WebhookSender) deliver(payload map[string]interface{}) {
