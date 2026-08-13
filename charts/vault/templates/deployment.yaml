@@ -12,6 +12,10 @@ spec:
   selector:
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
+      # Subset match: scope to the vault component (the pod template below carries
+      # it) so this Deployment never adopts a bridge or honeypot pod that shares
+      # the name and instance labels. See networkpolicy.yaml.
+      app.kubernetes.io/component: vault
   template:
     metadata:
       annotations:

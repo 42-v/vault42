@@ -11,4 +11,7 @@ spec:
   selector:
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
+      # Subset match: scope to the vault component so the budget does not also
+      # count the bridge and honeypot pods (see networkpolicy.yaml).
+      app.kubernetes.io/component: vault
 {{- end }}

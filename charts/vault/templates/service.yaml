@@ -17,3 +17,8 @@ spec:
       {{- end }}
   selector:
     {{- include "vault.selectorLabels" . | nindent 4 }}
+    # A Service selector is a subset match: selectorLabels alone also match the
+    # bridge and honeypot pods (same name + instance labels), so in bridge mode
+    # the Service would round-robin real traffic onto the honeypot. Name the
+    # component, as networkpolicy.yaml does for the same reason.
+    app.kubernetes.io/component: vault
