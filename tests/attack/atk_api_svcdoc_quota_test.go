@@ -1,19 +1,19 @@
 package attack
 
-// Attack surface: the service-document store's per-owner document count quota
-// and per-subject byte quota (internal/service/servicedoc.go).
+// Attack surface: the service-document store's per-(client, subject) document
+// count quota and per-(client, subject) byte quota (internal/service/servicedoc.go).
 //
 // WHY these tests exist. checkQuota reads the current state with CountForOwner
-// and SumBytesForSubject, decides, and then the caller writes with Upsert. The
-// read and the write are separate statements with nothing between them: no
-// transaction, no SELECT ... FOR UPDATE, no advisory lock, and no compensating
-// delete if the decision turns out to have raced. The only database-level guard
-// on this table (migration 014) is a UNIQUE index on
+// and SumBytesForSubjectAndClient, decides, and then the caller writes with
+// Upsert. The read and the write are separate statements with nothing between
+// them: no transaction, no SELECT ... FOR UPDATE, no advisory lock, and no
+// compensating delete if the decision turns out to have raced. The only
+// database-level guard on this table (migration 014) is a UNIQUE index on
 // (client_id, subject_hash, doc_key); it collapses two writes of the SAME key
 // but does nothing for two writes of DIFFERENT keys, which is exactly what a
 // count or byte quota bounds. So two writes that arrive together each observe
 // the pre-write total, each pass, and each land, and the quota the docs promise
-// (32 docs per subject, 1 MiB per subject) is advisory under concurrency.
+// is advisory under concurrency.
 //
 // Both tests below assert the SECURE invariant (the stored total never exceeds
 // the configured cap). They FAIL against the current code because the exploit
@@ -199,12 +199,12 @@ func (m *atkSvcDocRepo) CountForOwner(_ context.Context, clientID, subjectHash s
 	return n, nil
 }
 
-func (m *atkSvcDocRepo) SumBytesForSubject(_ context.Context, subjectHash string) (int, error) {
+func (m *atkSvcDocRepo) SumBytesForSubjectAndClient(_ context.Context, subjectHash, clientID string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	total := 0
 	for k, d := range m.rows {
-		if k.subject == subjectHash {
+		if k.subject == subjectHash && k.client == clientID {
 			total += d.StoredBytes
 		}
 	}
@@ -319,17 +319,24 @@ func TestAtkSvcDocCountQuotaConcurrentBypass(t *testing.T) {
 	}
 }
 
-// TestAtkSvcDocByteQuotaConcurrentBypass drives two concurrent writes by two
-// DIFFERENT clients about one subject, under a per-subject byte budget sized to
-// hold exactly one such document. The byte quota is the control that bounds a
-// user's storage footprint across every service that writes about them, so a
-// concurrent breach lets two tenants together exceed the very cap that is meant
-// to span them.
+// TestAtkSvcDocByteQuotaConcurrentBypass drives two concurrent writes of two
+// distinct keys, by ONE client, about one subject, under a per-(client, subject)
+// byte budget sized to hold exactly one such document. The byte quota bounds a
+// single service's own footprint for a subject; a concurrent breach would let
+// one client store past its own budget by racing two writes whose quota checks
+// both observe the pre-write total.
+//
+// The budget is per (client, subject) on purpose: summing it across every client
+// let one service fill a shared budget and lock every other service out of a
+// subject with a permanent 409, so the enforced budget is the caller's own. Two
+// DIFFERENT clients writing the same subject are therefore no longer a breach,
+// which is why both racers here share a client.
 //
 // The document size is measured first with a throwaway write, so the budget can
 // be set to admit one and refuse two without hardcoding the AES-GCM overhead.
 //
-// FAILS against current code: the subject's stored bytes exceed the budget.
+// FAILS against a non-atomic check-then-write: the client's stored bytes for the
+// subject exceed its budget.
 func TestAtkSvcDocByteQuotaConcurrentBypass(t *testing.T) {
 	const subject = "user-toctou-bytes"
 	body := `{"pad":"` + strings.Repeat("x", 512) + `"}`
@@ -355,27 +362,26 @@ func TestAtkSvcDocByteQuotaConcurrentBypass(t *testing.T) {
 		c.QuotaBytesPerSubject = budget
 	})
 
-	type write struct {
-		client, key string
-	}
-	writes := []write{{atkClientA, "from-a"}, {atkClientB, "from-b"}}
-	codes := make([]int, len(writes))
+	// Both racers are the same client: the budget is per (client, subject), so
+	// two distinct keys by one client are the pair the byte quota bounds.
+	keys := []string{"from-a1", "from-a2"}
+	codes := make([]int, len(keys))
 	var wg sync.WaitGroup
-	for i, wr := range writes {
+	for i, key := range keys {
 		wg.Add(1)
-		go func(i int, wr write) {
+		go func(i int, key string) {
 			defer wg.Done()
 			rec := httptest.NewRecorder()
-			h.Put(rec, atkDocPutReq(wr.client, subject, wr.key, body))
+			h.Put(rec, atkDocPutReq(atkClientA, subject, key, body))
 			codes[i] = rec.Code
-		}(i, wr)
+		}(i, key)
 	}
 	wg.Wait()
 
 	if got := repo.storedBytes(); got > budget {
-		t.Errorf("byte quota bypassed: subject holds %d stored bytes under a per-subject "+
-			"budget of %d (one document is %d bytes, responses %v); the per-subject byte "+
-			"cap is enforced by a non-atomic read-then-write and two tenants breached it "+
-			"together", got, budget, one, codes)
+		t.Errorf("byte quota bypassed: client holds %d stored bytes for the subject under a "+
+			"per-(client, subject) budget of %d (one document is %d bytes, responses %v); the "+
+			"byte cap is enforced by a non-atomic read-then-write and one client breached its "+
+			"own budget by racing two writes", got, budget, one, codes)
 	}
 }

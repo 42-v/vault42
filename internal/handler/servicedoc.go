@@ -94,9 +94,10 @@ type ServiceDocumentListResponse struct {
 	Documents []*service.DocumentMeta `json:"documents"`
 	// Count is len(Documents). Always present, including on an empty list.
 	Count int `json:"count"`
-	// Quota is this subject's usage. used_bytes is cross-client ciphertext
-	// for the subject; used_count is this caller's document count for the
-	// subject. The two limits have different scopes on purpose.
+	// Quota is this caller's usage for the subject. used_bytes and used_count
+	// are both scoped to the caller: they never report another client's
+	// footprint, so the listing cannot be used to learn whether, or how much,
+	// another service stores about the subject.
 	Quota *service.DocumentQuota `json:"quota"`
 }
 

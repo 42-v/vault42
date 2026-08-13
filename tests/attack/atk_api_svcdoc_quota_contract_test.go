@@ -103,9 +103,10 @@ func TestSvcDocQuotaSequentialRefusalIsUnchanged(t *testing.T) {
 			t.Fatalf("first write: status %d, want 201 (%s)", got.status, got.body)
 		}
 
-		// A different client, because the byte budget spans owners. The refusal a
-		// second tenant sees has to be the same refusal the first tenant would see.
-		got := atkPut(h, atkClientB, "user-seq-bytes", "doc-b", body)
+		// The same client, because the byte budget is per (client, subject): a
+		// caller is refused when its OWN footprint for the subject would exceed the
+		// budget, and that refusal is a plain 409 quota_exceeded.
+		got := atkPut(h, atkClientA, "user-seq-bytes", "doc-b", body)
 		if got.status != http.StatusConflict {
 			t.Errorf("over the byte cap: status %d, want 409 (%s)", got.status, got.body)
 		}

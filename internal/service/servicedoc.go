@@ -120,9 +120,10 @@ type DocumentConfig struct {
 	MaxDocumentBytes int
 	// MaxDocsPerSubject caps how many documents one client holds for one subject.
 	MaxDocsPerSubject int
-	// QuotaBytesPerSubject caps the stored bytes held for one subject across
-	// every owning client, so one user's footprint is bounded no matter how many
-	// services write about them.
+	// QuotaBytesPerSubject caps the stored bytes one client holds for one
+	// subject. It is enforced per (client, subject): the budget is charged
+	// against the caller's own footprint so a write by one service cannot fill a
+	// budget every other service then fails against.
 	QuotaBytesPerSubject int
 	// SharedEnabled gates the shared visibility tier. Off means a service can
 	// keep private state but no service can read another's documents, which is a
@@ -422,11 +423,13 @@ func (s *DocumentService) Put(
 // a stripe, and never the other way round, so two writers cannot each hold what
 // the other is waiting for.
 //
-// The lock is per SUBJECT, deliberately, and never per client. The byte budget
-// is documented as spanning every owning service, so two different clients
-// writing about the same user are exactly the pair that has to contend; scoping
-// this to (client, subject) would leave the cross-tenant breach wide open while
-// looking like a fix.
+// The lock is per SUBJECT. Both quotas are per (client, subject), so the writers
+// that must serialize for correctness are the ones that share a client and a
+// subject; keying the lock on the subject alone is a superset of that pair and
+// costs only a little throughput when two different clients touch the same
+// subject at once. Keeping one lock word per subject also avoids growing a lock
+// space indexed by every (client, subject) pair, for a guarantee the narrower key
+// would not strengthen.
 func (s *DocumentService) serializeSubjectWrite(ctx context.Context, subjectHash string, fn func(context.Context) error) error {
 	stripe := &s.writeLocks[svcDocLockStripe(subjectHash)]
 	stripe.Lock()
@@ -449,8 +452,12 @@ func svcDocLockStripe(subjectHash string) uint32 {
 	return h.Sum32() % svcDocLockStripes
 }
 
-// checkQuota rejects a write that would breach the document count for this
-// (client, subject) or the byte budget for this subject across every client.
+// checkQuota rejects a write that would breach either quota for this
+// (client, subject): the document count or the byte budget. Both are scoped to
+// the caller's own footprint. A byte budget summed across every client would let
+// one service exhaust a subject's shared budget and lock every other service out
+// of that subject with a permanent 409, so the enforced budget charges the
+// caller against its own bytes only.
 //
 // It is only ever called from inside serializeSubjectWrite, and the totals it
 // reads are only meaningful there: outside that section they are a snapshot that
@@ -473,7 +480,7 @@ func (s *DocumentService) checkQuota(
 		}
 	}
 
-	used, err := s.repo.SumBytesForSubject(ctx, subjHash)
+	used, err := s.repo.SumBytesForSubjectAndClient(ctx, subjHash, clientID)
 	if err != nil {
 		return fmt.Errorf("svcdoc quota: %w", err)
 	}
@@ -544,11 +551,20 @@ func (s *DocumentService) resolve(ctx context.Context, clientID, subjHash, docKe
 		if err != nil {
 			return nil, fmt.Errorf("svcdoc get by owner: %w", err)
 		}
-		// A named owner that is not the caller only ever yields a shared row.
-		if doc == nil || (doc.ClientID != clientID && doc.Visibility != repository.VisibilityShared) {
+		// A named owner that is not the caller only ever yields a shared row, and
+		// only while the shared tier is enabled. With the tier off an already-shared
+		// row is treated exactly like a private one owned by another client: absent.
+		if doc == nil || (doc.ClientID != clientID && !(doc.Visibility == repository.VisibilityShared && s.cfg.SharedEnabled)) {
 			return nil, ErrSvcDocNotFound
 		}
 		return doc, nil
+	}
+
+	// Gating shared resolution on the tier switch, not only the write path: once
+	// an operator disables sharing, rows shared earlier must stop resolving for
+	// other clients rather than staying readable until they are rewritten.
+	if !s.cfg.SharedEnabled {
+		return nil, ErrSvcDocNotFound
 	}
 
 	shared, err := s.repo.ListSharedByKey(ctx, subjHash, docKey, clientID)
@@ -604,6 +620,18 @@ func (s *DocumentService) Delete(ctx context.Context, clientID, subject, docKey 
 // List returns metadata for the caller's own documents plus the shared
 // documents other clients hold for the same subject, and the subject's quota
 // position. Bodies are never returned by a listing.
+//
+// used_bytes reports the CALLER'S own footprint for the subject, never a
+// cross-client total. A cross-client total would answer "does another service
+// hold data about this subject, and how much" for any svcdoc:read caller, which
+// is the presence oracle the pseudonymised subject exists to deny; it is also
+// the counterpart of the per-(client, subject) byte budget the write path now
+// enforces.
+//
+// Shared rows are only listed while the shared tier is enabled. With it off,
+// rows shared before it was disabled are treated as private to their owner, so
+// disabling the tier stops other clients seeing them here as well as on the read
+// path.
 func (s *DocumentService) List(ctx context.Context, clientID, subject string) ([]*DocumentMeta, *DocumentQuota, error) {
 	if err := ValidateSubject(subject); err != nil {
 		return nil, nil, err
@@ -614,11 +642,14 @@ func (s *DocumentService) List(ctx context.Context, clientID, subject string) ([
 	if err != nil {
 		return nil, nil, fmt.Errorf("svcdoc list own: %w", err)
 	}
-	shared, err := s.repo.ListSharedForSubject(ctx, subjHash, clientID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("svcdoc list shared: %w", err)
+	var shared []*repository.ServiceDocument
+	if s.cfg.SharedEnabled {
+		shared, err = s.repo.ListSharedForSubject(ctx, subjHash, clientID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("svcdoc list shared: %w", err)
+		}
 	}
-	usedBytes, err := s.repo.SumBytesForSubject(ctx, subjHash)
+	usedBytes, err := s.repo.SumBytesForSubjectAndClient(ctx, subjHash, clientID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("svcdoc list quota: %w", err)
 	}

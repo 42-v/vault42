@@ -414,9 +414,12 @@ type ServiceDocumentRepository interface {
 	ListAllForSubject(ctx context.Context, subjectHash string) ([]*ServiceDocument, error)
 	// CountForOwner returns how many documents clientID holds for a subject.
 	CountForOwner(ctx context.Context, clientID, subjectHash string) (int, error)
-	// SumBytesForSubject returns the total stored bytes held for a subject
-	// across every owning client, for the per-subject quota.
-	SumBytesForSubject(ctx context.Context, subjectHash string) (int, error)
+	// SumBytesForSubjectAndClient returns the stored bytes one client holds for
+	// a subject, for the per-(client, subject) byte quota. The budget is charged
+	// against the caller's own footprint, so one service cannot fill a budget the
+	// others then fail against, and one service's usage is never reported to
+	// another.
+	SumBytesForSubjectAndClient(ctx context.Context, subjectHash, clientID string) (int, error)
 	// DeleteAllForSubject removes every document for a subject across all
 	// owning clients (account erasure). It is idempotent: erasing a subject
 	// that never had a document is not an error, so an interrupted cascade can
