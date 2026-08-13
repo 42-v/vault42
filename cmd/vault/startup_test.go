@@ -611,6 +611,50 @@ func TestEphemeralSigningKeyIsAnnounced(t *testing.T) {
 	}
 }
 
+// TestSigningKeyGenerationFailureIsFatal covers the two entropy draws on the
+// no-key-file path. Neither is a configuration mistake an operator can make, so
+// the child runs over a starved CSPRNG (see starvedReader) to produce them.
+//
+// Both guard a failure that would otherwise be silent or misattributed. A
+// generation failure that was only logged leaves signingKey nil and the process
+// dies a few lines down, on the nil dereference that builds the JWKS map,
+// reporting a stack trace where it should report a cause. A key-id failure that
+// was only logged is worse: the server starts, publishes a JWKS whose single
+// entry has an empty kid, and signs every token with that empty kid, which
+// nothing downstream can pin and no probe can see from the outside.
+func TestSigningKeyGenerationFailureIsFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		godebug string
+		want    string
+	}{
+		// rsa.GenerateKey ignores a replaced crypto/rand.Reader unless
+		// cryptocustomrand=1, so with the default the key is generated from the
+		// crypto module's own DRBG and the starved reader is felt one statement
+		// later, where RandomUUID reads crypto/rand.Reader directly. The value is
+		// stated rather than left out so an inherited GODEBUG cannot decide which
+		// of the two failures this row gets.
+		{name: "key id", godebug: "cryptocustomrand=0", want: "Failed to generate key ID"},
+		// With the setting on, the same reader is felt in rsa.GenerateKey itself
+		// and startup fails before a key exists at all.
+		{name: "signing key", godebug: "cryptocustomrand=1", want: "Failed to generate signing key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := bootedStub(t)
+			addr := freeAddr(t)
+			env := bootEnv(t, stub, addr)
+			env[vaultChildStarveEntropy] = "1"
+			env["GODEBUG"] = tc.godebug
+
+			res := runVault(t, vaultRun{env: env})
+			requireExit(t, res, 1, tc.want)
+			if dialable(addr) {
+				t.Fatal("the server bound its port without a signing key")
+			}
+		})
+	}
+}
+
 // TestMalformedSigningKeyIsFatal asserts a corrupt key file stops startup. The
 // alternative, falling back to a generated key, would silently rotate every
 // issued token out of validity.

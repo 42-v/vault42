@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 	"net"
 	"net/http"
@@ -42,12 +43,31 @@ const (
 	// argument may contain spaces or be empty.
 	vaultChildArgs = "VAULT42_TEST_CHILD_ARGS"
 	vaultArgsSep   = "\x1f"
+	// vaultChildStarveEntropy runs the child over a CSPRNG that has stopped
+	// answering. See starvedReader.
+	vaultChildStarveEntropy = "VAULT42_TEST_STARVE_ENTROPY"
 )
+
+// starvedReader is a CSPRNG that has run out. Several checks in this package sit
+// behind a crypto/rand.Reader read that a healthy Linux host never fails: the
+// real reader does not report an error at all, it takes the process down.
+// Installing this one is what makes those checks observable, both in the child
+// (the ephemeral signing key and its key id) and in the parent (the nonce
+// `vault kms wrap` draws for its AEAD seal).
+type starvedReader struct{}
+
+func (starvedReader) Read([]byte) (int, error) { return 0, errors.New("entropy exhausted") }
 
 // TestMain is the fork point. Without the child branch the tests below would
 // have no way to reach main() at all.
 func TestMain(m *testing.M) {
 	if os.Getenv(vaultChildEnv) == "1" {
+		// Swapped here because main() takes no arguments and holds no seam: the
+		// entropy source it uses is the process-wide one, so the only place to
+		// starve it is before control is handed over.
+		if os.Getenv(vaultChildStarveEntropy) == "1" {
+			rand.Reader = starvedReader{}
+		}
 		os.Args = append([]string{"vault"}, childArgs()...)
 		main()
 		// Reached only when main() returns rather than exiting: --version, a

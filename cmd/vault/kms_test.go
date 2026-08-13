@@ -338,6 +338,38 @@ func TestKMSWrapIOFailures(t *testing.T) {
 	})
 }
 
+// TestKMSWrapSealFailureIsReported covers the last failure Wrap can still report
+// once the kid and the root have passed their own checks: the AEAD seal draws a
+// nonce from crypto/rand.Reader, and this starves it.
+//
+// The second assertion is the one that matters. base64 of a nil envelope is the
+// empty string, so a swallowed seal error would exit zero having written a
+// zero-length artifact, and the deploy pipeline would ship a file that decodes
+// cleanly and carries no key.
+func TestKMSWrapSealFailureIsReported(t *testing.T) {
+	// Every fixture that needs real entropy is built first: once the reader is
+	// starved, crypto/rand.Read does not fail, it takes the process down.
+	t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", ephemeralRoot(t)))
+	kmsStarveEntropy(t)
+
+	var out bytes.Buffer
+	err := runKMSWrap([]string{"--kid", "life42-root-kek"}, strings.NewReader("payload"), &out)
+	if err == nil || !strings.HasPrefix(err.Error(), "wrap: ") {
+		t.Fatalf("error = %v, want the failure attributed to the wrap step", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a failed wrap still produced an artifact: %q", out.String())
+	}
+}
+
+// kmsStarveEntropy swaps the process CSPRNG for the duration of one test.
+func kmsStarveEntropy(t *testing.T) {
+	t.Helper()
+	orig := rand.Reader
+	rand.Reader = starvedReader{}
+	t.Cleanup(func() { rand.Reader = orig })
+}
+
 // TestKMSRootKeyIsWhitespaceTrimmed pins a sharp edge of the _FILE convention.
 // config.LoadSecret trims whitespace so that a key written with `echo` is not
 // rejected for its trailing newline, but it trims raw binary key files too: a

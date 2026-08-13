@@ -48,6 +48,86 @@
   ],
   "entries": [
     {
+      "package": "cmd/admin-gateway",
+      "file": "cmd/admin-gateway/main.go",
+      "line": 158,
+      "occurrence": 1,
+      "source": "\t\tlog.Fatalf(\"admin-gateway: keystore init: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "LoadConfig returns an error unless len(c.MasterKey) == 32 (cmd/admin-gateway/config.go:159) and main() dies on that error at main.go:66, long before this line. main.go:147 hands keystore.New a full-length copy of that key, append([]byte(nil), cfg.MasterKey...), and internal/keystore/keystore.go:128 holds keystore.New's only error return, the len(masterKey) != 32 check, so New cannot fail at this call site. Both legs are pinned by tests that fail if the reasoning stops holding: TestKeystoreNewHasExactlyOneErrorPath (cmd/admin-gateway/main_test.go:1186) fails if keystore.New grows a second error return or if its one return stops being guarded by the length check, and TestLoadConfigRequiredSettings/\"master key must be 32 bytes\" (cmd/admin-gateway/config_test.go:220) fails if LoadConfig stops refusing a short key. The child-process fixture cannot provoke it either: the master key reaches the binary only through MASTER_KEY_FILE, which LoadConfig validates before the process opens a database connection (TestConfigErrorIsFatalBeforeAnyDatabaseWork). The error is read rather than discarded on purpose, so a future second error path in keystore.New arrives here as a loud exit instead of a nil dereference on the next line."
+    },
+    {
+      "package": "cmd/bridge",
+      "file": "cmd/bridge/main.go",
+      "line": 43,
+      "occurrence": 1,
+      "source": "\t\tlog.Fatalf(\"bridge: config error: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "log.Fatalf calls os.Exit(1), so this statement ends whatever process executes it before any assertion can run, and the canonical profile is a single `go test -coverprofile` run (cov_run in scripts/lib/coverage-env.sh) that never merges a re-executed child's counters. The condition is provokable and is already asserted where it is decided: TestLoadConfigRequiresBothUpstreams pins the error LoadConfig returns for each missing upstream. Covering main's reaction to it needs main split into a run() error whose only caller besides main would be the test."
+    },
+    {
+      "package": "cmd/bridge",
+      "file": "cmd/bridge/main.go",
+      "line": 48,
+      "occurrence": 1,
+      "source": "\t\tlog.Fatalf(\"bridge: initialization error: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The same os.Exit(1) as the config guard above it, on the NewBridge error. NewBridge (cmd/bridge/proxy.go:81) returns an error only when url.Parse rejects one of the two upstreams, which TestNewBridgeRejectsUnparseableUpstreams asserts directly on the constructor; what stays unexecuted here is only main's log.Fatalf reaction to it."
+    },
+    {
+      "package": "cmd/bridge",
+      "file": "cmd/bridge/main.go",
+      "line": 75,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Fatalf(\"bridge: listen error: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The third os.Exit(1), inside main's listener goroutine. srv.ListenAndServe returns a non-ErrServerClosed error only for a bind failure such as an address already in use, which a test can provoke but not survive: log.Fatalf ends the test binary before any assertion, and a child process re-executed to reach it contributes no counters to the canonical profile."
+    },
+    {
+      "package": "cmd/recover",
+      "file": "cmd/recover/main.go",
+      "line": 117,
+      "occurrence": 1,
+      "source": "\tos.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "main's only statement is os.Exit, so any in-process test that reaches it terminates the test binary before the testing package writes the profile, and main.go offers no seam to intercept the exit: run's return value is passed straight to os.Exit. The wiring is executed and asserted, just not recorded. TestMainWiring in cmd/recover/main_test.go re-runs the test binary as the recover binary through the RECOVER_TEST_ARGS branch of TestMain, which calls main() directly, and checks the real process exit codes (0, 1, 2), that os.Args[1:] slicing lets flags reach the parser, and that stdout stays empty on every failing run. A child process's counters are never merged into the parent's -coverprofile, which testing writes from in-process counters at the end of m.Run(); confirmed empirically with a minimal module whose child ran main() with GOCOVERDIR set and still left both main and run at 0.0% in the parent's profile. Covering this would require a production seam (var exit = os.Exit) whose sole consumer is the test, which is bucket B."
+    },
+    {
+      "package": "cmd/vault",
+      "file": "cmd/vault/main.go",
+      "line": 220,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:212 is the same length check on the same slice, four lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+    },
+    {
+      "package": "internal/adminapi",
+      "file": "internal/adminapi/frontend.go",
+      "line": 38,
+      "occurrence": 1,
+      "source": "\t\tlog.Fatalf(\"admin-gateway: failed to parse layout template: %v\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "template.ParseFS over the embedded templates/*.html, parsed by NewFrontendHandler at wiring time. A template that did not parse would take down every test binary that builds the gateway before any assertion ran, so the guard is a build-time assertion with no runtime input; and log.Fatalf calls os.Exit, so even a reachable failure leaves nothing in-process to observe."
+    },
+    {
+      "package": "internal/adminapi",
+      "file": "internal/adminapi/frontend.go",
+      "line": 50,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Fatalf(\"admin-gateway: failed to parse template %s: %v\", page, err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The per-page copy of the layout-template guard, same embed.FS and same log.Fatalf."
+    },
+    {
       "package": "internal/crypto",
       "file": "internal/crypto/aes.go",
       "line": 27,
@@ -90,7 +170,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/argon2.go",
-      "line": 186,
+      "line": 194,
       "occurrence": 1,
       "source": "\t\th = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
       "bucket": "C",
@@ -120,7 +200,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/recovery.go",
-      "line": 206,
+      "line": 211,
       "occurrence": 1,
       "source": "\t\treturn nil, errors.New(\"recovery: wrapped key too large\")",
       "bucket": "C",
@@ -150,7 +230,7 @@
     {
       "package": "internal/email",
       "file": "internal/email/templates.go",
-      "line": 258,
+      "line": 267,
       "occurrence": 1,
       "source": "\t\tpanic(\"email: failed to initialize default templates: \" + err.Error())",
       "bucket": "C",
@@ -238,6 +318,16 @@
       "justification": "json.Marshal of a map[string]string literal built two lines above: no channels, funcs, cycles or MarshalJSON implementations, so the encoder has no failure mode to reach."
     },
     {
+      "package": "internal/keystore",
+      "file": "internal/keystore/keystore.go",
+      "line": 197,
+      "occurrence": 1,
+      "source": "\t\treturn \"\", fmt.Errorf(\"keystore: marshal public key: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "x509.MarshalPKIXPublicKey on an *rsa.PublicKey fails in exactly one case: asn1.Marshal rejects a nil modulus. Import derives the kid first via KIDFromPublicKey, which calls pub.N.Bytes() and panics on a nil modulus, so no key reaches this line holding the only value that could fail it. Every other malformed key is refused two lines earlier by MarshalSigningKeyPEM, which keystore_marshal_failure_test.go demonstrates."
+    },
+    {
       "package": "internal/kms",
       "file": "internal/kms/kms.go",
       "line": 114,
@@ -258,19 +348,49 @@
       "justification": "The Unwrap path's copy of the Wrap guard, on the same deriveKEK call with the same constant key length."
     },
     {
-      "package": "internal/service",
-      "file": "internal/service/mint.go",
-      "line": 352,
+      "package": "internal/oauth2",
+      "file": "internal/oauth2/github.go",
+      "line": 155,
       "occurrence": 1,
-      "source": "\t\treturn nil, ErrMintRoleNotPermitted",
+      "source": "\t\treturn nil, fmt.Errorf(\"github userinfo: build emails request: %w\", err)",
       "bucket": "C",
       "confirmed": true,
-      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (seed/seed.go:75) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
+      "justification": "In production emailsURL is a constant. Under the test override it is g.userInfoURL + \"/emails\", and the same g.userInfoURL already built a successful request earlier in the call. Appending a safe literal to a string that already parsed cannot introduce a control character, bad escape or bad port. Covering it needs a second override field that exists only for the test."
+    },
+    {
+      "package": "internal/repository/postgres",
+      "file": "internal/repository/postgres/db.go",
+      "line": 31,
+      "occurrence": 1,
+      "source": "\t\treturn nil, fmt.Errorf(\"create pool: %w\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "pgxpool.NewWithConfig returns an error only from puddle.NewPool, which fails only for MaxSize < 1. MaxConns comes from pgxpool.ParseConfig, which rejects pool_max_conns below 1 and otherwise defaults to max(4, NumCPU), and New overwrites it only when maxConns is in [1, 1000]. Every other field New sets is a constant duration. The dial itself is lazy, so an unreachable database surfaces at the Ping three lines below, which is covered."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/auth.go",
+      "line": 549,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/auth.go",
+      "line": 553,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token."
     },
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 102,
+      "line": 142,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress init: %w\", err)",
       "bucket": "C",
@@ -280,7 +400,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 105,
+      "line": 145,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress write: %w\", err)",
       "bucket": "C",
@@ -290,7 +410,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 108,
+      "line": 148,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress close: %w\", err)",
       "bucket": "C",
@@ -309,68 +429,18 @@
     },
     {
       "package": "internal/service",
-      "file": "internal/service/auth.go",
-      "line": 495,
+      "file": "internal/service/mint.go",
+      "line": 352,
       "occurrence": 1,
-      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
-      "bucket": "B",
-      "confirmed": true,
-      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test."
-    },
-    {
-      "package": "internal/service",
-      "file": "internal/service/auth.go",
-      "line": 499,
-      "occurrence": 1,
-      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
-      "bucket": "B",
-      "confirmed": true,
-      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token."
-    },
-    {
-      "package": "internal/adminapi",
-      "file": "internal/adminapi/frontend.go",
-      "line": 38,
-      "occurrence": 1,
-      "source": "\t\tlog.Fatalf(\"admin-gateway: failed to parse layout template: %v\", err)",
+      "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",
       "confirmed": true,
-      "justification": "template.ParseFS over the embedded templates/*.html, parsed by NewFrontendHandler at wiring time. A template that did not parse would take down every test binary that builds the gateway before any assertion ran, so the guard is a build-time assertion with no runtime input; and log.Fatalf calls os.Exit, so even a reachable failure leaves nothing in-process to observe."
-    },
-    {
-      "package": "internal/adminapi",
-      "file": "internal/adminapi/frontend.go",
-      "line": 50,
-      "occurrence": 1,
-      "source": "\t\t\tlog.Fatalf(\"admin-gateway: failed to parse template %s: %v\", page, err)",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "The per-page copy of the layout-template guard, same embed.FS and same log.Fatalf."
-    },
-    {
-      "package": "internal/keystore",
-      "file": "internal/keystore/keystore.go",
-      "line": 182,
-      "occurrence": 1,
-      "source": "\t\treturn \"\", fmt.Errorf(\"keystore: marshal public key: %w\", err)",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "x509.MarshalPKIXPublicKey on an *rsa.PublicKey fails in exactly one case: asn1.Marshal rejects a nil modulus. Import derives the kid first via KIDFromPublicKey, which calls pub.N.Bytes() and panics on a nil modulus, so no key reaches this line holding the only value that could fail it. Every other malformed key is refused two lines earlier by MarshalSigningKeyPEM, which keystore_marshal_failure_test.go demonstrates."
-    },
-    {
-      "package": "internal/oauth2",
-      "file": "internal/oauth2/github.go",
-      "line": 155,
-      "occurrence": 1,
-      "source": "\t\treturn nil, fmt.Errorf(\"github userinfo: build emails request: %w\", err)",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "In production emailsURL is a constant. Under the test override it is g.userInfoURL + \"/emails\", and the same g.userInfoURL already built a successful request earlier in the call. Appending a safe literal to a string that already parsed cannot introduce a control character, bad escape or bad port. Covering it needs a second override field that exists only for the test."
+      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (seed/seed.go:75) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
     },
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 652,
+      "line": 773,
       "occurrence": 3,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -380,7 +450,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 656,
+      "line": 777,
       "occurrence": 4,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -390,7 +460,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 666,
+      "line": 787,
       "occurrence": 5,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -400,7 +470,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 732,
+      "line": 853,
       "occurrence": 2,
       "source": "\t\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -410,22 +480,12 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 785,
+      "line": 906,
       "occurrence": 8,
       "source": "\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
       "confirmed": true,
       "justification": "The default arm of walkDocValue, reached only if Token returned a closing json.Delim in value position. walkDocValue is called from walkDocObject after a key, where a '}' or ']' is an error and not a token ({\"a\":} and {\"a\":]} both error), and from walkDocArray behind dec.More(), which is false before a ']'. Mismatched closers like {\"a\":[1} error on the closing Token at line 787 instead."
-    },
-    {
-      "package": "internal/repository/postgres",
-      "file": "internal/repository/postgres/db.go",
-      "line": 31,
-      "occurrence": 1,
-      "source": "\t\treturn nil, fmt.Errorf(\"create pool: %w\", err)",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "pgxpool.NewWithConfig returns an error only from puddle.NewPool, which fails only for MaxSize < 1. MaxConns comes from pgxpool.ParseConfig, which rejects pool_max_conns below 1 and otherwise defaults to max(4, NumCPU), and New overwrites it only when maxConns is in [1, 1000]. Every other field New sets is a constant duration. The dial itself is lazy, so an unreachable database surfaces at the Ping three lines below, which is covered."
     }
   ]
 }
