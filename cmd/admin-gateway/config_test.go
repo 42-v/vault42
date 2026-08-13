@@ -358,10 +358,9 @@ func TestLoadConfigDevModeOnlyAcceptsTrue(t *testing.T) {
 // The killswitch is the gateway's tripwire: rather than answering 403 to a
 // request that arrived from off-box, it panics so the breach attempt surfaces
 // as a CrashLoopBackOff instead of a line in a log nobody reads. The default
-// therefore has to be on. The subtlety worth pinning is that an explicitly set
-// but unrecognized value turns the tripwire OFF, so ADMIN_GW_KILLSWITCH=True,
-// ADMIN_GW_KILLSWITCH=on and a typo all silently disable it. See
-// TestLoadConfigKillswitchFailsOpenOnUnrecognizedValue.
+// therefore has to be on. Recognised off values are the same set envBool
+// already treats as false ({false, 0, no}); anything else is not a disable,
+// it is a configuration error. See TestLoadConfigKillswitchRefusesUnrecognizedValue.
 func TestLoadConfigKillswitch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -376,6 +375,8 @@ func TestLoadConfigKillswitch(t *testing.T) {
 		{name: "1", value: "1", set: true, want: true},
 		{name: "yes", value: "yes", set: true, want: true},
 		{name: "false", value: "false", set: true, want: false},
+		{name: "0", value: "0", set: true, want: false},
+		{name: "no", value: "no", set: true, want: false},
 		{name: "explicit value overrides dev mode", devMode: true, value: "true", set: true, want: true},
 	}
 
@@ -400,28 +401,29 @@ func TestLoadConfigKillswitch(t *testing.T) {
 	}
 }
 
-// TestLoadConfigKillswitchFailsOpenOnUnrecognizedValue documents a real
-// footgun in the killswitch parse.
+// TestLoadConfigKillswitchRefusesUnrecognizedValue is the fail-closed half of
+// the killswitch parse.
 //
-// Setting the variable to anything outside {true, 1, yes} disables the
-// killswitch, including capitalizations that every other tool in the stack
-// accepts. The unset default is "on", so an operator who tries to be explicit
-// about wanting the killswitch and writes ADMIN_GW_KILLSWITCH=True ends up
-// weaker than one who left the variable alone. The behavior is asserted here
-// so that a fix, or a decision that this is intended, is a visible change to
-// this test rather than an unnoticed change in posture.
-func TestLoadConfigKillswitchFailsOpenOnUnrecognizedValue(t *testing.T) {
+// The unset default is on. An unrecognised explicit value used to disable the
+// tripwire, so ADMIN_GW_KILLSWITCH=True, =TRUE, =on or a typo left the operator
+// weaker than saying nothing. A killswitch that cannot be parsed must refuse
+// to start: being explicit is never weaker than being silent, and the error
+// names the variable so the operator can see which spelling was rejected.
+func TestLoadConfigKillswitchRefusesUnrecognizedValue(t *testing.T) {
 	for _, value := range []string{"True", "TRUE", "YES", "on", "enabled", "tru"} {
 		t.Run(value, func(t *testing.T) {
 			minimalEnv(t)
 			t.Setenv("ADMIN_GW_KILLSWITCH", value)
 
 			cfg, err := LoadConfig()
-			if err != nil {
-				t.Fatalf("LoadConfig: %v", err)
+			if err == nil {
+				t.Fatalf("ADMIN_GW_KILLSWITCH=%q was accepted (killswitch=%v); an unparseable value must refuse to start", value, cfg.Killswitch)
 			}
-			if cfg.Killswitch {
-				t.Fatalf("ADMIN_GW_KILLSWITCH=%q kept the killswitch on; update this test if the parse was widened", value)
+			if !strings.Contains(err.Error(), "ADMIN_GW_KILLSWITCH") {
+				t.Errorf("error = %q, want it to name ADMIN_GW_KILLSWITCH", err)
+			}
+			if !strings.Contains(err.Error(), value) {
+				t.Errorf("error = %q, want it to echo the rejected value %q", err, value)
 			}
 		})
 	}
@@ -487,29 +489,17 @@ func TestDatabaseURL(t *testing.T) {
 	}
 }
 
-// TestDatabaseURLDoesNotEscapePassword documents a second real defect.
+// TestDatabaseURLEscapesPassword pins that operator-supplied passwords survive
+// the connection string.
 //
-// The connection string is assembled with fmt.Sprintf, so a password is spliced
-// into a URL without being percent-encoded and any character that is structural
-// in a URL changes the meaning of the string rather than being carried as data.
-// The test drives the result through pgxpool.ParseConfig, which is the parser
-// postgres.New hands it to, so the assertions are about what the gateway will
-// actually do rather than about string shapes.
-//
-// Two failure classes fall out. Characters that terminate the authority, "/",
-// "?", "#" and a space, make the string unparseable, so the gateway dies with
-// "invalid port" or "invalid userinfo" and points the operator at a host and
-// port that are both correct. A percent sign is worse: it is silently
-// percent-decoded, so the gateway authenticates with a password that is not the
-// one on disk and the operator sees an authentication failure against a
-// credential they can see is right.
-//
-// The shipped generator emits hex passwords, which is why this has not bitten
-// in production, but docs/config.md invites operators to supply their own
-// password file and nothing warns them off punctuation. main.go builds the
-// migration role's URL the same way, so DB_MIG_PASSWORD has the same problem.
-// The fix is url.UserPassword rather than Sprintf.
-func TestDatabaseURLDoesNotEscapePassword(t *testing.T) {
+// scripts/generate-secrets.sh does not emit db-admin-password, so operators
+// supply that one themselves. The URI is handed to pgxpool.ParseConfig (the
+// parser postgres.New actually uses). Without percent-encoding, '/', '?' and
+// '#' produce "invalid port after host", a space produces "invalid userinfo",
+// and a percent sign is silent: the password ab%cdef is decoded and the
+// gateway authenticates as a different string. The operator then sees an auth
+// failure against a credential they can read and confirm is correct.
+func TestDatabaseURLEscapesPassword(t *testing.T) {
 	newConfig := func(password string) *Config {
 		return &Config{
 			DBPassword: password,
@@ -520,43 +510,56 @@ func TestDatabaseURLDoesNotEscapePassword(t *testing.T) {
 		}
 	}
 
-	t.Run("hex password from the shipped generator round-trips", func(t *testing.T) {
-		const password = "9f2c4ab7d1e08356"
-		cfg, err := pgxpool.ParseConfig(newConfig(password).DatabaseURL())
-		if err != nil {
-			t.Fatalf("ParseConfig: %v", err)
-		}
-		if cfg.ConnConfig.Password != password {
-			t.Errorf("password = %q, want %q", cfg.ConnConfig.Password, password)
-		}
-		if cfg.ConnConfig.Host != "db.internal" || cfg.ConnConfig.Port != 6543 {
-			t.Errorf("host = %s:%d, want db.internal:6543", cfg.ConnConfig.Host, cfg.ConnConfig.Port)
-		}
-	})
+	passwords := []string{
+		"9f2c4ab7d1e08356", // hex from the shipped generator
+		"ab/cd",
+		"ab?cd",
+		"ab#cd",
+		"ab cd",
+		"ab%cdef",
+		"p@ss w0rd!#$%&",
+	}
 
-	t.Run("structural characters make the string unparseable", func(t *testing.T) {
-		for _, password := range []string{"ab/cd", "ab?cd", "ab#cd", "ab cd"} {
-			t.Run(password, func(t *testing.T) {
-				if _, err := pgxpool.ParseConfig(newConfig(password).DatabaseURL()); err == nil {
-					t.Fatalf("password %q no longer breaks the connection string; it is being escaped now, invert this test", password)
-				}
-			})
-		}
-	})
+	for _, password := range passwords {
+		t.Run(password, func(t *testing.T) {
+			cfg, err := pgxpool.ParseConfig(newConfig(password).DatabaseURL())
+			if err != nil {
+				t.Fatalf("ParseConfig rejected password %q: %v", password, err)
+			}
+			if cfg.ConnConfig.Password != password {
+				t.Errorf("password = %q, want the value on disk %q", cfg.ConnConfig.Password, password)
+			}
+			if cfg.ConnConfig.User != "vault_admin" {
+				t.Errorf("user = %q, want vault_admin", cfg.ConnConfig.User)
+			}
+			if cfg.ConnConfig.Host != "db.internal" || cfg.ConnConfig.Port != 6543 {
+				t.Errorf("host = %s:%d, want db.internal:6543", cfg.ConnConfig.Host, cfg.ConnConfig.Port)
+			}
+		})
+	}
+}
 
-	t.Run("percent sign silently changes the password", func(t *testing.T) {
-		const password = "ab%cdef"
-		cfg, err := pgxpool.ParseConfig(newConfig(password).DatabaseURL())
-		if err != nil {
-			t.Fatalf("ParseConfig: %v", err)
-		}
-		if cfg.ConnConfig.Password == password {
-			t.Fatal("the percent sign now survives; the password is being escaped, invert this test")
-		}
-		if cfg.ConnConfig.Password != "ab\xcdef" {
-			t.Fatalf("password decoded to %q, want the percent-decoded %q", cfg.ConnConfig.Password, "ab\xcdef")
-		}
-	})
+// TestPostgresURLEscapesMigrationPassword is the same contract for the
+// vault_mig URL main() builds. That path used to Sprintf the password the
+// same way DatabaseURL did, so a punctuation-bearing DB_MIG_PASSWORD_FILE
+// failed (or authenticated as the wrong secret) only when auto-migrate ran.
+func TestPostgresURLEscapesMigrationPassword(t *testing.T) {
+	passwords := []string{"ab/cd", "ab?cd", "ab#cd", "ab cd", "ab%cdef"}
+	for _, password := range passwords {
+		t.Run(password, func(t *testing.T) {
+			raw := postgresURL("vault_mig", password, "db.internal", "6543", "vaultdb", "disable")
+			cfg, err := pgxpool.ParseConfig(raw)
+			if err != nil {
+				t.Fatalf("ParseConfig rejected vault_mig password %q: %v", password, err)
+			}
+			if cfg.ConnConfig.Password != password {
+				t.Errorf("password = %q, want %q", cfg.ConnConfig.Password, password)
+			}
+			if cfg.ConnConfig.User != "vault_mig" {
+				t.Errorf("user = %q, want vault_mig", cfg.ConnConfig.User)
+			}
+		})
+	}
 }
 
 // TestEnvOr covers the string fallback helper. An empty variable is treated as

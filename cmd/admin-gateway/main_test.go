@@ -4,11 +4,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -172,6 +176,11 @@ func TestConfigErrorIsFatalBeforeAnyDatabaseWork(t *testing.T) {
 			env:     []string{"ADMIN_GW_LISTEN_ADDR=0.0.0.0:9443"},
 			wantLog: "admin-gateway: config error: ADMIN_GW_LISTEN_ADDR must bind to loopback",
 		},
+		{
+			name:    "unparseable killswitch",
+			env:     []string{"ADMIN_GW_KILLSWITCH=True"},
+			wantLog: "admin-gateway: config error: ADMIN_GW_KILLSWITCH",
+		},
 	}
 
 	for _, tt := range tests {
@@ -333,6 +342,68 @@ func TestMigrationsUseTheDedicatedDDLRole(t *testing.T) {
 	}
 }
 
+// TestOperatorSuppliedDatabasePasswordSurvivesURLEncoding is the wire-level
+// half of TestDatabaseURLEscapesPassword. The percent sign is the load-bearing
+// case: it used to parse cleanly and authenticate as a different string, so
+// the operator saw a wrong-password error against a file they could read.
+// The slash is the parse-failure case: without encoding the child never
+// completes the handshake. Both roles are asserted because main() builds the
+// vault_mig URI independently of Config.DatabaseURL.
+func TestOperatorSuppliedDatabasePasswordSurvivesURLEncoding(t *testing.T) {
+	t.Run("percent sign in vault_admin password", func(t *testing.T) {
+		const password = "ab%cdef"
+		f := newFixture(t)
+		c := f.start(t, "DB_ADMIN_PASSWORD_FILE="+writeSecret(t, "db-admin-pct", []byte(password)))
+
+		if !f.pg.sawLogin(login{user: "vault_admin", database: "vault", password: password}) {
+			t.Errorf("vault_admin did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+
+	t.Run("slash in vault_admin password", func(t *testing.T) {
+		const password = "ab/cd"
+		f := newFixture(t)
+		c := f.start(t, "DB_ADMIN_PASSWORD_FILE="+writeSecret(t, "db-admin-slash", []byte(password)))
+
+		if !f.pg.sawLogin(login{user: "vault_admin", database: "vault", password: password}) {
+			t.Errorf("vault_admin did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+
+	t.Run("percent sign in vault_mig password", func(t *testing.T) {
+		const password = "ab%cdef"
+		f := newFixture(t)
+		if err := os.Mkdir(filepath.Join(f.workDir, "migrations"), 0o755); err != nil {
+			t.Fatalf("create migrations directory: %v", err)
+		}
+
+		c := f.start(t,
+			"ADMIN_GW_AUTO_MIGRATE=true",
+			"DB_MIG_PASSWORD_FILE="+writeSecret(t, "db-mig-pct", []byte(password)),
+		)
+		c.waitForLog(t, "admin-gateway: migrations complete")
+
+		if !f.pg.sawLogin(login{user: "vault_mig", database: "vault", password: password}) {
+			t.Errorf("vault_mig did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+}
+
 // TestMigrationsWithoutAPasswordFileStillUseTheDDLRole records what happens
 // when DB_MIG_PASSWORD_FILE is not supplied.
 //
@@ -371,11 +442,12 @@ func TestMigrationsWithoutAPasswordFileStillUseTheDDLRole(t *testing.T) {
 // "relation does not exist", so this test drives all three of those paths at
 // once and asserts they logged and continued rather than exiting.
 //
-// The absence of the keystore warning is asserted too. The master key is
-// mandatory and always 32 bytes by the time it reaches keystore.New, so a run
-// that reported key management as disabled would mean the key was lost between
-// LoadConfig and the keystore, which is exactly the failure the copy taken at
-// main.go's masterKey line exists to prevent.
+// The absence of the keystore-disabled warning is asserted too, but only
+// as a runtime sanity check that the 32-byte key reached the keystore.
+// Those init-error / ks==nil branches never ran (keystore.New errors only
+// on length, and LoadConfig already refused any other), so a process-level
+// test cannot see them. TestKeystoreInitHasNoDeadBranches is the check
+// that fails if they are put back.
 func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	f := newFixture(t)
 	c := f.start(t)
@@ -404,6 +476,165 @@ func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	c.signal(t, syscall.SIGTERM)
 	if code := c.waitForExit(t); code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+	}
+}
+
+// TestKeystoreInitHasNoDeadBranches is the failing-before test for the
+// unreachable keystore.New handling that used to sit in main().
+//
+// keystore.New returns a non-nil error only when len(masterKey) != 32, and
+// LoadConfig already refuses any other length, so the previous
+//
+//	ks, err := keystore.New(...)
+//	if err != nil { log.Printf("... keystore init error ...") }
+//	if ks != nil { EnsureKey; StartRefreshLoop } else { log "not initialized" }
+//
+// pair could not run. A child-process test with a valid 32-byte key takes
+// the success path either way, which is why TestGatewayStartsAgainstUnmigratedDatabase
+// stayed green with the dead branches still there. This reads the AST of
+// main() and fails if either branch is restored: the error result of
+// keystore.New must be discarded, ks must not be nil-checked, and the
+// store must still be used so deleting the feature would not pass.
+func TestKeystoreInitHasNoDeadBranches(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	srcPath := filepath.Join(filepath.Dir(thisFile), "main.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, srcPath, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", srcPath, err)
+	}
+
+	var mainFn *ast.FuncDecl
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "main" && fn.Recv == nil {
+			mainFn = fn
+			return false
+		}
+		return true
+	})
+	if mainFn == nil || mainFn.Body == nil {
+		t.Fatal("no func main in main.go")
+	}
+
+	var newAssign *ast.AssignStmt
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "New" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "keystore" {
+			return true
+		}
+		newAssign = as
+		return false
+	})
+	if newAssign == nil {
+		t.Fatal("main() no longer calls keystore.New; rewrite this test rather than treating that as the dead-branch fix")
+	}
+
+	if len(newAssign.Lhs) != 2 {
+		t.Fatalf("keystore.New is assigned to %d result(s), want 2 (store, discarded error)", len(newAssign.Lhs))
+	}
+	errName := astIdentName(newAssign.Lhs[1])
+	// The error is read rather than discarded. Discarding it satisfies coverage
+	// without a single exclusion entry, and costs an errcheck suppression plus a
+	// nil dereference on the line below the day keystore.New grows a second
+	// error path. Reading it and dying loudly is one uncoverable line, which is
+	// what the exclusion register exists for.
+	//
+	// What keeps that line honestly unreachable is not this call site but
+	// keystore.New itself, so that is what gets pinned, below.
+	if errName == "" {
+		t.Fatalf("keystore.New error result at line %d is neither named nor discarded",
+			fset.Position(newAssign.Pos()).Line)
+	}
+
+	ksName := astIdentName(newAssign.Lhs[0])
+	if ksName == "" || ksName == "_" {
+		t.Fatal("keystore.New store result is not a named identifier")
+	}
+
+	var nilGuards []int
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		if astComparesToNil(ifs.Cond, ksName) {
+			nilGuards = append(nilGuards, fset.Position(ifs.Pos()).Line)
+		}
+		return true
+	})
+	if len(nilGuards) > 0 {
+		t.Fatalf("main() still nil-checks %s at line(s) %v; that branch is unreachable after LoadConfig", ksName, nilGuards)
+	}
+
+	var sawEnsure, sawRefresh bool
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != ksName {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "EnsureKey":
+			sawEnsure = true
+		case "StartRefreshLoop":
+			sawRefresh = true
+		}
+		return true
+	})
+	if !sawEnsure || !sawRefresh {
+		t.Fatalf("main() does not use the keystore (EnsureKey=%v StartRefreshLoop=%v); the dead branches must be deleted, not the feature", sawEnsure, sawRefresh)
+	}
+}
+
+func astIdentName(e ast.Expr) string {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return fmt.Sprintf("%T", e)
+	}
+	return id.Name
+}
+
+func astComparesToNil(expr ast.Expr, name string) bool {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return astComparesToNil(e.X, name)
+	case *ast.UnaryExpr:
+		return astComparesToNil(e.X, name)
+	case *ast.BinaryExpr:
+		if e.Op == token.LAND || e.Op == token.LOR {
+			return astComparesToNil(e.X, name) || astComparesToNil(e.Y, name)
+		}
+		if e.Op != token.EQL && e.Op != token.NEQ {
+			return false
+		}
+		x, y := astIdentName(e.X), astIdentName(e.Y)
+		return (x == name && y == "nil") || (x == "nil" && y == name)
+	default:
+		return false
 	}
 }
 
@@ -936,5 +1167,83 @@ func TestSanitizeDBErrorMissesPasswordsContainingWhitespace(t *testing.T) {
 				t.Fatalf("sanitizeDBError now redacts %q; the pattern was fixed, invert this test", tt.leak)
 			}
 		})
+	}
+}
+
+// TestKeystoreNewHasExactlyOneErrorPath pins the fact that makes main()'s
+// keystore error branch unreachable rather than merely untested.
+//
+// main() dies on that error, and the branch is excluded from coverage on the
+// grounds that LoadConfig has already refused every input that could produce
+// it. That reasoning is a claim about keystore.New, not about main(), and it
+// silently stops being true the moment keystore.New learns to fail for a
+// second reason: a database handle it validates, a retention period it
+// rejects, an entropy source it reads at construction. Nothing about this
+// package would fail then, so the claim is asserted where it lives.
+//
+// If this test fails, do not relax it. Go read main() and decide whether the
+// new error is one the gateway can survive.
+func TestKeystoreNewHasExactlyOneErrorPath(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	path := filepath.Join(root, "internal", "keystore", "keystore.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing keystore.go: %v", err)
+	}
+
+	var newFn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "New" && fn.Recv == nil {
+			newFn = fn
+			break
+		}
+	}
+	if newFn == nil {
+		t.Fatal("keystore.New not found; it was renamed and this gate has stopped seeing what it guards")
+	}
+
+	// Every return whose last result is anything but a bare nil is an error
+	// path. Counting returns rather than if-statements catches an error
+	// returned from a switch, a loop, or a helper call just as well.
+	var errorReturns []int
+	ast.Inspect(newFn.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) == 0 {
+			return true
+		}
+		last := ret.Results[len(ret.Results)-1]
+		if id, isIdent := last.(*ast.Ident); isIdent && id.Name == "nil" {
+			return true
+		}
+		errorReturns = append(errorReturns, fset.Position(ret.Pos()).Line)
+		return true
+	})
+
+	if len(errorReturns) != 1 {
+		t.Fatalf("keystore.New has %d error returns (lines %v), want exactly 1.\n"+
+			"cmd/admin-gateway/main.go treats its error as unreachable because LoadConfig "+
+			"already refuses the only input that produces it. A second error path breaks that "+
+			"reasoning, and the gateway would die at boot on a condition nobody decided it "+
+			"should die on.", len(errorReturns), errorReturns)
+	}
+
+	// And that the one path is still the length check the exclusion cites.
+	src, err := os.ReadFile(path) // #nosec G304 -- fixed path inside the repo
+	if err != nil {
+		t.Fatalf("read keystore.go: %v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	guard := strings.Join(lines[max(0, errorReturns[0]-3):errorReturns[0]], " ")
+	if !strings.Contains(guard, "len(masterKey)") {
+		t.Errorf("keystore.New's only error return at line %d is no longer guarded by the "+
+			"master-key length check (context: %q). The coverage exclusion in "+
+			"cmd/admin-gateway/main.go cites that check by name.", errorReturns[0], strings.TrimSpace(guard))
 	}
 }

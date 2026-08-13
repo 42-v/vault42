@@ -151,7 +151,18 @@ func main() {
 		log.Printf("Admin token init error: %v", err)
 	}
 
-	// Declarative seeding from VAULT_SEED_FILE (idempotent)
+	// Check if this is a CLI invocation
+	if cliHandler.Run(ctx, os.Args) {
+		return
+	}
+
+	// Declarative seeding from VAULT_SEED_FILE (idempotent).
+	//
+	// Applied only once we know this is the server and not a CLI invocation:
+	// running it above the CLI check made every `vault list-clients` create
+	// the declared clients and users as a side effect, and a broken seed file
+	// killed an unrelated admin subcommand with log.Fatalf. The retention
+	// sweepers sit below for the same reason.
 	if cfg.SeedFile != "" {
 		sf, err := seed.Load(cfg.SeedFile)
 		if err != nil {
@@ -161,11 +172,6 @@ func main() {
 		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}); err != nil {
 			log.Fatalf("Seeding failed: %v", err)
 		}
-	}
-
-	// Check if this is a CLI invocation
-	if cliHandler.Run(ctx, os.Args) {
-		return
 	}
 
 	// Audit retention sweeper (Art. 5(1)(e)). No-op unless

@@ -266,7 +266,8 @@ func (b *syncBuffer) String() string {
 // ---------------------------------------------------------------------------
 
 // bootEnv is the smallest environment in which vault42 starts and serves: a
-// production profile that passes Validate, plaintext listening (the tests do not
+// production profile that passes Validate (including the 32-byte master key
+// production now requires at boot), plaintext listening (the tests do not
 // exercise TLS termination), the scripted database, and an in-memory cache.
 //
 // Every startup test builds on this and overrides only the variables it is about,
@@ -287,6 +288,7 @@ func bootEnv(t *testing.T, stub *pgStub, listen string) map[string]string {
 		"DB_MIG_PASSWORD_FILE":  secretFile(t, dir, "db_mig", dbPassword),
 		"HMAC_SECRET_FILE":      secretFile(t, dir, "hmac", strings.Repeat("h", 32)),
 		"VAULT_PEPPER_FILE":     secretFile(t, dir, "pepper", strings.Repeat("p", 32)),
+		"MASTER_KEY_FILE":       secretFile(t, dir, "master", strings.Repeat("m", 32)),
 		"CACHE_BACKEND":         "memory",
 		"VAULT_HIBP_CHECK":      "false",
 	}
