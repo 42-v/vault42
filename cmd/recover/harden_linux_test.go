@@ -7,8 +7,12 @@ import (
 	"testing"
 )
 
-// prGetDumpable reads back what prSetDumpable wrote (<sys/prctl.h>).
-const prGetDumpable = 3
+// prGetDumpable reads back what prSetDumpable wrote, and dumpUser is
+// SUID_DUMP_USER, the value a process starts life with (<sys/prctl.h>).
+const (
+	prGetDumpable = 3
+	dumpUser      = 1
+)
 
 func dumpable(t *testing.T) uintptr {
 	t.Helper()
@@ -30,9 +34,14 @@ func dumpable(t *testing.T) uintptr {
 // This test runs in the test binary rather than a subprocess, so it also proves
 // the call is not silently failing on this kernel.
 func TestHardenProcess_LeavesTheProcessUndumpable(t *testing.T) {
-	// Without this the assertion below could pass on a process that was already
-	// undumpable for some unrelated reason, and hardenProcess could be a no-op.
-	if before := dumpable(t); before != 1 {
+	// run() hardens the process it is called in, so any test above this one has
+	// already cleared the flag and the assertion below would pass on a process
+	// hardenProcess never touched. Put the kernel default back first: without a
+	// known starting value this test cannot tell a working prctl from a no-op.
+	if _, _, errno := syscall.Syscall(syscall.SYS_PRCTL, prSetDumpable, dumpUser, 0); errno != 0 {
+		t.Fatalf("prctl(PR_SET_DUMPABLE, SUID_DUMP_USER): %v", errno)
+	}
+	if before := dumpable(t); before != dumpUser {
 		t.Fatalf("the test process starts at dumpable=%d, so this proves nothing about hardenProcess", before)
 	}
 

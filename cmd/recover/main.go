@@ -126,13 +126,11 @@ type rowSource interface {
 // release function that closes both the rows and the connection behind them.
 type escrowOpener func(ctx context.Context, dsn string, limit int) (rowSource, func(), error)
 
+// main is one line of wiring: run's exit code is the process's, and every writer
+// the tool uses is handed to run. Anything placed here instead runs outside the
+// only seam the tests have, which is why the process hardening below is run's
+// first statement and not main's.
 func main() {
-	// Before anything reads the key. A failure here is reported and not fatal: it
-	// weakens the run, but refusing to answer a legal request because a hardening
-	// step was unavailable is worse.
-	if err := hardenProcess(); err != nil {
-		fmt.Fprintf(os.Stderr, "recover: could not disable core dumps and debugger attach: %v\n", err)
-	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))
 }
 
@@ -171,6 +169,13 @@ func decryptEscrowed(priv *rsa.PrivateKey, format vaultcrypto.RecoveryFormat, pa
 // Individual records that fail are counted and reported, not fatal, so one
 // corrupt row cannot abort an entire restore.
 func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) {
+	// Before anything reads the key. A failure is reported and not fatal: it
+	// weakens the run, but refusing to answer a legal request because a hardening
+	// step was unavailable is worse. It sits at the top of run rather than in main
+	// because run is what holds the key, and because a warning written straight to
+	// os.Stderr would be the one line of this tool a caller cannot capture.
+	warnIfUnhardened(stderr, hardenProcess())
+
 	logger := log.New(stderr, "", log.LstdFlags)
 
 	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
@@ -319,6 +324,18 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 		return exitIncomplete
 	}
 	return 0
+}
+
+// warnIfUnhardened says out loud that the process could not be made undumpable,
+// then lets the run continue. For the length of a run this process holds the one
+// private key that opens every escrow record the deployment has ever written, so
+// an operator told nothing will assume no crash can dump it to disk and no
+// same-user process can ptrace it out of memory.
+func warnIfUnhardened(stderr io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "recover: could not disable core dumps and debugger attach: %v\n", err)
 }
 
 // warnDSNInArgv says out loud that a credential passed on the command line is

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -82,6 +83,87 @@ func TestRun_SaysSoWhenTheDSNPasswordWasPassedInArgv(t *testing.T) {
 	// The warning itself must not repeat the credential it is warning about, or
 	// it moves the password from argv into the scrollback as well.
 	mustNotLeak(t, "argv warning", got.stderr, prodPassword)
+}
+
+// pgx reads a keyword/value DSN as readily as a URL, and both spellings land the
+// password in argv. A warning that fires only on the form net/url understands
+// leaves the other one silently exposed on /proc and in shell history, which is
+// the case an operator is least likely to notice on their own.
+func TestRun_SaysSoWhenAKeywordValueDSNCarriesAPassword(t *testing.T) {
+	dsns := map[string]string{
+		"keyword/value pairs":       "host=db.internal port=5432 user=vault_app password=" + prodPassword + " dbname=vault sslmode=require",
+		"password in the URL query": "postgres://vault_app@db.internal:5432/vault?sslmode=require&password=" + prodPassword,
+	}
+
+	for name, dsn := range dsns {
+		t.Run(name, func(t *testing.T) {
+			o := &opened{rows: &fakeRows{}}
+			got := exercise(t, []string{"--key", writeKey(t, escrowKey), "--dsn", dsn}, o)
+
+			if got.code != 0 {
+				t.Fatalf("exit code = %d, want 0: the warning must not fail the run\n%s", got.code, got.stderr)
+			}
+			if !strings.Contains(got.stderr, "readable to every process") {
+				t.Errorf("a password in argv produced no warning:\n%s", got.stderr)
+			}
+			if !strings.Contains(got.stderr, "DATABASE_URL") {
+				t.Errorf("stderr does not point at the safer channel:\n%s", got.stderr)
+			}
+			mustNotLeak(t, "argv warning", got.stderr, prodPassword)
+		})
+	}
+}
+
+// The keyword/value form has spellings that name the key without carrying a
+// value: a template whose password variable was unset, or the key at the end of
+// the string. Warning about those is the same failure as warning about a DSN
+// with no password at all, and one false warning is enough to teach an operator
+// that the line is noise.
+func TestRun_NoArgvWarningWhenAKeywordValueDSNHasNoPassword(t *testing.T) {
+	dsns := map[string]string{
+		"empty value, more pairs follow":          "host=db.internal password= dbname=vault",
+		"empty value at the end of the DSN":       "host=db.internal dbname=vault password=",
+		"empty value, more URL parameters follow": "postgres://vault_app@db.internal:5432/vault?password=&sslmode=require",
+	}
+
+	for name, dsn := range dsns {
+		t.Run(name, func(t *testing.T) {
+			o := &opened{rows: &fakeRows{}}
+			got := exercise(t, []string{"--key", writeKey(t, escrowKey), "--dsn", dsn}, o)
+
+			if got.code != 0 {
+				t.Fatalf("exit code = %d, want 0\n%s", got.code, got.stderr)
+			}
+			if strings.Contains(got.stderr, "readable to every process") {
+				t.Errorf("the argv warning fired for a DSN that carries no password:\n%s", got.stderr)
+			}
+		})
+	}
+}
+
+// Clearing the dumpable flag is defense in depth and the run continues without
+// it, which makes this line the only thing standing between the operator and a
+// false sense of containment: a recovery they believe was sealed would have held
+// the private key in a process any program running as them could ptrace, and any
+// crash could have written that key to the disk in a core file.
+func TestWarnIfUnhardened_SaysWhatTheFailedStepWouldHavePrevented(t *testing.T) {
+	var stderr strings.Builder
+	warnIfUnhardened(&stderr, errors.New("operation not permitted"))
+
+	for _, want := range []string{"core dumps", "debugger attach", "operation not permitted"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("the hardening warning does not mention %q:\n%s", want, stderr.String())
+		}
+	}
+
+	// The quiet case matters as much: every other test in this package drives
+	// run(), which hardens for real, and a line printed on a hardened process
+	// would be a permanent false alarm in every operator's scrollback.
+	stderr.Reset()
+	warnIfUnhardened(&stderr, nil)
+	if stderr.String() != "" {
+		t.Errorf("a hardening step that succeeded still wrote to stderr: %q", stderr.String())
+	}
 }
 
 // The warning has to be specific to the case it describes. A DSN with no

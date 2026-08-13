@@ -89,13 +89,33 @@
     },
     {
       "package": "cmd/recover",
+      "file": "cmd/recover/harden_linux.go",
+      "line": 25,
+      "occurrence": 1,
+      "source": "\t\treturn errno",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "hardenProcess takes no arguments and is called from exactly one place, run (cmd/recover/main.go:177), so every execution makes the identical syscall: both operands of this prctl are untyped constants declared at cmd/recover/harden_linux.go:11-12, prSetDumpable = 4 (PR_SET_DUMPABLE) and dumpDisable = 0 (SUID_DUMP_DISABLE). The kernel returns EINVAL only for an unknown option or for a dumpable value outside {0, 1}, and this call needs no privilege, so on a Linux kernel errno is always 0 here. What the branch defends against is a host that refuses the syscall anyway: a seccomp filter carrying a prctl rule, or an LSM that denies it. A test cannot enter that state in-process, because a seccomp filter cannot be removed once installed and would go on filtering the Go runtime's own prctl calls for the life of the test binary; the alternative is to parameterize the prctl value so a test can pass an invalid one, a seam whose only consumer would be the test. The call is proven rather than assumed on the kernel the tests run on: TestHardenProcess_LeavesTheProcessUndumpable (cmd/recover/harden_linux_test.go:36) puts PR_SET_DUMPABLE back to SUID_DUMP_USER, calls hardenProcess and reads the flag back as 0, so a kernel that started refusing the call fails that test instead of passing silently. The errno is returned rather than dropped because run reports it to the operator through warnIfUnhardened (cmd/recover/main.go:334), whose own branches are covered by TestWarnIfUnhardened_SaysWhatTheFailedStepWouldHavePrevented (cmd/recover/opsec_test.go:149)."
+    },
+    {
+      "package": "cmd/recover",
       "file": "cmd/recover/main.go",
-      "line": 136,
+      "line": 134,
       "occurrence": 1,
       "source": "\tos.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))",
       "bucket": "B",
       "confirmed": true,
       "justification": "main's only statement is os.Exit, so any in-process test that reaches it terminates the test binary before the testing package writes the profile, and main.go offers no seam to intercept the exit: run's return value is passed straight to os.Exit. The wiring is executed and asserted, just not recorded. TestMainWiring in cmd/recover/main_test.go re-runs the test binary as the recover binary through the RECOVER_TEST_ARGS branch of TestMain, which calls main() directly, and checks the real process exit codes (0, 1, 2), that os.Args[1:] slicing lets flags reach the parser, and that stdout stays empty on every failing run. A child process's counters are never merged into the parent's -coverprofile, which testing writes from in-process counters at the end of m.Run(); confirmed empirically with a minimal module whose child ran main() with GOCOVERDIR set and still left both main and run at 0.0% in the parent's profile. Covering this would require a production seam (var exit = os.Exit) whose sole consumer is the test, which is bucket B."
+    },
+    {
+      "package": "cmd/recover",
+      "file": "cmd/recover/main.go",
+      "line": 564,
+      "occurrence": 2,
+      "source": "\t\treturn nil, 0, err",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The fstat error inside readKeyFile, on the descriptor os.Open returned six lines above at cmd/recover/main.go:556. readKeyFile's only caller is loadRecoveryKey (cmd/recover/main.go:358) and its only argument is the operator's --key path; the handle is open and stays open until the deferred Close at cmd/recover/main.go:560, and fstat(2) on a valid descriptor has no failure mode for a file on a local filesystem, so no --key value reaches this return. The failures a bad --key really produces are the os.Open error above it and the io.ReadAll error below it, both covered by TestRun_UnusableKeyIsFatalBeforeConnecting (cmd/recover/main_test.go:661), whose 'path is a directory' case opens and stats the directory successfully and then fails at the read with EISDIR. What is left needs the key file on a filesystem that can fail a getattr after a successful open, a FUSE or network mount that disconnects between the two calls, which a test cannot construct in-process; the alternative is to give readKeyFile an interface parameter so a fake can fail its Stat, a seam whose only consumer would be the test. The error is returned rather than ignored because the mode it carries is what drives the group- and other-readable key warning at cmd/recover/main.go:372: a run that could not read the mode must not report 0 and silently suppress that warning."
     },
     {
       "package": "cmd/vault",
