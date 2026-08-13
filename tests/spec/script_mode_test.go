@@ -12,7 +12,7 @@
 // can assert about itself: a file that starts with a shebang is a program, and a
 // program that is not executable is broken. Checking the checked-out file mode
 // rather than shelling out to `git ls-files -s` keeps the test dependency-free
-// and still measures the same thing, because a checkout materialises the index
+// and still measures the same thing, because a checkout materializes the index
 // mode onto disk.
 //
 // The tests are read-only. They never write to the source tree.

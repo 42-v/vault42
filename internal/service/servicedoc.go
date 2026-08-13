@@ -198,7 +198,7 @@ type ServiceDocumentMeta struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// ServiceDocumentQuota summarises a subject's document usage, mirroring the
+// ServiceDocumentQuota summarizes a subject's document usage, mirroring the
 // blob quota shape.
 type ServiceDocumentQuota struct {
 	UsedBytes int `json:"used_bytes"`

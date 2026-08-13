@@ -40,7 +40,7 @@ func TestASVS_V9_1_2_TokenAlgorithmAllowlistExcludesNoneAndHMAC(t *testing.T) {
 		}
 	}
 	if !strings.Contains(parse, "unsupported algorithm") {
-		t.Error("V9.1.2: the parser no longer rejects unrecognised algorithms by default")
+		t.Error("V9.1.2: the parser no longer rejects unrecognized algorithms by default")
 	}
 }
 
@@ -171,7 +171,7 @@ func TestASVS_V10_4_2_AuthorizationArtifactsAreSingleUse(t *testing.T) {
 // against browser-based request forgery attacks ... which trigger token
 // requests."
 //
-// The state parameter is only a CSRF defence if its integrity is checked, and
+// The state parameter is only a CSRF defense if its integrity is checked, and
 // only a session binding if it is mirrored somewhere the attacker cannot set.
 func TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound(t *testing.T) {
 	src := readProductionSource(t, "internal/handler/oauth.go")
@@ -204,7 +204,7 @@ func TestASVS_V10_5_1_EmptyExpectedNonceFailsClosed(t *testing.T) {
 		t.Fatal("V10.5.1: ID token nonce binding is gone")
 	}
 	if !strings.Contains(src, "no expected nonce") {
-		t.Error("V10.5.1: an empty expected nonce no longer fails closed; the replay defence would silently switch off")
+		t.Error("V10.5.1: an empty expected nonce no longer fails closed; the replay defense would silently switch off")
 	}
 }
 

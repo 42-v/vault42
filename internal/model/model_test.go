@@ -38,7 +38,7 @@ func allTypes() []any {
 	}
 }
 
-// The model types are persistence rows, but a handler that serialises one
+// The model types are persistence rows, but a handler that serializes one
 // directly turns them into a wire contract, which is how GET /admin/audit came
 // to publish Go field names in an API that is snake_case everywhere else.
 // Requiring a tag on every exported field means the next accidental
@@ -54,7 +54,7 @@ func TestModelFieldsCarryJSONTags(t *testing.T) {
 				}
 				tag, ok := f.Tag.Lookup("json")
 				if !ok {
-					t.Errorf("%s.%s has no json tag, so it would serialise under its Go name", typ.Name(), f.Name)
+					t.Errorf("%s.%s has no json tag, so it would serialize under its Go name", typ.Name(), f.Name)
 					continue
 				}
 				name, _, _ := strings.Cut(tag, ",")

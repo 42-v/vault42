@@ -205,6 +205,6 @@ func TestSocialList_NoLinksIsAnEmptyArray(t *testing.T) {
 	h.List(rec, socialAuthedRequest(http.MethodGet, "/user/social", "user-1"))
 
 	if body := rec.Body.String(); !strings.Contains(body, `"accounts":[]`) {
-		t.Errorf("an account with no links did not serialise accounts as []: %s", body)
+		t.Errorf("an account with no links did not serialize accounts as []: %s", body)
 	}
 }

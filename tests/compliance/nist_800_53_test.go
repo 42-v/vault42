@@ -35,7 +35,7 @@ func TestNIST80053_AC_3_AccessEnforcementDeniesUnknownPrincipals(t *testing.T) {
 	for _, role := range []rbac.Role{"", "admin", "root", "*", "SUPER_ADMIN"} {
 		for _, p := range everything {
 			if rbac.HasPermission(role, p) {
-				t.Errorf("AC-3: unrecognised role %q was granted %q", role, p)
+				t.Errorf("AC-3: unrecognized role %q was granted %q", role, p)
 			}
 		}
 	}
@@ -119,8 +119,8 @@ func TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily(t *testing.T) {
 // AU-3 enumerates what a record must establish: what happened, when, where,
 // the source, and the identity associated with the outcome. The audit entry
 // shape is asserted through the real logger in asvs_logging_test.go; here the
-// control identifier is bound to that evidence and the event catalogue is
-// checked for the categories AU-2 requires an organisation to select.
+// control identifier is bound to that evidence and the event catalog is
+// checked for the categories AU-2 requires an organization to select.
 func TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories(t *testing.T) {
 	src := readProductionSource(t, "internal/audit/audit.go")
 	categories := map[string]string{
@@ -282,7 +282,7 @@ func TestNIST80053_SC_8_TransmissionProtectionCoversEveryConfiguredEndpoint(t *t
 // --- SC-13 "Cryptographic Protection" ---
 
 // The control requires the cryptography in use to be identified and to be a
-// type the organisation has approved. The approved set is asserted by name so
+// type the organization has approved. The approved set is asserted by name so
 // that a substitution has to be a deliberate edit to this list.
 func TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured(t *testing.T) {
 	aes := readProductionSource(t, "internal/crypto/aes.go")

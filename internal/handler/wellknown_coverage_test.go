@@ -151,7 +151,7 @@ func TestWellKnown_OpenIDConfig_TruthfulKeysOnly(t *testing.T) {
 
 // vault42 is not an OIDC provider. Advertising a capability at 1.0.0 and
 // retracting it later is a breaking change, so these keys must stay absent
-// until the behaviour behind each one exists.
+// until the behavior behind each one exists.
 func TestWellKnown_OpenIDConfig_RetractedKeysAbsent(t *testing.T) {
 	h := NewWellKnownHandler(nil, "https://vault.test")
 

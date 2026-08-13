@@ -15,7 +15,7 @@ import (
 // Shared source-scanning helpers for the property-based compliance suites.
 //
 // The compliance suites in this package assert *properties* of the tree rather
-// than the behaviour of one function. A statement-coverage number cannot see
+// than the behavior of one function. A statement-coverage number cannot see
 // the failures these catch: a new tls.Config that forgets MinVersion, a new
 // repository method that builds SQL by concatenation, a new admin route wired
 // to the wrong permission. Each of those is invisible to a unit test of the

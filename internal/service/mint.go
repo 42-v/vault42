@@ -35,8 +35,8 @@ import (
 //   - Off unless configured. The route is not mounted at all when minting is
 //     disabled, following the KMS unwrap oracle rather than a soft in-handler
 //     403. A vanilla deployment has no mint.
-//   - Its own scope. It never reuses the KMS scope: a client authorised to
-//     unwrap envelopes must not thereby be authorised to forge subjects.
+//   - Its own scope. It never reuses the KMS scope: a client authorized to
+//     unwrap envelopes must not thereby be authorized to forge subjects.
 //   - Minted tokens are structurally rejected by vault42 itself. The token_type
 //     claim is "mint", which is not in the allow-list vault42's own auth
 //     middleware accepts, and the audience is a separate configured value that
@@ -345,7 +345,7 @@ func (s *MintService) checkRoles(requested []string) ([]string, error) {
 			return nil, ErrMintRoleNotPermitted
 		}
 	}
-	// Defence in depth: if the check above is ever weakened, the filter still
+	// Defense in depth: if the check above is ever weakened, the filter still
 	// keeps an admin-tier name out of a signed token.
 	filtered := seed.FilterUserRoles(requested)
 	if len(filtered) != len(requested) {

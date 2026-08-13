@@ -16,7 +16,7 @@ import (
 // The compliance register gate.
 //
 // docs/compliance-register.json is the enumeration that docs/COMPLIANCE.md
-// summarises. Through 0.9.9 the report claimed 242 requirements met and listed
+// summarizes. Through 0.9.9 the report claimed 242 requirements met and listed
 // none of them, and reported "94.2% weighted coverage" with no published
 // weighting model and no denominator anyone could check. Both claims were
 // unfalsifiable, which is the first thing a hostile reader finds.
@@ -228,7 +228,7 @@ func TestComplianceRegister_NamedTestsAreNotUnconditionallySkipped(t *testing.T)
 // --- The claim shape ---
 
 // The claim is that nothing is unclassified. That is only checkable if the
-// status vocabulary is closed, so an unrecognised status is a failure rather
+// status vocabulary is closed, so an unrecognized status is a failure rather
 // than a pass-through. "Partial" in particular must never reappear: it names a
 // finding with no owner, no rationale and no revisit date, which is what the
 // register replaced.
@@ -392,7 +392,7 @@ func TestComplianceRegister_ScopeAndSelfAssessmentAreDeclared(t *testing.T) {
 	}
 }
 
-// docs/COMPLIANCE.md summarises the register. If the two disagree on the
+// docs/COMPLIANCE.md summarizes the register. If the two disagree on the
 // counts, the document is the one a reader sees and the register is the one
 // that is true, so the disagreement has to fail rather than be discovered.
 func TestComplianceRegister_ComplianceDocumentCountsMatchTheRegister(t *testing.T) {

@@ -139,11 +139,11 @@ func TestListUsers_NoMatchIsAnEmptyList(t *testing.T) {
 	}
 }
 
-// GET /admin/audit was serialising []*model.AuditEntry directly, so the wire
+// GET /admin/audit was serializing []*model.AuditEntry directly, so the wire
 // format was Go field names, PascalCase in an API that is snake_case
 // everywhere else, and it carried FingerprintHash: an HMAC that correlates
 // events across accounts. The projection is what fixes both, and it is only a
-// fix as long as nothing serialises the row again.
+// fix as long as nothing serializes the row again.
 func TestQueryAudit_ProjectsSnakeCaseAndDropsTheFingerprint(t *testing.T) {
 	const fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 
@@ -217,7 +217,7 @@ func TestQueryAudit_NoResultsIsAnEmptyArray(t *testing.T) {
 	h.QueryAudit(rec, httptest.NewRequest(http.MethodGet, "/admin/audit", nil))
 
 	if body := rec.Body.String(); !strings.Contains(body, `"entries":[]`) {
-		t.Errorf("an empty audit query did not serialise entries as []: %s", body)
+		t.Errorf("an empty audit query did not serialize entries as []: %s", body)
 	}
 }
 
@@ -246,12 +246,12 @@ func TestGetClient_DoesNotLeakTheClientSecretHash(t *testing.T) {
 		t.Errorf("the client was not returned at all: %s", body)
 	}
 	if strings.Contains(body, secretHash) || strings.Contains(body, "argon2") {
-		t.Error("the client secret hash was serialised to the admin, handing an offline cracking target out over HTTP")
+		t.Error("the client secret hash was serialized to the admin, handing an offline cracking target out over HTTP")
 	}
 	if strings.Contains(body, `"SecretHash"`) || strings.Contains(body, `"ID"`) {
 		t.Errorf("Go field names reached the wire: %s", body)
 	}
 	if !strings.Contains(body, `"scopes":[]`) || !strings.Contains(body, `"redirect_uris":[]`) {
-		t.Errorf("an unset scope or redirect list serialised as null rather than []: %s", body)
+		t.Errorf("an unset scope or redirect list serialized as null rather than []: %s", body)
 	}
 }

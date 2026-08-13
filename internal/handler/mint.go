@@ -13,7 +13,7 @@ import (
 // MintScope is the scope POST /mint requires.
 //
 // It is its own scope on purpose. Reusing kms:unwrap would mean a client
-// authorised to unwrap an envelope was thereby authorised to forge a subject,
+// authorized to unwrap an envelope was thereby authorized to forge a subject,
 // and the two capabilities have nothing to do with each other.
 const MintScope = "mint:token"
 
@@ -90,7 +90,7 @@ func NewMintHandler(svc *service.MintService, auditLog *audit.Logger) *MintHandl
 func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
 	if claims == nil {
-		// Defence in depth: the route wiring always authenticates first.
+		// Defense in depth: the route wiring always authenticates first.
 		WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}

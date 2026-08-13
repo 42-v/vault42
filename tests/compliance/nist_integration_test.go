@@ -32,7 +32,7 @@ import (
 
 // skipIfNoDocker skips integration tests when no container runtime is reachable.
 //
-// Probing rather than only honouring SKIP_INTEGRATION matters for the
+// Probing rather than only honoring SKIP_INTEGRATION matters for the
 // compliance suite specifically: a reviewer who clones the repo and runs
 // `go test ./tests/compliance/` must get a clean result showing which
 // requirements are proven container-free and which need a database, not a wall

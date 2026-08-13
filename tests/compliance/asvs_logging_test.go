@@ -227,7 +227,7 @@ func TestASVS_V16_2_2_AuditTimestampCarriesAnOffset(t *testing.T) {
 //
 // The event vocabulary is the contract between the code and any detection rule
 // written against it. A rename that silently orphans a rule is invisible to
-// every behavioural test, so the values are asserted, not just the identifiers.
+// every behavioral test, so the values are asserted, not just the identifiers.
 func TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes(t *testing.T) {
 	required := map[string]string{
 		audit.LoginSuccess:  "successful authentication",
@@ -312,7 +312,7 @@ func TestASVS_V16_3_2_RBACDenialsAreStillUnlogged(t *testing.T) {
 //
 // The attack is a newline or carriage return in an attacker-controlled field
 // that forges a second log line. SafeLogValue is the encoder; this pins the
-// control characters it is documented to neutralise.
+// control characters it is documented to neutralize.
 func TestASVS_V16_4_1_LogValuesCannotForgeNewRecords(t *testing.T) {
 	cases := []struct{ name, input string }{
 		{"newline", "user\nADMIN LOGIN SUCCEEDED"},

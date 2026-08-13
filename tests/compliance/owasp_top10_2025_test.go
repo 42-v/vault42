@@ -219,7 +219,7 @@ func TestOWASP_A01_2025_SensitiveRoutesBindTheFingerprint(t *testing.T) {
 // (the first being a context).
 var sqlEntryPoints = map[string]bool{"Query": true, "QueryRow": true, "Exec": true}
 
-// sqlKeyword recognises a string literal that is actually SQL rather than, say,
+// sqlKeyword recognizes a string literal that is actually SQL rather than, say,
 // a log message that happens to be concatenated.
 var sqlKeyword = regexp.MustCompile(`(?i)\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|WHERE|ORDER\s+BY|LIMIT|OFFSET|RETURNING)\b`)
 

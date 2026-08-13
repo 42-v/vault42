@@ -229,7 +229,7 @@ func TestRequiresMFAWithMethodsUntrusted(t *testing.T) {
 	}
 }
 
-// GET /auth/2fa/status serialises MFAStatus directly, so this struct is a
+// GET /auth/2fa/status serializes MFAStatus directly, so this struct is a
 // public wire contract. Two things must hold for every value of it: the method
 // list is an array and never null, and the list is published under both
 // mfa_methods (canonical) and available_methods (the deprecated pre-1.0.0
@@ -265,7 +265,7 @@ func TestMFAStatusJSON_MethodListIsAnArrayUnderBothNames(t *testing.T) {
 				t.Errorf("the two names disagree: mfa_methods=%s available_methods=%s", canonical, alias)
 			}
 			if string(canonical) == "null" {
-				t.Errorf("the method list serialised as null rather than []: %s", raw)
+				t.Errorf("the method list serialized as null rather than []: %s", raw)
 			}
 		})
 	}
@@ -281,6 +281,6 @@ func TestGetStatus_EmptyMethodsIsNotNil(t *testing.T) {
 		t.Fatalf("GetStatus: %v", err)
 	}
 	if status.Methods == nil {
-		t.Fatal("Methods is nil, so the status serialises as null")
+		t.Fatal("Methods is nil, so the status serializes as null")
 	}
 }

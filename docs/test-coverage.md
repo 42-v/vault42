@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-11 | Tests: 3385 | Total: 99.55% statement coverage
+Generated: 2026-08-13 | Tests: 3385 | Total: 99.55% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.

@@ -80,7 +80,7 @@ func TestCollectorHandler(t *testing.T) {
 
 // The mint and document-store counters are the only signal an operator has that
 // a signing oracle or a service-scoped store is in use, and each has to move on
-// its own: a Record call that bumped a neighbour would make an alert fire on the
+// its own: a Record call that bumped a neighbor would make an alert fire on the
 // wrong subsystem. Counting is half the job, so the exposition output is checked
 // too, with values rather than names alone. A counter that increments but never
 // reaches /metrics is invisible to every scrape.

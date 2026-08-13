@@ -54,7 +54,7 @@ func TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion(t *testing.T) {
 		name := selectorName(value)
 		rank, known := tlsVersionRank[name]
 		if !known {
-			t.Errorf("V12.1.1: %s sets MinVersion to %q, which is not a recognised crypto/tls version constant", where, name)
+			t.Errorf("V12.1.1: %s sets MinVersion to %q, which is not a recognized crypto/tls version constant", where, name)
 			continue
 		}
 		if rank < tlsVersionRank["tls.VersionTLS12"] {

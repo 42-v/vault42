@@ -79,7 +79,7 @@ var (
 	// absolute session lifetime and must reauthenticate regardless of activity
 	// (NIST SP 800-63B-4 §2.2.3). It wraps ErrTokenExpired so every transport that
 	// already maps an expired refresh token keeps its status code and its
-	// cookie-clearing behaviour, and so the outcome is indistinguishable from an
+	// cookie-clearing behavior, and so the outcome is indistinguishable from an
 	// ordinary expiry to the client.
 	ErrSessionExpired = fmt.Errorf("session exceeded maximum lifetime: %w", ErrTokenExpired)
 	// ErrSessionAgeUnknown is the fail-closed outcome when the absolute session
@@ -452,7 +452,7 @@ type LoginResult struct {
 	Requires2FA      bool     `json:"requires_2fa,omitempty"`
 	ChallengeToken   string   `json:"challenge_token,omitempty"`
 	AvailableMethods []string `json:"available_methods,omitempty"`
-	// ImportClaimRequired is never set. It signalled an unclaimed imported account
+	// ImportClaimRequired is never set. It signaled an unclaimed imported account
 	// on its first login, which made that account distinguishable from every other
 	// login failure to an unauthenticated caller; Login now answers
 	// ErrInvalidCredentials there and mails the claim link out of band. The field
@@ -1207,7 +1207,7 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 // creates no family for CountActiveFamilies to count.
 //
 // Semantics are identical to the password path, including the soft, non-atomic
-// behaviour documented on checkSessionLimit.
+// behavior documented on checkSessionLimit.
 func (s *AuthService) CheckSessionLimit(ctx context.Context, userID string) error {
 	return s.checkSessionLimit(ctx, userID)
 }

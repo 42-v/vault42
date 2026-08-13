@@ -42,7 +42,7 @@ var routeSources = []string{
 // frontendIdent is the identifier through which every non-API route is served:
 // the embedded SPA catch-all in server.go and the admin gateway's HTML pages and
 // static assets in router.go. Classifying by handler identifier rather than by a
-// hardcoded path list means a new HTML page is recognised as non-API without
+// hardcoded path list means a new HTML page is recognized as non-API without
 // anyone remembering to update this test.
 const frontendIdent = "frontend"
 
@@ -314,11 +314,11 @@ func tableRoutes(t *testing.T, path, begin, end string) map[route]bool {
 	var inside bool
 	for _, line := range strings.Split(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == begin:
+		switch trimmed {
+		case begin:
 			inside = true
 			continue
-		case trimmed == end:
+		case end:
 			inside = false
 			continue
 		}
