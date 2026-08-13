@@ -530,6 +530,43 @@ func TestBridgeStripsHopByHopHeaders(t *testing.T) {
 	}
 }
 
+// TestBridgeKeepsTrustedHeadersUnderConnectionStrip is a security assertion that
+// TestBridgeStripsHopByHopHeaders does not cover: that test names X-Hop-Token, a
+// header the client owns, and confirms the proxy drops it. A client can instead
+// name the bridge's own stamps. net/http's reverse proxy deletes every header
+// the request's Connection line lists, and it does so after the bridge has set
+// X-Real-IP and X-Forwarded-Proto, so a caller sending
+//
+//	Connection: X-Real-IP, X-Forwarded-Proto
+//
+// strips the very headers the vault uses to attribute and rate limit the
+// request, from an unauthenticated peer in a single request. X-Real-IP goes to
+// the upstream empty and X-Forwarded-Proto with it, undoing
+// TestBridgeOverwritesClientSuppliedRealIP the moment the attacker adds one more
+// header.
+func TestBridgeKeepsTrustedHeadersUnderConnectionStrip(t *testing.T) {
+	f := newFixture(t, nil, nil, nil)
+
+	raw := "GET /whoami HTTP/1.1\r\n" +
+		"Host: bridge.test\r\n" +
+		"User-Agent: " + benignUA + "\r\n" +
+		"Connection: close, X-Real-IP, X-Forwarded-Proto\r\n" +
+		"\r\n"
+
+	reply := rawExchange(t, f.front.Listener.Addr().String(), raw)
+	if !strings.HasPrefix(reply, "HTTP/1.1 200") {
+		t.Fatalf("response = %q, want a 200", firstLine(reply))
+	}
+
+	got := f.real.only(t)
+	if ip := got.Header.Get("X-Real-IP"); ip != "127.0.0.1" {
+		t.Errorf("X-Real-IP = %q, want the true peer address 127.0.0.1; a Connection-named header stripped the bridge's stamp", ip)
+	}
+	if proto := got.Header.Get("X-Forwarded-Proto"); proto != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want https; a Connection-named header stripped the bridge's stamp", proto)
+	}
+}
+
 func firstLine(s string) string {
 	if i := strings.Index(s, "\r\n"); i >= 0 {
 		return s[:i]
