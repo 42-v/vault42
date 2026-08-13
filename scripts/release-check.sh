@@ -229,6 +229,32 @@ else
   fail "attack suite has failures"
 fi
 
+# ---------- 4b. End-to-end suite ----------
+#
+# tests/e2e runs against a DEPLOYED vault42, not against anything this script can
+# start. Its TestMain skips the whole suite when nothing answers at VAULT_E2E_URL,
+# which is right for a developer and wrong for a release: a green release-check
+# would mean "every test that ran, passed", and the suite that exercises the
+# thing users actually talk to would be the one that did not run.
+#
+# VAULT_E2E_REQUIRED=1 turns that skip into a failure. This gate is about making
+# the DECISION explicit rather than about forcing a cluster to exist: run it
+# against a deployment, or state that you are shipping without it. What is
+# removed is the third option, where nobody noticed the question was asked.
+section "e2e suite"
+if [ -n "${VAULT_E2E_URL:-}" ]; then
+  if VAULT_E2E_REQUIRED=1 go test ./tests/e2e/... -count=1 -timeout 600s >/dev/null 2>&1; then
+    pass "e2e suite green against $VAULT_E2E_URL"
+  else
+    VAULT_E2E_REQUIRED=1 go test ./tests/e2e/... -count=1 -timeout 600s
+    fail "e2e suite has failures against $VAULT_E2E_URL"
+  fi
+elif [ "${RELEASE_CHECK_SKIP_E2E:-}" = "1" ]; then
+  skip "VAULT_E2E_URL is unset and RELEASE_CHECK_SKIP_E2E=1 (shipping without a deployed-cluster run)"
+else
+  fail "VAULT_E2E_URL is not set, so the deployed-cluster suite would skip itself and this check would pass without running it. Point VAULT_E2E_URL at a deployment, or set RELEASE_CHECK_SKIP_E2E=1 to ship without one."
+fi
+
 # ---------- 5. Coverage ----------
 section "coverage"
 # shellcheck source=lib/coverage-env.sh
