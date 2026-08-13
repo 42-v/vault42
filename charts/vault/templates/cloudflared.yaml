@@ -41,8 +41,12 @@ spec:
           args:
             - tunnel
             - run
-            - --token
-            - $(TUNNEL_TOKEN)
+          # The token is the tunnel's credential: anything holding it can stand
+          # up a connector for this tunnel and receive the traffic meant for the
+          # cluster. cloudflared reads it from TUNNEL_TOKEN on its own, so
+          # "--token $(TUNNEL_TOKEN)" only added a copy in /proc/<pid>/cmdline,
+          # readable by every process in the pod's PID namespace and by anything
+          # that collects a process listing off the node.
           env:
             - name: TUNNEL_TOKEN
               valueFrom:
