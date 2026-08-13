@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/sanitize"
@@ -13,15 +14,47 @@ import (
 
 // UserHandler handles user profile and session management.
 type UserHandler struct {
-	users   repository.UserRepository
-	devices repository.DeviceRepository
-	tokens  repository.RefreshTokenRepository
-	mfaSvc  *service.MFAService
+	users    repository.UserRepository
+	devices  repository.DeviceRepository
+	tokens   repository.RefreshTokenRepository
+	mfaSvc   *service.MFAService
+	auditLog *audit.Logger
 }
 
 // NewUserHandler creates a new user handler.
 func NewUserHandler(users repository.UserRepository, devices repository.DeviceRepository, tokens repository.RefreshTokenRepository, mfaSvc *service.MFAService) *UserHandler {
 	return &UserHandler{users: users, devices: devices, tokens: tokens, mfaSvc: mfaSvc}
+}
+
+// SetAuditLog attaches the audit logger. Called once at wiring time; a nil
+// logger is ignored.
+func (h *UserHandler) SetAuditLog(l *audit.Logger) {
+	if l != nil {
+		h.auditLog = l
+	}
+}
+
+// logSessionRevoke records that sessions were torn down, and which.
+//
+// This is how an account takeover ends: the attacker signs the owner out
+// everywhere so the owner cannot race them for the account, and the devices row
+// that would have shown an unfamiliar login is deleted in the same request.
+// Until 1.0.0 that left nothing behind, so the owner's support ticket ("I was
+// logged out and my password no longer works") had no evidence to sit next to,
+// and a self-service sign-out was indistinguishable from a hostile one.
+//
+// The device is passed in the entry's own device column rather than in metadata
+// so a revocation can be joined against the login that created the device. The
+// blanket case has no single device and leaves it empty.
+//
+// Best-effort on purpose. A trail that can fail the request would leave the
+// owner unable to sign an attacker out.
+func (h *UserHandler) logSessionRevoke(r *http.Request, userID, deviceID, scope string) {
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), audit.SessionRevoke, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks the response
+		r.Header.Get("User-Agent"), "", deviceID, map[string]interface{}{"scope": scope}, 0)
 }
 
 // Profile handles GET /user/profile.
@@ -185,6 +218,7 @@ func (h *UserHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	h.logSessionRevoke(r, claims.Subject, sessionID, "session")
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "revoked"})
 }
 
@@ -205,6 +239,7 @@ func (h *UserHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) 
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	h.logSessionRevoke(r, claims.Subject, "", "all")
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "all_sessions_revoked"})
 }
 
@@ -322,5 +357,6 @@ func (h *UserHandler) DeleteDevice(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	h.logSessionRevoke(r, claims.Subject, deviceID, "device")
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "device_removed"})
 }
