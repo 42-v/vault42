@@ -30,6 +30,15 @@ func testJSONHandler() http.HandlerFunc {
 	}
 }
 
+// The three Content-Type mismatch cases that used to live here are gone. They
+// built their own local handler, decoded a body with encoding/json, and reported
+// the status with t.Logf and no assertion, so they could not fail. What they
+// demonstrated was a property of the standard library rather than anything about
+// vault42, in the suite whose purpose is to show that an attack does not work.
+//
+// The real behaviour is pinned in internal/handler, against the decoder every
+// route actually uses: TestDecodeJSONIgnoresContentType.
+
 // TestContentType_ValidJSON verifies that valid JSON with correct Content-Type works.
 func TestContentType_ValidJSON(t *testing.T) {
 	handler := testJSONHandler()
@@ -43,52 +52,6 @@ func TestContentType_ValidJSON(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Expected 200 for valid JSON, got %d: %s", rec.Code, rec.Body.String())
 	}
-}
-
-// TestContentType_MismatchTextPlain verifies behavior when sending valid JSON
-// with Content-Type: text/plain. Go's json.Decoder ignores Content-Type — it
-// only cares about the body bytes. This test documents that behavior.
-func TestContentType_MismatchTextPlain(t *testing.T) {
-	handler := testJSONHandler()
-	body := `{"email":"test@example.com","password":"secure-password-123"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
-	req.Header.Set("Content-Type", "text/plain")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	// Go's json.Decoder does not check Content-Type — this documents the behavior.
-	// The decoder will parse the body regardless. If the API needs Content-Type
-	// enforcement, it must be done in middleware.
-	t.Logf("text/plain with JSON body: status=%d (json.Decoder ignores Content-Type)", rec.Code)
-}
-
-// TestContentType_MismatchXML verifies behavior when sending valid JSON
-// with Content-Type: application/xml.
-func TestContentType_MismatchXML(t *testing.T) {
-	handler := testJSONHandler()
-	body := `{"email":"test@example.com","password":"secure-password-123"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/xml")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	t.Logf("application/xml with JSON body: status=%d (json.Decoder ignores Content-Type)", rec.Code)
-}
-
-// TestContentType_NoContentType verifies behavior when no Content-Type header is set.
-func TestContentType_NoContentType(t *testing.T) {
-	handler := testJSONHandler()
-	body := `{"email":"test@example.com","password":"secure-password-123"}`
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
-	// Deliberately not setting Content-Type
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	// json.Decoder works without Content-Type header
-	t.Logf("no Content-Type with JSON body: status=%d", rec.Code)
 }
 
 // TestContentType_InvalidJSONBody verifies that non-JSON data with
