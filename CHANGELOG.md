@@ -128,7 +128,14 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   exit 0. This is a deploy-pipeline tool, so a failed earlier step yielded a valid looking
   artifact that unwrapped to zero bytes, surfacing much later as an empty secret in a running
   service. The guard rejects the input without trimming the payload, because a key legitimately
-  carries a trailing newline and trimming would seal it a byte short.
+  carries a trailing newline and trimming would seal it a byte short. It sits in
+  `kms.Service.Wrap` rather than in the CLI, since `Service.Wrap` is exported and deploy
+  tooling calls it directly. `POST /kms/unwrap` still opens a zero-byte envelope on purpose:
+  unwrap has to stay the exact inverse of every wrap that ever ran, and refusing one returns
+  `unwrap_failed`, byte-identical to a tampered artifact, so the operator chases corruption
+  instead. `vault kms wrap` also refuses a `--kid` outside `^[A-Za-z0-9][A-Za-z0-9._@-]*$`,
+  because a kid carrying a space or a control byte produces an artifact that only opens under
+  a string nobody can read back off a terminal.
 * **`POST /mint` issued tokens for a `ttl_seconds` the contract refuses.** The seconds were
   multiplied into a `time.Duration` with no bound. `time.Second` is `2^9 * 1953125` and the
   odd factor is invertible modulo a power of two, so the nanosecond product repeats with
