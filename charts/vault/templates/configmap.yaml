@@ -11,6 +11,9 @@ data:
   VAULT_ORIGIN: {{ .Values.origin | quote }}
   VAULT_APP_NAME: {{ .Values.appName | quote }}
   VAULT_AUTO_MIGRATE: {{ .Values.autoMigrate | quote }}
+  {{- if and (ne .Values.profile "dev") (not .Values.tls.enabled) (not .Values.forceSecureCookies) }}
+  {{- fail "tls.enabled and forceSecureCookies are both false. The refresh cookie is named __Host-refresh_token, and a browser discards a __Host- cookie that arrives without the Secure flag, so every refresh would fail. Config.Validate refuses to start on this pair for the same reason, which turns it into a CrashLoopBackOff whose cause is one line deep in the pod logs. Set forceSecureCookies=true when TLS terminates at an ingress or a tunnel, or tls.enabled=true with tls.certFile and tls.keyFile to terminate it in the pod. Only the dev profile is exempt, because Config.Validate returns before this check there." }}
+  {{- end }}
   VAULT_TLS_ENABLED: {{ .Values.tls.enabled | quote }}
   {{- if and .Values.tls.enabled .Values.tls.certFile }}
   VAULT_TLS_CERT_FILE: {{ .Values.tls.certFile | quote }}
