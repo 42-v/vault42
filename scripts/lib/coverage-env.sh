@@ -50,6 +50,30 @@ COV_PKGS=(
 # Ryuk (Testcontainers' reaper) needs write access to the container socket, which
 # trips SELinux AVC denials on rootless podman + Fedora. Every suite tears down
 # its own containers via defer, so the reaper is redundant.
+# cov_socket_answers reports whether a container socket is not just present but
+# serving. Returns 0 when the daemon answers, 1 when the socket exists and does
+# not.
+#
+# The existence check alone is not enough, and the failure it lets through is the
+# expensive kind. A rootless podman can leave its socket file in place while the
+# API stops answering: /_ping still returns OK while /version and /info hang
+# forever. Detection then succeeds, the coverage run starts, and every suite that
+# wants a container blocks until the 40m per-binary timeout, burning most of an
+# hour to arrive at a failure the first second could have reported.
+#
+# /version is the probe rather than /_ping precisely because /_ping is the
+# endpoint that keeps answering when the daemon is wedged.
+#
+# When curl is unavailable this returns 0 rather than refusing, because a missing
+# probe tool is not evidence about the daemon and refusing on it would break
+# every machine that has a working runtime and no curl.
+cov_socket_answers() {
+  local sock=$1
+  command -v curl >/dev/null 2>&1 || return 0
+  curl --silent --fail --max-time 5 --unix-socket "$sock" \
+       "http://d/v1.41/version" >/dev/null 2>&1
+}
+
 cov_detect_runtime() {
   export TESTCONTAINERS_RYUK_DISABLED=true
 
@@ -59,7 +83,7 @@ cov_detect_runtime() {
   for sock in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" \
               /run/podman/podman.sock \
               /var/run/docker.sock; do
-    if [ -S "$sock" ]; then
+    if [ -S "$sock" ] && cov_socket_answers "$sock"; then
       export DOCKER_HOST="unix://$sock"
       return 0
     fi
