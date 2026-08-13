@@ -116,8 +116,11 @@ type SessionInfo struct {
 	// ID is the device UUID this session is bound to. DELETE
 	// /user/sessions/{id} addresses it.
 	ID string `json:"id"`
-	// FriendlyName is the label from PATCH /user/devices/{id}. Empty until
-	// the user names the device.
+	// FriendlyName is the stored device label. Login invents one from the
+	// User-Agent (for example "Chrome on Windows"; "Unknown Device" if the
+	// header is empty or unrecognized). PATCH /user/devices/{id} replaces
+	// it. Empty only on a row that skipped the current login path and was
+	// never renamed.
 	FriendlyName string `json:"friendly_name"`
 	// IP is the remote address last recorded on the device.
 	IP string `json:"ip"`
@@ -154,7 +157,11 @@ type SessionsResponse struct {
 type DeviceInfo struct {
 	// ID is the device UUID. PATCH and DELETE /user/devices/{id} address it.
 	ID string `json:"id"`
-	// FriendlyName is the user-chosen label. Empty until PATCH sets one.
+	// FriendlyName is the stored device label. Login invents one from the
+	// User-Agent (for example "Chrome on Windows"; "Unknown Device" if the
+	// header is empty or unrecognized). PATCH /user/devices/{id} replaces
+	// it. Empty only on a row that skipped the current login path and was
+	// never renamed.
 	FriendlyName string `json:"friendly_name"`
 	// Trusted is the remembered-device flag. Current issuance never sets it.
 	Trusted bool `json:"trusted"`
@@ -381,7 +388,11 @@ type DataExportAccount struct {
 type DataExportDevice struct {
 	// ID is the device UUID.
 	ID string `json:"id"`
-	// FriendlyName is the user-chosen label. Empty if never named.
+	// FriendlyName is the stored device label. Login invents one from the
+	// User-Agent (for example "Chrome on Windows"; "Unknown Device" if the
+	// header is empty or unrecognized). PATCH /user/devices/{id} replaces
+	// it. Empty only on a row that skipped the current login path and was
+	// never renamed.
 	FriendlyName string `json:"friendly_name"`
 	// Trusted is the remembered-device flag. Current issuance never sets it.
 	Trusted bool `json:"trusted"`

@@ -95,7 +95,9 @@ code. The document was not edited.
     `vaultcrypto.RandomHex(8)`: 16 hex characters, 64-bit entropy.
     Storage is HMAC-SHA256 of the plaintext under the server HMAC key
     (`BackupCode.CodeHash`), not Argon2id. `docs/spec.md` already
-    records this (16 hex / HMAC-SHA256); api.md does not.
+    records this (16 hex / HMAC-SHA256); api.md does not. The later
+    verify paragraph in api.md does say HMAC-SHA256, so the document
+    disagrees with itself.
 
 14. **`mfa_methods` never includes `email_otp`.**
     `ProfileResponse.MFAMethods` and `GET /auth/2fa/status` both copy
@@ -109,6 +111,39 @@ code. The document was not edited.
     is `email_otp`. A client that expects `GET /user/profile` or
     `GET /auth/2fa/status` to list `email_otp` will see `[]`.
 
+16. **HMAC vs unkeyed SHA-256 on stored hashes.**
+    The two algorithms are not interchangeable. The code splits as:
+
+    | Field | Algorithm | Source |
+    |---|---|---|
+    | `RefreshToken.TokenHash` | unkeyed SHA-256 hex (`SHA256Hex`) | `internal/service/auth.go` |
+    | `AdminSession.TokenHash` | unkeyed SHA-256 hex (`sha256.Sum256`) | `internal/adminapi/auth.go` `hashSessionToken` |
+    | `Device.FingerprintHash` | unkeyed SHA-256 of length-prefixed IP, User-Agent, Accept-Language, TLS-fingerprint (`ComputeFingerprint`) | `internal/crypto/fingerprint.go` |
+    | `RefreshToken.FingerprintHash` | same `ComputeFingerprint` | issuance in `internal/service/auth.go` |
+    | `AuditEntry.FingerprintHash` | same digest, stored as the caller supplied it | `internal/audit/audit.go` |
+    | `BackupCode.CodeHash` | HMAC-SHA256 of the 16-hex plaintext under the server HMAC key | `internal/handler/backup_codes.go` |
+    | `IdentityProfile.PseudonymID` | HMAC-SHA256(`userID + ":identity"`) | `internal/service/identity.go` |
+    | `Blob.PseudonymID` | HMAC-SHA256(`userID + ":objects"`) | `internal/service/blob.go` |
+    | `AccountRecovery.Pseudonym` | HMAC-SHA256(`userID + ":recovery"`) | `internal/service/erasure.go` |
+    | `Blob.RefHash` | HMAC-SHA256(`"ref:" + name + ":" + pseudonym`) | `internal/service/blob.go` `refHash` |
+    | password / client / admin secret hashes | Argon2id | verify paths |
+
+    Possession of a SHA-256 `TokenHash` cannot reconstruct or mint a
+    cookie. There is no HMAC secret on that field.
+
+    api.md disagreements with this split:
+    - The Device Fingerprint section writes
+      `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)`
+      (simple concatenation). The code is 4-byte big-endian length
+      then bytes for each field. The family is SHA-256, not HMAC.
+    - The backup-code generate paragraph still says Argon2id (item
+      13); the verify paragraph says HMAC-SHA256.
+
+    `docs/spec.md` section 21.4 also calls `fingerprint_hash` "an HMAC
+    of a device fingerprint". That is wrong: it is unkeyed SHA-256.
+    spec.md section 5.1 and the `refresh_tokens` / `admin_sessions`
+    schema table match the code. The document was not edited.
+
 ### Related contract mismatch (not a struct field)
 
 15. **Refresh-token cookie name.** api.md names the cookie
@@ -117,6 +152,14 @@ code. The document was not edited.
     not part of the comment pass, but a client written from api.md
     will send the wrong cookie name.
 
+17. **Authenticated-route fingerprint mismatch error code.**
+    api.md lists `fingerprint_mismatch` on most Bearer routes.
+    `internal/middleware/fingerprint.go` writes `invalid_token`.
+    POST /auth/refresh also maps a stored-vs-request fingerprint
+    miss to `invalid_token` (the refresh error table is correct on
+    this one). A client written from the per-route tables will look
+    for an error code the server does not emit.
+
 ## What was documented
 
 Every exported struct field in `internal/model` (22 persistence
@@ -124,24 +167,51 @@ structs plus `WebAuthnUser`) and every exported struct field in
 `internal/handler` named types, including unexported view/input
 types whose fields are still exported (`capabilitiesResponse`,
 `blobListWire`, `identityInput`, `billingInput`,
-`socialAccountView`). Every exported constant in those packages
+`socialAccountView`). Anonymous request structs whose fields are
+exported are also documented: `password` (confirm, account
+delete), `current_password` / `new_password` (change password),
+`friendly_name` (PATCH device), `code` (TOTP, backup-code, email
+OTP, OAuth exchange). Every exported constant in those packages
 (`MintScope`, `AuditTokenMinted`, `AuditSvcDocPut`,
 `AuditSvcDocGet`, `AuditSvcDocDelete`) already had comments; they
 were left as they were.
 
 `json:"-"` fields state why they are withheld (credential material
-or a cross-account correlator). Optional / pointer / omitempty
-fields state what absence means. Fields that exist only on some
-routes or under a config flag name the route or flag.
+or a cross-account correlator) and name the actual algorithm.
+Optional / pointer / omitempty fields state what absence means.
+Fields that exist only on some routes or under a config flag name
+the route or flag.
 
 No field name, JSON tag, type or behaviour was changed.
 
-Prior-review remediations (comments now follow the code, not
-api.md): `BackupCodesResponse.Codes` and `BackupCode.CodeHash`
+Prior-review remediations (comments now follow the code, not a
+guessed threat model):
+
+- `Device.FriendlyName`, `SessionInfo.FriendlyName`,
+  `DeviceInfo.FriendlyName` and `DataExportDevice.FriendlyName`
+  describe the User-Agent-derived name `findOrCreateDevice` stores
+  (`useragent.FriendlyName`; "Unknown Device" if the header is
+  empty or unrecognized). PATCH can replace it. The previous
+  "server does not invent one / empty until the user names it"
+  text was false.
+- `RefreshToken.TokenHash` and `AdminSession.TokenHash` are
+  unkeyed SHA-256. The previous "HMAC" wording and the claim that
+  "possession of the hash plus the HMAC secret is enough to mint a
+  usable cookie" were false.
+- `Device.FingerprintHash`, `RefreshToken.FingerprintHash` and
+  `AuditEntry.FingerprintHash` are `ComputeFingerprint` (unkeyed
+  SHA-256 of length-prefixed fields), not HMAC.
+- `AccountRecovery.Pseudonym` is HMAC-SHA256(`userID + ":recovery"`),
+  not HMAC of the bare user id.
+- `Blob.RefHash` is HMAC-SHA256(`"ref:" + name + ":" + pseudonym`),
+  not HMAC of the name alone.
+- The HMAC-vs-SHA-256 split is item 16.
+
+`BackupCodesResponse.Codes` and `BackupCode.CodeHash` still
 describe 16-hex HMAC-SHA256 (see `RandomHex(8)` and `HMACSign`
-in `internal/handler/backup_codes.go`), and
-`ProfileResponse.MFAMethods` lists only the names GetStatus
-appends. The api.md disagreements are items 13 and 14.
+in `internal/handler/backup_codes.go`). `ProfileResponse.MFAMethods`
+lists only the names GetStatus appends. The api.md disagreements
+are items 13 and 14.
 
 ## Self-review
 
@@ -155,9 +225,11 @@ appends. The api.md disagreements are items 13 and 14.
 
 2. **Did I shape the fixture to fit my code?**
    No fixtures were written. Meanings were taken from handlers,
-   migrations, `docs/api.md` and the existing type comments. Where
-   api.md and the code disagree, the comment follows the code and
-   the disagreement is listed above.
+   `internal/crypto/fingerprint.go`, `internal/service/auth.go`
+   `findOrCreateDevice` / `SHA256Hex`, `internal/adminapi/auth.go`
+   `hashSessionToken`, `docs/api.md` and the existing type comments.
+   Where api.md and the code disagree, the comment follows the code
+   and the disagreement is listed above.
 
 3. **Can a failure look like a success?**
    Not introduced. One pre-existing case is now written down:
@@ -190,21 +262,24 @@ appends. The api.md disagreements are items 13 and 14.
 **Verified by reading, not by running:**
 
 - Every capitalized field on the named types in those two packages
-  now has a comment immediately above it.
-- `backup_codes.go` Generate uses `RandomHex(8)` + `HMACSign`;
-  `TestBackupCodeGenerate_CodeLength` asserts length 16. The
-  Codes and CodeHash comments match that, not api.md's 12-hex
-  Argon2id.
-- `mfa.go` GetStatus appends only totp / webauthn / backup_code.
-  Profile MFAMethods is that slice. The comment no longer names
-  email_otp as a profile value.
+  now has a comment immediately above it. Anonymous request
+  structs (`password`, `code`, `friendly_name`, `current_password`,
+  `new_password`) also have field comments.
+- `findOrCreateDevice` sets `FriendlyName: useragent.FriendlyName(ua)`.
+  Empty/unrecognized UA is "Unknown Device". The FriendlyName
+  comments match that, not "empty until PATCH".
+- `AuthService.Refresh` and token issuance use `SHA256Hex` for
+  `RefreshToken.TokenHash`. `hashSessionToken` uses `sha256.Sum256`.
+  `ComputeFingerprint` is unkeyed SHA-256 of length-prefixed
+  fields. Backup codes and pseudonyms use `HMACSign`. The field
+  comments match those call sites.
 - JSON tags, field names and types in the files I rewrote match
   the versions I read before editing.
 - `#nosec G117` trailers on `access_token`, `password` and
   `plaintext` are still present.
-- No new em-dashes in comments I wrote. Two pre-existing
-  em-dashes in `model.User` and `model.AccountRecovery` type
-  comments were left untouched.
+- No new em-dashes in comments I wrote. Pre-existing em-dashes
+  in `model.User` and `model.AccountRecovery` type comments were
+  left untouched.
 - Exported constants already had comments and still do.
 
 **Could not verify:**
@@ -214,7 +289,7 @@ appends. The api.md disagreements are items 13 and 14.
 - Whether revive treats a field comment that does not start with
   the identifier as undocumented. Every new field comment starts
   with the field name.
-- Live responses against a running server. Discrepancies 1-15
+- Live responses against a running server. Discrepancies 1-17
   are from source vs `docs/api.md`, not from captured traffic.
 
 **Unsure:**
