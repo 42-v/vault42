@@ -1,0 +1,35 @@
+-- ============================================================================
+-- Migration 022: the signature counter needs the whole uint32 range
+--
+-- auth.webauthn_credentials.sign_count was declared INTEGER in 001. Postgres
+-- INTEGER is int4, so it stops at 2147483647. The WebAuthn signature counter is
+-- a uint32 and runs to 4294967295, which is twice that.
+--
+-- The failure is worse than a one-off error. UpdateSignCount is called on every
+-- successful assertion, and it is fail-closed: the handler returns 500 and
+-- refuses the assertion when the write fails. Since the stored counter never
+-- advances, the next attempt fails identically. An authenticator past 2^31 does
+-- not glitch once, it stops working permanently, and registering one in that
+-- state fails at the INSERT instead.
+--
+-- This is theoretical. No real authenticator signs two billion times: a counter
+-- that high means either a device used continuously for decades or one that
+-- seeds its counter high, and the second is the reachable case. It is fixed here
+-- because the fix is one line and the alternative is a credential that cannot be
+-- recovered without operator surgery on a row the user cannot see.
+--
+-- The Go side needs no change. model.WebAuthnCredential.SignCount is int and
+-- .goreleaser.yaml builds only amd64 and arm64, where int is 64 bits and already
+-- holds the full uint32 range. A 32-bit target would need int64 there and in
+-- repository.WebAuthnRepository.UpdateSignCount, because int(uint32) above 2^31
+-- wraps negative and the reverse uint32() in modelCredsToWebAuthn wraps it back
+-- to an enormous count, which reads as a clone-detection hit.
+--
+-- int4 to int8 rewrites the table, so this takes an ACCESS EXCLUSIVE lock for
+-- the length of the rewrite. The table holds one row per enrolled authenticator,
+-- so that is brief, and internal/migrate runs each file in a transaction that
+-- would hold the lock anyway.
+-- ============================================================================
+
+ALTER TABLE auth.webauthn_credentials
+    ALTER COLUMN sign_count TYPE BIGINT;
