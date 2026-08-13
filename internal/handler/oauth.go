@@ -386,6 +386,22 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				userID = newID
+				// A provider that does not vouch for the address creates an
+				// unverified account, and without this mail that account can never
+				// become verified. GET /auth/verify-email consumes a token it never
+				// issues, so the only token that exists is one the user was sent;
+				// send none and there is no route left. The address is taken from
+				// here on, so a later login through a provider that does verify it
+				// is refused with 409 email_already_registered, and the user is
+				// locked out of an account they cannot reach and an address they
+				// cannot reuse.
+				//
+				// A provider that did verify the address created a verified account
+				// above, which needs no mail. Delivery is fire-and-forget: the row
+				// is committed, and a mailer outage must not fail the callback.
+				if !userInfo.EmailVerified && h.authSvc != nil {
+					h.authSvc.SendSignupVerification(r.Context(), userInfo.Email, userID, "")
+				}
 			}
 		}
 

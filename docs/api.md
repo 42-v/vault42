@@ -2581,6 +2581,8 @@ curl -v "https://vault42.example.com/auth/oauth2/authorize?provider=google"
 
 Handle the OAuth2 callback from the identity provider. Validates the state parameter (HMAC-signed with expiry), exchanges the authorization code for tokens using PKCE, fetches user info, and either creates a new account or links to an existing one.
 
+When the provider does not vouch for the address (Facebook publishes no per-address verification signal), the new account is created unverified and a verification email is sent, exactly as password registration does. Delivery is best effort: a mailer outage is logged and audited, never returned, so the login still completes.
+
 If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=true&challenge_token=...` instead of issuing full tokens.
 
 **Authentication:** None (callback from provider)
