@@ -93,7 +93,7 @@ func (h *WebAuthnHandler) RegisterBegin(w http.ResponseWriter, r *http.Request) 
 
 	wanUser := &model.WebAuthnUser{User: user, Credentials: wanCreds}
 
-	creation, session, err := h.wan.BeginRegistration(wanUser)
+	creation, session, err := h.wan.BeginRegistration(wanUser, webauthn.WithExclusions(credentialDescriptors(wanCreds)))
 	if err != nil {
 		log.Printf("webauthn: begin registration failed: %v", err)
 		WriteError(w, http.StatusInternalServerError, "webauthn_error")
@@ -156,6 +156,24 @@ func (h *WebAuthnHandler) RegisterFinish(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.Printf("webauthn: finish registration failed: %v", err)
 		WriteError(w, http.StatusBadRequest, "webauthn_verification_failed")
+		return
+	}
+
+	// §7.1 step 17: a credential ID already registered must not be enrolled a
+	// second time. This service accepts "none" attestation, so the credential ID
+	// in the attestation is chosen by whoever built the authenticator, and the
+	// table has no unique constraint to fall back on. Two rows sharing an ID make
+	// every lookup that is not already scoped by user resolve to whichever row
+	// the database happens to return, so the public key that answers for an ID
+	// stops being the one its owner enrolled.
+	duplicate, err := h.webauthnRepo.GetByCredentialID(r.Context(), credential.ID)
+	if err != nil {
+		log.Printf("webauthn: credential ID uniqueness check failed for %s: %v", httputil.SafeLogValue(claims.Subject), err)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if duplicate != nil {
+		WriteError(w, http.StatusConflict, "credential_already_registered")
 		return
 	}
 
@@ -309,8 +327,21 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		if string(stored.CredentialID) != string(credential.ID) {
 			continue
 		}
+		// The client, not this server, decides whether the authenticator is
+		// asked to verify the user, so an assertion that arrives with UV clear
+		// proves only that something touched the key. Refusing the downgrade is
+		// what keeps the PIN or biometric on a stolen authenticator meaningful.
+		// Checked before the writes below so a refused assertion leaves neither
+		// the counter nor the recorded flags moved: writing the UP-only flags
+		// back would erase the very bit this gate reads.
+		if userVerificationDowngraded(stored.Flags, credential.Flags) {
+			log.Printf("webauthn: user verification downgrade refused for user %s cred=%s",
+				strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
+			WriteError(w, http.StatusUnauthorized, "user_verification_required")
+			return
+		}
 		if err := h.webauthnRepo.UpdateSignCount(r.Context(), stored.ID, int(credential.Authenticator.SignCount)); err != nil {
-			log.Printf("webauthn: CRITICAL sign count update failed for user %s: %v", claims.Subject, err)
+			log.Printf("webauthn: CRITICAL sign count update failed for user %s: %v", httputil.SafeLogValue(claims.Subject), err)
 			WriteError(w, http.StatusInternalServerError, "webauthn_error")
 			return
 		}
@@ -438,6 +469,33 @@ func modelCredsToWebAuthn(creds []*model.WebAuthnCredential) []webauthn.Credenti
 		}
 	}
 	return out
+}
+
+// credentialDescriptors renders stored credentials as the descriptor list the
+// browser needs to recognize a key the account already holds.
+func credentialDescriptors(creds []webauthn.Credential) []protocol.CredentialDescriptor {
+	out := make([]protocol.CredentialDescriptor, len(creds))
+	for i := range creds {
+		out[i] = creds[i].Descriptor()
+	}
+	return out
+}
+
+// userVerificationDowngraded reports whether a credential recorded as
+// user-verifying is being asserted without user verification.
+//
+// storedFlags is the raw authenticator flags byte kept for the credential.
+// A recorded 0 means the flags predate the column (see
+// adoptUnknownCredentialFlags) and carries no claim about user verification, so
+// it never triggers the gate; neither does a credential enrolled from a key
+// with no PIN, which reports UV=0 for its whole life and would otherwise be
+// locked out of an account that never had user verification to lose.
+func userVerificationDowngraded(storedFlags int, asserted webauthn.CredentialFlags) bool {
+	recorded := webauthn.CredentialFlagsFromMsgpByte(byte(storedFlags & 0xFF))
+	if recorded.ProtocolValue() == 0 {
+		return false
+	}
+	return recorded.UserVerified && !asserted.UserVerified
 }
 
 // adoptUnknownCredentialFlags fills in the authenticator flags of credentials

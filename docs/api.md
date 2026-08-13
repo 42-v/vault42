@@ -2124,6 +2124,7 @@ Complete WebAuthn credential registration. Send the `AuthenticatorAttestationRes
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
+| 409 | `credential_already_registered` | The credential ID is already enrolled on this or another account |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
 | 500 | `internal_error` | Server error |
 
@@ -2226,6 +2227,8 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `no_pending_verification` | No verification session found (expired or not started) |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `webauthn_verification_failed` | Authenticator assertion verification failed |
+| 401 | `user_verification_required` | The credential was enrolled with user verification; the assertion carried none. Retry with the authenticator's PIN or biometric |
+| 401 | `cloned_authenticator_detected` | The signature counter did not advance; every refresh-token family for the user is revoked |
 | 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |

@@ -62,6 +62,8 @@ const errorKeys: Record<string, string> = {
   webauthn_verification_failed: 'error.webauthn_authentication_failed',
   webauthn_error: 'error.webauthn_failed',
   cloned_authenticator_detected: 'error.webauthn_failed',
+  credential_already_registered: 'error.webauthn_registration_failed',
+  user_verification_required: 'error.webauthn_authentication_failed',
   no_webauthn_credentials: 'error.no_webauthn_credentials',
   oauth_failed: 'error.oauth_failed',
   provider_denied: 'error.oauth_failed',
