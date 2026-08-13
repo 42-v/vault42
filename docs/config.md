@@ -302,6 +302,9 @@ holding the mint credential can therefore speak as any subject to every service 
 and a verifier cannot tell a minted token from a real one by its signature. Treat enabling it as a
 trust-model decision, not a feature flag.
 
+The request and response contract is in [`api.md`](api.md#post-mint); the threat model and the
+controls that bound it are in [`spec.md` section 6.5](spec.md#65-subject-assertion-signing-oracle).
+
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `VAULT_MINT_ENABLED` | bool | `false` | No | Mounts `POST /mint`. Leave unset unless a service genuinely needs delegated signing. |
@@ -317,6 +320,11 @@ Off by default. Lets a registered service store arbitrary JSON against a subject
 Documents are private to the writing service unless the shared tier is enabled and the write asks for
 it. Erasure removes a subject's documents across every owning service, and the GDPR data export
 returns them decrypted, including private ones.
+
+The request and response contract is in [`api.md`](api.md#service-documents); the storage model,
+validation bounds and access control are in
+[`spec.md` section 7.8](spec.md#78-service-scoped-json-documents). Neither the 32-level nesting
+bound nor the 1024-key bound is operator-tunable, and they are not in the table below.
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|

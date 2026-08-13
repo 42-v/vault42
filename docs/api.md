@@ -146,7 +146,7 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, every 2FA verify and resend, and `POST /kms/unwrap` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
 
 ```
 HTTP/1.1 503 Service Unavailable
@@ -2708,7 +2708,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. When `VAULT_DPOP_ENABLED=true` the request must additionally carry a syntactically fresh, single-use DPoP proof -- but that proof is **bound to nothing**, because no vault42 token carries a `cnf.jkt` confirmation claim, so the flag adds no replay protection here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. `VAULT_DPOP_ENABLED` is experimental, unsupported and excluded from the stability contract; see `spec.md` section 0.6.2.
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. `VAULT_DPOP_ENABLED=true` adds **no** requirement to this endpoint: the DPoP middleware requires a proof only from a token that carries a `cnf.jkt` confirmation claim, no vault42 issuance path populates that claim, so a request with no `DPoP` header is passed straight through (`internal/middleware/dpop.go:31-40`). A proof that *is* presented must parse, match the method and URI, match the access-token hash, and be single-use, but it is compared against no thumbprint, so it constrains nothing and can be omitted at will. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. `VAULT_DPOP_ENABLED` is experimental, unsupported and excluded from the stability contract; see `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2735,10 +2735,16 @@ Every post-authorization failure (malformed body, bad base64, empty `kid`, tampe
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `unwrap_failed` | Any envelope that does not unwrap. The status, body, and audit outcome are identical across all failure modes. |
-| 401 | `unauthorized` | Missing or invalid access token, or a missing/malformed DPoP proof when `VAULT_DPOP_ENABLED=true` |
+| 401 | `missing_authorization` | No `Authorization` header |
+| 401 | `invalid_authorization` | Header is not `Bearer <token>` |
+| 401 | `invalid_token` | Signature, issuer, audience or expiry check failed |
+| 401 | `invalid_token_type` | The token's `token_type` claim is not `Bearer` |
+| 401 | `invalid_dpop_proof` | A `DPoP` header was presented and failed validation (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `dpop_proof_reused` | The proof's `jti` was seen before (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `unauthorized` | Defensive: claims absent behind the auth middleware. Not reachable through the mounted chain |
 | 403 | `insufficient_scope` | Token lacks the `kms:unwrap` scope |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
-| 503 | `service_unavailable` | Rate-limiter backing store is down (fail-closed) |
+| 503 | `rate_limiter_unavailable` | Rate-limiter backing store is down (fail-closed) |
 
 Every attempt is written synchronously to the audit log (`kid` and outcome only; key material is never logged). Use the `vault kms wrap` CLI to produce envelopes this endpoint accepts.
 
@@ -2750,6 +2756,478 @@ curl -X POST https://vault42.example.com/kms/unwrap \
   -H "Content-Type: application/json" \
   -d '{"kid":"data-root-v1","ciphertext":"'"$ENVELOPE_B64"'"}'
 ```
+
+---
+
+### Mint
+
+---
+
+#### POST /mint
+
+Subject-assertion signing oracle. The caller names a subject, and vault42 signs a token asserting it with the same key that signs every real one. **vault42 does not authenticate the subject and does not look it up.** The endpoint exists because eleven legacy services hold foreign-key copies of the legacy platform's own user ids, so the token subject has to stay that id rather than a vault42-native one; the alternative was rewriting every one of those tables.
+
+Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:613-620`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
+
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
+**Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:564-570`).
+**Rate limit:** 60 per minute, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The key function asks for the authenticated client and falls back to the source IP when there are no claims; because the limiter is mounted **outside** the auth middleware there are never any claims yet, so the effective bucket is the source IP. Plan capacity as 60/min per source address, not per client.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`, and even then a request with no `DPoP` header passes straight through, because the middleware demands a proof only from a token carrying `cnf.jkt` and nothing in vault42 issues one. See `spec.md` section 0.6.2.
+**Fingerprint:** not verified. `POST /mint` is a machine endpoint and carries no device binding.
+**Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
+
+**Request body:**
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `subject` | string | Yes | 1--128 bytes, `^[A-Za-z0-9][A-Za-z0-9._@-]*$` | The identifier being asserted. Held to a charset that cannot smuggle control characters, whitespace or delimiters, because it lands in a signed claim and in an audit row |
+| `roles` | string[] | No | Every member must appear in `VAULT_MINT_ROLES` | Omit or send `[]` for no roles. The allow-list is empty by default, so a freshly enabled mint issues bare subject assertions |
+| `scopes` | string[] | No | Every member must appear in `VAULT_MINT_SCOPES` | Same deny-by-default rule as `roles` |
+| `ttl_seconds` | int | No | `0` or absent means `VAULT_MINT_TOKEN_TTL`; otherwise `0 < ttl <= VAULT_MINT_MAX_TTL`, itself capped at 900 in code | A value above the ceiling is **refused, not clamped**. Silently issuing something other than what was asked for hides a misconfigured caller until the day its tokens expire mid-flight |
+
+Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name fails the whole request with `400 invalid_request`.
+
+**Success response (200 OK):**
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 300,
+  "subject": "legacy-user-8814",
+  "audience": "https://legacy.example.com",
+  "issuer": "https://vault42.example.com",
+  "roles": ["rider"],
+  "scopes": ["orders:read"],
+  "kid": "4f1c9e60-2a77-4e0f-9a3e-9c2b7f0d51aa",
+  "jti": "0f2b8c1d-6e4a-4c92-b8a1-2f7d3e5a90c4"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `access_token` | string | The signed assertion (RS256 JWT) |
+| `token_type` | string | Always `Bearer`. This is the RFC 6749 presentation scheme, **not** the JWT's own `token_type` claim, which is `mint` |
+| `expires_in` | int | Lifetime in seconds, granted rather than requested |
+| `subject` | string | Echo of the asserted subject |
+| `audience` | string | `VAULT_MINT_AUDIENCE`, the `aud` claim on the token |
+| `issuer` | string | `VAULT_ORIGIN`, the `iss` claim on the token |
+| `roles` | string[] | Granted roles. Omitted when none were requested |
+| `scopes` | string[] | Granted scopes. Omitted when none were requested |
+| `kid` | string | Key id the assertion was signed under, resolvable against `GET /.well-known/jwks.json` |
+| `jti` | string | The token's unique id, also recorded in the audit event so a downstream incident traces back to the exact assertion |
+
+**Claims on the minted token:**
+
+| Claim | Value |
+|-------|-------|
+| `iss` | `VAULT_ORIGIN` |
+| `aud` | `VAULT_MINT_AUDIENCE` (single-element array) |
+| `sub` | The caller-asserted subject, verbatim |
+| `iat`, `nbf` | Issue time. The token is valid immediately |
+| `exp` | Issue time plus the granted TTL |
+| `jti` | Per-token UUID |
+| `roles`, `scopes` | Granted values, omitted when empty |
+| `token_type` | `mint` |
+| `client_id` | **Absent, deliberately.** See the security notes below |
+| `fingerprint`, `cnf` | Absent. A minted token is not device-bound and not sender-constrained |
+
+There is no refresh token and no stored session behind a minted token. It cannot be exchanged, rotated, extended or revoked; vault42 keeps no record of it beyond the audit event.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_request` | Body is not JSON, carries an unknown key, or exceeds 8 KiB |
+| 400 | `invalid_subject` | `subject` is empty, longer than 128 bytes, or outside the charset |
+| 400 | `invalid_ttl` | `ttl_seconds` is negative, or above `VAULT_MINT_MAX_TTL` |
+| 401 | `missing_authorization` | No `Authorization` header |
+| 401 | `invalid_authorization` | Header is not `Bearer <token>` |
+| 401 | `invalid_token` | Signature, issuer, audience or expiry check failed |
+| 401 | `invalid_token_type` | The token's `token_type` claim is not `Bearer`. This is what a minted token presented back to `/mint` hits |
+| 401 | `invalid_dpop_proof` | A `DPoP` header was presented and failed validation (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `dpop_proof_reused` | The proof's `jti` was seen before (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `unauthorized` | Defensive: claims absent behind the auth middleware. Not reachable through the mounted chain |
+| 403 | `insufficient_scope` | Token lacks the `mint:token` scope |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim, so it is not a service client |
+| 403 | `role_not_permitted` | A requested role is outside `VAULT_MINT_ROLES`, or is `admin` or `super_admin` |
+| 403 | `scope_not_permitted` | A requested scope is outside `VAULT_MINT_SCOPES`, or is one of the vault42 capability scopes |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Signing or UUID generation failed |
+| 503 | `server_busy` | No signing key is currently available |
+| 503 | `rate_limiter_unavailable` | Rate-limiter backing store is down (fail-closed) |
+
+Roles and scopes are checked as whole sets: one bad member rejects the request rather than issuing a token with the rest. A signing oracle that quietly issues something other than what was requested hides the misconfiguration that produced the request.
+
+**Audit.** Every path, accepted and refused, writes one `token_minted` event. `user_id` holds the asserted subject and `client_id` the service that asserted it, so the log answers "who was spoken for, and by whom". Accepted mints record the `jti`, `kid`, `audience`, roles, scopes and lifetime at risk score 30; refusals record only the reason at risk score 45, because a client probing for roles it cannot mint is the early signal that its credential has been taken. The token itself is never logged. `token_minted` is a distinct event type from `login_success`, `token_refresh` and `client_auth` on purpose: the signature on a minted token is indistinguishable from any other, so the log is the only place the difference is recorded.
+
+`token_minted` is **not** in the critical-event set, so under a deployment that batches audit writes (`VAULT_AUDIT_FLUSH_INTERVAL > 0`, which is the embedded profile) a full buffer drops the event rather than writing it synchronously. On the default configuration the interval is `0` and every event is written inline. An operator who enables minting and batching together is choosing to lose mint attribution under load.
+
+**curl example (happy path):**
+
+```bash
+MINT_TOKEN=$(curl -sS -X POST https://vault42.example.com/client/token \
+  -u "$CLIENT_ID:$CLIENT_SECRET" -d "scope=mint:token" | jq -r .access_token)
+
+curl -X POST https://vault42.example.com/mint \
+  -H "Authorization: Bearer $MINT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"legacy-user-8814","roles":["rider"],"ttl_seconds":300}'
+```
+
+**curl example (instructive failure).** Asking for a role the operator did not allow-list is refused outright, not silently stripped:
+
+```bash
+curl -i -X POST https://vault42.example.com/mint \
+  -H "Authorization: Bearer $MINT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"legacy-user-8814","roles":["admin"]}'
+```
+
+```
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"error": "role_not_permitted"}
+```
+
+`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time.
+
+**What a caller must understand before integrating.**
+
+- **This signs an assertion for a subject the caller merely claims.** Every other token vault42 issues follows an authentication vault42 performed: a password, a second factor, a social callback, a client secret. A minted token follows nothing. A verifier cannot tell the difference from the signature, so whoever holds the mint credential can speak as any subject to every service that trusts vault42's JWKS. Treat the credential as equivalent to the signing key's blast radius, not as an API key.
+- **The audience must differ from the vault42 issuer, and startup enforces it.** A minted token carrying vault42's own audience would satisfy vault42's own audience validation, leaving `token_type` as the single control between a subject assertion and a session. `config.Validate()` refuses that configuration before the dev-profile short-circuit, and `service.NewMintService` refuses it again.
+- **Minted tokens are structurally rejected by vault42 itself.** The `token_type` claim is `mint`, which is not in the allow-list vault42's own auth middleware accepts (`Bearer`, plus `2fa_challenge` on the 2FA verify routes), and the audience is not vault42's. Either check alone stops a minted token at vault42's door; both are enforced. Without this, a mint credential would be full account takeover of every vault42 user: mint for any subject, then read the identity profile, download the blobs, delete the account.
+- **Admin-tier roles and vault42 capability scopes cannot be minted.** `admin` and `super_admin` are refused unconditionally. So are `mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read` and `admin:write` -- a minted token carrying one of those would let the holder pivot from "assert a subject downstream" into "operate vault42's privileged endpoints as that subject".
+- **`client_id` is deliberately absent from the claims.** Setting it would make a minted token indistinguishable from a client-credentials token to any code that treats the claim's presence as proof of a service caller, including the service document store, which asserts exactly that. Attribution for the minting client lives in the audit event, where it cannot be replayed. A downstream verifier must therefore not use `client_id` to decide anything about a minted token, and must not assume its absence means "user token".
+- **Lifetimes are the only revocation.** A minted token cannot be revoked before it expires. The hard ceiling is 15 minutes regardless of configuration, enforced in the service constructor rather than left to the operator, and the default is 5.
+- **Downstream verifiers should pin all three.** Check `iss` against `VAULT_ORIGIN`, `aud` against your own resource identifier, and `token_type == "mint"` if you accept both minted and self-authenticated tokens. Accepting a token on signature and `iss` alone re-opens the confusion the separate audience and type exist to prevent.
+
+---
+
+### Service Documents
+
+A namespaced JSON document store with an ownership axis: a registered service client writes documents scoped to the triple `(itself, a subject, a key)`, and by default nothing else can read them. It exists so a service can keep small structured records about a user without owning a schema migration for every new per-user boolean.
+
+Mounted **only** when `VAULT_SVCDOC_ENABLED=true`; otherwise the four routes do not exist and `ServeMux` answers `404` in `text/plain`. Off by default because this is new surface reachable by every existing client-credentials holder, so enabling it is an explicit operator decision rather than a consequence of upgrading. The shared visibility tier is a second, separate switch (`VAULT_SVCDOC_SHARED_ENABLED`).
+
+**Authentication:** Bearer access token from `POST /client/token`, carrying `svcdoc:read` (reads) or `svcdoc:write` (writes). Every handler additionally requires a non-empty `client_id` claim.
+**Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> handler (`internal/server/server.go:509-518`). No DPoP wrapper, no fingerprint verification.
+**Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs outside the auth middleware, so the bucket is the source IP rather than the client despite the per-client key function.
+**Max body:** the `/service/documents` prefix is exempt from the global 8 KiB cap, so a 64 KiB document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of `VAULT_SVCDOC_MAX_SIZE` + 1 KiB.
+
+**Storage model.**
+
+- Documents are AES-256-GCM encrypted at rest, never plaintext JSONB. The AAD is `svcdoc:<client_id>:<subject_hash>:<doc_key>`, so a row copied between clients, subjects or keys fails to decrypt rather than silently changing owner.
+- The subject is stored as an HMAC pseudonym, never in the clear, so the table does not enumerate which users a service holds records about.
+- One row per `(client_id, subject_hash, doc_key)`. A `PUT` to an existing triple is an `UPDATE`, never a second row.
+- Ownership is a SQL predicate on every request-path read, not a comparison performed after fetching a row.
+- Erasure of a vault42 account removes every document held about that subject across every owning service. `GET /user/data-export` returns them **decrypted, including private ones**: a service's privacy from other services is not privacy from the data subject. Documents under `_global` are excluded from the export, since they belong to no subject.
+
+**Path parameters.**
+
+| Parameter | Constraints | Description |
+|-----------|-------------|-------------|
+| `{subject}` | 1--128 bytes, `^[A-Za-z0-9][A-Za-z0-9._@-]*$`, or the literal `_global` | Who the document is about. Percent-encoded separators decode into this segment before validation, so `%2F` produces a `/` that the charset then rejects |
+| `{key}` | 1--128 bytes, `^[a-z0-9]+([._-][a-z0-9]+)*$` | Lowercase segments joined by `.`, `_` or `-`. Mirrors the `CHECK` constraint in `migrations/014_service_documents.sql`, so a bad key is a `400` rather than a constraint violation surfacing as a `500`. It is the identity store's dynamic-namespace charset widened with `_` and `-`, so every identity key is a legal document key but not the reverse |
+
+**`_global` is the sentinel subject** for documents that belong to a service rather than to any user: feature flags, per-service settings. It is a sentinel rather than a `NULL` subject because PostgreSQL treats `NULL`s as distinct in a unique index, so a nullable column would silently permit duplicate `(client_id, NULL, doc_key)` rows. It cannot collide with a real subject, because a real subject must start with an alphanumeric and this one starts with an underscore. Global documents are written to the audit log with an empty `user_id` rather than the sentinel, and are excluded from every subject's data export.
+
+**Visibility** is a string enum, not a boolean, so a later tier (an explicit grantee allow-list) is an added value rather than a changed field type.
+
+| Value | Meaning |
+|-------|---------|
+| `private` | Readable only by the writing client. The default on every write, including when the parameter is absent |
+| `shared` | Readable by any client holding `svcdoc:read`, for the same subject and key. Rejected with `403 shared_visibility_disabled` unless `VAULT_SVCDOC_SHARED_ENABLED=true` |
+
+**Quotas.**
+
+| Limit | Default | Config | Scope |
+|-------|---------|--------|-------|
+| Bytes per document | 65536 | `VAULT_SVCDOC_MAX_SIZE` | Measured on the canonical encoding, checked before and after canonicalisation |
+| Documents per subject | 32 | `VAULT_SVCDOC_MAX_PER_SUBJECT` | Per `(owning client, subject)`. Only charged when creating; a replacement does not consume a second slot |
+| Stored bytes per subject | 1048576 | `VAULT_SVCDOC_QUOTA_BYTES` | Summed across **every** owning client, so one user's footprint is bounded no matter how many services write about them. Counts ciphertext, so it is slightly larger than the document body |
+
+Quota is evaluated against the state the write would produce, so a replacement is not charged twice. Both checks run before the row is written; there is no compensating delete.
+
+---
+
+#### PUT /service/documents/{subject}/{key}
+
+Create or replace a document. This is a full replace: there is no merge, so a caller changing one field reads, edits and writes the whole document.
+
+**Authentication:** Bearer token with `svcdoc:write` and a `client_id` claim
+**Rate limit:** 60 per minute
+
+**Query parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `visibility` | `private`, `shared` | `private` | An absent or empty value is `private`. Any other value is a `400` |
+
+**Request body:** the document itself, `Content-Type: application/json`. It is not decoded through the strict decoder every other endpoint uses, because there is no fixed field set to reject unknown members against. It must instead satisfy:
+
+- top level is a JSON **object**. An array or a scalar is rejected: it leaves no room for a future merge-patch endpoint and makes the stored shape unpredictable;
+- valid UTF-8, checked on the raw bytes. The JSON decoder replaces invalid UTF-8 with U+FFFD as it reads, so by the time a token is in hand the evidence is gone and the document would round-trip differently than it was submitted;
+- nesting **at most 32 levels**. `encoding/json` has no depth limit, and a 64 KiB body of `[` characters is roughly 32 thousand levels; unmarshalling it recurses that deep and takes the process down. Depth is therefore bounded on the token stream, before the decoder ever builds a value;
+- **at most 1024 keys** in total across the whole document. This bounds decode cost independently of byte size: a document of tiny keys is cheap in bytes and expensive in allocations;
+- **no duplicate keys** within any one object. `encoding/json` decodes a repeated key last-wins, so such a document round-trips differently than it was submitted;
+- nothing after the closing brace. Trailing content is a second document, not whitespace.
+
+The stored form is canonical: keys sorted, HTML escaping off (it would rewrite `<`, `>` and `&` inside string values into `\u00xx` forms, so a stored document would not match what the service submitted), and numbers carried as literals so a large integer or a high-precision decimal is stored exactly as written rather than round-tripped through a `float64`. `size_bytes` is measured on that canonical encoding, which may differ from the submitted byte count.
+
+**Success response (201 Created on create, 200 OK on replace):**
+
+```json
+{
+  "key": "loyalty",
+  "owner_id": "c1f0a9d2-3b44-4a17-9f2e-7d0b6c8e5411",
+  "visibility": "private",
+  "size_bytes": 84,
+  "stored_bytes": 112,
+  "created_at": "2026-08-13T09:14:02Z",
+  "updated_at": "2026-08-13T09:14:02Z"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | Echo of `{key}` |
+| `owner_id` | string | The writing client's id, always the caller |
+| `visibility` | string | `private` or `shared` |
+| `size_bytes` | int | Canonical plaintext size |
+| `stored_bytes` | int | Ciphertext size, which is what the per-subject byte quota charges |
+| `created_at` | string | First write of this triple, preserved across replacements |
+| `updated_at` | string | This write |
+
+The write response carries no `owner` name; only listings and exports resolve one.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_visibility` | `?visibility=` is neither `private`, `shared` nor empty |
+| 400 | `invalid_key` | `{key}` is empty, over 128 bytes, or outside the key charset |
+| 400 | `invalid_subject` | `{subject}` is over 128 bytes or outside the subject charset |
+| 400 | `invalid_document` | Body is empty or whitespace, not valid UTF-8, not a JSON object, malformed, deeper than 32 levels, over 1024 keys, carries a duplicate key, or has trailing content |
+| 400 | `missing_subject`, `missing_key` | Defensive: a path segment resolved empty. Not reachable through the mux, which redirects `//` and 404s an empty trailing segment |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:write` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 403 | `shared_visibility_disabled` | `?visibility=shared` while `VAULT_SVCDOC_SHARED_ENABLED` is off |
+| 409 | `quota_exceeded` | Would breach the document count for this `(client, subject)` or the byte budget for this subject |
+| 413 | `document_too_large` | Body exceeds `VAULT_SVCDOC_MAX_SIZE`, either at the reader or after canonicalisation |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Encryption, UUID generation or storage failed |
+
+**curl example (happy path):**
+
+```bash
+SVC_TOKEN=$(curl -sS -X POST https://vault42.example.com/client/token \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  --data-urlencode "scope=svcdoc:read svcdoc:write" | jq -r .access_token)
+SUBJECT=user-8c1d4f   # the vault42 user id, or the literal _global
+
+curl -X PUT "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tier":"gold","points":4210,"since":"2024-03-01"}'
+```
+
+**curl example (instructive failure).** A top-level array is not a document:
+
+```bash
+curl -i -X PUT "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '[{"tier":"gold"}]'
+```
+
+```
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"error": "invalid_document"}
+```
+
+`invalid_document` is deliberately one code for every structural rejection. A caller debugging a rejected body should check the six rules above in order rather than expect the server to say which one it broke.
+
+Audited as `svcdoc_put`, recording the key, canonical size, visibility and whether the row was created. The body is never logged.
+
+---
+
+#### GET /service/documents/{subject}/{key}
+
+Read a document body.
+
+**Authentication:** Bearer token with `svcdoc:read` and a `client_id` claim
+**Rate limit:** 300 per minute
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `owner` | No | The **registered name** of the publishing client, as it appears in a listing's `owner` field. Disambiguates when more than one service publishes a shared document at the same key |
+
+**Resolution order.** Without `owner`: the caller's own document first, then a shared document published by another client. With `owner`: that client's row directly, which is returned only if it is the caller's own or is `shared`. Two clients sharing the same key and no `owner` given is `409 ambiguous_document` rather than an arbitrary pick.
+
+**Success response (200 OK):** the stored document body, verbatim, as `application/json`. It is not wrapped in an envelope.
+
+| Header | Description |
+|--------|-------------|
+| `X-Document-Owner` | The owning client's **id** (UUID), not its name |
+| `X-Document-Visibility` | `private` or `shared` |
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_key`, `invalid_subject` | Path segment outside its charset or over 128 bytes |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:read` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 404 | `document_not_found` | No readable document at that triple. Also covers a private document owned by another client, and an `owner` that names no registered client |
+| 409 | `ambiguous_document` | Two or more other clients publish a shared document at this key and no `owner` was named |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Decryption or storage failed |
+
+**A document owned by another client and not shared reports as absent, never as forbidden.** Distinguishing the two would make the store an oracle for "does service X hold a record at key K about user U", which is exactly the question the pseudonymised subject exists to make unanswerable. An `owner` naming a client that does not exist collapses to the same `404` for the same reason.
+
+**curl example:**
+
+```bash
+curl "https://vault42.example.com/service/documents/$SUBJECT/loyalty?owner=billing" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Audited as `svcdoc_get`, recording the key, the resolved owner id, and whether the document was the caller's own.
+
+---
+
+#### DELETE /service/documents/{subject}/{key}
+
+Delete the caller's own document. A client can never delete another client's row, shared or not.
+
+**Authentication:** Bearer token with `svcdoc:write` and a `client_id` claim
+**Rate limit:** 60 per minute
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_key`, `invalid_subject` | Path segment outside its charset or over 128 bytes |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:write` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 404 | `document_not_found` | The caller holds no document at that triple. Another client's shared document at the same key is not deletable and reports the same way |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Storage failed |
+
+The delete is not idempotent in its status code: a second `DELETE` of the same key returns `404 document_not_found`.
+
+**curl example:**
+
+```bash
+curl -X DELETE "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Audited as `svcdoc_delete`.
+
+---
+
+#### GET /service/documents/{subject}
+
+List the metadata of every document the caller may read for one subject, plus that subject's quota position. Bodies are never returned by a listing.
+
+**Authentication:** Bearer token with `svcdoc:read` and a `client_id` claim
+**Rate limit:** 300 per minute
+
+**Success response (200 OK):**
+
+```json
+{
+  "subject": "user-8c1d4f",
+  "documents": [
+    {
+      "key": "loyalty",
+      "owner": "billing",
+      "owner_id": "c1f0a9d2-3b44-4a17-9f2e-7d0b6c8e5411",
+      "visibility": "private",
+      "size_bytes": 84,
+      "stored_bytes": 112,
+      "mine": true,
+      "created_at": "2026-08-13T09:14:02Z",
+      "updated_at": "2026-08-13T09:14:02Z"
+    }
+  ],
+  "count": 1,
+  "quota": {
+    "used_bytes": 112,
+    "max_bytes": 1048576,
+    "used_count": 1,
+    "max_count": 32
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subject` | string | Echo of `{subject}` |
+| `documents` | array | The caller's own documents, then other clients' shared documents for the same subject. Always an array; `[]` when empty |
+| `documents[].key` | string | Document key |
+| `documents[].owner` | string | The owning client's registered name. **Omitted** when the client lookup fails, since the id is already present and the name is a convenience |
+| `documents[].owner_id` | string | The owning client's id |
+| `documents[].visibility` | string | `private` or `shared` |
+| `documents[].mine` | bool | Whether the caller owns this document |
+| `documents[].size_bytes` | int | Canonical plaintext size |
+| `documents[].stored_bytes` | int | Ciphertext size |
+| `documents[].created_at`, `documents[].updated_at` | string | RFC 3339 UTC, read back from the row |
+| `count` | int | Length of `documents` |
+| `quota.used_bytes` | int | Stored bytes held for this subject across **every** owning client |
+| `quota.max_bytes` | int | `VAULT_SVCDOC_QUOTA_BYTES` |
+| `quota.used_count` | int | Documents this caller holds for this subject, **not** the cross-client total |
+| `quota.max_count` | int | `VAULT_SVCDOC_MAX_PER_SUBJECT` |
+
+The two `used_` fields have different scopes on purpose, because the two limits do: the count is per `(client, subject)` and the byte budget is per subject. A caller that is well under `max_count` can still be refused with `quota_exceeded` because another service filled the byte budget.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_subject` | `{subject}` is over 128 bytes or outside the subject charset |
+| 400 | `missing_subject` | Defensive: the segment resolved empty. Not reachable through the mux |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:read` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Storage failed |
+
+A subject with no documents is `200` with an empty array, not `404`.
+
+**curl example:**
+
+```bash
+curl "https://vault42.example.com/service/documents/$SUBJECT" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Listing is the only route that writes no audit event; it discloses no body and the read of a body is audited where it happens.
+
+**What a caller must understand before integrating.**
+
+- **Documents are private to the writing `client_id` by default.** Privacy is enforced as a SQL predicate on the request path, not as a check after fetching, and the failure mode is `404`, not `403`. Do not design around distinguishing "not there" from "not yours"; you cannot.
+- **The handler asserts `claims.ClientID != ""` and does not rely on the scope check alone.** `RequireScope` looks only at the `scopes` array. Today a user token can never carry a `svcdoc` scope, because every user-token issuance site hardcodes `["read","write"]`, so the scope check happens to be sufficient. That is an accident of the current code and not an invariant: a change to user-scope issuance would otherwise silently open a service-owned store to end-user tokens. The ownership axis of this store is the client id, so the handler asserts it directly. It is also why a minted token carries no `client_id`: such a token is already refused at the auth middleware for its `token_type` and its audience, and this check would refuse it again.
+- **`_global` is a real namespace, not a wildcard.** It is a subject like any other, with its own quota row, its own document count, and no relationship to any user. Writing user data under it removes that data from the subject's erasure cascade and from their data export.
+- **Sharing is a two-key decision.** A `shared` write needs both the operator flag and the explicit `?visibility=shared` parameter. Neither implies the other, and switching the flag off later does not retroactively unshare existing rows: it only refuses new shared writes.
+- **The 32-level depth bound and the 1024-key bound are validation, not tuning.** They are not operator-configurable and are not negotiable per client. A configuration document that needs 33 levels is a document that should be several documents.
+- **A subject's documents are personal data.** They ride the erasure cascade and appear decrypted in that subject's GDPR export, private ones included. Write nothing under a real subject that you would not hand to that person.
 
 ---
 
@@ -3157,7 +3635,7 @@ curl https://vault42.example.com/.well-known/openid-configuration
 
 ## Endpoint Summary
 
-**98 API routes: 57 on the main binary, 41 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
+**103 API routes: 62 on the main binary, 41 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
 
 The **Mounted when** column is the answer to "why does this endpoint 404 in production". A route in a group that is not mounted does not exist, and `net/http.ServeMux` answers `404` in `text/plain` -- not the JSON error envelope.
 
@@ -3170,8 +3648,10 @@ The **Mounted when** column is the answer to "why does this endpoint 404 in prod
 - **Bearer + Confirm** -- Bearer token plus a recent password confirmation via `POST /auth/confirm`
 - **Bearer/Challenge** -- accepts both standard Bearer tokens and 2FA challenge tokens
 - **Bearer + password** -- Bearer token plus the current password re-submitted in the request body
-- **Scope `kms:unwrap`** -- Bearer client-credential token carrying the `kms:unwrap` scope
+- **Scope `<name>`** -- Bearer client-credential token carrying that scope. `mint:token` and both `svcdoc:*` scopes additionally require the token to carry a `client_id` claim, which no user token does; without one the request is `403 client_credentials_required` even though the scope check passed
 - **Session** -- admin gateway session cookie, behind mTLS and loopback-only enforcement. The permission the session's role must hold is in the Permission column.
+
+**Rate limit column.** `POST /mint` and the `/service/documents/*` routes are keyed by source IP in practice, not by client: their limiters are mounted outside the authentication middleware, so the per-client key function finds no claims and falls back to the address. See the endpoint sections above.
 
 <!-- BEGIN ENDPOINT SUMMARY -->
 
@@ -3234,11 +3714,11 @@ The **Mounted when** column is the answer to "why does this endpoint 404 in prod
 | `POST` | `/auth/oauth2/exchange` | None | 10/min | >= 1 provider configured | Exchange the one-time code for tokens |
 | `POST` | `/client/token` | Basic | 10/min | Always | Client-credentials grant |
 | `POST` | `/kms/unwrap` | Scope `kms:unwrap` | 30/min, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle |
-| `POST` | `/mint` | Scope `mint:token` | 60/min per client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
-| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
-| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
-| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
-| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
+| `POST` | `/mint` | Scope `mint:token` | 60/min per IP, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
+| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per IP | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per IP | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
+| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per IP | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per IP | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
 | `GET` | `/.well-known/jwks.json` | None | -- | Always | JWKS public keys |
 | `GET` | `/.well-known/openid-configuration` | None | -- | Always | Issuer metadata |
 
