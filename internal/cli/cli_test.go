@@ -885,129 +885,8 @@ func TestRotateClientSecret(t *testing.T) {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// TestLockUser
-// ---------------------------------------------------------------------------
-
-func TestLockUser(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		var lockedID string
-		users.LockUntilFn = func(_ context.Context, id string, _ time.Time) error {
-			lockedID = id
-			return nil
-		}
-
-		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "user-42"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if lockedID != "user-42" {
-			t.Errorf("locked ID = %q, want %q", lockedID, "user-42")
-		}
-		if !strings.Contains(out, "User user-42 locked") {
-			t.Error("expected lock confirmation in output")
-		}
-	})
-
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "lock-user", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true (usage printed)")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		users.LockUntilFn = func(_ context.Context, _ string, _ time.Time) error {
-			return errors.New("user not found")
-		}
-
-		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "missing-user"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// TestUnlockUser
-// ---------------------------------------------------------------------------
-
-func TestUnlockUser(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		var unlockedID string
-		users.UnlockFn = func(_ context.Context, id string) error {
-			unlockedID = id
-			return nil
-		}
-
-		args := []string{"vault", "unlock-user", "--admin-token", token, "--id", "user-42"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if unlockedID != "user-42" {
-			t.Errorf("unlocked ID = %q, want %q", unlockedID, "user-42")
-		}
-		if !strings.Contains(out, "unlocked") {
-			t.Error("expected unlock confirmation")
-		}
-	})
-
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "unlock-user", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		users.UnlockFn = func(_ context.Context, _ string) error {
-			return errors.New("user not found")
-		}
-
-		args := []string{"vault", "unlock-user", "--admin-token", token, "--id", "bad-user"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
-}
+// lock-user and unlock-user are retired (they no longer write via vault_app);
+// their contract is pinned in cli_lock_retired_test.go.
 
 // ---------------------------------------------------------------------------
 // TestRevokeAllSessions
@@ -1196,13 +1075,20 @@ func TestRun(t *testing.T) {
 			return nil
 		}
 
+		// lock-user is retired: dispatch reaches the retirement handler, which
+		// prints the admin-route redirect and issues no vault_app write.
 		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "u1"}
-		captureStdout(t, func() {
-			c.Run(context.Background(), args)
+		stderr := captureStderr(t, func() {
+			if !c.Run(context.Background(), args) {
+				t.Error("expected lock-user to be routed (handled), not fall through to the server")
+			}
 		})
 
-		if !lockCalled {
-			t.Error("expected lock-user to be routed")
+		if lockCalled {
+			t.Error("retired lock-user must not issue a vault_app LockUntil write")
+		}
+		if !strings.Contains(stderr, "/admin/users") {
+			t.Errorf("expected lock-user to point at the admin route, got %q", stderr)
 		}
 	})
 
