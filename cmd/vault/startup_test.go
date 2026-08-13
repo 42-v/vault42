@@ -991,7 +991,19 @@ func TestCacheBackendFallback(t *testing.T) {
 	env["REDIS_ADDR"] = "127.0.0.1:" + deadPort(t)
 
 	res := bootAndShutdown(t, vaultRun{env: env}, addr, syscall.SIGTERM, nil)
-	requireExit(t, res, 0, "Cache init failed, falling back to memory")
+	requireExit(t, res, 0, "cache init failed, falling back to per-process memory")
+
+	// The line has to say what was lost, not only that something was. The
+	// fallback silently turns every cross-replica control into a per-pod one:
+	// the login and password-reset limiters multiply by the replica count, and
+	// OAuth state written on one pod cannot be read on another. An operator
+	// reading "falling back to memory" has no reason to treat that as urgent.
+	for _, want := range []string{"WARNING", "rate limiting", "readyz reports cache=degraded"} {
+		if !strings.Contains(res.stderr, want) {
+			t.Errorf("the fallback warning does not mention %q, so nothing tells the operator "+
+				"what degraded:\n%s", want, res.stderr)
+		}
+	}
 }
 
 // TestSeedFileFailuresAreFatal covers declarative seeding on the server path.
