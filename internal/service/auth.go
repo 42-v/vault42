@@ -1195,25 +1195,50 @@ func (s *AuthService) findOrCreateDevice(ctx context.Context, userID, fp, ip, ua
 	return device.ID
 }
 
-// isAccountLocked checks the cache-based lockout counter.
-// When cache is unavailable, falls back to the DB failed_login_count field.
+// lockedByStoredCount enforces the lockout threshold from the durable
+// failed_login_count column.
+//
+// It is coarser than the cache counter, because nothing expires it by TTL, and
+// that is the trade: it never auto-resets, but it cannot be erased by losing a
+// cache. A read failure here answers "not locked", since refusing every login
+// because the user table is unreachable would turn a database blip into a total
+// outage, and the caller cannot authenticate without that table anyway.
+func (s *AuthService) lockedByStoredCount(ctx context.Context, userID string) bool {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil || user == nil {
+		return false
+	}
+	if user.FailedLoginCount >= lockoutThreshold {
+		log.Printf("auth: lockout enforced from the stored count for user %s (cache unavailable)", userID)
+		return true
+	}
+	return false
+}
+
+// isAccountLocked checks the cache-based lockout counter, falling back to the
+// stored failed_login_count whenever the cache cannot answer.
 func (s *AuthService) isAccountLocked(ctx context.Context, userID string) bool {
 	if s.cache == nil {
-		// Fallback: check DB-level failed login counter when cache is unavailable.
-		// This is coarser (never auto-resets by TTL) but prevents unlimited brute force.
-		user, err := s.users.GetByID(ctx, userID)
-		if err != nil || user == nil {
-			return false
-		}
-		if user.FailedLoginCount >= lockoutThreshold {
-			log.Printf("auth: lockout enforced via DB fallback for user %s (cache unavailable)", userID)
-			return true
-		}
-		return false
+		return s.lockedByStoredCount(ctx, userID)
 	}
 	key := fmt.Sprintf("lockout:%s", userID)
 	val, err := s.cache.Get(ctx, key)
-	if err != nil || val == "" {
+	if err != nil {
+		// A failing cache takes the same durable fallback as an absent one.
+		//
+		// This branch used to answer "not locked" without consulting the stored
+		// count, so lockout held with no cache configured and stopped holding the
+		// moment the configured cache broke, which is precisely the situation the
+		// fallback was written for. During a cache outage the pods stay in
+		// rotation, because a degraded cache still reports ready, so every
+		// account was unlocked regardless of what the database had recorded.
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	if val == "" {
+		// A successful read with no counter is what an account with no recent
+		// failures looks like. Falling back here too would put a database read in
+		// front of nearly every login to learn what the cache just answered
+		// correctly.
 		return false
 	}
 	var n int
