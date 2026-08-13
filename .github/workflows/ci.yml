@@ -240,6 +240,13 @@ jobs:
       - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: v2.6.2
+          # Build golangci-lint from source with the runner's Go toolchain rather
+          # than pulling the prebuilt release binary. The v2.6.2 release binary is
+          # built with go1.25, and golangci-lint refuses to load a config whose
+          # target Go (1.26, from go.mod) is newer than the Go it was built with.
+          # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
+          # target-Go match.
+          install-mode: goinstall
           args: --timeout 15m --new-from-merge-base=origin/${{ github.base_ref || 'main' }}
 
       - name: Full run (report only)
