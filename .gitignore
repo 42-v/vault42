@@ -96,3 +96,8 @@ __pycache__/
 /bridge
 /recover
 /vault
+
+# Grok review deliverables. The fleet writes its findings here inside the
+# sandbox worktree, and the harness commits whatever it finds. They are review
+# output rather than product, and they are archived to /mnt/knowledge instead.
+GROK_OUTPUT.md

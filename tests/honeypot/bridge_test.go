@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,44 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+const honeypotRequiredEnv = "VAULT_HONEYPOT_E2E_REQUIRED"
+
+// TestMain refuses a silent pass when the images this suite expects are
+// missing. The untagged skip_test.go covers the no-tag compile; this one
+// covers `go test -tags honeypot_e2e` on a runner that has no vault:dev.
+func TestMain(m *testing.M) {
+	missing := missingImages("vault:dev", "vault-bridge:dev")
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"SKIP honeypot: missing local images: %s\n"+
+				"This suite starts vault:dev and vault-bridge:dev via testcontainers. Build them\n"+
+				"first (Dockerfile, Dockerfile.bridge). Sibling containers are also given host-mapped\n"+
+				"DB ports, which do not reach each other on a default GitHub Actions runner.\n"+
+				"Nothing in this suite ran. Set %s=1 to make this a failure.\n",
+			strings.Join(missing, ", "), honeypotRequiredEnv)
+		if os.Getenv(honeypotRequiredEnv) == "1" {
+			fmt.Fprintf(os.Stderr,
+				"FAIL honeypot: %s=1 but images are not available: %s\n"+
+					"Unset %s only where a skipped run is genuinely acceptable, which is not a release gate.\n",
+				honeypotRequiredEnv, strings.Join(missing, ", "), honeypotRequiredEnv)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func missingImages(names ...string) []string {
+	var missing []string
+	for _, name := range names {
+		cmd := exec.Command("docker", "image", "inspect", name)
+		if err := cmd.Run(); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
 
 // testEnv holds references to all containers for a bridge E2E test.
 type testEnv struct {

@@ -300,8 +300,8 @@ func TestMintHandler_AuditsEveryOutcome(t *testing.T) {
 		t.Fatalf("recorded %d audit entries, want 2", len(captured))
 	}
 	for _, e := range captured {
-		if e.EventType != AuditTokenMinted {
-			t.Errorf("event type = %q, want %q", e.EventType, AuditTokenMinted)
+		if e.EventType != audit.TokenMinted {
+			t.Errorf("event type = %q, want %q", e.EventType, audit.TokenMinted)
 		}
 		if e.ClientID != mintHandlerClient {
 			t.Errorf("client_id = %q, want the minting client", e.ClientID)
