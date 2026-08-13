@@ -1999,11 +1999,49 @@ func TestClientIPResolution(t *testing.T) {
 			want:       "198.51.100.7",
 		},
 		{
-			name:       "the leftmost X-Forwarded-For entry wins",
+			name:       "trailing trusted proxies are skipped for the closest untrusted hop",
 			trusted:    []string{"10.0.0.0/8"},
 			remoteAddr: "10.0.0.5:1234",
 			headers:    map[string]string{"X-Forwarded-For": " 198.51.100.7 , 10.0.0.9 , 10.0.0.5 "},
 			want:       "198.51.100.7",
+		},
+		{
+			// The deployment this bridge is built for: a load balancer that
+			// appends to X-Forwarded-For, so the peer is a trusted proxy and the
+			// real client sits at the rightmost position it added. The leftmost
+			// entry is whatever the caller wrote. Taking it would let an
+			// unauthenticated caller keep every request under a fresh spoofed key
+			// to dodge scoring, and stamp a victim address to trip an auto-flag.
+			name:       "a spoofed leftmost entry loses to the client the load balancer appended",
+			trusted:    []string{"10.0.0.0/8"},
+			remoteAddr: "10.0.0.5:1234",
+			headers:    map[string]string{"X-Forwarded-For": "203.0.113.99, 198.51.100.23"},
+			want:       "198.51.100.23",
+		},
+		{
+			// A multi-proxy chain: the caller pads the header with trusted-proxy
+			// addresses to push the real hop out of any fixed-offset read. The
+			// right-to-left walk skips every trusted entry and still lands on the
+			// real client the outermost proxy vouched for.
+			name:       "a spoofed leftmost entry loses across a chain of trusted proxies",
+			trusted:    []string{"10.0.0.0/8"},
+			remoteAddr: "10.0.0.7:1234",
+			headers:    map[string]string{"X-Forwarded-For": "203.0.113.99, 198.51.100.23, 10.0.0.5, 10.0.0.6"},
+			want:       "198.51.100.23",
+		},
+		{
+			name:       "an all-trusted chain falls back to the peer address",
+			trusted:    []string{"10.0.0.0/8"},
+			remoteAddr: "10.0.0.5:1234",
+			headers:    map[string]string{"X-Forwarded-For": "10.0.0.7, 10.0.0.8"},
+			want:       "10.0.0.5",
+		},
+		{
+			name:       "a garbage rightmost entry falls back to the peer address",
+			trusted:    []string{"10.0.0.0/8"},
+			remoteAddr: "10.0.0.5:1234",
+			headers:    map[string]string{"X-Forwarded-For": "not-an-ip"},
+			want:       "10.0.0.5",
 		},
 		{
 			name:       "a peer outside the trusted ranges is not believed",
