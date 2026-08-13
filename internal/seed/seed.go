@@ -399,13 +399,34 @@ func seedAdminCreator(ctx context.Context, admins repository.AdminUserRepository
 	return best, nil
 }
 
+// adminTierRanks is the rank column of auth.admin_roles, keyed by the rbac
+// constants so a renamed or deleted tier is a compile error rather than a row
+// that silently stops matching.
+//
+// The numbers are migration 001's, and only their order is used. They are
+// restated rather than derived because the two places that could supply them
+// both have a defect. The database has the authoritative copy, but reaching it
+// needs a repository for auth.admin_roles that does not exist and a signature
+// change to RunAdmins reaching cmd/admin-gateway, and the query would only
+// detect drift on a deployment that actually seeds. rbac.ValidRoles is in this
+// process, but it is an exported slice: any importer can sort it in place, a
+// role picker wanting the strongest tier first is the ordinary way that happens,
+// and reading a position out of it would then invert every rank here at runtime
+// with nothing in rbac changed to notice. A private table keyed by constants can
+// be neither reordered from outside nor drift unseen, because
+// TestTheAdminTierRanksMirrorTheRanksMigration001Seeds reads the migration.
+var adminTierRanks = map[rbac.Role]int{
+	rbac.RoleViewer:     1,
+	rbac.RoleOperator:   2,
+	rbac.RoleSuperAdmin: 3,
+}
+
 // adminRoleRank mirrors the rank column of auth.admin_roles. Unknown roles sort
-// below every known one so they are never chosen as a creator.
+// below every known one so they are never chosen as a creator: a role that rbac
+// does not recognize authorizes nothing, whatever the database ranks it.
 func adminRoleRank(role string) int {
-	for i, r := range rbac.ValidRoles {
-		if string(r) == role {
-			return i
-		}
+	if rank, ok := adminTierRanks[rbac.Role(role)]; ok {
+		return rank
 	}
 	return -1
 }
