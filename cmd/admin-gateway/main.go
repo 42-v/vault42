@@ -198,11 +198,23 @@ func main() {
 				log.Fatalf("admin-gateway: failed to load recovery public key: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 			}
 		}
-		apiHandler.SetErasureService(service.NewErasureService(
+		erasureSvc := service.NewErasureService(
 			userRepo, identityRepo, blobRepo, deviceRepo, socialAccountRepo,
 			pwHistoryRepo, refreshTokenRepo, totpRepo, webauthnRepo, backupCodeRepo,
 			recoveryRepo, auditLogger, recoveryPub, cfg.HMACSecret,
-		))
+		)
+		// Documents other services filed about the user are personal data under
+		// Art. 4(1) whoever authored them, so the cascade has to reach them. This
+		// call was missing, and its absence was invisible from here: the erasure
+		// returned success and wrote an AccountErased audit row while every
+		// service document survived. migrations/014_service_documents.sql grants
+		// vault_admin SELECT and DELETE on the table for this exact cascade, so
+		// the privilege was provisioned for a wiring that did not exist.
+		//
+		// DELETE /admin/users/{id} is how an Art. 17 request is normally actioned,
+		// which made this the path that mattered most.
+		erasureSvc.SetServiceDocs(postgres.NewServiceDocumentRepo(db))
+		apiHandler.SetErasureService(erasureSvc)
 		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
 		// the profile ciphertext an import writes are readable by the main server.
 		//
