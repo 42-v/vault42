@@ -69,11 +69,15 @@ type SocialAccount struct {
 
 // AccountRecovery is one append-only escrow record written when a user account
 // is erased. Payload is a hybrid-asymmetric ciphertext (see crypto.EncryptRecovery)
-// of the recoverable profile (email, created_at, roles, display_name). The
-// server cannot decrypt it — only the holder of the offline recovery private
+// of the recoverable profile (user id, email, created_at, roles, display_name).
+// The server cannot decrypt it — only the holder of the offline recovery private
 // key can, to restore the deleted user from backup. Pseudonym is an HMAC of the
 // user id so a record can be correlated to a (soft-deleted) user without
 // storing the plaintext identity here.
+//
+// ID and Pseudonym are also the context Payload is sealed to
+// (crypto.RecoveryBinding), so the ciphertext cannot be moved to another row:
+// the pair is not merely a label on this record, it is part of what decrypts it.
 type AccountRecovery struct {
 	ID        string    `json:"id"`
 	Pseudonym string    `json:"-"`

@@ -17,15 +17,24 @@ import (
 // path therefore has to fail cleanly rather than panic or index out of range —
 // these inputs are exactly what a corrupted or truncated escrow file looks like.
 
+// errorsBinding is the row context these fixtures are sealed to. Its value does
+// not matter to any assertion below; what matters is that it is the same on both
+// sides, so every failure these tests observe is the one they name and not a
+// binding mismatch.
+var errorsBinding = RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+
 func TestEncryptRecovery_NilPublicKey(t *testing.T) {
-	if _, err := EncryptRecovery(nil, []byte("payload")); err == nil {
+	if _, err := EncryptRecovery(nil, []byte("payload"), errorsBinding); err == nil {
 		t.Error("expected an error for a nil public key")
 	}
 }
 
 func TestDecryptRecovery_NilPrivateKey(t *testing.T) {
-	if _, err := DecryptRecovery(nil, []byte("blob")); err == nil {
+	if _, err := DecryptRecovery(nil, []byte("blob"), errorsBinding); err == nil {
 		t.Error("expected an error for a nil private key")
+	}
+	if _, err := DecryptRecoveryLegacy(nil, []byte("blob")); err == nil {
+		t.Error("expected an error for a nil private key on the legacy path")
 	}
 }
 
@@ -36,8 +45,11 @@ func TestDecryptRecovery_BlobTooShort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
-	if _, err := DecryptRecovery(priv, []byte{0x00, 0x01}); err == nil {
+	if _, err := DecryptRecovery(priv, []byte{0x00, 0x01}, errorsBinding); err == nil {
 		t.Error("expected an error for a blob shorter than the length prefix")
+	}
+	if _, err := DecryptRecoveryLegacy(priv, []byte{0x00, 0x01}); err == nil {
+		t.Error("expected an error for a legacy blob shorter than the length prefix")
 	}
 }
 
@@ -48,10 +60,18 @@ func TestDecryptRecovery_CorruptWrappedKeyLength(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
-	blob := make([]byte, 8)
-	binary.BigEndian.PutUint32(blob[:4], 0xFFFFFFFF) // claims a huge wrapped key
-	if _, err := DecryptRecovery(priv, blob); err == nil {
+	// Built in the bound framing, so the guard under test is reached rather than
+	// the format check in front of it.
+	blob := append([]byte(recoveryMagic), recoveryVersionBound, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint32(blob[recoveryHeaderLen:], 0xFFFFFFFF) // claims a huge wrapped key
+	if _, err := DecryptRecovery(priv, blob, errorsBinding); err == nil {
 		t.Error("expected an error for a wrapped-key length past the end of the blob")
+	}
+
+	legacy := make([]byte, 8)
+	binary.BigEndian.PutUint32(legacy[:4], 0xFFFFFFFF)
+	if _, err := DecryptRecoveryLegacy(priv, legacy); err == nil {
+		t.Error("expected the same guard on the legacy path")
 	}
 }
 
@@ -62,7 +82,7 @@ func TestDecryptRecovery_TamperedAESPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
-	blob, err := EncryptRecovery(&priv.PublicKey, []byte("erased account payload"))
+	blob, err := EncryptRecovery(&priv.PublicKey, []byte("erased account payload"), errorsBinding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery: %v", err)
 	}
@@ -73,7 +93,7 @@ func TestDecryptRecovery_TamperedAESPayload(t *testing.T) {
 	copy(tampered, blob)
 	tampered[len(tampered)-1] ^= 0xFF
 
-	if _, err := DecryptRecovery(priv, tampered); err == nil {
+	if _, err := DecryptRecovery(priv, tampered, errorsBinding); err == nil {
 		t.Error("expected GCM to reject a tampered recovery payload")
 	}
 }
@@ -86,7 +106,7 @@ func TestEncryptRecovery_UndersizedPublicKey(t *testing.T) {
 	n.Sub(n, big.NewInt(1)) // 2^512 - 1: an odd 512-bit modulus
 	pub := &rsa.PublicKey{N: n, E: 65537}
 
-	if _, err := EncryptRecovery(pub, []byte("payload")); err == nil {
+	if _, err := EncryptRecovery(pub, []byte("payload"), errorsBinding); err == nil {
 		t.Error("expected an error for a 512-bit recovery key")
 	} else if !strings.Contains(err.Error(), "wrap aes key") {
 		t.Errorf("error = %v, want wrap aes key", err)

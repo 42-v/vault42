@@ -33,8 +33,9 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 	}
 
 	plaintext := []byte(`{"email":"user@example.com","roles":["user"]}`)
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
 
-	blob, err := EncryptRecovery(&priv.PublicKey, plaintext)
+	blob, err := EncryptRecovery(&priv.PublicKey, plaintext, binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 		t.Fatal("ciphertext leaks plaintext")
 	}
 
-	got, err := DecryptRecovery(priv, blob)
+	got, err := DecryptRecovery(priv, blob, binding)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
@@ -64,14 +65,20 @@ func TestEncryptRecoveryUsesFreshNonZeroAESKey(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
 	unwrap := func() []byte {
 		t.Helper()
-		blob, err := EncryptRecovery(&priv.PublicKey, []byte("user@example.com"))
+		blob, err := EncryptRecovery(&priv.PublicKey, []byte("user@example.com"), binding)
 		if err != nil {
 			t.Fatalf("encrypt: %v", err)
 		}
-		wrappedLen := binary.BigEndian.Uint32(blob[:4])
-		key, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, blob[4:4+wrappedLen], nil)
+		// The wrapped-key length prefix sits after the magic and the version
+		// byte, and the OAEP label is the binding: unwrapping by hand has to
+		// agree with the framing EncryptRecovery writes, which is half of what
+		// this test is checking.
+		wrappedLen := binary.BigEndian.Uint32(blob[recoveryHeaderLen:])
+		wrapped := blob[recoveryHeaderLen+4 : recoveryHeaderLen+4+int(wrappedLen)]
+		key, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, wrapped, recoveryLabel(binding))
 		if err != nil {
 			t.Fatalf("unwrap aes key: %v", err)
 		}
@@ -94,12 +101,13 @@ func TestDecryptRecoveryWrongKeyFails(t *testing.T) {
 	priv1, _ := GenerateRSAKeyPair()
 	priv2, _ := GenerateRSAKeyPair()
 
-	blob, err := EncryptRecovery(&priv1.PublicKey, []byte("user@example.com"))
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+	blob, err := EncryptRecovery(&priv1.PublicKey, []byte("user@example.com"), binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	if _, err := DecryptRecovery(priv2, blob); err == nil {
+	if _, err := DecryptRecovery(priv2, blob, binding); err == nil {
 		t.Fatal("expected decryption with a different key to fail")
 	}
 }
@@ -126,11 +134,12 @@ func TestLoadRSAPublicAndPrivateKeyPEM(t *testing.T) {
 	}
 
 	// End-to-end through the parsed keys.
-	blob, err := EncryptRecovery(loadedPub, []byte("user@example.com"))
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+	blob, err := EncryptRecovery(loadedPub, []byte("user@example.com"), binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	got, err := DecryptRecovery(loadedPriv, blob)
+	got, err := DecryptRecovery(loadedPriv, blob, binding)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}

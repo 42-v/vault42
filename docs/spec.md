@@ -1040,6 +1040,18 @@ via `cmd/recover`. The table is append-only on the same footing as the audit log
 who can write rows still cannot rewrite or erase escrow history. `pseudonym` is an HMAC-SHA256 of
 the user id, which correlates a record to the soft-deleted row without storing a plaintext identity.
 
+**Payload binding.** The escrowed payload is sealed to the row it belongs to: the record's primary key and
+its `pseudonym` are the RSA-OAEP label and the AES-GCM AAD, and the payload itself carries the erased
+user's id. Without that binding the two halves of a recovery record were independent -- `deleted_at`,
+`deleted_by` and `reason` are ordinary columns beside the ciphertext -- so anyone able to write the table
+could move a payload from one row to another and `cmd/recover` would report the move as fact. A moved
+payload now fails at the key unwrap. `cmd/recover` rebuilds the binding from the row's own columns, which
+is why it needs no HMAC secret to do so.
+
+Records written before the binding existed remain readable, are labelled `escrow_format: "legacy"` in the
+recovery output, and are reported on stderr as unverified attributions. `cmd/recover --allow-legacy=false`
+refuses them; once the retention horizon has aged the last of them out, that read path can be removed.
+
 **Retention.** The escrow log is exempt from the erasure cascade by construction, so it is bounded
 by time instead (Article 5(1)(e)). `VAULT_RECOVERY_RETENTION_DAYS` sets the horizon and
 `vault cleanup-recovery` sweeps it via a `SECURITY DEFINER` function that briefly disables the
