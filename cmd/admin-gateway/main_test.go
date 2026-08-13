@@ -4,11 +4,15 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -438,13 +442,12 @@ func TestMigrationsWithoutAPasswordFileStillUseTheDDLRole(t *testing.T) {
 // "relation does not exist", so this test drives all three of those paths at
 // once and asserts they logged and continued rather than exiting.
 //
-// The absence of the keystore-disabled warning is asserted too. LoadConfig
-// already refuses a non-32-byte key and keystore.New errors only on that
-// length, so the init-error and ks==nil branches were unreachable and have
-// been deleted. A run that logged key management as disabled would mean
-// those branches were put back, or that the key was lost between LoadConfig
-// and the keystore (the failure the copy taken at main.go's masterKey line
-// exists to prevent).
+// The absence of the keystore-disabled warning is asserted too, but only
+// as a runtime sanity check that the 32-byte key reached the keystore.
+// Those init-error / ks==nil branches never ran (keystore.New errors only
+// on length, and LoadConfig already refused any other), so a process-level
+// test cannot see them. TestKeystoreInitHasNoDeadBranches is the check
+// that fails if they are put back.
 func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	f := newFixture(t)
 	c := f.start(t)
@@ -473,6 +476,156 @@ func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	c.signal(t, syscall.SIGTERM)
 	if code := c.waitForExit(t); code != 0 {
 		t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+	}
+}
+
+// TestKeystoreInitHasNoDeadBranches is the failing-before test for the
+// unreachable keystore.New handling that used to sit in main().
+//
+// keystore.New returns a non-nil error only when len(masterKey) != 32, and
+// LoadConfig already refuses any other length, so the previous
+//
+//	ks, err := keystore.New(...)
+//	if err != nil { log.Printf("... keystore init error ...") }
+//	if ks != nil { EnsureKey; StartRefreshLoop } else { log "not initialized" }
+//
+// pair could not run. A child-process test with a valid 32-byte key takes
+// the success path either way, which is why TestGatewayStartsAgainstUnmigratedDatabase
+// stayed green with the dead branches still there. This reads the AST of
+// main() and fails if either branch is restored: the error result of
+// keystore.New must be discarded, ks must not be nil-checked, and the
+// store must still be used so deleting the feature would not pass.
+func TestKeystoreInitHasNoDeadBranches(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	srcPath := filepath.Join(filepath.Dir(thisFile), "main.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, srcPath, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", srcPath, err)
+	}
+
+	var mainFn *ast.FuncDecl
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "main" && fn.Recv == nil {
+			mainFn = fn
+			return false
+		}
+		return true
+	})
+	if mainFn == nil || mainFn.Body == nil {
+		t.Fatal("no func main in main.go")
+	}
+
+	var newAssign *ast.AssignStmt
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "New" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "keystore" {
+			return true
+		}
+		newAssign = as
+		return false
+	})
+	if newAssign == nil {
+		t.Fatal("main() no longer calls keystore.New; rewrite this test rather than treating that as the dead-branch fix")
+	}
+
+	if len(newAssign.Lhs) != 2 {
+		t.Fatalf("keystore.New is assigned to %d result(s), want 2 (store, discarded error)", len(newAssign.Lhs))
+	}
+	errName := astIdentName(newAssign.Lhs[1])
+	if errName != "_" {
+		t.Fatalf("keystore.New error is bound to %q at line %d; the dead if-err branch is back. Discard it: LoadConfig already refused a non-32-byte key and keystore.New errors only on that length", errName, fset.Position(newAssign.Pos()).Line)
+	}
+
+	ksName := astIdentName(newAssign.Lhs[0])
+	if ksName == "" || ksName == "_" {
+		t.Fatal("keystore.New store result is not a named identifier")
+	}
+
+	var nilGuards []int
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		if astComparesToNil(ifs.Cond, ksName) {
+			nilGuards = append(nilGuards, fset.Position(ifs.Pos()).Line)
+		}
+		return true
+	})
+	if len(nilGuards) > 0 {
+		t.Fatalf("main() still nil-checks %s at line(s) %v; that branch is unreachable after LoadConfig", ksName, nilGuards)
+	}
+
+	var sawEnsure, sawRefresh bool
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != ksName {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "EnsureKey":
+			sawEnsure = true
+		case "StartRefreshLoop":
+			sawRefresh = true
+		}
+		return true
+	})
+	if !sawEnsure || !sawRefresh {
+		t.Fatalf("main() does not use the keystore (EnsureKey=%v StartRefreshLoop=%v); the dead branches must be deleted, not the feature", sawEnsure, sawRefresh)
+	}
+}
+
+func astIdentName(e ast.Expr) string {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return fmt.Sprintf("%T", e)
+	}
+	return id.Name
+}
+
+func astComparesToNil(expr ast.Expr, name string) bool {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return astComparesToNil(e.X, name)
+	case *ast.UnaryExpr:
+		return astComparesToNil(e.X, name)
+	case *ast.BinaryExpr:
+		if e.Op == token.LAND || e.Op == token.LOR {
+			return astComparesToNil(e.X, name) || astComparesToNil(e.Y, name)
+		}
+		if e.Op != token.EQL && e.Op != token.NEQ {
+			return false
+		}
+		x, y := astIdentName(e.X), astIdentName(e.Y)
+		return (x == name && y == "nil") || (x == "nil" && y == name)
+	default:
+		return false
 	}
 }
 
