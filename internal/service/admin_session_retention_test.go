@@ -22,9 +22,11 @@ func (f *fakeAdminSessionRepo) Create(context.Context, *model.AdminSession) erro
 func (f *fakeAdminSessionRepo) GetByTokenHash(context.Context, string) (*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (f *fakeAdminSessionRepo) ListByAdmin(context.Context, string) ([]*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (f *fakeAdminSessionRepo) ListActive(context.Context) ([]*model.AdminSession, error) {
 	return nil, nil
 }
