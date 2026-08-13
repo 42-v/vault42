@@ -203,34 +203,44 @@ func TestProfileDefaults_Dev(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unknown profile falls back to production
+// Unknown profile refuses to start; an unset one is production
 // ---------------------------------------------------------------------------
 
 func TestProfileDefaults_UnknownProfile(t *testing.T) {
-	unknowns := []string{"staging", "testing", "qa", "sandbox", "", "PRODUCTION", "Dev"}
+	t.Run("an unset profile is production", func(t *testing.T) {
+		t.Setenv("VAULT_PROFILE", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Profile != ProfileProduction {
+			t.Errorf("empty profile should be production, got %q", cfg.Profile)
+		}
+	})
 
-	for _, profile := range unknowns {
-		t.Run("profile "+profile, func(t *testing.T) {
-			// For empty profile, applyProfileDefaults defaults it
-			if profile == "" {
-				t.Setenv("VAULT_PROFILE", "")
-				// envOr returns "production" for empty env var
-				cfg, err := Load()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if cfg.Profile != ProfileProduction {
-					t.Errorf("empty profile should be production, got %q", cfg.Profile)
-				}
-				return
+	// A name nobody implements used to become production silently. That hid the
+	// one case where the fallback is not the strict choice: every profile-keyed
+	// control compares against an exact string, so a misspelled honeypot ran as
+	// an ordinary vault with its alerter unmounted.
+	for _, profile := range []string{"staging", "testing", "qa", "sandbox"} {
+		t.Run("profile "+profile+" refuses to start", func(t *testing.T) {
+			t.Setenv("VAULT_PROFILE", profile)
+			if _, err := Load(); err == nil {
+				t.Errorf("profile %q was accepted", profile)
 			}
+		})
+	}
+
+	// A known name in the wrong case is the operator's intent.
+	for profile, want := range map[string]Profile{"PRODUCTION": ProfileProduction, "Dev": ProfileDev} {
+		t.Run("profile "+profile+" is normalized", func(t *testing.T) {
 			t.Setenv("VAULT_PROFILE", profile)
 			cfg, err := Load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Profile != ProfileProduction {
-				t.Errorf("profile %q should fall back to production, got %q", profile, cfg.Profile)
+			if cfg.Profile != want {
+				t.Errorf("profile %q became %q, want %q", profile, cfg.Profile, want)
 			}
 		})
 	}
@@ -256,41 +266,38 @@ func TestEnvVar_WhitespaceValues(t *testing.T) {
 	})
 }
 
-func TestEnvVar_InvalidDurationFallback(t *testing.T) {
+// A duration this service cannot parse is a lifetime the operator chose and did
+// not get. VAULT_ACCESS_TOKEN_TTL=15 (no unit) silently became the profile
+// default, and VAULT_MAX_SESSION_LIFETIME=12 became 720h: the deployment
+// documented a 12-hour bound on a refresh family and enforced a 30-day one.
+func TestEnvVar_InvalidDurationRefusesToStart(t *testing.T) {
 	t.Setenv("VAULT_PROFILE", "dev")
 	t.Setenv("VAULT_ACCESS_TOKEN_TTL", "invalid-duration")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an unparseable VAULT_ACCESS_TOKEN_TTL and substituted the profile default")
 	}
-
-	t.Run("invalid duration uses profile default", func(t *testing.T) {
-		if cfg.AccessTokenTTL != 15*time.Minute {
-			t.Errorf("AccessTokenTTL = %v, want 15m (profile default)", cfg.AccessTokenTTL)
-		}
-	})
 }
 
-func TestEnvVar_InvalidIntFallback(t *testing.T) {
+// The same for whole numbers. VAULT_PASSWORD_MIN_LENGTH=twenty silently became
+// 15, and an operator raising the floor got the default back.
+func TestEnvVar_InvalidIntRefusesToStart(t *testing.T) {
 	t.Setenv("VAULT_PROFILE", "dev")
 	t.Setenv("VAULT_PASSWORD_MIN_LENGTH", "not-a-number")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an unparseable VAULT_PASSWORD_MIN_LENGTH and substituted the default")
 	}
-
-	t.Run("invalid int uses default", func(t *testing.T) {
-		if cfg.PasswordMinLength != 15 {
-			t.Errorf("PasswordMinLength = %d, want 15", cfg.PasswordMinLength)
-		}
-	})
 }
 
+// VAULT_MFA_REQUIRED defaults to true, so every spelling this package does not
+// recognize used to turn the requirement off: "TRUE", "YES" and "on" all left
+// the deployment password-only while /auth/capabilities advertised
+// mfa_required=false. Each recognized spelling now means what it says, and an
+// unrecognized one refuses to start (TestLoadRefusesABooleanSpellingItCannotParse).
 func TestEnvVar_BoolVariations(t *testing.T) {
-	trueValues := []string{"true", "1", "yes", ""} // "" defaults to true (envBoolDefault)
-	falseValues := []string{"false", "0", "no", "off", "on", "TRUE", "YES"}
+	trueValues := []string{"true", "1", "yes", "TRUE", "YES", "on", ""} // "" defaults to true (envBoolDefault)
+	falseValues := []string{"false", "0", "no", "off", "FALSE", "NO"}
 
 	for _, val := range trueValues {
 		t.Run("VAULT_MFA_REQUIRED="+val, func(t *testing.T) {

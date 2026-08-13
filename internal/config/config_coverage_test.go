@@ -170,7 +170,11 @@ func TestEnvBool(t *testing.T) {
 		{"false", "false", false},
 		{"0", "0", false},
 		{"empty", "", false},
-		{"random string", "on", false},
+		{"on", "on", true},
+		{"shouted true", "TRUE", true},
+		// An unrecognized value answers false here and Load refuses to start on
+		// it, so a control the operator switched on can never end up off.
+		{"unrecognized", "ture", false},
 	}
 
 	for _, tt := range tests {
@@ -456,8 +460,12 @@ func TestLoadCustomTokenTTLs(t *testing.T) {
 	}
 }
 
-func TestLoadUnknownProfileFallsBackToProduction(t *testing.T) {
-	t.Setenv("VAULT_PROFILE", "staging")
+// An unset profile is the one that falls back to production. A profile name
+// that is set and unknown is a typo, and the fallback used to hide it: the
+// honeypot profile is the case where production is not the strict choice,
+// because server.go mounts the honeypot alerter only on the exact name.
+func TestLoadUnsetProfileFallsBackToProduction(t *testing.T) {
+	t.Setenv("VAULT_PROFILE", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -465,7 +473,7 @@ func TestLoadUnknownProfileFallsBackToProduction(t *testing.T) {
 	}
 
 	if cfg.Profile != ProfileProduction {
-		t.Errorf("unknown profile should fall back to production, got %q", cfg.Profile)
+		t.Errorf("unset profile should fall back to production, got %q", cfg.Profile)
 	}
 	if !cfg.TLSEnabled {
 		t.Error("should have production TLS defaults")

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -360,8 +361,19 @@ type Config struct {
 //
 //nolint:gocognit // each env var is one branch; splitting hides defaults across files
 func Load() (*Config, error) {
+	// Ahead of everything, including the secret files: VAULT_SECRET_FILE_CONSUME
+	// makes the first read of a secret destructive, so a config that is going to
+	// be refused must be refused before it deletes the operator's key material.
+	if err := checkEnvValues(); err != nil {
+		return nil, err
+	}
+	profile, err := parseProfile(envOr("VAULT_PROFILE", "production"))
+	if err != nil {
+		return nil, err
+	}
+
 	c := &Config{
-		Profile: Profile(envOr("VAULT_PROFILE", "production")),
+		Profile: profile,
 
 		ListenAddr: os.Getenv("LISTEN_ADDR"),
 		Origin:     os.Getenv("VAULT_ORIGIN"),
@@ -584,6 +596,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid VAULT_PRIMARY_COLOR %q: must be hex format #RRGGBB", c.PrimaryColor)
 	}
 
+	// The password floor is the only length control on registration and reset:
+	// AuthService.Register and PasswordHandler both compare the rune count
+	// against this number and nothing downstream enforces a minimum of its own,
+	// so a deployment that sets it to 4 accepts a password an offline attacker
+	// enumerates in seconds. Dev keeps the escape hatch; a local login is not a
+	// deployment.
+	if c.Profile != ProfileDev && c.PasswordMinLength < passwordMinLengthFloor {
+		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", passwordMinLengthFloor, c.Profile, c.PasswordMinLength)
+	}
+
 	// Enforce HMAC secret minimum length in non-dev profiles
 	if len(c.HMACSecret) > 0 && len(c.HMACSecret) < 32 {
 		if c.Profile != ProfileDev {
@@ -684,6 +706,36 @@ func (c *Config) Validate() error {
 	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
 		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
 	}
+	if err := c.checkGeoFence(); err != nil {
+		return err
+	}
+	// The connection carries the role password in the startup packet and every
+	// row of every table after it, including the encrypted TOTP secrets and the
+	// password hashes. Three of the six legal modes do not guarantee it is
+	// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
+	// back to plaintext without telling anyone. Deployments that run Postgres in
+	// the same pod set "disable" on purpose (charts/vault/values-bridge.yaml,
+	// values-local.yaml), so this says so rather than refusing.
+	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
+		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
+	}
+	// A proxy header nobody is trusted to set is a header that is never read.
+	// ClientIP returns the peer address when TrustedProxies is empty, so every
+	// client behind the ingress shares one rate-limit bucket, one lockout counter
+	// and one address in the audit log, and the operator's evidence that
+	// per-client attribution works is the variable they set. This one warns
+	// rather than refuses: the effect is lost attribution, not a lost gate, and
+	// a deployment already running this way must not stop booting on upgrade.
+	if len(c.TrustedProxies) == 0 {
+		for _, h := range []struct{ name, value string }{
+			{"REAL_IP_HEADER", c.RealIPHeader},
+			{"VAULT_TLS_FINGERPRINT_HEADER", c.TLSFingerprintHeader},
+		} {
+			if h.value != "" {
+				log.Printf("SECURITY WARNING: %s is set but TRUSTED_PROXIES is empty; the header is never read and every client is attributed to the address of the hop in front of vault42", h.name)
+			}
+		}
+	}
 	// Recovery escrow is recommended but not mandatory: without it, an accidental
 	// or malicious account deletion is unrecoverable. Warn rather than hard-fail so
 	// operators can opt out deliberately.
@@ -692,6 +744,32 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
+
+// checkGeoFence refuses a geo-fence that cannot fire.
+//
+// middleware.IPAccess runs the geo ladder only when GEO_IP_HEADER is set, and
+// reads the country only from a hop listed in TRUSTED_PROXIES. Miss either and
+// the country is never established: a blocklist then refuses nobody while the
+// operator's config records the countries they believe are banned, and an
+// allowlist refuses everybody. Both halves are configured in the same place and
+// neither used to be checked anywhere.
+func (c *Config) checkGeoFence() error {
+	if len(c.GeoAllowlist) == 0 && len(c.GeoBlocklist) == 0 {
+		return nil
+	}
+	if c.GeoIPHeader == "" {
+		return fmt.Errorf("GEO_IP_HEADER required when GEO_ALLOWLIST or GEO_BLOCKLIST is set in %s profile; without it the country is never read and the geo fence never fires", c.Profile)
+	}
+	if len(c.TrustedProxies) == 0 {
+		return fmt.Errorf("TRUSTED_PROXIES required when GEO_IP_HEADER is set in %s profile; the country is believed only from a trusted hop, so with no trusted proxy the geo fence never fires", c.Profile)
+	}
+	return nil
+}
+
+// passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
+// outside dev. NIST SP 800-63B sets 8 characters as the minimum length of a
+// memorized secret the subscriber chooses; the package default is 15.
+const passwordMinLengthFloor = 8
 
 // argon2idPrefix marks the PHC-encoded form of an Argon2id hash. Its presence
 // is what tells ADMIN_TOKEN_FILE's two accepted forms apart: a hash, which is
@@ -983,17 +1061,19 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// envBool and envBoolDefault answer with the profile default when the value is
+// one parseBoolEnv refuses. Load rejects those before any of this runs, so the
+// fallback only covers a Config assembled without Load.
 func envBool(key string) bool {
-	v := os.Getenv(key)
-	return v == "true" || v == "1" || v == "yes"
+	return envBoolDefault(key, false)
 }
 
 func envBoolDefault(key string, def bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
+	v, set, err := parseBoolEnv(key)
+	if err != nil || !set {
 		return def
 	}
-	return v == "true" || v == "1" || v == "yes"
+	return v
 }
 
 func envInt(key string, def int) int {

@@ -73,6 +73,13 @@ func LoadSecretBinary(envKey string, wantLen int) ([]byte, error) {
 // consumeSecretFile applies the opt-in zero-and-remove wipe shared by LoadSecret
 // and LoadSecretBinary.
 func consumeSecretFile(path string, size int) {
+	// The one boolean in this package that is deliberately not resolved through
+	// parseBoolEnv, and so the one where an unrecognized spelling is silently
+	// false. Every other setting is a control whose absence is the hazard, so
+	// guessing wrong there costs a security property; this one destroys the
+	// operator's key material on a writable mount, so guessing wrong costs the
+	// deployment. Exactly "true" is what docs/config.md documents and what
+	// cmd/vault/startup_test.go pins in both directions.
 	if os.Getenv("VAULT_SECRET_FILE_CONSUME") != "true" {
 		return
 	}

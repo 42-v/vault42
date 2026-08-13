@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -111,16 +110,14 @@ func setDefault(field *string, val string) {
 	}
 }
 
+// setDefaultBool applies val unless the operator set the variable to a value
+// parseBoolEnv recognizes. It resolves the variable through the same parser as
+// envBool: this used to be strconv.ParseBool while the rest of the package used
+// envBool's own set, so the two disagreed about "yes" and about "no", and the
+// field ended up holding whichever of them ran last.
 func setDefaultBool(field *bool, val bool, envKey string) {
-	// Only apply default if the env var was not explicitly set.
-	// os.LookupEnv distinguishes "not set" from "set to empty/false".
-	v, exists := os.LookupEnv(envKey)
-	if !exists {
-		*field = val
-		return
-	}
-	parsed, err := strconv.ParseBool(v)
-	if err != nil {
+	parsed, set, err := parseBoolEnv(envKey)
+	if err != nil || !set {
 		*field = val
 		return
 	}
