@@ -94,7 +94,7 @@ func (r *Retention) Done() <-chan struct{} { return r.doneCh }
 // went.
 //
 // It cannot shorten any key's verification life. Refresh loads a row only while
-// `expires_at IS NULL OR expires_at > NOW()`, and the reap's predicate is
+// `expires_at > NOW() OR (expires_at IS NULL AND status = 'active')`, and the reap's predicate is
 // `expires_at IS NOT NULL AND expires_at < NOW()`. The two sets are disjoint, so
 // every row this deletes is one the keystore already refuses to publish, and the
 // tokens it signed had already stopped verifying at expires_at rather than here.

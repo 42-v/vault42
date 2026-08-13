@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 (2026-08-13)
+## 1.0.0 (2026-08-14)
 
 The version number is the coverage figure, so 1.0.0 could only ever mean a fully covered
 tree. It turned out not to be honestly reachable, and saying why is most of what this
@@ -240,9 +240,12 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 * **`vault_app` could flip privileged account state.** Migration 024 revokes `UPDATE` on
   `banned`, `ban_reason` and `disabled` outright, since no application path writes them, and
   narrows the two that are written to their legitimate direction: `email_verified` may only go
-  false to true, `import_pending` only true to false. `locked_until` is not closed, because
-  `vault lock-user` and `vault unlock-user` genuinely run under the application role; that is a
-  Go change and is recorded as AR-18. Stated plainly rather than glossed: `vault_app` keeps
+  false to true, `import_pending` only true to false. `locked_until` is not closed, because the
+  web server itself writes it under the application role for failed-login auto-lockout and the
+  reset-on-success that clears it; `vault lock-user` and `vault unlock-user` no longer write it,
+  since both were retired to the admin plane this release (see Public API). Whether the column
+  can now be narrowed to a transition rule the way the other four were is recorded as AR-18.
+  Stated plainly rather than glossed: `vault_app` keeps
   `UPDATE (password_hash)` and always will, so takeover through a compromised application role
   is not closed and cannot be. What 024 removes is what password control does not reach, namely
   lifting a ban and mass account disablement.
@@ -362,6 +365,26 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   been flagged and let a scanner measure its own detection, and then behind a bounded worker
   pool, since a goroutine per event let one cheap request open one connection to the operator's
   alerting endpoint.
+* **The password-reset request was an inverted enumeration oracle.** `POST /auth/password/reset`
+  burned a dummy Argon2id verification only when the address mapped to no user, while the found
+  path generated a token with no Argon2id at all, so a known address answered in about a
+  millisecond and an unknown one in about fifty: the reverse of the constant-time intent the
+  comment claimed, since a reset request verifies no password. Every request now spends the same
+  dominant work before the lookup, one Argon2id verification and one token generation, so the
+  response timing no longer depends on whether the account exists. A deleted, banned or disabled
+  account no longer has a reset token stored or mailed either, where before the row's existence
+  alone was enough, and the 200 stays indistinguishable in every case. A locked-out account is
+  still eligible, since resetting the password is a legitimate way out of a failed-login lockout.
+* **A second factor could mint a session for a subject that no longer resolved.**
+  `CompleteMFALogin` read the user with the error discarded and gated account state behind a nil
+  check, so a transient `GetByID` fault, or a subject deleted inside the challenge window, fell
+  through to a default-role session that hid the account's banned or disabled state. It fails
+  closed now on either a read error or a nil user, the way `Refresh` already does, so no token
+  issues for a subject that cannot be resolved to a live account. Separately, the password-login
+  `Deleted` branch masked a soft delete as `invalid_credentials` but skipped the dummy Argon2id
+  the `user==nil` and import-pending paths burn, so a soft-deleted address answered about fifty
+  milliseconds faster and was enumerable; it burns the same dummy hash now, so the masked error
+  is masked in timing too.
 
 ### Public API
 
@@ -396,6 +419,11 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   `mfa_*` with the old key kept as a documented alias; nil slices serialize as `[]`;
   timestamps use one encoding; `avatar_url` is readable on `GET /user/profile`;
   `GET /admin/metrics` returns 501 rather than a 200-OK stub documented as real.
+* **Four `vault` CLI commands moved to the admin plane.** `lock-user`, `unlock-user`,
+  `revoke-client` and `rotate-client-secret` are now retired stubs: each prints a pointer to the
+  admin gateway and issues no database write. They ran under `vault_app`, whose grants this
+  release narrows (migrations 023 and 024), so the equivalent operations now go through the
+  authenticated admin gateway instead. A script invoking any of the four must be repointed.
 
 ### Features
 
@@ -472,6 +500,11 @@ requirement text is about something else.
   documents how to verify the cosign signatures that were already being produced.
 * `packages/dotnet` had 82% of its XML documentation written and shipped none of it: three
   separate switches suppressed it.
+* **the Go toolchain moved to 1.26.6**, clearing seven standard-library advisories in one bump:
+  GO-2026-6218 (`net/url`), 6091 (`html/template`), 6090 (`crypto/tls`), 6089 and 5026
+  (`net/http`), 6088 (`encoding/xml`) and 5972 (`encoding/asn1`). `go.mod` pins
+  `toolchain go1.26.6`; the three Dockerfiles, the browser-test module and the README badge move
+  with it, so the tree that ships and the version it advertises no longer disagree.
 
 ## 0.9.9-B (2026-08-09)
 

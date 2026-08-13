@@ -2099,7 +2099,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "AR-20",
       "evidence": [
-        "internal/service/recovery.go"
+        "internal/service/recovery_retention.go"
       ],
       "tests": [
         "TestGDPR_Art5_1_e_RecoveryEscrowRetentionDisabledByDefault"
@@ -5501,7 +5501,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/password.go:332",
-        "internal/service/recovery.go"
+        "internal/service/recovery_retention.go"
       ],
       "tests": [
         "TestNIST_PasswordResetSingleUse",

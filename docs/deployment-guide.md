@@ -76,7 +76,7 @@ microk8s kubectl -n vault42 create secret generic vault42-secrets \
   --from-file=./secrets/signing-key
 ```
 
-**Note:** The `signing-key` is required for multi-pod deployments -- all pods must share the same signing key so that JWTs issued by one pod can be validated by any other. Without it, each pod generates an ephemeral key at startup.
+**Note:** The `signing-key` is required for multi-pod deployments -- all pods must share the same signing key so that JWTs issued by one pod can be validated by any other. Without it, each pod generates an ephemeral key at startup. `redis-password` is left out of the block above because the embedded profile uses an in-memory cache; `generate-secrets.sh` still produces it, so add `--from-file=./secrets/redis-password` when the cache backend is Redis, or the server comes up with no `REDIS_PASS_FILE`.
 
 The whole Secret is mounted as a directory at `secrets.mountPath` (default `/run/secrets`), so any additional key you add to it appears as a file there without a chart change. What the chart does *not* do is invent the matching `_FILE` environment variable -- see [KMS root key](#kms-root-key-optional) below.
 

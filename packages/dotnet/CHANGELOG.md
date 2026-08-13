@@ -1,6 +1,6 @@
 # Vault42 .NET SDK — Changelog
 
-## 1.0.0 — 2026-08-13
+## 1.0.0 — 2026-08-14
 
 Version lockstep with the vault42 server, and the first release whose published packages carry
 their documentation.
