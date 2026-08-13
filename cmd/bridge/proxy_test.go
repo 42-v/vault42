@@ -385,21 +385,18 @@ func TestBridgeOverwritesClientSuppliedRealIP(t *testing.T) {
 	}
 }
 
-// TestBridgeAppendsToClientSuppliedForwardedFor documents a real weakness rather
-// than a designed behaviour.
+// TestBridgeOverwritesClientSuppliedForwardedForFromUntrustedPeer is the XFF
+// half of TestBridgeOverwritesClientSuppliedRealIP.
 //
-// setProxyHeaders appends the resolved client IP to whatever X-Forwarded-For the
-// client sent, and it does so unconditionally, without regard to whether the
-// peer is in BRIDGE_TRUSTED_PROXIES. The bridge itself is not fooled, since
+// A previous implementation appended the resolved client IP to whatever
+// X-Forwarded-For the client sent, and did so without asking whether the peer
+// was in BRIDGE_TRUSTED_PROXIES. The bridge itself was not fooled, since
 // clientIP ignores X-Forwarded-For from an untrusted peer, but the header it
-// hands the vault upstream still carries the forged entry in the leftmost
-// position, which is exactly the position most X-Forwarded-For parsers treat as
-// the originating client.
-//
-// The test asserts the current behaviour so the forwarding is visible and so a
-// fix, which would be to replace the header rather than extend it when the peer
-// is untrusted, shows up here as a deliberate change.
-func TestBridgeAppendsToClientSuppliedForwardedFor(t *testing.T) {
+// handed the vault still carried the forged entry in the leftmost position,
+// which is the position most parsers treat as the originating client. X-Real-IP
+// was already overwritten; XFF has to be just as safe, otherwise the vault's
+// own per-IP limits and audit log see whoever the attacker named.
+func TestBridgeOverwritesClientSuppliedForwardedForFromUntrustedPeer(t *testing.T) {
 	f := newFixture(t, nil, nil, nil)
 
 	req, err := http.NewRequest(http.MethodGet, f.front.URL+"/whoami", nil)
@@ -412,21 +409,55 @@ func TestBridgeAppendsToClientSuppliedForwardedFor(t *testing.T) {
 	resp.Body.Close()
 
 	xff := f.real.only(t).Header.Get("X-Forwarded-For")
-	entries := strings.Split(xff, ", ")
-	if len(entries) == 0 {
-		t.Fatalf("X-Forwarded-For = %q, want at least one entry", xff)
+	if xff == "" {
+		t.Fatal("X-Forwarded-For was stripped entirely, want the true peer")
 	}
-	if entries[0] != "1.2.3.4" {
-		t.Fatalf("X-Forwarded-For = %q; the forged leftmost entry is gone, so the header is now replaced rather than appended and this test needs updating", xff)
-	}
-	if entries[len(entries)-1] != "127.0.0.1" {
-		t.Errorf("X-Forwarded-For = %q, want the true peer appended last", xff)
+	for i, entry := range strings.Split(xff, ",") {
+		if strings.TrimSpace(entry) == "1.2.3.4" {
+			t.Fatalf("X-Forwarded-For = %q; entry %d is the client-supplied forgery, so the header was appended instead of replaced", xff, i)
+		}
+		if strings.TrimSpace(entry) != "127.0.0.1" {
+			t.Errorf("X-Forwarded-For = %q, want only the true peer address", xff)
+		}
 	}
 
-	// The bridge's own decision is unaffected: the forged address is not what
-	// the request was scored or routed as.
+	// Routing identity stays the true peer; this is the X-Real-IP contract the
+	// XFF rewrite must not regress.
 	if ip := f.real.only(t).Header.Get("X-Real-IP"); ip != "127.0.0.1" {
 		t.Errorf("X-Real-IP = %q, want 127.0.0.1; the forged X-Forwarded-For changed the routing identity", ip)
+	}
+}
+
+// TestBridgePreservesForwardedForFromTrustedProxy is the other half of the XFF
+// rule. When the peer really is a configured proxy, the chain it sent is the
+// actual client path and must not be discarded: overwriting it would make every
+// user behind that proxy look like the proxy itself to the vault.
+func TestBridgePreservesForwardedForFromTrustedProxy(t *testing.T) {
+	_, loopback, err := net.ParseCIDR("127.0.0.0/8")
+	if err != nil {
+		t.Fatalf("ParseCIDR: %v", err)
+	}
+
+	f := newFixture(t, nil, nil, func(cfg *Config) {
+		cfg.TrustedProxies = []*net.IPNet{loopback}
+	})
+
+	req, err := http.NewRequest(http.MethodGet, f.front.URL+"/whoami", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+
+	resp := f.do(t, req)
+	resp.Body.Close()
+
+	xff := f.real.only(t).Header.Get("X-Forwarded-For")
+	entries := strings.Split(xff, ",")
+	if len(entries) == 0 || strings.TrimSpace(entries[0]) != "198.51.100.7" {
+		t.Fatalf("X-Forwarded-For = %q, want the trusted chain to keep 198.51.100.7 on the left", xff)
+	}
+	if ip := f.real.only(t).Header.Get("X-Real-IP"); ip != "198.51.100.7" {
+		t.Errorf("X-Real-IP = %q, want the resolved client 198.51.100.7", ip)
 	}
 }
 
@@ -1459,21 +1490,22 @@ func TestBridgeIgnoresResponsesThatAreNotFailedLogins(t *testing.T) {
 	}
 }
 
-// TestBridgeLoginFailureDetectionBreaksWhenTheUpstreamHasAPathPrefix documents a
-// real fail-open defect.
+// TestBridgeLoginFailureDetectionUsesInboundPath pins the path the
+// ModifyResponse hook compares against.
 //
-// inspectLoginResponse reads resp.Request.URL.Path, and resp.Request is the
-// request the transport actually sent, which httputil.NewSingleHostReverseProxy
-// has already rewritten to include the upstream URL's own path. Configure
-// BRIDGE_REAL_UPSTREAM as http://vault:8080/api and the outbound path becomes
-// /api/auth/login, which never equals the "/auth/login" the hook compares
-// against. Failed-login scoring then silently stops: no error, no log line, and
-// the detection signal documented in docs/bridge.md is simply gone.
+// inspectLoginResponse used to read resp.Request.URL.Path, and resp.Request is
+// the request the transport actually sent. httputil.NewSingleHostReverseProxy
+// has already rewritten that URL to include the upstream's own path, so with
+// BRIDGE_REAL_UPSTREAM=http://vault:8080/api the outbound path is
+// /api/auth/login and never equals "/auth/login". Failed-login scoring then
+// silently stopped: no error, no log line, and the signal documented in
+// docs/bridge.md disappeared. The hook has to compare the inbound path, the
+// one the client actually requested.
 //
-// The test proves the mechanism rather than asserting it from the outside: it
-// checks that the upstream really did receive the prefixed path, and that the
-// same number of failures which flags an unprefixed bridge flags nothing here.
-func TestBridgeLoginFailureDetectionBreaksWhenTheUpstreamHasAPathPrefix(t *testing.T) {
+// The test also proves the prefix really is applied on the wire, so a future
+// change that stops joining the upstream path would make this pass for the
+// wrong reason.
+func TestBridgeLoginFailureDetectionUsesInboundPath(t *testing.T) {
 	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}, nil, nil)
@@ -1492,38 +1524,92 @@ func TestBridgeLoginFailureDetectionBreaksWhenTheUpstreamHasAPathPrefix(t *testi
 	front := httptest.NewServer(prefixed)
 	defer front.Close()
 
-	for i := 0; i < 5; i++ {
-		req, err := http.NewRequest(http.MethodPost, front.URL+"/auth/login", strings.NewReader("{}"))
-		if err != nil {
-			t.Fatalf("NewRequest: %v", err)
-		}
-		req.Header.Set("User-Agent", benignUA)
-		resp, err := front.Client().Do(req)
-		if err != nil {
-			t.Fatalf("POST: %v", err)
-		}
-		io.Copy(io.Discard, resp.Body) // #nosec G104 -- draining for connection reuse
-		resp.Body.Close()
+	req, err := http.NewRequest(http.MethodPost, front.URL+"/auth/login", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("User-Agent", benignUA)
+	resp, err := front.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) // #nosec G104 -- draining for connection reuse
+	resp.Body.Close()
 
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("attempt %d status = %d, want 401", i+1, resp.StatusCode)
-		}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 
-	// The prefix really is applied on the wire, which is what defeats the hook.
 	reqs := f.real.requests()
-	if len(reqs) != 5 {
-		t.Fatalf("upstream saw %d requests, want 5", len(reqs))
+	if len(reqs) != 1 {
+		t.Fatalf("upstream saw %d requests, want 1", len(reqs))
 	}
 	if reqs[0].Path != "/api/auth/login" {
-		t.Fatalf("upstream path = %q, want /api/auth/login; the prefix is no longer applied and this test needs rewriting", reqs[0].Path)
+		t.Fatalf("upstream path = %q, want /api/auth/login; the prefix is no longer applied and this test is no longer testing the rewrite", reqs[0].Path)
 	}
 
-	if prefixed.flags.IsFlagged("127.0.0.1") {
-		t.Error("failed-login detection now survives an upstream path prefix, so the path comparison was fixed and this test needs updating")
+	if !prefixed.flags.IsFlagged("127.0.0.1") {
+		t.Fatal("one failed login against a prefixed upstream did not flag the IP; the hook is still comparing the outbound path")
 	}
-	if got := prefixed.scores.Get("127.0.0.1"); got != 0 {
-		t.Errorf("score = %d, want 0 while the defect stands", got)
+	entries := prefixed.flags.List()
+	if len(entries) != 1 {
+		t.Fatalf("flag list has %d entries, want 1", len(entries))
+	}
+	if entries[0].Reason != "auto:login_failures" {
+		t.Errorf("reason = %q, want auto:login_failures", entries[0].Reason)
+	}
+	if got := prefixed.scores.Get("127.0.0.1"); got != 20 {
+		t.Errorf("score = %d, want 20", got)
+	}
+}
+
+// TestBridgeLoginFailureDetectionDoesNotUseOutboundPath is the inverse of the
+// prefix case: an inbound POST /login against an upstream mounted at /auth
+// produces an outbound /auth/login, which would look like a failed login if the
+// hook inspected the rewritten URL. Counting that would flag anyone who POSTed
+// to a path that merely happens to join with the upstream prefix.
+func TestBridgeLoginFailureDetectionDoesNotUseOutboundPath(t *testing.T) {
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}, nil, nil)
+
+	cfg := testConfig(f.real.srv.URL+"/auth", f.honeypot.srv.URL)
+	cfg.LoginFailThreshold = 1
+	cfg.FlagThreshold = 20
+
+	b, err := NewBridge(cfg)
+	if err != nil {
+		t.Fatalf("NewBridge: %v", err)
+	}
+	defer b.Close()
+
+	front := httptest.NewServer(b)
+	defer front.Close()
+
+	req, err := http.NewRequest(http.MethodPost, front.URL+"/login", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("User-Agent", benignUA)
+	resp, err := front.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body) // #nosec G104 -- draining for connection reuse
+	resp.Body.Close()
+
+	reqs := f.real.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream saw %d requests, want 1", len(reqs))
+	}
+	if reqs[0].Path != "/auth/login" {
+		t.Fatalf("upstream path = %q, want /auth/login so the outbound path is the one the hook used to match", reqs[0].Path)
+	}
+	if b.flags.IsFlagged("127.0.0.1") {
+		t.Error("POST /login was counted as a failed login because the hook compared the outbound path")
+	}
+	if got := b.scores.Get("127.0.0.1"); got != 0 {
+		t.Errorf("score = %d, want 0", got)
 	}
 }
 
@@ -2098,10 +2184,9 @@ func TestScoreMapConcurrentAdd(t *testing.T) {
 }
 
 // TestStartReaperDrainsExpiredState checks that the background sweep actually
-// reaches all three stores it claims to. Each of them grows by one entry per
-// distinct client address and none of them is bounded, so a reaper that quietly
-// missed one would turn a long-running bridge under scanner traffic into a slow
-// memory leak.
+// reaches every store that grows by one entry per distinct client address.
+// None of them is otherwise bounded, so a reaper that quietly missed one would
+// turn a long-running bridge under scanner traffic into a slow memory leak.
 func TestStartReaperDrainsExpiredState(t *testing.T) {
 	cfg := testConfig("http://real:8080", "http://honeypot:8080")
 	cfg.FlagTTL = 20 * time.Millisecond
@@ -2117,6 +2202,7 @@ func TestStartReaperDrainsExpiredState(t *testing.T) {
 	b.flags.Flag("1.1.1.1", "test", 100)
 	b.rateTracker.Record("2.2.2.2")
 	b.loginFails.Record("3.3.3.3")
+	b.scores.Add("4.4.4.4", 30)
 
 	b.StartReaper(10 * time.Millisecond)
 
@@ -2134,7 +2220,11 @@ func TestStartReaperDrainsExpiredState(t *testing.T) {
 		logins := len(b.loginFails.buckets)
 		b.loginFails.mu.Unlock()
 
-		if flags == 0 && rates == 0 && logins == 0 {
+		b.scores.mu.Lock()
+		scores := len(b.scores.scores)
+		b.scores.mu.Unlock()
+
+		if flags == 0 && rates == 0 && logins == 0 && scores == 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -2149,24 +2239,64 @@ func TestStartReaperDrainsExpiredState(t *testing.T) {
 	b.loginFails.mu.Lock()
 	logins := len(b.loginFails.buckets)
 	b.loginFails.mu.Unlock()
+	b.scores.mu.Lock()
+	scores := len(b.scores.scores)
+	b.scores.mu.Unlock()
 
-	t.Errorf("after reaping: flags=%d rate buckets=%d login buckets=%d, want all zero", flags, rates, logins)
+	t.Errorf("after reaping: flags=%d rate buckets=%d login buckets=%d scores=%d, want all zero", flags, rates, logins, scores)
 }
 
-// TestReaperLeavesScoresBehind records a genuine unbounded-growth defect.
+// TestScoreMapReapEvictsIdleEntries is the unit form of the ScoreMap leak.
 //
-// StartReaper sweeps the flag store and both sliding-window trackers, but
-// nothing ever removes an entry from the ScoreMap. Scores also never decay, so
-// every address that has ever scored a single point keeps a map entry for the
-// life of the process. A bridge on the public internet takes scanner traffic
-// continuously from a large and changing set of addresses, which makes this a
-// slow leak with no ceiling and no operator-visible signal.
+// StartReaper used to sweep flags, rateTracker and loginFails and leave every
+// ScoreMap entry in place for process lifetime. A public bridge sees a large,
+// changing set of scanner addresses, each of which scores at least once, so
+// that map grew without a ceiling or an operator-visible signal.
 //
-// The lack of decay is documented in Config.FlagThreshold as a deliberate
-// lifetime budget. The lack of eviction is not documented anywhere, and the two
-// are separable: entries could be dropped once their address has been flagged
-// and the flag has expired.
-func TestReaperLeavesScoresBehind(t *testing.T) {
+// Scores still do not decay while an address is active: the reaper must not
+// zero a recently updated total, because that would reset a scanner's budget
+// every tick and let it stay under the flag threshold forever. Eviction is
+// only for addresses that have been idle longer than the flag TTL, the same
+// window the other stores already use.
+func TestScoreMapReapEvictsIdleEntries(t *testing.T) {
+	sm := NewScoreMap()
+
+	if got := sm.Add("1.1.1.1", 30); got != 30 {
+		t.Fatalf("Add returned %d, want 30", got)
+	}
+	sm.Reap(time.Hour)
+	if got := sm.Get("1.1.1.1"); got != 30 {
+		t.Fatalf("Reap reduced a live score to %d, want 30; that is decay, not eviction of idle entries", got)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	sm.Reap(time.Millisecond)
+
+	if got := sm.Get("1.1.1.1"); got != 0 {
+		t.Errorf("Get after evicting an idle entry = %d, want 0", got)
+	}
+	sm.mu.Lock()
+	size := len(sm.scores)
+	sm.mu.Unlock()
+	if size != 0 {
+		t.Errorf("score map holds %d entries after reaping an idle address, want 0", size)
+	}
+
+	// A fresh score recorded after the sweep must survive the next one, otherwise
+	// the reaper is wiping the map rather than dropping stale keys.
+	if got := sm.Add("2.2.2.2", 50); got != 50 {
+		t.Fatalf("Add after reap returned %d, want 50", got)
+	}
+	sm.Reap(time.Hour)
+	if got := sm.Get("2.2.2.2"); got != 50 {
+		t.Errorf("a freshly scored address was evicted: Get = %d, want 50", got)
+	}
+}
+
+// TestReaperEvictsIdleScores joins ScoreMap.Reap to StartReaper. A unit test
+// that the map can evict is not enough: the leak existed because the sweep
+// never called it.
+func TestReaperEvictsIdleScores(t *testing.T) {
 	cfg := testConfig("http://real:8080", "http://honeypot:8080")
 	cfg.FlagTTL = 20 * time.Millisecond
 	cfg.RateWindow = 20 * time.Millisecond
@@ -2184,28 +2314,24 @@ func TestReaperLeavesScoresBehind(t *testing.T) {
 
 	b.StartReaper(10 * time.Millisecond)
 
-	// Wait until the reaper has demonstrably run at least once.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		b.flags.mu.RLock()
-		flags := len(b.flags.flags)
-		b.flags.mu.RUnlock()
-		if flags == 0 {
-			break
+		b.scores.mu.Lock()
+		size := len(b.scores.scores)
+		b.scores.mu.Unlock()
+		if size == 0 {
+			if got := b.scores.Get("1.1.1.1"); got != 0 {
+				t.Errorf("Get on an evicted score = %d, want 0", got)
+			}
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-
-	if got := b.scores.Get("1.1.1.1"); got != 30 {
-		t.Errorf("score after reaping = %d, want 30; scores are now evicted, so this defect was fixed and the test needs updating", got)
 	}
 
 	b.scores.mu.Lock()
 	size := len(b.scores.scores)
 	b.scores.mu.Unlock()
-	if size != 1 {
-		t.Errorf("score map holds %d entries after reaping, want 1", size)
-	}
+	t.Errorf("score map still holds %d entries after the reaper ran, want 0", size)
 }
 
 // ---------------------------------------------------------------------------
@@ -2260,6 +2386,7 @@ func TestWebhookSenderPostsJSON(t *testing.T) {
 		"score":  130,
 		"reason": "auto:automation_ua",
 	})
+	defer ws.Close()
 
 	select {
 	case r := <-got:
@@ -2298,6 +2425,7 @@ func TestWebhookSenderSwallowsFailures(t *testing.T) {
 
 		ws := NewWebhookSender(srv.URL)
 		ws.Send(map[string]interface{}{"event": "auto_flag", "bad": make(chan int)})
+		ws.Close()
 
 		select {
 		case <-reached:
@@ -2309,6 +2437,7 @@ func TestWebhookSenderSwallowsFailures(t *testing.T) {
 	t.Run("receiver refuses the connection", func(t *testing.T) {
 		ws := NewWebhookSender("http://" + deadAddr(t) + "/hook")
 		ws.Send(map[string]interface{}{"event": "auto_flag"})
+		ws.Close()
 	})
 
 	t.Run("receiver answers with an error status", func(t *testing.T) {
@@ -2319,11 +2448,13 @@ func TestWebhookSenderSwallowsFailures(t *testing.T) {
 
 		ws := NewWebhookSender(srv.URL)
 		ws.Send(map[string]interface{}{"event": "auto_flag"})
+		ws.Close()
 	})
 
 	t.Run("URL that cannot be requested", func(t *testing.T) {
 		ws := NewWebhookSender("://not-a-url")
 		ws.Send(map[string]interface{}{"event": "auto_flag"})
+		ws.Close()
 	})
 }
 
@@ -2415,24 +2546,24 @@ func TestBridgeSendsWebhookOnLoginFailureFlag(t *testing.T) {
 	}
 }
 
-// TestWebhookDispatchIsSynchronousAndObservable records a timing side channel.
+// TestWebhookDispatchDoesNotBlockTheFlaggedRequest is the timing contract
+// docs/bridge.md makes: the attacker never learns they have been switched.
 //
-// Send is called inline from ServeHTTP and from ServeDecoy, and it waits on an
-// HTTP POST to an operator-supplied URL with a five second client timeout. The
-// request that triggered the alert is therefore held for as long as the receiver
-// takes to answer. docs/bridge.md states the attacker never knows they have been
-// switched, but the flagging request is exactly the one that stalls, so a
-// scanner watching its own latency sees the moment it was detected. A slow or
-// hung webhook receiver turns that into seconds, and it does so on every decoy
-// hit, which is also a cheap way to make the bridge's connections pile up.
-//
-// The fix is to dispatch the webhook from its own goroutine. The test asserts
-// the current behaviour so the change is visible when it is made.
-func TestWebhookDispatchIsSynchronousAndObservable(t *testing.T) {
+// Send used to run inline from ServeHTTP and ServeDecoy and waited on an HTTP
+// POST with a five second client timeout. The request that triggered the alert
+// was therefore the one that stalled, so a scanner watching its own latency
+// saw the moment it was detected. A slow or hung receiver turned that into
+// seconds on every decoy hit, and also piled up bridge connections.
+func TestWebhookDispatchDoesNotBlockTheFlaggedRequest(t *testing.T) {
 	const hookDelay = 400 * time.Millisecond
 
+	got := make(chan struct{}, 2)
 	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(hookDelay)
+		select {
+		case got <- struct{}{}:
+		default:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer hook.Close()
@@ -2441,24 +2572,72 @@ func TestWebhookDispatchIsSynchronousAndObservable(t *testing.T) {
 		cfg.WebhookURL = hook.URL
 	})
 
-	// A request that triggers no alert is the baseline.
 	start := time.Now()
 	resp, _ := f.get(t, "/auth/login")
 	resp.Body.Close()
 	clean := time.Since(start)
 
-	// A decoy hit fires the webhook inline.
 	start = time.Now()
 	resp, _ = f.get(t, "/wp-admin")
 	resp.Body.Close()
 	trapped := time.Since(start)
 
-	if trapped < hookDelay {
-		t.Errorf("the decoy response took %v, want at least the webhook's %v; dispatch is now asynchronous and this test needs updating", trapped, hookDelay)
+	if trapped >= hookDelay {
+		t.Errorf("the decoy response took %v, which includes the webhook's %v; dispatch is still on the request path", trapped, hookDelay)
 	}
 	if clean > hookDelay {
 		t.Errorf("an ordinary request took %v, which is as slow as the webhook delay; the baseline is not meaningful", clean)
 	}
+
+	// The event must still be delivered. Returning quickly by dropping the
+	// webhook would hide the stall and also hide the detection from the
+	// operator.
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the decoy response returned quickly because the webhook was never sent")
+	}
+}
+
+// TestWebhookCloseFlushesQueuedEvents is the shutdown half of async dispatch.
+// main defers Bridge.Close after the HTTP server stops, so any event that is
+// only sitting in a goroutine is lost unless Close waits for it. Losing the
+// last flag of a process that is being rolled is exactly the event an operator
+// most needs.
+func TestWebhookCloseFlushesQueuedEvents(t *testing.T) {
+	const hookDelay = 250 * time.Millisecond
+
+	received := make(chan struct{})
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(hookDelay)
+		close(received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	ws := NewWebhookSender(hook.URL)
+
+	start := time.Now()
+	ws.Send(map[string]interface{}{"event": "auto_flag", "ip": "203.0.113.9"})
+	if time.Since(start) >= hookDelay {
+		t.Fatalf("Send took %v, want it to return before the receiver's %v", time.Since(start), hookDelay)
+	}
+
+	ws.Close()
+	elapsed := time.Since(start)
+	if elapsed < hookDelay {
+		t.Errorf("Close returned after %v, want it to wait for the in-flight send (%v)", elapsed, hookDelay)
+	}
+
+	select {
+	case <-received:
+	default:
+		t.Fatal("Close returned without the webhook having been delivered")
+	}
+
+	// A second Close is what t.Cleanup on a Bridge will do after a test has
+	// already drained the sender.
+	ws.Close()
 }
 
 // ---------------------------------------------------------------------------
@@ -2707,6 +2886,11 @@ func TestBridgeConcurrentDecoyHitsFlagEveryCaller(t *testing.T) {
 			t.Errorf("%s was not flagged by its decoy hit", ip)
 		}
 	}
+
+	// Dispatch is asynchronous, so the request WaitGroup finishing does not
+	// mean the webhook POSTs have landed. Close waits for them; that is also
+	// the shutdown contract.
+	f.bridge.webhook.Close()
 
 	hookMu.Lock()
 	calls := hookCalls
