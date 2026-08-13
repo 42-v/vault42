@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -253,26 +254,68 @@ func TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet(t *testing.T) {
 func TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated(t *testing.T) {
 	src := readProductionSource(t, "internal/service/auth.go")
 
-	refreshAt := strings.Index(src, "func (s *AuthService) Refresh(")
-	if refreshAt < 0 {
-		t.Fatal("V10.4.5: AuthService.Refresh has moved; re-derive this assertion")
-	}
-	body := src[refreshAt:]
-	if end := strings.Index(body, "\nfunc "); end > 0 {
-		body = body[:end]
-	}
+	body := funcBody(t, src, "func (s *AuthService) Refresh(")
 
 	markUsed := strings.Index(body, "s.tokens.MarkUsed(")
-	create := strings.Index(body, "s.tokens.Create(")
 	if markUsed < 0 {
 		t.Fatal("V10.4.5: Refresh no longer marks the presented token used")
 	}
+
+	// The replacement may be created directly in Refresh or in a helper it
+	// calls. It moved into issueRotatedPair when the rotation guard pushed
+	// Refresh past the complexity limit, and an assertion that only looked at
+	// Refresh's own body reported the mitigation gone when nothing about it had
+	// changed. Following one level of local call keeps the property asserted
+	// across a refactor instead of retiring on one.
+	create := strings.Index(body, "s.tokens.Create(")
+	where := "Refresh"
 	if create < 0 {
-		t.Fatal("V10.4.5: Refresh no longer creates a replacement token")
+		for _, helper := range localCallsAfter(body, markUsed) {
+			hb := funcBody(t, src, "func (s *AuthService) "+helper+"(")
+			if hb == "" {
+				continue
+			}
+			if strings.Contains(hb, "s.tokens.Create(") {
+				// Reached only after MarkUsed, by construction of localCallsAfter.
+				create, where = markUsed+1, helper
+				break
+			}
+		}
+	}
+	if create < 0 {
+		t.Fatal("V10.4.5: neither Refresh nor any helper it calls creates a replacement token")
 	}
 	if markUsed > create {
-		t.Error("V10.4.5: Refresh issues the replacement token before invalidating the presented one; an interrupted rotation would leave two usable refresh tokens")
+		t.Errorf("V10.4.5: the replacement token is created in %s before the presented one is "+
+			"invalidated; an interrupted rotation would leave two usable refresh tokens", where)
 	}
+}
+
+// funcBody returns the source of the function whose declaration starts with
+// prefix, or "" when there is none.
+func funcBody(t *testing.T, src, prefix string) string {
+	t.Helper()
+
+	at := strings.Index(src, prefix)
+	if at < 0 {
+		return ""
+	}
+	body := src[at:]
+	if end := strings.Index(body[1:], "\nfunc "); end > 0 {
+		body = body[:end+1]
+	}
+	return body
+}
+
+// localCallsAfter returns the names of methods on the receiver called after
+// offset, in source order, so the search follows the path the rotation actually
+// takes rather than every helper in the file.
+func localCallsAfter(body string, offset int) []string {
+	var out []string
+	for _, m := range regexp.MustCompile(`s\.([a-z][A-Za-z0-9]*)\(`).FindAllStringSubmatchIndex(body[offset:], -1) {
+		out = append(out, body[offset+m[2]:offset+m[3]])
+	}
+	return out
 }
 
 // --- V10.4.8: refresh tokens have an absolute expiration ---
