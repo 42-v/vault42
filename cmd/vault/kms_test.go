@@ -550,6 +550,87 @@ func TestKMSWrapSealsThePlaintextItWasGivenWithoutTrimming(t *testing.T) {
 	}
 }
 
+// TestKMSWrapRefusesAKidThatIsNotAPlainIdentifier covers the other half of the
+// artifact's identity. The kid is AAD, so an envelope opens only under the exact
+// byte string it was sealed with, and nothing anywhere resolves it: a kid of a
+// single space, or one carrying a stray newline from an unquoted shell variable,
+// produces a perfectly good envelope that nobody can open again, because the
+// odd bytes are invisible in the deploy log, in the audit row and in the ticket
+// where the kid gets written down. The refusal has to name the kid quoted so the
+// operator can see what is actually in it.
+//
+// The charset is the one POST /mint already applies to its caller-supplied
+// subject, for the same reason: an identifier that reaches a log and a signed
+// context must not carry whitespace or control characters.
+func TestKMSWrapRefusesAKidThatIsNotAPlainIdentifier(t *testing.T) {
+	root := ephemeralRoot(t)
+
+	for _, tc := range []struct {
+		name string
+		kid  string
+	}{
+		{name: "a single space", kid: " "},
+		{name: "an unquoted variable that kept its newline", kid: "data-root-v1\n"},
+		{name: "leading whitespace", kid: " data-root-v1"},
+		{name: "an embedded space", kid: "data root v1"},
+		{name: "a control byte", kid: "data-root-v1\x00"},
+		{name: "a tab", kid: "data\troot"},
+		{name: "a path separator", kid: "../../etc/passwd"},
+		{name: "a leading dash that reads as a flag", kid: "-kid"},
+		{name: "a homoglyph of an ASCII kid", kid: "dаta-root-v1"},
+		{name: "longer than the identifier bound", kid: strings.Repeat("k", 129)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", root))
+			outPath := filepath.Join(t.TempDir(), "wrapped.b64")
+
+			var stdout bytes.Buffer
+			err := runKMSWrap([]string{"--kid", tc.kid, "--out", outPath}, strings.NewReader("payload"), &stdout)
+
+			if err == nil {
+				t.Fatalf("--kid %q was accepted, so the artifact opens only under a kid nobody can read back", tc.kid)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("%q", tc.kid)) {
+				t.Fatalf("error = %q, want it to quote the rejected kid so the odd bytes are visible", err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("a rejected kid still wrote an envelope to stdout: %q", stdout.String())
+			}
+			if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+				t.Fatalf("a rejected kid left an artifact at %s (stat: %v)", outPath, statErr)
+			}
+		})
+	}
+
+	// Every kid shape the deployment, the docs and the fixtures already use.
+	// The check is worth nothing if it refuses an artifact someone has to
+	// re-wrap tomorrow, so these are asserted to still produce an envelope.
+	for _, kid := range []string{
+		"data-root-v1",
+		"life42-root-kek",
+		"life42-root-kek-test",
+		"tenant-a",
+		"k",
+		"k1",
+		"a.b",
+		"a_b",
+		"svc@life42",
+		strings.Repeat("k", 128),
+	} {
+		t.Run("accepts "+kid, func(t *testing.T) {
+			t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", root))
+
+			var out bytes.Buffer
+			if err := runKMSWrap([]string{"--kid", kid}, strings.NewReader("payload"), &out); err != nil {
+				t.Fatalf("runKMSWrap(--kid %q): %v", kid, err)
+			}
+			if out.Len() == 0 {
+				t.Fatalf("--kid %q produced no envelope", kid)
+			}
+		})
+	}
+}
+
 // TestReadInputAndWriteOutputTreatDashAsAStream pins the "-" and "" conventions
 // both helpers share. They are the reason a wrap can be piped, and the empty
 // string is the case a caller hits by passing an unset variable rather than by
