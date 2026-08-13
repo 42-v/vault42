@@ -105,6 +105,11 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
+		// Code is the 6-digit TOTP value from the authenticator.
+		// Required. Not exactly 6 ASCII digits is 400 invalid_code. A
+		// wrong value records an MFA failure and returns 401
+		// invalid_code. Reuse of the same step is 429
+		// totp_code_already_used.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &input); err != nil || !isValidTOTPCode(input.Code) {

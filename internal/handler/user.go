@@ -259,6 +259,12 @@ func (h *UserHandler) RenameDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// FriendlyName is the replacement label for this device.
+		// Required. Trimmed; empty or whitespace-only is 400
+		// name_required. Longer than 100 runes is 400 name_too_long.
+		// Control characters other than tab are 400 name_invalid_chars.
+		// This is how a user overrides the User-Agent-derived name the
+		// login path stored.
 		FriendlyName string `json:"friendly_name"`
 	}
 	if err := decodeJSON(r, &req); err != nil {

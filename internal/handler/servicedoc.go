@@ -61,22 +61,50 @@ func NewServiceDocumentHandler(svc *service.DocumentService, auditLog *audit.Log
 // ServiceDocumentResponse is returned after a write. There is no single-document
 // metadata route; a reader gets the document itself, or the list.
 type ServiceDocumentResponse struct {
-	Key         string    `json:"key"`
-	Owner       string    `json:"owner,omitempty"`
-	OwnerID     string    `json:"owner_id"`
-	Visibility  string    `json:"visibility"`
-	SizeBytes   int       `json:"size_bytes"`
-	StoredBytes int       `json:"stored_bytes"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Key is an echo of the {key} path segment.
+	Key string `json:"key"`
+	// Owner is the writing client's registered name. Omitted on PUT
+	// /service/documents/{subject}/{key}: the write path never resolves a
+	// name, so this key is absent there. Listings and exports populate it
+	// when the client lookup succeeds.
+	Owner string `json:"owner,omitempty"`
+	// OwnerID is the writing client's UUID. On PUT it is always the
+	// caller.
+	OwnerID string `json:"owner_id"`
+	// Visibility is "private" (readable only by the writer) or "shared"
+	// (readable by any svcdoc:read holder for the same subject and key).
+	// The default on every write, including when ?visibility= is absent,
+	// is private.
+	Visibility string `json:"visibility"`
+	// SizeBytes is the canonical plaintext size, which may differ from the
+	// submitted byte count because keys are sorted and numbers are kept as
+	// literals.
+	SizeBytes int `json:"size_bytes"`
+	// StoredBytes is the ciphertext size, which is what the per-subject
+	// byte quota charges.
+	StoredBytes int `json:"stored_bytes"`
+	// CreatedAt is the first write of this (client, subject, key) triple,
+	// RFC3339 UTC. A replacement preserves it.
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is this write, RFC3339 UTC.
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ServiceDocumentListResponse is returned by GET /service/documents/{subject}.
 type ServiceDocumentListResponse struct {
-	Subject   string                  `json:"subject"`
+	// Subject is an echo of the {subject} path segment, including the
+	// literal _global for service-owned documents.
+	Subject string `json:"subject"`
+	// Documents is metadata of every document the caller may read for this
+	// subject (own rows, then other clients' shared rows). Always an
+	// array; [] when none exist. Bodies are never included.
 	Documents []*service.DocumentMeta `json:"documents"`
-	Count     int                     `json:"count"`
-	Quota     *service.DocumentQuota  `json:"quota"`
+	// Count is len(Documents). Always present, including on an empty list.
+	Count int `json:"count"`
+	// Quota is this subject's usage. used_bytes is cross-client ciphertext
+	// for the subject; used_count is this caller's document count for the
+	// subject. The two limits have different scopes on purpose.
+	Quota *service.DocumentQuota `json:"quota"`
 }
 
 // requireClient resolves the calling service client, rejecting anything that is

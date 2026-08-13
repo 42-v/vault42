@@ -532,6 +532,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 // Exchanges a one-time code (from the OAuth2 callback redirect) for the access token.
 func (h *OAuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	var input struct {
+		// Code is the one-time exchange value from the OAuth2 callback
+		// fragment. Required. Empty is 400 invalid_request. Lookup is
+		// SHA-256 of this value plus the request fingerprint; a miss or
+		// fingerprint change is 400 invalid_or_expired_code so the two
+		// cases cannot be distinguished.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &input); err != nil || input.Code == "" {

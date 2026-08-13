@@ -49,25 +49,61 @@ var (
 
 // identityInput is the JSON request body for PUT /user/identity.
 type identityInput struct {
-	GivenName       string                     `json:"given_name"`
-	FamilyName      string                     `json:"family_name"`
-	Username        string                     `json:"username"`
-	Country         string                     `json:"country"`
-	State           string                     `json:"state"`
-	DateOfBirth     string                     `json:"date_of_birth"`
-	Sex             string                     `json:"sex"`
-	MarketingEmails *bool                      `json:"marketing_emails"`
-	Billing         *billingInput              `json:"billing"`
-	Dynamic         map[string]json.RawMessage `json:"dynamic"`
+	// GivenName replaces the stored given name. Optional. Truncated at 100
+	// runes. An omitted key becomes "" and, because PUT is a full replace,
+	// clears the stored value.
+	GivenName string `json:"given_name"`
+	// FamilyName replaces the stored family name. Optional. Truncated at
+	// 100 runes. Omitted means cleared, same as GivenName.
+	FamilyName string `json:"family_name"`
+	// Username is an optional handle. When set it must be 3-32 runes or
+	// PUT returns 400 invalid_profile. Omitted or empty clears it.
+	Username string `json:"username"`
+	// Country is an optional ISO 3166-1 alpha-2 code. The handler requires
+	// two uppercase letters (^[A-Z]{2}$); any other non-empty value is
+	// 400 invalid_country. Omitted or empty clears it.
+	Country string `json:"country"`
+	// State is an optional region code, at most 3 runes. A longer value is
+	// 400 invalid_profile. Omitted or empty clears it.
+	State string `json:"state"`
+	// DateOfBirth is an optional YYYY-MM-DD. A malformed value or a date
+	// in the future is 400 invalid_date_of_birth. Omitted or empty clears it.
+	DateOfBirth string `json:"date_of_birth"`
+	// Sex is optional. Stored values that survive validation are "male",
+	// "female", or empty; anything else is 400 invalid_profile. The handler
+	// truncates to 50 runes before that check. Omitted or empty clears it.
+	Sex string `json:"sex"`
+	// MarketingEmails, when present, is a new preference stamped with
+	// source=profile. Omitted (nil) leaves the stored consent record
+	// untouched so a PUT that does not mention marketing cannot erase a
+	// withdrawal. A pointer is required to tell those two cases apart.
+	MarketingEmails *bool `json:"marketing_emails"`
+	// Billing, when present, replaces the whole billing address. Nil
+	// (omitted) clears any stored billing object, because PUT is a replace.
+	Billing *billingInput `json:"billing"`
+	// Dynamic is optional namespaced opaque JSON. Keys must be lowercase
+	// dotted segments (max 64 bytes); the encoded map must be <= 64 KiB.
+	// Nil or empty clears any stored dynamic object.
+	Dynamic map[string]json.RawMessage `json:"dynamic"`
 }
 
 type billingInput struct {
+	// AddressLine1 is the first street line. Optional. Truncated at 200
+	// runes.
 	AddressLine1 string `json:"address_line_1"`
+	// AddressLine2 is the second street line. Optional. Truncated at 200
+	// runes. Empty is a valid "no line 2".
 	AddressLine2 string `json:"address_line_2"`
-	City         string `json:"city"`
-	PostalCode   string `json:"postal_code"`
-	Country      string `json:"country"`
-	VATID        string `json:"vat_id"`
+	// City is the locality. Optional. Truncated at 100 runes.
+	City string `json:"city"`
+	// PostalCode is the postcode. Optional. Truncated at 20 runes.
+	PostalCode string `json:"postal_code"`
+	// Country is an optional ISO 3166-1 alpha-2 code for the billing
+	// address. The handler requires two uppercase letters; any other
+	// non-empty value is 400 invalid_billing_country.
+	Country string `json:"country"`
+	// VATID is an optional tax identifier. Truncated at 50 runes.
+	VATID string `json:"vat_id"`
 }
 
 // Get handles GET /user/identity.
