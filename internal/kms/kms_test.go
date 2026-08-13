@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
 // testRoot returns a distinct 32-byte root seeded from b.
@@ -99,6 +101,78 @@ func TestWrap_EmptyKid(t *testing.T) {
 	}
 	if err == nil || err.Error() != "kms: empty kid" {
 		t.Fatalf("Wrap with empty kid: err = %v, want %q", err, "kms: empty kid")
+	}
+}
+
+// TestWrapRefusesAZeroBytePlaintext pins the rule that nothing vault42 seals is
+// allowed to be nothing. AES-GCM turns zero bytes into a well-formed 28-byte
+// envelope that authenticates and unwraps cleanly, so a caller whose key
+// generation silently produced nothing walks away with an artifact that looks
+// correct at every later checkpoint: it is valid base64, it decodes, it opens
+// under its kid, and POST /kms/unwrap answers 200 for it. The service that
+// consumes it boots with an empty key, and nothing in the trail points back at
+// the wrap that made it.
+//
+// The guard belongs here rather than in the CLI alone because Wrap is exported
+// and deploy tooling calls it directly, so a check that lives only in
+// `vault kms wrap` leaves every in-process producer able to seal nothing.
+func TestWrapRefusesAZeroBytePlaintext(t *testing.T) {
+	s := newService(t, 0x44)
+
+	for name, plaintext := range map[string][]byte{
+		"nil":         nil,
+		"empty slice": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, err := s.Wrap("life42-root-kek", plaintext)
+			if env != nil {
+				t.Fatalf("Wrap sealed %d bytes of nothing into an envelope: %x", len(env), env)
+			}
+			if !errors.Is(err, ErrEmptyPlaintext) {
+				t.Fatalf("Wrap with an empty plaintext: err = %v, want ErrEmptyPlaintext", err)
+			}
+		})
+	}
+
+	// A one-byte key is the smallest thing the guard must still let through.
+	// Rejecting it would be over-correction: length is not the service's
+	// business beyond the difference between something and nothing.
+	if _, err := s.Wrap("life42-root-kek", []byte{0x00}); err != nil {
+		t.Fatalf("Wrap of a single byte: %v", err)
+	}
+}
+
+// TestUnwrapStillOpensAnEnvelopeThatSealsZeroBytes is the deliberate other half
+// of the guard above, and it is asserted so a later change does not "finish the
+// job" by refusing these at unwrap too.
+//
+// Unwrap has to stay the exact inverse of every Wrap that ever ran. Envelopes
+// produced before the guard existed are still on disk in deploy artifacts, and
+// an operator holding one needs the endpoint to open it to confirm what it
+// actually carries. Refusing it there would report it as unwrap_failed, which is
+// the same answer a corrupted or tampered artifact gets, and would send the
+// incident after a bit-rot theory instead of an empty-secret one.
+func TestUnwrapStillOpensAnEnvelopeThatSealsZeroBytes(t *testing.T) {
+	s := newService(t, 0x55)
+	const kid = "life42-root-kek"
+
+	// Built through the AEAD directly because Wrap now refuses to produce one.
+	// This is byte-for-byte what an older `vault kms wrap` emitted.
+	kek, err := s.deriveKEK(kid)
+	if err != nil {
+		t.Fatalf("deriveKEK: %v", err)
+	}
+	legacy, err := vaultcrypto.Encrypt(nil, kek, []byte(kid))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	got, err := s.Unwrap(kid, legacy)
+	if err != nil {
+		t.Fatalf("Unwrap of a historical zero-byte envelope: %v, want it to open", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Unwrap returned %d bytes, want the zero bytes that were sealed", len(got))
 	}
 }
 

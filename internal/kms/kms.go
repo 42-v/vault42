@@ -56,6 +56,13 @@ var ErrUnwrap = errors.New("kms: unwrap failed")
 // is unchanged; Wrap is not attacker-facing and says what actually happened.
 var ErrClosed = errors.New("kms: service is closed")
 
+// ErrEmptyPlaintext is returned by Wrap when there is nothing to seal. Like
+// ErrClosed it names what actually happened, because Wrap is producer-facing:
+// the caller is deploy tooling that needs to know its key generation came up
+// empty, not an attacker probing the oracle. Unwrap is unaffected and keeps
+// opening envelopes sealed before this rule existed.
+var ErrEmptyPlaintext = errors.New("kms: refusing to wrap an empty plaintext")
+
 // Service derives per-kid KEKs from a KMS root secret and wraps/unwraps key
 // envelopes under them. Derivation allocates fresh buffers per call, and the
 // root is guarded against Close, so the type is safe for concurrent use
@@ -105,9 +112,25 @@ func (s *Service) deriveKEK(kid string) ([]byte, error) {
 // Wrap seals plaintext under the KEK for kid, returning the envelope
 // (nonce || AES-256-GCM ciphertext, with kid as AAD). This is the inverse of
 // Unwrap; it lets deploy tooling and tests produce artifacts the oracle accepts.
+//
+// An empty plaintext is refused. Zero bytes is not a key, but AES-GCM seals it
+// into a 28-byte envelope that is indistinguishable from a real one everywhere
+// it is subsequently handled: it is valid base64, it authenticates under its
+// kid, and the unwrap oracle answers 200 for it. A caller whose key generation
+// came up empty would therefore get an artifact that passes every downstream
+// check and delivers nothing, and the consuming service would boot with an
+// empty key far from the wrap that produced it.
+//
+// The rule sits at this boundary rather than at the unwrap end because this is
+// the only moment vault42 sees the material with the intent "seal this key".
+// Unwrap must stay the exact inverse of every Wrap that ever ran, including the
+// ones from before this check existed.
 func (s *Service) Wrap(kid string, plaintext []byte) ([]byte, error) {
 	if kid == "" {
 		return nil, errors.New("kms: empty kid")
+	}
+	if len(plaintext) == 0 {
+		return nil, ErrEmptyPlaintext
 	}
 	kek, err := s.deriveKEK(kid)
 	if err != nil {
