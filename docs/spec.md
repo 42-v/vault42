@@ -778,10 +778,10 @@ All commands require `--admin-token`:
 |---------|---------|
 | `add-client` | Register new service client |
 | `list-clients` | List all registered clients |
-| `revoke-client` | Deactivate a client |
-| `rotate-client-secret` | Issue new secret, invalidate old |
-| `lock-user` | Lock a user account (1 year) |
-| `unlock-user` | Unlock a user account |
+| `revoke-client` | Retired: refuses and points at `POST /admin/clients/{id}/revoke` |
+| `rotate-client-secret` | Retired: refuses and points at `POST /admin/clients/{id}/rotate` |
+| `lock-user` | Retired: refuses and points at `POST /admin/users/{id}/lock` |
+| `unlock-user` | Retired: refuses and points at `POST /admin/users/{id}/unlock` |
 | `revoke-all-sessions` | Revoke all refresh tokens system-wide |
 | `rotate-admin-token` | Rotate the admin token itself |
 | `rotate-jwks` | Rotate the JWKS signing key |

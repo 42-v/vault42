@@ -205,51 +205,31 @@ func (c *CLI) listClients(ctx context.Context) bool {
 	return true
 }
 
-func (c *CLI) revokeClient(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault revoke-client --admin-token <token> --id <client-id>")
-		return true
-	}
-	if err := c.clients.Deactivate(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("Client %s revoked.\n", id)
-	}
+// revokeClient is retired. Deactivating a client from cmd/vault ran as the
+// vault_app role, which holds only SELECT and INSERT on auth.clients (migration
+// 001): the UPDATE that clears active failed with 42501 insufficient_privilege,
+// so the command has been dead since the schema was first cut, and even had it
+// run it would leave no audit trail. Client revocation belongs on the admin
+// gateway, which audits the action and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) revokeClient(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: revoke-client is retired. Revoke a client on the admin gateway: POST /admin/clients/{id}/revoke (operator role, mTLS loopback). The vault CLI no longer writes client state.")
 	return true
 }
 
-func (c *CLI) rotateClientSecret(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault rotate-client-secret --admin-token <token> --id <client-id>")
-		return true
-	}
-
-	client, err := c.clients.GetByID(ctx, id)
-	if err != nil || client == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: client not found")
-		return true
-	}
-
-	newSecret, err := vaultcrypto.RandomHex(32)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	newHash, err := hashPassword(newSecret)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	client.SecretHash = newHash
-	client.UpdatedAt = time.Now()
-
-	if err := c.clients.Update(ctx, client); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("New secret for %s: %s\n(shown ONCE — save it now)\n", client.Name, newSecret)
-	}
+// rotateClientSecret is retired for the same reason as revokeClient: rotating a
+// secret from cmd/vault ran as the vault_app role, whose SELECT+INSERT-only grant
+// on auth.clients (migration 001) fails the UPDATE with 42501, and it printed a
+// fresh secret to stdout with no audit trail. Secret rotation belongs on the
+// admin gateway, which audits the action and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not fall through
+// to booting the server. It issues no database write.
+func (c *CLI) rotateClientSecret(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: rotate-client-secret is retired. Rotate a client secret on the admin gateway: POST /admin/clients/{id}/rotate (operator role, mTLS loopback). The vault CLI no longer writes client state.")
 	return true
 }
 

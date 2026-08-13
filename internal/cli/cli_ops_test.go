@@ -216,27 +216,20 @@ func bytesContains(b []byte, sub string) bool {
 	return strings.Contains(string(b), sub)
 }
 
-func TestCLI_RotateClientSecret(t *testing.T) {
+func TestCLI_RotateClientSecret_RetiredIsInert(t *testing.T) {
 	ctx := context.Background()
 	c, clients, _, _, _ := newTestCLI()
-
-	t.Run("rotates for an existing client", func(t *testing.T) {
-		clients.GetByIDFn = func(context.Context, string) (*model.Client, error) {
-			return &model.Client{ID: "c1", Name: "frontend"}, nil
-		}
-		updated := false
-		clients.UpdateFn = func(context.Context, *model.Client) error { updated = true; return nil }
-		c.rotateClientSecret(ctx, []string{"--id", "c1"})
-		if !updated {
-			t.Error("Update not called on rotate-client-secret")
-		}
-	})
-
-	t.Run("missing id and unknown client", func(t *testing.T) {
-		c.rotateClientSecret(ctx, nil)
-		clients.GetByIDFn = func(context.Context, string) (*model.Client, error) { return nil, errors.New("not found") }
-		c.rotateClientSecret(ctx, []string{"--id", "ghost"})
-	})
+	clients.GetByIDFn = func(context.Context, string) (*model.Client, error) {
+		t.Error("rotate-client-secret must not read the clients repository once retired")
+		return nil, nil
+	}
+	clients.UpdateFn = func(context.Context, *model.Client) error {
+		t.Error("rotate-client-secret must not write the clients repository once retired")
+		return nil
+	}
+	if handled := c.rotateClientSecret(ctx, []string{"--id", "c1"}); !handled {
+		t.Error("rotate-client-secret must stay a recognized command")
+	}
 }
 
 func TestCLI_InitAdminToken(t *testing.T) {
