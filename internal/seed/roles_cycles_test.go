@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/42-v/vault42/internal/rbac"
 )
 
 // Cycle 1 — reserved-role rejection across every position, every reserved
@@ -135,7 +137,8 @@ func TestCycleValidate_BulkSeed(t *testing.T) {
 	}
 	admins := make([]AdminSeed, 100)
 	for i := range admins {
-		admins[i] = AdminSeed{Username: "a" + itoa(i), Password: "fifteenCharsExactly!!", Role: "admin"}
+		tier := rbac.ValidRoles[i%len(rbac.ValidRoles)]
+		admins[i] = AdminSeed{Username: "a" + itoa(i), Password: "fifteenCharsExactly!!", Role: string(tier)}
 	}
 	if err := validate(&SeedFile{Users: users, Admins: admins}); err != nil {
 		t.Fatalf("bulk seed rejected: %v", err)

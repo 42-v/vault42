@@ -80,7 +80,7 @@ func TestSeedClient_EntropyFailure(t *testing.T) {
 
 func TestSeedAdmin_EntropyFailure(t *testing.T) {
 	seedSwapRandReader(t, &seedScriptedReader{reads: 0})
-	as := AdminSeed{Username: "root", Password: "correct-horse-battery", Role: "admin"}
+	as := AdminSeed{Username: "root", Password: "correct-horse-battery", Role: "super_admin"}
 	repo := &seedAdminRepo{
 		getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
 	}

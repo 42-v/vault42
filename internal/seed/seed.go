@@ -26,8 +26,11 @@ type SeedFile struct {
 	Admins  []AdminSeed  `json:"admins,omitempty"`
 }
 
-// AdminSeed defines an admin gateway user to create. Password must be at
-// least 15 characters. Role must be one of: super_admin, admin, viewer.
+// AdminSeed defines an admin gateway user to create. Password must be at least
+// 15 characters. Role must be one of the admin tiers rbac.IsValidRole accepts,
+// which are the roles auth.admin_roles holds and nothing else. The end-user role
+// names a JWT can carry are a separate vocabulary and are not valid here even
+// where the two spell a name the same way.
 type AdminSeed struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -194,7 +197,6 @@ func validate(sf *SeedFile) error {
 		}
 	}
 
-	validAdminRoles := map[string]bool{"super_admin": true, "admin": true, "viewer": true, "operator": true}
 	usernames := make(map[string]bool)
 	for i, a := range sf.Admins {
 		if a.Username == "" {
@@ -206,8 +208,16 @@ func validate(sf *SeedFile) error {
 		if len(a.Password) < 15 {
 			return fmt.Errorf("admins[%d] (%s): password must be at least 15 characters", i, a.Username)
 		}
-		if !validAdminRoles[a.Role] {
-			return fmt.Errorf("admins[%d] (%s): role must be super_admin, admin, operator, or viewer", i, a.Username)
+		// rbac.IsValidRole rather than a list kept here. A local list is a third
+		// vocabulary next to rbac.ValidRoles and auth.admin_roles, and the one
+		// that used to live here had drifted: it accepted "admin", which rbac
+		// resolves no permissions for and auth.admin_roles has no row for. That
+		// still failed closed, at INSERT, as a foreign-key violation raised after
+		// the clients and users from the same file were already written. Rejecting
+		// it here keeps the run from half-applying and says which role is wrong.
+		if !rbac.IsValidRole(a.Role) {
+			return fmt.Errorf("admins[%d] (%s): role %q is not an admin tier (valid: %s)",
+				i, a.Username, a.Role, adminTierNames())
 		}
 		if usernames[a.Username] {
 			return fmt.Errorf("admins[%d]: duplicate username %q", i, a.Username)
@@ -216,6 +226,17 @@ func validate(sf *SeedFile) error {
 	}
 
 	return nil
+}
+
+// adminTierNames renders the admin tiers for a validation error, lowest first.
+// An operator who mistyped a role should not have to read the source to learn
+// what the alternatives were.
+func adminTierNames() string {
+	names := make([]string, 0, len(rbac.ValidRoles))
+	for _, r := range rbac.ValidRoles {
+		names = append(names, string(r))
+	}
+	return strings.Join(names, ", ")
 }
 
 // Run executes the seed file against the database. Existing entries are

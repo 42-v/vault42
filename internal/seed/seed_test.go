@@ -415,7 +415,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"admin username required", `{"admins":[{"password":"TestPassword12345!","role":"viewer"}]}`, "username is required"},
 		{"admin password required", `{"admins":[{"username":"root","role":"viewer"}]}`, "password is required"},
 		{"admin password short", `{"admins":[{"username":"root","password":"short","role":"viewer"}]}`, "at least 15"},
-		{"admin bad role", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"root"}]}`, "role must be super_admin"},
+		{"admin bad role", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"root"}]}`, `role "root" is not an admin tier`},
 		{"admin duplicate", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"viewer"},{"username":"root","password":"TestPassword12345!","role":"viewer"}]}`, "duplicate username"},
 	}
 	for _, tt := range tests {
@@ -546,7 +546,7 @@ func TestLoad_Table(t *testing.T) {
 		{"admin missing username", `{"admins":[{"password":"123456789012345","role":"viewer"}]}`, "username is required"},
 		{"admin missing pass", `{"admins":[{"username":"a","role":"viewer"}]}`, "password is required"},
 		{"admin short pass", `{"admins":[{"username":"a","password":"short","role":"viewer"}]}`, "at least 15"},
-		{"admin bad role", `{"admins":[{"username":"a","password":"123456789012345","role":"root"}]}`, "role must be super_admin"},
+		{"admin bad role", `{"admins":[{"username":"a","password":"123456789012345","role":"root"}]}`, `role "root" is not an admin tier`},
 		{"admin dup username", `{"admins":[{"username":"a","password":"123456789012345","role":"viewer"},{"username":"a","password":"123456789012345","role":"viewer"}]}`, "duplicate username"},
 		{"valid with admins", `{"admins":[{"username":"root","password":"123456789012345","role":"super_admin"}]}`, ""},
 	}
@@ -588,7 +588,7 @@ func TestRunAdmins_Table(t *testing.T) {
 		},
 		{
 			name: "skip existing admin",
-			sf:   &SeedFile{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "admin"}}},
+			sf:   &SeedFile{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "operator"}}},
 			setup: func(m *mockAdminUserRepo) {
 				m.users["ex"] = &model.AdminUser{ID: "1", Username: "ex"}
 			},
