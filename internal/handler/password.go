@@ -43,12 +43,22 @@ type PasswordHandler struct {
 
 // PasswordResetRequestInput represents the reset request payload.
 type PasswordResetRequestInput struct {
+	// Email is the account to send a reset link to. Required. The response
+	// is identical whether the address exists or not, so this field cannot
+	// be used as an enumeration oracle.
 	Email string `json:"email"`
 }
 
 // PasswordResetConfirmInput represents the reset confirmation payload.
 type PasswordResetConfirmInput struct {
-	Token    string `json:"token"`
+	// Token is the single-use value from the reset email. Required.
+	// Unknown, expired or already-used values all return
+	// invalid_or_expired_token.
+	Token string `json:"token"`
+	// Password is the new password. Required. Minimum 15 characters
+	// (NIST SP 800-63B); a match against the last 5 hashes is
+	// password_recently_used. Completing the reset revokes every refresh
+	// family for the account.
 	Password string `json:"password"` // #nosec G117 -- password field in request DTO, not stored
 }
 

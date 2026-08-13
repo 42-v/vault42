@@ -34,33 +34,63 @@ const mintMaxBody = 8 * 1024
 
 // MintRequestBody is the POST /mint request.
 type MintRequestBody struct {
-	// Subject is the identifier the caller asserts. Required. vault42 does not
-	// look it up and does not require it to be a vault42 user.
+	// Subject is the identifier the caller asserts. Required. 1-128 bytes
+	// matching ^[A-Za-z0-9][A-Za-z0-9._@-]*$. vault42 does not look it up
+	// and does not require it to be a vault42 user; the charset exists so
+	// a signed claim and an audit row cannot carry control characters or
+	// whitespace.
 	Subject string `json:"subject"`
-	// Roles and Scopes are optional and must be subsets of the operator's
-	// allow-lists.
-	Roles  []string `json:"roles,omitempty"`
+	// Roles is an optional set that must be a subset of VAULT_MINT_ROLES.
+	// Omit or send [] for none. The allow-list is empty by default, so a
+	// freshly enabled mint issues bare subject assertions. One bad member
+	// rejects the whole request; admin and super_admin are refused
+	// regardless of the allow-list.
+	Roles []string `json:"roles,omitempty"`
+	// Scopes is an optional set that must be a subset of VAULT_MINT_SCOPES.
+	// Same deny-by-default rule as Roles. mint:token, kms:unwrap, the
+	// svcdoc scopes and admin scopes cannot be minted, so a minted token
+	// cannot pivot onto vault42's privileged endpoints.
 	Scopes []string `json:"scopes,omitempty"`
-	// TTLSeconds is optional; zero means the configured default.
+	// TTLSeconds is optional. 0 or omitted means VAULT_MINT_TOKEN_TTL.
+	// Otherwise it must satisfy 0 < ttl <= VAULT_MINT_MAX_TTL (hard-capped
+	// at 900s). A value above the ceiling is refused, not clamped, so a
+	// misconfigured caller finds out now rather than when tokens expire
+	// mid-flight.
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
 // MintResponse is the POST /mint response.
 type MintResponse struct {
-	// AccessToken is the signed assertion.
+	// AccessToken is the signed RS256 assertion. There is no refresh
+	// token and no stored session; the assertion cannot be rotated or
+	// revoked before ExpiresIn elapses.
 	AccessToken string `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749
 	// TokenType is the HTTP presentation scheme, per RFC 6749. It is NOT the
 	// JWT's own token_type claim, which is "mint" and is what keeps a minted
 	// token out of vault42's own authenticated routes.
-	TokenType string   `json:"token_type"`
-	ExpiresIn int      `json:"expires_in"`
-	Subject   string   `json:"subject"`
-	Audience  string   `json:"audience"`
-	Issuer    string   `json:"issuer"`
-	Roles     []string `json:"roles,omitempty"`
-	Scopes    []string `json:"scopes,omitempty"`
-	KID       string   `json:"kid"`
-	JTI       string   `json:"jti"`
+	TokenType string `json:"token_type"`
+	// ExpiresIn is the granted lifetime in seconds, not necessarily the
+	// requested TTLSeconds.
+	ExpiresIn int `json:"expires_in"`
+	// Subject is an echo of the asserted subject, equal to the token's sub.
+	Subject string `json:"subject"`
+	// Audience is VAULT_MINT_AUDIENCE, equal to the token's aud. Startup
+	// refuses a configuration where this equals VAULT_ORIGIN, so a minted
+	// token cannot satisfy vault42's own audience check.
+	Audience string `json:"audience"`
+	// Issuer is VAULT_ORIGIN, equal to the token's iss.
+	Issuer string `json:"issuer"`
+	// Roles is the granted set. Omitted when none were requested, so an
+	// empty grant is absent rather than [].
+	Roles []string `json:"roles,omitempty"`
+	// Scopes is the granted set. Omitted when none were requested.
+	Scopes []string `json:"scopes,omitempty"`
+	// KID is the signing-key id, resolvable against GET /.well-known/jwks.json.
+	KID string `json:"kid"`
+	// JTI is the token's unique id. It is also written on the token_minted
+	// audit event so a downstream incident traces back to this assertion
+	// without the token itself being logged.
+	JTI string `json:"jti"`
 }
 
 // MintHandler serves POST /mint.
