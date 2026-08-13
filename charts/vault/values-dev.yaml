@@ -138,6 +138,12 @@ secrets:
 adminGateway:
   enabled: true
   hostNetwork: false
+  # Stated explicitly, because hostNetwork: false means LocalOnly would refuse
+  # every request arriving through the ingress this profile enables. Dev mode
+  # also switches off RejectProxyHeaders. That is acceptable for a development
+  # cluster and is not acceptable in production, which is why it is written here
+  # rather than inferred from the line above.
+  devMode: true
   listenAddr: "0.0.0.0:9443"
   image:
     repository: vault-admin-gateway

@@ -39,7 +39,15 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
-            {{- if not .Values.adminGateway.hostNetwork }}
+            {{- if and (not .Values.adminGateway.hostNetwork) (not .Values.adminGateway.devMode) }}
+            {{- fail "adminGateway.hostNetwork is false, which means the admin plane is reachable through the cluster network rather than node loopback. LocalOnly refuses every such request, so the gateway can only serve with adminGateway.devMode=true, and that also switches off RejectProxyHeaders. Set adminGateway.devMode explicitly to state that you accept a network-reachable admin plane whose remaining control is the bearer session token, and put a proxy in front of it that carries the weight LocalOnly did." }}
+            {{- end }}
+            {{- if .Values.adminGateway.devMode }}
+            # Set from adminGateway.devMode, never inferred. It used to be forced
+            # on whenever hostNetwork was false, so choosing an ordinary
+            # Kubernetes networking option silently disabled LocalOnly and
+            # RejectProxyHeaders, and the layered story in docs/admin-gateway.md
+            # collapsed to "holds a valid session token" with nothing saying so.
             - name: ADMIN_GW_DEV_MODE
               value: "true"
             {{- end }}
