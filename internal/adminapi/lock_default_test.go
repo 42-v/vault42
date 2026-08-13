@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,5 +120,50 @@ func TestLockUser_NilTokenRepoLocksWithoutPanicking(t *testing.T) {
 	if auditedRevoked != false {
 		t.Errorf("sessions_revoked = %v, want false: the audit row is where an operator learns "+
 			"the sessions are still alive, so it must not claim they were revoked", auditedRevoked)
+	}
+}
+
+// TestLockUser_RevokeFailureIsReportedNotSwallowed covers the other half of the
+// revoke bookkeeping.
+//
+// The lock is written before the sessions are revoked, deliberately: failing the
+// request after the lock has committed would tell an operator the account is not
+// locked when it is. That makes the audit row the only place the revoke outcome
+// is recorded, so a repository error has to reach it rather than being reported
+// as a success.
+func TestLockUser_RevokeFailureIsReportedNotSwallowed(t *testing.T) {
+	var auditedRevoked any
+
+	h := &Handler{
+		users: &mocks.MockUserRepo{
+			LockUntilFn: func(context.Context, string, time.Time) error { return nil },
+		},
+		tokens: &mocks.MockRefreshTokenRepo{
+			RevokeAllForUserFn: func(context.Context, string) error {
+				return errors.New("refresh store unavailable")
+			},
+		},
+		auditLog: audit.NewLogger(&mocks.MockAuditRepo{
+			InsertFn: func(_ context.Context, e *model.AuditEntry) error {
+				auditedRevoked = e.Metadata["sessions_revoked"]
+				return nil
+			},
+		}, 0),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/users/u-1/lock", strings.NewReader(`{"duration":"24h"}`))
+	req.SetPathValue("id", "u-1")
+	req = req.WithContext(context.WithValue(req.Context(), adminUserKey,
+		&model.AdminUser{ID: "adm-1", Username: "root"}))
+
+	rec := httptest.NewRecorder()
+	h.LockUser(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: the lock committed, so the request must not report failure", rec.Code)
+	}
+	if auditedRevoked != false {
+		t.Errorf("sessions_revoked = %v, want false; the revoke failed and the audit row is the "+
+			"only record an operator has of whether the sessions are still alive", auditedRevoked)
 	}
 }

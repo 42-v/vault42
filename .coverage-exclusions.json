@@ -199,6 +199,16 @@
     },
     {
       "package": "internal/crypto",
+      "file": "internal/crypto/jwt.go",
+      "line": 105,
+      "occurrence": 1,
+      "source": "\t\tder = pub.N.Bytes()",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Bucket C. x509.MarshalPKIXPublicKey returns an error only for a key type it does not recognise, and KIDFromPublicKey takes *rsa.PublicKey, which it does. The fallback exists to keep the function total rather than to introduce an error return no caller could act on, and the comment above it says so. Reaching it would need the standard library to stop understanding RSA public keys."
+    },
+    {
+      "package": "internal/crypto",
       "file": "internal/crypto/recovery.go",
       "line": 211,
       "occurrence": 1,
@@ -250,12 +260,32 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
+      "line": 107,
+      "occurrence": 6,
+      "source": "\t\treturn",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Companion statement of the entry for webauthn.go:106; the block holds a WriteError and this return, and a partially named block is rejected. Both are the arm of a json.Marshal(session) that cannot fail: in go-webauthn v0.17.4 BeginRegistration builds SessionData from Challenge, RelyingPartyID, UserID, UserVerification, CredParams, Mediation and Expires only, all strings, byte slices, a time and enum strings. Extensions is the one member that could hold an unmarshalable value and BeginRegistration never assigns it. Verified against webauthn@v0.17.4/webauthn/registration.go:103-110 and types_session.go:32-43."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
       "line": 225,
       "occurrence": 6,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
       "confirmed": true,
       "justification": "json.Marshal(session) for BeginLogin, the same *webauthn.SessionData as the registration path, and VerifyBegin passes it no option either."
+    },
+    {
+      "package": "internal/handler",
+      "file": "internal/handler/webauthn.go",
+      "line": 226,
+      "occurrence": 21,
+      "source": "\t\treturn",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Companion statement of the entry for webauthn.go:225, same block, same unreachable json.Marshal(session) arm. BeginLogin copies session.Extensions from assertion.Response.Extensions, which is only populated by a LoginOption applied in beginLogin's opts loop, and VerifyBegin calls BeginLogin with no options, so it stays nil. The remaining SessionData members are strings, byte slices, a time and enum strings. Verified against webauthn@v0.17.4/webauthn/login.go:79-132."
     },
     {
       "package": "internal/handler",
@@ -376,6 +406,36 @@
       "bucket": "C",
       "confirmed": true,
       "justification": "flate.Writer.Close surfaces only a sink error, and the sink is the same bytes.Buffer."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 170,
+      "occurrence": 1,
+      "source": "\t\treturn nil, err",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Bucket C. blobDataAAD errors only when the id contains a colon (blobAADSafeID). The id here is minted by vaultcrypto.RandomUUID six lines above, which formats hex digits and dashes, so no caller can reach this. The same helper's error return IS exercised where the id comes from a stored row, by TestBlobDownloadRefusesAStoredIDThatCollidesWithALabelAAD, so the guard is not dead code, only unreachable on the upload path."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 184,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, aadErr",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Bucket C. blobLabelAAD errors on the same colon check, against the same freshly minted id as the entry above. Upload takes no id from the caller: Upload and UploadNamed both delegate to uploadInternal, which mints its own."
+    },
+    {
+      "package": "internal/service",
+      "file": "internal/service/blob.go",
+      "line": 265,
+      "occurrence": 1,
+      "source": "\t\t\treturn nil, \"\", \"\", aadErr",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Bucket C. Redundant with the identical check at blob.go:239. decryptBlob calls blobDataAAD(blob.ID, pseudo) first and returns on error, and blobLabelAAD applies the same blobAADSafeID predicate to the same blob.ID, so a stored row whose id would fail here has already been refused. The guard is kept because the two AAD helpers are independent and a future caller may reach the label path without the data path."
     },
     {
       "package": "internal/service",

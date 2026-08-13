@@ -151,7 +151,13 @@ func TestClientAuthAuditBoundsTheAttemptedID(t *testing.T) {
 	}
 	h, cap := newAuditingClientHandler(t, clients)
 
-	postClientToken(h, strings.Repeat("A", 64*1024), "x")
+	// 512 bytes, not 64 KB. Token bodies pass through
+	// http.MaxBytesReader(w, r.Body, 8192), so an oversized body never reaches
+	// parseClientCredentials at all: it fails to parse and the handler takes the
+	// unparseable-credentials path with an empty id, leaving the truncation this
+	// test exists for unexecuted. The id has to be over the audit limit and under
+	// the body limit for the case to be the one it claims.
+	postClientToken(h, strings.Repeat("A", 512), "x")
 
 	row := cap.last(t)
 	if row == nil {
