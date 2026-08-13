@@ -716,7 +716,12 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	if s.mfaSvc != nil {
 		status, err := s.mfaSvc.GetStatus(ctx, user.ID)
 		if err != nil {
+			// Fail closed: an undetermined MFA status must not fall through to the
+			// no-methods branch, which issues real tokens or downgrades to the
+			// email-OTP fallback. Refuse the login rather than skip a factor the
+			// account may hold but that a failed read could not see.
 			log.Printf("auth: MFA status check failed for %s: %v", user.ID, err)
+			return nil, fmt.Errorf("mfa status unavailable: %w", err)
 		}
 		hasMethods := status != nil && len(status.Methods) > 0
 		if hasMethods {

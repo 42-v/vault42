@@ -178,8 +178,9 @@ func TestLoginMFA_TOTPChallengeTokenExpiry(t *testing.T) {
 
 func TestLoginMFA_TOTPStatusCheckError(t *testing.T) {
 	hash := validPasswordHash(t)
-	// MFA service that returns error for GetStatus (internally, repo errors are swallowed)
-	// Since MFA errors are logged but not propagated, login should still proceed
+	// Every MFA lookup errors, so the status is undetermined. Login must fail
+	// closed rather than read the empty method set as "no second factor" and
+	// issue tokens; this test used to assert the opposite (the fail-open bug).
 	mfaSvc := NewMFAService(
 		&mocks.MockTOTPRepo{
 			GetByUserIDFn: func(_ context.Context, _ string) (*model.TOTPSecret, error) {
@@ -208,15 +209,13 @@ func TestLoginMFA_TOTPStatusCheckError(t *testing.T) {
 		}
 	})
 
-	// Even with MFA repo errors, MFA status shows no methods, so login proceeds
+	// An undetermined MFA status must refuse the login, not proceed: a factor may
+	// exist that the failed reads could not see.
 	result, err := svc.Login(context.Background(), LoginInput{
 		Email: "mfa-err@example.com", Password: "correct-horse-battery-staple",
 	}, "1.2.3.4", "TestAgent")
-	if err != nil {
-		t.Fatalf("login should succeed when MFA repos fail (no methods detected): %v", err)
-	}
-	if result.Requires2FA {
-		t.Error("should not require 2FA when MFA repos return errors")
+	if err == nil {
+		t.Fatalf("login must fail closed when the MFA status cannot be determined, got result %+v", result)
 	}
 }
 
