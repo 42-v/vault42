@@ -189,6 +189,43 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   string.** Registering as `admin <attacker@evil.com>` put a display name in the address column
   and split the uniqueness check, since `admin <a@b.com>` and `a@b.com` compared as different
   rows.
+* **Every security boolean silently meant `false` on an unrecognized spelling, and two parsers
+  disagreed about which spellings existed.** `envBool` accepted `true|1|yes`; the profile
+  defaults used `strconv.ParseBool`. So `VAULT_MFA_REQUIRED=True` produced a password-only
+  deployment that advertised `mfa_required:false`, `VAULT_DPOP_ENABLED=True` never mounted the
+  DPoP middleware, `VAULT_HIBP_CHECK=True` accepted breached passwords, and `VAULT_AUTO_MIGRATE=no`
+  ran migrations against a database the operator had refused. One parser now serves all three
+  helpers and an unrecognized value refuses to start. `VAULT_PROFILE` was a free string where an
+  unknown value became production silently, so `VAULT_PROFILE=Honeypot` gave a deception
+  deployment whose trap accounts notified nobody. A geo blocklist with no `GEO_IP_HEADER` refused
+  nobody and an allowlist denied everybody, with nothing checking either. `VAULT_PASSWORD_MIN_LENGTH`
+  had no floor, so `0` accepted an empty password in production. Malformed entries in the proxy
+  and IP lists were dropped with only a log line.
+* **`recover -h` printed the production database password.** The `--dsn` flag defaulted to
+  `os.Getenv("DATABASE_URL")`, and `flag.PrintDefaults` appends any non-empty string default to
+  the usage text, so asking the offline recovery tool for help disclosed the credential to the
+  terminal and to shell scrollback. The tool also had no output option, so the only way to keep a
+  recovered record was a shell redirect at the operator's umask, writing every erased user's email
+  and display name world-readable; `--out` now opens it `0600` with `O_EXCL`. Reaching `--limit`
+  was silent, so a truncated compliance dataset looked complete, and calling the recovery-retention
+  sweeper's `Start` twice panicked the process from a deferred close in a background goroutine.
+* **A DPoP proof could be replayed after its replay entry expired.** The spent-jti entry lived
+  `DPoPMaxAge + 30s` while the proof stayed acceptable across `iat ± DPoPMaxAge`, so a proof
+  minted with a future `iat` outlived the memory of itself by about four minutes and the
+  `dpop_proof_reused` rejection never fired. The entry now covers the whole acceptance window.
+* **A social login could create a second verified account for a taken mailbox.** The OAuth
+  callback looked the provider's email up without folding case, while the repository matches
+  exactly. An IdP asserting a verified `Victim@Example.com` missed the existing
+  `victim@example.com`, so the linking gate was skipped rather than failed, and a new account was
+  created with `email_verified` true for a mailbox the attacker does not own. The address was also
+  never validated, so a CRLF-bearing value was written to the row. Both closed by normalizing once
+  before any lookup. An empty provider subject was likewise usable as an identity join key, where
+  `UNIQUE(provider, provider_user_id)` made the first claimant permanent.
+* **OIDC discovery accepted plaintext endpoints, including `jwks_uri`.** A self-hosted issuer
+  behind a proxy with the wrong `X-Forwarded-Proto` advertises `http://` endpoints, and vault42
+  fetched the signing keys over cleartext, which lets an on-path attacker substitute the JWKS and
+  forge an `id_token` for any subject. Provider profile responses were also read unbounded, unlike
+  every token exchange in the same package.
 * **A stolen security key plus a password was enough.** `webauthn.Config` was built without
   `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
   check compared it against `VerificationRequired`, which is false on every assertion. A
