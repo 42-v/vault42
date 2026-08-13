@@ -266,13 +266,17 @@ const (
 // ValidRoles lists every recognized role, lowest tier first. It is not a
 // permission source: authorization decisions go through [HasPermission].
 //
-// The order is load-bearing and not merely presentational. internal/seed
-// adminRoleRank returns a role's index here as its privilege rank, and
-// seedAdminCreator attributes a seeded admin to the highest-ranked existing
-// account, which is the created_by that migration 016 checks the seeded role
-// against. Reordering this slice, for a role picker that wanted the strongest
-// tier first, would invert that rank. The order is pinned against the
-// permission sets in the package tests rather than left to this comment.
+// The order is lowest tier first and the package tests pin it against the
+// permission sets, so it is an ordering with meaning rather than a whim. Nothing
+// outside this package depends on it any more: internal/seed used to read a
+// role's index here as its privilege rank, which made a reorder anywhere invert
+// the rank migration 016 enforces in SQL, and it now keeps its own private map
+// of the ranks auth.admin_roles actually holds.
+//
+// That coupling was worth removing rather than documenting. This is an exported
+// slice, so an importer sorting it in place for a strongest-first role picker
+// would have inverted the rank at runtime with the source order unchanged, and
+// no gate reading this file could have seen it.
 var ValidRoles = []Role{RoleViewer, RoleOperator, RoleSuperAdmin}
 
 // IsValidRole reports whether r is exactly one of the three recognized admin

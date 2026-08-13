@@ -198,13 +198,12 @@ func TestPermissionsForRoleEnumeratesEveryPermissionTheTierTablesGrant(t *testin
 	}
 }
 
-// ValidRoles is documented as a validation and role-picker list, but its index
-// order is load-bearing privilege rank: internal/seed adminRoleRank returns the
-// index and seedAdminCreator picks the highest one as the created_by of a
-// seeded admin, which is the ceiling migration 016 enforces in SQL. Reordering
-// this slice to put super_admin first for a UI would invert that rank, so the
-// order is pinned here against the permission sets rather than trusted to the
-// comment.
+// ValidRoles is ordered lowest tier first, and this pins that order against the
+// permission sets themselves: each role must hold a strict superset of the one
+// below it. That is a property of this package, provable from its own tables,
+// which is why it survives even though nothing outside the package reads the
+// order any more. internal/seed once took a role's index here as its privilege
+// rank and now keeps its own map of the ranks the database holds.
 func TestValidRolesIsOrderedByStrictlyIncreasingPrivilege(t *testing.T) {
 	if len(ValidRoles) < 2 {
 		t.Fatalf("ValidRoles has %d entries; there is no ordering left to check", len(ValidRoles))
