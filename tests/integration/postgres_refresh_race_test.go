@@ -422,11 +422,11 @@ func TestMarkUsedRefusesARevokedToken(t *testing.T) {
 	}
 }
 
-// waitForBlockedBackend blocks until some backend is waiting on a lock against
-// auth.refresh_tokens. Polling the server is what makes the overlap tests
-// deterministic: a sleep would let the statement under test run to completion
-// before the interleaving it is meant to prove ever forms.
-func waitForBlockedBackend(t *testing.T, pool *pgxpool.Pool) {
+// waitForBlockedBackends blocks until want backends are waiting on a lock
+// against auth.refresh_tokens. Polling the server is what makes the overlap
+// tests deterministic: a sleep would let the statement under test run to
+// completion before the interleaving it is meant to prove ever forms.
+func waitForBlockedBackends(t *testing.T, pool *pgxpool.Pool, want int) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
@@ -436,13 +436,13 @@ func waitForBlockedBackend(t *testing.T, pool *pgxpool.Pool) {
 			WHERE wait_event_type = 'Lock' AND query LIKE '%refresh_tokens%'`).Scan(&n); err != nil {
 			t.Fatalf("poll pg_stat_activity: %v", err)
 		}
-		if n > 0 {
+		if n >= want {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("no backend ever blocked on auth.refresh_tokens; the statement under test did not " +
-		"take the lock that serializes it against the other half of the race")
+	t.Fatalf("fewer than %d backends ever blocked on auth.refresh_tokens; the statement under test "+
+		"did not take the lock that serializes it against the other half of the race", want)
 }
 
 // TestRotationInsertRefusesAFamilyBeingRevoked proves the rotation side cannot
@@ -547,7 +547,7 @@ func TestFamilyRevocationSeesASuccessorInsertedWhileItWaited(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- f.tokens.RevokeFamily(ctx, familyID) }()
-	waitForBlockedBackend(t, pool)
+	waitForBlockedBackends(t, pool, 1)
 
 	successorID, _ := vaultcrypto.RandomUUID()
 	successorRaw, _ := vaultcrypto.RandomHex(32)
