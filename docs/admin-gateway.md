@@ -229,8 +229,22 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
 | `auth.admin_sessions` | none (revoked in 002) | Full CRUD |
 | `auth.app_roles` | SELECT | SELECT, INSERT, DELETE |
-| `auth.signing_keys` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
+| `auth.signing_keys` | SELECT, INSERT, UPDATE, DELETE (narrowed by trigger, below) | SELECT, INSERT, UPDATE |
 | `audit.audit_log` | SELECT, INSERT | SELECT, INSERT |
+
+`vault_app`'s DELETE on `auth.signing_keys` is the one grant in this table that a
+trigger, rather than the grant itself, makes safe. It exists so the retention
+sweep can reap retired keys, and PostgreSQL has no row scope for a privilege, so
+the bare grant would also cover the active key and every retired key still
+verifying live tokens. Migration 020 pairs it with `signing_keys_reap_scope`, a
+`BEFORE DELETE` trigger that refuses any row outside the sweep's predicate.
+
+That trigger deliberately says nothing about a revoked row. Same-event triggers
+fire in name order and `signing_keys_reap_scope` sorts ahead of
+`signing_keys_revocation_terminal`, so excluding revoked rows from its `WHEN`
+clause is what leaves migration 017 as the only guard that answers for a revoked
+key. `vault_admin` holds no DELETE here, and 020 states the revoke explicitly so
+the absence reads as a decision rather than an oversight.
 
 The erasure cascade behind `DELETE /admin/users/{id}` additionally gives `vault_admin` DELETE on the per-user tables plus column-level `SELECT (user_id)` on `auth.social_accounts`, `auth.password_history`, `auth.totp_secrets`, `auth.webauthn_credentials` and `auth.backup_codes`. PostgreSQL requires SELECT on every column read in a `WHERE` clause, so DELETE alone is not enough to run `DELETE ... WHERE user_id = $1`; the grant is column-level so the role still cannot read the encrypted TOTP secret, the WebAuthn public keys, the backup-code hashes or the password history it is allowed to destroy.
 

@@ -255,8 +255,16 @@ func TestSigningKeyInjectionAsVaultApp(t *testing.T) {
 	})
 
 	// Control: the tombstone that keeps a revoked kid from being written afresh
-	// only holds while the row cannot be deleted. 001 grants no DELETE here
-	// ("no DELETE -- revoke only"), and this pins that.
+	// only holds while the row cannot be deleted.
+	//
+	// vault_app does hold DELETE on this table now. 020 grants it so the sweep
+	// can reap retired keys that have already left the verification set, which
+	// means this no longer pins the absence of a privilege. It pins the triggers
+	// that narrow it: 020's reap scope excludes revoked rows in its WHEN clause,
+	// deliberately, because same-event triggers fire in name order and
+	// signing_keys_reap_scope sorts ahead of signing_keys_revocation_terminal.
+	// Without that exclusion the reap guard would answer first for a revoked row
+	// and 017 would never be consulted about the case it exists for.
 	t.Run("vault_app cannot delete a revoked row (control)", func(t *testing.T) {
 		atkKeyTruncate(t, owner)
 		ks := atkKeyStore(t, app)
