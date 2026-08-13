@@ -2,7 +2,7 @@ module github.com/42-v/vault42
 
 go 1.26.0
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/go-webauthn/webauthn v0.17.4
