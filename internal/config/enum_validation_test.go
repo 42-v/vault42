@@ -13,7 +13,7 @@ import (
 // exactly "honeypot", and the deception deployment then ran as an ordinary
 // vault with fake accounts in it and no webhook.
 func TestLoadRefusesAProfileNameItDoesNotKnow(t *testing.T) {
-	for _, value := range []string{"staging", "prod", "developement", "honeypot-eu"} {
+	for _, value := range []string{"staging", "prod", "development", "honeypot-eu"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("VAULT_PROFILE", value)
 
