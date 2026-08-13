@@ -175,6 +175,13 @@ func main() {
 	ks.StartRefreshLoop(ctx, 60*time.Second)
 	defer ks.Stop()
 
+	// Reap expired admin sessions on a timer so the table does not accumulate
+	// spent rows and their token hash, IP and user-agent. Stop blocks on return,
+	// after the server has shut down, so the sweep cannot outlive the pool.
+	sessionReaper := service.NewAdminSessionRetention(adminSessionRepo)
+	sessionReaper.Start(ctx)
+	defer sessionReaper.Stop()
+
 	// Create handlers
 	authHandler := adminapi.NewAuthHandler(
 		adminUserRepo, adminSessionRepo, auditLogger,
