@@ -157,3 +157,69 @@ func TestParseJWKHeaderRejectsEveryPrivateMember(t *testing.T) {
 		})
 	}
 }
+
+// TestParseJWKHeaderRejectsACurveNoDPoPAlgorithmCanVerify replaces
+// TestParseJWKHeaderValidECP384, which asserted the opposite.
+//
+// That test pinned as a contract a branch that cannot produce an accepted
+// proof. ValidateDPoPProof allows RS256 and ES256 and nothing else. RS256
+// needs an *rsa.PublicKey, and RFC 7518 3.4 assigns exactly P-256 to ES256, a
+// pin VerifyES256 now enforces. So every P-384 key parseJWKHeader built died
+// one call later, and the only thing the branch could still do was go live
+// without review the day ES384 appeared on that allowlist. The parser now
+// admits only the curve the algorithms it feeds can actually verify.
+//
+// P-384 is not a weak curve, and this is not a strength judgement. It is the
+// rule that the key a proof carries and the algorithm its header names must
+// describe the same thing, which is also what the RFC 7638 thumbprint asserts:
+// the curve name is inside it, so a proof vault42 accepted under a curve
+// mismatch would bind to a thumbprint no conforming relying party computes.
+func TestParseJWKHeaderRejectsACurveNoDPoPAlgorithmCanVerify(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	x, y := ecCoords(&key.PublicKey)
+
+	_, err = parseJWKHeader(map[string]any{
+		"kty": "EC",
+		"crv": "P-384",
+		"x":   base64.RawURLEncoding.EncodeToString(x),
+		"y":   base64.RawURLEncoding.EncodeToString(y),
+	})
+	if err == nil {
+		t.Fatal("a P-384 jwk was accepted by the DPoP key parser, whose only caller allows " +
+			"RS256 and ES256; no proof carrying this key can ever verify, so building it is a " +
+			"fail-open waiting for the allowlist to widen")
+	}
+	if !strings.Contains(err.Error(), "unsupported curve") {
+		t.Errorf("the rejection did not come from the curve check: %v", err)
+	}
+}
+
+// TestParseJWKHeaderStillAcceptsP256 is the negative control for the curve
+// rule: rejecting P-256 would end every WebCrypto DPoP client.
+func TestParseJWKHeaderStillAcceptsP256(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	x, y := ecCoords(&key.PublicKey)
+
+	pub, err := parseJWKHeader(map[string]any{
+		"kty": "EC",
+		"crv": "P-256",
+		"x":   base64.RawURLEncoding.EncodeToString(x),
+		"y":   base64.RawURLEncoding.EncodeToString(y),
+	})
+	if err != nil {
+		t.Fatalf("a P-256 jwk was rejected: %v", err)
+	}
+	ec, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("parseJWKHeader returned %T, want *ecdsa.PublicKey", pub)
+	}
+	if ec.Curve != elliptic.P256() {
+		t.Errorf("curve = %v, want P-256", ec.Curve.Params().Name)
+	}
+}
