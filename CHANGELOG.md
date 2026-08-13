@@ -129,6 +129,37 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   artifact that unwrapped to zero bytes, surfacing much later as an empty secret in a running
   service. The guard rejects the input without trimming the payload, because a key legitimately
   carries a trailing newline and trimming would seal it a byte short.
+* **`POST /mint` issued tokens for a `ttl_seconds` the contract refuses.** The seconds were
+  multiplied into a `time.Duration` with no bound. `time.Second` is `2^9 * 1953125` and the
+  odd factor is invertible modulo a power of two, so the nanosecond product repeats with
+  period `2^55` in the seconds operand and every in-range lifetime has absurd preimages.
+  `ttl_seconds=36028797018964568` wrapped to exactly 600s and was answered with 200 and a
+  real signed token instead of `400 invalid_ttl`. The lifetime was never longer than the
+  ceiling, since `exp` derives from the same wrapped value the ceiling check tests, so this
+  is a contract violation rather than a privilege one. The seconds are bounded before the
+  multiply now.
+* **An OAuth signup with an unverified provider email created an account that could never
+  become verified.** No mail was sent on that path, there is no resend route, and
+  `GET /auth/verify-email` consumes a token rather than issuing one. `users.VerifyEmail` has
+  exactly one caller, so there was no second path to the flag. The account was not
+  unreachable, because a repeat login through the same provider still works, but the address
+  was burned: password login is gated on the flag and any second provider is refused with
+  409. The signup path sends the mail now, fire-and-forget so a mailer outage cannot fail the
+  callback, and audits the three exits that produce no mail.
+* **Two secrets were passed through argv.** The chart ran redis with
+  `--requirepass $(REDIS_PASSWORD)` and cloudflared with `--token $(TUNNEL_TOKEN)`, both
+  sourced from Secrets. The kubelet substitutes `$(VAR)` before exec, so both cleartext
+  values sat in `/proc/<pid>/cmdline` for the life of the pod, readable by anything in that
+  PID namespace, by a debug container attached later, and by anything collecting a process
+  listing off the node. Redis reads its password from a 0600 file in a memory-backed volume
+  now, mounted with an `items` list for that one key so the container is not also handed the
+  master key, HMAC secret and pepper. cloudflared reads its token from the environment.
+* **The default chart install could not start.** The shipped values set `profile: production`
+  with `tls.enabled: false` and `forceSecureCookies: false`, while the refresh cookie is
+  `__Host-refresh_token`, which a browser discards without `Secure`. `Config.Validate`
+  already refused that pair, so the default install was a CrashLoopBackOff with the reason
+  one line deep in the pod logs rather than a silently dropped cookie. Secure cookies are the
+  default now, and the chart refuses to render the combination outside dev.
 * **The honeypot bridge aimed its own decoy at the operator.** `/admin` was a decoy prefix and
   matching is by prefix, while vault42 serves its admin SPA and roughly thirty documented API
   routes under `/admin/`. An operator opening the console through a bridge was flagged for the
