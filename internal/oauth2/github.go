@@ -130,6 +130,13 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		return nil, fmt.Errorf("github userinfo: %w", err)
 	}
 	defer resp.Body.Close()
+	// The exchange above refuses a non-200 and this call did not, so a response
+	// GitHub declined to give was decoded as a profile anyway. Its error bodies
+	// are JSON objects, so the decode succeeds, every field lands on its zero
+	// value, and the caller receives a profile with a nil error.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github userinfo: status %d", resp.StatusCode)
+	}
 
 	var info struct {
 		ID        int    `json:"id"`
@@ -140,6 +147,16 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&info); err != nil {
 		return nil, fmt.Errorf("github userinfo: decode: %w", err)
+	}
+	// id is an int here, so a body that carries none decodes to 0 and formats to
+	// the subject "0". That is not the empty string internal/handler/oauth.go
+	// refuses, so it passes the subject guard and resolves against the one row
+	// UNIQUE(provider, provider_user_id) allows for github/0: whoever reaches it
+	// first claims that row, and every later unnamed response is answered with
+	// their session. GitHub numbers accounts from 1, so 0 never names anybody and
+	// no real login is refused by this.
+	if info.ID == 0 {
+		return nil, fmt.Errorf("github userinfo: response names no user")
 	}
 
 	// Fetch verified primary email from /user/emails since /user doesn't

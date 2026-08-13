@@ -573,6 +573,11 @@ func TestGitHubUserInfo_LargeID(t *testing.T) {
 	}
 }
 
+// TestGitHubUserInfo_ZeroID used to assert that id 0 becomes the subject "0",
+// which is the value that must never leave this function. GitHub numbers
+// accounts from 1, so 0 is what a body with no id decodes to, and "0" is
+// non-empty enough to pass the subject guard in internal/handler/oauth.go and
+// resolve against the single github/0 row.
 func TestGitHubUserInfo_ZeroID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -582,10 +587,7 @@ func TestGitHubUserInfo_ZeroID(t *testing.T) {
 
 	p := &GitHubProvider{clientID: "cid", userInfoURL: srv.URL}
 	info, err := p.UserInfo(context.Background(), "tok")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if info.ID != "0" {
-		t.Errorf("ID = %q, want %q", info.ID, "0")
+	if err == nil {
+		t.Fatalf("id 0 was returned as the subject %q", info.ID)
 	}
 }

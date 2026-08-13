@@ -130,6 +130,13 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		return nil, fmt.Errorf("google userinfo: %w", err)
 	}
 	defer resp.Body.Close()
+	// Same rule the exchange applies: a status other than 200 is not a profile.
+	// Google's error bodies decode cleanly into this struct and leave every field
+	// zeroed, which is a UserInfo carrying no subject and email_verified false
+	// returned with a nil error.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("google userinfo: status %d", resp.StatusCode)
+	}
 
 	var info struct {
 		ID            string `json:"id"`
