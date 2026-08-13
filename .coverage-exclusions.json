@@ -60,7 +60,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 43,
+      "line": 64,
       "occurrence": 1,
       "source": "\t\tlog.Fatalf(\"bridge: config error: %v\", err)",
       "bucket": "B",
@@ -70,7 +70,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 48,
+      "line": 69,
       "occurrence": 1,
       "source": "\t\tlog.Fatalf(\"bridge: initialization error: %v\", err)",
       "bucket": "B",
@@ -80,7 +80,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 75,
+      "line": 96,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"bridge: listen error: %v\", err)",
       "bucket": "B",
@@ -100,7 +100,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 220,
+      "line": 236,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
@@ -240,7 +240,7 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 76,
+      "line": 106,
       "occurrence": 1,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
@@ -250,32 +250,12 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 77,
-      "occurrence": 5,
-      "source": "\t\treturn",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "The return of the same unreachable json.Marshal failure as the WriteError above it."
-    },
-    {
-      "package": "internal/handler",
-      "file": "internal/handler/webauthn.go",
-      "line": 189,
+      "line": 225,
       "occurrence": 6,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
       "confirmed": true,
       "justification": "json.Marshal(session) for BeginLogin, the same *webauthn.SessionData as the registration path, and VerifyBegin passes it no option either."
-    },
-    {
-      "package": "internal/handler",
-      "file": "internal/handler/webauthn.go",
-      "line": 190,
-      "occurrence": 20,
-      "source": "\t\treturn",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "The return of the same unreachable json.Marshal failure as the WriteError above it."
     },
     {
       "package": "internal/handler",
@@ -326,26 +306,6 @@
       "bucket": "C",
       "confirmed": true,
       "justification": "x509.MarshalPKIXPublicKey on an *rsa.PublicKey fails in exactly one case: asn1.Marshal rejects a nil modulus. Import derives the kid first via KIDFromPublicKey, which calls pub.N.Bytes() and panics on a nil modulus, so no key reaches this line holding the only value that could fail it. Every other malformed key is refused two lines earlier by MarshalSigningKeyPEM, which keystore_marshal_failure_test.go demonstrates."
-    },
-    {
-      "package": "internal/kms",
-      "file": "internal/kms/kms.go",
-      "line": 114,
-      "occurrence": 1,
-      "source": "\t\treturn nil, err",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "deriveKEK is hkdf.Key(sha256.New, root, nil, info, kekSize). hkdf.Key errors only for a key length above 8160, where kekSize is 32, or in FIPS-140-only mode with a secret under 112 bits, and New rejects a root under 32 bytes."
-    },
-    {
-      "package": "internal/kms",
-      "file": "internal/kms/kms.go",
-      "line": 131,
-      "occurrence": 2,
-      "source": "\t\treturn nil, ErrUnwrap",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "The Unwrap path's copy of the Wrap guard, on the same deriveKEK call with the same constant key length."
     },
     {
       "package": "internal/oauth2",
