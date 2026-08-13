@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/42-v/vault42/internal/config"
 	"github.com/42-v/vault42/internal/kms"
@@ -42,7 +43,7 @@ func runKMS(args []string, stdin io.Reader, stdout io.Writer) error {
 func runKMSWrap(args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet("kms wrap", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	kid := fs.String("kid", "", "KEK key id the envelope is bound to as AAD (required)")
+	kid := fs.String("kid", "", "KEK key id the envelope is bound to as AAD (required; letters, digits, dot, underscore, at-sign, dash)")
 	in := fs.String("in", "-", "plaintext input file, or - for stdin")
 	out := fs.String("out", "-", "base64 envelope output file, or - for stdout")
 	if err := fs.Parse(args); err != nil {
@@ -50,6 +51,9 @@ func runKMSWrap(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	if *kid == "" {
 		return errors.New("--kid is required")
+	}
+	if err := validateKID(*kid); err != nil {
+		return err
 	}
 
 	// Load the KMS root byte-for-byte as the server does so the derived KEK — and
@@ -106,6 +110,31 @@ func runKMSWrap(args []string, stdin io.Reader, stdout io.Writer) error {
 	// The envelope is ciphertext, not a secret; emit it exactly (no trailing
 	// newline) so the artifact decodes cleanly with base64.StdEncoding.
 	return writeOutput(*out, base64.StdEncoding.EncodeToString(envelope), stdout)
+}
+
+// kidRe and kidMaxLen are the identifier rule POST /mint applies to its
+// caller-supplied subject (internal/service.mintSubjectRe, mintSubjectMaxLen),
+// reused rather than reinvented so vault42 has one answer for what an operator
+// may name a thing.
+//
+// Nothing dereferences a kid: it is HKDF info and GCM AAD, so an odd one is not
+// a traversal or injection risk. It is an identity risk. The envelope opens only
+// under the exact bytes it was sealed with, and a kid holding a space, a
+// trailing newline from an unquoted shell variable, or a Cyrillic lookalike is
+// invisible in the deploy log, in the audit row, and in the runbook where the
+// operator writes it down. The artifact would be unopenable with no way to see
+// why, so the wrap is refused at the one point a human is still watching.
+var kidRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*$`)
+
+const kidMaxLen = 128
+
+// validateKID rejects a kid that is not a plain identifier. The kid is quoted in
+// the message so whitespace and control bytes are visible in a terminal.
+func validateKID(kid string) error {
+	if len(kid) > kidMaxLen || !kidRe.MatchString(kid) {
+		return fmt.Errorf("--kid %q is not a valid key id: 1-%d characters of letters, digits, dot, underscore, at-sign or dash, starting with a letter or digit", kid, kidMaxLen)
+	}
+	return nil
 }
 
 // plaintextSource names where the plaintext came from and what the operator
