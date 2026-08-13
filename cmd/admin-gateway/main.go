@@ -42,13 +42,25 @@ var (
 	BuildTime = "unknown"
 )
 
-var dbURLPattern = regexp.MustCompile(`postgres://[^\s]+@`)
+// dbURLPattern matches the userinfo of a PostgreSQL DSN so it can be redacted
+// out of an error before it reaches a log.
+//
+// Both schemes, because pgx accepts postgresql:// as well as postgres:// and
+// DATABASE_URL is operator-supplied, so the longer spelling reached these
+// messages unredacted. And [^:]+:[^@]* rather than [^\s]+, because the old
+// pattern stopped at whitespace: a DSN carrying a space anywhere before the @
+// did not match at all, and the entire string went to the log with the password
+// in it.
+//
+// Only the userinfo is replaced. The host and database survive, because an
+// operator reading a connection failure needs to know what it was connecting to.
+var dbURLPattern = regexp.MustCompile(`(postgres(?:ql)?://)[^:@/]+:[^@]*@`)
 
 func sanitizeDBError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%s", dbURLPattern.ReplaceAllString(err.Error(), "postgres://***@"))
+	return fmt.Errorf("%s", dbURLPattern.ReplaceAllString(err.Error(), "${1}***:***@"))
 }
 
 func main() {
