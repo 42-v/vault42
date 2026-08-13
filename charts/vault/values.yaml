@@ -307,8 +307,9 @@ frontend:
   image:
     # -- Frontend image repository
     repository: vault-frontend
-    # -- Frontend image tag
-    tag: latest
+    # -- Frontend image tag (default: Chart appVersion, like every other image here;
+    # "latest" meant a rebuilt tag silently replaced a running pod on restart)
+    tag: ""
     # -- Frontend image pull policy
     pullPolicy: IfNotPresent
   # -- Number of frontend replicas
