@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -328,6 +329,89 @@ func TestMintHandler_ErrorMapping(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), tc.code) {
 			t.Errorf("%s: body %s, want %s", tc.name, rec.Body.String(), tc.code)
+		}
+	}
+}
+
+// ttlSecondsWrapPeriod is the period of the seconds-to-nanoseconds conversion.
+//
+// time.Duration is int64 nanoseconds and time.Second is 1e9 = 2^9 * 1953125.
+// The odd factor is invertible modulo a power of two, so two ttl_seconds values
+// that differ by 2^55 multiply to the identical int64 nanosecond count once the
+// product wraps. That is why an absurd request can land exactly on an ordinary
+// lifetime rather than on an obviously broken one.
+const ttlSecondsWrapPeriod = 1 << 55
+
+// ttlSecondsMaxExact is the largest ttl_seconds whose conversion to nanoseconds
+// does not wrap.
+const ttlSecondsMaxExact = math.MaxInt64 / int64(time.Second)
+
+// A minted token cannot be revoked, so the lifetime granted is the entire
+// exposure window, and the documented contract is that an out-of-range
+// ttl_seconds is refused rather than turned into some other lifetime. Without a
+// bound before the multiply, a caller asking for roughly 1.1 billion years is
+// answered 200 with a signed subject assertion, because the wrapped product
+// lands inside the ceiling and passes the comparison the ceiling is checked
+// with. In production that means the one endpoint that forges subjects accepts
+// input nobody validated, the caller never learns its configuration is wrong,
+// and the audit trail records a successful mint at a lifetime the caller never
+// asked for.
+func TestMintHandler_OutOfRangeTTLSecondsIsRefusedRatherThanWrappedIntoAnAcceptedLifetime(t *testing.T) {
+	// Configured MaxTTL is 10m and DefaultTTL is 5m, so the wrap targets below
+	// are chosen to land on or inside that ceiling.
+	h := newMintTestHandler(t, nil)
+
+	cases := []struct {
+		name string
+		ttl  int
+	}{
+		{"largest value that converts exactly, already above the configured maximum", int(ttlSecondsMaxExact)},
+		{"first value whose conversion wraps", int(ttlSecondsMaxExact) + 1},
+		{"maximum int64 seconds", math.MaxInt64},
+		{"wraps to exactly the configured maximum", ttlSecondsWrapPeriod + 600},
+		{"wraps to a minute", ttlSecondsWrapPeriod + 60},
+		{"wraps to zero, which the service reads as no TTL requested", ttlSecondsWrapPeriod},
+		{"wraps to five minutes after two periods", 2*ttlSecondsWrapPeriod + 300},
+		{"negative", -1},
+	}
+	for _, tc := range cases {
+		req := withServiceClaims(mintRequest(t, MintRequestBody{Subject: "user-1", TTLSeconds: tc.ttl}), mintHandlerClient, []string{MintScope})
+		rec := httptest.NewRecorder()
+		h.Mint(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: ttl_seconds=%d got status %d, want 400: %s", tc.name, tc.ttl, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "invalid_ttl") {
+			t.Errorf("%s: ttl_seconds=%d body %s, want invalid_ttl", tc.name, tc.ttl, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "access_token") {
+			t.Errorf("%s: ttl_seconds=%d was signed a token: %s", tc.name, tc.ttl, rec.Body.String())
+		}
+	}
+}
+
+// The guard above must not cost the endpoint its documented range. Every
+// lifetime an operator can configure has to stay mintable, or the fix for the
+// overflow becomes an outage for the callers that were using the endpoint
+// correctly.
+func TestMintHandler_TTLSecondsWithinTheConfiguredCeilingIsStillGrantedExactly(t *testing.T) {
+	h := newMintTestHandler(t, nil)
+
+	for _, ttl := range []int{1, 60, 300, 600} {
+		req := withServiceClaims(mintRequest(t, MintRequestBody{Subject: "user-1", TTLSeconds: ttl}), mintHandlerClient, []string{MintScope})
+		rec := httptest.NewRecorder()
+		h.Mint(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ttl_seconds=%d got status %d, want 200: %s", ttl, rec.Code, rec.Body.String())
+		}
+		var got MintResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("ttl_seconds=%d decode response: %v", ttl, err)
+		}
+		if got.ExpiresIn != ttl {
+			t.Errorf("ttl_seconds=%d granted expires_in=%d, want %d", ttl, got.ExpiresIn, ttl)
 		}
 	}
 }

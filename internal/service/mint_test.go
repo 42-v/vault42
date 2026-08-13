@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -322,6 +323,62 @@ func TestMint_TTLBounds(t *testing.T) {
 	}
 	if _, err := svc.Mint(MintRequest{Subject: "user-1", TTL: -time.Second}); !errors.Is(err, ErrMintTTLInvalid) {
 		t.Fatalf("negative ttl accepted: %v", err)
+	}
+}
+
+// Every value MintTTLFromSeconds accepts must convert to exactly that many
+// seconds, and every value it rejects must be reported as ErrMintTTLInvalid so
+// the endpoint answers with the invalid_ttl the contract documents.
+//
+// The rejections are the point. time.Second is 1e9 = 2^9 * 1953125, so the
+// int64 nanosecond product repeats with period 2^55 in the seconds operand:
+// 2^55 + 300 seconds, about 1.1 billion years, converts to exactly five
+// minutes. Any bound applied after that multiply reads it as an ordinary
+// request. If this conversion silently wraps in production, the signing oracle
+// mints a token for input nobody validated, and the exact_conversion cases
+// below are what stops a future rewrite from clamping instead of refusing:
+// clamping would grant a lifetime the caller never asked for and never sees.
+func TestMintTTLFromSeconds_AcceptsOnlyExactlyRepresentableLifetimesAndRefusesTheRest(t *testing.T) {
+	// Seconds values differing by this convert to the identical nanosecond count.
+	const wrapPeriod = 1 << 55
+	const ceilingSeconds = int(mintTTLCeiling / time.Second)
+	const maxExact = math.MaxInt64 / int64(time.Second)
+
+	accepted := []int{0, 1, 60, 300, 900, ceilingSeconds}
+	for _, seconds := range accepted {
+		got, err := MintTTLFromSeconds(seconds)
+		if err != nil {
+			t.Errorf("%d seconds refused: %v", seconds, err)
+			continue
+		}
+		if got != time.Duration(seconds)*time.Second || int(got.Seconds()) != seconds {
+			t.Errorf("%d seconds converted to %v, want exactly %d seconds", seconds, got, seconds)
+		}
+	}
+
+	refused := []struct {
+		name    string
+		seconds int
+	}{
+		{"one past the hard ceiling", ceilingSeconds + 1},
+		{"largest value that converts without wrapping", int(maxExact)},
+		{"first value whose conversion wraps", int(maxExact) + 1},
+		{"maximum int64", math.MaxInt64},
+		{"wraps to zero, which Mint would read as no TTL requested", wrapPeriod},
+		{"wraps to the hard ceiling", wrapPeriod + ceilingSeconds},
+		{"wraps to five minutes", wrapPeriod + 300},
+		{"wraps to five minutes after two periods", 2*wrapPeriod + 300},
+		{"negative", -1},
+		{"minimum int64", math.MinInt64},
+	}
+	for _, tc := range refused {
+		got, err := MintTTLFromSeconds(tc.seconds)
+		if !errors.Is(err, ErrMintTTLInvalid) {
+			t.Errorf("%s: %d seconds gave (%v, %v), want ErrMintTTLInvalid", tc.name, tc.seconds, got, err)
+		}
+		if got != 0 {
+			t.Errorf("%s: %d seconds returned duration %v alongside its error, want 0", tc.name, tc.seconds, got)
+		}
 	}
 }
 
