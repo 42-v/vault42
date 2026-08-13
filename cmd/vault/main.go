@@ -169,7 +169,7 @@ func main() {
 			_ = auditLogger.Close(ctx)
 			log.Fatalf("Failed to load seed file: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 		}
-		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}); err != nil {
+		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}, cfg.Pepper); err != nil {
 			log.Fatalf("Seeding failed: %v", err)
 		}
 	}

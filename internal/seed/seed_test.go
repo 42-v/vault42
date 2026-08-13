@@ -196,7 +196,7 @@ func TestRun_NewClients(t *testing.T) {
 		},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: clients}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestRun_ExistingClient(t *testing.T) {
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestRun_NewUsers(t *testing.T) {
 		},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRun_ExistingUser(t *testing.T) {
 		Users: []UserSeed{{Email: "dev@test.com", Password: "TestPassword12345!"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestRun_UserDefaultLocale(t *testing.T) {
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestRun_UserEmailVerifiedExplicitFalse(t *testing.T) {
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!", EmailVerified: &f}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestRun_UserPasswordPeppered(t *testing.T) {
 	}
 
 	err := Run(context.Background(), sf,
-		Deps{Users: users, Clients: newMockClientRepo(), Pepper: pepper})
+		Deps{Users: users, Clients: newMockClientRepo()}, pepper)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -357,16 +357,18 @@ func TestRun_UserPasswordPeppered(t *testing.T) {
 	}
 }
 
-// A-1 negative-control: when Deps.Pepper is empty, hashes verify without pepper
-// (backward compatibility — an operator who hasn't configured VAULT_PEPPER
-// gets the same behavior as before).
+// A-1 negative-control: when the pepper is empty, hashes verify without one
+// (backward compatibility for an operator who has not configured VAULT_PEPPER).
+// The empty pepper is passed explicitly, because that is now the only way to
+// ask for it: it used to be an unset struct field, and cmd/vault leaving it
+// unset by accident locked every seeded account out of the server.
 func TestRun_UserPasswordNoPepperBackcompat(t *testing.T) {
 	users := newMockUserRepo()
 	const password = "TestPassword12345!"
 
 	sf := &SeedFile{Users: []UserSeed{{Email: "nopepper@test.com", Password: password}}}
 	err := Run(context.Background(), sf,
-		Deps{Users: users, Clients: newMockClientRepo()}) // no Pepper
+		Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -388,7 +390,7 @@ func TestRun_ClientRepoError(t *testing.T) {
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients}, "")
 	if err == nil {
 		t.Fatal("expected error from client repo")
 	}
