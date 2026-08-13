@@ -80,7 +80,8 @@ func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:role_create", "", "", "", "", "", "", // #nosec G104 -- audit is best-effort
+		actor := GetAdmin(r.Context())
+		h.auditLog.Log(r.Context(), "admin:role_create", actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"name": req.Name, "namespace": ns}, 0)
 	}
 	httputil.WriteJSON(w, http.StatusCreated, roleView{role.Name, role.Namespace, role.Description, role.Reserved, role.CreatedAt})
@@ -106,7 +107,8 @@ func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:role_delete", "", "", "", "", "", "", // #nosec G104 -- audit is best-effort
+		actor := GetAdmin(r.Context())
+		h.auditLog.Log(r.Context(), "admin:role_delete", actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"name": name}, 0)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
