@@ -445,6 +445,7 @@ jobs:
           - Dockerfile.goreleaser
           - Dockerfile.goreleaser.bridge
           - Dockerfile.goreleaser.admin-gateway
+          - web/Dockerfile
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
