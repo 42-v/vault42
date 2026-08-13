@@ -355,7 +355,7 @@ or admin-created user passwords will not verify.
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `DATABASE_URL` | string | *(none)* | Conditional | PostgreSQL DSN for the recovery run. Supplies the default for the `--dsn` flag; one of the two is required. Prefer `--dsn` on an interactive host so the credential does not land in the shell environment or history. |
+| `DATABASE_URL` | string | *(none)* | Conditional | PostgreSQL DSN for the recovery run. One of the two is required. Prefer this over `--dsn`: a DSN in argv is world-readable through `/proc/<pid>/cmdline` for the life of the run and lands in shell history, while `/proc/<pid>/environ` is readable only by the process owner. `recover` warns on stderr when it sees a password arrive in argv. It is no longer the default for `--dsn` either, because `flag.PrintDefaults` printed that default in the usage text, so `recover -h` disclosed the password to the terminal. |
 
 ### Metrics & Observability
 
