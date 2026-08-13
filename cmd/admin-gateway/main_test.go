@@ -1082,17 +1082,17 @@ func TestSanitizeDBError(t *testing.T) {
 		{
 			name: "password in a connection string is removed",
 			in:   errors.New("cannot parse `postgres://vault_admin:hunter2@db:5432/vault?sslmode=require`: bad port"),
-			want: "cannot parse `postgres://***@db:5432/vault?sslmode=require`: bad port",
+			want: "cannot parse `postgres://***:***@db:5432/vault?sslmode=require`: bad port",
 		},
 		{
 			name: "redaction survives a wrapped error",
 			in:   fmt.Errorf("ping: %w", errors.New("postgres://vault_admin:hunter2@db:5432/vault")),
-			want: "ping: postgres://***@db:5432/vault",
+			want: "ping: postgres://***:***@db:5432/vault",
 		},
 		{
 			name: "every occurrence is redacted",
 			in:   errors.New("postgres://a:b@h1 then postgres://c:d@h2"),
-			want: "postgres://***@h1 then postgres://***@h2",
+			want: "postgres://***:***@h1 then postgres://***:***@h2",
 		},
 		{
 			name: "error without a connection string is untouched",
@@ -1100,9 +1100,9 @@ func TestSanitizeDBError(t *testing.T) {
 			want: "failed to connect to `user=vault_admin database=vault`: connection refused",
 		},
 		{
-			name: "a later at sign widens the redaction over the host",
+			name: "a later at sign no longer widens the redaction over the host",
 			in:   errors.New("postgres://vault_admin:hunter2@db:5432/vault?options=a@b"),
-			want: "postgres://***@b",
+			want: "postgres://***:***@db:5432/vault?options=a@b",
 		},
 	}
 
@@ -1142,29 +1142,41 @@ func TestSanitizeDBError(t *testing.T) {
 // passwords, but docs/config.md invites operators to supply their own. The test
 // asserts the broken behavior so a fix shows up here as a failure rather than
 // going unnoticed.
-func TestSanitizeDBErrorMissesPasswordsContainingWhitespace(t *testing.T) {
+func TestSanitizeDBErrorRedactsTheShapesItUsedToMiss(t *testing.T) {
+	// This test was named ...MissesPasswordsContainingWhitespace and asserted
+	// that the password LEAKED. It documented the defect as expected behaviour,
+	// which is why the leak survived: the suite was green over it.
+	//
+	// The pattern was `postgres://[^\s]+@`. [^\s]+ stops at whitespace, so a DSN
+	// carrying a space before the @ did not match at all and the whole string
+	// reached the log. And pgx accepts postgresql:// as well as postgres://,
+	// while DATABASE_URL is operator-supplied, so the longer spelling was never
+	// matched either.
 	tests := []struct {
-		name string
-		in   string
-		leak string
+		name   string
+		in     string
+		secret string
 	}{
 		{
-			name: "space in the password defeats the pattern",
-			in:   "cannot parse `postgres://vault_admin:hun ter2@db:5432/vault`: bad port",
-			leak: "hun ter2",
+			name:   "a space in the password no longer defeats the pattern",
+			in:     "cannot parse `postgres://vault_admin:hun ter2@db:5432/vault`: bad port",
+			secret: "hun ter2",
 		},
 		{
-			name: "postgresql scheme is not matched",
-			in:   "cannot parse `postgresql://vault_admin:hunter2@db:5432/vault`: bad port",
-			leak: "hunter2",
+			name:   "the postgresql scheme is matched too",
+			in:     "cannot parse `postgresql://vault_admin:hunter2@db:5432/vault`: bad port",
+			secret: "hunter2",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeDBError(errors.New(tt.in))
-			if !strings.Contains(got.Error(), tt.leak) {
-				t.Fatalf("sanitizeDBError now redacts %q; the pattern was fixed, invert this test", tt.leak)
+			got := sanitizeDBError(errors.New(tt.in)).Error()
+			if strings.Contains(got, tt.secret) {
+				t.Errorf("the password survived redaction: %q", got)
+			}
+			if !strings.Contains(got, "db:5432") {
+				t.Errorf("the host was redacted away, leaving nothing to diagnose: %q", got)
 			}
 		})
 	}
