@@ -377,7 +377,7 @@ func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) 
 	if err := s.emailMailer().Send(ctx, app, vaultemail.TemplateVerification, to, vaultemail.TemplateData{
 		URL: verifyURL,
 	}); err != nil {
-		log.Printf("auth: failed to send verification email to %s: %v", to, err)
+		log.Printf("auth: failed to send verification email to %s: %v", maskEmail(to), err)
 	}
 }
 
@@ -429,7 +429,7 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
 		if err := s.emailMailer().Send(ctx, app, vaultemail.TemplatePasswordReset, emailAddr, vaultemail.TemplateData{
 			URL: claimURL,
 		}); err != nil {
-			log.Printf("auth: failed to send import claim email to %s: %v", emailAddr, err)
+			log.Printf("auth: failed to send import claim email to %s: %v", maskEmail(emailAddr), err)
 		}
 	}()
 }
