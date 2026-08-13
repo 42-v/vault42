@@ -26,7 +26,7 @@ func blockedThrough(t *testing.T, ip string) bool {
 // while an attack is in progress. These are the edges where a silent no-op leaves
 // the caller believing an address is blocked when it is not.
 func TestIPBlocklist_AddAndRemove(t *testing.T) {
-	// This test asserts that one address is blocked and its neighbour is not, so
+	// This test asserts that one address is blocked and its neighbor is not, so
 	// it needs the geo lists clear: a geo allowlist left set by an earlier test
 	// denies every request, and "blocked" then reads true for both.
 	resetIPAccess()

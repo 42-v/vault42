@@ -167,7 +167,11 @@ func main() {
 	// reached by a test.
 	ks, err := keystore.New(db.Pool, masterKey, time.Hour)
 	if err != nil {
-		log.Fatalf("admin-gateway: keystore init: %v", err)
+		// Drain before dying, because log.Fatalf skips the deferred Close and
+		// would take the buffered audit rows with it. Same shape as the seed
+		// failure below.
+		_ = auditLogger.Close(ctx)
+		log.Fatalf("admin-gateway: keystore init: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 	}
 	if err := ks.EnsureKey(ctx, nil); err != nil {
 		log.Printf("admin-gateway: keystore ensure key error: %v", err)

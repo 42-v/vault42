@@ -142,8 +142,8 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Killswitch: default on, off in dev mode. An explicit value must be a
-	// recognised spelling; anything else refuses to start. The previous parse
-	// treated every unrecognised value as off, so ADMIN_GW_KILLSWITCH=True
+	// recognized spelling; anything else refuses to start. The previous parse
+	// treated every unrecognized value as off, so ADMIN_GW_KILLSWITCH=True
 	// (or a typo) disabled the tripwire while leaving it unset kept it on.
 	killswitch := os.Getenv("ADMIN_GW_KILLSWITCH")
 	if killswitch == "" {

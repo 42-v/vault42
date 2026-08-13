@@ -35,7 +35,7 @@ var accountStateErrors = []string{"ErrAccountBanned", "ErrAccountDisabled", "Err
 
 // serviceCallsReturningAccountState are the AuthService entry points whose
 // bodies can return those errors. Derived below rather than assumed, so a new
-// entry point that grows the behaviour is included automatically.
+// entry point that grows the behavior is included automatically.
 func serviceCallsReturningAccountState(t *testing.T, root string) map[string]bool {
 	t.Helper()
 

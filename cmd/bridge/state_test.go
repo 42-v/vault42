@@ -1236,7 +1236,7 @@ func TestFlagStoreLoadSurvivesScanFailure(t *testing.T) {
 // TestFlagStoreRedisReasonWithPipeSurvivesRestart is the decoy path that made
 // the encoding matter.
 //
-// Flag used to serialise as reason|score|timestamp and loadFromRedis split on
+// Flag used to serialize as reason|score|timestamp and loadFromRedis split on
 // the first two pipes, so a reason containing a pipe shifted the score and
 // timestamp. The timestamp failed to parse, ExpiresAt landed in year one, and
 // the entry was dropped as expired. Decoy reasons are "decoy:" plus the raw

@@ -17,9 +17,9 @@ import (
 // library rather than anything about this service, in the suite whose whole
 // purpose is to show that an attack does not work.
 //
-// The behaviour is pinned here, against the decoder every route actually uses,
+// The behavior is pinned here, against the decoder every route actually uses,
 // and stated plainly: vault42 does not enforce Content-Type. Anyone reaching for
-// these tests as evidence of a CSRF or content-type defence can see in one line
+// these tests as evidence of a CSRF or content-type defense can see in one line
 // that they are not one. The refresh cookie is SameSite=Strict and the API is
 // bearer-token authenticated, which is what carries that weight today.
 //

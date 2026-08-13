@@ -26,7 +26,7 @@ import (
 // which is the record an incident responder would read afterwards.
 //
 // Both halves are asserted below on an account deliberately parked one failure
-// short of its limit, so a regression to the old behaviour locks it.
+// short of its limit, so a regression to the old behavior locks it.
 
 // adminapiCollectedAudit records the audit entries a handler writes. The logger
 // is built with a zero flush interval, which makes Log write through to the

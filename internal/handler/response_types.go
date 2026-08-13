@@ -528,7 +528,7 @@ type IdentityResponse struct {
 	// as invalid_profile even though the handler truncates to 50 runes.
 	Sex string `json:"sex"`
 	// MarketingEmails is the current preference. Omitted when no value
-	// has been stored. True alone does not authorise sending; read
+	// has been stored. True alone does not authorize sending; read
 	// MarketingConsent.Affirmative.
 	MarketingEmails *bool `json:"marketing_emails,omitempty"`
 	// UpdatedAt is when the encrypted profile was last rewritten, RFC3339

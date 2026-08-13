@@ -38,7 +38,7 @@ type vaultRedisStub struct {
 	data map[string]string
 	cmds [][]string
 	// setReply, when non-empty, replaces the reply to every SET, which is how a
-	// backend that has started rejecting writes is modelled.
+	// backend that has started rejecting writes is modeled.
 	setReply string
 	// swallowWrites acknowledges a SET with +OK and stores nothing, which is the
 	// backend the read-back exists to catch.

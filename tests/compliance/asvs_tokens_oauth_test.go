@@ -311,8 +311,9 @@ func funcBody(t *testing.T, src, prefix string) string {
 // offset, in source order, so the search follows the path the rotation actually
 // takes rather than every helper in the file.
 func localCallsAfter(body string, offset int) []string {
-	var out []string
-	for _, m := range regexp.MustCompile(`s\.([a-z][A-Za-z0-9]*)\(`).FindAllStringSubmatchIndex(body[offset:], -1) {
+	matches := regexp.MustCompile(`s\.([a-z][A-Za-z0-9]*)\(`).FindAllStringSubmatchIndex(body[offset:], -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
 		out = append(out, body[offset+m[2]:offset+m[3]])
 	}
 	return out
