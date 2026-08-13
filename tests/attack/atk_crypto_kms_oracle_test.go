@@ -96,49 +96,43 @@ func TestKMSAttack_CloseRacesWrapOnRootSecret(t *testing.T) {
 }
 
 // A wiped root is still 32 bytes, so every length guard downstream still passes
-// and HKDF still produces a well-formed 32-byte KEK. Nothing in the package
-// notices that the secret is gone: Wrap keeps returning envelopes, they are
-// simply sealed under HKDF(zeros) instead of HKDF(root).
+// and HKDF still produces a well-formed 32-byte KEK. Nothing about the secret's
+// absence is visible to the arithmetic, which is why the Service has to know it
+// is closed rather than infer it.
 //
-// That is the reason the race above matters rather than being a shutdown-only
-// nuisance. There is no fail-closed behaviour to fall back on; a Service whose
-// root has been zeroed is indistinguishable from a working one at the API, and
-// the artifacts it produces are sealed under a key an attacker can derive
-// without knowing the root at all.
-func TestKMSAttack_WipedRootStillProducesUsableEnvelopes(t *testing.T) {
+// Before it did, Wrap kept returning envelopes after Close. They were sealed
+// under HKDF(zeros) instead of HKDF(root), so anyone who constructs a Service
+// over 32 zero bytes could open them, and neither Wrap nor Unwrap reported
+// anything. That turned a shutdown race from a nuisance into ciphertext sealed
+// under a public constant.
+//
+// This is the inverted form: the closed Service must refuse, and the all-zero
+// root must open nothing.
+func TestKMSAttack_WipedRootProducesNothing(t *testing.T) {
 	svc := newKMS(t)
+	live, err := svc.Wrap("kid-after-close", []byte("secret"))
+	if err != nil {
+		t.Fatalf("Wrap before Close: %v", err)
+	}
 	svc.Close()
 
-	env, err := svc.Wrap("kid-after-close", []byte("secret"))
-	if err != nil {
-		t.Fatalf("Wrap after Close returned an error, so the package does fail closed: %v", err)
+	if env, err := svc.Wrap("kid-after-close", []byte("secret")); err == nil {
+		t.Fatalf("Wrap after Close produced a %d-byte envelope; a closed service "+
+			"seals under HKDF(zeros), which is a key anyone can derive", len(env))
+	}
+	if _, err := svc.Unwrap("kid-after-close", live); !errors.Is(err, kms.ErrUnwrap) {
+		t.Fatalf("Unwrap after Close returned %v, want ErrUnwrap", err)
 	}
 
-	pt, err := svc.Unwrap("kid-after-close", env)
+	// The envelope sealed while the root was live must not be openable by a
+	// Service over an all-zero root. This is the property that was broken.
+	attacker, err := kms.New(make([]byte, 32))
 	if err != nil {
-		t.Fatalf("Unwrap after Close: %v", err)
+		t.Fatalf("kms.New(zero root): %v", err)
 	}
-	if string(pt) != "secret" {
-		t.Fatalf("round trip after Close returned %q", pt)
+	if pt, err := attacker.Unwrap("kid-after-close", live); err == nil {
+		t.Fatalf("an all-zero root opened a real envelope and read %q", pt)
 	}
-
-	// The damning part: a second Service built over an all-zero "root" opens
-	// the envelope the closed Service produced. The wipe turned the secret into
-	// a public constant, and no error was raised at any point.
-	zeroRoot := make([]byte, 32)
-	attacker, err := kms.New(zeroRoot)
-	if err != nil {
-		t.Fatalf("kms.New(zero root) was rejected, so this path is closed: %v", err)
-	}
-	pt2, err := attacker.Unwrap("kid-after-close", env)
-	if err != nil {
-		t.Fatalf("an all-zero root did not open the post-Close envelope: %v", err)
-	}
-	if string(pt2) != "secret" {
-		t.Fatalf("attacker unwrap returned %q", pt2)
-	}
-	t.Log("a Service whose root was wiped by Close seals envelopes under HKDF(zeros): " +
-		"anyone can unwrap them, and neither Wrap nor Unwrap reports an error")
 }
 
 // Per-kid KEK separation. Two distinct kids must never derive the same KEK, and

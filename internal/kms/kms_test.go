@@ -111,11 +111,26 @@ func TestClose_WipesRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	live, err := svc.Wrap("kid", []byte("x"))
+	if err != nil {
+		t.Fatalf("Wrap before Close: %v", err)
+	}
+
 	// Close must zero the service's internal copy of the root secret.
 	svc.Close()
-	// A wrap after Close derives from a zeroed root; it must still not panic and
-	// must produce a different envelope than one from the live root.
-	if _, err := svc.Wrap("kid", []byte("x")); err != nil {
-		t.Fatalf("Wrap after Close: %v", err)
+
+	// A wrap after Close must FAIL, and the reason is not tidiness. A wiped root
+	// is 32 zero bytes, which HKDF accepts, so the old behaviour was to keep
+	// producing envelopes that looked correct and were sealed under a key anyone
+	// can reconstruct by building a Service over 32 zeros. Returning an envelope
+	// here is worse than returning nothing.
+	if _, err := svc.Wrap("kid", []byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Wrap after Close returned err=%v; a closed service must not seal anything", err)
 	}
+	// Unwrap collapses it into ErrUnwrap so the oracle property is preserved.
+	if _, err := svc.Unwrap("kid", live); !errors.Is(err, ErrUnwrap) {
+		t.Fatalf("Unwrap after Close returned err=%v, want ErrUnwrap", err)
+	}
+	// Close is called from more than one shutdown defer, so it must be idempotent.
+	svc.Close()
 }

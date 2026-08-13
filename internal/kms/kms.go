@@ -27,6 +27,7 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"errors"
+	"sync"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
@@ -50,11 +51,27 @@ const minRootBytes = 32
 // endpoint cannot be used as a decryption oracle.
 var ErrUnwrap = errors.New("kms: unwrap failed")
 
+// ErrClosed is returned by Wrap once the Service has been closed. Unwrap
+// collapses it into ErrUnwrap like every other failure, so the oracle property
+// is unchanged; Wrap is not attacker-facing and says what actually happened.
+var ErrClosed = errors.New("kms: service is closed")
+
 // Service derives per-kid KEKs from a KMS root secret and wraps/unwraps key
-// envelopes under them. It is safe for concurrent use: the root is immutable
-// after construction and derivation allocates fresh buffers per call.
+// envelopes under them. Derivation allocates fresh buffers per call, and the
+// root is guarded against Close, so the type is safe for concurrent use
+// including during shutdown.
 type Service struct {
-	root []byte // copy of the KMS root secret; wiped by Close, never logged
+	// mu guards root against Close. Close zeroes the secret every other method
+	// derives from, so "immutable after construction" was true only until the
+	// first shutdown: a request in flight when the process caught SIGTERM read
+	// the root while Close wrote it.
+	//
+	// A read lock is the right shape rather than an atomic swap, because the
+	// derivation has to complete against a root that is still whole. Holding it
+	// for the HKDF call is cheap; Close is once per process.
+	mu     sync.RWMutex
+	root   []byte // copy of the KMS root secret; wiped by Close, never logged
+	closed bool
 }
 
 // New returns a Service over a copy of root. root must be at least 32 bytes.
@@ -68,7 +85,20 @@ func New(root []byte) (*Service, error) {
 
 // deriveKEK derives the 32-byte AES-256 KEK for kid via HKDF-SHA256. The kid is
 // carried in the HKDF info, so each kid yields an independent KEK.
+//
+// The closed check is not defensive tidiness, it is the whole control. Wiping
+// the root leaves 32 zero bytes, which is a perfectly valid HKDF input, so
+// without this a closed Service kept deriving and Wrap kept returning envelopes
+// that looked correct. Those envelopes were sealed under HKDF over an all-zero
+// root, which means anyone who constructs a Service over 32 zero bytes can open
+// them. Failing closed here is what stops a shutdown race turning into
+// permanently readable ciphertext.
 func (s *Service) deriveKEK(kid string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	return hkdf.Key(sha256.New, s.root, nil, kekInfoPrefix+kid, kekSize)
 }
 
@@ -108,8 +138,17 @@ func (s *Service) Unwrap(kid string, envelope []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Close zeroes the root secret. After Close the Service must not be used.
+// Close zeroes the root secret and marks the Service unusable.
+//
+// It takes the write lock, so it cannot land midway through a derivation, and
+// it is idempotent because shutdown paths call it from more than one defer.
 func (s *Service) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	wipe(s.root)
 }
 

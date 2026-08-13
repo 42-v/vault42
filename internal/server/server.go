@@ -177,7 +177,18 @@ func (s *Server) Start() error {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
+	// drained closes only after Shutdown has returned, which is the difference
+	// between the drain starting and the drain finishing.
+	//
+	// ListenAndServe returns ErrServerClosed the instant Shutdown is CALLED, so
+	// returning on that alone handed control back to main while handlers were
+	// still running. main's deferred kmsSvc.Close() and ks.Stop() then zeroed the
+	// KMS root and the keystore master key underneath them, and the configured
+	// ShutdownTimeout was waited on by nobody. That happened on every SIGTERM,
+	// which is every Kubernetes rollout.
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-done
 		log.Println("Shutting down...")
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -196,6 +207,9 @@ func (s *Server) Start() error {
 	}
 
 	if err == http.ErrServerClosed {
+		// The drain is in progress, not finished. Wait for it, so that whatever
+		// the caller does next happens after the last handler has returned.
+		<-drained
 		return nil
 	}
 	return fmt.Errorf("server: %w", err)
