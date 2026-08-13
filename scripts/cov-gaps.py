@@ -82,7 +82,14 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # account-state link ordering in internal/oauth2 and internal/handler, and the
 # tombstone-domain refusal in internal/sanitize. A full cov_run reports 10806,
 # all 22 covered by the tests those fixes shipped.
-BASELINE_TOTAL_STATEMENTS = 10806
+# Raised from 10806 to 10831 by the second attack fleet: +25 statements from the
+# admin-session reaper, bridge Connection-strip guard, MFA-lockout and MFA-status
+# fail-closed paths, the OAuth and verify/begin lookup fail-closed branches, the
+# admin-config redaction and audit-actor attribution, and the OIDC crit and OAuth
+# device-binding fixes. A full cov_run reports 10831, all covered by the tests
+# those fixes shipped; the two SQL migrations (025 tombstone-insert, 026
+# signing-key retire) add no Go statements.
+BASELINE_TOTAL_STATEMENTS = 10831
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an

@@ -290,8 +290,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 298,
-      "occurrence": 7,
+      "line": 308,
+      "occurrence": 8,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
       "confirmed": true,
@@ -300,8 +300,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 299,
-      "occurrence": 24,
+      "line": 309,
+      "occurrence": 25,
       "source": "\t\treturn",
       "bucket": "C",
       "confirmed": true,
