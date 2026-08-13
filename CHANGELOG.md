@@ -246,6 +246,16 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   `UPDATE (password_hash)` and always will, so takeover through a compromised application role
   is not closed and cannot be. What 024 removes is what password control does not reach, namely
   lifting a ban and mass account disablement.
+* **A logout could leave a rotating session alive.** `RevokeAllForUser`, `RevokeByDeviceID`
+  and `RevokeAll` were single `UPDATE`s, so a rotation in flight inserted its successor after the
+  revocation had already chosen its rows. Measured with a client rotating across a logout, 207 of
+  300 logouts left a live rotating token; it is now zero. The fix is a deterministic lock order,
+  ascending primary key, applied per row rather than per family, because the rotation path holds
+  several rows of one family and waits for the next. The order also binds statements that never
+  say `FOR UPDATE`, since `DELETE` locks each row as its scan reaches it, which is how the first
+  attempt deadlocked against the expiry reaper. The two widest paths take a table lock instead,
+  because `vault_admin` holds `DELETE` but deliberately not `UPDATE`, and `SELECT ... FOR UPDATE`
+  requires it.
 * **A stolen security key plus a password was enough.** `webauthn.Config` was built without
   `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
   check compared it against `VerificationRequired`, which is false on every assertion. A
