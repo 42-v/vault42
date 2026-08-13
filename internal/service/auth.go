@@ -627,6 +627,14 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// deleted accounts before password verification. A soft-deleted account is
 	// treated as "no such user" (ErrInvalidCredentials) to avoid revealing it.
 	if user.Deleted {
+		// Masked as "no such user" (ErrInvalidCredentials) to avoid revealing the
+		// soft delete. The timing must match too: the user==nil and ImportPending
+		// paths both burn a dummy Argon2 (~50ms), so returning here without one
+		// answered a soft-deleted address that much faster and re-revealed exactly
+		// what the masked error hides. Burn the same dummy hash, honoring overload.
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_deleted"}, 20)
 		return nil, ErrInvalidCredentials
@@ -1188,7 +1196,7 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 	// Issue tokens — same per-user roles flow as the password login
 	// path; 2FA verify shares the post-auth shape.
-	mfaUser, _ := s.users.GetByID(ctx, userID)
+	mfaUser, mfaErr := s.users.GetByID(ctx, userID)
 
 	// Account state is re-read here rather than trusted from the password step.
 	// Minutes pass between the two: the challenge TTL is the window, and it is
@@ -1198,29 +1206,27 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	// Refresh and the OAuth callback all gate here, so its absence was an
 	// oversight rather than a policy.
 	//
-	// A nil user is deliberately NOT rejected. That case is pinned by
-	// TestCompleteMFALoginNilUserDefaultsRoles: a subject the repository cannot
-	// resolve falls back to the least-privileged role set rather than failing the
-	// login, and changing it is a separate decision from closing this gap.
-	if mfaUser != nil {
-		switch {
-		case mfaUser.Deleted:
-			return nil, ErrTokenInvalid
-		case mfaUser.Banned:
-			return nil, ErrAccountBanned
-		case mfaUser.Disabled:
-			return nil, ErrAccountDisabled
-		case mfaUser.LockedUntil != nil && time.Now().Before(*mfaUser.LockedUntil):
-			return nil, ErrAccountLocked
-		}
+	// Fail closed when the subject cannot be resolved to a live account. A read
+	// fault (mfaErr) previously fell through as a nil user, skipping the gate
+	// below and minting a session with default roles for an account the fault hid
+	// the banned/disabled state of; a genuine no-row means the subject was deleted
+	// inside the challenge window. Refresh rejects both the same way. Issuing a
+	// second-factor session for an unresolvable subject is never correct.
+	if mfaErr != nil || mfaUser == nil {
+		return nil, ErrTokenInvalid
+	}
+	switch {
+	case mfaUser.Deleted:
+		return nil, ErrTokenInvalid
+	case mfaUser.Banned:
+		return nil, ErrAccountBanned
+	case mfaUser.Disabled:
+		return nil, ErrAccountDisabled
+	case mfaUser.LockedUntil != nil && time.Now().Before(*mfaUser.LockedUntil):
+		return nil, ErrAccountLocked
 	}
 
-	var mfaRoles []string
-	if mfaUser != nil {
-		mfaRoles = s.effectiveRoles(ctx, mfaUser.Roles)
-	} else {
-		mfaRoles = []string{"user"}
-	}
+	mfaRoles := s.effectiveRoles(ctx, mfaUser.Roles)
 	pair, err := s.tokenSvc.IssueTokenPair(
 		userID, mfaRoles, []string{"read", "write"},
 		"", fingerprint, "", false,

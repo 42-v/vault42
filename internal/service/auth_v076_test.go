@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	vaultcrypto "github.com/42-v/vault42/internal/crypto"
-	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
@@ -56,28 +54,40 @@ func TestCompleteMFALoginCacheFailsClosed(t *testing.T) {
 	}
 }
 
-// A user row that vanished between challenge and completion still gets tokens
-// (the challenge was already verified), but only with the default "user" role.
-func TestCompleteMFALoginNilUserDefaultsRoles(t *testing.T) {
-	svc, o := newMockAuthService(t)
-	o.userRepo.GetByIDFn = func(_ context.Context, _ string) (*model.User, error) {
-		return nil, nil
-	}
+// A subject the repository cannot resolve after the second factor gets no
+// session: a nil user (deleted inside the challenge window) and a read fault
+// (which would otherwise hide a banned/disabled state and skip the account gate)
+// both fail closed with ErrTokenInvalid, matching how Refresh treats the same
+// reads. Previously a nil user fell back to a default-role session, and a read
+// fault reached that same nil path, so a transient error minted tokens for an
+// account whose banned state it hid.
+func TestCompleteMFALoginRefusesUnresolvableUser(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		get  func(context.Context, string) (*model.User, error)
+	}{
+		{name: "nil user", get: func(context.Context, string) (*model.User, error) { return nil, nil }},
+		{name: "read error", get: func(context.Context, string) (*model.User, error) {
+			return nil, errors.New("transient db read fault")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, o := newMockAuthService(t)
+			o.userRepo.GetByIDFn = tc.get
+			stored := false
+			o.tokenRepo.CreateFn = func(context.Context, *model.RefreshToken) error { stored = true; return nil }
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	token, err := vjwt.ParseUnverified(res.AccessToken, &vaultcrypto.VaultClaims{})
-	if err != nil {
-		t.Fatalf("parse access token: %v", err)
-	}
-	claims, ok := token.Claims.(*vaultcrypto.VaultClaims)
-	if !ok {
-		t.Fatal("unexpected claims type")
-	}
-	if len(claims.Roles) != 1 || claims.Roles[0] != "user" {
-		t.Errorf("roles = %v, want [user]", claims.Roles)
+			res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
+			if !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("err = %v, want ErrTokenInvalid: an unresolvable subject must not get a session", err)
+			}
+			if res != nil {
+				t.Error("a token pair was issued for an unresolvable subject")
+			}
+			if stored {
+				t.Error("a refresh token was stored for an unresolvable subject")
+			}
+		})
 	}
 }
 
