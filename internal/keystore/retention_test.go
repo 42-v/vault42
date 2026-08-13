@@ -137,9 +137,9 @@ func TestStopIsSafeToCallTwiceAndOnASweeperThatNeverStarted(t *testing.T) {
 	r2.Stop()
 }
 
-// A cancelled context is how cmd/vault ends on SIGTERM. The loop must notice it
+// A canceled context is how cmd/vault ends on SIGTERM. The loop must notice it
 // even though nothing called Stop, or the process hangs on the deferred Stop.
-func TestACancelledContextEndsTheSweepLoop(t *testing.T) {
+func TestACanceledContextEndsTheSweepLoop(t *testing.T) {
 	reaper := newStubReaper()
 	r := NewRetention(reaper)
 
@@ -151,7 +151,7 @@ func TestACancelledContextEndsTheSweepLoop(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("the sweep loop is still running after its context was cancelled")
+		t.Fatal("the sweep loop is still running after its context was canceled")
 	}
 
 	r.Stop()
