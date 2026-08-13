@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TAG="${1:-latest}"
-NAMESPACE="vault"
+NAMESPACE="vault42"
 SECRETS_DIR="${SCRIPT_DIR}/../secrets"
 CHART_DIR="${SCRIPT_DIR}/../charts/vault"
 
@@ -29,8 +29,11 @@ microk8s status --wait-ready
 echo "Enabling addons..."
 microk8s enable dns storage ingress helm3
 
-# 3. Generate secrets if not present
-if [ ! -d "$SECRETS_DIR" ]; then
+# 3. Generate secrets if not present.
+# Guard on a canonical artifact, not the directory: the repo ships a secrets/ dir
+# of differently-named dev files, and guarding on the directory would skip
+# generation and then fail on the missing master-key below.
+if [ ! -f "$SECRETS_DIR/master-key" ]; then
     echo "Generating secrets..."
     "$SCRIPT_DIR/generate-secrets.sh" "$SECRETS_DIR"
 fi
@@ -38,28 +41,34 @@ fi
 # 4. Create namespace
 microk8s kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | microk8s kubectl apply -f -
 
-# 5. Create Kubernetes secret from generated files
+# 5. Create Kubernetes secret from generated files.
+# signing-key is included so JWTs survive a pod restart. redis-password is omitted
+# on purpose: the embedded profile is single-pod with an in-memory cache. Add it,
+# and switch the cache backend, for a Redis or multi-pod topology (see
+# docs/deployment-guide.md).
 echo "Creating Kubernetes secret..."
-microk8s kubectl -n "$NAMESPACE" create secret generic vault-secrets \
+microk8s kubectl -n "$NAMESPACE" create secret generic vault42-secrets \
     --from-file="$SECRETS_DIR/master-key" \
     --from-file="$SECRETS_DIR/hmac-secret" \
     --from-file="$SECRETS_DIR/admin-token" \
     --from-file="$SECRETS_DIR/db-mig-password" \
     --from-file="$SECRETS_DIR/db-app-password" \
     --from-file="$SECRETS_DIR/pepper" \
+    --from-file="$SECRETS_DIR/signing-key" \
     --dry-run=client -o yaml | microk8s kubectl apply -f -
 
 # 6. Install Helm chart with embedded values
 echo "Installing Helm chart..."
-microk8s helm3 upgrade --install vault "$CHART_DIR" \
+microk8s helm3 upgrade --install vault42 "$CHART_DIR" \
     -n "$NAMESPACE" \
     -f "$CHART_DIR/values-embedded.yaml" \
     --set "image.tag=$TAG" \
-    --set "secrets.existingSecret=vault-secrets"
+    --set "secrets.existingSecret=vault42-secrets" \
+    --set "origin=https://vault42.local"
 
 # 7. Wait for rollout
 echo "Waiting for deployment..."
-microk8s kubectl -n "$NAMESPACE" rollout status deployment/vault --timeout=120s
+microk8s kubectl -n "$NAMESPACE" rollout status deployment/vault42 --timeout=120s
 
 # 8. Print access info
 echo ""
@@ -74,8 +83,8 @@ cat "$SECRETS_DIR/admin-token"
 echo ""
 echo ""
 echo "Access (via ingress):"
-echo "  https://vault.local"
+echo "  https://vault42.local"
 echo ""
 echo "Check status:"
 echo "  microk8s kubectl -n $NAMESPACE get pods"
-echo "  microk8s kubectl -n $NAMESPACE logs deploy/vault"
+echo "  microk8s kubectl -n $NAMESPACE logs deploy/vault42"

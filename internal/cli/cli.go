@@ -1,8 +1,10 @@
 // Package cli implements administrative CLI commands for The Vault.
 // All commands require authentication via --admin-token. Available commands:
-// add-client, list-clients, revoke-client, rotate-client-secret, lock-user,
-// unlock-user, revoke-all-sessions, rotate-admin-token, rotate-jwks, seed,
-// cleanup-audit, cleanup-recovery, and export-audit.
+// add-client, list-clients, revoke-all-sessions, rotate-admin-token,
+// rotate-jwks, seed, cleanup-audit, cleanup-recovery, and export-audit.
+// The revoke-client, rotate-client-secret, lock-user and unlock-user
+// subcommands are retired stubs that print an error and redirect to the admin
+// gateway; they issue no database write.
 package cli
 
 import (

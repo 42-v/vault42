@@ -365,9 +365,6 @@ func (h *BlobHandler) writeUploadError(w http.ResponseWriter, err error) {
 	}
 }
 
-// sanitizeLabelForHeader strips all control characters (U+0000–U+001F) from a
-// blob label before setting it as an HTTP response header value. This prevents
-// header injection via tabs, null bytes, or other non-printable characters.
 // validRefName reports whether a named-blob reference matches the documented
 // [a-zA-Z0-9_-]+ charset (docs/spec.md, docs/api.md).
 func validRefName(name string) bool {
@@ -381,6 +378,9 @@ func validRefName(name string) bool {
 	return true
 }
 
+// sanitizeLabelForHeader strips all control characters (U+0000–U+001F) from a
+// blob label before setting it as an HTTP response header value. This prevents
+// header injection via tabs, null bytes, or other non-printable characters.
 func sanitizeLabelForHeader(label string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 {

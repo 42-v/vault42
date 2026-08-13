@@ -69,7 +69,7 @@ internal/
   metrics/              Hand-rolled Prometheus text exposition
   audit/                Append-only audit logger
   email/                SMTP + SendGrid, go:embed HTML templates, per-app white-label
-  cli/                  Admin CLI (add-client, rotate-jwks, lock-user, seed, etc.)
+  cli/                  Admin CLI (add-client, rotate-jwks, list-clients, seed, etc.)
   seed/                 Declarative JSON seeding for clients and users
   oauth2/               GitHub, Google, Facebook, and generic OIDC providers
   honeypot/             Trap user detection, webhook alerts
@@ -167,7 +167,7 @@ Full index with one line on each document: [docs/README.md](docs/README.md).
 | [Deployment Guide](docs/deployment-guide.md) | Kubernetes install, KMS root key, upgrades, backup |
 | [Admin Gateway](docs/admin-gateway.md) | mTLS admin plane, RBAC model, admin endpoints |
 | [Bridge Deployment](docs/bridge.md) | Honeypot bridge proxy |
-| [Security & Accepted Risks](docs/security.md) | AR-1 through AR-12: what is deliberately not defended |
+| [Security & Accepted Risks](docs/security.md) | AR-1 through AR-18: what is deliberately not defended |
 | [Attack Cheatsheet](docs/cheatsheet.md) | Attack vectors with defenses and the tests that prove them |
 | [Standards Compliance](docs/COMPLIANCE.md) | NIST SP 800-63B, OWASP ASVS, Top 10, RFC family |
 | [Privacy Policy](docs/PRIVACY.md) | GDPR posture, data inventory, retention, breach procedure |

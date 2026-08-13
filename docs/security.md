@@ -15,7 +15,7 @@
 Email verification and password reset flows transmit single-use tokens as URL query parameters (e.g., `?token=...`). While URL parameters can appear in server logs, browser history, and referrer headers, the following mitigations reduce risk to an acceptable level:
 
 - **Single-use:** Tokens are consumed atomically on first use via `GetAndDelete` (cache-level atomic get+delete). A token intercepted after use is worthless.
-- **Short-lived:** Token TTL is configurable -- verification links default to 24 hours, password reset links to 1 hour.
+- **Short-lived:** Verification links live 24 hours, password reset links 1 hour. Both are hardcoded constants (`internal/service/auth.go`), not operator-tunable.
 - **Referrer suppressed:** `Referrer-Policy: no-referrer` is set on all responses (see spec section 13.3), preventing token leakage via HTTP referer headers to third-party origins.
 - **HTTPS-only:** All traffic is TLS-encrypted. Tokens are never transmitted in plaintext.
 - **Hashed storage:** Tokens are stored hashed in the cache backend, not in plaintext.
@@ -87,7 +87,8 @@ Two consequences are accepted:
 
 **Why this is accepted:**
 
-- **Bounded staleness.** Access tokens live 5-15 minutes, and refresh re-reads the user row on
+- **Bounded staleness.** Access tokens default to 15 minutes (operator-configurable via
+  `VAULT_ACCESS_TOKEN_TTL`, with no enforced lower bound), and refresh re-reads the user row on
   every rotation (`AuthService.Refresh`), which also revokes the whole family if the account has
   since been deleted, banned or disabled. The window is one access-token TTL, not the refresh
   family lifetime.
@@ -431,8 +432,9 @@ on `clients:create` (`super_admin` only) and audited.
   capability scope now aborts. That is intended: a seed file names a capability and no authority
   for it, and the process reading it is the one this model treats as semi-hostile. The sibling
   commands show where client management already lived -- `vault revoke-client` and `vault
-  rotate-client-secret` are UPDATE statements on a table `vault_app` has never held UPDATE on,
-  so both have failed with 42501 in every deployment since 001.
+  rotate-client-secret` were UPDATE statements on a table `vault_app` has never held UPDATE on,
+  so both failed with 42501 in every deployment since 001; both are now retired stubs
+  (`internal/cli/cli.go:218,231`) that refuse and redirect to the admin gateway.
 - **Guarded against regression.**
   `TestVaultAppCannotGrantItselfACapabilityScopeThroughAClientRow` connects as the real
   `vault_app` and `vault_admin` roles with the real grants and asserts the whole model: ordinary
@@ -459,14 +461,21 @@ and `UserRepo.ClearImportPending` are `vault_app`'s own statements, and
 
 **Why the residue is accepted:**
 
-- **`locked_until` could not be narrowed without breaking a working command.** The intended rule
-  was that `vault_app` may set a lock and may clear one only once it has expired. `vault
-  lock-user` and `vault unlock-user` call `UserRepo.LockUntil` and `UserRepo.Unlock`, they live in
-  `cmd/vault`, and `cmd/vault` opens its pool with `cfg.DatabaseURL("app")`, so releasing a live
-  lock is something `vault_app` does on an operator's command. The database cannot tell that
-  invocation from the web-facing process. Pointing the two subcommands at the admin DSN, or
-  removing them in favour of `POST /admin/users/{id}/lock` and `/unlock`, which already do this
-  under `vault_admin`, is a change in Go; the column can be narrowed after it.
+- **`locked_until` no longer has a `vault_app` writer, and can now be narrowed.** The intended
+  rule was that `vault_app` may set a lock and may clear one only once it has expired. The
+  writers that blocked that rule were `vault lock-user` and `vault unlock-user`, which called
+  `UserRepo.LockUntil` and `UserRepo.Unlock` from `cmd/vault` under `cfg.DatabaseURL("app")`.
+  Both are now retired stubs (`internal/cli/cli.go:246,254`) that print an error and issue no
+  database write, so `vault_app` no longer releases a live lock on an operator's command. The
+  web-facing process does not write `locked_until` either: its failed-login auto-lockout is
+  enforced entirely in the cache (`isAccountLocked` / `recordFailedAttempt` / `clearLockout`,
+  `internal/service/auth.go`), and the only account-lock write it still makes as `vault_app` is
+  the `failed_login_count` counter that backs the cache-outage fallback. The one runtime writer
+  of `auth.users.locked_until` is now the admin gateway (`internal/adminapi/handler.go`) under
+  `vault_admin`, via `POST /admin/users/{id}/lock` and `/unlock`. With the last `vault_app`
+  writer of the column gone, the `UPDATE (locked_until)` grant is surplus and can be revoked
+  outright the way 024 revoked `banned`/`ban_reason`/`disabled`; that is a one-line follow-up
+  migration.
 - **Account takeover through this role is not closed and cannot be.** `vault_app` keeps `UPDATE
   (password_hash)` because password change and reset are its job, so anything reaching the
   database as that role can already authenticate as any account whose state permits login. What

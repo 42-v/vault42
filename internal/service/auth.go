@@ -1538,20 +1538,6 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 	s.cache.Increment(ctx, key, lockoutDuration) // #nosec G104 -- best-effort IP lockout counter
 }
 
-// storeRefreshToken hashes and persists a refresh token in the database.
-// checkSessionLimit verifies that the user has not exceeded the maximum number of
-// concurrent refresh token families. Returns ErrTooManySessions if the limit is reached.
-// A maxSessionsPerUser of 0 disables the check.
-// checkSessionLimit is a soft, best-effort cap on concurrent session families.
-// It is intentionally NOT atomic with the subsequent token insert: concurrent
-// logins by the SAME user can each pass this check and then insert, briefly
-// exceeding the cap by the number of racing attempts. This is an accepted
-// trade-off — making it strict would require serializing the login hot path
-// (per-user advisory lock) or a count-conditional INSERT, adding latency/lock
-// contention for every login to prevent a user marginally exceeding their own
-// session cap (no auth bypass, bounded over-count). The cap converges as old
-// families expire/revoke. Revisit only if the limit becomes a hard security
-// boundary rather than a resource control.
 // CheckSessionLimit applies the concurrent-session-family cap on behalf of a
 // login path that mints a family outside Login and CompleteMFALogin.
 //
@@ -1621,6 +1607,20 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 	return origin, nil
 }
 
+// checkSessionLimit verifies that the user has not exceeded the maximum number of
+// concurrent refresh token families. Returns ErrTooManySessions if the limit is reached.
+// A maxSessionsPerUser of 0 disables the check.
+//
+// checkSessionLimit is a soft, best-effort cap on concurrent session families.
+// It is intentionally NOT atomic with the subsequent token insert: concurrent
+// logins by the SAME user can each pass this check and then insert, briefly
+// exceeding the cap by the number of racing attempts. This is an accepted
+// trade-off — making it strict would require serializing the login hot path
+// (per-user advisory lock) or a count-conditional INSERT, adding latency/lock
+// contention for every login to prevent a user marginally exceeding their own
+// session cap (no auth bypass, bounded over-count). The cap converges as old
+// families expire/revoke. Revisit only if the limit becomes a hard security
+// boundary rather than a resource control.
 func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) error {
 	if s.maxSessionsPerUser <= 0 {
 		return nil
@@ -1642,6 +1642,7 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 	return nil
 }
 
+// storeRefreshToken hashes and persists a refresh token in the database.
 func (s *AuthService) storeRefreshToken(ctx context.Context, userID, clientID, deviceID, fp string, pair *TokenPair) error {
 	tokenHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
 	rtID, err := vaultcrypto.RandomUUID()

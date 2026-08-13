@@ -596,7 +596,10 @@ func (ks *KeyStore) EnsureKey(ctx context.Context, importKey *rsa.PrivateKey) er
 }
 
 // CleanupExpired removes expired retired keys from the database.
-// Called periodically during refresh to prevent table bloat.
+//
+// Called by the keystore Retention sweeper (internal/keystore/retention.go) on
+// its sweep interval; deletes retired keys whose expires_at has passed. It is
+// never called from Refresh.
 func (ks *KeyStore) CleanupExpired(ctx context.Context) (int64, error) {
 	result, err := ks.pool.Exec(ctx, `
 		DELETE FROM auth.signing_keys

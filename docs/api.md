@@ -95,7 +95,7 @@ Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup code 
 Authenticated requests are fingerprint-verified. The fingerprint is computed as `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)` and embedded in the access token at issuance. The TLS-fingerprint component is populated from the header specified by `VAULT_TLS_FINGERPRINT_HEADER` (e.g. `X-TLS-Fingerprint`), which the TLS-terminating proxy must set. When the header is not configured, the TLS-fingerprint field is empty (backward compatible). On each authenticated request, the server recomputes the fingerprint and compares it to the token claim. A mismatch results in:
 
 ```json
-{"error": "fingerprint_mismatch"}
+{"error": "invalid_token"}
 ```
 
 Status: `401 Unauthorized`
@@ -127,7 +127,7 @@ Error codes are lowercase, underscore-separated strings (e.g., `invalid_credenti
 
 ## Rate Limiting
 
-Rate limits are enforced per-IP or per-user depending on the endpoint. When rate limiting is active, the following headers are present on every response (including successful ones):
+Rate limits are enforced per-IP, per-user, or per-client depending on the endpoint. When rate limiting is active, the following headers are present on every response (including successful ones):
 
 | Header | Description |
 |--------|-------------|
@@ -146,7 +146,7 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
 
 ```
 HTTP/1.1 503 Service Unavailable
@@ -596,8 +596,7 @@ Clears the `refresh_token` cookie.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `missing_authorization` | No Authorization header |
-| 401 | `invalid_token` | Token invalid or expired |
-| 401 | `fingerprint_mismatch` | Device fingerprint does not match token |
+| 401 | `invalid_token` | Token invalid, expired, or device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -641,7 +640,7 @@ Verify the user's password to grant a 5-minute elevated access window for sensit
 | 400 | `password_required` | Missing or empty password |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_password` | Wrong password |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
@@ -779,7 +778,7 @@ All existing refresh tokens for the user are revoked.
 | 400 | `password_recently_used` | New password matches one of the last 5 passwords |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_current_password` | Wrong current password |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
@@ -837,7 +836,7 @@ Retrieve the authenticated user's profile information.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 
 **curl example:**
@@ -931,7 +930,7 @@ List all active sessions (devices) for the authenticated user.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -970,7 +969,7 @@ Revoke a specific session. Removes the device record and revokes all associated 
 |--------|-------|-------------|
 | 400 | `missing_session_id` | Empty session ID in path |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `session_not_found` | Session not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1003,7 +1002,7 @@ Revoke all sessions (sign out everywhere). Removes all device records and revoke
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1049,7 +1048,7 @@ The `fingerprint_hash` field is truncated to the first 8 characters for display 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1101,7 +1100,7 @@ Rename a device (set a friendly name).
 | 400 | `name_too_long` | Name exceeds 100 characters |
 | 400 | `name_invalid_chars` | Name contains control characters |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `device_not_found` | Device not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1142,7 +1141,7 @@ Remove a device and revoke all associated refresh tokens.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `device_not_found` | Device not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1200,7 +1199,7 @@ Erase the authenticated user's account. **This is the most destructive endpoint 
 | 401 | `password_required` | Body missing or `password` empty |
 | 401 | `invalid_password` | Wrong password (audited as a failed login) |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `not_found` | Account already erased |
 | 429 | `rate_limit_exceeded` | Deletion rate limit exceeded |
 | 500 | `internal_error` | Erasure failed; the account may be tombstoned but not fully purged. Retry. |
@@ -1285,7 +1284,7 @@ The endpoint aggregates the live repositories and stores nothing of its own, so 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Export rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -1893,7 +1892,7 @@ Both are always arrays. A user with no configured factor gets `[]`, never `null`
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1932,7 +1931,7 @@ The TOTP secret is stored encrypted (AES-256-GCM) and marked as unverified until
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required (call `POST /auth/confirm` first) |
 | 409 | `totp_already_setup` | TOTP is already configured and verified |
 | 500 | `internal_error` | Server error |
@@ -1992,7 +1991,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | TOTP code is incorrect |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `totp_not_setup` | TOTP has not been configured |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 429 | `totp_code_already_used` | Same code used within the same 30-second time step (replay prevention) |
@@ -2033,7 +2032,7 @@ Disable TOTP for the authenticated user. Requires recent password confirmation.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 404 | `totp_not_setup` | TOTP has not been configured |
 | 500 | `internal_error` | Server error |
@@ -2082,7 +2081,7 @@ Returns a WebAuthn `PublicKeyCredentialCreationOptions` JSON object (structure d
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 401 | `unauthorized` | User not found |
 | 500 | `webauthn_error` | WebAuthn ceremony initialization failed |
@@ -2122,7 +2121,7 @@ Complete WebAuthn credential registration. Send the `AuthenticatorAttestationRes
 | 400 | `no_pending_registration` | No registration session found (expired or not started) |
 | 400 | `webauthn_verification_failed` | Credential verification failed |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 409 | `credential_already_registered` | The credential ID is already enrolled on this or another account |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
@@ -2174,7 +2173,7 @@ Returns a WebAuthn `PublicKeyCredentialRequestOptions` JSON object.
 |--------|-------|-------------|
 | 400 | `no_webauthn_credentials` | No WebAuthn credentials registered for this user |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 500 | `webauthn_error` | WebAuthn ceremony initialization failed |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
@@ -2229,7 +2228,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 401 | `webauthn_verification_failed` | Authenticator assertion verification failed |
 | 401 | `user_verification_required` | The credential was enrolled with user verification; the assertion carried none. Retry with the authenticator's PIN or biometric |
 | 401 | `cloned_authenticator_detected` | The signature counter did not advance; every refresh-token family for the user is revoked |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
 | 500 | `internal_error` | Server error |
@@ -2275,7 +2274,7 @@ List all registered WebAuthn credentials for the authenticated user.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -2314,7 +2313,7 @@ Delete a specific WebAuthn credential. Requires recent password confirmation.
 |--------|-------|-------------|
 | 400 | `missing_credential_id` | Empty credential ID in path |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 404 | `credential_not_found` | Credential not found or belongs to another user |
 | 500 | `internal_error` | Server error |
@@ -2364,7 +2363,7 @@ Generate a new set of 10 backup codes. Any existing backup codes are replaced. R
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 500 | `internal_error` | Server error |
 
@@ -2425,7 +2424,7 @@ Sets the `refresh_token` cookie.
 | 400 | `invalid_request` | Malformed JSON or missing code |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | Code is wrong or already used |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Verify rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
@@ -2489,7 +2488,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | Email OTP code is incorrect or expired |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -2529,7 +2528,7 @@ Resend the email one-time password code. Generates a new 6-digit code and sends 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated or user not found |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -2818,7 +2817,7 @@ Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not ex
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
 **Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:564-570`).
-**Rate limit:** 60 per minute, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The key function asks for the authenticated client and falls back to the source IP when there are no claims; because the limiter is mounted **outside** the auth middleware there are never any claims yet, so the effective bucket is the source IP. Plan capacity as 60/min per source address, not per client.
+**Rate limit:** 60 per minute per authenticated `client_id`, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The limiter is mounted **inside** the auth middleware, so the key function reads the client id from the validated claims and buckets by `client_id`; its source-IP fallback is unreachable here, because a request carrying no claims is rejected by the auth middleware before it reaches the limiter. Plan capacity as 60/min per client, not per source address.
 **DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`, and even then a request with no `DPoP` header passes straight through, because the middleware demands a proof only from a token carrying `cnf.jkt` and nothing in vault42 issues one. See `spec.md` section 0.6.2.
 **Fingerprint:** not verified. `POST /mint` is a machine endpoint and carries no device binding.
 **Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
@@ -2961,7 +2960,7 @@ Mounted **only** when `VAULT_SVCDOC_ENABLED=true`; otherwise the four routes do 
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying `svcdoc:read` (reads) or `svcdoc:write` (writes). Every handler additionally requires a non-empty `client_id` claim.
 **Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> handler (`internal/server/server.go:509-518`). No DPoP wrapper, no fingerprint verification.
-**Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs outside the auth middleware, so the bucket is the source IP rather than the client despite the per-client key function.
+**Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s, keyed by the authenticated `client_id`. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs inside the auth middleware, so the bucket is the client id read from the validated claims; the per-client key function's source-IP fallback is unreachable, because the auth middleware rejects a claimless request first.
 **Max body:** the `/service/documents` prefix is exempt from the global 8 KiB cap, so a 64 KiB document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of `VAULT_SVCDOC_MAX_SIZE` + 1 KiB.
 
 **Storage model.**
@@ -3699,7 +3698,7 @@ The **Mounted when** column is the answer to "why does this endpoint 404 in prod
 - **Scope `<name>`** -- Bearer client-credential token carrying that scope. `mint:token` and both `svcdoc:*` scopes additionally require the token to carry a `client_id` claim, which no user token does; without one the request is `403 client_credentials_required` even though the scope check passed
 - **Session** -- admin gateway session cookie, behind mTLS and loopback-only enforcement. The permission the session's role must hold is in the Permission column.
 
-**Rate limit column.** `POST /mint` and the `/service/documents/*` routes are keyed by source IP in practice, not by client: their limiters are mounted outside the authentication middleware, so the per-client key function finds no claims and falls back to the address. See the endpoint sections above.
+**Rate limit column.** `POST /mint` and the `/service/documents/*` routes are keyed by the authenticated `client_id`, not by source IP: their limiters are mounted inside the authentication middleware, so the per-client key function reads the client from the validated claims. Its source-IP fallback is unreachable, because a claimless request is rejected by the auth middleware first. See the endpoint sections above.
 
 <!-- BEGIN ENDPOINT SUMMARY -->
 
@@ -3762,11 +3761,11 @@ The **Mounted when** column is the answer to "why does this endpoint 404 in prod
 | `POST` | `/auth/oauth2/exchange` | None | 10/min | >= 1 provider configured | Exchange the one-time code for tokens |
 | `POST` | `/client/token` | Basic | 10/min | Always | Client-credentials grant |
 | `POST` | `/kms/unwrap` | Scope `kms:unwrap` | 30/min, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle |
-| `POST` | `/mint` | Scope `mint:token` | 60/min per IP, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
-| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per IP | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
-| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per IP | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
-| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per IP | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
-| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per IP | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
+| `POST` | `/mint` | Scope `mint:token` | 60/min per client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
+| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
+| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
 | `GET` | `/.well-known/jwks.json` | None | -- | Always | JWKS public keys |
 | `GET` | `/.well-known/openid-configuration` | None | -- | Always | Issuer metadata |
 
