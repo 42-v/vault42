@@ -290,6 +290,24 @@ Until 016 there was no INSERT half, and the gap was not theoretical: `vault_admi
 
 ---
 
+### AR-15: What Keeps a Forged Signing Key Out of JWKS Is the Master Key, Not the Grant
+
+**Severity:** Low | **Source:** red-team review of `KeyStore.Refresh` and `auth.signing_keys` (post-1.0.0)
+
+Migration 001 grants `vault_app` SELECT, INSERT and UPDATE on `auth.signing_keys`, because the vault rotates its own keys. Until this change, `Refresh` published every loaded row's `public_key` and decrypted `private_key` only when the row's status was `active`, so a row the process could not open was published as a verification key anyway. Anyone able to issue SQL as `vault_app` could INSERT a key of their own as `retired` with a NULL `expires_at`, wait one `VAULT_KEY_REFRESH_INTERVAL`, and then mint tokens for any subject that validated here and in every service polling this issuer. Revocation had the matching hole: the guard that stopped a revoked kid from coming back was a `WHERE` clause inside `Import`'s upsert, which a raw UPDATE never runs.
+
+Both are closed. `Refresh` now opens every row before publishing any of it, and publishes only a row whose `private_key` decrypts under the master key with the kid as AAD and whose `public_key` column is the public half of what decrypted. Migration 017 freezes revoked rows against UPDATE and DELETE. What remains is worth stating exactly, because the grant itself has not moved.
+
+**Why the residue is accepted:**
+
+- **The control is a key, not a privilege.** A forged row is rejected because the AES-256-GCM tag over the kid does not verify, which needs the master key, not a database privilege. That is the right place for it: the same rule holds for every role, for the migration role, and for anything with direct psql access, none of which a grant on one table can constrain.
+- **Denial of service through this table is still available, and cheap.** SQL as `vault_app` can corrupt the active row and freeze every pod's key set at whatever it last loaded, or corrupt retired rows and drop their kids from JWKS, invalidating tokens still in flight. Failing the whole refresh on a bad non-active row instead of skipping it would make this worse rather than better: one hostile row would then break the next pod to boot, since `EnsureKey` will not start without a successful refresh. Availability of the key set is not defended here; forgery is.
+- **The trigger is not a boundary against the owner.** `ALTER TABLE ... DISABLE TRIGGER`, `session_replication_role = replica` and TRUNCATE all bypass row triggers, and the migration role holds them. 017 closes the path available to the two least-privilege roles the services connect as, which is the threat model 001 states for this table. The same limitation is argued in AR-14 for the admin tables.
+- **Opening every row widens AR-13 slightly.** A retired key's private material is now briefly resident on each refresh instead of never. The decrypted PEM buffer is wiped; the parsed key cannot be, for the reason AR-13 gives. The exposure needs heap access to a process that already holds the active key.
+- **Guarded against regression.** `TestSigningKeyInjectionAsVaultApp` connects as the real `vault_app` role with the real grants and runs all three writes: the forged INSERT, the `public_key` swap by UPDATE, and the un-revoking UPDATE, checking each against both the published key set and a token forged under it. `TestSigningKeyRevocationIsTerminalInTheDatabase` pins 017's trigger and, as importantly, that rotation, revocation and cleanup still work.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED
