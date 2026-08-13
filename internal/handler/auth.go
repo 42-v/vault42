@@ -143,6 +143,23 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrTokenInvalid):
 			clearRefreshCookie(w, h.secureCookies)
 			WriteError(w, http.StatusUnauthorized, "invalid_token")
+		// Refresh re-reads account state and refuses a banned, disabled or
+		// locked account, which is what makes a ban take effect on a session
+		// already holding a valid refresh token. These three fell through to
+		// 500, so the control worked and then reported itself as a server
+		// fault: a bulk ban spiked the 5xx rate, and the caller could not tell
+		// a refusal by policy from a vault42 that was broken. The cookie is
+		// cleared with them, because a refresh token belonging to a banned
+		// account is not one the browser should keep presenting.
+		case errors.Is(err, service.ErrAccountLocked):
+			clearRefreshCookie(w, h.secureCookies)
+			WriteError(w, http.StatusForbidden, "account_locked")
+		case errors.Is(err, service.ErrAccountBanned):
+			clearRefreshCookie(w, h.secureCookies)
+			WriteError(w, http.StatusForbidden, "account_banned")
+		case errors.Is(err, service.ErrAccountDisabled):
+			clearRefreshCookie(w, h.secureCookies)
+			WriteError(w, http.StatusForbidden, "account_disabled")
 		default:
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 		}
