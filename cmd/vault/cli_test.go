@@ -199,11 +199,6 @@ func TestAuthenticatedCommandWithMissingArgumentsPrintsUsage(t *testing.T) {
 			usage: "Usage: vault add-client --admin-token <token> --name <name> --role <role> --scopes <scopes>",
 		},
 		{
-			name:  "revoke-client without an id",
-			args:  []string{"revoke-client"},
-			usage: "Usage: vault revoke-client --admin-token <token> --id <client-id>",
-		},
-		{
 			name:  "seed without a file",
 			args:  []string{"seed"},
 			usage: "Usage: vault seed --admin-token <token> --file <path>",

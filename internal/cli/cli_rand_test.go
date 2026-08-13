@@ -83,33 +83,6 @@ func TestAddClient_EntropyFailureAborts(t *testing.T) {
 	})
 }
 
-func TestRotateClientSecret_EntropyFailureAborts(t *testing.T) {
-	c, clients, _, _, _ := newTestCLI()
-	clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-		return &model.Client{ID: id, Name: "frontend", Active: true}, nil
-	}
-	updated := false
-	clients.UpdateFn = func(context.Context, *model.Client) error { updated = true; return nil }
-	swapRandReader(t, &cliScriptedReader{reads: 0})
-
-	var stdout string
-	stderr := captureStderr(t, func() {
-		stdout = captureStdout(t, func() {
-			if !c.rotateClientSecret(context.Background(), []string{"--id", "client-1"}) {
-				t.Error("expected handled=true")
-			}
-		})
-	})
-	if !strings.Contains(stderr, "ERROR: crypto/rand: entropy exhausted") {
-		t.Errorf("expected entropy error on stderr, got %q", stderr)
-	}
-	if strings.Contains(stdout, "New secret for") {
-		t.Error("a secret was printed despite an entropy failure")
-	}
-	if updated {
-		t.Error("client was updated despite an entropy failure")
-	}
-}
 
 func TestRotateJWKS_KidEntropyFailureAborts(t *testing.T) {
 	c, _, _, _, _ := newTestCLI()

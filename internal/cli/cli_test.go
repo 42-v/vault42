@@ -718,171 +718,58 @@ func TestListClients(t *testing.T) {
 // TestRevokeClient
 // ---------------------------------------------------------------------------
 
-func TestRevokeClient(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		var deactivatedID string
-		clients.DeactivateFn = func(_ context.Context, id string) error {
-			deactivatedID = id
-			return nil
-		}
+func TestRevokeClient_RetiredDoesNotWriteAndPointsAtAdminPlane(t *testing.T) {
+	c, clients, _, _, _, token := setupAuthenticatedCLI(t)
+	called := false
+	clients.DeactivateFn = func(_ context.Context, _ string) error {
+		called = true
+		return nil
+	}
 
-		args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "client-123"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if deactivatedID != "client-123" {
-			t.Errorf("deactivated ID = %q, want %q", deactivatedID, "client-123")
-		}
-		if !strings.Contains(out, "revoked") {
-			t.Error("expected 'revoked' in output")
+	args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "client-123"}
+	stderr := captureStderr(t, func() {
+		if handled := c.Run(context.Background(), args); !handled {
+			t.Error("revoke-client must stay a recognized command so it does not fall through to booting the server")
 		}
 	})
 
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "revoke-client", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true (usage printed)")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.DeactivateFn = func(_ context.Context, _ string) error {
-			return errors.New("not found")
-		}
-
-		args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "bad-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
+	if called {
+		t.Error("revoke-client issued a vault_app Deactivate write; client revocation must not run from cmd/vault")
+	}
+	if !strings.Contains(stderr, "/admin/clients") || !strings.Contains(stderr, "revoke") {
+		t.Errorf("revoke-client did not point the operator at the admin route: %q", stderr)
+	}
 }
 
 // ---------------------------------------------------------------------------
 // TestRotateClientSecret
 // ---------------------------------------------------------------------------
 
-func TestRotateClientSecret(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-			return &model.Client{ID: id, Name: "frontend", Active: true}, nil
-		}
-		var updatedClient *model.Client
-		clients.UpdateFn = func(_ context.Context, cl *model.Client) error {
-			updatedClient = cl
-			return nil
-		}
+func TestRotateClientSecret_RetiredDoesNotWriteAndPointsAtAdminPlane(t *testing.T) {
+	c, clients, _, _, _, token := setupAuthenticatedCLI(t)
+	getCalled, updateCalled := false, false
+	clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
+		getCalled = true
+		return &model.Client{ID: id, Name: "frontend"}, nil
+	}
+	clients.UpdateFn = func(_ context.Context, _ *model.Client) error {
+		updateCalled = true
+		return nil
+	}
 
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if updatedClient == nil {
-			t.Fatal("client was not updated")
-		}
-		if updatedClient.SecretHash == "" {
-			t.Error("expected new secret hash")
-		}
-		if !strings.Contains(out, "New secret for frontend:") {
-			t.Error("expected new secret in output")
+	args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
+	stderr := captureStderr(t, func() {
+		if handled := c.Run(context.Background(), args); !handled {
+			t.Error("rotate-client-secret must stay a recognized command so it does not fall through to booting the server")
 		}
 	})
 
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("client not found", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, _ string) (*model.Client, error) {
-			return nil, nil // not found
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "missing-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "client not found") {
-			t.Error("expected 'client not found' error")
-		}
-	})
-
-	t.Run("GetByID error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, _ string) (*model.Client, error) {
-			return nil, errors.New("db error")
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "err-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "client not found") {
-			t.Error("expected 'client not found' error")
-		}
-	})
-
-	t.Run("Update error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-			return &model.Client{ID: id, Name: "svc"}, nil
-		}
-		clients.UpdateFn = func(_ context.Context, _ *model.Client) error {
-			return errors.New("update failed")
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
-		stderr := captureStderr(t, func() {
-			captureStdout(t, func() {
-				result := c.Run(context.Background(), args)
-				if !result {
-					t.Error("expected true")
-				}
-			})
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
+	if getCalled || updateCalled {
+		t.Error("rotate-client-secret touched the clients repository; secret rotation must not run from cmd/vault")
+	}
+	if !strings.Contains(stderr, "/admin/clients") || !strings.Contains(stderr, "rotate") {
+		t.Errorf("rotate-client-secret did not point the operator at the admin route: %q", stderr)
+	}
 }
 
 // lock-user and unlock-user are retired (they no longer write via vault_app);
