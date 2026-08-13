@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -426,21 +427,22 @@ func TestLoadConfigKillswitchFailsOpenOnUnrecognizedValue(t *testing.T) {
 	}
 }
 
-// TestLoadConfigRejectsGeneratedMasterKeyEndingInWhitespaceByte is a
-// regression test for a real defect.
+// TestLoadConfigAcceptsGeneratedMasterKeyEndingInWhitespaceByte is the inverted
+// form of a regression test that used to pin the defect.
 //
 // scripts/generate-secrets.sh writes the master key as 32 raw bytes from
 // `openssl rand 32`, and loadSecret runs strings.TrimSpace over whatever it
 // reads. Six of the 256 possible byte values are ASCII whitespace, so roughly
-// one generated key in twenty-two begins or ends with a byte that TrimSpace
-// eats. The key on disk is correct and exactly 32 bytes, but the gateway
-// reports "MASTER_KEY_FILE is required (32 bytes for AES-256)" and refuses to
-// start, which reads as a missing file rather than a corrupted read.
+// one generated key in twenty-two began or ended with a byte the trim ate. The
+// key on disk was correct and exactly 32 bytes, and the gateway reported
+// "MASTER_KEY_FILE is required (32 bytes for AES-256)" and refused to start,
+// which reads as a missing file rather than a corrupted read.
 //
-// The test asserts the current, broken behavior so the defect cannot be
-// forgotten. When loadSecret stops trimming binary secrets, this test fails and
-// must be inverted.
-func TestLoadConfigRejectsGeneratedMasterKeyEndingInWhitespaceByte(t *testing.T) {
+// The master key now loads through config.LoadSecretBinary, which does not trim
+// and treats the length as the contract. The key is asserted byte for byte
+// rather than just accepted, because a loader that quietly substituted a
+// different 32 bytes would pass a mere non-error check.
+func TestLoadConfigAcceptsGeneratedMasterKeyEndingInWhitespaceByte(t *testing.T) {
 	for _, b := range []byte{'\t', '\n', '\v', '\f', '\r', ' '} {
 		t.Run(string([]byte{b}), func(t *testing.T) {
 			key := make([]byte, 32)
@@ -452,12 +454,12 @@ func TestLoadConfigRejectsGeneratedMasterKeyEndingInWhitespaceByte(t *testing.T)
 			minimalEnv(t)
 			t.Setenv("MASTER_KEY_FILE", writeSecret(t, "master-key", key))
 
-			_, err := LoadConfig()
-			if err == nil {
-				t.Fatal("LoadConfig accepted a 32-byte master key ending in a whitespace byte; the trim in loadSecret was fixed, invert this test")
+			cfg, err := LoadConfig()
+			if err != nil {
+				t.Fatalf("LoadConfig rejected a valid 32-byte master key ending in %q: %v", b, err)
 			}
-			if !strings.Contains(err.Error(), "32 bytes for AES-256") {
-				t.Fatalf("LoadConfig error = %q, want the 32-byte length complaint", err)
+			if !bytes.Equal(cfg.MasterKey, key) {
+				t.Fatalf("master key came back altered:\n got %x\nwant %x", cfg.MasterKey, key)
 			}
 		})
 	}

@@ -654,8 +654,8 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) loadSecrets() {
-	if mk, err := LoadSecret("MASTER_KEY"); err == nil {
-		c.MasterKey = []byte(mk)
+	if mk, err := LoadSecretBinary("MASTER_KEY", 32); err == nil {
+		c.MasterKey = mk
 	}
 	if kr, err := LoadSecret("KMS_ROOT_KEY"); err == nil {
 		c.KMSRootKey = []byte(kr)

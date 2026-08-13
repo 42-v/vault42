@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/42-v/vault42/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,9 +101,13 @@ func LoadConfig() (*Config, error) {
 		SeedFile:        os.Getenv("VAULT_SEED_FILE"),
 	}
 
-	// Load secrets from _FILE env vars
-	if mk, err := loadSecret("MASTER_KEY"); err == nil {
-		c.MasterKey = []byte(mk)
+	// Load secrets from _FILE env vars.
+	//
+	// The master key is raw bytes and must not go through loadSecret, whose
+	// TrimSpace ate a byte off roughly one correctly generated key in twenty-two.
+	// See config.LoadSecretBinary for the arithmetic.
+	if mk, err := config.LoadSecretBinary("MASTER_KEY", 32); err == nil {
+		c.MasterKey = mk
 	}
 	if pw, err := loadSecret("DB_ADMIN_PASSWORD"); err == nil {
 		c.DBPassword = pw
