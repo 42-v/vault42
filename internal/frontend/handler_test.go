@@ -102,6 +102,55 @@ func TestHandlerServesTheSameDocumentForEveryClientRoute(t *testing.T) {
 	}
 }
 
+// The SPA fallback must answer the request without editing it.
+//
+// internal/middleware/logger.go and internal/honeypot/honeypot.go both read
+// r.URL.Path AFTER next.ServeHTTP returns. A fallback that rewrites the path in
+// place to reach index.html therefore erases the only record of what was asked
+// for: every scan probe against an unrouted path lands here, so
+// "GET /wp-admin/setup-config.php" and "GET /.env" are written to the access log
+// as "GET /". The honeypot profile turns this handler on precisely to collect
+// those paths, so the loss is total there.
+func TestSPAFallbackLeavesTheRequestPathIntactForTheAccessLog(t *testing.T) {
+	h := Handler()
+	for _, path := range []string{
+		"/login",
+		"/.env",
+		"/wp-admin/setup-config.php",
+		"/settings/security/2fa",
+	} {
+		req := httptest.NewRequest("GET", path, nil)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+
+		if req.URL.Path != path {
+			t.Errorf("after serving the SPA fallback for %s, r.URL.Path = %q; the "+
+				"surrounding logger reads this field after the handler returns and "+
+				"would record the wrong path", path, req.URL.Path)
+		}
+	}
+}
+
+// The same property stated the way it actually bites: what a wrapping middleware
+// observes once the handler has run. A handler that restored the path only for
+// its own bookkeeping would still pass the assertion above if it restored it too
+// late, so the observation is taken from where the real logger takes it.
+func TestSPAFallbackIsTransparentToWrappingMiddleware(t *testing.T) {
+	var logged string
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Handler().ServeHTTP(w, r)
+		logged = r.URL.Path
+	})
+
+	const probe = "/.git/config"
+	wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", probe, nil))
+
+	if logged != probe {
+		t.Errorf("middleware wrapping the SPA fallback saw r.URL.Path = %q, want %q; "+
+			"the access log and the honeypot log both read the path at this point",
+			logged, probe)
+	}
+}
+
 // The placeholder that ships when the SPA has not been built must not reference
 // asset files that are not embedded alongside it.
 //

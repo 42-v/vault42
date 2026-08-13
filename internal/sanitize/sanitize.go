@@ -43,18 +43,63 @@ func Locale(locale string) string {
 	return strings.ToLower(locale)
 }
 
-// RedirectPath validates a redirect path is safe (relative, no protocol, no double-slash).
+// RedirectPath returns path unchanged when it is provably a same-origin relative
+// path, and "" otherwise.
+//
+// The rules mirror web/src/utils/safeRedirect.ts, the validator that runs last
+// before router.push. This one runs first, and its output is what gets baked
+// into an emailed verification link, so the two have to agree: a value only this
+// side accepts becomes a dead link, and a value only this side accepts that some
+// other consumer resolves differently becomes an open redirect.
 func RedirectPath(path string) string {
-	if path == "" {
+	if path == "" || len(path) > 256 {
 		return ""
 	}
-	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.Contains(path, "://") || strings.Contains(path, "\\") {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return ""
 	}
-	if len(path) > 256 {
+	if strings.Contains(path, "\\") || strings.Contains(path, "://") {
+		return ""
+	}
+	// A browser deletes tab, CR and LF from a URL before it resolves it, so
+	// "/\n//evil.com" reaches the parser as "///evil.com": protocol-relative, and
+	// off the origin. The rest of C0, DEL, C1 and the Unicode line separators go
+	// with them rather than trusting every downstream parser to agree about which
+	// of them are stripped, which are rejected, and which pass through.
+	if strings.ContainsFunc(path, isURLControl) {
+		return ""
+	}
+	// A dot segment means one thing to a consumer that normalizes ("/..//evil.com"
+	// collapses to the protocol-relative "//evil.com" under new URL() and under
+	// path.Clean) and another to one that does not. Rejecting is the only reading
+	// both agree on, and it is why a single collapsing pass would not do: strip
+	// "../" once from "/..././/evil.com" and what is left is "/..//evil.com".
+	if hasDotSegment(path) {
 		return ""
 	}
 	return path
+}
+
+// isURLControl reports whether r is a character no two URL consumers handle the
+// same way: the C0 range, DEL, C1 (0x9b alone opens a control sequence on an
+// 8-bit terminal), and the Unicode line separators.
+func isURLControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == '\u2028' || r == '\u2029'
+}
+
+// hasDotSegment reports whether any segment of the path component is "." or "..".
+// The query and fragment are excluded: they are opaque to path resolution, and a
+// route legitimately carries them.
+func hasDotSegment(path string) bool {
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // AvatarURL validates and sanitizes an HTTPS-only URL.
@@ -72,11 +117,22 @@ func AvatarURL(rawURL string) string {
 	return rawURL
 }
 
-// Email validates an email address format.
+// Email reports whether email is an address and nothing else.
+//
+// net/mail.ParseAddress implements the whole RFC 5322 mailbox grammar, so it
+// also accepts "Admin <attacker@evil.com>" and "user@example.com (comment)" and
+// returns the address it dug out. Callers store the string they validated rather
+// than that extracted address, so anything that is not exactly the address is
+// rejected here: otherwise a display name ends up in the email column, shown as
+// the account's address while the mail goes elsewhere, and the exact-match
+// uniqueness lookup treats it as a second, unrelated account.
 func Email(email string) bool {
 	if len(email) > 254 {
 		return false
 	}
-	_, err := mail.ParseAddress(email)
-	return err == nil
+	addr, err := mail.ParseAddress(email)
+	if err != nil {
+		return false
+	}
+	return addr.Address == email
 }
