@@ -167,6 +167,25 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   already refused that pair, so the default install was a CrashLoopBackOff with the reason
   one line deep in the pod logs rather than a silently dropped cookie. Secure cookies are the
   default now, and the chart refuses to render the combination outside dev.
+* **`ES256` verified against a key on any curve.** `VerifyES256` derived the expected raw
+  signature length from whatever curve the presented key carried and never compared that curve
+  against the one `alg` names, though RFC 7518 assigns exactly P-256 to `ES256`. A proof
+  labelled `ES256` carrying a P-384 JWK, signed over SHA-256 and emitting 96 bytes of raw
+  `r||s`, verified end to end through `ValidateDPoPProof`. It buys no privilege today, since
+  `cnf.jkt` is populated nowhere and the attacker owns the key, but it becomes one when
+  sender-constrained tokens ship: the RFC 7638 thumbprint covers `crv`, so vault42 would
+  confirm proofs no conforming relying party accepts. The test that appeared to cover this
+  labelled its proof `ES384`, which the algorithm allowlist rejects before any key is read, so
+  it passed with the curve check deleted.
+* **One signature had unlimited spellings.** `encoding/base64` skips `\r` and `\n` anywhere
+  and, without `.Strict()`, ignores the unused low bits of the final character. A 256-byte
+  RS256 signature is 342 base64 characters holding 2052 bits, so 4 bits are unreachable: 15
+  alternate final characters verify, plus unlimited newline splices in the signature segment,
+  which the signing string does not cover. Nothing keys on the token string today, but the
+  compact serialization is what the DPoP `ath` binding hashes.
+* **An `exp` of zero read as "no expiry".** `MapClaims` returned nil for a numeric zero, and a
+  nil `exp` means none was claimed, so the most expired timestamp a token can carry validated
+  as never expiring while `RegisteredClaims` parsing the same payload called it expired.
 * **Retired signing keys accumulated forever.** `keystore.CleanupExpired` had no production
   caller, and no role held `DELETE` on `auth.signing_keys`, so it could not have reaped
   anything if something had called it. Migration 020 grants `vault_app` that `DELETE` and
