@@ -68,7 +68,14 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # genuinely deleted, re-measure and lower it in the same review as the deletion.
 # BASELINE_PACKAGES catches the shape the floor cannot: a package dropped from
 # the run while enough statements remain to clear the count.
-BASELINE_TOTAL_STATEMENTS = 10345
+# Raised from 10345 to 10693 by the 1.0.0 security work. The floor tracks the
+# canonical run, and that run grew by 348 statements because the audits added
+# code rather than because the measurement widened: the https endpoint checks in
+# internal/oauth2, the strict enum and boolean validation in internal/config, the
+# --out and argv-warning paths in cmd/recover, the honeypot token parity work,
+# and the expired-row reaper in internal/cache. Measured, not estimated: a full
+# cov_run over every suite reports 10693.
+BASELINE_TOTAL_STATEMENTS = 10693
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
