@@ -328,9 +328,11 @@ operator can decide whether to enable it.
 1. `VAULT_MINT_ENABLED=true`, and `VAULT_MINT_AUDIENCE` set to a value other than
    `VAULT_ORIGIN`. `POST /mint` is not mounted otherwise, and the server refuses to start if the
    two are equal. Both default to off and unset.
-2. A service client record carries `mint:token` in its scope list, written into the seed file or
-   granted through the admin client API. Nothing grants it implicitly, and no user-token
-   issuance path can produce it.
+2. A service client record carries `mint:token` in its scope list, granted through `POST
+   /admin/clients` by a `super_admin` and recorded in an `admin:client_create` audit row. Since
+   migration 023 that is the only writer: the seed file and `vault add-client` run under
+   `vault_app`, which the database now refuses for any capability scope (AR-17). Nothing grants
+   it implicitly, and no user-token issuance path can produce it.
 3. The caller holds that client's secret and exchanges it at `POST /client/token`. A user
    session cannot reach the route: the handler refuses any token with no `client_id` claim,
    ahead of the scope check.
@@ -380,6 +382,102 @@ and stops there treats a minted assertion and a real login as the same fact.
 
 **Revisit when** a second tenant's service is granted `mint:token` in the same deployment. At
 that point the missing binding stops being an accepted risk and becomes a defect.
+
+---
+
+### AR-17: What Stops `vault_app` Issuing Itself a Capability Credential Is a Trigger, Not the Grant
+
+**Severity:** Low | **Source:** red-team review of `auth.clients` and the seed path (post-1.0.0)
+
+Migration 001 grants `vault_app` SELECT and INSERT on `auth.clients` so `cmd/vault` can seed
+clients at startup, and `scopes` is a plain `TEXT[]` with no constraint and no catalog. Until
+this change the grant therefore read "may write any authorization this service recognizes": a
+statement reaching the database as the application role could insert a client row carrying
+`mint:token` and `kms:unwrap` with a `secret_hash` it chose, then present that secret at `POST
+/client/token` and receive a token carrying the scopes verbatim. `RequireScope` compares whole
+strings, so the token opened `POST /mint` and `POST /kms/unwrap`. That is the step from "can
+write application tables" to "can assert any subject to every relying party in the estate, and
+can open every envelope the KMS oracle will decrypt", and it is also the step that turns a
+defect with no network reach into a bearer credential usable from outside the database.
+
+`VAULT_MINT_SCOPES` never covered this. That allow-list and `service.mintDeniedScopes` behind it
+bound what a *minted token* may carry; nothing read them on the way into a *client row*.
+
+Migration 023 closes it with `clients_capability_scope_guard`, a `BEFORE INSERT OR UPDATE`
+trigger that refuses any row whose `scopes` overlap `auth.capability_scopes()` unless the writer
+holds `vault_admin`. `POST /admin/clients` is now the only writer of a privileged client, gated
+on `clients:create` (`super_admin` only) and audited.
+
+**Why the residue is accepted:**
+
+- **The grant has not moved, and could not.** PostgreSQL has column-level INSERT, but the
+  privilege is checked against the columns a statement *names*, not the values it writes.
+  `ClientRepo.Create` lists `scopes` in every INSERT including the ordinary ones, so `REVOKE
+  INSERT (scopes)` would refuse plain seeding too. Migration 015 could take `email` out of the
+  statement before revoking the column; here the column is the point of the statement.
+- **The guard has to ask who is writing.** Every other trigger in this tree states a rule about a
+  row. This one cannot: a client row carrying `mint:token` is legitimate from the admin plane and
+  an escalation from the application role, so the membership test on `vault_admin` is load-bearing
+  and is the part to review if the role model ever changes.
+- **It is not a boundary against the owner.** `ALTER TABLE ... DISABLE TRIGGER`,
+  `session_replication_role = replica` and TRUNCATE all bypass row triggers, and the migration
+  role holds them. Same limitation as AR-14 and AR-15, and the same threat model: the two
+  least-privilege roles the services connect as.
+- **Two copies of one list.** The capability scopes are named in Go and in SQL and neither can be
+  derived from the other, so `tests/spec/capability_scope_parity_test.go` fails the build when
+  they disagree, and a second test fails it when the migration spells a scope anywhere but inside
+  `auth.capability_scopes()`.
+- **A documented convenience is gone.** A `VAULT_SEED_FILE` or a `vault add-client` naming a
+  capability scope now aborts. That is intended: a seed file names a capability and no authority
+  for it, and the process reading it is the one this model treats as semi-hostile. The sibling
+  commands show where client management already lived -- `vault revoke-client` and `vault
+  rotate-client-secret` are UPDATE statements on a table `vault_app` has never held UPDATE on,
+  so both have failed with 42501 in every deployment since 001.
+- **Guarded against regression.**
+  `TestVaultAppCannotGrantItselfACapabilityScopeThroughAClientRow` connects as the real
+  `vault_app` and `vault_admin` roles with the real grants and asserts the whole model: ordinary
+  seeding still works, each capability scope is refused, a capability scope hidden in a mixed list
+  is refused, the admin plane can still create a privileged client, and UPDATE stays denied.
+
+---
+
+### AR-18: `vault_app` Can Still Release an Account Lock, and Owns Every Password Hash
+
+**Severity:** Low | **Source:** red-team review of the `auth.users` account-state columns (post-1.0.0)
+
+Migration 004 granted `vault_app` UPDATE on the account-state columns in one line, and 006 added
+`import_pending`. Nobody asked which of those writes the running server makes. Until this change
+the application role could ban or disable any account or every account, lift a ban, rewrite a
+recorded ban reason, un-confirm a verified address, and put a claimed account back into
+`import_pending`. None of those is a statement any code path issues.
+
+Migration 024 splits them by whether a writer exists. `banned`, `ban_reason` and `disabled` have
+none -- they are set once at INSERT by the import path, under `vault_admin` -- so the privilege is
+revoked outright. `email_verified` and `import_pending` keep theirs, because `UserRepo.VerifyEmail`
+and `UserRepo.ClearImportPending` are `vault_app`'s own statements, and
+`users_account_state_transitions` narrows each to the direction its writer moves in.
+
+**Why the residue is accepted:**
+
+- **`locked_until` could not be narrowed without breaking a working command.** The intended rule
+  was that `vault_app` may set a lock and may clear one only once it has expired. `vault
+  lock-user` and `vault unlock-user` call `UserRepo.LockUntil` and `UserRepo.Unlock`, they live in
+  `cmd/vault`, and `cmd/vault` opens its pool with `cfg.DatabaseURL("app")`, so releasing a live
+  lock is something `vault_app` does on an operator's command. The database cannot tell that
+  invocation from the web-facing process. Pointing the two subcommands at the admin DSN, or
+  removing them in favour of `POST /admin/users/{id}/lock` and `/unlock`, which already do this
+  under `vault_admin`, is a change in Go; the column can be narrowed after it.
+- **Account takeover through this role is not closed and cannot be.** `vault_app` keeps `UPDATE
+  (password_hash)` because password change and reset are its job, so anything reaching the
+  database as that role can already authenticate as any account whose state permits login. What
+  024 removes is the part password control does not reach: lifting a ban, which the account-state
+  gate refuses before any credential is read, and mass denial of service, which no code path can
+  perform at all.
+- **It is not a boundary against the owner**, for the reasons AR-14 and AR-15 give.
+- **Guarded against regression.** `TestVaultAppCannotFlipThePrivilegedAccountStateColumns`
+  connects as the real roles with the real grants and asserts both halves: the refusals, and that
+  email confirmation, import claiming, the import path's own ban and the lock/unlock pair all
+  still work.
 
 ---
 
