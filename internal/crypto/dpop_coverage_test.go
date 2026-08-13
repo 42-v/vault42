@@ -263,7 +263,7 @@ func TestDPoPJWKMismatchSignatureKey(t *testing.T) {
 // allowlist refuses ES384 outright, before any key is looked at.
 //
 // The name matters because this test cannot say anything about curves. The
-// proof is labelled ES384, so WithValidMethods rejects it while the P-384 key
+// proof is labeled ES384, so WithValidMethods rejects it while the P-384 key
 // below is still unread, and the test passes with the ES256 curve check deleted
 // entirely. It was previously named for the curve, which read as coverage of a
 // property nothing here exercises.

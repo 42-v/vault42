@@ -170,12 +170,12 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 * **`ES256` verified against a key on any curve.** `VerifyES256` derived the expected raw
   signature length from whatever curve the presented key carried and never compared that curve
   against the one `alg` names, though RFC 7518 assigns exactly P-256 to `ES256`. A proof
-  labelled `ES256` carrying a P-384 JWK, signed over SHA-256 and emitting 96 bytes of raw
+  labeled `ES256` carrying a P-384 JWK, signed over SHA-256 and emitting 96 bytes of raw
   `r||s`, verified end to end through `ValidateDPoPProof`. It buys no privilege today, since
   `cnf.jkt` is populated nowhere and the attacker owns the key, but it becomes one when
   sender-constrained tokens ship: the RFC 7638 thumbprint covers `crv`, so vault42 would
   confirm proofs no conforming relying party accepts. The test that appeared to cover this
-  labelled its proof `ES384`, which the algorithm allowlist rejects before any key is read, so
+  labeled its proof `ES384`, which the algorithm allowlist rejects before any key is read, so
   it passed with the curve check deleted.
 * **One signature had unlimited spellings.** `encoding/base64` skips `\r` and `\n` anywhere
   and, without `.Strict()`, ignores the unused low bits of the final character. A 256-byte
