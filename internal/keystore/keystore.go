@@ -124,13 +124,28 @@ func (ks *KeyStore) withMasterKey(fn func(masterKey []byte) error) error {
 }
 
 // New creates a new KeyStore. masterKey must be exactly 32 bytes (AES-256).
+//
+// The key is copied rather than retained, because Stop wipes it and the
+// caller's slice is shared. cmd/vault takes one working copy of the master key
+// and hands that same slice to this constructor and to the service container,
+// which passes it on to the identity, blob, service-document and TOTP paths.
+// Retaining the caller's array made Stop zero the key all of those were still
+// using, and 32 zero bytes is still a valid AES-256 key, so a request draining
+// through shutdown encrypted successfully against it and wrote a row no later
+// process could ever decrypt.
+//
+// Owning the copy is what makes the wipe in Stop safe to perform at all: it
+// destroys this keystore's key material and nobody else's.
 func New(pool *pgxpool.Pool, masterKey []byte, retentionPeriod time.Duration) (*KeyStore, error) {
 	if len(masterKey) != 32 {
 		return nil, errors.New("keystore: master key must be 32 bytes")
 	}
+	owned := make([]byte, len(masterKey))
+	copy(owned, masterKey)
+
 	return &KeyStore{
 		pool:            pool,
-		masterKey:       masterKey,
+		masterKey:       owned,
 		publicKeys:      make(map[string]*rsa.PublicKey),
 		retentionPeriod: retentionPeriod,
 		stopCh:          make(chan struct{}),
