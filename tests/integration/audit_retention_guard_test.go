@@ -6,7 +6,7 @@ import (
 )
 
 // TestAuditCleanupRejectsEveryIntervalWhoseCutoffIsNotAWholeDayBack is the
-// behavioural half of the retention guard regression. The cheap structural half
+// behavioral half of the retention guard regression. The cheap structural half
 // lives in tests/spec and needs no container.
 //
 // audit.cleanup_old_entries is the only path that can delete an audit row: the
@@ -18,7 +18,7 @@ import (
 //
 // Migration 012 checked the caller's INTERVAL against a minimum and then built
 // the DELETE predicate by subtracting that INTERVAL from NOW(). Those disagree
-// whenever the interval carries a month: comparison canonicalises a month to 30
+// whenever the interval carries a month: comparison canonicalizes a month to 30
 // days so intervals can be ordered without a reference date, subtraction uses
 // the real calendar month. INTERVAL '1 mon -29 days' compares as 1 day and
 // passes; evaluated in February it subtracts to a cutoff one day in the FUTURE
@@ -80,7 +80,7 @@ func TestAuditCleanupRejectsEveryIntervalWhoseCutoffIsNotAWholeDayBack(t *testin
 				var cutoff string
 				_ = pool.QueryRow(ctx, "SELECT (NOW() - $1::interval)::text", iv).Scan(&cutoff)
 				t.Fatalf("audit.cleanup_old_entries(%q) was ACCEPTED, but its cutoff is %s, "+
-					"less than a day ago. The guard compared a canonicalised interval instead "+
+					"less than a day ago. The guard compared a canonicalized interval instead "+
 					"of the cutoff it deletes on, so this call would take audit rows written "+
 					"minutes before it, including whatever recorded the caller.", iv, cutoff)
 			}

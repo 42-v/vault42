@@ -14,7 +14,7 @@
 --     DELETE ... WHERE timestamp < NOW() - retention_interval
 --
 -- Comparing two intervals and subtracting an interval from a timestamp are
--- different operations in Postgres. Comparison canonicalises a month to 30 days
+-- different operations in Postgres. Comparison canonicalizes a month to 30 days
 -- so that intervals are totally ordered without a reference date. Subtraction
 -- has a reference date, so it uses the real calendar month. For any interval
 -- carrying a month component the two disagree, and a caller chooses the
