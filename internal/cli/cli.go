@@ -375,7 +375,7 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 		return true
 	}
 
-	if err := seed.Run(ctx, sf, seed.Deps{Users: c.users, Clients: c.clients, Pepper: c.pepper}); err != nil {
+	if err := seed.Run(ctx, sf, seed.Deps{Users: c.users, Clients: c.clients}, c.pepper); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}

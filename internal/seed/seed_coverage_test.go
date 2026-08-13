@@ -253,7 +253,7 @@ func TestRun_PropagatesErrors(t *testing.T) {
 	ctx := context.Background()
 	sf := &SeedFile{Clients: []ClientSeed{{Name: "x", Role: "frontend"}}}
 	deps := Deps{Clients: &seedClientRepo{getByName: func(context.Context, string) (*model.Client, error) { return nil, errors.New("db") }}}
-	if err := Run(ctx, sf, deps); err == nil {
+	if err := Run(ctx, sf, deps, ""); err == nil {
 		t.Error("Run should propagate a client seed error")
 	}
 }

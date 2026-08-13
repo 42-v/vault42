@@ -27,7 +27,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			Users: &mocks.MockUserRepo{},
 		}
 
-		err := Run(context.Background(), sf, deps)
+		err := Run(context.Background(), sf, deps, "")
 		if err == nil {
 			t.Fatal("seeding reported success while the database was down")
 		}
@@ -46,7 +46,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			Users: &mocks.MockUserRepo{},
 		}
 
-		if err := Run(context.Background(), sf, deps); err == nil {
+		if err := Run(context.Background(), sf, deps, ""); err == nil {
 			t.Fatal("seeding reported success though the client was never written")
 		}
 	})
@@ -61,7 +61,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			},
 		}
 
-		err := Run(context.Background(), sf, deps)
+		err := Run(context.Background(), sf, deps, "")
 		if err == nil {
 			t.Fatal("seeding reported success though the first user was never written")
 		}
@@ -79,7 +79,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			},
 		}
 
-		if err := Run(context.Background(), sf, deps); err == nil {
+		if err := Run(context.Background(), sf, deps, ""); err == nil {
 			t.Fatal("seeding reported success while the user lookup was failing")
 		}
 	})

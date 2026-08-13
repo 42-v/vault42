@@ -87,14 +87,17 @@ func FilterUserRoles(roles []string) []string {
 }
 
 // Deps holds the repositories needed for seeding.
+//
+// The pepper is deliberately NOT a field here. It was one, and cmd/vault's
+// startup path left it unset while the CLI and the admin gateway set it, so the
+// server seeded every user with an unpeppered hash that login could never
+// match. A struct field that is merely absent compiles, and an empty pepper is
+// a legal configuration, so nothing anywhere could tell the omission from the
+// choice. It is a positional parameter of Run now, which makes forgetting it a
+// compile error instead.
 type Deps struct {
 	Users   repository.UserRepository
 	Clients repository.ClientRepository
-	// Pepper is the optional HMAC-pepper applied to user/admin password hashes.
-	// Empty = no pepper (back-compat for deployments without VAULT_PEPPER).
-	// Client secrets are NEVER peppered — they are full-entropy random tokens
-	// where pepper provides no defensive value.
-	Pepper string
 }
 
 // Load reads and validates a seed file from the given path.
@@ -187,7 +190,17 @@ func validate(sf *SeedFile) error {
 
 // Run executes the seed file against the database. Existing entries are
 // skipped (idempotent). Client secrets are generated and printed to stdout.
-func Run(ctx context.Context, sf *SeedFile, deps Deps) error {
+//
+// pepper is the HMAC-pepper applied to seeded user passwords, and must be the
+// same value AuthService verifies logins with. An empty pepper is legal, for
+// deployments that run without VAULT_PEPPER_FILE, but it has to be passed
+// explicitly: a seeded account whose hash was built with a different pepper
+// than login uses can never authenticate, and nothing reports that, because
+// both halves are individually correct.
+//
+// Client secrets are never peppered. They are full-entropy random tokens where
+// a pepper adds nothing.
+func Run(ctx context.Context, sf *SeedFile, deps Deps, pepper string) error {
 	for _, cs := range sf.Clients {
 		if err := seedClient(ctx, cs, deps.Clients); err != nil {
 			return fmt.Errorf("seed client %q: %w", cs.Name, err)
@@ -195,7 +208,7 @@ func Run(ctx context.Context, sf *SeedFile, deps Deps) error {
 	}
 
 	for _, us := range sf.Users {
-		if err := seedUser(ctx, us, deps.Users, deps.Pepper); err != nil {
+		if err := seedUser(ctx, us, deps.Users, pepper); err != nil {
 			return fmt.Errorf("seed user %q: %w", us.Email, err)
 		}
 	}
