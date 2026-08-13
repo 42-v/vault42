@@ -343,13 +343,32 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput, ip stri
 	s.auditLog.Log(ctx, audit.Registration, userID, "", ip, "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 		map[string]interface{}{"email": maskEmail(email)}, 0)
 
-	// Send verification email (non-critical — log but don't fail registration)
-	if s.cache != nil && s.emailSender != nil {
-		app := vaultemail.AppFromContext(ctx)
-		go s.sendVerificationEmail(email, userID, app, sanitize.RedirectPath(input.RedirectTo)) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
-	}
+	s.SendSignupVerification(ctx, email, userID, sanitize.RedirectPath(input.RedirectTo))
 
 	return &RegisterResult{UserID: userID, Email: email}, nil
+}
+
+// SendSignupVerification mails a verification link for an account that was just
+// created, and returns immediately. Delivery outlives the request and is best
+// effort: the row is already committed when this is called, so a mailer outage
+// must not turn a completed signup into a failure the caller reports.
+//
+// Every signup path goes through here so none of them can drift into its own
+// error convention. Password registration is one. A social login whose provider
+// does not vouch for the address is the other, and that one is not optional:
+// GET /auth/verify-email consumes a token it never issues, so an unverified
+// OAuth account that received no mail can never become verified, and because the
+// address is taken a later login through a provider that does verify it is
+// refused with 409.
+//
+// redirectTo is a sanitized relative path the verification link returns the user
+// to, or empty for the default landing page.
+func (s *AuthService) SendSignupVerification(ctx context.Context, to, userID, redirectTo string) {
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	app := vaultemail.AppFromContext(ctx)
+	go s.sendVerificationEmail(to, userID, app, redirectTo) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
 }
 
 // sendVerificationEmail generates a verification token, stores it, and sends the
@@ -360,12 +379,14 @@ func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) 
 	token, err := vaultcrypto.RandomHex(32)
 	if err != nil {
 		log.Printf("auth: failed to generate verification token: %v", err)
+		s.auditVerificationNotSent(ctx, userID, to, "token_generation_failed")
 		return
 	}
 
 	tokenHash := vaultcrypto.SHA256Hex(token)
 	if err := s.cache.Set(ctx, "verify:"+tokenHash, userID, 24*time.Hour); err != nil {
 		log.Printf("auth: failed to store verification token: %v", err)
+		s.auditVerificationNotSent(ctx, userID, to, "token_store_failed")
 		return
 	}
 
@@ -378,7 +399,26 @@ func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) 
 		URL: verifyURL,
 	}); err != nil {
 		log.Printf("auth: failed to send verification email to %s: %v", maskEmail(to), err)
+		s.auditVerificationNotSent(ctx, userID, to, "delivery_failed")
 	}
+}
+
+// auditVerificationNotSent records that an account was left without the
+// verification link it needs. The send is deliberately non-fatal, which means
+// the only evidence it ever failed is this record plus the log line: the account
+// looks like any other unverified one, and an operator asked why a user cannot
+// log in has nothing else to read. The address is masked, matching the
+// Registration event the same signup already writes.
+func (s *AuthService) auditVerificationNotSent(ctx context.Context, userID, to, reason string) {
+	if s.auditLog == nil {
+		return
+	}
+	s.auditLog.Log(ctx, audit.Registration, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"action": "verification_email_not_sent",
+			"reason": reason,
+			"email":  maskEmail(to),
+		}, 0)
 }
 
 // importClaimTTL is how long an import claim link stays valid, and therefore also
