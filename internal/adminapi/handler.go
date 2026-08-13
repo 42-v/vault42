@@ -336,8 +336,17 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	// Best-effort by design: the lock itself has already been written, and
 	// failing the request here would tell the operator the account is not locked
 	// when it is. The audit event records whether the revocation succeeded.
+	// The nil check is not defensive noise. This repository arrives as a
+	// positional argument, cmd/admin-gateway passed nil for it, and the panic
+	// landed here: after the lock had committed, on the one route an operator
+	// reaches for during a takeover. Recovery turned it into a 500 that reads as
+	// "the lock failed", which invites an unlock. A missing repository now
+	// reports revoked=false in the audit row, which is the honest answer and the
+	// one this function already knows how to give.
 	revoked := true
-	if err := h.tokens.RevokeAllForUser(r.Context(), id); err != nil {
+	if h.tokens == nil {
+		revoked = false
+	} else if err := h.tokens.RevokeAllForUser(r.Context(), id); err != nil {
 		revoked = false
 	}
 

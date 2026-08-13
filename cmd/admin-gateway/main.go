@@ -169,8 +169,12 @@ func main() {
 		masterKey, cfg.Pepper, cfg.SessionTTL, cfg.MaxFailed, cfg.LockoutDur,
 	)
 
+	// refreshTokenRepo, not nil. It is built above and was already being handed
+	// to the seeding path; passing nil here left POST /admin/users/{id}/lock
+	// dereferencing it, so the lock committed and the request then panicked into
+	// a 500 with the user's sessions still alive and no audit row written.
 	apiHandler := adminapi.NewHandler(
-		userRepo, clientRepo, nil, auditRepo,
+		userRepo, clientRepo, refreshTokenRepo, auditRepo,
 		adminUserRepo, adminSessionRepo, adminConfigRepo,
 		ks, auditLogger, masterKey, cfg.Pepper,
 	)

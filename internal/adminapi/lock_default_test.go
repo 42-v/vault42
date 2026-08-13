@@ -66,3 +66,58 @@ func TestLockUser_UnparseableBodyStillLocksForTheDefault(t *testing.T) {
 		})
 	}
 }
+
+// TestLockUser_NilTokenRepoLocksWithoutPanicking pins the guard that keeps a
+// wiring mistake from becoming a crash on the containment route.
+//
+// cmd/admin-gateway passed nil for this repository, and LockUser dereferenced
+// it after the lock had already committed. The recovery middleware turned the
+// panic into a 500, so the operator responding to a takeover saw "lock failed"
+// on an account that was in fact locked, no audit row was written, and an
+// unlock to try again would have handed the account back.
+//
+// The wiring itself is asserted in tests/spec, because a unit test that
+// supplies its own mock cannot see what main.go passes. This one covers what
+// happens if it goes wrong again: the lock still commits, the request still
+// succeeds, and the audit row says the sessions were not revoked, which is the
+// honest answer rather than a crash.
+func TestLockUser_NilTokenRepoLocksWithoutPanicking(t *testing.T) {
+	var lockedUntil time.Time
+	var auditedRevoked any
+
+	h := &Handler{
+		users: &mocks.MockUserRepo{
+			LockUntilFn: func(_ context.Context, _ string, until time.Time) error {
+				lockedUntil = until
+				return nil
+			},
+		},
+		tokens: nil,
+		auditLog: audit.NewLogger(&mocks.MockAuditRepo{
+			InsertFn: func(_ context.Context, e *model.AuditEntry) error {
+				auditedRevoked = e.Metadata["sessions_revoked"]
+				return nil
+			},
+		}, 0),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/users/u-1/lock", strings.NewReader(`{"duration":"24h"}`))
+	req.SetPathValue("id", "u-1")
+	req = req.WithContext(context.WithValue(req.Context(), adminUserKey,
+		&model.AdminUser{ID: "adm-1", Username: "root"}))
+
+	rec := httptest.NewRecorder()
+	h.LockUser(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: a missing token repository must not turn the lock into "+
+			"a failure the operator reads as 'the account is not locked'", rec.Code)
+	}
+	if lockedUntil.IsZero() {
+		t.Error("the lock was not written")
+	}
+	if auditedRevoked != false {
+		t.Errorf("sessions_revoked = %v, want false: the audit row is where an operator learns "+
+			"the sessions are still alive, so it must not claim they were revoked", auditedRevoked)
+	}
+}
