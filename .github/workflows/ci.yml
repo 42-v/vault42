@@ -316,6 +316,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       go_changed: ${{ steps.filter.outputs.go }}
+      goreleaser_changed: ${{ steps.filter.outputs.goreleaser }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -335,6 +336,13 @@ jobs:
               - 'scripts/release-check.sh'
               - 'scripts/coverage.sh'
               - 'scripts/lib/coverage-env.sh'
+            # The release config is not a Go file, so an edit that touched only
+            # it left goreleaser-config skipped and the first parse of the file
+            # happened on the tag push, with the tag already published and the
+            # image jobs already running.
+            goreleaser:
+              - '.goreleaser.yaml'
+              - '.goreleaser.yml'
 
   modules:
     name: Go module hygiene
@@ -400,11 +408,16 @@ jobs:
 
   # The release artifacts are built by goreleaser, not by the Dockerfiles, so a
   # config error surfaces here rather than after a tag is already pushed.
+  #
+  # `check` parses the config and reports schema errors and deprecations without
+  # running the before-hooks, which install pnpm dependencies and build the SPA
+  # into internal/frontend/dist. That is what keeps this affordable on every
+  # edit to the config itself.
   goreleaser-config:
     name: GoReleaser config
     runs-on: ubuntu-latest
     needs: [changes]
-    if: needs.changes.outputs.go_changed == 'true'
+    if: needs.changes.outputs.go_changed == 'true' || needs.changes.outputs.goreleaser_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

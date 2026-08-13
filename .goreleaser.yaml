@@ -52,6 +52,14 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # The three stamps below have to match variables declared in cmd/bridge
+    # itself. cmd/bridge is deliberately stdlib-only and links nothing under
+    # internal/, so they cannot be borrowed from a shared package: a -X naming a
+    # symbol the binary does not link is dropped by the linker without a warning
+    # and with exit 0. That is exactly what happened here for every release
+    # before 1.0.0, and this file read as though the bridge were stamped like
+    # the other two binaries while it shipped reporting no version at all.
+    # tests/spec/version_stamp_test.go keeps the two sides in agreement.
     ldflags:
       - -s -w
       - -X main.Version={{ .Version }}

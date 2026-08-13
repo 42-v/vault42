@@ -27,6 +27,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -35,7 +36,27 @@ import (
 	"time"
 )
 
+// Set at build time via -ldflags, matching cmd/vault and cmd/admin-gateway.
+//
+// These have to be declared here rather than borrowed from a shared package.
+// cmd/bridge is deliberately stdlib-only and imports nothing under internal/,
+// and a -X naming a symbol the binary does not link is dropped by the linker
+// without a warning and with exit 0. .goreleaser.yaml carried the three stamps
+// for this build from the start and none of them ever landed, so every release
+// shipped a bridge that reported no version while the config read as though it
+// were stamped like the other two.
+var (
+	Version   = "dev"
+	GitCommit = "unknown"
+	BuildTime = "unknown"
+)
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Printf("bridge %s (commit: %s, built: %s)\n", Version, GitCommit, BuildTime)
+		return
+	}
+
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	cfg, err := LoadConfig()

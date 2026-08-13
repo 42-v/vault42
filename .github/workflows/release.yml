@@ -11,7 +11,9 @@ name: Release
 # release, no image, and nuget.org jumps 0.8.0 to 0.9.0.
 #
 # workflow_dispatch re-runs a release for a tag that already exists, so a
-# registry outage no longer costs a version number.
+# registry outage no longer costs a version number. Start it with that tag
+# selected as the ref: the version input names the release, and the ref decides
+# what gets built, so the detect job below refuses a run where the two disagree.
 on:
   push:
     tags:
@@ -47,6 +49,7 @@ jobs:
     outputs:
       version: ${{ steps.parse.outputs.version }}
       tag: ${{ steps.parse.outputs.tag }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -63,7 +66,43 @@ jobs:
             || { echo "::error::not a semantic version: $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version"    >> "$GITHUB_OUTPUT"
-          echo "Releasing $version"
+
+          # The optional -suffix the regex above admits is the whole difference
+          # between a release and a candidate, and this is the only place that
+          # reading is done. Jobs that have to treat a candidate differently,
+          # starting with the floating image tags, take the answer from here
+          # instead of re-reading the version string and drifting from the job
+          # that decides what the release itself is.
+          case $version in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (prerelease: $prerelease)"
+
+      # The version input names the release; it never reaches a checkout. Every
+      # job here runs actions/checkout with no ref, which takes GITHUB_SHA, and
+      # GITHUB_SHA on a workflow_dispatch is the head of the ref the run was
+      # started from. Dispatching 1.0.0 from a main that has moved past v1.0.0
+      # therefore built main and published it as 1.0.0, over the images, the
+      # chart, the NuGet packages and the release assets, while the tag kept
+      # naming the reviewed commit. The version consistency step below could not
+      # see it, because VERSION stays at the released value until the next bump.
+      #
+      # Requiring the run to start from the tag, rather than pointing the
+      # checkouts at the tag, is what keeps the rest of the file honest:
+      # GITHUB_SHA is also what the ancestor check, the sha- image tags, the
+      # GIT_COMMIT build arg and the release body record.
+      - name: Release ref is the tag being published
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          set -eu
+          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" \
+            || { echo "::error::$TAG does not exist on origin; a release publishes a tag that was already pushed"; exit 1; }
+          tagged=$(git rev-list -n 1 "$TAG")
+          [ "$tagged" = "$GITHUB_SHA" ] \
+            || { echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA; re-run the workflow with $TAG as the selected ref"; exit 1; }
 
       # A tag on a branch that never merged would publish code main does not
       # have, under a version number main will later reuse.
@@ -150,6 +189,41 @@ jobs:
         id: buildtime
         run: echo "value=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
 
+      # `docker pull ghcr.io/42-v/vault42` with no tag resolves to :latest, so
+      # :latest is what everyone who never pinned a version is running, and it is
+      # the reference the published quickstarts hand out by name. Every release
+      # used to move it, prereleases included, which meant one `v1.1.0-rc.1` tag
+      # served a release candidate to all of them with no version number changing
+      # anywhere they could see it. A candidate now publishes its own version and
+      # its sha- build only.
+      #
+      # The test is for "false" rather than against "true" so that a missing or
+      # unexpected classification withholds :latest: a floating tag left one
+      # release behind is a rerun away from correct, while a floating tag pointing
+      # at a candidate is already in production wherever it was pulled.
+      - name: Resolve image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          PRERELEASE: ${{ needs.detect.outputs.prerelease }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          emit() {
+            {
+              echo "$1<<TAGS"
+              echo "ghcr.io/42-v/$2:${VERSION}"
+              echo "ghcr.io/42-v/$2:sha-${SHA}"
+              if [ "$PRERELEASE" = "false" ]; then
+                echo "ghcr.io/42-v/$2:latest"
+              fi
+              echo "TAGS"
+            } >> "$GITHUB_OUTPUT"
+          }
+          emit vault  vault42
+          emit admin  vault42-admin-gateway
+          emit bridge vault42-bridge
+
       - name: Build and push vault42
         id: build_vault
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -157,10 +231,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
-            ghcr.io/42-v/vault42:latest
-            ghcr.io/42-v/vault42:sha-${{ github.sha }}
+          tags: ${{ steps.tags.outputs.vault }}
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
@@ -178,10 +249,7 @@ jobs:
           file: Dockerfile.admin-gateway
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
-            ghcr.io/42-v/vault42-admin-gateway:latest
-            ghcr.io/42-v/vault42-admin-gateway:sha-${{ github.sha }}
+          tags: ${{ steps.tags.outputs.admin }}
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
@@ -202,10 +270,7 @@ jobs:
           file: Dockerfile.bridge
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/42-v/vault42-bridge:${{ needs.detect.outputs.version }}
-            ghcr.io/42-v/vault42-bridge:latest
-            ghcr.io/42-v/vault42-bridge:sha-${{ github.sha }}
+          tags: ${{ steps.tags.outputs.bridge }}
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
