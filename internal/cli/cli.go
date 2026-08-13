@@ -253,32 +253,26 @@ func (c *CLI) rotateClientSecret(ctx context.Context, args []string) bool {
 	return true
 }
 
-func (c *CLI) lockUser(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault lock-user --admin-token <token> --id <user-id>")
-		return true
-	}
-	until := time.Now().Add(365 * 24 * time.Hour) // lock for 1 year
-	if err := c.users.LockUntil(ctx, id, until); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("User %s locked until %s\n", id, until)
-	}
+// lockUser is retired. Locking an account from cmd/vault ran as the vault_app
+// role and set auth.users.locked_until directly: no audit row, no session
+// revocation, and — because vault_app writes the same column the admin plane
+// uses for containment — it could silently release or override a lock an admin
+// had imposed. Account containment belongs on the admin gateway, which audits
+// the action, revokes the target's refresh tokens, and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) lockUser(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: lock-user is retired. Lock accounts on the admin gateway: POST /admin/users/{id}/lock (operator role, mTLS loopback). The vault CLI no longer writes account locks.")
 	return true
 }
 
-func (c *CLI) unlockUser(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault unlock-user --admin-token <token> --id <user-id>")
-		return true
-	}
-	if err := c.users.Unlock(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("User %s unlocked.\n", id)
-	}
+// unlockUser is retired for the same reason as lockUser: a vault_app Unlock here
+// could release a lock the admin plane set, with no audit trail. Use the admin
+// gateway's unlock route instead.
+func (c *CLI) unlockUser(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: unlock-user is retired. Unlock accounts on the admin gateway: POST /admin/users/{id}/unlock (operator role, mTLS loopback). The vault CLI no longer writes account unlocks.")
 	return true
 }
 
