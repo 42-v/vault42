@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -111,6 +112,44 @@ func TestNewDecoyHandlerLoadsEveryTemplate(t *testing.T) {
 		if dh.templates[tmpl] == nil {
 			t.Errorf("decoy path %q maps to %q, which was not loaded", path, tmpl)
 		}
+	}
+}
+
+// TestNewDecoyHandlerKeepsGoingWhenAPageDoesNotLoad drives the parse failure in
+// the constructor loop. Swapping the embedded set for an empty one is the only
+// way in: the four pages are compiled into the binary and
+// TestNewDecoyHandlerLoadsEveryTemplate proves they parse, so no caller can
+// supply a broken one.
+//
+// The branch logs and continues on purpose, and both halves of that matter. A
+// constructor that gave up on the first bad page would leave the remaining
+// decoys unloaded, and one that refused to start would turn a missing cosmetic
+// asset into a bridge that does not come up. What must survive is the flag: the
+// trap is the point, the page is the decoration.
+func TestNewDecoyHandlerKeepsGoingWhenAPageDoesNotLoad(t *testing.T) {
+	original := decoyFS
+	decoyFS = embed.FS{}
+	t.Cleanup(func() { decoyFS = original })
+
+	fs := NewFlagStore(time.Hour, "")
+	dh := NewDecoyHandler(fs, nil)
+
+	if dh == nil {
+		t.Fatal("NewDecoyHandler returned nil when no template loaded")
+	}
+	if len(dh.templates) != 0 {
+		t.Fatalf("loaded %d templates out of an empty filesystem, want 0", len(dh.templates))
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/wp-admin", nil)
+	w := httptest.NewRecorder()
+	dh.ServeDecoy(w, req, "10.0.0.7", "wp-login.html")
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+	if !fs.IsFlagged("10.0.0.7") {
+		t.Error("the caller escaped the flag because the decoy page had not loaded")
 	}
 }
 

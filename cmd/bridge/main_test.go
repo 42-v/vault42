@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -365,5 +368,165 @@ func TestMainStartsServesAndShutsDown(t *testing.T) {
 	if err == nil {
 		conn.Close() // #nosec G104 -- test client cleanup
 		t.Errorf("%s still accepts connections after shutdown", listenAddr)
+	}
+}
+
+// syncBuffer collects the standard logger's output while main is running, which
+// writes from the reaper, the listener goroutine and main itself at once.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestMainStopsWaitingOnARequestTheUpstreamNeverAnswers is the shutdown path
+// with something still in flight. A vault that has stopped answering is exactly
+// when a bridge gets restarted, so this is the shape of shutdown an operator
+// meets on a bad day rather than a rare one.
+//
+// Shutdown gets fifteen seconds and then main has to let go and return. Waiting
+// on the request instead, which is what an undeadlined context.Background()
+// would do, keeps the process alive past the grace period until Kubernetes
+// sends SIGKILL, and a SIGKILLed bridge takes every other live connection down
+// with it rather than draining them. The error the timeout produces is logged
+// and not swallowed, because it is the only signal an operator gets that the
+// drain did not finish.
+func TestMainStopsWaitingOnARequestTheUpstreamNeverAnswers(t *testing.T) {
+	// The assertion is that the drain deadline elapses and main still returns,
+	// so the test costs the full 15s grace period by construction. CI never
+	// passes -short, so the gate always runs there; this only keeps a local
+	// `go test -short ./...` quick.
+	if testing.Short() {
+		t.Skip("waits out the 15s shutdown grace period by design")
+	}
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
+
+	realVault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		io.WriteString(w, `{"upstream":"real"}`) // #nosec G104 -- test upstream response
+	}))
+	defer realVault.Close()
+
+	honeypotVault := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer honeypotVault.Close()
+
+	// The stuck handler has to be let go before httptest closes its server,
+	// which waits for its own outstanding requests. This defer is registered
+	// after the two Close calls above, so it runs before them.
+	stuck := make(chan struct{})
+	defer func() {
+		close(release)
+		select {
+		case <-stuck:
+		case <-time.After(10 * time.Second):
+			t.Error("the stuck request never finished after the upstream was released")
+		}
+	}()
+
+	var logs syncBuffer
+	priorOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(priorOutput) })
+
+	listenAddr := deadAddr(t)
+	clearBridgeEnv(t)
+	t.Setenv("BRIDGE_LISTEN_ADDR", listenAddr)
+	t.Setenv("BRIDGE_REAL_UPSTREAM", realVault.URL)
+	t.Setenv("BRIDGE_HONEYPOT_UPSTREAM", honeypotVault.URL)
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		main()
+	}()
+
+	base := "http://" + listenAddr
+	client := &http.Client{Timeout: 60 * time.Second}
+	deadline := time.Now().Add(20 * time.Second)
+	var up bool
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(base + "/bridge/healthz")
+		if err == nil {
+			resp.Body.Close()
+			up = resp.StatusCode == http.StatusOK
+			if up {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !up {
+		t.Fatalf("the bridge never started listening on %s", listenAddr)
+	}
+
+	// Nothing in this goroutine may touch t: it outlives the assertions below,
+	// and whether the client sees a response or a reset connection after the
+	// listener goes away is not part of the contract under test.
+	go func() {
+		defer close(stuck)
+		req, err := http.NewRequest(http.MethodGet, base+"/vaults/1/keys", nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("User-Agent", benignUA)
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		io.Copy(io.Discard, resp.Body) // #nosec G104 -- draining for connection reuse
+		resp.Body.Close()
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the upstream never received the request that has to stay in flight")
+	}
+
+	start := time.Now()
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("signal self: %v", err)
+	}
+
+	select {
+	case <-returned:
+	case <-time.After(45 * time.Second):
+		t.Fatal("main never returned with a request stuck on the upstream; the shutdown has no deadline")
+	}
+	waited := time.Since(start)
+
+	// Anything much shorter means the drain was not attempted at all and live
+	// requests are being cut off on every rolling update.
+	if waited < 10*time.Second {
+		t.Errorf("main returned %s after SIGTERM, want it to spend the grace period draining", waited)
+	}
+
+	got := logs.String()
+	if !strings.Contains(got, "bridge: shutdown error") {
+		t.Errorf("the expired drain was not reported; log was:\n%s", got)
+	}
+	if !strings.Contains(got, "bridge: stopped") {
+		t.Errorf("main did not run to the end after the drain expired; log was:\n%s", got)
 	}
 }

@@ -1613,6 +1613,48 @@ func TestBridgeLoginFailureDetectionDoesNotUseOutboundPath(t *testing.T) {
 	}
 }
 
+// TestInboundPathFallsBackWhenTheDirectorDidNotRun pins the other half of the
+// inbound-path fix. The Director that remembers the path and the ModifyResponse
+// hook that reads it are wired onto the proxy by two separate statements in
+// NewBridge, so a response can reach the hook with nothing in its context: a
+// proxy built with one and not the other, or a Director replaced by a later
+// change. The fallback has to be the request's own path. Returning the empty
+// string instead would compare unequal to "/auth/login" forever and switch
+// failed-login scoring off silently, which is the same outage the remembered
+// path was added to fix.
+func TestInboundPathFallsBackWhenTheDirectorDidNotRun(t *testing.T) {
+	f := newFixture(t, nil, nil, func(cfg *Config) {
+		cfg.LoginFailThreshold = 1
+		cfg.FlagThreshold = 20
+	})
+
+	untouched := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	untouched.RemoteAddr = "198.51.100.7:40000"
+	if got := inboundPath(untouched); got != "/auth/login" {
+		t.Fatalf("inboundPath = %q, want /auth/login for a request no Director touched", got)
+	}
+
+	// The consequence is what the branch is for: the hook still recognizes the
+	// failed login and scores it.
+	if err := f.bridge.inspectLoginResponse(&http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Request:    untouched,
+	}); err != nil {
+		t.Fatalf("inspectLoginResponse: %v", err)
+	}
+	if !f.bridge.flags.IsFlagged("198.51.100.7") {
+		t.Error("a failed login went uncounted because no Director had remembered the path")
+	}
+
+	// The contrast case: once the Director has run, the remembered path wins
+	// over the rewritten one and the upstream prefix stays out of the compare.
+	rewritten := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	rewritten = rewritten.WithContext(context.WithValue(rewritten.Context(), inboundPathKey{}, "/auth/login"))
+	if got := inboundPath(rewritten); got != "/auth/login" {
+		t.Errorf("inboundPath = %q, want the remembered /auth/login rather than the outbound path", got)
+	}
+}
+
 // TestBridgeNeverProxiesItsOwnPaths keeps the control plane off the vault. Every
 // /bridge/ path is answered locally, including ones that do not exist, so the
 // upstream can never be reached through this prefix and an unauthenticated

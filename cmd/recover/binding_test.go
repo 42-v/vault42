@@ -21,6 +21,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
 // legacyRow is one row as it exists in a database written before the binding: a
@@ -412,5 +414,41 @@ func TestRun_BoundRecordDoesNotFallBackToTheLegacyPath(t *testing.T) {
 	}
 	if !strings.Contains(got.stderr, "recover: 0 record(s) decrypted, 1 failure(s)") {
 		t.Errorf("the downgrade attempt was not counted as a failure:\n%s", got.stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Framing dispatch
+// ---------------------------------------------------------------------------
+
+// decryptEscrowed picks a primitive from a RecoveryFormat, and today the
+// classifier can only hand it one of the three declared values, so the tests
+// above reach every named arm through run(). This calls it directly with a value
+// outside the enum to pin the arm that catches the rest.
+//
+// The case it guards is a fourth framing added to internal/crypto: until this
+// switch learns the new value, it arrives here, and it has to be refused. Either
+// of the alternatives is worse than a failed run. Read as bound, a record with no
+// binding would be reported as one that had been verified against its row; read
+// as legacy, a bound record would have its binding dropped and its attribution
+// printed as unverified when it was not.
+func TestDecryptEscrowed_FormatOutsideTheEnumIsRefused(t *testing.T) {
+	row := goodRow(t, sampleEmail)
+
+	// Without this, a refusal below could just as well be a fixture that does not
+	// decrypt under any format at all.
+	if _, err := decryptEscrowed(escrowKey, vaultcrypto.RecoveryFormatBound, row.payload, row.id, row.pseudonym); err != nil {
+		t.Fatalf("the fixture does not open under its own framing, so refusing another one proves nothing: %v", err)
+	}
+
+	plain, err := decryptEscrowed(escrowKey, vaultcrypto.RecoveryFormat(99), row.payload, row.id, row.pseudonym)
+	if err == nil {
+		t.Fatal("a framing this build does not know was decrypted anyway")
+	}
+	if plain != nil {
+		t.Errorf("plaintext = %q, want none: a refused framing must hand back no bytes", plain)
+	}
+	if !strings.Contains(err.Error(), "unrecognized escrow blob framing") {
+		t.Errorf("error = %v, want it to name the framing as the reason", err)
 	}
 }
