@@ -103,7 +103,31 @@ BASELINE_TOTAL_STATEMENTS = 10693
 # The next person to raise this owes the same arithmetic: what entered the
 # measurement, what is a new exclusion rather than a fuller statement of an old
 # one, and what left the set entirely.
-BASELINE_MAX_ENTRIES = 46
+# Raised from 46 to 48 by the 1.0.0 security work, and the arithmetic again,
+# because a ratchet that moves without one is not a ratchet:
+#
+#   46  the set as measured before the hardening audits
+#   +1  cmd/recover/harden_linux.go:25, the prctl errno return. The file did not
+#       exist when 46 was set: it arrives with the audit that made the recovery
+#       tool undumpable while it holds the escrow key. Both prctl operands are
+#       file-scope constants and the call needs no privilege, so the kernel
+#       rejects it only under a seccomp rule or an LSM, a state a test cannot
+#       enter in-process because a filter cannot be removed once installed and
+#       would then catch the Go runtime's own prctl calls.
+#   +1  cmd/recover/main.go:564, the f.Stat() error in readKeyFile, from the same
+#       audit's key-permission warning. The descriptor is open six lines above
+#       and fstat has no failure mode on a valid descriptor for a local file.
+#       The error must stay rather than be dropped: the mode it carries is what
+#       drives the world-readable-key warning, so swallowing it would report
+#       mode 0 and silence the warning.
+#   =48
+#
+# Both are statements that did not exist when 46 was measured, so this is a
+# like-for-like comparison rather than a loosened bar. The alternative offered
+# was retiring two entries elsewhere; nothing else in the set had become
+# coverable, and inventing a reason to delete a justified exclusion in order to
+# make room is exactly the pressure this constant exists to resist.
+BASELINE_MAX_ENTRIES = 48
 BASELINE_PACKAGES = (
     "internal/adminapi",
     "internal/audit",
