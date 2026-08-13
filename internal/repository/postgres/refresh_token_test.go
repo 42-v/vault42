@@ -92,6 +92,27 @@ func TestRefreshTokenRepo_CreateNeverTakesTheFamilyOriginFromItsCaller(t *testin
 	}
 }
 
+// The erasure gate is structural for the same reason the origin is: the
+// interleaving that exposes its absence needs the cascade to land between one
+// request's account-state read and its insert, so every functional test in the
+// suite passes without it. A family erasure emptied carries no revoked row, so
+// the guard above it is satisfied by an empty set and the rotation puts a
+// fingerprint hash and a device reference straight back into the table the
+// erasure reported it had cleared.
+func TestRefreshTokenRepo_CreateRefusesARotationIntoAnErasedAccount(t *testing.T) {
+	sql := createStatementSQL(t)
+
+	if !strings.Contains(sql, "FROM auth.users WHERE id = $2 AND deleted = FALSE") {
+		t.Error("Create no longer asks whether the account survives; erasure removes this table's rows " +
+			"rather than marking them, so the revoked-row guard has nothing left to see and a rotation " +
+			"in flight repopulates the family it just emptied")
+	}
+	if highestPlaceholder(sql) != 9 {
+		t.Errorf("Create binds %d parameters, want 9: the account gate must reuse the user id the row "+
+			"already carries, not take one of its own", highestPlaceholder(sql))
+	}
+}
+
 // createStatementSQL returns the SQL literal inside RefreshTokenRepo.Create as it
 // is actually shipped.
 func createStatementSQL(t *testing.T) string {

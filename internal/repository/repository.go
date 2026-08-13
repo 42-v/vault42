@@ -91,17 +91,26 @@ type UserRepository interface {
 	SoftDeleteScrub(ctx context.Context, id, tombstoneEmail string) error
 }
 
-// ErrFamilyRevoked is returned by RefreshTokenRepository.Create when the
-// rotation family the token belongs to has already been revoked. Reuse detection
+// ErrFamilyRevoked is returned by RefreshTokenRepository.Create when the family
+// the token belongs to may no longer be extended, and nothing was inserted.
+//
+// Two conditions produce it. The family has been revoked: reuse detection
 // revokes the rows a family has at that instant, so a successor inserted
-// afterwards is born outside the revocation and keeps the stolen session alive;
-// the store refuses the insert instead, and the caller must treat it as a replay.
+// afterwards is born outside the revocation and keeps the stolen session alive.
+// Or the account has been erased: the cascade tombstones the user row and then
+// removes every token row, so a rotation that was already in flight would put a
+// fingerprint hash and a device reference back into a table the erasure reported
+// it had cleared.
+//
+// Either way the caller must treat it as a replay: refuse the rotation and end
+// the session.
 var ErrFamilyRevoked = errors.New("refresh token family is revoked")
 
 // RefreshTokenRepository manages refresh token persistence.
 type RefreshTokenRepository interface {
 	// Create inserts a new refresh token record. Returns ErrFamilyRevoked, and
-	// inserts nothing, when the token's family already carries a revoked row.
+	// inserts nothing, when the token's family already carries a revoked row or
+	// the owning account has been erased.
 	Create(ctx context.Context, token *model.RefreshToken) error
 	// GetByTokenHash retrieves a refresh token by its SHA-256 hash. Returns nil, nil if not found.
 	GetByTokenHash(ctx context.Context, hash string) (*model.RefreshToken, error)

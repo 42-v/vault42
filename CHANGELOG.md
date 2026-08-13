@@ -256,6 +256,18 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   attempt deadlocked against the expiry reaper. The two widest paths take a table lock instead,
   because `vault_admin` holds `DELETE` but deliberately not `UPDATE`, and `SELECT ... FOR UPDATE`
   requires it.
+* **A refresh in flight survived the erasure it raced.** The rotation insert refuses a family
+  that carries a revoked row, and erasure is the one revocation that removes the rows instead of
+  marking them: a family `DeleteAllForUser` has emptied carries nothing, so the guard was
+  satisfied by an empty set and the successor landed anyway. The table lock erasure takes did not
+  help, because it only orders the two and the insert runs second. The surviving row is a
+  fingerprint hash, a device reference and a user id belonging to an account the cascade reported
+  it had cleared, and it is neither used nor revoked, so `DeleteExpired` never collects it
+  either. The erasure stayed one row short for good (Art. 17). `Create` now also asks whether the
+  account survives. The cascade tombstones the user row before it touches this table, so the
+  check closes the whole window rather than the width of one statement. A ban, a lock or a
+  disable is deliberately not part of it: those leave the rows in place, so the family stays
+  revocable and the next refresh ends it.
 * **A stolen security key plus a password was enough.** `webauthn.Config` was built without
   `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
   check compared it against `VerificationRequired`, which is false on every assertion. A

@@ -51,13 +51,37 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 // The ORDER BY is the lock order described on lockThenWrite, and it is not
 // cosmetic here: this scan takes a family's rows one at a time, so it can hold
 // one and wait for another, which is exactly what a cycle needs.
+//
+// SECURITY INVARIANT (erasure completeness): the revoked-row guard above is
+// written against a mark, and erasure is the one revocation that removes the
+// rows instead of marking them. A family DeleteAllForUser has emptied carries no
+// revoked row, so the guard passes over an empty set and the rotation that was
+// in flight puts a row straight back. The table lock erasure takes does not stop
+// it; it only orders the two, and the insert runs second. That row is a
+// fingerprint hash, a device reference and a user id outliving the erasure that
+// reported them gone, and it is neither used nor revoked, so DeleteExpired never
+// collects it either. The cascade stays one row short for good (Art. 17).
+//
+// The insert therefore also asks whether the account still exists. The cascade
+// tombstones the user row before it touches this table, so the check closes the
+// whole window rather than the width of one statement: from the instant erasure
+// commits the tombstone, no rotation can write here again. A ban, a lock or a
+// disable is deliberately not part of this condition. Those leave the rows in
+// place, so the family stays revocable and the next refresh terminates it, which
+// is the one-access-token-TTL exposure docs/security.md already accepts.
+//
+// It is a plain read, and that is what keeps it out of the lock order this file
+// otherwise lives by. A SELECT with no locking clause takes nothing above ACCESS
+// SHARE and is never blocked by a row a writer holds, so it adds no edge any
+// cycle could close.
 func (r *RefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
 	tag, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
 		SELECT $1::uuid, $2::uuid, $3::uuid, $4::varchar, $5::uuid, $6::uuid, $7::varchar, $8::timestamptz, $9::timestamptz,
 		       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)
 		WHERE COALESCE((SELECT bool_or(family.revoked)
-		                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 ORDER BY id FOR UPDATE) AS family), FALSE) = FALSE`,
+		                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 ORDER BY id FOR UPDATE) AS family), FALSE) = FALSE
+		  AND EXISTS (SELECT 1 FROM auth.users WHERE id = $2 AND deleted = FALSE)`,
 		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
 		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
 		token.ExpiresAt, token.CreatedAt,
