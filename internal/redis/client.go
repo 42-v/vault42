@@ -238,6 +238,20 @@ func (c *Client) Close() error {
 
 // exec sends a command on the given connection and handles pool return/removal.
 func (c *Client) exec(ctx context.Context, cn *conn, args ...string) (reply, error) {
+	// A caller who has already given up must not have their command executed.
+	// GETDEL and SET NX are consumed on the server whether or not anyone is
+	// still listening, so sending one anyway burns a single-use email
+	// verification token, password reset token, OAuth exchange code or PKCE
+	// verifier on behalf of a request that will never see the reply. Returning
+	// the connection rather than removing it matters too: an expired deadline
+	// belongs to the caller, not to the socket, and treating it as a broken
+	// connection made a burst of timed-out requests drain the pool at exactly
+	// the moment the cache was already slow.
+	if err := ctx.Err(); err != nil {
+		c.pool.put(cn)
+		return reply{}, err
+	}
+
 	ioTimeout := c.opts.IOTimeout
 
 	// Respect context deadline if shorter
