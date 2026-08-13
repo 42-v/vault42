@@ -92,6 +92,21 @@ func TestVerifyIDToken_Rejections(t *testing.T) {
 		}
 	})
 
+	t.Run("crit header is rejected even when validly signed", func(t *testing.T) {
+		// Signed by the trusted key, so only the crit header can turn it away.
+		// RFC 7515 4.1.11 makes crit a MUST-reject for a recipient that does not
+		// implement every extension it lists, and vault42 implements none.
+		tok, err := vjwt.SignRS256WithHeader(
+			map[string]any{"alg": "RS256", "typ": "JWT", "kid": "k1", "crit": []string{"http://example.com/ext"}},
+			baseClaims(srv.URL, "client-1"), key)
+		if err != nil {
+			t.Fatalf("sign id token: %v", err)
+		}
+		if _, err := p.VerifyIDToken(ctx, tok, "nonce-xyz"); err == nil {
+			t.Fatal("an id_token carrying a crit header must be rejected, RFC 7515 4.1.11")
+		}
+	})
+
 	t.Run("signature by wrong key is rejected", func(t *testing.T) {
 		tok := signIDToken(t, otherKey, "k1", baseClaims(srv.URL, "client-1"))
 		if _, err := p.VerifyIDToken(ctx, tok, "nonce-xyz"); err == nil {
