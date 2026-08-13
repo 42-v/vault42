@@ -165,8 +165,13 @@ func (s *MFAService) GetStatus(ctx context.Context, userID string) (*MFAStatus, 
 		status.Methods = append(status.Methods, "webauthn")
 	}
 
-	// If both primary MFA lookups failed, return error to fail closed
-	if totpErr != nil && credsErr != nil {
+	// Fail closed if EITHER primary lookup failed. A single failed read means a
+	// method may exist that this call cannot see: for a passkey-only account, a
+	// webauthn read error while the totp read succeeds-empty would otherwise
+	// return an empty method set with no error, and the login path reads that as
+	// "no second factor" and issues tokens or downgrades to email OTP. The
+	// caller must treat an undetermined status as MFA-owed, not MFA-absent.
+	if totpErr != nil || credsErr != nil {
 		return nil, fmt.Errorf("mfa: unable to determine MFA status: totp: %w, webauthn: %w", totpErr, credsErr)
 	}
 
