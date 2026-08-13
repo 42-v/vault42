@@ -265,6 +265,14 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 }
 
 func (b *Bridge) setProxyHeaders(r *http.Request, ip string) {
+	// A Connection header is hop-by-hop: net/http's reverse proxy deletes every
+	// header the client lists there before forwarding. It runs that deletion
+	// after this function, so a caller sending "Connection: X-Real-IP" would
+	// strip the stamp below and hand the vault a request with no attributable
+	// client address. Drop our own header names from the client's Connection
+	// token list first; unrelated tokens (close, upgrade) are left in place.
+	stripConnectionTokens(r.Header, "X-Real-IP", "X-Forwarded-Proto", "X-Forwarded-For")
+
 	r.Header.Set("X-Real-IP", ip)
 	r.Header.Set("X-Forwarded-Proto", "https")
 	// Only extend a client-supplied XFF when the peer is a trusted proxy.
@@ -275,6 +283,40 @@ func (b *Bridge) setProxyHeaders(r *http.Request, ip string) {
 		r.Header.Set("X-Forwarded-For", prior+", "+ip)
 	} else {
 		r.Header.Set("X-Forwarded-For", ip)
+	}
+}
+
+// stripConnectionTokens removes the named header tokens from the request's
+// Connection header. net/http's reverse proxy treats every token listed there
+// as a hop-by-hop header and deletes the matching header before forwarding.
+// Leaving the bridge's own header names in an attacker-supplied Connection line
+// would let an unauthenticated caller strip the stamps this proxy relies on.
+// Token matching is case-insensitive and other tokens are preserved.
+func stripConnectionTokens(h http.Header, protected ...string) {
+	values := h.Values("Connection")
+	if len(values) == 0 {
+		return
+	}
+
+	drop := make(map[string]bool, len(protected))
+	for _, p := range protected {
+		drop[strings.ToLower(p)] = true
+	}
+
+	var kept []string
+	for _, v := range values {
+		for _, tok := range strings.Split(v, ",") {
+			t := strings.TrimSpace(tok)
+			if t == "" || drop[strings.ToLower(t)] {
+				continue
+			}
+			kept = append(kept, t)
+		}
+	}
+
+	h.Del("Connection")
+	if len(kept) > 0 {
+		h.Set("Connection", strings.Join(kept, ", "))
 	}
 }
 
