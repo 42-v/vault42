@@ -242,6 +242,17 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	}
 	emailOTPHandler := handler.NewEmailOTPHandler(d.AuthSvc, d.Users, secureCookies)
 	backupCodeHandler := handler.NewBackupCodeHandler(d.BackupCodes, d.HMACSecret, d.AuthSvc, secureCookies)
+	// Second-factor enrollment, verification and removal, and session
+	// revocation, are the moves an account takeover makes. These four handlers
+	// shipped without a logger, so every one of them was invisible: an attacker
+	// on a stolen session could bind their own authenticator and sign the owner
+	// out, and the trail ran straight from the owner's last login to silence.
+	// Anything constructed here that can change a factor or end a session owes
+	// the trail a row.
+	totpHandler.SetAuditLog(d.AuditLog)
+	webauthnHandler.SetAuditLog(d.AuditLog)
+	backupCodeHandler.SetAuditLog(d.AuditLog)
+	userHandler.SetAuditLog(d.AuditLog)
 	mfaHandler := handler.NewMFAHandler(d.MFASvc)
 	clientHandler := handler.NewClientHandler(d.Clients, d.TokenSvc, d.AuditLog)
 	var wellKnownHandler *handler.WellKnownHandler

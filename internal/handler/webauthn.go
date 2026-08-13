@@ -12,6 +12,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
@@ -29,11 +30,40 @@ type WebAuthnHandler struct {
 	wan           *webauthn.WebAuthn
 	authSvc       *service.AuthService
 	secureCookies bool
+	auditLog      *audit.Logger
 }
 
 // NewWebAuthnHandler creates a new WebAuthn handler.
 func NewWebAuthnHandler(repo repository.WebAuthnRepository, userRepo repository.UserRepository, c cache.Cache, wan *webauthn.WebAuthn, authSvc *service.AuthService, secureCookies bool) *WebAuthnHandler {
 	return &WebAuthnHandler{webauthnRepo: repo, userRepo: userRepo, cache: c, wan: wan, authSvc: authSvc, secureCookies: secureCookies}
+}
+
+// SetAuditLog attaches the audit logger. Called once at wiring time; a nil
+// logger is ignored.
+func (h *WebAuthnHandler) SetAuditLog(l *audit.Logger) {
+	if l != nil {
+		h.auditLog = l
+	}
+}
+
+// logEvent records a WebAuthn credential lifecycle event against the user's
+// trail.
+//
+// A passkey is a permanent key on the account, and until 1.0.0 binding one left
+// no record: this handler had no logger, so an attacker on a stolen session
+// could enroll their own authenticator, then keep logging in as the owner long
+// after the stolen session expired, and the trail showed only the owner's own
+// logins. Removal is recorded for the same reason in reverse, since taking the
+// owner's key off the account is how the lockout is made to stick.
+//
+// Best-effort on purpose. A trail that can refuse an assertion the authenticator
+// just signed would convert an audit outage into an authentication outage.
+func (h *WebAuthnHandler) logEvent(r *http.Request, event, userID string, meta map[string]interface{}) {
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", meta, 0)
 }
 
 // RegisterBegin handles POST /auth/2fa/webauthn/register/begin.
@@ -147,6 +177,12 @@ func (h *WebAuthnHandler) RegisterFinish(w http.ResponseWriter, r *http.Request)
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method":        "webauthn",
+		"action":        "enrolled",
+		"credential_id": credID,
+	})
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "webauthn_registered"})
 }
@@ -295,6 +331,13 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
+	// Recorded before the login is completed and regardless of how it ends. The
+	// assertion was verified here; whether the session that follows is issued
+	// or refused by account policy is a separate fact the login path records for
+	// itself, and folding the two together would lose every verification that
+	// happened against a banned or locked account.
+	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "webauthn"})
+
 	// If this is a 2FA challenge (login flow), issue real tokens
 	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
 		return
@@ -367,6 +410,16 @@ func (h *WebAuthnHandler) DeleteCredential(w http.ResponseWriter, r *http.Reques
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+
+	// Filed under the enrollment event with action=removed because the
+	// vocabulary in internal/audit has no removal constant; a query for factor
+	// changes must therefore read the action key rather than the event type
+	// alone.
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method":        "webauthn",
+		"action":        "removed",
+		"credential_id": credID,
+	})
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "credential_removed"})
 }
