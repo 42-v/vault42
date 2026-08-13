@@ -16,10 +16,26 @@
 -- write a new one next to it, with a password hash they picked, and log in as
 -- it. DELETE-then-INSERT of one's own row is the same gap reached differently.
 --
--- The guard below closes it with the rule the Go RBAC layer already enforces at
--- the handler (POST /admin/admins records the acting admin in created_by):
--- an admin row may not outrank its own creator. Stated as a data invariant it is
--- checkable and has no exceptions to argue about:
+-- The guard below closes it with a rule the database can check on its own: an
+-- admin row may not outrank its own creator.
+--
+-- Go does not check that rule, and being exact about it matters, because the
+-- natural reading is that the trigger duplicates a handler check. POST
+-- /admin/admins is gated on the admins:create permission, validates the
+-- requested role with rbac.IsValidRole, and records the acting admin in
+-- created_by. adminapi.CreateAdmin compares no ranks, and no other Go path does
+-- either. What holds the invariant above the database is narrower than a check:
+-- admins:create belongs to super_admin alone, so a creator is always the top
+-- tier and cannot be outranked by whatever role it asks for.
+--
+-- The distinction decides what moving that grant would mean. Giving
+-- admins:create to operator reads as widening what operator may create. With no
+-- rank comparison in Go it is not a widening: an operator holding it could
+-- create a super_admin and log in as it, which is escalation to the top tier,
+-- and this trigger is the only thing that would refuse it.
+--
+-- Stated as a data invariant the rule is checkable and has no exceptions to
+-- argue about:
 --
 --   * created_by set    -> the creator must exist and must rank at or above the
 --                          role being created.
