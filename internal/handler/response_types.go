@@ -81,9 +81,14 @@ type ProfileResponse struct {
 	// least one WebAuthn credential. Backup codes and email OTP alone do
 	// not set it.
 	MFAEnabled bool `json:"mfa_enabled"`
-	// MFAMethods is the list of enrolled factor names (totp, webauthn,
-	// backup_code, email_otp). Always an array; a user with no factor gets
-	// [], never null.
+	// MFAMethods is the enrolled-factor list copied from
+	// MFAService.GetStatus: "totp" when a verified TOTP secret exists,
+	// "webauthn" when at least one credential exists, "backup_code" when
+	// at least one unused backup code remains. Always an array; a user
+	// with none of those gets [], never null. GetStatus never appends
+	// "email_otp": that name is only on POST /auth/login
+	// available_methods, and only when VAULT_MFA_REQUIRED is set and the
+	// user has no enrolled factor.
 	MFAMethods []string `json:"mfa_methods"`
 	// CreatedAt is when the account was created, RFC3339 UTC.
 	CreatedAt time.Time `json:"created_at"`
@@ -305,9 +310,12 @@ type TOTPSetupResponse struct {
 
 // BackupCodesResponse is returned by POST /auth/2fa/backup-codes.
 type BackupCodesResponse struct {
-	// Codes is the new set of 10 single-use 12-hex codes. Any previous
-	// set is replaced. Each code is stored as an HMAC; the plaintext is
-	// shown only in this response.
+	// Codes is the new set of 10 single-use 16-hex codes (RandomHex(8),
+	// 64-bit entropy). Any previous set is replaced. Each code is stored
+	// as HMAC-SHA256 of the plaintext under the server HMAC key, not as
+	// Argon2id; verification compares the guess against every unused hash
+	// in constant time, which Argon2id would make too expensive. The
+	// plaintext is shown only in this response.
 	Codes []string `json:"codes"`
 	// Warning is a fixed reminder that the codes will not be shown again.
 	// Prose is not in the stability contract; the codes array is.
