@@ -172,11 +172,20 @@ At 1.0.0, therefore:
 
 - the discovery document MUST NOT advertise DPoP support, and does not
   (`internal/handler/wellknown.go`);
-- the `DPoP` authentication scheme on the `Authorization` header MUST be rejected unless the flag
-  is on. `internal/middleware/auth.go` accepts only `Bearer` by default, and takes
-  `WithDPoPScheme(true)` when the flag is set. RFC 9449 section 7.1 reserves that scheme for
-  sender-constrained tokens, and silently degrading it to `Bearer` is the exact confusion the
-  separate scheme exists to prevent;
+- the `DPoP` authentication scheme on the `Authorization` header MUST be rejected while no token is
+  sender-constrained, and it is, unconditionally. `internal/middleware/auth.go` accepts only
+  `Bearer` unless `WithDPoPScheme(true)` is passed, and `internal/server/server.go:240-248` never
+  passes it, flag or no flag. RFC 9449 section 7.1 reserves that scheme for sender-constrained
+  tokens, and silently degrading it to `Bearer` is the exact confusion the separate scheme exists
+  to prevent. A caller that sends `Authorization: DPoP <token>` gets `401 invalid_authorization` on
+  every deployment, including one with the flag on;
+- **the flag makes no DPoP proof mandatory anywhere.** `internal/middleware/dpop.go:31-40` passes a
+  request carrying no `DPoP` header straight through, because it demands a proof only from a token
+  whose `cnf.jkt` is set, and nothing sets one. A proof that *is* presented is validated in full
+  (`typ`, `alg`, `jwk`, `htm`, `htu`, `iat`, single-use `jti`, `ath`) and then compared against no
+  thumbprint, so it constrains nothing and can be dropped at will. Any statement that the flag adds
+  a required proof to `POST /kms/unwrap` or `POST /mint` is a defect: both accept a bare `Bearer`
+  request with the flag on;
 - operators SHOULD leave the flag off.
 
 DPoP issuance -- a proof-carrying `POST /auth/login` that binds `cnf.jkt` into the token, plus the
@@ -267,9 +276,9 @@ section 0.4.
 
 ## 1. Overview
 
-Vault42 is a production-grade authentication and authorization microservice built in Go. It is PostgreSQL-backed, deployed via Kubernetes (Helm chart), HTTPS-only, and single-origin. It implements stateless JWT access tokens (RS256), stateful refresh tokens with family-based replay detection, TOTP and WebAuthn/FIDO2 two-factor authentication, OAuth2 social login (Google, GitHub, Facebook) plus generic OpenID Connect issuers, device fingerprinting, an encrypted identity store for PII, encrypted blob storage with per-user quotas, self-service account erasure with recoverable escrow, GDPR data export, per-app white-label email branding, a KEK envelope-unwrap oracle, and an append-only audit log.
+Vault42 is a production-grade authentication and authorization microservice built in Go. It is PostgreSQL-backed, deployed via Kubernetes (Helm chart), HTTPS-only, and single-origin. It implements stateless JWT access tokens (RS256), stateful refresh tokens with family-based replay detection, TOTP and WebAuthn/FIDO2 two-factor authentication, OAuth2 social login (Google, GitHub, Facebook) plus generic OpenID Connect issuers, device fingerprinting, an encrypted identity store for PII, encrypted blob storage with per-user quotas, self-service account erasure with recoverable escrow, GDPR data export, per-app white-label email branding, a KEK envelope-unwrap oracle, an opt-in subject-assertion signing oracle, an opt-in service-scoped encrypted JSON document store, and an append-only audit log.
 
-The product is two binaries. `cmd/vault` serves the 57-route public API. `cmd/admin-gateway` serves the 41-route administrative API plus its HTML console, behind mTLS, RBAC and loopback-only enforcement, and is never exposed alongside the public API. Section 16 inventories both.
+The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/admin-gateway` serves the 41-route administrative API plus its HTML console, behind mTLS, RBAC and loopback-only enforcement, and is never exposed alongside the public API. Section 16 inventories both.
 
 **Key properties:**
 - Go 1.26, 3 direct runtime dependencies (+ test-only dependencies)
@@ -796,13 +805,75 @@ A KEK envelope-unwrap oracle: a caller presents a wrapped-key envelope and vault
 
 - **Key derivation:** per-`kid` KEKs are derived from a single KMS root secret (`KMS_ROOT_KEY_FILE`, >= 32 bytes) via HKDF-SHA256 with a versioned, domain-separated info label (`vault42/kms/kek/v1/<kid>`). This keeps the KMS keyspace cryptographically separate from the master key that encrypts TOTP/identity/blob at rest, and supports rotation without provisioning a new secret per kid.
 - **Envelope format:** `nonce || AES-256-GCM ciphertext`, with `kid` bound as GCM AAD, base64 (std) on the wire. Reuses `internal/crypto` AEAD; no new crypto.
-- **Authorization:** requires a client-credential access token carrying the `kms:unwrap` scope (`middleware.RequireScope`). When `VAULT_DPOP_ENABLED=true` a syntactically fresh, single-use DPoP proof is additionally required, but it is **bound to nothing**: no vault42 token carries `cnf.jkt`, so the proof cannot be tied to the presented token and the flag adds no replay protection here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. Section 0.6.2.
+- **Authorization:** requires a client-credential access token carrying the `kms:unwrap` scope (`middleware.RequireScope`). `VAULT_DPOP_ENABLED=true` adds nothing here: the DPoP middleware demands a proof only from a token carrying `cnf.jkt`, nothing issues one, so a request with no `DPoP` header passes through and a proof that is presented is compared against no thumbprint. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. Section 0.6.2.
 - **Oracle resistance:** every failure mode (empty kid, malformed envelope, bad base64, tampered ciphertext, wrong KEK) collapses to a single opaque `400 unwrap_failed` with a byte-identical body and audit outcome. No branch reveals which check failed.
 - **Rate limiting:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading to a weaker per-pod limiter).
 - **Audit:** every attempt is written synchronously (never dropped under buffer pressure), recording `kid` and outcome only. Key material is never logged, and KEKs plus the root secret are wiped after use.
 - **Tooling:** `vault kms wrap` produces envelopes the oracle accepts.
 
 **Source:** `internal/kms/kms.go`, `internal/handler/kms.go`, `internal/server/server.go`, `cmd/vault/kms.go`
+
+### 6.5 Subject-Assertion Signing Oracle
+
+**Endpoint:** `POST /mint` (mounted only when `VAULT_MINT_ENABLED=true`). `api.md` is authoritative
+for the request and response bodies; this section is the threat model and the mount conditions.
+
+A registered client names a subject and vault42 signs a token asserting it, with the same key that
+signs every real one. **vault42 does not authenticate the subject, does not look it up, and does
+not require it to be a vault42 user.** It exists because eleven legacy services hold foreign-key
+copies of the legacy platform's own user ids, so the token subject has to stay that id rather than a
+vault42-native one; the alternative was rewriting every one of those tables.
+
+The blast radius is the whole trust model: a verifier cannot tell a minted token from a real one by
+its signature, so whoever holds the mint credential can speak as any subject to every service that
+trusts vault42's JWKS. The controls are:
+
+- **Off unless configured.** The route is not registered when `VAULT_MINT_ENABLED` is unset,
+  following the `POST /kms/unwrap` precedent rather than a soft in-handler 403. A vanilla
+  deployment has no mint, and a misconfiguration is an authentication bypass rather than a weakened
+  control.
+- **Startup validation ahead of the dev short-circuit.** `VAULT_MINT_AUDIENCE` is required and MUST
+  differ from `VAULT_ORIGIN`; `config.Validate()` checks both before it returns early for the dev
+  profile, and `service.NewMintService` checks the audience again. A minted token carrying
+  vault42's own audience would satisfy vault42's own audience validation, leaving `token_type` as
+  the single control between a subject assertion and a session, and a dev deployment that teaches
+  the wrong configuration gets copied.
+- **Its own scope.** `mint:token`, never `kms:unwrap`: a client authorized to unwrap an envelope
+  must not thereby be authorized to forge a subject.
+- **A client-credential assertion in the handler.** `RequireScope` checks only the scopes array;
+  the handler additionally requires a non-empty `client_id` claim, because user tokens cannot carry
+  `mint:token` today only by accident of the issuance sites hardcoding their scopes.
+- **Structural rejection by vault42 itself.** The `token_type` claim is `mint`, which is outside the
+  allow-list vault42's auth middleware accepts, and the audience is not vault42's. Either check
+  alone stops a minted token at vault42's door; both are enforced. Without them a mint credential
+  would be full account takeover of every vault42 user.
+- **No credential-bearing claims.** No `client_id`, no `fingerprint`, no `cnf`, no refresh token and
+  no stored session. Setting `client_id` would make a minted token indistinguishable from a
+  client-credentials token to any code that treats the claim's presence as proof of a service
+  caller, including the service document store (section 7.8), which asserts exactly that.
+  Attribution lives in the audit event, where it cannot be replayed.
+- **Deny-by-default roles and scopes.** Both allow-lists start empty, so a freshly enabled mint
+  issues bare subject assertions. `admin` and `super_admin` are refused whatever the list says, as
+  are the vault42 capability scopes `mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`,
+  `admin`, `admin:read` and `admin:write`. A listed admin role or capability scope aborts startup.
+- **Short, unclampable lifetimes.** A minted token cannot be revoked, because vault42 holds no
+  record of it beyond the audit event, so its exposure window is its whole security story. The
+  ceiling is 15 minutes, enforced in the constructor rather than left to configuration, and a
+  request above the operator's cap is refused rather than clamped: silently issuing something other
+  than what was asked for hides a misconfigured caller until the day its tokens expire mid-flight.
+- **Rate limiting:** 60/min, fail-closed. The key function asks for the authenticated client, but
+  the limiter sits outside the auth middleware, so in practice the bucket is the source IP.
+- **Audit on every path.** One `token_minted` event per request, accepted or refused, recording the
+  asserted subject and the asserting client. It is a distinct event type from `login_success`,
+  `token_refresh` and `client_auth` because the signature is indistinguishable, so the log is the
+  only place the difference is recorded. `token_minted` is not in the critical-event set of section
+  9.3, so a deployment that batches audit writes can drop it under buffer pressure.
+
+What is deliberately NOT checked: whether the subject exists in vault42. It usually does not, and
+that is the point.
+
+**Source:** `internal/service/mint.go`, `internal/handler/mint.go`, `internal/server/server.go`,
+`internal/config/config.go`, `cmd/vault/main.go`
 
 ---
 
@@ -1008,6 +1079,112 @@ log for an operator.
 
 **Source:** `internal/handler/data_export.go`, `internal/handler/response_types.go`
 
+### 7.8 Service-Scoped JSON Documents
+
+**Endpoints:** `PUT`, `GET`, `DELETE /service/documents/{subject}/{key}` and
+`GET /service/documents/{subject}` (mounted only when `VAULT_SVCDOC_ENABLED=true`). `api.md` is
+authoritative for the request and response bodies.
+
+A namespaced arbitrary-JSON store with an ownership axis: a registered service client writes
+documents scoped to `(itself, a subject, a key)`, and by default nothing else can read them. It
+exists so a service can keep small structured records about a user without owning a schema migration
+for every new per-user boolean. `IdentityData.Dynamic` had the right semantics and the wrong access
+control -- one ciphertext, written by the user's own token, with no per-service isolation.
+
+Off by default because this is new surface reachable by every existing client-credentials holder, so
+enabling it is an explicit operator decision rather than a consequence of upgrading. The shared
+visibility tier is a second, separate switch.
+
+**Architecture:**
+- Schema: `objects.service_documents(id UUID PK, client_id UUID FK -> auth.clients, subject_hash
+  VARCHAR(128), doc_key VARCHAR(128), visibility SMALLINT, data_enc BYTEA, size_bytes INT,
+  stored_bytes INT, version INT, created_at, updated_at)`, `migrations/014_service_documents.sql`
+- Unique index on `(client_id, subject_hash, doc_key)`: a replacement is an `UPDATE` through that
+  index, never a second row. A partial index on `(subject_hash, doc_key) WHERE visibility = 1` keeps
+  the cross-service read off the private majority
+- AES-256-GCM at rest, never plaintext JSONB. These documents hold data a service wrote about a
+  user; a plaintext column here would be the product's first plaintext personal-data column
+- **AAD binding:** `svcdoc:<client_id>:<subject_hash>:<doc_key>`, a superset of the blob AAD. A row
+  copied between clients, subjects or keys fails to decrypt rather than silently changing owner. The
+  surrogate id is deliberately absent so a replacement keeps its identity without a re-key
+- Subject stored as `HMAC-SHA256(userID + ":svcdoc", hmac_secret)`, so the table does not enumerate
+  which users a service holds records about. The erasure cascade derives the same value
+- `visibility` is a `CHECK`-constrained enum (`0` private, `1` shared) rather than a boolean, so a
+  third tier (an explicit grantee allow-list) is a constraint widening plus a new table rather than
+  a column type change and a wire break
+- Ownership is a SQL predicate on every request-path read, not a comparison performed after fetching
+- Deliberately not a column on `objects.blobs`: blob ownership has no client dimension, the blob
+  routes authenticate a user JWT, blob `DELETE` requires a password re-confirmation no service can
+  satisfy, and the blob prefix carries a body-cap exemption sized for 10 MiB uploads
+- Roles: `vault_app` gets `SELECT, INSERT, UPDATE, DELETE` explicitly, because migration 001's
+  `ALTER DEFAULT PRIVILEGES IN SCHEMA objects` grants only `SELECT, INSERT, DELETE` and an inherited
+  default would leave replacement failing with `42501` at runtime and invisible to the integration
+  suite. `vault_admin` gets `SELECT, DELETE` for the admin-gateway erasure cascade
+
+**The `_global` sentinel subject** holds documents that belong to a service rather than to any user:
+feature flags, per-service settings. It is a sentinel rather than a `NULL` subject because
+PostgreSQL treats `NULL`s as distinct in a unique index, so a nullable column would silently permit
+duplicate `(client_id, NULL, doc_key)` rows. It cannot collide with a real subject, which must start
+with an alphanumeric. Global documents are audited with an empty `user_id` rather than the sentinel,
+and are excluded from every subject's data export: they are attached to no subject, and exporting
+them would hand one service's configuration to every user who asks.
+
+**Validation.** A document body is walked on the token stream before any unmarshal, because
+`encoding/json` has no depth limit and no duplicate-key rejection. A 64 KiB body of `[` characters
+is roughly 32 thousand nesting levels; unmarshalling it recurses that deep and takes the process
+down, so depth is bounded before the decoder ever builds a value. The bounds are a JSON object at
+top level, at most 32 levels deep, at most 1024 keys in total, no duplicate key within an object,
+valid UTF-8 checked on the raw bytes, and nothing after the closing brace. A repeated key decodes
+last-wins, so a document carrying one round-trips differently than it was submitted -- a correctness
+bug on its own and a signature-bypass primitive if anything downstream ever verifies a body it also
+parses. None of these bounds are operator-tunable.
+
+**Quotas:** `VAULT_SVCDOC_MAX_SIZE` (default 64 KiB) per document, measured on the canonical
+encoding; `VAULT_SVCDOC_MAX_PER_SUBJECT` (default 32) documents per `(client, subject)`; and
+`VAULT_SVCDOC_QUOTA_BYTES` (default 1 MiB) stored bytes per subject summed across every owning
+client, so one user's footprint is bounded no matter how many services write about them. Quota is
+evaluated against the state the write would produce, so a replacement is not charged twice and does
+not consume a document slot it already holds.
+
+**Access control:**
+- `svcdoc:write` on `PUT` and `DELETE`, `svcdoc:read` on both `GET`s, via `middleware.RequireScope`
+- Every handler additionally asserts a non-empty `client_id` claim. `RequireScope` checks only the
+  scopes array, and a user token can never carry a `svcdoc` scope today only because every
+  user-token issuance site hardcodes `["read","write"]`. That is an accident of the current code and
+  not an invariant: a change to user-scope issuance would otherwise silently open a service-owned
+  store to end-user tokens. The ownership axis of this store is the client id, so the handler
+  asserts it directly. It is also why a minted token (section 6.5) carries no `client_id`
+- A document owned by another client that is not shared is reported as **absent, never forbidden**.
+  The alternative turns the store into an oracle for "does service X hold a record at key K about
+  user U", which is exactly the question the pseudonymised subject exists to make unanswerable. An
+  `?owner=` naming an unregistered client collapses to the same `404`
+- `DELETE` only ever removes the caller's own row, shared or not
+
+**Rate limiting:** 60/min on writes, 300/min on reads, not fail-closed -- these routes release only
+what the caller itself wrote, and a cache blip must not take profile reads down across every
+consuming service. The key function asks for the authenticated client, but the limiter sits outside
+the auth middleware, so in practice the bucket is the source IP.
+
+**Body cap:** the `/service/documents` prefix is exempt from the global 8 KiB cap so a 64 KiB
+document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of
+`VAULT_SVCDOC_MAX_SIZE` + 1 KiB, because an exemption without a reader of its own is an
+unbounded-body hole.
+
+**Audit events:** `svcdoc_put`, `svcdoc_get`, `svcdoc_delete`. Metadata is limited to the key, the
+size, the visibility and the outcome; a body is never logged. Listing writes no event. The actor
+split differs from `client_auth` and `kms_unwrap`, which file the client id in both fields because
+those events have no user: here there genuinely is one, and filing it under `user_id` is what puts
+the event in that user's data export.
+
+**GDPR:** documents ride the erasure cascade across every owning service, and `GET
+/user/data-export` returns them **decrypted, including private ones** -- a service's privacy from
+other services is not privacy from the data subject. A document that fails to decrypt is skipped
+rather than failing the whole export, so one unreadable row does not deny a subject the rest of
+their data.
+
+**Source:** `internal/service/servicedoc.go`, `internal/handler/servicedoc.go`,
+`internal/repository/postgres/servicedoc.go`, `migrations/014_service_documents.sql`
+
 ---
 
 ## 8. Rate Limiting
@@ -1033,6 +1210,7 @@ material.
 | `POST /auth/2fa/email-otp/verify` | 5 | 5 min | IP | Closed |
 | `POST /auth/2fa/email-otp/resend` | 5 | 5 min | IP | Closed |
 | `POST /kms/unwrap` | 30 | 1 min | IP | Closed |
+| `POST /mint` | 60 | 1 min | IP (see below) | Closed |
 | `POST /auth/refresh` | 30 | 1 min | IP | In-memory fallback |
 | `GET /auth/verify-email` | 10 | 1 hour | IP | In-memory fallback |
 | `POST /client/token` | 10 | 1 min | IP | In-memory fallback |
@@ -1053,7 +1231,20 @@ material.
 | `GET /user/blobs/{id}` | 30 | 1 min | IP | In-memory fallback |
 | `GET /user/blobs/named/{name}` | 30 | 1 min | IP | In-memory fallback |
 | `GET /user/data-export` | 5 | 1 min | IP | In-memory fallback |
+| `PUT /service/documents/{subject}/{key}` | 60 | 1 min | IP (see below) | In-memory fallback |
+| `DELETE /service/documents/{subject}/{key}` | 60 | 1 min | IP (see below) | In-memory fallback |
+| `GET /service/documents/{subject}/{key}` | 300 | 1 min | IP (see below) | In-memory fallback |
+| `GET /service/documents/{subject}` | 300 | 1 min | IP (see below) | In-memory fallback |
 | `POST /admin/auth/login` | 10 | 1 min | IP | n/a (in-process) |
+
+**"IP (see below)"** marks the five routes configured with `handler.ClientRateLimitKey`, which
+buckets by the authenticated `client_id` and falls back to the source address when the request
+carries no claims. Every one of those limiters is mounted **outside** `authMw`
+(`internal/server/server.go:509-518, 564-570`), so the claims are never in context when the key is
+computed and the fallback is always taken. The effective bucket is the source IP. A caller behind a
+single in-cluster pod therefore shares one budget across its whole fleet, which is the outcome the
+client key was introduced to avoid; treat the numbers above as per-address until the chain order
+changes. That change would loosen a limit, which section 0.3 permits in a minor release.
 
 Every other route is unlimited at the middleware layer. `POST /user/marketing/unsubscribe` carries
 the *read* limit rather than the write one on purpose: withdrawing consent must be no harder than
@@ -1106,6 +1297,11 @@ an outage that multiplies the brute-force budget by the replica count is a secur
 | `device_trust` | `DeviceTrust` | Device trust change |
 | `session_revoke` | `SessionRevoke` | Session revocation |
 | `client_auth` | `ClientAuth` | Client credentials grant |
+| `kms_unwrap` | `KMSUnwrap` | KEK envelope-unwrap attempt (`kid` and outcome only) |
+| `token_minted` | `handler.AuditTokenMinted` | Token signed for a caller-asserted subject via `POST /mint` (section 6.5). Emitted on refusal as well as success |
+| `svcdoc_put` | `handler.AuditSvcDocPut` | Service document created or replaced (section 7.8) |
+| `svcdoc_get` | `handler.AuditSvcDocGet` | Service document read |
+| `svcdoc_delete` | `handler.AuditSvcDocDelete` | Service document deleted |
 | `rate_limit` | `RateLimit` | Rate limit triggered |
 | `fingerprint_anomaly` | `FingerprintAnomaly` | Fingerprint mismatch on refresh |
 | `oauth2_authorize` | `OAuth2Authorize` | OAuth2 redirect initiated |
@@ -1154,7 +1350,7 @@ Each audit entry contains:
 - **Database role enforcement:** `vault_app` has only `INSERT` and `SELECT` on the audit schema
 - **Sensitive data scrubbing:** metadata keys matching `password`, `secret`, `token`, `access_token`, `refresh_token`, `code`, `totp_secret`, `backup_code`, `master_key`, `client_secret`, `api_key` are automatically stripped before storage
 - **Batching:** configurable via `VAULT_AUDIT_FLUSH_INTERVAL`; when set, entries are buffered in memory and flushed periodically
-- **Buffer overflow protection:** configurable buffer size (`VAULT_AUDIT_BUFFER_SIZE`, default 1000). When the buffer is full, critical events (`login_failure`, `admin_login_failure`, `admin_lockout`) bypass the buffer and write synchronously. Dropped events are counted and logged.
+- **Buffer overflow protection:** configurable buffer size (`VAULT_AUDIT_BUFFER_SIZE`, default 1000). When the buffer is full, the critical event set bypasses the buffer and writes synchronously; everything else is dropped, counted and logged. The set is exactly `login_failure`, `password_change`, `password_reset`, `token_revoke`, `admin_action` and `kms_unwrap` (`isCriticalEvent`). Notably `token_minted` and the `svcdoc_*` events are **not** in it, so a deployment that both enables minting and batches audit writes can lose mint attribution under load. Batching is off by default (`VAULT_AUDIT_FLUSH_INTERVAL=0`, immediate write) and on in the embedded profile.
 
 **Source:** `internal/audit/audit.go`
 
@@ -1287,7 +1483,7 @@ behaviour.
 
 ### 12.1 Schema
 
-Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encrypted PII), and `objects` (encrypted blob storage).
+Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encrypted PII), and `objects` (encrypted blobs and service documents).
 
 **Tables in `auth` schema:**
 
@@ -1326,20 +1522,22 @@ Four schemas: `auth` (user data), `audit` (append-only logs), `identity` (encryp
 |-------|---------|
 | `profiles` | Encrypted PII (pseudonymous key, AES-256-GCM encrypted JSON, version tracking) |
 
-**Table in `objects` schema:**
+**Tables in `objects` schema:**
 
 | Table | Purpose |
 |-------|---------|
 | `blobs` | Encrypted files (pseudonymous key, compressed+encrypted data, immutable via trigger) |
+| `service_documents` | Service-scoped encrypted JSON (section 7.8). Unique on `(client_id, subject_hash, doc_key)`; mutable, unlike `blobs` |
 
-**Source:** `migrations/001_initial_schema.sql` for the baseline; `migrations/003`–`012` add user
+**Source:** `migrations/001_initial_schema.sql` for the baseline; `migrations/003`--`014` add user
 roles, account flags, the app-role catalog, account import, the recovery escrow and its retention
-sweeper, email branding, erasure grants, WebAuthn credential flags, and audit-function hardening.
+sweeper, email branding, erasure grants, WebAuthn credential flags, audit-function hardening, the
+refresh-family lifetime column, and the service document store.
 
 ### 12.2 Roles
 
 - **`vault_mig`:** DDL privileges, used only at startup for migrations, then connection closed
-- **`vault_app`:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `auth` schema; `INSERT`, `SELECT` only on `audit` schema; `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `identity` schema; `SELECT`, `INSERT`, `DELETE` on `objects` schema (no UPDATE -- enforced by trigger); NO `TRUNCATE`, NO DDL
+- **`vault_app`:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `auth` schema; `INSERT`, `SELECT` only on `audit` schema; `SELECT`, `INSERT`, `UPDATE`, `DELETE` on `identity` schema; `SELECT`, `INSERT`, `DELETE` by default on `objects` schema, with `objects.blobs` immutable by trigger as well and `objects.service_documents` granted `UPDATE` explicitly by migration 014 because replacing a document is an `UPDATE`; NO `TRUNCATE`, NO DDL
 - **`vault_admin`:** Full CRUD on admin tables, read/update on user tables, full on clients + config, read + append on audit
 - All schemas, tables, indexes, and role grants are defined in `migrations/001_initial_schema.sql`
 
@@ -1759,7 +1957,7 @@ Threat observation deployment. Extends production with debug logging, auto-migra
 
 ## 16. Endpoint Inventory
 
-**98 API routes: 57 on the main binary, 41 on the admin gateway.** This inventory is the complete
+**103 API routes: 62 on the main binary, 41 on the admin gateway.** This inventory is the complete
 set. `tests/spec/route_drift_test.go` parses `internal/server/server.go` and
 `internal/adminapi/router.go` with `go/ast` and fails the build if a route here does not exist, or
 if a route exists that is not here. Adding an endpoint without a row is not possible.
@@ -1868,11 +2066,11 @@ probing.
 | `GET` | `/user/blobs/named/{name}` | Bearer | 30/m IP | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob by name |
 | `DELETE` | `/user/blobs/named/{name}` | Bearer + Confirmed | 5/15m user | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob by name |
 | `POST` | `/kms/unwrap` | Bearer + scope `kms:unwrap` | 30/m IP, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle (6.4) |
-| `POST` | `/mint` | Bearer + scope `mint:token` | 60/m client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject (16.4) |
-| `PUT` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document (16.4) |
-| `GET` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:read` | 300/m client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document (16.4) |
-| `DELETE` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document (16.4) |
-| `GET` | `/service/documents/{subject}` | Bearer + scope `svcdoc:read` | 300/m client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject (16.4) |
+| `POST` | `/mint` | Bearer + scope `mint:token` | 60/m IP, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject (6.5) |
+| `PUT` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m IP | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document (7.8) |
+| `GET` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:read` | 300/m IP | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document (7.8) |
+| `DELETE` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m IP | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document (7.8) |
+| `GET` | `/service/documents/{subject}` | Bearer + scope `svcdoc:read` | 300/m IP | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject (7.8) |
 
 #### Admin gateway
 
@@ -1938,27 +2136,25 @@ new page is recognised without anyone remembering to update a list.
 | `GET /admin/`, `/admin/login`, `/admin/ui/*` (10 pages) | Admin gateway | Static HTML shells with no secrets. No server-side auth on page routes: browsers send `GET` without an `Authorization` header, so session auth would answer a JSON 401 to a page load. Client-side JS handles the redirect, and every datum on the page comes from an authenticated API route. |
 | `GET /admin/static/` | Admin gateway | CSS and JS assets. |
 
-### 16.4 Subsystems landing alongside 1.0.0
+### 16.4 Opt-in subsystems
 
-Two subsystems are being built for the 1.0.0 window. Neither registers a route in the tree this
-document was verified against, so neither has rows above. Both are **off by default**, which means
-that on a deployment that does not configure them their routes are not mounted and the surface in
-section 16.2 is unchanged.
+Two subsystems ship in 1.0.0 **off by default**. Both are mounted only when an operator sets their
+gate, and on a deployment that sets neither, their five rows in section 16.2 do not exist: the mux
+has no such patterns and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error
+envelope.
 
-They are named here rather than left out because an integrator planning against 1.0.0 needs to know
-they exist and that they are opt-in. When they land, the drift gate forces their rows into the
-inventory: a route with no row fails the build, so there is no path by which they arrive documented
-only in prose.
+| Subsystem | Routes | Gate | Detail |
+|-----------|--------|------|--------|
+| Subject-assertion signing oracle | `POST /mint` | `VAULT_MINT_ENABLED` (plus a required `VAULT_MINT_AUDIENCE` that must differ from `VAULT_ORIGIN`) | Section 6.5 |
+| Service-scoped JSON document store | `PUT`, `GET`, `DELETE /service/documents/{subject}/{key}`, `GET /service/documents/{subject}` | `VAULT_SVCDOC_ENABLED`, with the shared visibility tier behind a second `VAULT_SVCDOC_SHARED_ENABLED` | Section 7.8 |
 
-| Subsystem | Shape | Gate |
-|-----------|-------|------|
-| Signing oracle (`POST /mint`) | Mints a token for a subject on behalf of a registered client, so a service that owns its own user identifiers can obtain a vault42-signed token without proxying an end-user credential. Follows the `POST /kms/unwrap` precedent exactly: unmounted unless configured, `authMw` plus `RequireScope`, per-IP fail-closed rate limit, synchronous audit. | Off unless configured |
-| Service-scoped JSON document store | `objects.service_documents`, keyed `(client_id, subject_hash, doc_key)` with `client_id` a real foreign key to `auth.clients`. AES-GCM encrypted, key-lookup only, opaque to vault42. `visibility` is an enum (`0` private, `1` shared) rather than a boolean so that an explicit grantee allow-list stays an additive tier. Deliberately not a column on `objects.blobs`: blob ownership has no client dimension, blob `DELETE` requires a password re-confirmation no service can satisfy, and the blob prefix carries a body-cap exemption sized for 10 MiB uploads. | Off by default |
+Both are in the stability contract on the same terms as every other route: their paths, error codes
+and response fields are frozen for 1.x under sections 0.3 and 0.4. Being off by default is a
+deployment property, not an exclusion from the contract, and section 0.6 does not list them.
 
-Until they are wired, the schema and repository layer for the document store exist
-(`migrations/014_service_documents.sql`, `internal/repository/postgres/servicedoc.go`) with no HTTP
-surface. Storage without a route is not an API, and nothing in this section is a commitment under
-sections 0.3 or 0.4 until a route exists to commit to.
+Being opt-in is itself contractual in one direction. Section 0.4 forbids changing a default such
+that an operator who set nothing gets different behaviour, so neither subsystem may become
+on-by-default before 2.0.0.
 
 ---
 
