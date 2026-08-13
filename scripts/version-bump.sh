@@ -39,7 +39,7 @@ RULES=(
   "badges.json::docs/badges.json::\"version\": \"::\""
   "AspNetCore csproj::packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj::<Version>::</Version>"
   "Blazor csproj::packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj::<Version>::</Version>"
-  "site helm command::site/index.html::--set image\.tag=v::"
+  "site helm command::site/index.html::--set image\.tag=::"
   "site footer::site/index.html::vault42 v::"
 )
 

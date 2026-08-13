@@ -26,7 +26,26 @@ jobs:
     name: Validate PR Title
     runs-on: ubuntu-latest
     steps:
+      # The action defaults to the conventional-commit-types list, which has no
+      # `security`. commitlint.config.js does allow it, so a `security:` title
+      # passed the commit check and failed the title check. The two lists have to
+      # be the same list, or the gates contradict each other the way release.yml
+      # and commitlint once did.
       - name: Check PR title format
         uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+            security

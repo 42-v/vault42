@@ -81,3 +81,9 @@ docs/localhost-profile.md
 # Python bytecode from scripts/
 __pycache__/
 *.pyc
+
+# Agent-harness scratch. These are per-run notes from the grok-fleet pipeline;
+# tracking them shipped a stale task brief and a failed test log inside the
+# source tarball and every goreleaser archive.
+.review.md
+.task.md

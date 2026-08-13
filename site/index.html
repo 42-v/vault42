@@ -193,7 +193,7 @@ CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault42</c
         <pre id="code-helm"><code>microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
   -f charts/vault/values-embedded.yaml \
-  --set image.tag=v1.0.0 \
+  --set image.tag=1.0.0 \
   --set origin=https://vault.example.com \
   --set secrets.existingSecret=vault42-secrets</code></pre>
         <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-helm" type="button" aria-label="copy helm commands">COPY</button>

@@ -244,7 +244,7 @@ Both are required for alerting: the webhook fires only on a login attempt agains
 microk8s helm3 upgrade vault42 charts/vault \
   -n vault42 \
   -f charts/vault/values-embedded.yaml \
-  --set image.tag=1.1.0
+  --set image.tag=<target-version>
 
 microk8s kubectl -n vault42 rollout status deployment/vault42
 ```

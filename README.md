@@ -174,8 +174,8 @@ Full index with one line on each document: [docs/README.md](docs/README.md).
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first. `scripts/precommit.sh` is the gate and no hook
-runs it, commits are commitlint-enforced, and a commit subject that starts with a version number
-cuts a release.
+runs it, and commits are commitlint-enforced. Releases are cut by pushing a `v*.*.*` tag at a
+commit that is already on `main`; nothing in a commit subject triggers one.
 
 ## Security
 
