@@ -144,6 +144,15 @@ const (
 	// AdminsCreate grants creating an admin account at any role, including
 	// another super_admin. It is the privilege-escalation permission, and the
 	// reason no role below super_admin may hold any admins:* verb.
+	//
+	// "At any role" is literal. Migration 016 refuses an admin row that
+	// outranks the account named in its created_by, but nothing in Go compares
+	// the two ranks: adminapi.CreateAdmin checks this permission and
+	// [IsValidRole], and no more. The invariant holds today only because this
+	// permission belongs to the highest tier, so the creator can never be
+	// outranked. Granting admins:create to a lower tier would therefore not be
+	// a widening of what that tier may create, it would be a full escalation to
+	// super_admin, caught only by the database trigger.
 	// Route: POST /admin/admins. Tier: super_admin.
 	AdminsCreate Permission = "admins:create"
 	// AdminsRevoke grants disabling an admin account, up to and including the
@@ -152,17 +161,29 @@ const (
 	// Route: POST /admin/admins/{id}/revoke. Tier: super_admin.
 	AdminsRevoke Permission = "admins:revoke"
 
-	// RolesList grants reading the admin role reference table.
+	// The roles:* verbs govern auth.app_roles, the end-user role catalog, and
+	// not auth.admin_roles. The distinction decides their blast radius, so it
+	// is stated once here and assumed by the three constants below.
+	// internal/adminapi/roles.go serves all three from the AppRole repository:
+	// an app_roles row is a role string an end user may carry in the "roles"
+	// claim of a signed access token, which AuthService.effectiveRoles
+	// validates the user's stored roles against at JWT issuance. No admin route
+	// writes auth.admin_roles at all, so nothing reachable over the admin API
+	// can add, rename or remove an admin tier, and no app_roles row can widen
+	// this package: [HasPermission] resolves only the three roles compiled in.
+
+	// RolesList grants reading the end-user role catalog.
 	// Route: GET /admin/roles. Tier: viewer.
 	RolesList Permission = "roles:list"
-	// RolesCreate grants adding a row to the admin role reference table. It
-	// does not widen this hardcoded permission model: [HasPermission] resolves
-	// only the three roles compiled into this package, so a database row that
-	// is not one of them grants nothing.
+	// RolesCreate grants adding a role to the end-user catalog, which makes
+	// that string issuable in a user's JWT roles claim. Whoever holds it
+	// decides what a relying party will see asserted about a user, which is why
+	// it is super_admin rather than a catalog-editing tier of its own.
 	// Route: POST /admin/roles. Tier: super_admin.
 	RolesCreate Permission = "roles:create"
-	// RolesDelete grants removing a row from the admin role reference table,
-	// with the same limitation as RolesCreate.
+	// RolesDelete grants removing a role from the end-user catalog, which stops
+	// the catalog filter from issuing it and so silently drops that claim from
+	// every subsequent token. Catalog entries marked reserved refuse deletion.
 	// Route: DELETE /admin/roles/{name}. Tier: super_admin.
 	RolesDelete Permission = "roles:delete"
 
@@ -213,6 +234,15 @@ type Role string
 // contract with the auth.admin_roles table and with the role column on admin
 // accounts, so they are compared literally: case, spacing and spelling must
 // match exactly.
+//
+// Two of these strings are not unique to the admin plane. Migration 005 seeds
+// "viewer" and "operator" into auth.app_roles as end-user roles, so an ordinary
+// user account can legitimately carry roles:["operator"] in a signed access
+// token. The two planes never meet inside this service: the admin gateway
+// authorizes from auth.admin_users.role reached through a session token and
+// never reads a JWT roles claim, and a user JWT never reaches
+// [HasPermission]. A relying party that treats the claim as this package's tier
+// would be reading a user-plane string as an admin-plane one.
 const (
 	// RoleViewer is the read-only tier. It holds only list and read verbs and
 	// no permission that changes state, which is what makes it safe to hand to
@@ -233,9 +263,16 @@ const (
 	RoleSuperAdmin Role = "super_admin"
 )
 
-// ValidRoles lists every recognized role, lowest tier first, for validation and
-// for populating role pickers. It is not a permission source: authorization
-// decisions go through [HasPermission].
+// ValidRoles lists every recognized role, lowest tier first. It is not a
+// permission source: authorization decisions go through [HasPermission].
+//
+// The order is load-bearing and not merely presentational. internal/seed
+// adminRoleRank returns a role's index here as its privilege rank, and
+// seedAdminCreator attributes a seeded admin to the highest-ranked existing
+// account, which is the created_by that migration 016 checks the seeded role
+// against. Reordering this slice, for a role picker that wanted the strongest
+// tier first, would invert that rank. The order is pinned against the
+// permission sets in the package tests rather than left to this comment.
 var ValidRoles = []Role{RoleViewer, RoleOperator, RoleSuperAdmin}
 
 // IsValidRole reports whether r is exactly one of the three recognized admin
