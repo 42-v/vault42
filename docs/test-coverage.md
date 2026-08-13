@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-13 | Tests: 4193 | Total: 99.56% statement coverage
+Generated: 2026-08-13 | Tests: 4199 | Total: 99.56% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -33,9 +33,9 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/handler` | 99.67% |
 | `internal/keystore` | 99.53% |
 | `cmd/bridge` | 99.49% |
-| `cmd/admin-gateway` | 99.41% |
+| `cmd/admin-gateway` | 99.42% |
 | `internal/jwt` | 99.22% |
-| `internal/service` | 99.09% |
+| `internal/service` | 99.10% |
 | `internal/email` | 99.01% |
 | `cmd/vault` | 98.92% |
 | `internal/crypto` | 98.17% |

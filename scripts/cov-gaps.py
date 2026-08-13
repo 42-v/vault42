@@ -89,7 +89,12 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # device-binding fixes. A full cov_run reports 10831, all covered by the tests
 # those fixes shipped; the two SQL migrations (025 tombstone-insert, 026
 # signing-key retire) add no Go statements.
-BASELINE_TOTAL_STATEMENTS = 10831
+# Raised from 10831 to 10861 by wiring the admin-session reaper: +30 statements
+# from internal/service/admin_session_retention.go (the scheduled sweeper that
+# actually calls DeleteExpired on a ticker) and its three-line Start/Stop wiring
+# in cmd/admin-gateway/main.go. A full cov_run reports 10861, all 30 covered by
+# admin_session_retention_test.go and the admin-gateway integration test.
+BASELINE_TOTAL_STATEMENTS = 10861
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
