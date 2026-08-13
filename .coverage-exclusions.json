@@ -50,7 +50,7 @@
     {
       "package": "cmd/admin-gateway",
       "file": "cmd/admin-gateway/main.go",
-      "line": 158,
+      "line": 170,
       "occurrence": 1,
       "source": "\t\tlog.Fatalf(\"admin-gateway: keystore init: %v\", err)",
       "bucket": "B",
@@ -100,7 +100,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 236,
+      "line": 248,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
