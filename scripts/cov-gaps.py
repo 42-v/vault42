@@ -94,7 +94,15 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # actually calls DeleteExpired on a ticker) and its three-line Start/Stop wiring
 # in cmd/admin-gateway/main.go. A full cov_run reports 10861, all 30 covered by
 # admin_session_retention_test.go and the admin-gateway integration test.
-BASELINE_TOTAL_STATEMENTS = 10861
+# Raised from 10861 to 10870 by the attack-pass batch: +9 net statements from the
+# bridge rightmost-XFF walk and the servicedoc per-client byte-quota / used_bytes
+# scoping and shared-read kill-switch gates (the cross-client SumBytesForSubject
+# was removed and replaced with SumBytesForSubjectAndClient). Migration 027
+# (retired keys need an expiry) adds no Go statements. A full cov_run reports
+# 10870, all covered by the tests those fixes shipped; the five servicedoc
+# bucket-C exclusions were unchanged in substance and only relocated (+31 lines)
+# by the quota code inserted above them.
+BASELINE_TOTAL_STATEMENTS = 10870
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
