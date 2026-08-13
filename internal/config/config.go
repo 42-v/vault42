@@ -627,6 +627,15 @@ func (c *Config) Validate() error {
 	if len(c.Pepper) < 32 {
 		return fmt.Errorf("VAULT_PEPPER_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.Pepper))
 	}
+	// Production is the only profile that must have a master key at boot.
+	// HMAC and pepper already refuse to start without theirs; the master key
+	// is the one secret that used to be checked only when something first
+	// tried to encrypt, so a production vault42 would come up with no key
+	// and TOTP, identity, blobs and service documents would fail at request
+	// time. Embedded, honeypot and dev keep that trade-off.
+	if c.Profile == ProfileProduction && len(c.MasterKey) != 32 {
+		return fmt.Errorf("MASTER_KEY_FILE required (32 bytes) in %s profile (got %d)", c.Profile, len(c.MasterKey))
+	}
 	if c.Origin == "" {
 		return fmt.Errorf("VAULT_ORIGIN required in %s profile", c.Profile)
 	}

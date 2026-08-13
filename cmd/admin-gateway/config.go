@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,12 +141,19 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("ADMIN_GW_LISTEN_ADDR must bind to loopback (127.0.0.1 or [::1]), got %q", c.ListenAddr)
 	}
 
-	// Killswitch: default true, disabled in dev mode or explicitly
+	// Killswitch: default on, off in dev mode. An explicit value must be a
+	// recognised spelling; anything else refuses to start. The previous parse
+	// treated every unrecognised value as off, so ADMIN_GW_KILLSWITCH=True
+	// (or a typo) disabled the tripwire while leaving it unset kept it on.
 	killswitch := os.Getenv("ADMIN_GW_KILLSWITCH")
 	if killswitch == "" {
 		c.Killswitch = !c.DevMode
 	} else {
-		c.Killswitch = killswitch == "true" || killswitch == "1" || killswitch == "yes"
+		on, err := parseKillswitch(killswitch)
+		if err != nil {
+			return nil, err
+		}
+		c.Killswitch = on
 	}
 
 	if len(c.MasterKey) != 32 {
@@ -157,8 +165,37 @@ func LoadConfig() (*Config, error) {
 
 // DatabaseURL builds a PostgreSQL connection string using the vault_admin role.
 func (c *Config) DatabaseURL() string {
-	return fmt.Sprintf("postgres://vault_admin:%s@%s:%s/%s?sslmode=%s",
-		c.DBPassword, c.DBHost, c.DBPort, c.DBName, c.DBSSLMode)
+	return postgresURL("vault_admin", c.DBPassword, c.DBHost, c.DBPort, c.DBName, c.DBSSLMode)
+}
+
+// postgresURL builds a PostgreSQL URI with the password percent-encoded.
+// Sprintf would splice the password into the userinfo verbatim, so '/', '?'
+// and '#' make pgx report "invalid port after host", a space makes it report
+// "invalid userinfo", and a '%' is decoded silently so the process
+// authenticates as a different string than the one on disk.
+func postgresURL(user, password, host, port, dbname, sslmode string) string {
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     host + ":" + port,
+		Path:     dbname,
+		RawQuery: "sslmode=" + sslmode,
+	}
+	return u.String()
+}
+
+// parseKillswitch accepts the same on/off spellings as envBool and refuses
+// everything else. A killswitch that cannot be parsed must not start the
+// process as if the operator had asked to disable it.
+func parseKillswitch(v string) (bool, error) {
+	switch v {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("ADMIN_GW_KILLSWITCH must be true, 1, yes, false, 0 or no (got %q)", v)
+	}
 }
 
 func envOr(key, fallback string) string {

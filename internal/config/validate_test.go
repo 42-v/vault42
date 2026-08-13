@@ -8,6 +8,7 @@ func prodConfig() *Config {
 		Profile:            ProfileProduction,
 		HMACSecret:         []byte("0123456789abcdef0123456789abcdef"), // 32 bytes
 		Pepper:             "0123456789abcdef0123456789abcdef",         // 32 bytes
+		MasterKey:          []byte("0123456789abcdef0123456789abcdef"), // 32 bytes
 		Origin:             "https://vault.test",
 		TLSEnabled:         true,
 		TLSCertFile:        "/tls/cert.pem",
@@ -102,4 +103,56 @@ func TestValidate(t *testing.T) {
 			t.Fatal("TLS enabled without cert must fail")
 		}
 	})
+
+	t.Run("missing master key in production", func(t *testing.T) {
+		c := prodConfig()
+		c.MasterKey = nil
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("production must refuse to start without MASTER_KEY_FILE")
+		}
+		if want := "MASTER_KEY_FILE required"; !contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	})
+
+	t.Run("short master key in production", func(t *testing.T) {
+		c := prodConfig()
+		c.MasterKey = []byte("too-short")
+		if err := c.Validate(); err == nil {
+			t.Fatal("production must refuse a master key that is not 32 bytes")
+		}
+	})
+
+	t.Run("oversized master key in production", func(t *testing.T) {
+		c := prodConfig()
+		c.MasterKey = make([]byte, 33)
+		if err := c.Validate(); err == nil {
+			t.Fatal("production must refuse a master key that is not 32 bytes")
+		}
+	})
+}
+
+// TestValidateMasterKeyIsProductionOnly pins that the master-key boot check
+// is the production profile's, not a non-dev check. Embedded, honeypot and
+// dev still start without one (TOTP / identity / blobs then fail at request
+// time). Production must not: it is the one secret HMAC and pepper already
+// refused at startup.
+func TestValidateMasterKeyIsProductionOnly(t *testing.T) {
+	base := func(p Profile) *Config {
+		c := prodConfig()
+		c.Profile = p
+		c.MasterKey = nil
+		return c
+	}
+
+	if err := base(ProfileProduction).Validate(); err == nil {
+		t.Fatal("production accepted an empty master key")
+	}
+
+	for _, p := range []Profile{ProfileDev, ProfileEmbedded, ProfileHoneypot} {
+		if err := base(p).Validate(); err != nil {
+			t.Errorf("%s profile refused an empty master key: %v", p, err)
+		}
+	}
 }
