@@ -332,13 +332,27 @@ func (b *Bridge) clientIP(r *http.Request) string {
 		}
 	}
 
-	// X-Forwarded-For from trusted proxies
+	// X-Forwarded-For from trusted proxies. A load balancer that appends to
+	// this header (nginx proxy_add_x_forwarded_for, AWS ALB) leaves the
+	// client-supplied entries on the left and adds each real hop on the right,
+	// so the closest hop this bridge did not itself vouch for is the rightmost
+	// entry that is not a trusted proxy. Walk right to left, skipping trusted
+	// proxies, and return the first address that parses. Taking the leftmost
+	// entry would return whatever the client wrote, letting an unauthenticated
+	// caller both evade its own scoring and frame another address.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		remoteIP := extractIP(r.RemoteAddr)
 		if b.isTrustedProxy(remoteIP) {
 			parts := strings.Split(xff, ",")
-			if len(parts) > 0 {
-				return strings.TrimSpace(parts[0])
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := strings.TrimSpace(parts[i])
+				if b.isTrustedProxy(candidate) {
+					continue
+				}
+				if net.ParseIP(candidate) != nil {
+					return candidate
+				}
+				break
 			}
 		}
 	}
