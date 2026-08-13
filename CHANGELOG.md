@@ -160,6 +160,20 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   already refused that pair, so the default install was a CrashLoopBackOff with the reason
   one line deep in the pod logs rather than a silently dropped cookie. Secure cookies are the
   default now, and the chart refuses to render the combination outside dev.
+* **Retired signing keys accumulated forever.** `keystore.CleanupExpired` had no production
+  caller, and no role held `DELETE` on `auth.signing_keys`, so it could not have reaped
+  anything if something had called it. Migration 020 grants `vault_app` that `DELETE` and
+  narrows it with a `BEFORE DELETE` trigger, since PostgreSQL has no row scope for a
+  privilege and the bare grant would also cover the active key and every retired key still
+  verifying live tokens. The trigger says nothing about a revoked row on purpose: same-event
+  triggers fire in name order and `signing_keys_reap_scope` sorts ahead of
+  `signing_keys_revocation_terminal`, so excluding revoked rows is what leaves migration 017
+  the only guard that answers for a revoked key. The reap and the published set are disjoint
+  by construction, because `Refresh` loads `expires_at IS NULL OR expires_at > NOW()` and the
+  reap deletes `expires_at IS NOT NULL AND expires_at < NOW()` off the same transaction
+  clock. `cmd/vault` now warns at startup when `VAULT_KEY_RETENTION_PERIOD` is shorter than
+  the access-token TTL, a pre-existing way to strand live tokens that reaping removes the
+  recourse for.
 * **The honeypot bridge aimed its own decoy at the operator.** `/admin` was a decoy prefix and
   matching is by prefix, while vault42 serves its admin SPA and roughly thirty documented API
   routes under `/admin/`. An operator opening the console through a bridge was flagged for the
