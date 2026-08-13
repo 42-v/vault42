@@ -4,7 +4,12 @@ import "github.com/go-webauthn/webauthn/webauthn"
 
 // WebAuthnUser implements the webauthn.User interface for use with go-webauthn.
 type WebAuthnUser struct {
-	User        *User
+	// User is the vault42 account this ceremony is for. Its ID becomes
+	// WebAuthnID and its Email becomes WebAuthnName; it is not serialized
+	// on any HTTP response.
+	User *User
+	// Credentials are the go-webauthn credentials loaded for this account
+	// for the current ceremony. Empty when the user has registered none.
 	Credentials []webauthn.Credential
 }
 

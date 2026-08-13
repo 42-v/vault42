@@ -10,7 +10,14 @@ func Healthz(w http.ResponseWriter, r *http.Request) {
 
 // ReadyzDeps holds dependencies for the readiness probe handler.
 type ReadyzDeps struct {
-	PingDB    func() error
+	// PingDB, when non-nil, is called on every GET /readyz. A non-nil
+	// error makes the probe return 503 with status=not_ready and
+	// database=down. Nil skips the database check entirely.
+	PingDB func() error
+	// PingCache, when non-nil, is called on every GET /readyz. A non-nil
+	// error is reported as cache=degraded but does not fail the probe,
+	// because a cache outage must not take the process out of rotation.
+	// Nil skips the cache check.
 	PingCache func() error
 }
 

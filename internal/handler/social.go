@@ -34,9 +34,15 @@ func NewSocialHandler(social repository.SocialAccountRepository, auditLog *audit
 // the API. Hand-formatting it truncated the value to whole seconds, which made
 // this the one endpoint whose timestamps a client had to parse differently.
 type socialAccountView struct {
-	ID        string    `json:"id"`
-	Provider  string    `json:"provider"`
-	Email     string    `json:"email,omitempty"`
+	// ID is the link UUID. DELETE /user/social/{id} addresses it.
+	ID string `json:"id"`
+	// Provider is the configured IdP name (google, github, ...).
+	Provider string `json:"provider"`
+	// Email is the address the IdP asserted at link time. Omitted when
+	// the provider released none.
+	Email string `json:"email,omitempty"`
+	// CreatedAt is when the link was stored, RFC3339 UTC. Encoded as
+	// time.Time so it matches every other timestamp in the API.
 	CreatedAt time.Time `json:"created_at"`
 }
 
