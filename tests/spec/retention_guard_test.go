@@ -5,7 +5,7 @@
 // catch: it compared the caller's INTERVAL against a minimum, then subtracted
 // that same INTERVAL from NOW() to build the DELETE predicate.
 //
-// Those are different operations. Interval comparison canonicalises a month to
+// Those are different operations. Interval comparison canonicalizes a month to
 // 30 days, because two intervals have to be ordered without a reference date.
 // Interval subtraction from a timestamp has a reference date and uses the real
 // calendar month. So INTERVAL '1 mon -29 days' compares as 1 day and passes,
@@ -16,7 +16,7 @@
 // append-only trigger off to do it, and vault_app holds EXECUTE. The minimum
 // horizon is the only limit on the blast radius of one call.
 //
-// The behavioural regression lives in tests/integration, where a real Postgres
+// The behavioral regression lives in tests/integration, where a real Postgres
 // can evaluate the arithmetic. This gate is the cheap half: it runs with no
 // container and fails if anyone reintroduces the shape, including in a new
 // retention function that has not been written yet.
