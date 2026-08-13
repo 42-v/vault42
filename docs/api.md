@@ -2776,6 +2776,22 @@ Every post-authorization failure (malformed body, bad base64, empty `kid`, tampe
 
 Every attempt is written synchronously to the audit log (`kid` and outcome only; key material is never logged). Use the `vault kms wrap` CLI to produce envelopes this endpoint accepts.
 
+The `kid` on this endpoint is deliberately unconstrained: it is HKDF info and GCM
+additional data, never a lookup key, and unwrap has to remain the exact inverse of
+every wrap that ever ran, including envelopes sealed under a kid this service would
+not choose today. `vault kms wrap` is stricter than the endpoint and refuses any
+`--kid` outside `^[A-Za-z0-9][A-Za-z0-9._@-]*$` (128 bytes), because a kid carrying
+a space, a control byte or a homoglyph produces an artifact that only opens under a
+string an operator cannot read back off their terminal. Producing is where that is
+worth catching; opening is not.
+
+`vault kms wrap` also refuses an empty or whitespace-only plaintext. Sealing zero
+bytes yields a well-formed envelope that unwraps to nothing, so a deploy step whose
+input file was empty produced a valid looking artifact and exit 0, and the failure
+surfaced later as an empty secret in a running service. `POST /kms/unwrap` still
+opens such an envelope, since older tooling could produce one and an operator
+holding it needs to confirm what it carries.
+
 **curl example:**
 
 ```bash
