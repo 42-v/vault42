@@ -81,8 +81,9 @@ func (c RegisteredClaims) GetAudience() ClaimStrings { return c.Audience }
 type MapClaims map[string]any
 
 // GetExpirationTime returns the exp claim. It returns nil when the claim is
-// absent, is not a number, or is zero, so a token whose exp arrived as a string
-// is treated as carrying no expiry rather than as expired.
+// absent or is not a number, so a token whose exp arrived as a string is treated
+// as carrying no expiry rather than as expired. A numeric zero is a real
+// timestamp, the epoch, and reads as long expired.
 func (m MapClaims) GetExpirationTime() *NumericDate { return mapNumericDate(m, "exp") }
 
 // GetIssuedAt returns the iat claim, with the same absent-or-untyped-is-nil
@@ -123,17 +124,29 @@ func (m MapClaims) GetAudience() ClaimStrings {
 	}
 }
 
+// mapNumericDate reads a timestamp claim, distinguishing a claim that is absent
+// from one whose value is the epoch.
+//
+// The distinction decides whether the claim is checked at all: validateClaims
+// reads a nil exp as "this token carries no expiry" and skips the expiry
+// comparison. Treating the number 0 as absent therefore turned the most expired
+// timestamp a token can carry into a token that never expires, and made
+// MapClaims disagree with RegisteredClaims, which parses the same payload into a
+// *NumericDate at the epoch and calls it expired.
+//
+// A value of the wrong JSON type still reads as absent. That is the safe
+// reading for a claim vault42 does not mint: exp arriving as a string is not a
+// deadline this package can compare, and callers that cannot tolerate a missing
+// deadline pass WithExpirationRequired, which rejects it.
 func mapNumericDate(m MapClaims, key string) *NumericDate {
-	switch v := m[key].(type) {
+	raw, present := m[key]
+	if !present {
+		return nil
+	}
+	switch v := raw.(type) {
 	case float64:
-		if v == 0 {
-			return nil
-		}
 		return NewNumericDate(time.Unix(int64(v), 0))
 	case int64:
-		if v == 0 {
-			return nil
-		}
 		return NewNumericDate(time.Unix(v, 0))
 	case *NumericDate:
 		return v

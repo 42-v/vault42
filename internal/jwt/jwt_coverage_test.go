@@ -354,9 +354,9 @@ func TestMapClaims_GetExpirationTime(t *testing.T) {
 		unix   int64
 	}{
 		{"float64_nonzero", MapClaims{"exp": float64(1700000000)}, false, 1700000000},
-		{"float64_zero", MapClaims{"exp": float64(0)}, true, 0},
+		{"float64_zero", MapClaims{"exp": float64(0)}, false, 0},
 		{"int64_nonzero", MapClaims{"exp": int64(1700000000)}, false, 1700000000},
-		{"int64_zero", MapClaims{"exp": int64(0)}, true, 0},
+		{"int64_zero", MapClaims{"exp": int64(0)}, false, 0},
 		{"numeric_date", MapClaims{"exp": NewNumericDate(time.Unix(1700000000, 0))}, false, 1700000000},
 		{"string_default", MapClaims{"exp": "not-a-number"}, true, 0},
 		{"missing_key", MapClaims{}, true, 0},
@@ -390,9 +390,9 @@ func TestMapClaims_GetIssuedAt(t *testing.T) {
 		unix   int64
 	}{
 		{"float64_nonzero", MapClaims{"iat": float64(1700000000)}, false, 1700000000},
-		{"float64_zero", MapClaims{"iat": float64(0)}, true, 0},
+		{"float64_zero", MapClaims{"iat": float64(0)}, false, 0},
 		{"int64_nonzero", MapClaims{"iat": int64(1700000000)}, false, 1700000000},
-		{"int64_zero", MapClaims{"iat": int64(0)}, true, 0},
+		{"int64_zero", MapClaims{"iat": int64(0)}, false, 0},
 		{"numeric_date", MapClaims{"iat": NewNumericDate(time.Unix(1700000000, 0))}, false, 1700000000},
 		{"string_default", MapClaims{"iat": "not-a-number"}, true, 0},
 		{"missing_key", MapClaims{}, true, 0},
@@ -425,9 +425,9 @@ func TestMapClaims_GetNotBefore(t *testing.T) {
 		unix   int64
 	}{
 		{"float64_nonzero", MapClaims{"nbf": float64(1700000000)}, false, 1700000000},
-		{"float64_zero", MapClaims{"nbf": float64(0)}, true, 0},
+		{"float64_zero", MapClaims{"nbf": float64(0)}, false, 0},
 		{"int64_nonzero", MapClaims{"nbf": int64(1700000000)}, false, 1700000000},
-		{"int64_zero", MapClaims{"nbf": int64(0)}, true, 0},
+		{"int64_zero", MapClaims{"nbf": int64(0)}, false, 0},
 		{"numeric_date", MapClaims{"nbf": NewNumericDate(time.Unix(1700000000, 0))}, false, 1700000000},
 		{"string_default", MapClaims{"nbf": "not-a-number"}, true, 0},
 		{"missing_key", MapClaims{}, true, 0},
@@ -582,6 +582,10 @@ func TestMapClaims_GetAudience(t *testing.T) {
 // mapNumericDate (claims.go:64) — exhaustive type switch coverage
 // ---------------------------------------------------------------------------
 
+// The zero cases below expect a timestamp, not nil. A numeric 0 is the epoch,
+// which is a real and long-past deadline; only an absent or non-numeric claim
+// reads as "no deadline", because that is the reading validateClaims turns into
+// skipping the check entirely.
 func TestMapNumericDate_AllPaths(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -591,9 +595,9 @@ func TestMapNumericDate_AllPaths(t *testing.T) {
 		unix   int64
 	}{
 		{"float64_nonzero", MapClaims{"exp": float64(1700000000)}, "exp", false, 1700000000},
-		{"float64_zero", MapClaims{"exp": float64(0)}, "exp", true, 0},
+		{"float64_zero", MapClaims{"exp": float64(0)}, "exp", false, 0},
 		{"int64_nonzero", MapClaims{"exp": int64(1700000000)}, "exp", false, 1700000000},
-		{"int64_zero", MapClaims{"exp": int64(0)}, "exp", true, 0},
+		{"int64_zero", MapClaims{"exp": int64(0)}, "exp", false, 0},
 		{"numeric_date_ptr", MapClaims{"exp": NewNumericDate(time.Unix(1700000000, 0))}, "exp", false, 1700000000},
 		{"numeric_date_nil_ptr", MapClaims{"exp": (*NumericDate)(nil)}, "exp", true, 0},
 		{"string_falls_to_default", MapClaims{"exp": "2023-11-14"}, "exp", true, 0},

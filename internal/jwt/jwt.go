@@ -1,7 +1,14 @@
 // Package jwt is a stdlib-only JWT implementation for Vault42:
 // RS256 + ES256 sign/verify, claim parsing, algorithm whitelisting, and
-// the security defenses spelled out in docs/spec.md (jku/x5u/x5c rejection,
-// 8 KB max size, kid traversal protection).
+// canonical segment decoding.
+//
+// The rest of the defenses spelled out in docs/spec.md belong to the callers
+// and are not enforced here, because this package never sees the policy they
+// depend on. The jku/x5u/x5c/jwk and crit rejections and the kid format check
+// live in the Keyfunc, which is the only place that knows which keys are
+// trusted; the size cap lives at each entry point, 8 KB in
+// crypto.ParseAndValidate and 4 KB in crypto.ValidateDPoPProof. A caller that
+// reaches ParseWithClaims directly gets none of them.
 package jwt
 
 import (
@@ -52,9 +59,33 @@ func encodeSegment(data []byte) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-// decodeSegment base64url-decodes a string (no padding).
+// segmentEncoding is the strict variant of the RFC 7515 §2 segment encoding.
+// Strict makes the decoder refuse a final character whose unused low bits are
+// not zero, which is otherwise ignored. It is a package-level value because
+// base64.Encoding.Strict returns a copy of the whole encoding, table included,
+// and every parse decodes three segments.
+var segmentEncoding = base64.RawURLEncoding.Strict()
+
+// decodeSegment base64url-decodes one segment of a compact serialization.
+//
+// The strictness above the stdlib decoder exists because the compact
+// serialization has to name a token uniquely. internal/middleware/dpop.go binds
+// a DPoP proof to an access token by hashing the exact bearer string it was
+// handed, and a denylist of individually revoked tokens would key on the same
+// bytes. Go's decoder is lax in two ways that give one signature many spellings:
+// it skips CR and LF wherever they appear, which the alphabet scan rejects here,
+// and it ignores the padding bits of the final character, which segmentEncoding
+// rejects. Neither is legal input under RFC 7515 §2, and no conforming encoder
+// produces either, so nothing that verified before stops verifying.
 func decodeSegment(seg string) ([]byte, error) {
-	return base64.RawURLEncoding.DecodeString(seg)
+	for i := 0; i < len(seg); i++ {
+		switch c := seg[i]; {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return nil, fmt.Errorf("illegal base64url character %q at offset %d", c, i)
+		}
+	}
+	return segmentEncoding.DecodeString(seg)
 }
 
 // EncodeSegment base64url-encodes a byte slice (exported for test helpers).
