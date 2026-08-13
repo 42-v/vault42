@@ -236,6 +236,7 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 
 	now := time.Now().UTC()
 	deviceID, tokenID, socialID, credID := randomID(), randomID(), randomID(), randomID()
+	familyID := randomID()
 
 	devices := postgres.NewDeviceRepo(db)
 	tokens := postgres.NewRefreshTokenRepo(db)
@@ -255,7 +256,7 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 	}
 	if err := tokens.Create(ctx, &model.RefreshToken{
 		ID: tokenID, UserID: user.ID, TokenHash: randomID(),
-		FamilyID: randomID(), FingerprintHash: randomID(),
+		FamilyID: familyID, FingerprintHash: randomID(),
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 	}); err != nil {
 		t.Fatalf("create refresh token: %v", err)
@@ -313,6 +314,12 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 		{"tokens.RevokeByID", func() error { return tokens.RevokeByID(ctx, tokenID) }},
 		{"tokens.RevokeByDeviceID", func() error { return tokens.RevokeByDeviceID(ctx, deviceID) }},
 		{"tokens.RevokeAllForUser", func() error { return tokens.RevokeAllForUser(ctx, user.ID) }},
+		{"tokens.RevokeFamily", func() error { return tokens.RevokeFamily(ctx, familyID) }},
+		// RevokeAll takes the table rather than the rows, and a table lock above
+		// ACCESS SHARE is a privilege of its own. vault_app holds UPDATE, which
+		// is what grants it; nothing else in the suite would notice if that
+		// stopped being true, because the rest of it runs as the owner.
+		{"tokens.RevokeAll", func() error { return tokens.RevokeAll(ctx) }},
 		{"tokens.DeleteExpired", func() error { _, err := tokens.DeleteExpired(ctx); return err }},
 
 		{"webauthn.UpdateSignCount", func() error { return webauthn.UpdateSignCount(ctx, credID, 7) }},
