@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -38,11 +39,31 @@ type CLI struct {
 	// pepper is forwarded to seed.Run so CLI-driven seeding produces hashes
 	// that match the runtime auth-service's pepper. Empty = no pepper.
 	pepper string
+	// provisionedAdminToken is the admin credential the operator mounted at
+	// ADMIN_TOKEN_FILE, either an Argon2id hash or the plaintext token. It seeds
+	// admin_token_hash on first boot so the credential never has to be minted
+	// and printed to stdout.
+	provisionedAdminToken string
+	// provisionedAdminErr defers a failed read to InitAdminToken, the only
+	// caller that can report it: New has no error return, and dropping the error
+	// would restore the silent fall-through to a generated token that the mount
+	// was supposed to replace.
+	provisionedAdminErr error
 }
 
 // New creates a new CLI handler with the given repositories.
 func New(clients repository.ClientRepository, users repository.UserRepository, tokens repository.RefreshTokenRepository, adminConfig repository.AdminConfigRepository, audit repository.AuditRepository, pepper string) *CLI {
-	return &CLI{clients: clients, users: users, tokens: tokens, adminConfig: adminConfig, audit: audit, pepper: pepper}
+	token, err := loadProvisionedAdminToken()
+	return &CLI{
+		clients:               clients,
+		users:                 users,
+		tokens:                tokens,
+		adminConfig:           adminConfig,
+		audit:                 audit,
+		pepper:                pepper,
+		provisionedAdminToken: token,
+		provisionedAdminErr:   err,
+	}
 }
 
 // WithRecoveryPruner attaches the account-recovery escrow pruner that
@@ -338,13 +359,72 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	return true
 }
 
-// InitAdminToken generates and stores the initial admin token on first boot.
-// If a token hash already exists in the database, this is a no-op. The
-// generated token is printed to stdout once and never shown again.
+// argon2idPrefix marks the PHC-encoded form of an Argon2id hash and is what
+// tells ADMIN_TOKEN_FILE's two accepted forms apart. Config.Validate has
+// already refused to start on anything carrying this prefix that is not a
+// complete hash.
+const argon2idPrefix = "$argon2id$"
+
+// loadProvisionedAdminToken reads the admin credential the operator mounted at
+// ADMIN_TOKEN_FILE, or returns "" when there is none.
+//
+// Read here rather than carried on config.Config, following how cmd/vault reads
+// SIGNING_KEY: this is the secret's only consumer, and under
+// VAULT_SECRET_FILE_CONSUME the read destroys the file, so a second reader
+// would get nothing. Config parsed this file for its whole life and stored it
+// in a field no code path ever read, which is what let a mounted admin token be
+// silently replaced by a generated one.
+func loadProvisionedAdminToken() (string, error) {
+	if os.Getenv("ADMIN_TOKEN_FILE") == "" {
+		return "", nil
+	}
+	return config.LoadSecret("ADMIN_TOKEN")
+}
+
+// InitAdminToken installs the initial admin token on first boot.
+//
+// ADMIN_TOKEN_FILE wins when set: the operator has already chosen the
+// credential and knows its plaintext, so nothing needs to be minted and nothing
+// secret reaches stdout. Only when no file is mounted is a token generated and
+// printed once.
+//
+// If a hash already exists in the database it is left alone, because it may be
+// the result of rotate-admin-token and re-seeding from the file would silently
+// undo that rotation on the next restart.
 func (c *CLI) InitAdminToken(ctx context.Context) error {
+	if c.provisionedAdminErr != nil {
+		return fmt.Errorf("read ADMIN_TOKEN_FILE: %w", c.provisionedAdminErr)
+	}
+
 	existing, _ := c.adminConfig.Get(ctx, "admin_token_hash")
 	if existing != "" {
-		return nil // already initialized
+		// Not fatal, but not silent either: an operator whose mounted file is no
+		// longer the credential in force will otherwise keep authenticating with
+		// it and blame the CLI.
+		if c.provisionedAdminToken != "" && !c.provisionedTokenMatches(existing) {
+			fmt.Fprintln(os.Stderr, "WARNING: the admin token in ADMIN_TOKEN_FILE is not the one in force; the database already holds a different hash. Run rotate-admin-token to change the admin token.")
+		}
+		return nil
+	}
+
+	if c.provisionedAdminToken != "" {
+		hash := c.provisionedAdminToken
+		if !strings.HasPrefix(hash, argon2idPrefix) {
+			// The file may hold the plaintext token instead of its hash, which is
+			// what scripts/generate-secrets.sh writes and what
+			// charts/vault/templates/NOTES.txt tells operators to cat into
+			// --admin-token. Only the hash is ever stored.
+			var err error
+			hash, err = hashPassword(hash)
+			if err != nil {
+				return fmt.Errorf("hash admin token from ADMIN_TOKEN_FILE: %w", err)
+			}
+		}
+		if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
+			return err
+		}
+		fmt.Println("Admin token taken from ADMIN_TOKEN_FILE.")
+		return nil
 	}
 
 	token, err := vaultcrypto.RandomHex(32)
@@ -360,6 +440,18 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	}
 	fmt.Printf("\n=== FIRST BOOT ===\nAdmin token: %s\nSave this token — it will NOT be shown again.\n================\n\n", token)
 	return nil
+}
+
+// provisionedTokenMatches reports whether ADMIN_TOKEN_FILE still describes the
+// credential stored in the database. The plaintext form costs one Argon2id
+// verification per boot, which is the price of telling an operator the truth
+// about whether their mount is in force.
+func (c *CLI) provisionedTokenMatches(storedHash string) bool {
+	if strings.HasPrefix(c.provisionedAdminToken, argon2idPrefix) {
+		return c.provisionedAdminToken == storedHash
+	}
+	ok, _ := vaultcrypto.VerifyPassword(c.provisionedAdminToken, storedHash)
+	return ok
 }
 
 func (c *CLI) runSeed(ctx context.Context, args []string) bool {

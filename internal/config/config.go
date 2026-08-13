@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,8 +26,6 @@ type Config struct {
 	ListenAddr string
 	// Origin is the public-facing URL, used for CORS, JWKS issuer, and cookie domain (VAULT_ORIGIN).
 	Origin string
-	// LogLevel controls log verbosity (LOG_LEVEL). Default: "warn" (production), "debug" (dev).
-	LogLevel string
 
 	// TLSEnabled enables HTTPS (VAULT_TLS_ENABLED). Default: true.
 	TLSEnabled bool
@@ -58,8 +57,6 @@ type Config struct {
 	// When empty the KMS endpoint is not mounted. Kept cryptographically separate
 	// from MasterKey (which encrypts data at rest) via HKDF domain separation.
 	KMSRootKey []byte
-	// AdminTokenHash is the Argon2id hash of the admin CLI token (ADMIN_TOKEN_FILE).
-	AdminTokenHash string
 	// Pepper is a server-side secret added to password hashes (VAULT_PEPPER_FILE).
 	Pepper string
 	// HMACSecret is the key used for HMAC-SHA256 signatures (HMAC_SECRET_FILE). Must be at least 32 bytes in non-dev profiles.
@@ -368,7 +365,6 @@ func Load() (*Config, error) {
 
 		ListenAddr: os.Getenv("LISTEN_ADDR"),
 		Origin:     os.Getenv("VAULT_ORIGIN"),
-		LogLevel:   os.Getenv("LOG_LEVEL"),
 
 		TLSEnabled:  envBool("VAULT_TLS_ENABLED"),
 		TLSCertFile: os.Getenv("VAULT_TLS_CERT_FILE"),
@@ -596,6 +592,19 @@ func Load() (*Config, error) {
 		log.Println("SECURITY WARNING: HMAC secret is shorter than 32 bytes")
 	}
 
+	// LOG_LEVEL is read here only to announce that it does nothing. It used to be
+	// parsed into a Config field, defaulted per profile and documented as "log
+	// verbosity" while no vault42 binary ever read it, so LOG_LEVEL=error and
+	// LOG_LEVEL=debug produced byte-for-byte identical output and an operator who
+	// set it to cut log exposure got none. Rejecting the variable outright would
+	// be the worse failure: docs/spec.md records LOG_LEVEL among the unprefixed
+	// names a co-located deployment is likely to have already set for other
+	// software, so a hard error would turn an inherited variable into a boot loop.
+	// One line at startup is what keeps the no-op from being silent again.
+	if os.Getenv("LOG_LEVEL") != "" {
+		log.Println("NOTICE: LOG_LEVEL is set but vault42 has no log-verbosity control; it is ignored and every log line is emitted")
+	}
+
 	return c, nil
 }
 
@@ -617,6 +626,12 @@ func (c *Config) Validate() error {
 		if c.MintAudience == c.Origin {
 			return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
 		}
+	}
+	// Also checked ahead of the dev short-circuit. A dev operator who mounts an
+	// admin token and gets a generated one instead learns the wrong thing about
+	// where the credential comes from, and carries that into production.
+	if err := c.checkAdminTokenFile(); err != nil {
+		return err
 	}
 	if c.Profile == ProfileDev {
 		return nil
@@ -678,6 +693,75 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// argon2idPrefix marks the PHC-encoded form of an Argon2id hash. Its presence
+// is what tells ADMIN_TOKEN_FILE's two accepted forms apart: a hash, which is
+// stored verbatim, or a plaintext token, which cli.InitAdminToken hashes before
+// storing. A random token cannot collide with it.
+const argon2idPrefix = "$argon2id$"
+
+// adminTokenMinLength is the shortest plaintext ADMIN_TOKEN_FILE accepted
+// outside dev. The admin CLI can add clients and revoke every session, and
+// nothing rate limits it, so a token an operator could type is a bad one.
+// scripts/generate-secrets.sh writes 64 hex characters.
+const adminTokenMinLength = 16
+
+// checkAdminTokenFile refuses to start on an ADMIN_TOKEN_FILE the admin CLI
+// could never use.
+//
+// That file is the operator's only way to choose the admin credential rather
+// than have one minted on first boot and printed to stdout, which under systemd
+// is the journal (docs/localhost-profile.md §4.5 counts that on its threat
+// table). Every way of getting it wrong used to be silent, because the value
+// was parsed into a config field that nothing read: an absent mount, an empty
+// file or a truncated hash all produced a server that started clean and then
+// rejected the operator's token with "Admin authentication required."
+//
+// The file is read here without consuming it. internal/cli performs the real
+// read, and VAULT_SECRET_FILE_CONSUME makes the first read destructive, so a
+// LoadSecret call here would delete the file before its only consumer saw it.
+func (c *Config) checkAdminTokenFile() error {
+	path := os.Getenv("ADMIN_TOKEN_FILE")
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- path from operator env var (_FILE convention), cleaned with filepath.Clean
+	if err != nil {
+		return fmt.Errorf("read ADMIN_TOKEN_FILE %q: %w", path, err)
+	}
+
+	secret := strings.TrimSpace(string(data))
+	switch {
+	case secret == "":
+		return fmt.Errorf("ADMIN_TOKEN_FILE %q is empty; it must hold either the admin token or its Argon2id hash", path)
+	case strings.HasPrefix(secret, argon2idPrefix):
+		if !isArgon2idHash(secret) {
+			return fmt.Errorf("ADMIN_TOKEN_FILE %q holds a malformed Argon2id hash; no token can ever verify against it", path)
+		}
+	case len(secret) < adminTokenMinLength:
+		if c.Profile != ProfileDev {
+			return fmt.Errorf("admin token in ADMIN_TOKEN_FILE %q is %d characters; %s profile requires at least %d", path, len(secret), c.Profile, adminTokenMinLength)
+		}
+		log.Printf("SECURITY WARNING: admin token in ADMIN_TOKEN_FILE is shorter than %d characters", adminTokenMinLength)
+	}
+	return nil
+}
+
+// isArgon2idHash reports whether s has the full PHC layout
+// $argon2id$v=..$m=..,t=..,p=..$salt$hash. A prefix-only check would admit a
+// truncated hash, which parses as nothing and locks the CLI out for good.
+func isArgon2idHash(s string) bool {
+	parts := strings.Split(s, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+	for _, p := range parts[2:] {
+		if p == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Config) loadSecrets() {
 	if mk, err := LoadSecretBinary("MASTER_KEY", 32); err == nil {
 		c.MasterKey = mk
@@ -685,9 +769,9 @@ func (c *Config) loadSecrets() {
 	if kr, err := LoadSecret("KMS_ROOT_KEY"); err == nil {
 		c.KMSRootKey = []byte(kr)
 	}
-	if at, err := LoadSecret("ADMIN_TOKEN"); err == nil {
-		c.AdminTokenHash = at
-	}
+	// ADMIN_TOKEN is deliberately absent: cli.New reads it, the same way
+	// cmd/vault reads SIGNING_KEY. Loading it here consumed the file (see
+	// VAULT_SECRET_FILE_CONSUME) on behalf of a field nothing ever read.
 	if p, err := LoadSecret("VAULT_PEPPER"); err == nil {
 		c.Pepper = p
 	}
@@ -827,8 +911,8 @@ func (c *Config) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "profile=%s listen=%s origin=%s\n", c.Profile, c.ListenAddr, c.Origin)
 	fmt.Fprintf(&b, "tls=%v db=%s:%s/%s cache=%s\n", c.TLSEnabled, c.DBHost, c.DBPort, c.DBName, c.CacheBackend)
-	fmt.Fprintf(&b, "master_key=%s kms_root_key=%s admin_token=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
-		redact(c.MasterKey), redact(c.KMSRootKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
+	fmt.Fprintf(&b, "master_key=%s kms_root_key=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
+		redact(c.MasterKey), redact(c.KMSRootKey), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
 	fmt.Fprintf(&b, "db_mig_pass=%s db_app_pass=%s redis_pass=%s\n",
 		redactStr(c.DBMigPassword), redactStr(c.DBAppPassword), redactStr(c.RedisPass))
 	fmt.Fprintf(&b, "sendgrid_key=%s smtp_user=%s smtp_pass=%s\n",

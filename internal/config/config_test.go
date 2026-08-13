@@ -35,9 +35,6 @@ func TestLoadDevProfile(t *testing.T) {
 	if cfg.CacheBackend != "redis" {
 		t.Errorf("cache = %q, want redis (production base)", cfg.CacheBackend)
 	}
-	if cfg.LogLevel != "debug" {
-		t.Errorf("log_level = %q, want debug", cfg.LogLevel)
-	}
 	// Dev overrides RefreshTokenTTL to 24h (shorter than production's 7d)
 	if cfg.RefreshTokenTTL != 24*time.Hour {
 		t.Errorf("refresh_ttl = %v, want 24h", cfg.RefreshTokenTTL)
@@ -140,16 +137,15 @@ func TestLoadSecretMissingFile(t *testing.T) {
 
 func TestConfigStringRedactsSecrets(t *testing.T) {
 	cfg := &Config{
-		Profile:        ProfileDev,
-		ListenAddr:     ":8080",
-		MasterKey:      []byte("super-secret-key-32-bytes-long!!"),
-		AdminTokenHash: "$argon2id$...",
-		Pepper:         "pepper-value",
-		HMACSecret:     []byte("hmac-secret"),
-		DBHost:         "localhost",
-		DBPort:         "5432",
-		DBName:         "vault",
-		CacheBackend:   "memory",
+		Profile:      ProfileDev,
+		ListenAddr:   ":8080",
+		MasterKey:    []byte("super-secret-key-32-bytes-long!!"),
+		Pepper:       "pepper-value",
+		HMACSecret:   []byte("hmac-secret"),
+		DBHost:       "localhost",
+		DBPort:       "5432",
+		DBName:       "vault",
+		CacheBackend: "memory",
 	}
 
 	str := cfg.String()
@@ -157,9 +153,6 @@ func TestConfigStringRedactsSecrets(t *testing.T) {
 	// Should NOT contain actual secret values
 	if strings.Contains(str, "super-secret") {
 		t.Error("String() should not contain master key")
-	}
-	if strings.Contains(str, "argon2id") {
-		t.Error("String() should not contain admin token hash")
 	}
 	if strings.Contains(str, "pepper-value") {
 		t.Error("String() should not contain pepper")

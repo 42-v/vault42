@@ -34,14 +34,13 @@ Tuned for resource-constrained environments such as a Raspberry Pi 5. Uses in-me
 
 ### Honeypot (`VAULT_PROFILE=honeypot`)
 
-A deception deployment that mimics a real Vault42 instance to detect and alert on unauthorized access attempts. Extends production defaults with debug logging, auto-migration, and the embedded frontend enabled by default. Pairs with `VAULT_HONEYPOT_WEBHOOK` and `VAULT_HONEYPOT_TRAP_USERS` to send alerts when attackers interact with the honeypot.
+A deception deployment that mimics a real Vault42 instance to detect and alert on unauthorized access attempts. Extends production defaults with auto-migration and the embedded frontend enabled by default. Pairs with `VAULT_HONEYPOT_WEBHOOK` and `VAULT_HONEYPOT_TRAP_USERS` to send alerts when attackers interact with the honeypot.
 
 ### Profile Comparison
 
 | Setting | Production | Dev | Embedded | Honeypot |
 |---------|-----------|-----|----------|----------|
 | `ListenAddr` | `:8443` | `:8443` (inherited) | `:8443` | `:8443` |
-| `LogLevel` | `warn` | `debug` | `info` | `debug` |
 | `TLSEnabled` | `true` | `true` (inherited) | `true` | `true` |
 | `RateLimitEnabled` | `true` | `true` (inherited, overridable) | `true` | `true` |
 | `AutoMigrate` | `false` | `true` | `true` | `true` |
@@ -56,7 +55,7 @@ A deception deployment that mimics a real Vault42 instance to detect and alert o
 | `ShutdownTimeout` | `15s` | `5s` | `5s` | `15s` |
 | `AuditFlushInterval` | *unset (0)* | *unset (0)* | `30s` | *unset (0)* |
 
-Note: In the dev profile, if you explicitly set an env var (e.g., `LOG_LEVEL=info`), the explicit value takes precedence over the dev override. The dev profile only overrides values that were left unset. Exception: `VAULT_AUTO_MIGRATE` is unconditionally set to `true` in dev and cannot be overridden via env var.
+Note: In the dev profile, if you explicitly set an env var (e.g., `VAULT_REFRESH_TOKEN_TTL=48h`), the explicit value takes precedence over the dev override. The dev profile only overrides values that were left unset. Exception: `VAULT_AUTO_MIGRATE` is unconditionally set to `true` in dev and cannot be overridden via env var.
 
 ---
 
@@ -69,7 +68,7 @@ auditor reviewing a deployment needs to find them in one place, not by grepping 
 
 | Variable | Default | What setting it does |
 |---|---|---|
-| `VAULT_ALLOW_PLAINTEXT` | `false` | **Permits a non-dev profile to serve plain HTTP.** Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off is a startup failure. Setting it drops the `Secure` cookie flag and serves credentials and tokens in cleartext to anything between the client and the process. The only defensible use is a TLS-terminating proxy on the same host or pod network -- and in that case set `VAULT_FORCE_SECURE_COOKIES=true` instead, which keeps the guard intact. |
+| `VAULT_ALLOW_PLAINTEXT` | `false` | **Permits a non-dev profile to serve plain HTTP.** Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off is a startup failure. Setting it serves credentials and tokens in cleartext to anything between the client and the process, and on its own leaves the `Secure` cookie flag off, because the flag tracks `VAULT_TLS_ENABLED` and `VAULT_FORCE_SECURE_COOKIES` rather than this variable. The only defensible use is a TLS-terminating proxy on the same host or pod network -- and in that case set `VAULT_FORCE_SECURE_COOKIES=true` instead, which keeps the guard intact. See [TLS and Cookies](#tls-and-cookies) for the full combination table. |
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | `false` | **Permits a non-dev profile to run with `VAULT_RATE_LIMIT_ENABLED=false`.** Rate limiting is the brute-force defence on login, registration, password reset, TOTP verify and the KMS unwrap oracle. Setting this removes it. Justified only when an upstream gateway enforces equivalent per-IP limits on those exact paths. |
 | `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | `false` | **Auto-trusts every RFC1918 range, IPv6 ULA and loopback as a proxy, and honours `X-Forwarded-For` from them** (`config.Load`, `internal/config/config.go`). On a flat network any pod can then forge a client IP, collapsing per-IP rate limiting and audit attribution. Startup refuses it outside the `embedded` profile. Prefer explicit `TRUSTED_PROXIES` + `REAL_IP_HEADER` everywhere else. |
 | `VAULT_STRICT_SESSION_LIMIT` | `false` | The inverse: **the concurrent-session cap fails open by default.** If the active-family count query errors, `VAULT_MAX_SESSIONS_PER_USER` is not enforced for that login (`AuthService.checkSessionLimit`). Setting this to `true` makes the check fail closed -- the login is refused and a risk-80 audit event is written. Enable it if the session cap is a control you rely on. |
@@ -89,7 +88,6 @@ has a matching failure mode: it destroys the on-disk secret after the first read
 | `VAULT_PROFILE` | string | `production` | No | Deployment profile: `production`, `dev`, `embedded`, or `honeypot`. Controls defaults for all unset variables. |
 | `LISTEN_ADDR` | string | `:8443` | No | Address and port the server binds to. Set by profile if unset. |
 | `VAULT_ORIGIN` | string | *(none)* | Yes | Public-facing URL (e.g., `https://auth.example.com`). Used for CORS `Access-Control-Allow-Origin`, JWT issuer claim, cookie domain, and WebAuthn RP ID. |
-| `LOG_LEVEL` | string | `warn` | No | Log verbosity. Profile defaults: `warn` (production), `debug` (dev), `info` (embedded). |
 | `VAULT_APP_NAME` | string | `The Vault` | No | Application display name used in email templates, the WebAuthn RP name, and UI. |
 | `VAULT_LOGO_URL` | string | *(none)* | No | URL to application logo for email templates. |
 | `VAULT_PRIMARY_COLOR` | string | `#00FF42` | No | Primary branding color hex code for email templates. |
@@ -100,15 +98,97 @@ has a matching failure mode: it destroys the on-disk secret after the first read
 | `VAULT_AUDIT_FLUSH_INTERVAL` | duration | `0` | No | Interval for flushing buffered audit log entries. `0` disables batching (immediate flush). **Profile-only** -- not loaded from env vars, set to `30s` in embedded profile. |
 | `VAULT_AUDIT_BUFFER_SIZE` | int | `1000` | No | Maximum number of audit entries buffered before new entries are dropped. Only relevant when `VAULT_AUDIT_FLUSH_INTERVAL > 0`. |
 
-### TLS
+### TLS and Cookies
+
+Four variables decide two separate things: whether this process speaks TLS, and
+whether session cookies carry the `Secure` flag. They are separate because the
+supported production topology terminates TLS at an ingress or a tunnel, where the
+process is reached over plain HTTP but the browser hop is HTTPS and the flag must
+still be set.
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `VAULT_TLS_ENABLED` | bool | `true` | No | Enable HTTPS. Set by profile if unset. When `true`, `VAULT_TLS_CERT_FILE` and `VAULT_TLS_KEY_FILE` are required. **Note**: Due to Go zero-value semantics, setting this to `false` via env var has no effect -- all profiles default it to `true` and `setDefaultBool` cannot distinguish "unset" from "explicitly false". To disable TLS, modify the profile code. |
-| `VAULT_TLS_CERT_FILE` | string | *(none)* | Conditional | Path to TLS certificate PEM file. Required when `VAULT_TLS_ENABLED=true`. |
-| `VAULT_TLS_KEY_FILE` | string | *(none)* | Conditional | Path to TLS private key PEM file. Required when `VAULT_TLS_ENABLED=true`. |
+| `VAULT_TLS_ENABLED` | bool | `true` | No | Serve HTTPS from this process. Read from the environment in every profile: profile defaults are applied through `os.LookupEnv`, so an explicit value beats the profile's `true`. Setting it to `false` is a supported deployment, and the Helm chart uses it (`charts/vault/templates/honeypot-vault.yaml`). Which combinations then start, and what happens to cookies, is the table below. |
+| `VAULT_TLS_CERT_FILE` | string | *(none)* | Conditional | Path to the TLS certificate PEM file. |
+| `VAULT_TLS_KEY_FILE` | string | *(none)* | Conditional | Path to the TLS private key PEM file. |
+| `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Mark cookies `Secure` regardless of `VAULT_TLS_ENABLED`. The setting for proxy termination, and the one that keeps the guard intact. Also documented under [Security](#security). |
+| `VAULT_ALLOW_PLAINTEXT` | bool | `false` | No | **Fail-closed override.** Lifts the startup refusal on serving plain HTTP without `Secure` cookies. Also documented under [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 
-Note: The secure cookie flag (`Secure`) is derived from `TLSEnabled`, not from the profile name. If TLS is enabled, cookies are marked `Secure`.
+**Certificate and key.** Both are needed to serve HTTPS. With TLS on and either
+one missing, a non-dev profile refuses to start unless
+`VAULT_FORCE_SECURE_COOKIES=true` opts into proxy termination. With that opt-in
+and no certificate, the process listens in plain HTTP and still marks cookies
+`Secure`, which is the intended proxy deployment. With that opt-in and a
+certificate but no key, the process selects the TLS listener instead and
+`ListenAndServeTLS` fails on the missing key, so a half-configured pair surfaces
+as a crash rather than as silent plaintext.
+
+**Cookies.** The `Secure` flag is `VAULT_TLS_ENABLED` **or**
+`VAULT_FORCE_SECURE_COOKIES`. It is computed once in `internal/server` and handed
+to every handler that writes a cookie, so it does not follow the profile name.
+`VAULT_ALLOW_PLAINTEXT` is not part of that expression: it removes a startup
+refusal and neither sets nor clears the flag. Behind a TLS-terminating proxy,
+`VAULT_FORCE_SECURE_COOKIES=true` is what keeps session cookies protected on the
+last hop; using `VAULT_ALLOW_PLAINTEXT` on its own is what leaves them exposed.
+
+**Startup.** `Config.Validate` refuses exactly two combinations, and only in
+non-dev profiles:
+
+- TLS off, `VAULT_FORCE_SECURE_COOKIES` off, `VAULT_ALLOW_PLAINTEXT` off. The
+  server would serve credentials and tokens in cleartext with cookies that any
+  intermediary can read.
+- TLS on, certificate or key missing, `VAULT_FORCE_SECURE_COOKIES` off. Without
+  the opt-in this silently degrades to a plaintext listener while the operator
+  believes TLS is on.
+
+The `dev` profile is exempt from both: `Config.Validate` returns before either
+check, so dev serves plaintext with cookies that are not `Secure` and needs no
+override variable to do it.
+
+**Parsing.** `VAULT_TLS_ENABLED` goes through `strconv.ParseBool`, which is not
+the rule described under [Boolean Parsing](#boolean-parsing). It accepts `1`, `t`,
+`T`, `TRUE`, `true`, `True`, `0`, `f`, `F`, `FALSE`, `false` and `False`; any
+other value, an empty value included, leaves the profile default of `true` in
+place. So `VAULT_TLS_ENABLED=no` still serves HTTPS. `VAULT_FORCE_SECURE_COOKIES`
+and `VAULT_ALLOW_PLAINTEXT` use the document-wide rule and are case-sensitive:
+only `true`, `1` and `yes` are truthy, so `VAULT_ALLOW_PLAINTEXT=TRUE` does not
+lift the refusal and startup still fails.
+
+The table below is executed against `config.Load`, `Config.Validate` and
+`internal/server` by `tests/spec/tls_cookie_docs_test.go`, under each of the
+`production`, `embedded` and `honeypot` profiles. A row that stops being true
+fails the build.
+
+<!-- BEGIN TLS COOKIE MATRIX -->
+
+| `VAULT_TLS_ENABLED` | cert + key | `VAULT_FORCE_SECURE_COOKIES` | `VAULT_ALLOW_PLAINTEXT` | Effective TLS | Startup | `Secure` cookie | Listener |
+|---|---|---|---|---|---|---|---|
+| unset | set | unset | unset | true | starts | set | HTTPS |
+| `true` | set | unset | unset | true | starts | set | HTTPS |
+| `true` | unset | unset | unset | true | refused | n/a | n/a |
+| `true` | unset | `true` | unset | true | starts | set | plaintext |
+| `true` | cert only | unset | unset | true | refused | n/a | n/a |
+| `true` | cert only | `true` | unset | true | starts | set | HTTPS |
+| `false` | unset | unset | unset | false | refused | n/a | n/a |
+| `false` | unset | `true` | unset | false | starts | set | plaintext |
+| `false` | unset | unset | `true` | false | starts | unset | plaintext |
+| `false` | unset | `true` | `true` | false | starts | set | plaintext |
+| `no` | set | unset | unset | true | starts | set | HTTPS |
+| `0` | unset | `true` | unset | false | starts | set | plaintext |
+| `false` | unset | unset | `TRUE` | false | refused | n/a | n/a |
+
+<!-- END TLS COOKIE MATRIX -->
+
+The `cert only` rows are the exception to reading the Listener column literally:
+`HTTPS` there means the process picks the TLS listener, which then fails on the
+missing key file. Every other row's listener serves.
+
+Two rows deserve to be read twice. `VAULT_TLS_ENABLED=false` with
+`VAULT_FORCE_SECURE_COOKIES=true` is the proxy deployment done right: the process
+speaks HTTP to the proxy, and the cookies it issues are still `Secure`.
+`VAULT_TLS_ENABLED=false` with `VAULT_ALLOW_PLAINTEXT=true` and nothing else is
+the same deployment with the flag dropped, which is a real exposure on the last
+hop and the reason the first row of that pair is the documented answer.
 
 ### Database
 
@@ -143,7 +223,7 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `MASTER_KEY_FILE` | string | *(none)* | Yes | Path to file containing the AES-256 master key (exactly 32 bytes). Used for encrypting TOTP secrets at rest. See [Secret Loading](#secret-loading-_file-convention). |
-| `ADMIN_TOKEN_FILE` | string | *(none)* | Recommended | Path to file containing the Argon2id hash of the admin CLI token. Required for CLI commands (`add-client`, `rotate-jwks`, etc.). |
+| `ADMIN_TOKEN_FILE` | string | *(none)* | Recommended | Path to a file holding the admin CLI token, either as its Argon2id hash (preferred) or as the plaintext token. On first boot the value seeds `admin_config.admin_token_hash`, the credential every CLI command (`add-client`, `rotate-jwks`, ...) is checked against. Without it, a token is generated on first boot and printed to stdout. See [Admin Token Provisioning](#admin-token-provisioning). |
 | `VAULT_PEPPER_FILE` | string | *(none)* | Recommended | Path to file containing the server-side pepper added to password hashes before Argon2id. Must be at least 32 bytes in non-dev profiles (startup fails otherwise). |
 | `HMAC_SECRET_FILE` | string | *(none)* | Yes | Path to file containing the HMAC-SHA256 signing key. Must be at least 32 bytes in production/embedded profiles. Dev profile logs a warning for shorter keys. |
 | `SIGNING_KEY_FILE` | string | *(none)* | Conditional | Path to RSA-2048 private key (PKCS#8 PEM) for JWT signing. Shared across all pods for horizontal scaling. Without this, each pod generates an ephemeral key (single-pod only). Required for multi-pod deployments. Generated by `scripts/generate-secrets.sh`. |
@@ -156,11 +236,11 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | `VAULT_STRICT_SESSION_LIMIT` | bool | `false` | No | Make the concurrent-session check fail closed. By default, if the active-family count query errors the login is allowed through and the cap is not enforced for that request. When `true`, the login is refused with `too_many_sessions` and a risk-80 audit event is recorded. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `VAULT_RATE_LIMIT_ENABLED` | bool | `true` | No | Enable rate limiting on authentication endpoints. Defaults to `true`; in non-dev profiles startup refuses to run with it disabled unless `VAULT_ALLOW_RATE_LIMIT_DISABLED=true`. |
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to run with rate limiting disabled (e.g. when an upstream gateway handles it). Without it, disabling rate limiting fails startup. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
-| `VAULT_ALLOW_PLAINTEXT` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to serve plain HTTP. Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off refuses to start (`Config.Validate`). Setting it serves credentials and tokens in cleartext and drops the `Secure` cookie flag. Behind a TLS-terminating proxy, set `VAULT_FORCE_SECURE_COOKIES=true` instead. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
+| `VAULT_ALLOW_PLAINTEXT` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to serve plain HTTP. Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off refuses to start (`Config.Validate`). Setting it serves credentials and tokens in cleartext, and on its own leaves the `Secure` cookie flag off. Behind a TLS-terminating proxy, set `VAULT_FORCE_SECURE_COOKIES=true` instead. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production) and [TLS and Cookies](#tls-and-cookies). |
 | `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | bool | `false` | No | **Fail-closed override.** Embedded profile only (startup fails elsewhere). When `TRUSTED_PROXIES` is empty, auto-populates it with `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `127.0.0.0/8` and `::1/128`; when `REAL_IP_HEADER` is empty, defaults it to `X-Forwarded-For`. Intended for a sibling reverse proxy on the same private network. Explicit `TRUSTED_PROXIES` / `REAL_IP_HEADER` always win. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `VAULT_DPOP_ENABLED` | bool | `false` | No | **Experimental, not a working control.** Mounts the DPoP middleware on `/auth/login`, `/auth/refresh`, the 2FA verify endpoints and `POST /kms/unwrap`. Sender-constraining a token requires the access token to carry a `cnf.jkt` claim (RFC 9449 §6.1) and no vault42 issuance path sets one (see the `middleware.DPoP` doc comment), so a presented proof is validated for structure, `htm`/`htu`, `iat` freshness, `ath` and JTI single-use, but is never bound to a thumbprint the token committed to, and a request with no proof passes through. Do not rely on it for replay protection. |
 | `KMS_ROOT_KEY_FILE` | string | *(none)* | No | Path to a file containing the KMS root secret (at least 32 bytes). Per-kid KEKs are derived from it via HKDF-SHA256, kept cryptographically separate from the master key. When unset, the `POST /kms/unwrap` envelope-unwrap oracle is not mounted. See [Secret Loading](#secret-loading-_file-convention). |
-| `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. Useful when running behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading). |
+| `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. The setting to reach for behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading), because it keeps the last hop protected without disabling the startup guard. It also satisfies the certificate requirement when `VAULT_TLS_ENABLED` is left on, in which case the listener is plain HTTP. See [TLS and Cookies](#tls-and-cookies). |
 | `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). Also gates the `X-Vault-App` white-label tenant header: the slug is only honoured when the direct peer is on this list, so an outside caller cannot dress an auth email in another tenant's branding. Empty = white-label tenant selection is off and all auth emails use the global branding. See [API Reference -- White-Label Tenant Selection](api.md#white-label-tenant-selection). |
 | `REAL_IP_HEADER` | string | *(none)* | No | HTTP header containing the real client IP from a trusted proxy. Only read when the direct connection is from a trusted proxy. Examples: `CF-Connecting-IP` (Cloudflare), `X-Real-IP` (nginx). Empty = use XFF parsing only. A comma-joined value (the embedded profile sets this to `X-Forwarded-For`) is split and the rightmost address wins; a value that is not an IP is discarded and resolution falls back to XFF parsing, then `RemoteAddr`. |
 | `VAULT_TLS_FINGERPRINT_HEADER` | string | *(none)* | No | HTTP header containing the client's TLS fingerprint (e.g. JA4) set by the TLS-terminating proxy. Since Vault42 runs behind a reverse proxy, it cannot compute TLS fingerprints directly; the proxy must extract the fingerprint during the TLS handshake and pass it as a header. The value is included in the device fingerprint hash. Empty = TLS fingerprint field remains empty (backward compatible). Example: `X-TLS-Fingerprint`. |
@@ -421,7 +501,7 @@ This design ensures secrets never appear in environment variable listings (`/pro
 | Secret Variable | Env Var (file path) | Description |
 |----------------|---------------------|-------------|
 | Master Key | `MASTER_KEY_FILE` | AES-256 key (32 bytes) for TOTP secret encryption |
-| Admin Token | `ADMIN_TOKEN_FILE` | Argon2id hash of the admin CLI token |
+| Admin Token | `ADMIN_TOKEN_FILE` | Admin CLI token, or its Argon2id hash |
 | Pepper | `VAULT_PEPPER_FILE` | Server-side secret added to password hashes |
 | HMAC Secret | `HMAC_SECRET_FILE` | HMAC-SHA256 signing key (min 32 bytes in production) |
 | Signing Key | `SIGNING_KEY_FILE` | RSA-2048 private key (PKCS#8 PEM) for JWT signing |
@@ -437,6 +517,37 @@ This design ensures secrets never appear in environment variable listings (`/pro
 | Facebook OAuth Secret | `VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE` | Facebook OAuth2 client secret |
 
 **Important**: There is no way to set these values directly via env vars (e.g., there is no `MASTER_KEY` env var -- only `MASTER_KEY_FILE`). This is intentional.
+
+### Admin Token Provisioning
+
+The credential the admin CLI accepts lives in `auth.admin_config` under
+`admin_token_hash`. `ADMIN_TOKEN_FILE` is how an operator chooses that credential
+instead of taking whatever the server mints; it is read by `cli.New` and applied by
+`InitAdminToken` before any command runs.
+
+Two file contents are accepted, told apart by the `$argon2id$` prefix:
+
+| File holds | What happens | When to use it |
+|---|---|---|
+| An Argon2id hash (`$argon2id$v=19$...`) | Stored verbatim | Preferred. The mount then holds no usable credential, so reading the file does not hand anyone the token. |
+| A plaintext token | Hashed with Argon2id, then stored | What `scripts/generate-secrets.sh` writes. Simplest, but the token is recoverable from the mount. |
+
+Rules that startup enforces. `Config.Validate` fails in every profile, including `dev`, and the server does not come up:
+
+- The path must exist and be readable. A typo in the path is a startup failure, not a silently generated token.
+- The file must not be empty.
+- Anything beginning with `$argon2id$` must be a complete PHC hash. A truncated hash can never verify and would lock the CLI out permanently.
+- A plaintext token must be at least 16 characters outside the `dev` profile. `dev` warns instead.
+
+With no `ADMIN_TOKEN_FILE` set, first boot generates a 256-bit token and prints it
+to stdout once. Under systemd that lands in the journal, and with several replicas
+only the pod that won the race prints anything, so provisioning the file is the
+better default for anything beyond a single container you are watching.
+
+The file seeds the credential; it does not keep enforcing it. `vault rotate-admin-token`
+replaces the stored hash, and every later boot leaves that rotated hash alone rather
+than reverting to the file. When the mounted file is no longer the credential in force,
+startup says so on stderr.
 
 ---
 
@@ -484,11 +595,13 @@ Production requires explicit CORS origins, TLS (typically terminated at ingress)
 export VAULT_PROFILE=production
 export LISTEN_ADDR=:8080
 export VAULT_ORIGIN=https://auth.example.com
-export LOG_LEVEL=warn
 
-# TLS -- all profiles default to enabled.
-# To disable (e.g., TLS terminated at ingress), modify the profile code.
-# export VAULT_TLS_ENABLED=false  # has no effect due to setDefaultBool limitation
+# TLS. All profiles default to enabled, so this block serves HTTPS directly.
+# For ingress or tunnel termination, turn it off and keep the Secure cookie flag:
+# export VAULT_TLS_ENABLED=false
+# export VAULT_FORCE_SECURE_COOKIES=true
+export VAULT_TLS_CERT_FILE=/etc/vault42-tls/tls.crt
+export VAULT_TLS_KEY_FILE=/etc/vault42-tls/tls.key
 
 # Database
 export DB_HOST=postgres.internal
