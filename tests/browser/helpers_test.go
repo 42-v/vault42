@@ -24,6 +24,8 @@ var (
 	mailpitURL = "http://mail.localhost"
 )
 
+const browserRequiredEnv = "VAULT_BROWSER_REQUIRED"
+
 func TestMain(m *testing.M) {
 	if u := os.Getenv("VAULT_BROWSER_URL"); u != "" {
 		baseURL = u
@@ -32,7 +34,8 @@ func TestMain(m *testing.M) {
 		mailpitURL = u
 	}
 
-	// Skip suite if vault is unreachable
+	// Skip suite if vault is unreachable. A quiet Exit(0) here used to look
+	// like a passing gate; name the env var that makes the skip fatal.
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 		Transport: &http.Transport{
@@ -40,7 +43,20 @@ func TestMain(m *testing.M) {
 		},
 	}
 	if _, err := client.Get(baseURL + "/healthz"); err != nil {
-		fmt.Fprintf(os.Stderr, "SKIP browser tests: vault not reachable at %s: %v\n", baseURL, err)
+		if os.Getenv(browserRequiredEnv) == "1" {
+			fmt.Fprintf(os.Stderr,
+				"FAIL browser: %s=1 but no vault42 answered at %s: %v\n"+
+					"This suite needs a deployment, chromedp and Chrome, plus kubectl and Mailpit.\n"+
+					"Bring a vault up with scripts/deploy-dev.sh, or point VAULT_BROWSER_URL at an\n"+
+					"existing one. Unset %s only where a skipped run is genuinely acceptable,\n"+
+					"which is not a release gate.\n",
+				browserRequiredEnv, baseURL, err, browserRequiredEnv)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr,
+			"SKIP browser: vault server not reachable at %s: %v\n"+
+				"Nothing in this suite ran. Set %s=1 to make this a failure.\n",
+			baseURL, err, browserRequiredEnv)
 		os.Exit(0)
 	}
 

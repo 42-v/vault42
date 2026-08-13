@@ -17,16 +17,6 @@ import (
 // and the two capabilities have nothing to do with each other.
 const MintScope = "mint:token"
 
-// AuditTokenMinted records a token issued for a subject vault42 did not
-// authenticate.
-//
-// It is a distinct event type from login_success, token_refresh and client_auth
-// so a minted token is never mistaken for a self-authenticated one in the log.
-// That distinction is the whole audit story for this endpoint: the signature on
-// a minted token is indistinguishable from any other, so the log is the only
-// place the difference is recorded.
-const AuditTokenMinted = "token_minted"
-
 // mintMaxBody bounds the request body. The route carries no exemption from the
 // global 8 KiB cap; this is the explicit belt-and-braces limit the client token
 // endpoint also applies.
@@ -185,7 +175,7 @@ func (h *MintHandler) auditIssued(r *http.Request, clientID string, result *serv
 		return
 	}
 	// #nosec G104 -- audit is best-effort and must never block the mint path
-	h.auditLog.Log(r.Context(), AuditTokenMinted, result.Subject, clientID, middleware.ClientIP(r),
+	h.auditLog.Log(r.Context(), audit.TokenMinted, result.Subject, clientID, middleware.ClientIP(r),
 		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 			"minted":     true,
 			"jti":        result.JTI,
@@ -210,7 +200,7 @@ func (h *MintHandler) audit(r *http.Request, clientID, subject, reason string) {
 		return
 	}
 	// #nosec G104 -- audit is best-effort and must never block the mint path
-	h.auditLog.Log(r.Context(), AuditTokenMinted, subject, clientID, middleware.ClientIP(r),
+	h.auditLog.Log(r.Context(), audit.TokenMinted, subject, clientID, middleware.ClientIP(r),
 		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 			"minted":  true,
 			"success": false,

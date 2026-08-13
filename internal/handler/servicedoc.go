@@ -18,14 +18,7 @@ import (
 // must never carry a document body. Nothing here logs one, since the metadata
 // is deliberately limited to the key, the size, the visibility and the outcome,
 // but the prefix keeps that true if a future caller is careless.
-const (
-	// AuditSvcDocPut records a service document being created or replaced.
-	AuditSvcDocPut = "svcdoc_put"
-	// AuditSvcDocGet records a service document being read.
-	AuditSvcDocGet = "svcdoc_get"
-	// AuditSvcDocDelete records a service document being deleted.
-	AuditSvcDocDelete = "svcdoc_delete"
-)
+const ()
 
 // ClientRateLimitKey buckets a rate limiter by the authenticated client rather
 // than by source IP.
@@ -167,7 +160,7 @@ func (h *ServiceDocumentHandler) Put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit(r, AuditSvcDocPut, subject, clientID, map[string]interface{}{
+	h.audit(r, audit.SvcDocPut, subject, clientID, map[string]interface{}{
 		"doc_key":    docKey,
 		"size_bytes": meta.SizeBytes,
 		"visibility": meta.Visibility,
@@ -208,7 +201,7 @@ func (h *ServiceDocumentHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit(r, AuditSvcDocGet, subject, clientID, map[string]interface{}{
+	h.audit(r, audit.SvcDocGet, subject, clientID, map[string]interface{}{
 		"doc_key":  docKey,
 		"owner_id": meta.OwnerID,
 		"mine":     meta.Mine,
@@ -237,7 +230,7 @@ func (h *ServiceDocumentHandler) Delete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	h.audit(r, AuditSvcDocDelete, subject, clientID, map[string]interface{}{"doc_key": docKey})
+	h.audit(r, audit.SvcDocDelete, subject, clientID, map[string]interface{}{"doc_key": docKey})
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})
 }
 

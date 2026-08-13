@@ -32,6 +32,12 @@ const (
 	TokenRefresh = "token_refresh"
 	// TokenRevoke records an explicit refresh token revocation (logout).
 	TokenRevoke = "token_revoke"
+	// TokenMinted records a token signed for a caller-asserted subject via
+	// POST /mint. vault42 never authenticated that subject. The signature is
+	// indistinguishable from any other issued token, so this event is the only
+	// attribution of who asked. It is critical: under a non-zero flush interval
+	// the buffer can drop it, which is worse than dropping a password_change.
+	TokenMinted = "token_minted"
 	// PasswordChange records a user-initiated password change.
 	PasswordChange = "password_change"
 	// PasswordReset records a password reset via email token.
@@ -111,6 +117,13 @@ const (
 	AdminAccountRevoke = "admin_account_revoke"
 	// AdminLockout records an admin account being locked due to too many failed logins.
 	AdminLockout = "admin_lockout"
+
+	// SvcDocPut records a service document being created or replaced.
+	SvcDocPut = "svcdoc_put"
+	// SvcDocGet records a service document being read.
+	SvcDocGet = "svcdoc_get"
+	// SvcDocDelete records a service document being deleted.
+	SvcDocDelete = "svcdoc_delete"
 )
 
 // sensitiveKeys are metadata keys that must NEVER be stored.
@@ -176,9 +189,23 @@ type Logger struct {
 // action (envelope-unwrap oracle) — every attempt needs a guaranteed audit
 // trail, so it is written synchronously rather than buffered where a DoS-driven
 // buffer overflow could drop it.
+//
+// TokenMinted is the same shape of oracle for subject assertions: POST /mint
+// signs a subject vault42 never authenticated, and the JWT is indistinguishable
+// from any other, so the event is the only attribution. Losing it under the
+// embedded profile's default flush interval is worse than losing a
+// password_change, which was already in this set.
+//
+// Every svcdoc_ event is a record of who accessed whose personal data. The
+// match is by prefix so a future svcdoc_ type cannot silently fall back to the
+// droppable buffer the way token_minted did when it was added without updating
+// this function.
 func isCriticalEvent(eventType string) bool {
+	if strings.HasPrefix(eventType, svcDocEventPrefix) {
+		return true
+	}
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted:
 		return true
 	}
 	return false
