@@ -89,9 +89,29 @@ code. The document was not edited.
     error table (the table lists `invalid_country` /
     `invalid_date_of_birth` / `invalid_billing_country` only).
 
+13. **POST /auth/2fa/backup-codes `codes`.** api.md says each code is
+    12 hex characters (48-bit entropy), stored as Argon2id hashes, and
+    the example values are 12 hex chars. The handler emits
+    `vaultcrypto.RandomHex(8)`: 16 hex characters, 64-bit entropy.
+    Storage is HMAC-SHA256 of the plaintext under the server HMAC key
+    (`BackupCode.CodeHash`), not Argon2id. `docs/spec.md` already
+    records this (16 hex / HMAC-SHA256); api.md does not.
+
+14. **`mfa_methods` never includes `email_otp`.**
+    `ProfileResponse.MFAMethods` and `GET /auth/2fa/status` both copy
+    `MFAService.GetStatus`, which appends only `totp`, `webauthn` and
+    `backup_code`. `email_otp` is not an enrolled factor: it is minted
+    only on `POST /auth/login` `available_methods` when
+    `VAULT_MFA_REQUIRED` is set and GetStatus returned no methods.
+    api.md's login field-naming paragraph says `mfa_methods` and
+    `available_methods` "name the same list", and the email-OTP
+    section says a code is sent when the user's only available method
+    is `email_otp`. A client that expects `GET /user/profile` or
+    `GET /auth/2fa/status` to list `email_otp` will see `[]`.
+
 ### Related contract mismatch (not a struct field)
 
-13. **Refresh-token cookie name.** api.md names the cookie
+15. **Refresh-token cookie name.** api.md names the cookie
     `refresh_token`. The handler sets and reads
     `__Host-refresh_token`. The constant is unexported, so it was
     not part of the comment pass, but a client written from api.md
@@ -116,6 +136,13 @@ routes or under a config flag name the route or flag.
 
 No field name, JSON tag, type or behaviour was changed.
 
+Prior-review remediations (comments now follow the code, not
+api.md): `BackupCodesResponse.Codes` and `BackupCode.CodeHash`
+describe 16-hex HMAC-SHA256 (see `RandomHex(8)` and `HMACSign`
+in `internal/handler/backup_codes.go`), and
+`ProfileResponse.MFAMethods` lists only the names GetStatus
+appends. The api.md disagreements are items 13 and 14.
+
 ## Self-review
 
 1. **Would my tests fail if my code were wrong?**
@@ -136,7 +163,10 @@ No field name, JSON tag, type or behaviour was changed.
    Not introduced. One pre-existing case is now written down:
    PUT /user/profile accepts a non-HTTPS `avatar_url` and stores
    empty, which is a 200 that looks like "cleared" rather than
-   "rejected". Listed as discrepancy 10.
+   "rejected". Listed as discrepancy 10. A user with only the
+   email-OTP fallback has `mfa_methods: []` on profile/status
+   while login reports `available_methods: ["email_otp"]`.
+   Listed as discrepancy 14.
 
 4. **Did I weaken anything to get green?**
    No assertions, bounds or counts were edited. No behaviour
@@ -161,6 +191,13 @@ No field name, JSON tag, type or behaviour was changed.
 
 - Every capitalized field on the named types in those two packages
   now has a comment immediately above it.
+- `backup_codes.go` Generate uses `RandomHex(8)` + `HMACSign`;
+  `TestBackupCodeGenerate_CodeLength` asserts length 16. The
+  Codes and CodeHash comments match that, not api.md's 12-hex
+  Argon2id.
+- `mfa.go` GetStatus appends only totp / webauthn / backup_code.
+  Profile MFAMethods is that slice. The comment no longer names
+  email_otp as a profile value.
 - JSON tags, field names and types in the files I rewrote match
   the versions I read before editing.
 - `#nosec G117` trailers on `access_token`, `password` and
@@ -177,7 +214,7 @@ No field name, JSON tag, type or behaviour was changed.
 - Whether revive treats a field comment that does not start with
   the identifier as undocumented. Every new field comment starts
   with the field name.
-- Live responses against a running server. Discrepancies 1-13
+- Live responses against a running server. Discrepancies 1-15
   are from source vs `docs/api.md`, not from captured traffic.
 
 **Unsure:**

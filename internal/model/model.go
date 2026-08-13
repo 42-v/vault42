@@ -348,9 +348,11 @@ type BackupCode struct {
 	ID string `json:"id"`
 	// UserID is the account that may spend this code.
 	UserID string `json:"user_id"`
-	// CodeHash is the HMAC-SHA256 of the 12-hex plaintext code. Tagged
-	// json:"-" because the plaintext is shown once at generation and must
-	// not be recoverable from any later response.
+	// CodeHash is the HMAC-SHA256 of the 16-hex plaintext code under the
+	// server HMAC key. Tagged json:"-" because the plaintext is shown
+	// once at generation and must not be recoverable from any later
+	// response. HMAC rather than Argon2id so verify can check every
+	// unused code without a memory-hard cost per guess.
 	CodeHash string `json:"-"`
 	// Used is true after POST /auth/2fa/backup-code/verify consumes the
 	// code. Consumption is compare-and-swap so a concurrent spend cannot
