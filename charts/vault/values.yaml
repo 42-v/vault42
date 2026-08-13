@@ -424,6 +424,14 @@ adminGateway:
     pullPolicy: IfNotPresent
   # -- Use host network (binds to node loopback for production local-only access)
   hostNetwork: true
+  # -- Run the gateway in dev mode. This DISABLES two controls: LocalOnly, which
+  # restricts the admin plane to loopback, and RejectProxyHeaders. It must be set
+  # explicitly whenever hostNetwork is false, because LocalOnly refuses every
+  # request arriving through an ingress and the chart will otherwise render a
+  # deployment that cannot serve. Setting it is a decision to run the admin plane
+  # reachable from the network with a bearer session token as the remaining
+  # control, so the proxy in front of it has to carry the weight LocalOnly did.
+  devMode: false
   # -- Listen address (127.0.0.1 for prod, 0.0.0.0 for dev behind ingress)
   listenAddr: "127.0.0.1:9443"
   # -- Session token TTL
