@@ -37,10 +37,11 @@ func TestConfigureFakeJWT_PublicationIsSafeForReadersThatNeverCallOnce(t *testin
 	// binary observe whatever it settled on. Reset the sentinel to its startup
 	// state before the storm and restore it afterwards so test order stays
 	// irrelevant.
-	originalIssuer, originalAudience := currentFakeJWTClaims()
+	original := currentFakeJWTConfig()
+	originalIssuer, originalAudience := original.issuer, original.audience
 	configOnce = sync.Once{}
 	t.Cleanup(func() {
-		storeFakeJWTClaims(originalIssuer, originalAudience)
+		storeFakeJWTConfig(original)
 		configOnce = sync.Once{}
 	})
 
@@ -58,7 +59,7 @@ func TestConfigureFakeJWT_PublicationIsSafeForReadersThatNeverCallOnce(t *testin
 		// A short delay lands the publication inside the mint stream rather
 		// than ahead of it, which is where the production window is.
 		time.Sleep(time.Millisecond)
-		ConfigureFakeJWT(wantIssuer, wantAudience)
+		ConfigureFakeJWT(wantIssuer, wantAudience, 15*time.Minute)
 	}()
 
 	// The readers: goroutines that never call Do, so they take no ordering from
@@ -98,7 +99,8 @@ func TestConfigureFakeJWT_PublicationIsSafeForReadersThatNeverCallOnce(t *testin
 	close(start)
 	wg.Wait()
 
-	iss, aud := currentFakeJWTClaims()
+	published := currentFakeJWTConfig()
+	iss, aud := published.issuer, published.audience
 	if iss != wantIssuer || aud != wantAudience {
 		t.Errorf("after publication the claims are (%q,%q), want (%q,%q)", iss, aud, wantIssuer, wantAudience)
 	}

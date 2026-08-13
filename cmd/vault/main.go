@@ -391,10 +391,40 @@ func main() {
 	if cfg.Profile == config.ProfileHoneypot {
 		honeypotAlerter = honeypot.NewAlerter(cfg.HoneypotWebhookURL, cfg.HoneypotTrapUsers, auditLogger)
 		authSvc.SetHoneypotAlerter(honeypotAlerter)
-		// Set fake JWT claims to match real server config so honeypot tokens
-		// are indistinguishable from real ones in their iss/aud fields.
-		honeypot.ConfigureFakeJWT(cfg.Origin, cfg.Origin)
-		log.Printf("Honeypot mode active: %d trap users configured", len(cfg.HoneypotTrapUsers))
+		// iss, aud and the access-token lifetime all come from this deployment's
+		// own configuration. The lifetime is here because the login body quotes
+		// it as expires_in while the token carries its own exp: a trap minting
+		// against a hardcoded default disagreed with its own response on every
+		// deployment that had set VAULT_ACCESS_TOKEN_TTL.
+		honeypot.ConfigureFakeJWT(cfg.Origin, cfg.Origin, cfg.AccessTokenTTL)
+
+		// Publish the trap's signing key in the JWKS this instance serves.
+		//
+		// The trap token has to verify against the document its own issuer
+		// publishes, or the first relying party the attacker feeds it to reports
+		// the forgery for them. The key is generated in this process, is never
+		// persisted, and is not the deployment's signing key: signing trap tokens
+		// with the real key would make them valid on any instance sharing it,
+		// which under the bridge topology is the production vault.
+		//
+		// Generating it here rather than on the first trap login also keeps that
+		// login from being several hundred milliseconds slower than every one
+		// after it.
+		trapKID, trapPub, err := honeypot.TrapSigningKey()
+		if err != nil {
+			log.Fatalf("Failed to generate the honeypot signing key: %v", err)
+		}
+		keys[trapKID] = trapPub
+		if ks != nil {
+			// The keystore serves JWKS from its own table, so the map above is
+			// not what this instance publishes and the trap key would be absent
+			// from the document. Honeypot deployments run with
+			// VAULT_KEY_ROTATION_DB unset, which is why this is a warning rather
+			// than a fatal.
+			log.Printf("WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) "+
+				"is not published in the keystore-backed JWKS, so trap tokens will not verify against it", trapKID)
+		}
+		log.Printf("Honeypot mode active: %d trap users configured (trap kid=%s)", len(cfg.HoneypotTrapUsers), trapKID)
 	}
 
 	// Initialize metrics collector (if enabled)
