@@ -106,7 +106,7 @@ func TestServerBootsServesAndShutsDownGracefully(t *testing.T) {
 			if dialable(addr) {
 				t.Fatalf("%s still accepts connections after the process exited", addr)
 			}
-			requireNoSecretLeak(t, res, dbPassword, strings.Repeat("h", 32), strings.Repeat("p", 32))
+			requireNoSecretLeak(t, res, dbPassword, strings.Repeat("h", 32), strings.Repeat("p", 32), strings.Repeat("m", 32))
 		})
 	}
 }
@@ -435,6 +435,13 @@ func TestConfigValidationFailuresAreFatal(t *testing.T) {
 			},
 			wantMsg: "must differ from VAULT_ORIGIN",
 		},
+		{
+			name: "missing master key",
+			mutate: func(_ *testing.T, env map[string]string) {
+				delete(env, "MASTER_KEY_FILE")
+			},
+			wantMsg: "MASTER_KEY_FILE required",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := bootedStub(t)
@@ -652,8 +659,15 @@ func TestKeyRotationDBRequiresA32ByteMasterKey(t *testing.T) {
 			stub := bootedStub(t)
 			addr := freeAddr(t)
 			env := bootEnv(t, stub, addr)
+			// Production Validate now refuses a missing master key first.
+			// This test is the remaining guard in main() for every other
+			// profile that can enable the DB-backed keystore.
+			env["VAULT_PROFILE"] = string(profileEmbedded)
+			env["VAULT_AUTO_MIGRATE"] = "false"
 			env["VAULT_KEY_ROTATION_DB"] = "true"
-			if tc.value != "" {
+			if tc.value == "" {
+				delete(env, "MASTER_KEY_FILE")
+			} else {
 				env["MASTER_KEY_FILE"] = secretFile(t, t.TempDir(), "master.key", tc.value)
 			}
 
@@ -936,10 +950,11 @@ func TestCacheBackendFallback(t *testing.T) {
 	requireExit(t, res, 0, "Cache init failed, falling back to memory")
 }
 
-// TestSeedFileFailuresAreFatal covers declarative seeding. Seeding runs before
-// the server starts and creates clients and users, so a seed file that cannot be
-// read or applied must stop the process: continuing would bring up a deployment
-// missing the very accounts the operator declared.
+// TestSeedFileFailuresAreFatal covers declarative seeding on the server path.
+// Seeding runs after the CLI check (see TestCLIDoesNotApplySeedFile) and
+// before the server listens, so a seed file that cannot be read or applied
+// must stop the process: continuing would bring up a deployment missing the
+// very accounts the operator declared.
 func TestSeedFileFailuresAreFatal(t *testing.T) {
 	t.Run("unreadable seed file", func(t *testing.T) {
 		stub := bootedStub(t)

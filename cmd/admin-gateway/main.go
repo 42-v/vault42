@@ -75,8 +75,7 @@ func main() {
 		if pw, err := loadSecret("DB_MIG_PASSWORD"); err == nil {
 			migPassword = pw
 		}
-		migURL := fmt.Sprintf("postgres://vault_mig:%s@%s:%s/%s?sslmode=%s",
-			migPassword, cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBSSLMode)
+		migURL := postgresURL("vault_mig", migPassword, cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBSSLMode)
 		migConn, err := pgx.Connect(ctx, migURL)
 		if err != nil {
 			log.Fatalf("admin-gateway: migration connect error: %v", sanitizeDBError(err))
@@ -147,25 +146,14 @@ func main() {
 	// on rotation. Pass these copies; never cfg.MasterKey.
 	masterKey := append([]byte(nil), cfg.MasterKey...)
 
-	// Initialize keystore (if master key available and DB-backed keys are configured)
-	var ks *keystore.KeyStore
-	if len(masterKey) == 32 {
-		retentionPeriod := time.Hour
-		ks, err = keystore.New(db.Pool, masterKey, retentionPeriod)
-		if err != nil {
-			log.Printf("admin-gateway: keystore init error (key management disabled): %v", err)
-		} else {
-			if err := ks.EnsureKey(ctx, nil); err != nil {
-				log.Printf("admin-gateway: keystore ensure key error: %v", err)
-			}
-			ks.StartRefreshLoop(ctx, 60*time.Second)
-			defer ks.Stop()
-		}
+	// LoadConfig already refused a non-32-byte key, and keystore.New errors
+	// only on that length check, so this cannot fail.
+	ks, _ := keystore.New(db.Pool, masterKey, time.Hour) //nolint:errcheck // LoadConfig already refused a non-32-byte key; keystore.New errors only on that length
+	if err := ks.EnsureKey(ctx, nil); err != nil {
+		log.Printf("admin-gateway: keystore ensure key error: %v", err)
 	}
-
-	if ks == nil {
-		log.Println("admin-gateway: keystore not initialized — key management endpoints will return 503")
-	}
+	ks.StartRefreshLoop(ctx, 60*time.Second)
+	defer ks.Stop()
 
 	// Create handlers
 	authHandler := adminapi.NewAuthHandler(

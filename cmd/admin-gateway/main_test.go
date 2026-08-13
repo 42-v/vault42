@@ -172,6 +172,11 @@ func TestConfigErrorIsFatalBeforeAnyDatabaseWork(t *testing.T) {
 			env:     []string{"ADMIN_GW_LISTEN_ADDR=0.0.0.0:9443"},
 			wantLog: "admin-gateway: config error: ADMIN_GW_LISTEN_ADDR must bind to loopback",
 		},
+		{
+			name:    "unparseable killswitch",
+			env:     []string{"ADMIN_GW_KILLSWITCH=True"},
+			wantLog: "admin-gateway: config error: ADMIN_GW_KILLSWITCH",
+		},
 	}
 
 	for _, tt := range tests {
@@ -333,6 +338,68 @@ func TestMigrationsUseTheDedicatedDDLRole(t *testing.T) {
 	}
 }
 
+// TestOperatorSuppliedDatabasePasswordSurvivesURLEncoding is the wire-level
+// half of TestDatabaseURLEscapesPassword. The percent sign is the load-bearing
+// case: it used to parse cleanly and authenticate as a different string, so
+// the operator saw a wrong-password error against a file they could read.
+// The slash is the parse-failure case: without encoding the child never
+// completes the handshake. Both roles are asserted because main() builds the
+// vault_mig URI independently of Config.DatabaseURL.
+func TestOperatorSuppliedDatabasePasswordSurvivesURLEncoding(t *testing.T) {
+	t.Run("percent sign in vault_admin password", func(t *testing.T) {
+		const password = "ab%cdef"
+		f := newFixture(t)
+		c := f.start(t, "DB_ADMIN_PASSWORD_FILE="+writeSecret(t, "db-admin-pct", []byte(password)))
+
+		if !f.pg.sawLogin(login{user: "vault_admin", database: "vault", password: password}) {
+			t.Errorf("vault_admin did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+
+	t.Run("slash in vault_admin password", func(t *testing.T) {
+		const password = "ab/cd"
+		f := newFixture(t)
+		c := f.start(t, "DB_ADMIN_PASSWORD_FILE="+writeSecret(t, "db-admin-slash", []byte(password)))
+
+		if !f.pg.sawLogin(login{user: "vault_admin", database: "vault", password: password}) {
+			t.Errorf("vault_admin did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+
+	t.Run("percent sign in vault_mig password", func(t *testing.T) {
+		const password = "ab%cdef"
+		f := newFixture(t)
+		if err := os.Mkdir(filepath.Join(f.workDir, "migrations"), 0o755); err != nil {
+			t.Fatalf("create migrations directory: %v", err)
+		}
+
+		c := f.start(t,
+			"ADMIN_GW_AUTO_MIGRATE=true",
+			"DB_MIG_PASSWORD_FILE="+writeSecret(t, "db-mig-pct", []byte(password)),
+		)
+		c.waitForLog(t, "admin-gateway: migrations complete")
+
+		if !f.pg.sawLogin(login{user: "vault_mig", database: "vault", password: password}) {
+			t.Errorf("vault_mig did not authenticate as the password on disk; roles seen: %v", f.pg.loginRoles())
+		}
+
+		c.signal(t, syscall.SIGTERM)
+		if code := c.waitForExit(t); code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+		}
+	})
+}
+
 // TestMigrationsWithoutAPasswordFileStillUseTheDDLRole records what happens
 // when DB_MIG_PASSWORD_FILE is not supplied.
 //
@@ -371,11 +438,13 @@ func TestMigrationsWithoutAPasswordFileStillUseTheDDLRole(t *testing.T) {
 // "relation does not exist", so this test drives all three of those paths at
 // once and asserts they logged and continued rather than exiting.
 //
-// The absence of the keystore warning is asserted too. The master key is
-// mandatory and always 32 bytes by the time it reaches keystore.New, so a run
-// that reported key management as disabled would mean the key was lost between
-// LoadConfig and the keystore, which is exactly the failure the copy taken at
-// main.go's masterKey line exists to prevent.
+// The absence of the keystore-disabled warning is asserted too. LoadConfig
+// already refuses a non-32-byte key and keystore.New errors only on that
+// length, so the init-error and ks==nil branches were unreachable and have
+// been deleted. A run that logged key management as disabled would mean
+// those branches were put back, or that the key was lost between LoadConfig
+// and the keystore (the failure the copy taken at main.go's masterKey line
+// exists to prevent).
 func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	f := newFixture(t)
 	c := f.start(t)

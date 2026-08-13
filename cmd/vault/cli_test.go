@@ -14,6 +14,7 @@ package main
 // which ones end the process, and which ones fall through and bring up a server.
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -99,6 +100,85 @@ func TestAuthenticatedCommandReturnsBeforeTheServerStarts(t *testing.T) {
 		t.Fatalf("list-clients never queried the client table; queries seen: %v", stub.queries())
 	}
 	requireNoSecretLeak(t, res, adminToken, adminTokenHash())
+}
+
+// TestCLIDoesNotApplySeedFile pins where VAULT_SEED_FILE is applied.
+//
+// Seeding used to run before the CLI check, so `vault list-clients` created
+// the declared clients and users as a side effect, and a broken seed file
+// killed an unrelated admin command with log.Fatalf. The retention sweepers
+// were already started after the CLI check for the same reason; seeding has
+// to sit with them.
+func TestCLIDoesNotApplySeedFile(t *testing.T) {
+	t.Run("broken seed file does not kill list-clients", func(t *testing.T) {
+		stub := authenticatedStub(t)
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		env["VAULT_SEED_FILE"] = filepath.Join(t.TempDir(), "absent.json")
+
+		res := runVault(t, vaultRun{
+			args: []string{"list-clients", "--admin-token", adminToken},
+			env:  env,
+		})
+
+		if res.code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", res.code, res.stderr)
+		}
+		if strings.Contains(res.stderr, "Failed to load seed file") {
+			t.Fatalf("a broken seed file killed an unrelated admin command\nstderr:\n%s", res.stderr)
+		}
+		if strings.Contains(res.stderr, "The Vault listening on") {
+			t.Fatalf("list-clients started the server\nstderr:\n%s", res.stderr)
+		}
+		if !stub.sawQuery("FROM auth.clients") {
+			t.Fatalf("list-clients never queried the client table; queries seen: %v", stub.queries())
+		}
+	})
+
+	t.Run("malformed seed file does not kill list-clients", func(t *testing.T) {
+		stub := authenticatedStub(t)
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		env["VAULT_SEED_FILE"] = secretFile(t, t.TempDir(), "seed.json", `{`)
+
+		res := runVault(t, vaultRun{
+			args: []string{"list-clients", "--admin-token", adminToken},
+			env:  env,
+		})
+
+		if res.code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", res.code, res.stderr)
+		}
+		if strings.Contains(res.stderr, "Failed to load seed file") {
+			t.Fatalf("a malformed seed file killed an unrelated admin command\nstderr:\n%s", res.stderr)
+		}
+	})
+
+	t.Run("list-clients does not create declared clients", func(t *testing.T) {
+		stub := authenticatedStub(t)
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		env["VAULT_SEED_FILE"] = secretFile(t, t.TempDir(), "seed.json",
+			`{"clients":[{"name":"seeded-side-effect","role":"service","scopes":["read"]}]}`)
+
+		res := runVault(t, vaultRun{
+			args: []string{"list-clients", "--admin-token", adminToken},
+			env:  env,
+		})
+
+		if res.code != 0 {
+			t.Fatalf("exit code = %d, want 0\nstderr:\n%s", res.code, res.stderr)
+		}
+		if stub.sawQuery("WHERE name") {
+			t.Fatalf("list-clients applied VAULT_SEED_FILE as a side effect; queries seen: %v", stub.queries())
+		}
+		if stub.sawQuery("INSERT INTO auth.clients") {
+			t.Fatalf("list-clients inserted a seeded client; queries seen: %v", stub.queries())
+		}
+		if !stub.sawQuery("ORDER BY name") {
+			t.Fatalf("list-clients never listed clients; queries seen: %v", stub.queries())
+		}
+	})
 }
 
 // TestAuthenticatedCommandWithMissingArgumentsPrintsUsage covers the argument
