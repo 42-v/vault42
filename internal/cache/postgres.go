@@ -150,15 +150,22 @@ func (p *PostgresCache) SetIfNotExists(ctx context.Context, key string, value st
 		t := time.Now().Add(ttl)
 		expiresAt = &t
 	}
-	// Single atomic statement: insert if key is missing OR has expired.
-	// The CTE deletes expired entries and the INSERT uses ON CONFLICT DO NOTHING
-	// for non-expired keys, avoiding the previous TOCTOU race.
+	// Single atomic statement, and one that needs no reasoning about what a
+	// sub-statement can see. Deleting the expired row from a data-modifying CTE
+	// and letting the INSERT fall through does not work: the arbiter index
+	// resolves against the pre-command snapshot, so the INSERT conflicts with the
+	// very row the same statement is deleting, DO NOTHING suppresses it, and the
+	// call reports 0 rows. The caller is then told an expired key is still held
+	// while the row backing that claim has just been deleted.
+	//
+	// Reclaiming the expired row in place keeps the whole decision in one index
+	// probe under one row lock, which is also what makes concurrent callers
+	// serialize: the loser re-evaluates the predicate against the winner's
+	// committed row, finds a live expiry, and is refused.
 	tag, err := p.pool.Exec(ctx, `
-		WITH cleanup AS (
-			DELETE FROM auth.cache WHERE key = $1 AND expires_at IS NOT NULL AND expires_at <= NOW()
-		)
 		INSERT INTO auth.cache (key, value, expires_at) VALUES ($1, $2, $3)
-		ON CONFLICT (key) DO NOTHING
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at
+		WHERE auth.cache.expires_at IS NOT NULL AND auth.cache.expires_at <= NOW()
 	`, key, value, expiresAt)
 	if err != nil {
 		return false, err
@@ -174,20 +181,25 @@ func (p *PostgresCache) Increment(ctx context.Context, key string, ttl time.Dura
 		t := time.Now().Add(ttl)
 		expiresAt = &t
 	}
+	// bigint rather than int throughout: the Cache interface returns int64 and
+	// the memory and Redis backends count in int64, so an int4 cast here would
+	// make one backend raise "integer out of range" where the other two keep
+	// counting, and Increment's error return is what sends a fail-closed rate
+	// limiter to 503.
 	var count int64
 	err := p.pool.QueryRow(ctx, `
 		INSERT INTO auth.cache (key, value, expires_at) VALUES ($1, '1', $2)
 		ON CONFLICT (key) DO UPDATE SET
 			value = CASE
 				WHEN auth.cache.expires_at IS NOT NULL AND auth.cache.expires_at <= NOW() THEN '1'
-				ELSE (COALESCE(auth.cache.value, '0')::int + 1)::text
+				ELSE (COALESCE(auth.cache.value, '0')::bigint + 1)::text
 			END,
 			expires_at = CASE
 				WHEN auth.cache.expires_at IS NOT NULL AND auth.cache.expires_at > NOW()
 					THEN auth.cache.expires_at
 				ELSE EXCLUDED.expires_at
 			END
-		RETURNING value::int
+		RETURNING value::bigint
 	`, key, expiresAt).Scan(&count)
 	if err != nil {
 		return 0, err
