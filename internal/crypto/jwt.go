@@ -119,6 +119,7 @@ func SignToken(claims VaultClaims, privateKey *rsa.PrivateKey, kid string) (stri
 // - Algorithm whitelist (RS256 only)
 // - kid is present and non-empty
 // - jku/x5u/x5c/jwk headers are rejected
+// - any crit header is rejected (RFC 7515 4.1.11: no JOSE extensions implemented)
 // - Standard claims (exp, nbf, iss, aud) are validated
 func ParseAndValidate(tokenString string, keyFunc vjwt.Keyfunc, issuer string, audience string) (*VaultClaims, error) {
 	if len(tokenString) > MaxJWTSize {
@@ -132,6 +133,23 @@ func ParseAndValidate(tokenString string, keyFunc vjwt.Keyfunc, issuer string, a
 			if _, exists := t.Header[h]; exists {
 				return nil, fmt.Errorf("jwt: rejected header %q", h)
 			}
+		}
+
+		// `crit` lists header parameters the producer requires the recipient to
+		// understand and act on, and RFC 7515 4.1.11 says a recipient MUST reject
+		// a JWS carrying one it does not fully implement. vault42 implements no
+		// JOSE extensions, so every crit qualifies, whatever it names and whether
+		// or not it is even a list. The RFC forbids an empty array outright,
+		// which is the case a "nothing is listed, so nothing is required" reading
+		// would wave through.
+		//
+		// Not exploitable on its own, since the header is inside the signature
+		// and forging one needs the signing key. It matters because these tokens
+		// are consumed elsewhere: a relying party that honours crit would refuse
+		// a token this vault called valid, and two verifiers disagreeing about
+		// what a valid token is is the kind of gap that later gets built on.
+		if _, exists := t.Header["crit"]; exists {
+			return nil, errors.New("jwt: rejected crit header, no JOSE extensions are implemented")
 		}
 
 		// Validate kid presence
