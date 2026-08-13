@@ -586,14 +586,14 @@ type EmailBranding struct {
 	// LogoURL is the image the template embeds. Empty falls back to the
 	// global logo.
 	LogoURL string `json:"logo_url"`
-	// PrimaryColor is the accent colour, typically "#RRGGBB". Empty falls
+	// PrimaryColor is the accent color, typically "#RRGGBB". Empty falls
 	// back to the global accent.
 	PrimaryColor string `json:"primary_color"`
 	// FromName is the display name on the From header. Empty falls back to
 	// the global From display name.
 	FromName string `json:"from_name"`
 	// FromAddress is the mailbox used as From. Empty falls back to the
-	// global address. A non-empty value is honoured only when its domain is
+	// global address. A non-empty value is honored only when its domain is
 	// on VAULT_EMAIL_FROM_ALLOWED_DOMAINS, so an admin cannot point mail at
 	// a domain the deployment does not control.
 	FromAddress string `json:"from_address"`

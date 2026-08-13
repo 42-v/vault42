@@ -14,7 +14,7 @@
 // TOTP replay guard only blocks a replay that lands on the pod that saw the
 // first use. One startup log line was the entire signal.
 //
-// The gate is on the wiring rather than on the behaviour because the behaviour
+// The gate is on the wiring rather than on the behavior because the behavior
 // is already tested: internal/handler proves Readyz reports what it is given.
 // What no test in that package can see is whether anything gives it anything.
 //

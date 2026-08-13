@@ -42,6 +42,7 @@ func (f *flakyAuditRepo) CountByUser(context.Context, string) (int, error) { ret
 func (f *flakyAuditRepo) Cleanup(context.Context, time.Time) (int64, error) {
 	return 0, nil
 }
+
 func (f *flakyAuditRepo) CleanupLocked(context.Context, time.Time) (int64, bool, error) {
 	return 0, true, nil
 }

@@ -145,7 +145,7 @@ func ParseAndValidate(tokenString string, keyFunc vjwt.Keyfunc, issuer string, a
 		//
 		// Not exploitable on its own, since the header is inside the signature
 		// and forging one needs the signing key. It matters because these tokens
-		// are consumed elsewhere: a relying party that honours crit would refuse
+		// are consumed elsewhere: a relying party that honors crit would refuse
 		// a token this vault called valid, and two verifiers disagreeing about
 		// what a valid token is is the kind of gap that later gets built on.
 		if _, exists := t.Header["crit"]; exists {

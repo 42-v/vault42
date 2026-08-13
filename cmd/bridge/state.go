@@ -160,7 +160,7 @@ func encodeFlagValue(reason string, score int, at time.Time) string {
 // parseFlagValue reads both new rows and the historical three-field form.
 // ok is false when the value does not have two separators; an unparseable
 // timestamp still returns ok so the caller can drop it as expired, matching
-// the previous fail-closed behaviour.
+// the previous fail-closed behavior.
 func parseFlagValue(val string) (reason string, score int, flaggedAt time.Time, ok bool) {
 	tsSep := strings.LastIndex(val, "|")
 	if tsSep < 1 {

@@ -358,7 +358,7 @@ func TestLoadConfigDevModeOnlyAcceptsTrue(t *testing.T) {
 // The killswitch is the gateway's tripwire: rather than answering 403 to a
 // request that arrived from off-box, it panics so the breach attempt surfaces
 // as a CrashLoopBackOff instead of a line in a log nobody reads. The default
-// therefore has to be on. Recognised off values are the same set envBool
+// therefore has to be on. Recognized off values are the same set envBool
 // already treats as false ({false, 0, no}); anything else is not a disable,
 // it is a configuration error. See TestLoadConfigKillswitchRefusesUnrecognizedValue.
 func TestLoadConfigKillswitch(t *testing.T) {
@@ -404,7 +404,7 @@ func TestLoadConfigKillswitch(t *testing.T) {
 // TestLoadConfigKillswitchRefusesUnrecognizedValue is the fail-closed half of
 // the killswitch parse.
 //
-// The unset default is on. An unrecognised explicit value used to disable the
+// The unset default is on. An unrecognized explicit value used to disable the
 // tripwire, so ADMIN_GW_KILLSWITCH=True, =TRUE, =on or a typo left the operator
 // weaker than saying nothing. A killswitch that cannot be parsed must refuse
 // to start: being explicit is never weaker than being silent, and the error

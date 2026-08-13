@@ -422,7 +422,7 @@ func (p *condParser) parseValue() string {
 		switch tok {
 		case "always", "success":
 			return "true"
-		case "failure", "cancelled":
+		case "failure", "canceled":
 			return "false"
 		default:
 			p.t.Fatalf("unknown function %s() in a ci.yml job condition; this gate must be taught "+

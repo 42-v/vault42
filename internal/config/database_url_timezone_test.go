@@ -57,7 +57,7 @@ func TestDatabaseURLPinsTheSessionTimezoneToUTC(t *testing.T) {
 	}
 }
 
-// TestDatabaseURLSurvivesAPasswordWithURLMetacharacters is the neighbouring
+// TestDatabaseURLSurvivesAPasswordWithURLMetacharacters is the neighboring
 // property, pinned here because the timezone parameter is appended to the same
 // query string that the password's encoding depends on.
 //

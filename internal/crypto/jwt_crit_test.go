@@ -53,7 +53,7 @@ func signWithHeader(t *testing.T, key *rsa.PrivateKey, kid string, extra map[str
 // This is not exploitable on its own: the header is inside the signature, so
 // forging one needs the signing key, and an attacker with that has already won.
 // It matters because vault42's tokens are consumed elsewhere. A relying party
-// that does honour `crit`, or a future verifier here, would refuse a token this
+// that does honor `crit`, or a future verifier here, would refuse a token this
 // vault happily accepts, and the two would disagree about what a valid token
 // is. Refusing it here keeps every consumer's answer the same.
 //
@@ -85,7 +85,7 @@ func TestCritHeaderIsRejected(t *testing.T) {
 			if err == nil {
 				t.Fatal("a correctly signed token carrying a crit header was accepted. RFC 7515 " +
 					"4.1.11 requires refusing a crit the recipient does not implement, and vault42 " +
-					"implements no JOSE extensions, so a relying party that honours crit would " +
+					"implements no JOSE extensions, so a relying party that honors crit would " +
 					"refuse a token this vault called valid.")
 			}
 			if !strings.Contains(err.Error(), "crit") {

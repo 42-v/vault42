@@ -66,6 +66,7 @@ func (g *gatedAuditRepo) CountByUser(context.Context, string) (int, error) { ret
 func (g *gatedAuditRepo) Cleanup(context.Context, time.Time) (int64, error) {
 	return 0, nil
 }
+
 func (g *gatedAuditRepo) CleanupLocked(context.Context, time.Time) (int64, bool, error) {
 	return 0, true, nil
 }

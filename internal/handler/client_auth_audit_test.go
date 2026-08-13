@@ -44,16 +44,16 @@ func (c *clientAuditCapture) last(t *testing.T) *model.AuditEntry {
 func newAuditingClientHandler(t *testing.T, clients *mocks.MockClientRepo) (*ClientHandler, *clientAuditCapture) {
 	t.Helper()
 
-	cap := &clientAuditCapture{}
+	rows := &clientAuditCapture{}
 	repo := &mocks.MockAuditRepo{
-		InsertFn: func(_ context.Context, e *model.AuditEntry) error { cap.add(e); return nil },
+		InsertFn: func(_ context.Context, e *model.AuditEntry) error { rows.add(e); return nil },
 		InsertBatchFn: func(_ context.Context, es []*model.AuditEntry) error {
-			cap.add(es...)
+			rows.add(es...)
 			return nil
 		},
 	}
 	tokenSvc, _ := newTestTokenService(t)
-	return NewClientHandler(clients, tokenSvc, audit.NewLogger(repo, 0)), cap
+	return NewClientHandler(clients, tokenSvc, audit.NewLogger(repo, 0)), rows
 }
 
 // postClientToken drives POST /client/token with form credentials.
@@ -110,14 +110,14 @@ func TestEveryClientAuthRejectionIsAudited(t *testing.T) {
 				},
 			}
 
-			h, cap := newAuditingClientHandler(t, clients)
+			h, rows := newAuditingClientHandler(t, clients)
 			w := postClientToken(h, tc.clientID, tc.secret)
 
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401 (body %s)", w.Code, w.Body.String())
 			}
 
-			row := cap.last(t)
+			row := rows.last(t)
 			if row == nil {
 				t.Fatalf("a rejected client-credentials grant wrote no audit row. Every rejection "+
 					"answers the same 401, so with no row nothing anywhere records that the "+
@@ -149,7 +149,7 @@ func TestClientAuthAuditBoundsTheAttemptedID(t *testing.T) {
 	clients := &mocks.MockClientRepo{
 		GetByIDFn: func(context.Context, string) (*model.Client, error) { return nil, nil },
 	}
-	h, cap := newAuditingClientHandler(t, clients)
+	h, rows := newAuditingClientHandler(t, clients)
 
 	// 512 bytes, not 64 KB. Token bodies pass through
 	// http.MaxBytesReader(w, r.Body, 8192), so an oversized body never reaches
@@ -159,7 +159,7 @@ func TestClientAuthAuditBoundsTheAttemptedID(t *testing.T) {
 	// the body limit for the case to be the one it claims.
 	postClientToken(h, strings.Repeat("A", 512), "x")
 
-	row := cap.last(t)
+	row := rows.last(t)
 	if row == nil {
 		t.Fatal("no audit row was written for an oversized client id")
 	}

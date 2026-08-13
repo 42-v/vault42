@@ -36,7 +36,7 @@ func testJSONHandler() http.HandlerFunc {
 // demonstrated was a property of the standard library rather than anything about
 // vault42, in the suite whose purpose is to show that an attack does not work.
 //
-// The real behaviour is pinned in internal/handler, against the decoder every
+// The real behavior is pinned in internal/handler, against the decoder every
 // route actually uses: TestDecodeJSONIgnoresContentType.
 
 // TestContentType_ValidJSON verifies that valid JSON with correct Content-Type works.

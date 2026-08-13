@@ -1144,7 +1144,7 @@ func TestSanitizeDBError(t *testing.T) {
 // going unnoticed.
 func TestSanitizeDBErrorRedactsTheShapesItUsedToMiss(t *testing.T) {
 	// This test was named ...MissesPasswordsContainingWhitespace and asserted
-	// that the password LEAKED. It documented the defect as expected behaviour,
+	// that the password LEAKED. It documented the defect as expected behavior,
 	// which is why the leak survived: the suite was green over it.
 	//
 	// The pattern was `postgres://[^\s]+@`. [^\s]+ stops at whitespace, so a DSN
