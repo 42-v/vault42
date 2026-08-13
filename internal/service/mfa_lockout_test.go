@@ -12,7 +12,12 @@ import (
 // counter the password path uses), and a successful completion clears it.
 func TestMFAVerifyLockout(t *testing.T) {
 	ctx := context.Background()
-	s := &AuthService{cache: cache.NewMemoryCache()}
+	// The user repository is not optional here. Every cache implementation
+	// reports a miss as an error, and the lockout check answers a cache error
+	// from the durable failed-login count, so the very first call reads the user
+	// table. NewAuthService always supplies the repository; a service built
+	// without one is a shape production never has.
+	s := &AuthService{cache: cache.NewMemoryCache(), users: &mocks.MockUserRepo{}}
 	const uid = "user-mfa-lock"
 
 	if s.MFAVerifyLocked(ctx, uid) {
@@ -37,7 +42,7 @@ func TestMFAVerifyLockout(t *testing.T) {
 // Below the threshold the account stays usable (no premature lockout).
 func TestMFAVerifyLockout_BelowThreshold(t *testing.T) {
 	ctx := context.Background()
-	s := &AuthService{cache: cache.NewMemoryCache()}
+	s := &AuthService{cache: cache.NewMemoryCache(), users: &mocks.MockUserRepo{}}
 	const uid = "user-mfa-few"
 	for i := 0; i < lockoutThreshold-1; i++ {
 		s.RecordMFAFailure(ctx, uid, "1.2.3.4", "ua")
