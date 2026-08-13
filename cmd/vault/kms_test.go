@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -436,35 +437,116 @@ func TestKMSRootKeyIsWhitespaceTrimmed(t *testing.T) {
 	})
 }
 
-// TestKMSWrapAcceptsEmptyInput records the current contract rather than
-// endorsing it. An empty plaintext produces a well-formed envelope that unwraps
-// to zero bytes, so a pipeline that pipes an empty file into `vault kms wrap`
-// gets a valid-looking artifact instead of an error and only discovers the
-// mistake when whatever consumes the unwrapped key fails.
-func TestKMSWrapAcceptsEmptyInput(t *testing.T) {
+// TestKMSWrapRefusesEmptyPlaintext is the guard that keeps a failed upstream
+// step from becoming a shipped secret. AES-GCM seals zero bytes into a
+// well-formed envelope, so without this the command exits zero having printed a
+// valid-looking base64 artifact that unwraps to nothing. The deploy pipeline
+// stores it, the service boots with an empty key, and the failure surfaces far
+// from the wrap step with nothing pointing back at it.
+//
+// Whitespace-only input is refused on the same grounds: a lone newline is a
+// truncated file or a here-doc that lost its body, never key material. Every
+// source the command reads from is covered because they reach the guard by
+// different routes (io.ReadAll for the stream, os.ReadFile for a path) and an
+// operator can hit any of them.
+func TestKMSWrapRefusesEmptyPlaintext(t *testing.T) {
 	root := ephemeralRoot(t)
-	t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", root))
+	dir := t.TempDir()
 
-	var out bytes.Buffer
-	if err := runKMSWrap([]string{"--kid", "k"}, strings.NewReader(""), &out); err != nil {
-		t.Fatalf("runKMSWrap: %v", err)
+	emptyFile := filepath.Join(dir, "truncated.key")
+	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
+		t.Fatalf("write empty fixture: %v", err)
 	}
-	envelope, err := base64.StdEncoding.DecodeString(out.String())
-	if err != nil {
-		t.Fatalf("decode envelope: %v", err)
+	blankFile := filepath.Join(dir, "newline-only.key")
+	if err := os.WriteFile(blankFile, []byte("\n"), 0o600); err != nil {
+		t.Fatalf("write blank fixture: %v", err)
 	}
 
-	svc, err := kms.New(root)
-	if err != nil {
-		t.Fatalf("kms.New: %v", err)
+	for _, tc := range []struct {
+		name  string
+		in    string
+		stdin string
+		// wantSource is the thing the operator has to go and look at. The error
+		// naming it is the point: "empty" alone does not tell an unattended
+		// pipeline's owner which file or which pipe came up short.
+		wantSource string
+	}{
+		{name: "empty stdin", in: "-", stdin: "", wantSource: "stdin"},
+		{name: "stdin defaulted by an unset flag value", in: "", stdin: "", wantSource: "stdin"},
+		{name: "whitespace-only stdin", in: "-", stdin: "\n", wantSource: "stdin"},
+		{name: "stdin of spaces and tabs", in: "-", stdin: " \t\r\n", wantSource: "stdin"},
+		{name: "zero-length file", in: emptyFile, stdin: "unused", wantSource: emptyFile},
+		{name: "file holding only a newline", in: blankFile, stdin: "unused", wantSource: blankFile},
+		{name: "dev null", in: os.DevNull, stdin: "unused", wantSource: os.DevNull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", root))
+			outPath := filepath.Join(t.TempDir(), "wrapped.b64")
+
+			var stdout bytes.Buffer
+			err := runKMSWrap([]string{"--kid", "k", "--in", tc.in, "--out", outPath}, strings.NewReader(tc.stdin), &stdout)
+
+			if err == nil {
+				t.Fatal("wrapping nothing reported success, so the pipeline would ship an empty secret")
+			}
+			if !strings.Contains(err.Error(), tc.wantSource) {
+				t.Fatalf("error = %q, want it to name %q as the thing to check", err, tc.wantSource)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("a refused wrap still wrote an envelope to stdout: %q", stdout.String())
+			}
+			// A partially written artifact is worse than none: a later step
+			// would read whatever landed on disk.
+			if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+				t.Fatalf("a refused wrap left an artifact at %s (stat: %v)", outPath, statErr)
+			}
+		})
 	}
-	defer svc.Close()
-	got, err := svc.Unwrap("k", envelope)
-	if err != nil {
-		t.Fatalf("Unwrap: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("unwrapped %d bytes from an empty input, want 0", len(got))
+}
+
+// TestKMSWrapSealsThePlaintextItWasGivenWithoutTrimming guards the other side of
+// the emptiness check. The guard trims only to judge whether anything is there;
+// if it ever trimmed the payload itself, a key whose encoding includes a
+// trailing newline (anything produced by `echo`, and the PEM the deploy tooling
+// hands over) would be sealed a byte short and the consumer would unwrap
+// material that no longer matches what was handed in.
+//
+// The single-byte row is here because a one-character secret is the smallest
+// thing the guard must still let through; rejecting it would be over-correction.
+func TestKMSWrapSealsThePlaintextItWasGivenWithoutTrimming(t *testing.T) {
+	root := ephemeralRoot(t)
+
+	for _, plaintext := range [][]byte{
+		[]byte("key-with-trailing-newline\n"),
+		[]byte("\n\tkey padded on both ends \r\n"),
+		[]byte("x"),
+		{0x00},
+	} {
+		t.Run(fmt.Sprintf("%q", plaintext), func(t *testing.T) {
+			t.Setenv("KMS_ROOT_KEY_FILE", writeBytes(t, "kms_root.key", root))
+
+			var out bytes.Buffer
+			if err := runKMSWrap([]string{"--kid", "k"}, bytes.NewReader(plaintext), &out); err != nil {
+				t.Fatalf("runKMSWrap(%q): %v", plaintext, err)
+			}
+			envelope, err := base64.StdEncoding.DecodeString(out.String())
+			if err != nil {
+				t.Fatalf("decode envelope: %v", err)
+			}
+
+			svc, err := kms.New(root)
+			if err != nil {
+				t.Fatalf("kms.New: %v", err)
+			}
+			defer svc.Close()
+			got, err := svc.Unwrap("k", envelope)
+			if err != nil {
+				t.Fatalf("Unwrap: %v", err)
+			}
+			if !bytes.Equal(got, plaintext) {
+				t.Fatalf("unwrapped %q, want the exact bytes handed in, %q", got, plaintext)
+			}
+		})
 	}
 }
 
