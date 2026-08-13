@@ -69,8 +69,22 @@ type OnKeyChangeFunc func(activeKey *rsa.PrivateKey, kid string, allPublicKeys m
 // It supports automatic refresh from the database, key rotation, and
 // notifies subscribers when the active key changes.
 type KeyStore struct {
-	pool      *pgxpool.Pool
-	masterKey []byte
+	pool *pgxpool.Pool
+
+	// masterKeyMu guards masterKey against Stop, and is deliberately NOT ks.mu.
+	// The crypto that reads the key happens outside ks.mu, and applyKeys takes
+	// ks.mu, so reusing it here would mean taking a read lock and then a write
+	// lock on the same non-reentrant mutex inside one Refresh.
+	masterKeyMu   sync.RWMutex
+	masterKey     []byte
+	masterKeyGone bool
+
+	// refreshMu serialises Refresh end to end. Without it two refreshes could
+	// interleave their SELECT and their apply, so a slower one could publish a
+	// key set it read before the faster one committed, and the notification that
+	// follows would hand the token service a key the database has already
+	// retired.
+	refreshMu sync.Mutex
 
 	mu         sync.RWMutex
 	activeKey  *rsa.PrivateKey
@@ -83,6 +97,30 @@ type KeyStore struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+// ErrClosed is returned by any operation needing the master key after Stop.
+//
+// Failing closed matters more here than it looks. A zeroed master key is still
+// 32 bytes, so AES-GCM accepts it and Import would encrypt a private key under
+// all zeros and commit the row. The write succeeds, nothing reports an error,
+// and the key is permanently undecryptable by the real master key. That is data
+// destruction rather than a torn read.
+var ErrClosed = errors.New("keystore: closed")
+
+// withMasterKey runs fn with the master key held under a read lock, so Stop
+// cannot zero it mid-operation.
+//
+// The key is passed in rather than read from the struct inside fn, so a caller
+// cannot accidentally reach for ks.masterKey directly and reintroduce the race
+// the lock exists to prevent.
+func (ks *KeyStore) withMasterKey(fn func(masterKey []byte) error) error {
+	ks.masterKeyMu.RLock()
+	defer ks.masterKeyMu.RUnlock()
+	if ks.masterKeyGone {
+		return ErrClosed
+	}
+	return fn(ks.masterKey)
 }
 
 // New creates a new KeyStore. masterKey must be exactly 32 bytes (AES-256).
@@ -144,8 +182,17 @@ func (ks *KeyStore) Import(ctx context.Context, key *rsa.PrivateKey) (string, er
 		return "", fmt.Errorf("keystore: marshal public key: %w", err)
 	}
 
-	// Encrypt private key with master key, using kid as AAD
-	encPriv, err := vaultcrypto.Encrypt(privPEM, ks.masterKey, []byte(kid))
+	// Encrypt private key with master key, using kid as AAD.
+	//
+	// Under the read lock, because Stop zeroes the master key and a zeroed key is
+	// still a valid 32-byte AES key: without this the row would be committed
+	// encrypted under all zeros and lost for good.
+	var encPriv []byte
+	err = ks.withMasterKey(func(masterKey []byte) error {
+		var encErr error
+		encPriv, encErr = vaultcrypto.Encrypt(privPEM, masterKey, []byte(kid))
+		return encErr
+	})
 	config.ZeroBytes(privPEM)
 	if err != nil {
 		return "", fmt.Errorf("keystore: encrypt private key: %w", err)
@@ -249,6 +296,15 @@ func (ks *KeyStore) Revoke(ctx context.Context, kid string) error {
 // A successful Refresh always replaces the whole set: keys are never merged
 // with what was loaded before.
 func (ks *KeyStore) Refresh(ctx context.Context) error {
+	// Held for the whole function, query and apply together. Refresh has four
+	// callers: the refresh ticker, Import, Revoke and EnsureKey, and the middle
+	// two are reachable from admin HTTP handlers. Unserialised, a refresh that
+	// read the table before another one committed could publish the older key set
+	// afterwards, and the notification it fires would then hand the token service
+	// a key the database has already retired.
+	ks.refreshMu.Lock()
+	defer ks.refreshMu.Unlock()
+
 	rows, err := ks.pool.Query(ctx, `
 		SELECT kid, private_key, public_key, algorithm, status, created_at, retired_at, expires_at
 		FROM auth.signing_keys
@@ -296,8 +352,12 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 		// last good refresh survives: a wrong master key or a corrupt row
 		// leaves the process serving stale keys instead of no keys.
 		if status == "active" {
-			privPEM, err := vaultcrypto.Decrypt(encPriv, ks.masterKey, []byte(kid))
-			if err != nil {
+			var privPEM []byte
+			if err := ks.withMasterKey(func(masterKey []byte) error {
+				var decErr error
+				privPEM, decErr = vaultcrypto.Decrypt(encPriv, masterKey, []byte(kid))
+				return decErr
+			}); err != nil {
 				return fmt.Errorf("keystore: decrypt key %s: %w", kid, err)
 			}
 			// The plaintext PEM of the signing key exists in this buffer and nowhere
@@ -433,11 +493,12 @@ func (ks *KeyStore) StartRefreshLoop(ctx context.Context, interval time.Duration
 func (ks *KeyStore) Stop() {
 	ks.stopOnce.Do(func() { close(ks.stopCh) })
 	ks.wg.Wait()
-	ks.mu.Lock()
+	ks.masterKeyMu.Lock()
+	ks.masterKeyGone = true
 	for i := range ks.masterKey {
 		ks.masterKey[i] = 0
 	}
-	ks.mu.Unlock()
+	ks.masterKeyMu.Unlock()
 }
 
 // EnsureKey loads keys from the database. If no active key exists,

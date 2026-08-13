@@ -402,11 +402,24 @@ func TestKeystoreAttack_DoubleStopIsSafe(t *testing.T) {
 	ks.Stop()
 }
 
-// Guard against the report going stale: if the wipe ever moves under the same
-// lock the readers take, or the readers start taking ks.mu, this test should be
-// deleted along with the finding. It documents today's state, that Refresh and
-// Import read ks.masterKey with no lock at all.
-func TestKeystoreAttack_MasterKeyReadsAreUnlocked(t *testing.T) {
+// Every read of ks.masterKey must go through withMasterKey.
+//
+// Stop zeroes the master key, and Refresh and Import used to read it with no
+// lock at all. ks.wg tracks only the goroutine StartRefreshLoop launches, so an
+// admin rotate, revoke or EnsureKey call was invisible to the join Stop performs
+// before wiping.
+//
+// The race detector cannot be relied on to catch a regression here, which is why
+// this test is structural rather than behavioural. The only read on the hot path
+// is aes.NewCipher's key schedule, which is assembly and uninstrumented, so a
+// torn read of the AES key produces no report at all. The identical pattern read
+// from Go IS reported, which makes the silence actively misleading.
+//
+// The consequence is worse than a torn read. A zeroed master key is still a
+// valid 32-byte AES key, so Import would encrypt a private key under all zeros,
+// commit the row, and return success. The key is then permanently undecryptable
+// by the real master key: data destruction, reported as a successful rotation.
+func TestKeystoreMasterKeyReadsAreGuarded(t *testing.T) {
 	path := filepath.Join("..", "..", "internal", "keystore", "keystore.go")
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
@@ -414,39 +427,44 @@ func TestKeystoreAttack_MasterKeyReadsAreUnlocked(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	unlockedReaders := map[string]bool{}
+	// withMasterKey is the one function allowed to touch the field directly; it
+	// is where the lock and the closed check live.
+	const accessor = "withMasterKey"
+
+	var offenders []string
+	var sawAccessor bool
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil || fn.Body == nil {
 			return true
 		}
-		var readsMasterKey, locks bool
+		if fn.Name.Name == accessor {
+			sawAccessor = true
+			return true
+		}
+		// Stop is the wipe itself and takes the write lock inline.
+		if fn.Name.Name == "Stop" {
+			return true
+		}
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			switch node := inner.(type) {
-			case *ast.SelectorExpr:
-				if node.Sel.Name == "masterKey" {
-					readsMasterKey = true
-				}
-				if node.Sel.Name == "Lock" || node.Sel.Name == "RLock" {
-					locks = true
-				}
+			sel, ok := inner.(*ast.SelectorExpr)
+			if ok && sel.Sel.Name == "masterKey" {
+				offenders = append(offenders,
+					fn.Name.Name+" (line "+fmt.Sprint(fset.Position(sel.Pos()).Line)+")")
 			}
 			return true
 		})
-		if readsMasterKey && !locks {
-			unlockedReaders[fn.Name.Name] = true
-		}
 		return true
 	})
 
-	for _, name := range []string{"Refresh", "Import"} {
-		if !unlockedReaders[name] {
-			t.Errorf("(*KeyStore).%s no longer reads masterKey without a lock; "+
-				"if that is a fix, delete this test and the finding", name)
-		}
+	if !sawAccessor {
+		t.Fatalf("keystore.go has no %s; the accessor this gate depends on was "+
+			"renamed or removed and the gate is now checking nothing", accessor)
 	}
-	if len(unlockedReaders) > 0 {
-		t.Logf("methods reading ks.masterKey with no lock while Stop zeroes it: %v",
-			fmt.Sprint(unlockedReaders))
+	for _, o := range offenders {
+		t.Errorf("(*KeyStore).%s reads ks.masterKey directly instead of through %s. "+
+			"Stop zeroes that field, a zeroed AES key still encrypts, and the race "+
+			"detector cannot see the read because the key schedule is assembly.",
+			o, accessor)
 	}
 }
