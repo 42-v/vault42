@@ -173,13 +173,22 @@ func (c *Config) DatabaseURL() string {
 // and '#' make pgx report "invalid port after host", a space makes it report
 // "invalid userinfo", and a '%' is decoded silently so the process
 // authenticates as a different string than the one on disk.
+//
+// timezone matches internal/config's DatabaseURL. The gateway reads the same
+// audit and key tables the server writes, so a gateway session left in the
+// server's local zone would render one row's timestamps two different ways
+// across the two products' responses.
 func postgresURL(user, password, host, port, dbname, sslmode string) string {
+	q := url.Values{}
+	q.Set("sslmode", sslmode)
+	q.Set("timezone", "UTC")
+
 	u := &url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(user, password),
 		Host:     host + ":" + port,
 		Path:     dbname,
-		RawQuery: "sslmode=" + sslmode,
+		RawQuery: q.Encode(),
 	}
 	return u.String()
 }

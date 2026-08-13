@@ -482,10 +482,34 @@ func TestDatabaseURL(t *testing.T) {
 		DBSSLMode:  "verify-full",
 	}
 
-	got := cfg.DatabaseURL()
-	want := "postgres://vault_admin:hunter2@db.internal:6543/vaultdb?sslmode=verify-full"
-	if got != want {
-		t.Fatalf("DatabaseURL() = %q, want %q", got, want)
+	// Parsed rather than string-compared, because the query string's parameter
+	// order is url.Values.Encode's business and not a property worth pinning.
+	// The role, the target and the settings are.
+	parsed, err := pgxpool.ParseConfig(cfg.DatabaseURL())
+	if err != nil {
+		t.Fatalf("pgxpool.ParseConfig rejected the DSN %q: %v", cfg.DatabaseURL(), err)
+	}
+
+	if parsed.ConnConfig.User != "vault_admin" {
+		t.Fatalf("role = %q, want vault_admin", parsed.ConnConfig.User)
+	}
+	if parsed.ConnConfig.Password != "hunter2" {
+		t.Errorf("password = %q, want hunter2", parsed.ConnConfig.Password)
+	}
+	if parsed.ConnConfig.Host != "db.internal" || parsed.ConnConfig.Port != 6543 {
+		t.Errorf("target = %s:%d, want db.internal:6543", parsed.ConnConfig.Host, parsed.ConnConfig.Port)
+	}
+	if parsed.ConnConfig.Database != "vaultdb" {
+		t.Errorf("database = %q, want vaultdb", parsed.ConnConfig.Database)
+	}
+	if parsed.ConnConfig.TLSConfig == nil {
+		t.Error("sslmode=verify-full did not produce a TLS config")
+	}
+	// The gateway reads the same audit and key rows the server writes. A session
+	// left in the server's local zone renders one row's timestamps two different
+	// ways across the two products' responses.
+	if got := parsed.ConnConfig.RuntimeParams["timezone"]; got != "UTC" {
+		t.Errorf("session timezone = %q, want UTC", got)
 	}
 }
 

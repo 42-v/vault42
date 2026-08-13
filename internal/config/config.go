@@ -765,12 +765,31 @@ func (c *Config) DatabaseURL(role string) string {
 	if c.Profile == ProfileDev {
 		sslmode = "disable"
 	}
+	// timezone is a startup runtime parameter, so pgx sends it in the startup
+	// packet and every session the pool opens is already in UTC.
+	//
+	// docs/spec.md promises RFC 3339 in UTC for every timestamp the API emits,
+	// and nothing enforced it. Postgres renders a timestamptz in the session's
+	// TimeZone, pgx builds a time.Time carrying that offset, and the handlers
+	// marshal it through unchanged, so the offset in a response body was
+	// whatever zone the database server happened to run in. Both spellings name
+	// the same instant and both are valid RFC 3339, which is why nothing ever
+	// failed; what breaks is comparing timestamps as strings, and a client
+	// slicing the first ten characters for a date gets the wrong day for two
+	// hours every night.
+	//
+	// Setting it on the connection is one place rather than dozens of marshal
+	// sites, and a handler added later returning a new timestamp inherits it.
+	q := url.Values{}
+	q.Set("sslmode", sslmode)
+	q.Set("timezone", "UTC")
+
 	u := &url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(user, password),
 		Host:     c.DBHost + ":" + c.DBPort,
 		Path:     c.DBName,
-		RawQuery: "sslmode=" + sslmode,
+		RawQuery: q.Encode(),
 	}
 	return u.String()
 }
