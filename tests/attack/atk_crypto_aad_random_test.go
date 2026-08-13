@@ -23,17 +23,27 @@ import (
 // A census of every AES-GCM call site outside tests, built from the AST so it
 // cannot go stale. The invariant: every Encrypt and Decrypt passes an AAD.
 //
-// It holds in ten of eleven places. internal/crypto/recovery.go is the
-// exception, and it is the subject of
-// TestRecoveryAttack_EscrowPayloadIsNotBoundToItsRow. This test is the drift
-// gate: if a twelfth call site appears without an AAD, it fails here rather
-// than being noticed in review.
+// It used to hold in ten of eleven places. internal/crypto/recovery.go was the
+// exception - the escrow ciphertext was bound to nothing, so a payload could be
+// moved between auth.account_recovery rows - and it is now bound like the rest.
+// This test is the drift gate: a new call site that binds no context fails here
+// rather than being noticed in review, and so does a call site that passes a
+// literal nil, which is an AAD argument in shape only.
+//
+// One nil is expected and named: recovery.go's legacy reader, which opens escrow
+// records written before the binding existed and cannot invent an AAD they were
+// never sealed with. When the retention horizon has aged those records out and
+// that function is deleted, this allowance goes with it and the count below
+// becomes zero.
 func TestAADAttack_EveryAEADCallSiteBindsContext(t *testing.T) {
 	type site struct {
 		file string
 		line int
 		fn   string
 		args int
+		// explicitNil records `Encrypt(pt, key, nil)`: three arguments, no
+		// binding. It looks bound to an argument count and is not.
+		explicitNil bool
 	}
 	var sites []site
 
@@ -84,11 +94,18 @@ func TestAADAttack_EveryAEADCallSiteBindsContext(t *testing.T) {
 						return true
 					}
 
+					nilAAD := false
+					if len(call.Args) >= 3 {
+						ident, ok := call.Args[2].(*ast.Ident)
+						nilAAD = ok && ident.Name == "nil"
+					}
+
 					sites = append(sites, site{
-						file: filepath.Join(filepath.Base(root), filepath.Base(name)),
-						line: fset.Position(call.Pos()).Line,
-						fn:   fnName,
-						args: len(call.Args),
+						file:        filepath.Join(filepath.Base(root), filepath.Base(name)),
+						line:        fset.Position(call.Pos()).Line,
+						fn:          fnName,
+						args:        len(call.Args),
+						explicitNil: nilAAD,
 					})
 					return true
 				})
@@ -107,26 +124,36 @@ func TestAADAttack_EveryAEADCallSiteBindsContext(t *testing.T) {
 		return sites[i].line < sites[j].line
 	})
 
-	var unbound []string
+	var unbound, nilBound []string
 	for _, s := range sites {
 		bound := "AAD"
-		if s.args < 3 {
+		switch {
+		case s.args < 3:
 			bound = "NO AAD"
 			unbound = append(unbound, s.file)
+		case s.explicitNil:
+			bound = "nil AAD"
+			nilBound = append(nilBound, s.file)
 		}
 		t.Logf("%-28s:%-4d %-8s %s", s.file, s.line, s.fn, bound)
 	}
 
-	// recovery.go is the known exception and is reported separately. Anything
-	// else appearing here is new.
 	for _, u := range unbound {
-		if !strings.HasSuffix(u, "recovery.go") {
-			t.Errorf("%s calls AES-GCM with no AAD: the ciphertext is not bound to the "+
-				"row it lives in and can be moved between records under the same master key", u)
+		t.Errorf("%s calls AES-GCM with no AAD: the ciphertext is not bound to the "+
+			"row it lives in and can be moved between records under the same master key", u)
+	}
+
+	// The one allowed nil, and only there. A nil AAD anywhere else is the same
+	// vulnerability as a missing one, wearing an argument.
+	for _, n := range nilBound {
+		if !strings.HasSuffix(n, "recovery.go") {
+			t.Errorf("%s passes a literal nil AAD, which binds nothing: an argument in shape only", n)
 		}
 	}
-	if len(unbound) == 0 {
-		t.Error("no unbound call site found; if recovery.go was fixed, delete that finding")
+	if len(nilBound) > 1 {
+		t.Errorf("more than one nil AAD in recovery.go (%d): the legacy escrow reader is the only "+
+			"call allowed to pass one, because those records were sealed without an AAD and "+
+			"cannot be re-sealed", len(nilBound))
 	}
 }
 

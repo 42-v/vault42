@@ -25,7 +25,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -89,7 +92,14 @@ func splitArgs(raw string) []string {
 
 // escrowRow is one row of auth.account_recovery. deletedBy and reason are
 // pointers because both columns are nullable in the schema.
+//
+// id and pseudonym are not output; they are the context a bound payload was
+// sealed to, which is why they have to travel with the row rather than being
+// invented at decrypt time. A test that leaves them empty is describing a row
+// whose binding does not match its payload, and the tool must refuse it.
 type escrowRow struct {
+	id        string
+	pseudonym string
 	payload   []byte
 	deletedAt time.Time
 	deletedBy *string
@@ -123,25 +133,34 @@ func (f *fakeRows) Scan(dest ...any) error {
 	if row.scanErr != nil {
 		return row.scanErr
 	}
-	if len(dest) != 4 {
-		return fmt.Errorf("escrow query selects 4 columns, tool scanned %d", len(dest))
+	if len(dest) != 6 {
+		return fmt.Errorf("escrow query selects 6 columns, tool scanned %d", len(dest))
 	}
-	payload, ok := dest[0].(*[]byte)
+	id, ok := dest[0].(*string)
 	if !ok {
-		return fmt.Errorf("column 1 (payload, BYTEA) scanned into %T", dest[0])
+		return fmt.Errorf("column 1 (id::text) scanned into %T", dest[0])
 	}
-	deletedAt, ok := dest[1].(*time.Time)
+	pseudonym, ok := dest[1].(*string)
 	if !ok {
-		return fmt.Errorf("column 2 (deleted_at, TIMESTAMPTZ) scanned into %T", dest[1])
+		return fmt.Errorf("column 2 (pseudonym, TEXT) scanned into %T", dest[1])
 	}
-	deletedBy, ok := dest[2].(**string)
+	payload, ok := dest[2].(*[]byte)
 	if !ok {
-		return fmt.Errorf("column 3 (deleted_by, nullable TEXT) scanned into %T", dest[2])
+		return fmt.Errorf("column 3 (payload, BYTEA) scanned into %T", dest[2])
 	}
-	reason, ok := dest[3].(**string)
+	deletedAt, ok := dest[3].(*time.Time)
 	if !ok {
-		return fmt.Errorf("column 4 (reason, nullable TEXT) scanned into %T", dest[3])
+		return fmt.Errorf("column 4 (deleted_at, TIMESTAMPTZ) scanned into %T", dest[3])
 	}
+	deletedBy, ok := dest[4].(**string)
+	if !ok {
+		return fmt.Errorf("column 5 (deleted_by, nullable TEXT) scanned into %T", dest[4])
+	}
+	reason, ok := dest[5].(**string)
+	if !ok {
+		return fmt.Errorf("column 6 (reason, nullable TEXT) scanned into %T", dest[5])
+	}
+	*id, *pseudonym = row.id, row.pseudonym
 	*payload, *deletedAt, *deletedBy, *reason = row.payload, row.deletedAt, row.deletedBy, row.reason
 	return nil
 }
@@ -189,9 +208,41 @@ var sampleCreatedAt = time.Date(2023, 4, 5, 6, 7, 8, 0, time.UTC)
 // with: renaming a json tag on one side has to break these tests.
 func escrowJSON(t *testing.T, email, displayName string, roles []string) []byte {
 	t.Helper()
+	return escrowJSONFor(t, userIDFor(email), email, displayName, roles)
+}
+
+// escrowJSONFor is escrowJSON with the subject named explicitly, for the cases
+// that need a payload whose user_id disagrees with the row, or is missing.
+func escrowJSONFor(t *testing.T, userID, email, displayName string, roles []string) []byte {
+	t.Helper()
 	return fmt.Appendf(nil,
-		`{"email":%s,"created_at":%s,"roles":%s,"display_name":%s}`,
-		jsonValue(t, email), jsonValue(t, sampleCreatedAt), jsonValue(t, roles), jsonValue(t, displayName))
+		`{"v":2,"user_id":%s,"email":%s,"created_at":%s,"roles":%s,"display_name":%s}`,
+		jsonValue(t, userID), jsonValue(t, email), jsonValue(t, sampleCreatedAt),
+		jsonValue(t, roles), jsonValue(t, displayName))
+}
+
+// The fixture rows are derived from the account they describe so that a test can
+// rebuild the same binding without threading a row through every helper. Real
+// ids come from crypto.RandomUUID and real pseudonyms from HMAC-SHA256; these
+// only have to be stable, distinct per account, and shaped like the columns.
+func userIDFor(email string) string { return "user-" + hexOf(email)[:12] }
+
+func rowIDFor(email string) string {
+	h := hexOf(email)
+	return h[0:8] + "-" + h[8:12] + "-4" + h[13:16] + "-8" + h[17:20] + "-" + h[20:32]
+}
+
+func pseudonymFor(email string) string { return hexOf("pseudonym:" + email) }
+
+func hexOf(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// bindingFor rebuilds the context the row's payload is sealed to, the same way
+// cmd/recover rebuilds it from the columns it read.
+func bindingFor(email string) []byte {
+	return vaultcrypto.RecoveryBinding(rowIDFor(email), pseudonymFor(email))
 }
 
 func jsonValue(t *testing.T, v any) []byte {
@@ -204,26 +255,67 @@ func jsonValue(t *testing.T, v any) []byte {
 }
 
 // sealTo produces a real escrow blob: the exact bytes internal/service/erasure.go
-// would have appended to auth.account_recovery.
-func sealTo(t *testing.T, pub *rsa.PublicKey, plaintext []byte) []byte {
+// would have appended to auth.account_recovery, bound to binding.
+func sealTo(t *testing.T, pub *rsa.PublicKey, plaintext, binding []byte) []byte {
 	t.Helper()
-	blob, err := vaultcrypto.EncryptRecovery(pub, plaintext)
+	blob, err := vaultcrypto.EncryptRecovery(pub, plaintext, binding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery: %v", err)
 	}
 	return blob
 }
 
-// goodRow is one recoverable record sealed to the escrow key.
-func goodRow(t *testing.T, email string) escrowRow {
+// sealLegacy produces an escrow blob in the pre-binding format: a bare
+// wrapped-key length prefix, RSA-OAEP under a nil label, AES-GCM with no AAD.
+//
+// It is built by hand because the product can no longer write one. Every record
+// already sitting in auth.account_recovery looks like this, and they are the
+// only recoverable copy of the accounts they describe, so the format has to stay
+// readable and therefore has to stay testable. internal/crypto and tests/attack
+// carry their own copy for the same reason.
+func sealLegacy(t *testing.T, pub *rsa.PublicKey, plaintext []byte) []byte {
 	t.Helper()
+
+	aesKey := make([]byte, 32)
+	if _, err := rand.Read(aesKey); err != nil {
+		t.Fatalf("aes key: %v", err)
+	}
+	aesBlob, err := vaultcrypto.Encrypt(plaintext, aesKey)
+	if err != nil {
+		t.Fatalf("legacy aes encrypt: %v", err)
+	}
+	wrapped, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, aesKey, nil)
+	if err != nil {
+		t.Fatalf("legacy wrap: %v", err)
+	}
+
+	out := make([]byte, 4+len(wrapped)+len(aesBlob))
+	binary.BigEndian.PutUint32(out[:4], uint32(len(wrapped)))
+	copy(out[4:], wrapped)
+	copy(out[4+len(wrapped):], aesBlob)
+	return out
+}
+
+// bareRow is one row of auth.account_recovery with no payload yet: the columns a
+// bound blob would be sealed to, plus the audit columns.
+func bareRow(email string) escrowRow {
 	by, reason := "admin:00000000-0000-0000-0000-000000000001", "user_request"
 	return escrowRow{
-		payload:   sealTo(t, &escrowKey.PublicKey, escrowJSON(t, email, sampleDisplayName, []string{"user"})),
+		id:        rowIDFor(email),
+		pseudonym: pseudonymFor(email),
 		deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 		deletedBy: &by,
 		reason:    &reason,
 	}
+}
+
+// goodRow is one recoverable record sealed to the escrow key and bound to its
+// own row.
+func goodRow(t *testing.T, email string) escrowRow {
+	t.Helper()
+	row := bareRow(email)
+	row.payload = sealTo(t, &escrowKey.PublicKey, escrowJSON(t, email, sampleDisplayName, []string{"user"}), bindingFor(email))
+	return row
 }
 
 // pemFor encodes priv the way an operator's offline key file holds it.

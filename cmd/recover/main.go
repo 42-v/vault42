@@ -12,6 +12,23 @@
 //	recover --key /path/to/recovery_private.pem --dsn "postgres://user:pass@host:5432/vault?sslmode=require"
 //
 // The DSN may also be supplied via the DATABASE_URL environment variable.
+//
+// # Escrow formats
+//
+// A payload is sealed to the row it lives in: the record's primary key and its
+// subject pseudonym are the RSA-OAEP label and the AES-GCM AAD, and the payload
+// names its own subject. That binding is what stops a payload being moved
+// between rows and reported under another erasure's deleted_at, deleted_by and
+// reason. This tool rebuilds it from the columns it reads, which is why it needs
+// no HMAC secret to do so.
+//
+// Records written before the binding existed are still readable, because they
+// are the only recoverable copy of the accounts they describe. Every output line
+// carries escrow_format, "bound" or "legacy", so a restore can tell a verified
+// attribution from an unverified one without reading stderr, and every legacy
+// read is announced there as well. --allow-legacy=false refuses them outright;
+// once the retention horizon has aged the last one out, the legacy path here and
+// in internal/crypto can be deleted.
 package main
 
 import (
@@ -33,15 +50,27 @@ import (
 // escrowQuery reads the append-only escrow log newest first. The table is
 // INSERT/SELECT only (migrations/007_account_recovery.sql), so this tool never
 // needs write access to the database it recovers from.
+//
+// id and pseudonym are selected because they are the binding a bound payload was
+// sealed to, not because they are printed. id is cast to text so the value that
+// reaches crypto.RecoveryBinding is PostgreSQL's canonical UUID spelling rather
+// than whatever the driver would have produced from the binary representation.
 const escrowQuery = `
-		SELECT payload, deleted_at, deleted_by, reason
+		SELECT id::text, pseudonym, payload, deleted_at, deleted_by, reason
 		FROM auth.account_recovery
 		ORDER BY deleted_at DESC
 		LIMIT $1`
 
+// boundPayloadVersion is the version stamp internal/service/erasure.go puts
+// inside every bound payload. A bound record that does not carry it is not a
+// profile this tool understands, and is dropped rather than half-read.
+const boundPayloadVersion = 2
+
 // escrowedPayload mirrors the JSON written by the erasure service. Kept local so
 // the tool stays decoupled from internal service types.
 type escrowedPayload struct {
+	Version     int       `json:"v"`
+	UserID      string    `json:"user_id"`
 	Email       string    `json:"email"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []string  `json:"roles"`
@@ -49,14 +78,24 @@ type escrowedPayload struct {
 }
 
 // recoveredRecord is the JSON-line output for one recovered account.
+//
+// EscrowFormat is not decoration and has no omitempty: every line says which
+// framing it came from. "bound" means the payload was cryptographically sealed
+// to this row, so the profile and the deleted_at/deleted_by/reason beside it are
+// the same erasure event. "legacy" means it was not, and the attribution is
+// unverified. A restore driven off this output has to be able to tell the two
+// apart without reading stderr, which is why it is a field and not only a log
+// line.
 type recoveredRecord struct {
-	Email       string    `json:"email"`
-	DisplayName string    `json:"display_name,omitempty"`
-	Roles       []string  `json:"roles,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	DeletedAt   time.Time `json:"deleted_at"`
-	DeletedBy   string    `json:"deleted_by,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	Email        string    `json:"email"`
+	DisplayName  string    `json:"display_name,omitempty"`
+	Roles        []string  `json:"roles,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	DeletedAt    time.Time `json:"deleted_at"`
+	DeletedBy    string    `json:"deleted_by,omitempty"`
+	Reason       string    `json:"reason,omitempty"`
+	EscrowFormat string    `json:"escrow_format"`
 }
 
 // rowSource is the read side of the escrow log. pgx.Rows satisfies it; the
@@ -96,6 +135,13 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 	keyPath := fs.String("key", "", "path to the recovery RSA private key (PEM)")
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "PostgreSQL DSN (or set DATABASE_URL)")
 	limit := fs.Int("limit", 10000, "maximum number of records to read")
+	// Defaults to true because the alternative is refusing to recover accounts
+	// erased before the escrow was bound to its row, and an operator running this
+	// tool is usually mid-incident and not in a position to debug a format
+	// argument. It is a flag rather than a constant so a deployment can prove it
+	// has no legacy records left before the legacy path is deleted from the tree.
+	allowLegacy := fs.Bool("allow-legacy", true,
+		"read pre-binding escrow records, whose payload is not bound to its row (set false once none remain)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -132,17 +178,45 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 	defer release()
 
 	enc := json.NewEncoder(stdout)
-	var count, failures int
+	var count, failures, legacy int
 	for rows.Next() {
+		var recordID, pseudonym string
 		var payload []byte
 		var deletedAt time.Time
 		var deletedBy, reason *string
-		if err := rows.Scan(&payload, &deletedAt, &deletedBy, &reason); err != nil {
+		if err := rows.Scan(&recordID, &pseudonym, &payload, &deletedAt, &deletedBy, &reason); err != nil {
 			logger.Printf("recover: scan: %v", err)
 			return 1
 		}
 
-		plain, err := vaultcrypto.DecryptRecovery(priv, payload)
+		// The framing is classified from the blob's own bytes before any key is
+		// touched, and each format then gets exactly one decryption attempt with
+		// the primitive that matches it. The alternative, trying bound first and
+		// falling back to legacy on failure, was rejected: a failed bound decrypt
+		// is indistinguishable from a wrong key or a corrupt row, so every one of
+		// those would quietly become a second attempt down the weaker path, and
+		// the tool could not honestly report which format it had read.
+		format := vaultcrypto.RecoveryBlobFormat(payload)
+
+		if format == vaultcrypto.RecoveryFormatLegacy && !*allowLegacy {
+			failures++
+			fmt.Fprintf(stderr, "recover: refused a legacy record (id=%s deleted_at=%s): its payload "+
+				"predates row binding and --allow-legacy=false\n", recordID, deletedAt.Format(time.RFC3339))
+			continue
+		}
+
+		var plain []byte
+		switch format {
+		case vaultcrypto.RecoveryFormatBound:
+			// The binding is rebuilt from this row's own columns, so a payload
+			// moved here from another row cannot produce the AES key: the OAEP
+			// unwrap fails and nothing downstream ever runs.
+			plain, err = vaultcrypto.DecryptRecovery(priv, payload, vaultcrypto.RecoveryBinding(recordID, pseudonym))
+		case vaultcrypto.RecoveryFormatLegacy:
+			plain, err = vaultcrypto.DecryptRecoveryLegacy(priv, payload)
+		default:
+			err = errors.New("unrecognised escrow blob framing")
+		}
 		if err != nil {
 			// Wrong key or corrupt record — report on stderr and continue so one
 			// bad row does not abort the whole restore.
@@ -176,20 +250,57 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 			continue
 		}
 
+		// A bound record has to name itself as well. The binding already proves the
+		// blob belongs to this row; these two checks prove the plaintext inside it
+		// is the profile shape this tool knows how to restore, sealed by a producer
+		// that agreed on the version. Without the user id there is nothing to
+		// restore the account under: the scrubbed user row is keyed by exactly that
+		// id, and the escrow row names its subject only as an HMAC pseudonym this
+		// tool has no secret to invert.
+		//
+		// It runs after the email check so that an empty or null payload still gets
+		// the specific diagnostic rather than this general one. Legacy records are
+		// exempt because their format predates both fields; that is precisely what
+		// makes them unverifiable and why they are reported as such.
+		if format == vaultcrypto.RecoveryFormatBound && (p.Version != boundPayloadVersion || p.UserID == "") {
+			failures++
+			fmt.Fprintf(stderr, "recover: bound record does not describe its subject (deleted_at=%s): "+
+				"payload version %d, user id present: %t\n",
+				deletedAt.Format(time.RFC3339), p.Version, p.UserID != "")
+			continue
+		}
+
 		out := recoveredRecord{
-			Email:       p.Email,
-			DisplayName: p.DisplayName,
-			Roles:       p.Roles,
-			CreatedAt:   p.CreatedAt,
-			DeletedAt:   deletedAt,
-			DeletedBy:   deref(deletedBy),
-			Reason:      deref(reason),
+			UserID:       p.UserID,
+			Email:        p.Email,
+			DisplayName:  p.DisplayName,
+			Roles:        p.Roles,
+			CreatedAt:    p.CreatedAt,
+			DeletedAt:    deletedAt,
+			DeletedBy:    deref(deletedBy),
+			Reason:       deref(reason),
+			EscrowFormat: format.String(),
 		}
 		if err := enc.Encode(out); err != nil {
 			logger.Printf("recover: encode: %v", err)
 			return 1
 		}
 		count++
+
+		// Counted and announced only once the record actually became output. A
+		// legacy blob that failed to decrypt was a failure, not a legacy read,
+		// and inflating this count would make the retirement decision on the
+		// legacy path harder rather than easier.
+		//
+		// The per-record line names the row rather than the person: the record id
+		// is what an operator needs to find the row, and stderr is the channel
+		// that ends up in scrollback and tickets.
+		if format == vaultcrypto.RecoveryFormatLegacy {
+			legacy++
+			fmt.Fprintf(stderr, "recover: legacy record read (id=%s deleted_at=%s): written before escrow "+
+				"payloads were bound to their row, so its attribution to this row's deleted_at, deleted_by "+
+				"and reason is unverified\n", recordID, deletedAt.Format(time.RFC3339))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		logger.Printf("recover: iterate: %v", err)
@@ -197,6 +308,12 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 	}
 
 	fmt.Fprintf(stderr, "recover: %d record(s) decrypted, %d failure(s)\n", count, failures)
+	if legacy > 0 {
+		fmt.Fprintf(stderr, "recover: %d of those came from the legacy pre-binding escrow format; "+
+			"they are marked escrow_format=legacy in the output and their attribution is unverified. "+
+			"Once VAULT_RECOVERY_RETENTION_DAYS has aged the last of them out, run with "+
+			"--allow-legacy=false to confirm, then the legacy read path can be removed.\n", legacy)
+	}
 
 	// Exit status has to distinguish "recovered nothing because there was
 	// nothing" from "recovered nothing because every record failed". Both used

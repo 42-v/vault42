@@ -29,7 +29,8 @@ import (
 	"time"
 )
 
-// PostgreSQL type OIDs for the four columns escrowQuery selects.
+// PostgreSQL type OIDs for the six columns escrowQuery selects. The record id is
+// selected as id::text, so it arrives as TEXT rather than as the UUID type.
 const (
 	oidBytea       = 17
 	oidText        = 25
@@ -346,13 +347,15 @@ func (w *wire) parameterDescription(oids ...uint32) {
 	w.msg('t', body)
 }
 
-// rowDescription describes the four columns of escrowQuery, in order.
+// rowDescription describes the six columns of escrowQuery, in order.
 func (w *wire) rowDescription() {
 	cols := []struct {
 		name string
 		oid  uint32
 		size int16
 	}{
+		{"id", oidText, -1},
+		{"pseudonym", oidText, -1},
 		{"payload", oidBytea, -1},
 		{"deleted_at", oidTimestamptz, 8},
 		{"deleted_by", oidText, -1},
@@ -360,7 +363,7 @@ func (w *wire) rowDescription() {
 	}
 
 	var body bytes.Buffer
-	_ = binary.Write(&body, binary.BigEndian, uint16(len(cols))) // #nosec G115 -- four columns
+	_ = binary.Write(&body, binary.BigEndian, uint16(len(cols))) // #nosec G115 -- six columns
 	for i, col := range cols {
 		body.Write(cstring(col.name))
 		_ = binary.Write(&body, binary.BigEndian, uint32(16384)) // table OID
@@ -373,24 +376,31 @@ func (w *wire) rowDescription() {
 	w.msg('T', body.Bytes())
 }
 
+// The column indices here track the SELECT list in escrowQuery: id, pseudonym,
+// payload, deleted_at, deleted_by, reason. Getting them out of step with the
+// query would send the driver a payload where it expects a timestamp, which is
+// the failure this file exists to catch, so they are written out rather than
+// derived.
 func (w *wire) dataRow(row escrowRow, formats []int16, corruptTimestamp bool) {
-	timestamp := encodeTimestamptz(row.deletedAt, format(formats, 1))
+	timestamp := encodeTimestamptz(row.deletedAt, format(formats, 3))
 	if corruptTimestamp {
 		timestamp = []byte{0x00, 0x00, 0x00, 0x01} // too short for either encoding
 	}
 
 	cols := [][]byte{
-		encodeBytea(row.payload, format(formats, 0)),
+		[]byte(row.id),
+		[]byte(row.pseudonym),
+		encodeBytea(row.payload, format(formats, 2)),
 		timestamp,
 		encodeNullableText(row.deletedBy),
 		encodeNullableText(row.reason),
 	}
 	if row.payload == nil {
-		cols[0] = nil
+		cols[2] = nil
 	}
 
 	var body bytes.Buffer
-	_ = binary.Write(&body, binary.BigEndian, uint16(len(cols))) // #nosec G115 -- four columns
+	_ = binary.Write(&body, binary.BigEndian, uint16(len(cols))) // #nosec G115 -- six columns
 	for _, col := range cols {
 		if col == nil {
 			_ = binary.Write(&body, binary.BigEndian, int32(-1))
@@ -513,19 +523,13 @@ func runAgainst(t *testing.T, dsn string, args ...string) result {
 // tests cannot see, namely that the SQL leaving the process is the escrow query
 // and that the columns are scanned in the order the SELECT lists them.
 func TestOpenPostgres_RecoversFromTheEscrowLog(t *testing.T) {
-	by, reason := "admin:00000000-0000-0000-0000-000000000001", "user_request"
-	srv := &fakePG{rows: []escrowRow{
-		{
-			payload:   sealTo(t, &escrowKey.PublicKey, escrowJSON(t, sampleEmail, sampleDisplayName, []string{"user"})),
-			deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
-			deletedBy: &by,
-			reason:    &reason,
-		},
-		{
-			payload:   sealTo(t, &escrowKey.PublicKey, escrowJSON(t, "second@example.invalid", "Second", nil)),
-			deletedAt: time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC),
-		},
-	}}
+	const by = "admin:00000000-0000-0000-0000-000000000001"
+	second := bareRow("second@example.invalid")
+	second.payload = sealTo(t, &escrowKey.PublicKey,
+		escrowJSON(t, "second@example.invalid", "Second", nil), bindingFor("second@example.invalid"))
+	second.deletedAt = time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC)
+	second.deletedBy, second.reason = nil, nil
+	srv := &fakePG{rows: []escrowRow{goodRow(t, sampleEmail), second}}
 	dsn := startFakePG(t, srv)
 
 	got := runAgainst(t, dsn, "--limit", "42")
@@ -543,6 +547,12 @@ func TestOpenPostgres_RecoversFromTheEscrowLog(t *testing.T) {
 	if !recs[0].DeletedAt.Equal(time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)) {
 		t.Errorf("deleted_at = %s, want the TIMESTAMPTZ from column 2", recs[0].DeletedAt)
 	}
+	// Proves the binding columns survived the driver: the record only decrypts
+	// because id and pseudonym came back through pgx in the shape the seal used.
+	if recs[0].UserID != userIDFor(sampleEmail) || recs[0].EscrowFormat != "bound" {
+		t.Errorf("record 0 = user_id %q, escrow_format %q, want the sealed subject and bound",
+			recs[0].UserID, recs[0].EscrowFormat)
+	}
 	if recs[0].DeletedBy != by || recs[1].DeletedBy != "" {
 		t.Errorf("deleted_by = %q and %q, want the column value then the NULL", recs[0].DeletedBy, recs[1].DeletedBy)
 	}
@@ -555,6 +565,15 @@ func TestOpenPostgres_RecoversFromTheEscrowLog(t *testing.T) {
 	if !strings.Contains(sql, "auth.account_recovery") || !strings.Contains(sql, "ORDER BY deleted_at DESC") {
 		t.Errorf("the query no longer reads the escrow log newest first:\n%q", sql)
 	}
+	// The binding columns have to be in the SELECT list, not merely in the Scan.
+	// A query that stopped fetching them would hand every record an empty
+	// binding, and every bound record in the escrow log would become
+	// unrecoverable at once.
+	for _, col := range []string{"id::text", "pseudonym"} {
+		if !strings.Contains(sql, col) {
+			t.Errorf("the query no longer selects %s, so the payload binding cannot be rebuilt:\n%q", col, sql)
+		}
+	}
 	if limit != 42 {
 		t.Errorf("bound LIMIT = %d, want 42: --limit must bound how much personal data one run reads", limit)
 	}
@@ -566,10 +585,10 @@ func TestOpenPostgres_RecoversFromTheEscrowLog(t *testing.T) {
 // A wrong key still fails closed when the records arrive over the real driver,
 // not only when a test hands them over in memory.
 func TestOpenPostgres_WrongKeyRecoversNothing(t *testing.T) {
-	srv := &fakePG{rows: []escrowRow{{
-		payload:   sealTo(t, &wrongKey.PublicKey, escrowJSON(t, sampleEmail, sampleDisplayName, nil)),
-		deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
-	}}}
+	row := bareRow(sampleEmail)
+	row.payload = sealTo(t, &wrongKey.PublicKey,
+		escrowJSON(t, sampleEmail, sampleDisplayName, nil), bindingFor(sampleEmail))
+	srv := &fakePG{rows: []escrowRow{row}}
 	dsn := startFakePG(t, srv)
 
 	got := runAgainst(t, dsn)
@@ -697,10 +716,7 @@ func TestOpenPostgres_QueryFailureIsReportedSeparately(t *testing.T) {
 func TestOpenPostgres_UndecodableColumnIsFatal(t *testing.T) {
 	srv := &fakePG{
 		corruptTimestamp: true,
-		rows: []escrowRow{{
-			payload:   sealTo(t, &escrowKey.PublicKey, escrowJSON(t, sampleEmail, sampleDisplayName, nil)),
-			deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
-		}},
+		rows:             []escrowRow{goodRow(t, sampleEmail)},
 	}
 	dsn := startFakePG(t, srv)
 
@@ -730,10 +746,7 @@ func TestOpenPostgres_UndecodableColumnIsFatal(t *testing.T) {
 func TestOpenPostgres_MidStreamFailureIsFatal(t *testing.T) {
 	rows := make([]escrowRow, 0, 3)
 	for _, email := range []string{"first@example.invalid", "second@example.invalid", "third@example.invalid"} {
-		rows = append(rows, escrowRow{
-			payload:   sealTo(t, &escrowKey.PublicKey, escrowJSON(t, email, sampleDisplayName, nil)),
-			deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
-		})
+		rows = append(rows, goodRow(t, email))
 	}
 	srv := &fakePG{
 		rows:        rows,

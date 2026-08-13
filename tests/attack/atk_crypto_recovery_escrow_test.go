@@ -29,39 +29,58 @@ var escrowKey = func() *rsa.PrivateKey {
 }()
 
 // recoveryPayload mirrors the struct internal/service/erasure.go marshals into
-// the escrow. Copied rather than imported because the real one is unexported,
-// and because the point of the test below is what it does NOT contain.
+// the escrow. Copied rather than imported because the real one is unexported.
+// The two fields at the top are the ones this file exists for: before the fix
+// the payload was Email, CreatedAt, Roles and DisplayName and nothing else, so a
+// decrypted record could not say who it was about.
 type recoveryPayload struct {
+	Version     int       `json:"v"`
+	UserID      string    `json:"user_id"`
 	Email       string    `json:"email"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []string  `json:"roles"`
 	DisplayName string    `json:"display_name"`
 }
 
-// FINDING: the escrow blob is bound to nothing.
+// Two escrow rows, standing in for two erasures. The values only have to be
+// distinct and shaped like the columns; the real ones are a v4 UUID and an
+// HMAC-SHA256 hex digest.
+const (
+	rowAlice = "6b1f5a2c-9e37-4a1d-8f02-11bb22cc33dd"
+	rowBob   = "6b1f5a2c-9e37-4a1d-8f02-44ee55ff6600"
+	pseAlice = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	pseBob   = "0f9e8d7c6b5a49382716051423324150607f8e9dacbbcadb0e1f2a3b4c5d6e7f"
+)
+
+// FINDING, now fixed: the escrow blob was bound to nothing.
 //
-// internal/crypto/recovery.go:49 is the only AES-GCM call in the product that
-// passes no AAD:
+// internal/crypto/recovery.go:49 used to be the only AES-GCM call in the product
+// that passed no AAD:
 //
 //	aesBlob, err := Encrypt(plaintext, aesKey)
 //
-// Every other call site binds its ciphertext to something that identifies the
+// Every other call site bound its ciphertext to something that identifies the
 // row it lives in: the keystore binds the kid, the identity store binds the
 // pseudonym, service documents bind client, subject and key, the admin TOTP
-// secret binds the admin id. The escrow binds nothing, the RSA-OAEP wrap uses a
-// nil label, and the marshalled payload carries no user id either: it is Email,
-// CreatedAt, Roles and DisplayName and that is all.
+// secret binds the admin id. The escrow bound nothing, the RSA-OAEP wrap used a
+// nil label, and the marshalled payload carried no user id either.
 //
 // auth.account_recovery stores deleted_at, deleted_by and reason as ordinary
 // columns beside the ciphertext, and cmd/recover joins the decrypted payload to
-// those columns to produce each output record. Nothing cryptographic ties the
-// two halves together, so anyone who can write the table can move a payload
-// from one row to another and the recovery tool will report the move as fact.
+// those columns to produce each output record. With nothing tying the two halves
+// together, anyone who could write the table could move a payload from one row
+// to another and the recovery tool would report the move as fact.
 //
-// The test demonstrates the swap end to end and fails while it succeeds.
+// The test used to demonstrate that swap and fail while it succeeded. It now
+// runs the same swap and demands that it fails: the payload is sealed to the
+// (record id, pseudonym) of its own row on both crypto layers, so a moved
+// payload does not survive the RSA-OAEP unwrap and no AES key is ever derived
+// from it.
 func TestRecoveryAttack_EscrowPayloadIsNotBoundToItsRow(t *testing.T) {
-	marshal := func(email, display string) []byte {
+	marshal := func(userID, email, display string) []byte {
 		b, err := json.Marshal(recoveryPayload{
+			Version:     2,
+			UserID:      userID,
 			Email:       email,
 			CreatedAt:   time.Unix(1700000000, 0).UTC(),
 			Roles:       []string{"user"},
@@ -73,54 +92,70 @@ func TestRecoveryAttack_EscrowPayloadIsNotBoundToItsRow(t *testing.T) {
 		return b
 	}
 
+	aliceBinding := vaultcrypto.RecoveryBinding(rowAlice, pseAlice)
+	bobBinding := vaultcrypto.RecoveryBinding(rowBob, pseBob)
+
 	// Two erasures, escrowed the way the service does it.
-	alice, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, marshal("alice@example.com", "Alice"))
+	alice, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, marshal("user-alice", "alice@example.com", "Alice"), aliceBinding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery(alice): %v", err)
 	}
-	bob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, marshal("bob@example.com", "Bob"))
+	bob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, marshal("user-bob", "bob@example.com", "Bob"), bobBinding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery(bob): %v", err)
 	}
 
-	// The attack: swap the two payload columns. Every other column, including
-	// deleted_at, deleted_by and reason, stays where it was.
-	//
-	// cmd/recover has no way to notice. It decrypts whatever payload the row
-	// holds and prints it next to that row's metadata.
-	for name, blob := range map[string][]byte{"alice's row now holds": bob, "bob's row now holds": alice} {
-		plain, err := vaultcrypto.DecryptRecovery(escrowKey, blob)
-		if err != nil {
-			t.Fatalf("%s: swapped payload failed to decrypt, so a binding exists after all: %v", name, err)
+	// Baseline. Each record opens under its own row, or the swap below would
+	// "fail" for a reason that has nothing to do with the binding.
+	for name, own := range map[string]struct {
+		blob    []byte
+		binding []byte
+	}{"alice": {alice, aliceBinding}, "bob": {bob, bobBinding}} {
+		if _, err := vaultcrypto.DecryptRecovery(escrowKey, own.blob, own.binding); err != nil {
+			t.Fatalf("%s's record does not open under its own row: %v", name, err)
 		}
-		var got recoveryPayload
-		if err := json.Unmarshal(plain, &got); err != nil {
-			t.Fatalf("%s: unmarshal: %v", name, err)
-		}
-		t.Logf("%s %q and decrypts cleanly", name, got.Email)
 	}
 
-	// The failing assertion. A payload that identified its own subject would
-	// let cmd/recover cross-check the row; today there is no field to check.
+	// The attack: swap the two payload columns. Every other column, including
+	// deleted_at, deleted_by and reason, stays where it was.
+	swaps := map[string]struct {
+		blob    []byte
+		binding []byte
+	}{
+		"alice's row now holds bob's payload": {bob, aliceBinding},
+		"bob's row now holds alice's payload": {alice, bobBinding},
+	}
+	for name, swap := range swaps {
+		plain, err := vaultcrypto.DecryptRecovery(escrowKey, swap.blob, swap.binding)
+		if err == nil {
+			var got recoveryPayload
+			_ = json.Unmarshal(plain, &got) // #nosec G104 -- the failure is already reported below
+			t.Errorf("%s and decrypts cleanly as %q: the payload is still movable between "+
+				"escrow rows, so cmd/recover will attribute it to the wrong "+
+				"deleted_at/deleted_by/reason with no error", name, got.Email)
+		}
+		if len(plain) != 0 {
+			t.Errorf("%s: a refused swap returned %d bytes of plaintext", name, len(plain))
+		}
+	}
+
+	// The payload also has to name its own subject. The binding stops a swap; the
+	// user id is what lets a recovered record be restored at all, since the row
+	// identifies its subject only by an HMAC pseudonym the offline tool cannot
+	// invert.
 	var probe map[string]any
-	plain, err := vaultcrypto.DecryptRecovery(escrowKey, alice)
+	plain, err := vaultcrypto.DecryptRecovery(escrowKey, alice, aliceBinding)
 	if err != nil {
 		t.Fatalf("DecryptRecovery: %v", err)
 	}
 	if err := json.Unmarshal(plain, &probe); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, field := range []string{"user_id", "id", "subject", "pseudonym"} {
-		if _, ok := probe[field]; ok {
-			t.Logf("payload carries %q, so a cross-check is possible", field)
-			return
-		}
+	if _, ok := probe["user_id"]; !ok {
+		t.Errorf("the escrow payload carries only %v: no subject identifier, so a decrypted "+
+			"record cannot be cross-checked against the row it came from or restored to the "+
+			"account it describes", keysOf(probe))
 	}
-	t.Errorf("the escrow payload carries only %v: no subject identifier, no AAD on the "+
-		"AES-GCM layer (internal/crypto/recovery.go:49 calls Encrypt with no aad), and a "+
-		"nil OAEP label on the RSA layer (recovery.go:54). A payload can be moved between "+
-		"auth.account_recovery rows and cmd/recover will attribute it to the wrong "+
-		"deleted_at/deleted_by/reason with no error.", keysOf(probe))
 }
 
 func keysOf(m map[string]any) []string {
@@ -135,8 +170,9 @@ func keysOf(m map[string]any) []string {
 // no plaintext at all, not a prefix of one, and must not panic the offline tool
 // on a row an attacker planted.
 func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
-	secret := []byte(`{"email":"victim@example.com","display_name":"Victim","roles":["user"]}`)
-	blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, secret)
+	secret := []byte(`{"v":2,"user_id":"user-victim","email":"victim@example.com","display_name":"Victim","roles":["user"]}`)
+	binding := vaultcrypto.RecoveryBinding(rowAlice, pseAlice)
+	blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, secret, binding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery: %v", err)
 	}
@@ -147,7 +183,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 	}
 
 	t.Run("wrong private key", func(t *testing.T) {
-		plain, err := vaultcrypto.DecryptRecovery(other, blob)
+		plain, err := vaultcrypto.DecryptRecovery(other, blob, binding)
 		if err == nil {
 			t.Fatalf("a foreign key decrypted the escrow: %q", plain)
 		}
@@ -158,7 +194,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 	})
 
 	t.Run("nil private key", func(t *testing.T) {
-		if _, err := vaultcrypto.DecryptRecovery(nil, blob); err == nil {
+		if _, err := vaultcrypto.DecryptRecovery(nil, blob, binding); err == nil {
 			t.Error("a nil key was accepted")
 		}
 	})
@@ -174,7 +210,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 						t.Errorf("truncating to %d bytes panicked the recovery tool: %v", i, r)
 					}
 				}()
-				plain, err := vaultcrypto.DecryptRecovery(escrowKey, blob[:i])
+				plain, err := vaultcrypto.DecryptRecovery(escrowKey, blob[:i], binding)
 				if err == nil {
 					t.Errorf("a blob truncated to %d bytes decrypted: %q", i, plain)
 				}
@@ -190,7 +226,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 	t.Run("length extension", func(t *testing.T) {
 		for _, extra := range [][]byte{{0}, {0xFF}, make([]byte, 64), make([]byte, 4096)} {
 			extended := append(append([]byte(nil), blob...), extra...)
-			if plain, err := vaultcrypto.DecryptRecovery(escrowKey, extended); err == nil {
+			if plain, err := vaultcrypto.DecryptRecovery(escrowKey, extended, binding); err == nil {
 				t.Errorf("appending %d bytes still decrypted: %q", len(extra), plain)
 			}
 		}
@@ -207,7 +243,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 						t.Errorf("corrupting byte %d panicked: %v", i, r)
 					}
 				}()
-				if plain, err := vaultcrypto.DecryptRecovery(escrowKey, corrupt); err == nil {
+				if plain, err := vaultcrypto.DecryptRecovery(escrowKey, corrupt, binding); err == nil {
 					t.Errorf("corrupting byte %d still decrypted: %q", i, plain)
 				}
 			}()
@@ -215,9 +251,11 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 	})
 
 	// The declared wrapped-key length drives the split between the OAEP
-	// ciphertext and the AES blob. Hostile values must be refused by the guard
-	// at recovery.go:83, not by a runtime bounds panic in the offline tool.
+	// ciphertext and the AES blob. Hostile values must be refused by the guard in
+	// openRecovery, not by a runtime bounds panic in the offline tool. In the
+	// bound framing the prefix sits after the 4-byte magic and the version byte.
 	t.Run("hostile wrapped-key length prefix", func(t *testing.T) {
+		const lenPrefixOffset = 5
 		for _, declared := range []uint32{
 			0, 1, 255,
 			uint32(len(blob)) - 4, // exactly the remainder: leaves an empty AES blob
@@ -226,14 +264,14 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 			0x7FFFFFFF, 0x80000000, 0xFFFFFFFF,
 		} {
 			forged := append([]byte(nil), blob...)
-			binary.BigEndian.PutUint32(forged[:4], declared)
+			binary.BigEndian.PutUint32(forged[lenPrefixOffset:], declared)
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
 						t.Errorf("declared length %d panicked the recovery tool: %v", declared, r)
 					}
 				}()
-				if plain, err := vaultcrypto.DecryptRecovery(escrowKey, forged); err == nil {
+				if plain, err := vaultcrypto.DecryptRecovery(escrowKey, forged, binding); err == nil {
 					t.Errorf("declared length %d produced plaintext: %q", declared, plain)
 				}
 			}()
@@ -243,7 +281,7 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 	// A blob shorter than the length prefix itself.
 	t.Run("runt blobs", func(t *testing.T) {
 		for _, b := range [][]byte{nil, {}, {0}, {0, 0}, {0, 0, 0}, {0, 0, 0, 0}} {
-			if plain, err := vaultcrypto.DecryptRecovery(escrowKey, b); err == nil {
+			if plain, err := vaultcrypto.DecryptRecovery(escrowKey, b, binding); err == nil {
 				t.Errorf("a %d-byte blob decrypted: %q", len(b), plain)
 			}
 		}
@@ -255,8 +293,9 @@ func TestRecoveryAttack_WrongKeyAndCorruptionFailClosed(t *testing.T) {
 // way for such output to escape, so they must not carry key material or
 // plaintext.
 func TestRecoveryAttack_ErrorsCarryNoKeyMaterialOrPlaintext(t *testing.T) {
-	secret := []byte(`{"email":"leak-canary@example.com"}`)
-	blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, secret)
+	secret := []byte(`{"v":2,"user_id":"user-canary","email":"leak-canary@example.com"}`)
+	binding := vaultcrypto.RecoveryBinding(rowAlice, pseAlice)
+	blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, secret, binding)
 	if err != nil {
 		t.Fatalf("EncryptRecovery: %v", err)
 	}
@@ -268,21 +307,30 @@ func TestRecoveryAttack_ErrorsCarryNoKeyMaterialOrPlaintext(t *testing.T) {
 	corrupt := append([]byte(nil), blob...)
 	corrupt[len(corrupt)-1] ^= 0xFF
 
+	badLength := append([]byte(nil), blob...)
+	binary.BigEndian.PutUint32(badLength[5:], 0xFFFFFFFF)
+
 	cases := map[string][]byte{
-		"corrupt tag":  corrupt,
-		"truncated":    blob[:len(blob)/2],
-		"runt":         {0, 0, 0, 0, 1},
-		"empty":        {},
-		"bad length":   append([]byte{0xFF, 0xFF, 0xFF, 0xFF}, blob[4:]...),
-		"foreign wrap": blob,
+		"corrupt tag":   corrupt,
+		"truncated":     blob[:len(blob)/2],
+		"runt":          {0, 0, 0, 0, 1},
+		"empty":         {},
+		"bad length":    badLength,
+		"foreign wrap":  blob,
+		"foreign row":   blob,
+		"legacy framed": blob[5:],
 	}
 
 	for name, b := range cases {
 		key := escrowKey
-		if name == "foreign wrap" {
+		bind := binding
+		switch name {
+		case "foreign wrap":
 			key = other
+		case "foreign row":
+			bind = vaultcrypto.RecoveryBinding(rowBob, pseBob)
 		}
-		_, err := vaultcrypto.DecryptRecovery(key, b)
+		_, err := vaultcrypto.DecryptRecovery(key, b, bind)
 		if err == nil {
 			continue
 		}
@@ -323,18 +371,23 @@ func assertNoLeak(t *testing.T, msg string, secret []byte) {
 // whose error is deliberately discarded (recovery.go:47), and a silently
 // constant key would show up exactly here.
 func TestRecoveryAttack_IdenticalPayloadsDoNotProduceIdenticalBlobs(t *testing.T) {
-	payload := []byte(`{"email":"same@example.com","display_name":"Same"}`)
+	payload := []byte(`{"v":2,"user_id":"user-same","email":"same@example.com","display_name":"Same"}`)
+	// Same payload AND the same binding, which is the harder case: a scheme that
+	// derived the AES key from the binding rather than from entropy would
+	// produce identical blobs here and identical ones only here.
+	binding := vaultcrypto.RecoveryBinding(rowAlice, pseAlice)
 
 	seen := map[string]bool{}
 	const runs = 16
 	for i := 0; i < runs; i++ {
-		blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, payload)
+		blob, err := vaultcrypto.EncryptRecovery(&escrowKey.PublicKey, payload, binding)
 		if err != nil {
 			t.Fatalf("EncryptRecovery: %v", err)
 		}
-		// The AES-GCM region starts after the 4-byte prefix and the wrapped key.
-		wrappedLen := binary.BigEndian.Uint32(blob[:4])
-		aesRegion := string(blob[4+wrappedLen:])
+		// The AES-GCM region starts after the framing header and the wrapped key.
+		const lenPrefixOffset = 5
+		wrappedLen := binary.BigEndian.Uint32(blob[lenPrefixOffset:])
+		aesRegion := string(blob[lenPrefixOffset+4+wrappedLen:])
 		if seen[aesRegion] {
 			t.Fatal("two escrows of the same payload produced the same AES-GCM region: " +
 				"the per-record key or the nonce is not random")

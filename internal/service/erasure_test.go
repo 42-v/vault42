@@ -263,7 +263,10 @@ func TestDeleteAccount_EscrowsAndCascades(t *testing.T) {
 	if string(appended.Payload) == "" {
 		t.Fatal("empty recovery payload")
 	}
-	plain, err := vaultcrypto.DecryptRecovery(priv, appended.Payload)
+	// Decrypted with the binding rebuilt from the record the service produced,
+	// which is exactly what cmd/recover does from the row's own columns.
+	plain, err := vaultcrypto.DecryptRecovery(priv, appended.Payload,
+		vaultcrypto.RecoveryBinding(appended.ID, appended.Pseudonym))
 	if err != nil {
 		t.Fatalf("decrypt recovery: %v", err)
 	}

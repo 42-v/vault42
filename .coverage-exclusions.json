@@ -120,7 +120,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/recovery.go",
-      "line": 62,
+      "line": 206,
       "occurrence": 1,
       "source": "\t\treturn nil, errors.New(\"recovery: wrapped key too large\")",
       "bucket": "C",

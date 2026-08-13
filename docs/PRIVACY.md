@@ -175,7 +175,7 @@ recovery key).
 | event_type, metadata, risk_score, timestamp | P4 | Per audit retention (§4) | 6(1)(f)/6(1)(c) |
 | **auth.account_recovery** (append-only, encrypted; only when a recovery key is configured) | | | |
 | pseudonym (HMAC of the user id) | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
-| payload (encrypted: email, created_at, roles, display_name) | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
+| payload (encrypted: user id, email, created_at, roles, display_name) | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
 | deleted_at, deleted_by, reason | P11 | Per recovery-escrow retention (§4) | 6(1)(f) |
 
 Administrator/operator accounts (used to run the service rather than to consume it) are out of

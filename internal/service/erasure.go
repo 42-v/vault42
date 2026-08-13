@@ -82,9 +82,27 @@ func NewErasureService(
 	}
 }
 
+// recoveryPayloadVersion is stamped into every escrowed profile. It is not a
+// framing discriminator - crypto.RecoveryBlobFormat does that from the outside,
+// before any key is touched - but a statement made INSIDE the sealed and bound
+// region about what the plaintext is. cmd/recover refuses a bound record whose
+// payload does not claim this version, so a producer that starts writing a
+// different shape cannot have it silently parsed as this one.
+const recoveryPayloadVersion = 2
+
 // recoveryPayload is the minimal recoverable profile escrowed on deletion. It is
 // JSON-marshalled and encrypted; only the offline recovery private key can read it.
+//
+// UserID is what makes a recovered record self-describing. The escrow row names
+// its subject only as an HMAC pseudonym, which the offline tool cannot invert, so
+// before this field existed a decrypted profile could not say who it was about:
+// it was an email and a display name that the recovery tool attributed to
+// whichever row's deleted_at/deleted_by/reason it happened to be sitting next to.
+// It is also the value an operator needs to actually restore the account, since
+// the scrubbed user row is keyed by exactly this id.
 type recoveryPayload struct {
+	Version     int       `json:"v"`
+	UserID      string    `json:"user_id"`
 	Email       string    `json:"email"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []string  `json:"roles"`
@@ -230,7 +248,19 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 // horizon would not eventually clear, and keep docs/PRIVACY.md §3.2 in step with
 // what recoveryPayload actually carries.
 func (s *ErasureService) escrow(ctx context.Context, user *model.User, deletedBy, reason string) error {
+	// The record id and the pseudonym are drawn BEFORE the payload is sealed,
+	// because they are what it is sealed to. The order used to be the other way
+	// round, which is how the escrow ended up bound to nothing: the ciphertext
+	// existed before anything identifying its row did.
+	id, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		return fmt.Errorf("erasure: recovery record id: %w", err)
+	}
+	pseudonym := s.recoveryPseudonym(user.ID)
+
 	payload, err := json.Marshal(recoveryPayload{
+		Version:     recoveryPayloadVersion,
+		UserID:      user.ID,
 		Email:       user.Email,
 		CreatedAt:   user.CreatedAt,
 		Roles:       user.Roles,
@@ -240,19 +270,23 @@ func (s *ErasureService) escrow(ctx context.Context, user *model.User, deletedBy
 		return fmt.Errorf("erasure: marshal recovery payload: %w", err)
 	}
 
-	enc, err := vaultcrypto.EncryptRecovery(s.recoveryPub, payload)
+	// Bound to (id, pseudonym): the primary key of the row this blob is about to
+	// occupy and the pseudonym of its subject. Both are columns cmd/recover reads
+	// back, which is what lets the offline tool rebuild the same binding without
+	// the HMAC secret and without ever learning the user id in advance.
+	//
+	// The retry path above can write a second record for the same user. That is
+	// fine and stays fine: each record gets its own id, so each blob is bound to
+	// its own row, and the two are not interchangeable even though they describe
+	// the same account.
+	enc, err := vaultcrypto.EncryptRecovery(s.recoveryPub, payload, vaultcrypto.RecoveryBinding(id, pseudonym))
 	if err != nil {
 		return fmt.Errorf("erasure: encrypt recovery payload: %w", err)
 	}
 
-	id, err := vaultcrypto.RandomUUID()
-	if err != nil {
-		return fmt.Errorf("erasure: recovery record id: %w", err)
-	}
-
 	rec := &model.AccountRecovery{
 		ID:        id,
-		Pseudonym: s.recoveryPseudonym(user.ID),
+		Pseudonym: pseudonym,
 		Payload:   enc,
 		DeletedAt: time.Now(),
 		DeletedBy: deletedBy,

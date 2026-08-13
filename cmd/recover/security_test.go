@@ -39,7 +39,8 @@ func damageCases() []damage {
 			name: "sealed to a different recovery key",
 			why:  "the operator loaded the wrong PEM, or an old key from before a rotation",
 			make: func(t *testing.T, _ []byte) []byte {
-				return sealTo(t, &wrongKey.PublicKey, escrowJSON(t, sampleEmail, sampleDisplayName, []string{"user"}))
+				return sealTo(t, &wrongKey.PublicKey,
+					escrowJSON(t, sampleEmail, sampleDisplayName, []string{"user"}), bindingFor(sampleEmail))
 			},
 		},
 		{
@@ -59,8 +60,35 @@ func damageCases() []damage {
 		},
 		{
 			name: "header only",
-			why:  "a truncated write that stored the prefix and nothing else",
-			make: func(_ *testing.T, sealed []byte) []byte { return slices.Clone(sealed[:4]) },
+			why:  "a truncated write that stored the framing and nothing else",
+			make: func(_ *testing.T, sealed []byte) []byte { return slices.Clone(sealed[:lenPrefixOffset+4]) },
+		},
+		{
+			name: "magic mangled",
+			why:  "a record whose bound framing was damaged reads as the legacy framing, and must fail there rather than silently losing its binding",
+			make: func(_ *testing.T, sealed []byte) []byte {
+				out := slices.Clone(sealed)
+				out[0] ^= 0xFF
+				return out
+			},
+		},
+		{
+			name: "version byte bumped",
+			why:  "a framing version this build does not know must be refused, never guessed at as an older one",
+			make: func(_ *testing.T, sealed []byte) []byte {
+				out := slices.Clone(sealed)
+				out[lenPrefixOffset-1] = 0x7F
+				return out
+			},
+		},
+		{
+			name: "payload lifted from another row",
+			why:  "the whole point of the binding: a blob sealed for a different escrow row must not open here",
+			make: func(t *testing.T, _ []byte) []byte {
+				const other = "someone.else@example.invalid"
+				return sealTo(t, &escrowKey.PublicKey,
+					escrowJSON(t, other, "Someone Else", []string{"user"}), bindingFor(other))
+			},
 		},
 		{
 			name: "truncated mid wrapped key",
@@ -98,7 +126,7 @@ func damageCases() []damage {
 			why:  "the nonce is unauthenticated framing; changing it must still fail the tag check",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				out[4+wrappedLen(sealed)] ^= 0x80
+				out[lenPrefixOffset+4+wrappedLen(sealed)] ^= 0x80
 				return out
 			},
 		},
@@ -107,7 +135,7 @@ func damageCases() []damage {
 			why:  "OAEP must reject a tampered key wrap rather than hand back a wrong AES key",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				out[10] ^= 0x01
+				out[lenPrefixOffset+8] ^= 0x01
 				return out
 			},
 		},
@@ -116,7 +144,7 @@ func damageCases() []damage {
 			why:  "the classic corrupt-header case; trusting it would slice past the end of the buffer",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				binary.BigEndian.PutUint32(out[:4], 0xFFFFFFFF)
+				putWrappedLen(out, 0xFFFFFFFF)
 				return out
 			},
 		},
@@ -125,7 +153,7 @@ func damageCases() []damage {
 			why:  "shifts the wrapped-key and ciphertext boundary, feeding OAEP a truncated wrap",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				binary.BigEndian.PutUint32(out[:4], wrappedLen(sealed)-1)
+				putWrappedLen(out, wrappedLen(sealed)-1)
 				return out
 			},
 		},
@@ -134,7 +162,7 @@ func damageCases() []damage {
 			why:  "leaves an empty AES blob, which must be an error and not an empty recovered record",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				binary.BigEndian.PutUint32(out[:4], uint32(len(out)-4)) // #nosec G115 -- test fixture, blob is a few hundred bytes
+				putWrappedLen(out, uint32(len(out)-lenPrefixOffset-4)) // #nosec G115 -- test fixture, blob is a few hundred bytes
 				return out
 			},
 		},
@@ -143,7 +171,7 @@ func damageCases() []damage {
 			why:  "claims there is no wrapped key at all, so OAEP is handed nothing",
 			make: func(_ *testing.T, sealed []byte) []byte {
 				out := slices.Clone(sealed)
-				binary.BigEndian.PutUint32(out[:4], 0)
+				putWrappedLen(out, 0)
 				return out
 			},
 		},
@@ -155,14 +183,23 @@ func damageCases() []damage {
 	}
 }
 
-func wrappedLen(blob []byte) uint32 { return binary.BigEndian.Uint32(blob[:4]) }
+// lenPrefixOffset is where the wrapped-key length sits in the bound framing:
+// after the 4-byte magic and the 1-byte version. Spelled out here rather than
+// imported so that a change to the framing has to be made deliberately in both
+// places instead of silently moving every offset in this file.
+const lenPrefixOffset = 5
+
+func wrappedLen(blob []byte) uint32 { return binary.BigEndian.Uint32(blob[lenPrefixOffset:]) }
+
+func putWrappedLen(blob []byte, n uint32) { binary.BigEndian.PutUint32(blob[lenPrefixOffset:], n) }
 
 // TestRun_RejectedRecordsEmitNoPlaintext is the core fail-closed assertion. For
 // every way a record can be wrong the tool must print nothing on stdout, count
 // the record as a failure, and keep going: one damaged row must neither abort a
 // restore nor contribute to it.
 func TestRun_RejectedRecordsEmitNoPlaintext(t *testing.T) {
-	sealed := sealTo(t, &escrowKey.PublicKey, escrowJSON(t, sampleEmail, sampleDisplayName, []string{"user", "admin"}))
+	sealed := sealTo(t, &escrowKey.PublicKey,
+		escrowJSON(t, sampleEmail, sampleDisplayName, []string{"user", "admin"}), bindingFor(sampleEmail))
 
 	for _, tc := range damageCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -197,7 +234,8 @@ func TestRun_RejectedRecordsEmitNoPlaintext(t *testing.T) {
 // pipeline reading a partial result as a complete one.
 func TestRun_OneBadRecordDoesNotStopTheRest(t *testing.T) {
 	bad := goodRow(t, "corrupt@example.invalid")
-	bad.payload = sealTo(t, &wrongKey.PublicKey, escrowJSON(t, "corrupt@example.invalid", "Wrong Key", nil))
+	bad.payload = sealTo(t, &wrongKey.PublicKey,
+		escrowJSON(t, "corrupt@example.invalid", "Wrong Key", nil), bindingFor("corrupt@example.invalid"))
 
 	o, args := withRows(t,
 		goodRow(t, "before@example.invalid"),
@@ -238,7 +276,7 @@ func TestRun_WrongKeyRecoversNothing(t *testing.T) {
 	rows := make([]escrowRow, 0, 3)
 	for _, email := range []string{"a@example.invalid", "b@example.invalid", "c@example.invalid"} {
 		row := goodRow(t, email)
-		row.payload = sealTo(t, &escrowKey.PublicKey, escrowJSON(t, email, sampleDisplayName, nil))
+		row.payload = sealTo(t, &escrowKey.PublicKey, escrowJSON(t, email, sampleDisplayName, nil), bindingFor(email))
 		rows = append(rows, row)
 	}
 
@@ -265,7 +303,8 @@ func TestRun_WrongKeyRecoversNothing(t *testing.T) {
 func TestRun_OnlyRecordsSealedToTheLoadedKeyAreRecovered(t *testing.T) {
 	mine := goodRow(t, "mine@example.invalid")
 	theirs := goodRow(t, "theirs@example.invalid")
-	theirs.payload = sealTo(t, &wrongKey.PublicKey, escrowJSON(t, "theirs@example.invalid", sampleDisplayName, nil))
+	theirs.payload = sealTo(t, &wrongKey.PublicKey,
+		escrowJSON(t, "theirs@example.invalid", sampleDisplayName, nil), bindingFor("theirs@example.invalid"))
 
 	o, args := withRows(t, mine, theirs)
 	got := exercise(t, args, o)
@@ -325,7 +364,7 @@ func TestRun_PlaintextThatIsNotAProfileIsDropped(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			row := goodRow(t, sampleEmail)
-			row.payload = sealTo(t, &escrowKey.PublicKey, []byte(tc.plain))
+			row.payload = sealTo(t, &escrowKey.PublicKey, []byte(tc.plain), bindingFor(sampleEmail))
 
 			o, args := withRows(t, row)
 			got := exercise(t, args, o)
@@ -360,11 +399,9 @@ func TestRun_IdentityFreePayloadIsRejected(t *testing.T) {
 	for _, plain := range []string{`null`, `{}`, `{"email":""}`} {
 		t.Run(plain, func(t *testing.T) {
 			by := "admin:real"
-			row := escrowRow{
-				payload:   sealTo(t, &escrowKey.PublicKey, []byte(plain)),
-				deletedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
-				deletedBy: &by,
-			}
+			row := bareRow(sampleEmail)
+			row.payload = sealTo(t, &escrowKey.PublicKey, []byte(plain), bindingFor(sampleEmail))
+			row.deletedBy, row.reason = &by, nil
 
 			o, args := withRows(t, row)
 			got := exercise(t, args, o)
@@ -400,7 +437,8 @@ func TestRun_IdentityFreePayloadIsRejected(t *testing.T) {
 func TestRun_HostilePayloadCannotForgeAnOutputLine(t *testing.T) {
 	forged := "victim@example.invalid\",\"display_name\":\"x\"}\n{\"email\":\"attacker@example.invalid"
 	row := goodRow(t, sampleEmail)
-	row.payload = sealTo(t, &escrowKey.PublicKey, escrowJSON(t, forged, "Injected\nName", []string{"admin\nroot"}))
+	row.payload = sealTo(t, &escrowKey.PublicKey,
+		escrowJSON(t, forged, "Injected\nName", []string{"admin\nroot"}), bindingFor(sampleEmail))
 
 	o, args := withRows(t, row)
 	got := exercise(t, args, o)
@@ -424,10 +462,10 @@ func TestRun_HostilePayloadCannotForgeAnOutputLine(t *testing.T) {
 // seal any JSON it likes into a record; if unknown fields were passed through,
 // that JSON would land in whatever a restore script feeds the recovered rows to.
 func TestRun_UnknownPayloadFieldsAreNotPassedThrough(t *testing.T) {
-	plain := `{"email":"extra@example.invalid","created_at":"2023-04-05T06:07:08Z","roles":["user"],` +
+	plain := `{"v":2,"user_id":"user-extra","email":"extra@example.invalid","created_at":"2023-04-05T06:07:08Z","roles":["user"],` +
 		`"display_name":"Extra","password_hash":"$argon2id$injected","is_admin":true,"totp_secret":"JBSWY3DPEHPK3PXP"}`
 	row := goodRow(t, sampleEmail)
-	row.payload = sealTo(t, &escrowKey.PublicKey, []byte(plain))
+	row.payload = sealTo(t, &escrowKey.PublicKey, []byte(plain), bindingFor(sampleEmail))
 
 	o, args := withRows(t, row)
 	got := exercise(t, args, o)
@@ -448,15 +486,14 @@ func TestRun_UnknownPayloadFieldsAreNotPassedThrough(t *testing.T) {
 // column. The row is append-only in the database; the payload is not
 // authenticated as to who deleted the account, only as to its own contents.
 func TestRun_PayloadCannotOverrideTheAuditColumns(t *testing.T) {
-	plain := `{"email":"audit@example.invalid","created_at":"2023-04-05T06:07:08Z","roles":null,"display_name":"Audit",` +
-		`"deleted_at":"1999-01-01T00:00:00Z","deleted_by":"self","reason":"forged"}`
+	plain := `{"v":2,"user_id":"user-audit","email":"audit@example.invalid","created_at":"2023-04-05T06:07:08Z","roles":null,"display_name":"Audit",` +
+		`"deleted_at":"1999-01-01T00:00:00Z","deleted_by":"self","reason":"forged",` +
+		`"escrow_format":"legacy"}`
 	by, reason := "admin:real", "gdpr_request"
-	row := escrowRow{
-		payload:   sealTo(t, &escrowKey.PublicKey, []byte(plain)),
-		deletedAt: time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC),
-		deletedBy: &by,
-		reason:    &reason,
-	}
+	row := bareRow(sampleEmail)
+	row.payload = sealTo(t, &escrowKey.PublicKey, []byte(plain), bindingFor(sampleEmail))
+	row.deletedAt = time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
+	row.deletedBy, row.reason = &by, &reason
 
 	o, args := withRows(t, row)
 	got := exercise(t, args, o)

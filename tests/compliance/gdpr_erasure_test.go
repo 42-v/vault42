@@ -496,22 +496,30 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	// HMAC(userID + ":recovery") so the plaintext identity never hits the table.
 	// Only the offline private key can read it back.
 	t.Run("recovery_escrow_written_hmac_keyed", func(t *testing.T) {
-		var pseudonym, gotDeletedBy, gotReason string
+		var recordID, pseudonym, gotDeletedBy, gotReason string
 		var payload []byte
 		if err := pool.QueryRow(ctx,
-			`SELECT pseudonym, payload, deleted_by, reason FROM auth.account_recovery WHERE pseudonym=$1`,
-			recoveryPseudonym).Scan(&pseudonym, &payload, &gotDeletedBy, &gotReason); err != nil {
+			`SELECT id::text, pseudonym, payload, deleted_by, reason FROM auth.account_recovery WHERE pseudonym=$1`,
+			recoveryPseudonym).Scan(&recordID, &pseudonym, &payload, &gotDeletedBy, &gotReason); err != nil {
 			t.Fatalf("escrow record keyed by the service's HMAC pseudonym must exist: %v", err)
 		}
 		if gotDeletedBy != deletedBy || gotReason != reason {
 			t.Errorf("escrow provenance = (%q, %q), want (%q, %q)", gotDeletedBy, gotReason, deletedBy, reason)
 		}
 
-		plaintext, err := vaultcrypto.DecryptRecovery(recoveryKey, payload)
+		// The binding is rebuilt from the columns as they came BACK out of
+		// PostgreSQL, which is the round trip that matters: the record id is
+		// written as a Go string and read back through the UUID type, and if
+		// those two spellings ever disagreed every escrow record in the database
+		// would be unrecoverable.
+		binding := vaultcrypto.RecoveryBinding(recordID, pseudonym)
+		plaintext, err := vaultcrypto.DecryptRecovery(recoveryKey, payload, binding)
 		if err != nil {
 			t.Fatalf("escrow payload does not decrypt with the recovery private key: %v", err)
 		}
 		var rec struct {
+			Version     int      `json:"v"`
+			UserID      string   `json:"user_id"`
 			Email       string   `json:"email"`
 			Roles       []string `json:"roles"`
 			DisplayName string   `json:"display_name"`
@@ -524,6 +532,22 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		}
 		if rec.DisplayName != displayName {
 			t.Errorf("recovered display_name = %q, want %q", rec.DisplayName, displayName)
+		}
+		if rec.UserID != userID {
+			t.Errorf("recovered user_id = %q, want %q: a record that does not name its subject "+
+				"cannot be restored, because the row identifies it only by HMAC", rec.UserID, userID)
+		}
+
+		// The payload is sealed to THIS row and to no other. A second escrow row
+		// exists in this database (the retry case above), and the two must not be
+		// interchangeable.
+		if _, err := vaultcrypto.DecryptRecovery(recoveryKey, payload,
+			vaultcrypto.RecoveryBinding(recordID, pseudonym+"x")); err == nil {
+			t.Error("the escrow payload opened under a foreign pseudonym: it can be moved between rows")
+		}
+		if _, err := vaultcrypto.DecryptRecovery(recoveryKey, payload,
+			vaultcrypto.RecoveryBinding("00000000-0000-4000-8000-000000000000", pseudonym)); err == nil {
+			t.Error("the escrow payload opened under a foreign record id: it can be moved between rows")
 		}
 	})
 }

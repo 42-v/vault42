@@ -130,7 +130,8 @@ func TestEncryptRecovery_NonceEntropyFailure(t *testing.T) {
 	}
 	cryptoSwapRandReader(t, &cryptoScriptedReader{reads: 1})
 
-	blob, err := EncryptRecovery(&priv.PublicKey, []byte("erased account payload"))
+	blob, err := EncryptRecovery(&priv.PublicKey, []byte("erased account payload"),
+		RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a"))
 	if err == nil {
 		t.Fatal("expected an error when nonce generation fails")
 	}
