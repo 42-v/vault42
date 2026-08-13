@@ -810,9 +810,22 @@ func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
 
 // ========== Config Management ==========
 
+// redactedConfigKeys are auth.admin_config entries that hold credential
+// material rather than operator-facing runtime configuration. admin_token_hash
+// is the Argon2id hash of the CLI admin token, written to this table by
+// InitAdminToken and rotate-admin-token. GET /admin/config is a ConfigRead
+// (viewer-tier) route, so returning the whole table would hand a read-only
+// admin an offline-crackable hash of a privileged credential — the same class
+// of secret clientView and adminView are careful never to project. The row is
+// left in place (the CLI reads it directly); it is stripped from the response.
+var redactedConfigKeys = map[string]bool{
+	"admin_token_hash": true,
+}
+
 // GetConfig handles GET /admin/config. entries is a key/value object, not a
 // list, so it carries no list envelope; an empty store is an empty object
-// rather than null.
+// rather than null. Credential-bearing keys (see redactedConfigKeys) are
+// stripped so a viewer-tier reader never receives them.
 func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.adminConfig.List(r.Context())
 	if err != nil {
@@ -821,6 +834,9 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if entries == nil {
 		entries = map[string]string{}
+	}
+	for k := range redactedConfigKeys {
+		delete(entries, k)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
