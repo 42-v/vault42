@@ -2855,7 +2855,8 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
 | `jti` | Per-token UUID |
 | `roles`, `scopes` | Granted values, omitted when empty |
 | `token_type` | `mint` |
-| `client_id` | **Absent, deliberately.** See the security notes below |
+| `minted_by` | The `client_id` of the client that requested the mint. This is the attribution a relying party can act on: the `token_minted` audit event names the same client, but that row lives in vault42's database and an RP cannot read it |
+| `client_id` | **Absent, deliberately.** A minted token must not look like an authenticated service caller. The service document store treats the presence of this claim as proof of one and uses it as the ownership axis, so a minted token carrying it would be admitted as the minting client. That is why the attribution claim is spelled `minted_by`. See the security notes below |
 | `fingerprint`, `cnf` | Absent. A minted token is not device-bound and not sender-constrained |
 
 There is no refresh token and no stored session behind a minted token. It cannot be exchanged, rotated, extended or revoked; vault42 keeps no record of it beyond the audit event.

@@ -361,9 +361,11 @@ func TestMintHandler_RejectsOversizeBody(t *testing.T) {
 	}
 }
 
-// The audit log is the only place a minted token differs from a
-// self-authenticated one: the signature does not say. Both the accepted and the
-// refused paths have to leave a record.
+// A refused mint exists nowhere but the audit log. An accepted one is visible on
+// the wire, since the token carries token_type "mint", an audience that is not
+// this service's origin, and a minted_by naming the calling client. A refusal
+// signs nothing, so the record is the only trace that the attempt happened at
+// all. Both paths have to leave one.
 func TestMintHandler_AuditsEveryOutcome(t *testing.T) {
 	var captured []*model.AuditEntry
 	auditRepo := &mocks.MockAuditRepo{
