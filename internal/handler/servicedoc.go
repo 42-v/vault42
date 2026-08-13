@@ -58,8 +58,8 @@ func NewServiceDocumentHandler(svc *service.ServiceDocumentService, auditLog *au
 	return &ServiceDocumentHandler{svc: svc, auditLog: auditLog}
 }
 
-// ServiceDocumentResponse is returned after a write and by the metadata read of
-// a single document.
+// ServiceDocumentResponse is returned after a write. There is no single-document
+// metadata route; a reader gets the document itself, or the list.
 type ServiceDocumentResponse struct {
 	Key         string    `json:"key"`
 	Owner       string    `json:"owner,omitempty"`
@@ -83,7 +83,7 @@ type ServiceDocumentListResponse struct {
 // not one.
 //
 // RequireScope checks only the scopes array. Today a user token can never carry
-// a svcdoc scope, because the three user-token issuance sites hardcode
+// a svcdoc scope, because the four user-token issuance sites hardcode
 // ["read","write"], so the scope check happens to be sufficient. That is an
 // accident of the current code and not an invariant: a change to user-scope
 // issuance would silently open a service-owned store to end-user tokens. The

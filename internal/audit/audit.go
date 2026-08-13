@@ -135,6 +135,27 @@ var blobSensitiveKeys = map[string]bool{
 // blobEventPrefix identifies the event types the blob key set applies to.
 const blobEventPrefix = "blob_"
 
+// svcDocSensitiveKeys are the keys a service-document event must never carry.
+//
+// Service documents are opaque, service-authored JSON about a user, so their
+// contents are personal data under Art. 4(1) whatever the writing service put
+// there. The event metadata is deliberately limited to the document key, its
+// size, its visibility and the outcome; none of these names belong in it, and a
+// caller reaching for one is reaching for the body.
+//
+// doc_key is deliberately absent from this set. It is an identifier the store
+// requires to be a bounded charset, it is what makes an audit trail useful, and
+// dropping it would leave events that say a document changed without saying
+// which.
+var svcDocSensitiveKeys = map[string]bool{
+	"value": true, "body": true, "content": true, "document": true,
+	"doc": true, "data": true, "plaintext": true, "payload": true,
+}
+
+// svcDocEventPrefix identifies the event types the service-document key set
+// applies to.
+const svcDocEventPrefix = "svcdoc_"
+
 // Logger handles audit event logging with optional batching. When flushEvery
 // is greater than zero, entries are buffered in memory and flushed periodically.
 // Sensitive metadata keys are automatically scrubbed before storage.
@@ -281,10 +302,21 @@ func (l *Logger) batchLoop() {
 // scoped to the event class.
 func scrubEventMetadata(eventType string, m map[string]interface{}) map[string]interface{} {
 	clean := scrubMetadata(m)
-	if !strings.HasPrefix(eventType, blobEventPrefix) {
-		return clean
+	// Per-class key sets rather than one global list: a name is personal data on a
+	// blob event and a legitimate non-personal object name on an admin role or
+	// client event, so dropping it everywhere would blind the admin audit trail.
+	for _, class := range []struct {
+		prefix string
+		drop   map[string]bool
+	}{
+		{blobEventPrefix, blobSensitiveKeys},
+		{svcDocEventPrefix, svcDocSensitiveKeys},
+	} {
+		if strings.HasPrefix(eventType, class.prefix) {
+			return dropKeys(clean, class.drop)
+		}
 	}
-	return dropKeys(clean, blobSensitiveKeys)
+	return clean
 }
 
 // dropKeys recursively deletes the given keys from an already-scrubbed map.

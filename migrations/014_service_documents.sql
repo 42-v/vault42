@@ -39,9 +39,12 @@ CREATE TABLE IF NOT EXISTS objects.service_documents (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Lowercase segments joined by '.', '_' or '-'. Mirrors the identity store's
-    -- dynamic-namespace shape (internal/service/identity.go dynamicKeyRe) so a
-    -- key that is legal in one store is legal in the other.
+    -- Lowercase segments joined by '.', '_' or '-'. Modelled on the identity
+    -- store's dynamic-namespace shape (internal/service/identity.go
+    -- dynamicKeyRe), but deliberately wider: svcDocKeyRe also admits '_' and
+    -- '-'. Containment therefore holds one way only. Every identity key is a
+    -- legal document key; the reverse is not true, so a key must not be assumed
+    -- portable from this store back into that one.
     CONSTRAINT service_documents_key_chk
         CHECK (doc_key ~ '^[a-z0-9]+([._-][a-z0-9]+)*$'),
 
