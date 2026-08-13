@@ -18,15 +18,21 @@ Usage:
     scripts/cov-gaps.py PROFILE --diff OTHER    # blocks OTHER covers that PROFILE does not
     scripts/cov-gaps.py PROFILE --json          # machine-readable, for tooling
     scripts/cov-gaps.py PROFILE --exclude FILE  # coverage of REACHABLE statements
-    scripts/cov-gaps.py --verify-exclusions [PROFILE]   # the release gate
+    scripts/cov-gaps.py PROFILE --verify-exclusions     # the release gate
 
 The exclusion set (.coverage-exclusions.json) is how 1.0.0 can claim "100.00% of
 reachable statements" without the claim being unfalsifiable. Each entry names one
 statement, freezes its source line verbatim, and carries the argument for why it
 is not reachable. --verify-exclusions is what stops the set rotting or growing:
 it fails when an excluded line has moved, changed text, or become covered, when
-an entry is still unconfirmed and a real profile is available to confirm it, and
-when covered + excluded does not equal total.
+an entry is still unconfirmed, when the set has grown past its ratchet, when the
+profile it is measured against is not the canonical one, and when covered +
+excluded does not equal total.
+
+The profile is not optional. Every one of those checks except the frozen-text
+comparison needs a measurement, so a run without one would confirm that N strings
+still sit at N line numbers and nothing else, then exit 0 wearing the name of a
+release gate.
 """
 
 import argparse
@@ -40,6 +46,59 @@ DEFAULT_EXCLUSIONS = os.path.join(REPO_ROOT, ".coverage-exclusions.json")
 BUCKETS = ("B", "C")
 ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
                 "justification", "confirmed")
+
+# ---------------------------------------------------------------------------
+# Ratchets. Measured from the canonical scripts/coverage.sh run, not chosen.
+#
+# The exclusion set constrains the denominator, so every check that reads it is
+# only as good as the profile it is handed. load() accepts any file that starts
+# with a mode: header, the identity check divides the profile's own numbers by
+# each other, and release-check.sh --coverage-only takes a path from the caller.
+# Nothing in that chain notices a profile from a narrower run: a `go test
+# -coverprofile` over a handful of packages satisfies covered + excluded == total
+# trivially and reports "100.00% of reachable" over a quarter of the tree.
+#
+# These three constants are what make the gate falsifiable. They live here rather
+# than in .coverage-exclusions.json so that growing the set is a two-file diff,
+# and the second file is the one a reviewer already opens.
+#
+# BASELINE_TOTAL_STATEMENTS is a floor, in the same spirit as GOLANGCI_MAX_ISSUES
+# in scripts/release-check.sh: a profile smaller than the canonical run is either
+# a subset run or a tree that lost code, and both need a human. When code is
+# genuinely deleted, re-measure and lower it in the same review as the deletion.
+# BASELINE_PACKAGES catches the shape the floor cannot: a package dropped from
+# the run while enough statements remain to clear the count.
+BASELINE_TOTAL_STATEMENTS = 8919
+BASELINE_MAX_ENTRIES = 38
+BASELINE_PACKAGES = (
+    "internal/adminapi",
+    "internal/audit",
+    "internal/cache",
+    "internal/cli",
+    "internal/config",
+    "internal/crypto",
+    "internal/email",
+    "internal/frontend",
+    "internal/handler",
+    "internal/honeypot",
+    "internal/httputil",
+    "internal/jwt",
+    "internal/keystore",
+    "internal/kms",
+    "internal/metrics",
+    "internal/middleware",
+    "internal/migrate",
+    "internal/model",
+    "internal/oauth2",
+    "internal/rbac",
+    "internal/redis",
+    "internal/repository/postgres",
+    "internal/sanitize",
+    "internal/seed",
+    "internal/server",
+    "internal/service",
+    "internal/useragent",
+)
 
 
 def load(path):
@@ -152,20 +211,42 @@ def load_exclusions(path):
             problems.append(f"{where}: file must be a repo-relative path")
         if e["package"] != os.path.dirname(e["file"]):
             problems.append(f"{where}: package {e['package']!r} is not the file's directory")
-        key = (e["file"], e["line"])
-        if key in seen:
-            problems.append(f"{where}: duplicate of entry #{seen[key] + 1}")
-        seen[key] = i
+        # Two keys, because an entry is addressed two ways and either collision
+        # means two entries claim one statement: by line, and by the frozen text
+        # plus which occurrence of it this is.
+        keys = ((e["file"], e["line"]), (e["file"], e["source"], e["occurrence"]))
+        dup = next((seen[k] for k in keys if k in seen), None)
+        if dup is not None:
+            problems.append(f"{where}: duplicate of entry #{dup + 1}")
+        for k in keys:
+            seen[k] = i
     return doc, problems
 
 
 def check_sources(entries):
-    """Confirm every entry still names the exact line it froze.
+    """Confirm every entry still names the exact statement it froze.
+
+    An entry identifies a statement by its frozen text and by which of the
+    identical lines carrying that text it is; the line number is advisory, which
+    is what .coverage-exclusions.json promises and what --relocate rewrites. So
+    the match is "the occurrence-th line holding this text is the line named",
+    not "this text appears at this line".
+
+    The difference is the whole check. Eight entries freeze text that appears
+    more than once in its file, and internal/handler/webauthn.go:77 and :190
+    freeze a bare `return` that appears 37 times there. Comparing text at the
+    named line alone accepts any of those 37 landing on line 77 after a refactor
+    removed the block the entry was written for, and reports 40/40 matching.
+
+    Requiring the occurrence to line up costs something in return: churn among
+    the identical lines above an entry fails the gate even when the entry itself
+    is untouched. That is the intended price of freezing text as unspecific as a
+    bare return, and the fix is a re-review, which is what an exclusion is for.
 
     Returns (problems, moved), where `moved` maps an entry's index to the line
-    its frozen text now sits on. Finding the text elsewhere is a different
-    failure from not finding it at all: the first is a refactor that moved a
-    statement, the second is a statement that no longer exists.
+    its statement now sits on. Finding the statement elsewhere is a different
+    failure from not finding it at all: the first is a refactor that moved it,
+    the second is a statement that no longer exists.
     """
     problems, moved, cache = [], {}, {}
     for i, e in enumerate(entries):
@@ -179,18 +260,20 @@ def check_sources(entries):
         src = cache[e["file"]]
         if src is None:
             continue
-        at = e["line"] - 1
-        if 0 <= at < len(src) and src[at] == e["source"]:
-            continue
         hits = [n for n, line in enumerate(src, 1) if line == e["source"]]
-        if len(hits) >= e["occurrence"]:
-            moved[i] = hits[e["occurrence"] - 1]
-            problems.append(f"{e['file']}:{e['line']}: statement moved to line {moved[i]}, "
-                            f"re-review it and rerun with --relocate")
-        else:
+        if len(hits) < e["occurrence"]:
             problems.append(f"{e['file']}:{e['line']}: the excluded statement is gone "
                             f"({len(hits)} lines match its frozen text, wanted #{e['occurrence']}). "
                             f"Delete the entry, or re-justify it against the new code.")
+            continue
+        at = hits[e["occurrence"] - 1]
+        if at == e["line"]:
+            continue
+        moved[i] = at
+        problems.append(f"{e['file']}:{e['line']}: occurrence #{e['occurrence']} of the frozen "
+                        f"text is on line {at}, not {e['line']}. The statement moved, or a line "
+                        f"identical to it appeared above; either way the entry no longer names "
+                        f"what it was reviewed against. Re-review it and rerun with --relocate.")
     return problems, moved
 
 
@@ -240,6 +323,39 @@ def resolve_exclusions(blocks, doc):
     return excluded, problems
 
 
+def check_canonical(blocks, total, module):
+    """Confirm the profile is the canonical run, not a slice of it.
+
+    Everything the gate asserts is relative to the profile it is given, so a
+    profile that measures less of the tree makes every assertion easier. This is
+    the only check that compares the measurement against something outside it.
+
+    The statement floor names the figure it measured in both directions, so
+    moving the ratchet is a one-line edit against a measured number rather than
+    an argued one.
+    """
+    problems, notes = [], []
+    if total < BASELINE_TOTAL_STATEMENTS:
+        problems.append(f"profile holds {total} statements, the canonical run holds "
+                        f"{BASELINE_TOTAL_STATEMENTS}. Almost always this is a subset run: "
+                        f"`go test -coverprofile` over some packages rather than "
+                        f"scripts/coverage.sh, whose -coverpkg=./internal/... instruments all "
+                        f"of internal/ whichever suites run. Measure the canonical profile, or "
+                        f"if code was deleted, lower BASELINE_TOTAL_STATEMENTS to {total} in "
+                        f"the same review as the deletion.")
+    elif total > BASELINE_TOTAL_STATEMENTS:
+        notes.append(f"profile holds {total} statements, {total - BASELINE_TOTAL_STATEMENTS} "
+                     f"over the floor; raise BASELINE_TOTAL_STATEMENTS to {total}")
+
+    measured = {os.path.dirname(f) for f in index_profile(blocks, module)}
+    missing = [p for p in BASELINE_PACKAGES if p not in measured]
+    if missing:
+        problems.append(f"{plural(len(missing), 'canonical package')} contribute no statement "
+                        f"to this profile, so nothing in them was measured: "
+                        + ", ".join(missing))
+    return problems, notes
+
+
 def verify_exclusions(args):
     """The release gate. Returns a process exit code."""
     path = args.exclude or DEFAULT_EXCLUSIONS
@@ -253,10 +369,14 @@ def verify_exclusions(args):
     entries = doc["entries"]
     src_problems, moved = check_sources(entries)
 
+    # --relocate is a rewrite tool, never a verdict: it exits nonzero whatever it
+    # finds, including when it finds nothing. Returning 0 on an empty run would
+    # make `--verify-exclusions --relocate` a green gate that measured nothing,
+    # which is the bypass this mode would otherwise hand to a CI author.
     if args.relocate:
         if not moved:
-            print(f"{shown}: nothing to relocate")
-            return 1 if problems or src_problems else 0
+            print(f"{shown}: nothing to relocate. Rerun without --relocate to verify the set.")
+            return 1
         for i, line in moved.items():
             entries[i]["line"] = line
         with open(path, "w") as fh:
@@ -271,23 +391,50 @@ def verify_exclusions(args):
         buckets[e["bucket"]] += 1
     unconfirmed = [e for e in entries if not e["confirmed"]]
 
+    notes = []
+    # The set may only ever shrink. .coverage-exclusions.json says so in prose;
+    # this is what makes it true. Same shape as GOLANGCI_MAX_ISSUES in
+    # scripts/release-check.sh: over the ratchet fails, under it prints the
+    # number to lower the ratchet to.
+    if len(entries) > BASELINE_MAX_ENTRIES:
+        problems.append(f"the set holds {len(entries)} entries, the ratchet is "
+                        f"{BASELINE_MAX_ENTRIES}. The set may only shrink: cover the statement, "
+                        f"delete the branch, or argue the case in review and raise "
+                        f"BASELINE_MAX_ENTRIES in scripts/cov-gaps.py alongside it.")
+    elif len(entries) < BASELINE_MAX_ENTRIES:
+        notes.append(f"the set holds {len(entries)} entries, "
+                     f"{BASELINE_MAX_ENTRIES - len(entries)} under the ratchet; "
+                     f"lower BASELINE_MAX_ENTRIES to {len(entries)}")
+    if unconfirmed:
+        problems.append(f"{len(unconfirmed)} of {len(entries)} entries are confirmed=false. "
+                        f"Check each against the profile and set confirmed=true, or delete it: "
+                        + ", ".join(f"{e['file']}:{e['line']}" for e in unconfirmed))
+
     print(f"exclusions  {shown}")
     print(f"entries     {len(entries)} "
           f"({', '.join(f'{n} {b}' for b, n in sorted(buckets.items()))})")
     print(f"source      {len(entries) - len(src_problems)}/{len(entries)} match their frozen text")
 
-    if args.profile:
+    if args.profile is None:
+        # Without a measurement the only check that ran was the one above. Every
+        # other assertion the gate exists to make -- that no excluded statement
+        # has become covered, that the packages were measured at all, that
+        # covered + excluded == total -- needs a profile, so this is a failure
+        # and not a reduced mode.
+        problems.append("no coverage profile. The frozen-text comparison is the only check that "
+                        "runs without one, and on its own it proves that "
+                        f"{plural(len(entries), 'string')} still sit at "
+                        f"{plural(len(entries), 'line number')}. Pass the profile "
+                        "scripts/coverage.sh writes.")
+    else:
         blocks = load(args.profile)
         total, covered = totals(blocks)
+        canon_problems, canon_notes = check_canonical(blocks, total, doc.get("module", ""))
+        problems += canon_problems
+        notes += canon_notes
         excluded, prof_problems = resolve_exclusions(blocks, doc)
         problems += prof_problems
         n_excluded = sum(excluded.values())
-
-        if unconfirmed:
-            problems.append(f"{len(unconfirmed)} of {len(entries)} entries are still "
-                            f"confirmed=false while a real profile is available. Check each "
-                            f"against this profile and set confirmed=true, or delete it: "
-                            + ", ".join(f"{e['file']}:{e['line']}" for e in unconfirmed))
 
         print(f"profile     {args.profile}")
         print(f"total       {total}")
@@ -301,9 +448,9 @@ def verify_exclusions(args):
             gap = total - covered - n_excluded
             problems.append(f"covered + excluded = {covered + n_excluded}, total = {total}: "
                             f"{plural(gap, 'statement')} neither covered nor excluded")
-    elif unconfirmed:
-        print(f"UNCONFIRMED {len(unconfirmed)} of {len(entries)} entries were inferred, not measured. Run "
-              f"scripts/coverage.sh on a host with a container runtime and rerun with its profile.")
+
+    for n in notes:
+        print(f"NOTE  {n}")
 
     if problems:
         print(f"\n{len(problems)} problem{'' if len(problems) == 1 else 's'}")
@@ -417,7 +564,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("profile", nargs="?",
-                    help="coverage profile; optional only with --verify-exclusions")
+                    help="coverage profile from scripts/coverage.sh; only --relocate, "
+                         "which never reports a pass, runs without one")
     ap.add_argument("--file", help="show every uncovered block in files matching this substring")
     ap.add_argument("--target", type=float, help="covered-count needed to land this coverage figure")
     ap.add_argument("--diff", metavar="OTHER", help="blocks OTHER covers that PROFILE does not")
@@ -426,8 +574,8 @@ def main():
                     help=f"exclusion set to subtract from the denominator "
                          f"(default {os.path.relpath(DEFAULT_EXCLUSIONS, REPO_ROOT)})")
     ap.add_argument("--verify-exclusions", action="store_true",
-                    help="check the exclusion set against the source and, with a profile, "
-                         "against the measurement; nonzero exit on any drift")
+                    help="check the exclusion set against the source, against the ratchets "
+                         "and against PROFILE; nonzero exit on any drift")
     ap.add_argument("--relocate", action="store_true",
                     help="with --verify-exclusions: rewrite only the line numbers of entries "
                          "whose frozen text moved, then exit nonzero so the diff gets reviewed")
@@ -450,30 +598,30 @@ def main():
 
     # --json always accounts for exclusions, even without --exclude: a consumer
     # checking covered + excluded == total cannot do so from a figure that silently
-    # omits the exclusion set. An unreadable or unresolvable set is reported as zero
-    # rather than guessed, so the caller's arithmetic fails loudly instead of passing
-    # on a number nobody computed.
+    # omits the exclusion set.
+    #
+    # A set that will not load or will not resolve is fatal in both modes. Passing
+    # excluded=0 through instead hands every consumer a reachable figure equal to
+    # raw total coverage, which is a plausible-looking number for a broken
+    # exclusion set: it happens to trip release-check.sh's identity assertion, and
+    # it does not trip anything in scripts/readme-gen.sh, which publishes it.
     exclusion_path = args.exclude or (DEFAULT_EXCLUSIONS if args.json else None)
     if exclusion_path:
         doc, problems = load_exclusions(exclusion_path)
         if doc is None:
-            if args.exclude:
-                sys.exit("\n".join(problems))
-        else:
-            excluded, problems = resolve_exclusions(blocks, doc)
-            if problems:
-                if args.exclude:
-                    print(f"{len(problems)} exclusions did not resolve against this profile; "
-                          f"the reachable figure below would be a guess:", file=sys.stderr)
-                    for p in problems:
-                        print(f"  {p}", file=sys.stderr)
-                    sys.exit(1)
-            else:
-                excluded_n = sum(excluded.values())
-                if args.exclude:
-                    print(f"excluded   {excluded_n} statements of {full_total} "
-                          f"({repo_path(exclusion_path)}), reachable {full_total - excluded_n}")
-                    blocks = {k: v for k, v in blocks.items() if k not in excluded}
+            sys.exit("\n".join(problems))
+        excluded, problems = resolve_exclusions(blocks, doc)
+        if problems:
+            print(f"{len(problems)} exclusions did not resolve against this profile; "
+                  f"any reachable figure computed from it would be a guess:", file=sys.stderr)
+            for p in problems:
+                print(f"  {p}", file=sys.stderr)
+            sys.exit(1)
+        excluded_n = sum(excluded.values())
+        if args.exclude:
+            print(f"excluded   {excluded_n} statements of {full_total} "
+                  f"({repo_path(exclusion_path)}), reachable {full_total - excluded_n}")
+            blocks = {k: v for k, v in blocks.items() if k not in excluded}
 
     report(blocks, args, excluded_n=excluded_n, full_total=full_total)
 

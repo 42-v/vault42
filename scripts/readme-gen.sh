@@ -226,14 +226,26 @@ COV_NUM=$(echo "$TOTAL_COV" | tr -d '%')
 # Reachable coverage comes from the same tool the release gate uses, so the badge
 # cannot claim a figure the gate would reject. Excluded statements are the ones no
 # test can reach; .coverage-exclusions.json records why, per statement.
-REACHABLE_COV=$(python3 scripts/cov-gaps.py "$COVER_FILE" --json 2>/dev/null | python3 -c '
+#
+# cov-gaps' exit code is load-bearing here. Discarding it and falling back to raw
+# total coverage gives a broken exclusion set a badge in the same shape as every
+# other run's, with nothing anywhere saying the set the figure is a claim about no
+# longer resolves: the badge could not fail, only quietly mean something else.
+# Either the set verifies against this profile or no badge is written.
+COV_JSON=$(python3 scripts/cov-gaps.py "$COVER_FILE" --json) || {
+  echo "ERROR: the exclusion set does not resolve against $COVER_FILE (see above)." >&2
+  echo "Run: python3 scripts/cov-gaps.py $COVER_FILE --verify-exclusions" >&2
+  echo "Refusing to publish a reachable-coverage badge no exclusion set backs." >&2
+  exit 1
+}
+REACHABLE_COV=$(printf '%s' "$COV_JSON" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 reach = d["total_statements"] - d["excluded_statements"]
-if reach:
-    print("%.2f" % (100.0 * d["covered_statements"] / reach))
-' 2>/dev/null || true)
-[ -n "$REACHABLE_COV" ] || REACHABLE_COV="$COV_NUM"
+if reach <= 0:
+    sys.exit("every instrumented statement is excluded; there is no reachable figure")
+print("%.2f" % (100.0 * d["covered_statements"] / reach))
+')
 
 VERSION_STR=$(cat VERSION 2>/dev/null || echo "0.0.0")
 

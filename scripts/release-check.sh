@@ -62,6 +62,13 @@ fail()    { echo -e "${RED}FAIL${NC}: $1"; exit 1; }
 # tree is accounted for: covered, or on the reviewed exclusion list. Nothing may
 # be neither.
 #
+# Both assertions below are relative to the profile, and --coverage-only takes
+# that path from whoever ran this, so a profile from a narrower run would satisfy
+# them on a fraction of the tree. cov-gaps.py --verify-exclusions is what rules
+# that out: it holds the canonical statement count and package set as ratchets
+# and rejects a profile that comes in under either. Keeping that check there
+# rather than here leaves one place where the canonical figures are recorded.
+#
 # scripts/cov-gaps.py owns the exclusion file and its --verify-exclusions mode;
 # this only consumes them.
 coverage_gate() {
