@@ -1,6 +1,7 @@
 package attack
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -466,5 +467,63 @@ func TestKeystoreMasterKeyReadsAreGuarded(t *testing.T) {
 			"Stop zeroes that field, a zeroed AES key still encrypts, and the race "+
 			"detector cannot see the read because the key schedule is assembly.",
 			o, accessor)
+	}
+}
+
+// TestKeystoreAttack_StopWipesTheKeyEveryOtherServiceIsStillUsing is the
+// aliasing half of the wipe, and it is the one that reaches user data.
+//
+// cmd/vault/main.go takes exactly one working copy of the master key and hands
+// that same slice to keystore.New and to the service container, which passes it
+// on to the identity, blob, service-document and TOTP paths. The comment above
+// that copy explains at length why a consumer must never be given
+// cfg.MasterKey: config.ZeroBytes wipes the config's array in place, and a
+// service left holding 32 zero bytes still has a valid AES-256 key length, so
+// it encrypts and decrypts happily against itself while the at-rest protection
+// is gone.
+//
+// keystore.Stop then does precisely that to every one of them. It wipes the
+// slice it was given, which is the same backing array, so the hazard the
+// comment describes is created by the shutdown path rather than avoided by it.
+//
+// Stop runs from a defer during shutdown, while handlers are still draining. A
+// request that encrypts in that window seals a row under a zero key, and the
+// row is then permanently undecryptable, which the test above already proves.
+// This one proves the aliasing that lets it happen at all.
+//
+// The fix is ownership: keystore.New copies the key, so Stop wipes only the
+// keystore's own copy.
+func TestKeystoreAttack_StopWipesTheKeyEveryOtherServiceIsStillUsing(t *testing.T) {
+	// The single working copy main() makes, handed to two consumers.
+	shared := make([]byte, 32)
+	for i := range shared {
+		shared[i] = byte(i + 1)
+	}
+	original := append([]byte(nil), shared...)
+
+	// Consumer A: the keystore.
+	ks, err := keystore.New(nil, shared, time.Hour)
+	if err != nil {
+		t.Fatalf("keystore.New: %v", err)
+	}
+
+	// Consumer B: every service that encrypts user data. They retain the slice
+	// exactly as the keystore does.
+	serviceKey := shared
+
+	ks.Stop()
+
+	if !bytes.Equal(serviceKey, original) {
+		t.Errorf("keystore.Stop zeroed the master key the identity, blob and TOTP paths are "+
+			"still holding: %x. A request draining through shutdown now seals rows under a "+
+			"zero key, and no later pod can ever read them.", serviceKey)
+	}
+
+	// And the keystore's own copy must still be wiped: that is what Stop is for.
+	if bytes.Equal(shared, original) && len(shared) > 0 {
+		// shared is A's view. If New copied, A's wipe is invisible here, which
+		// is correct. This branch only documents that the assertion above is
+		// about B's key and not about weakening the wipe itself.
+		t.Log("keystore.New took its own copy, so the caller's slice is untouched, which is the fix")
 	}
 }
