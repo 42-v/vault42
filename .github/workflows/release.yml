@@ -311,6 +311,21 @@ jobs:
             --version "${{ needs.detect.outputs.version }}" \
             --app-version "${{ needs.detect.outputs.version }}"
 
+      # cosign does not read helm's credential store. `helm registry login`
+      # writes HELM_REGISTRY_CONFIG (~/.config/helm/registry/config.json), while
+      # cosign resolves registry auth through go-containerregistry's default
+      # keychain, which reads ~/.docker/config.json and knows nothing about
+      # helm's file. Without this step the signing below ran unauthenticated,
+      # GHCR answered 401, and the job went red on every release with the chart
+      # already pushed and unsigned, while the release notes said it was signed.
+      # The images job has always had this login; the chart job never got one.
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Push to GHCR
         id: push
         env:
@@ -318,10 +333,18 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -eu
+          # pipefail matters for the push below. Without it the pipeline reports
+          # tee's exit status, so a failed helm push yields an empty digest and
+          # the run dies two steps later on an invalid image reference instead
+          # of here, where the actual error is.
+          set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GHCR_USER" --password-stdin
           helm push "vault-auth-${VERSION}.tgz" oci://ghcr.io/42-v/charts 2>&1 | tee push.log
           digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -1)
+          if [ -z "$digest" ]; then
+            echo "::error::helm push printed no digest, so there is nothing to sign"
+            exit 1
+          fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
@@ -374,9 +397,14 @@ jobs:
   # nuget is deliberately not a dependency: nuget.org is a secondary consumer and
   # is independently retryable, and making the GitHub release wait on it is how a
   # registry hiccup used to cost the whole release.
+  #
+  # chart IS a dependency, unlike nuget, because the release body tells the
+  # reader the chart is published and cosign-signed at that version. Publishing
+  # the release while the chart job is red announces an artifact that is either
+  # absent or unsigned, and the announcement is the thing people act on.
   github-release:
     name: GitHub release
-    needs: [detect, images, artifacts]
+    needs: [detect, images, artifacts, chart]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
