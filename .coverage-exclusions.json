@@ -450,7 +450,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/mint.go",
-      "line": 352,
+      "line": 392,
       "occurrence": 1,
       "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",

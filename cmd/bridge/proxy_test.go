@@ -3168,3 +3168,67 @@ func TestBridgeConcurrentAdminAndTrafficShareTheStore(t *testing.T) {
 		}
 	}
 }
+
+// TestWebhookFloodIsDroppedAndCountedRatherThanQueuedForever is the other half
+// of the bound. The pool test proves a flood cannot open unbounded connections;
+// this proves what happens to the events that do not fit.
+//
+// The choice is between blocking the request path and losing events, and this
+// code drops on purpose: blocking would put the receiver's latency back on the
+// request that was just flagged, which is the timing oracle the async dispatch
+// exists to remove. So the loss is deliberate, and what makes it acceptable is
+// that it is counted and said out loud. A silent drop would mean an operator
+// whose receiver is down sees a quiet alert stream and reads it as calm.
+//
+// This path is also the one an attacker would aim at. Flooding the queue does
+// suppress later webhooks, including the ones about the flood, which is why the
+// drop counter and the log line are the mitigation rather than a diagnostic:
+// they are what turns "no alerts" into "alerts are being dropped".
+func TestWebhookFloodIsDroppedAndCountedRatherThanQueuedForever(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var delivered int
+
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		delivered++
+		mu.Unlock()
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hook.Close()
+
+	ws := NewWebhookSender(hook.URL)
+
+	// Nothing completes until release, so the workers fill, the queue fills, and
+	// everything past that has nowhere to go. The margin is what this asserts on:
+	// enough beyond capacity that a drop cannot be a scheduling accident.
+	const overflow = 256
+	total := webhookWorkers + webhookQueueDepth + overflow
+	for i := 0; i < total; i++ {
+		ws.Send(map[string]interface{}{"event": "decoy_hit", "ip": "203.0.113.9", "n": i})
+	}
+
+	dropped := ws.dropped.Load()
+	if dropped == 0 {
+		t.Fatalf("sent %d events into a sender holding %d workers and a %d-deep queue and none "+
+			"were dropped. Either the send blocked, which puts the receiver's latency back on "+
+			"the request path, or the queue is unbounded, which is the memory growth the bound "+
+			"exists to stop.", total, webhookWorkers, webhookQueueDepth)
+	}
+	if dropped > uint64(total) {
+		t.Errorf("counted %d drops from %d events; the counter an operator alerts on is wrong",
+			dropped, total)
+	}
+
+	close(release)
+	ws.Close()
+
+	// Close reports the total. An operator who never sees this line has no way to
+	// learn that the alert stream was lossy, which is the failure this whole path
+	// is designed to make visible.
+	if got := ws.dropped.Load(); got != dropped {
+		t.Errorf("drop count moved from %d to %d after Close; the reported total must be stable",
+			dropped, got)
+	}
+}
