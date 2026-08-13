@@ -181,8 +181,29 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	// Idempotent like the rest of the cascade, so an interrupted erasure re-runs
 	// cleanly. Documents filed under the global sentinel belong to a service rather
 	// than a user and carry a different hash, so they are correctly untouched.
+	//
+	// The delete takes the same per-subject write lock a Put takes, because
+	// otherwise it races one. A Put that passed its quota check just before the
+	// delete ran can commit its row just after, and the document then belongs to
+	// an account that no longer exists, with the erasure having reported success.
+	// The window is small and the consequence is an Art. 17 failure, so it is
+	// closed rather than accepted.
+	//
+	// The lock is best-effort in one direction only: a repository that does not
+	// implement the serialiser still gets the plain delete, which is the previous
+	// behaviour, never a skipped delete.
 	if s.svcDocs != nil {
-		if err := s.svcDocs.DeleteAllForSubject(ctx, s.svcDocPseudonym(userID)); err != nil {
+		pseudonym := s.svcDocPseudonym(userID)
+		deleteDocs := func(ctx context.Context) error {
+			return s.svcDocs.DeleteAllForSubject(ctx, pseudonym)
+		}
+		var err error
+		if serializer, ok := s.svcDocs.(SubjectWriteSerializer); ok {
+			err = serializer.WithSubjectWriteLock(ctx, pseudonym, deleteDocs)
+		} else {
+			err = deleteDocs(ctx)
+		}
+		if err != nil {
 			return fmt.Errorf("erasure: delete service documents: %w", err)
 		}
 	}
