@@ -24,6 +24,16 @@ import (
 // cannot make an algorithm verifiable that the verifier does not implement.
 var idTokenAlgs = []string{"RS256", "RS384", "RS512"}
 
+// maxIDTokenSize is the ceiling on an ID token, matching the 8 KB the access
+// token verifier applies and the 4 KB the DPoP proof verifier applies.
+//
+// Without one, the only bound was the megabyte cap on the token-endpoint
+// response body, so an issuer decided how much base64 got decoded and
+// unmarshalled into a claims map, and how much unauthenticated material reached
+// the key lookup that fetches discovery and the JWKS. 8 KB is several times any
+// real ID token, including the large ones Entra issues with group claims.
+const maxIDTokenSize = 8 * 1024
+
 // jwksCache holds the issuer's signing keys, indexed by kid.
 type jwksCache struct {
 	mu   sync.RWMutex
@@ -49,6 +59,9 @@ type jwksCache struct {
 func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce string) (*UserInfo, error) {
 	if idToken == "" {
 		return nil, fmt.Errorf("oidc id_token: empty")
+	}
+	if len(idToken) > maxIDTokenSize {
+		return nil, fmt.Errorf("oidc id_token: exceeds maximum size")
 	}
 	if expectedNonce == "" {
 		return nil, fmt.Errorf("oidc id_token: no expected nonce for this login attempt")
@@ -156,7 +169,7 @@ func (p *OIDCProvider) refreshJWKS(ctx context.Context) error {
 			Use string `json:"use"`
 		} `json:"keys"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&doc); err != nil {
 		return fmt.Errorf("oidc jwks: decode: %w", err)
 	}
 	keys := make(map[string]*rsa.PublicKey)

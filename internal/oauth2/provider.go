@@ -7,6 +7,15 @@ package oauth2
 
 import "context"
 
+// maxProviderResponse caps every response body this package reads.
+//
+// The provider is the one peer in the login flow that is neither vault42 nor the
+// browser, and the flow that talks to it is unauthenticated, so the size of the
+// allocation must not be the provider's to choose. One megabyte is far past any
+// real token, profile or discovery document and far short of a response that
+// costs the auth service anything to drop.
+const maxProviderResponse = 1 << 20
+
 // Provider defines the interface for OAuth2/OIDC providers. Implementations
 // must handle authorization URL construction, authorization code exchange,
 // and user profile retrieval from the provider's API.

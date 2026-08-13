@@ -193,6 +193,33 @@ func linkableToExistingAccount(userInfo *oauth2.UserInfo, existing *model.User) 
 	return userInfo.EmailVerified && existing.EmailVerified
 }
 
+// normalizedProviderEmail folds a provider-asserted address into the single form
+// the rest of vault42 stores and queries, or returns "" when the address is not
+// one this system would accept from anybody else.
+//
+// The address is both a join key and a delivery destination, and this path had
+// been treating it as neither. GetByEmail is an exact SQL comparison against a
+// VARCHAR(255) UNIQUE column, while Register and Login fold to lower case before
+// they query, so an unfolded spelling from an IdP missed the row that already
+// holds the mailbox: it skipped linkableToExistingAccount instead of failing it,
+// and fell through to the create branch. That turns the address of an
+// unverified account into something claimable by anyone whose IdP will assert a
+// differently-cased spelling of it, and the resulting row is invisible to every
+// path that folds first. Validation covers the other end: the same string is
+// handed to the verification mailer as an envelope recipient and written to a
+// 255-character column, so an issuer was choosing both.
+//
+// An unusable address is dropped rather than fataled. An identity already linked
+// by (provider, provider_user_id) still signs in, and a first-time login with no
+// usable address falls through to unable_to_identify_user, which is accurate.
+func normalizedProviderEmail(raw string) string {
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if !sanitize.Email(email) {
+		return ""
+	}
+	return email
+}
+
 // logRefusedLink records a refused identity link. Both refusal sites log the
 // same shape so the two are indistinguishable in an incident review.
 func logRefusedLink(providerName string, userInfo *oauth2.UserInfo, existing *model.User) {
@@ -313,6 +340,25 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			log.Printf("oauth: user info failed for %s: %v", httputil.SafeLogValue(providerName), err) // #nosec G706 -- sanitized via SafeLogValue
 			WriteError(w, http.StatusBadGateway, "provider_error")
 			return
+		}
+	}
+
+	// The provider's subject is the join key on both ends of the identity bridge,
+	// and auth.social_accounts stores it NOT NULL but not non-empty, so the empty
+	// string is one storable value with exactly one UNIQUE(provider,
+	// provider_user_id) row behind it. Left unchecked, every response that named
+	// nobody collapsed onto that single row: the first such login claims it, and
+	// each later one is answered with that account's session. Refuse before the
+	// lookup, so neither direction is reachable.
+	if strings.TrimSpace(userInfo.ID) == "" {
+		log.Printf("oauth: provider %s returned no subject", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
+		WriteError(w, http.StatusBadGateway, "provider_error")
+		return
+	}
+
+	if raw := userInfo.Email; raw != "" {
+		if userInfo.Email = normalizedProviderEmail(raw); userInfo.Email == "" {
+			log.Printf("oauth: provider %s asserted an unusable email address", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
 		}
 	}
 

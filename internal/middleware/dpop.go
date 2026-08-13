@@ -73,7 +73,7 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 					}
 				} else {
 					key := dpopReplayKey(jti)
-					isNew, err := c.SetIfNotExists(r.Context(), key, "1", vaultcrypto.DPoPMaxAge+30*time.Second)
+					isNew, err := c.SetIfNotExists(r.Context(), key, "1", dpopReplayTTL)
 					if err != nil {
 						if tokenRequiresDPoP {
 							log.Printf("DPoP: JTI cache error, failing closed")
@@ -100,6 +100,21 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// dpopReplayTTL is how long a spent DPoP jti is remembered.
+//
+// ValidateDPoPProof measures a proof's age against DPoPMaxAge in both
+// directions, so the span in which one proof stays acceptable runs from
+// DPoPMaxAge before its iat to DPoPMaxAge after it: twice DPoPMaxAge, not once.
+// A caller picks where inside that span the first request lands by choosing the
+// iat, and post-dating it by DPoPMaxAge puts the whole remaining span after the
+// first use.
+//
+// Sized to DPoPMaxAge alone the entry expired while the proof was still valid,
+// so a captured proof presented a second time was recorded as fresh and passed.
+// The 30 seconds on top absorb clock drift between the pod that writes the entry
+// and the one that reads it.
+const dpopReplayTTL = 2*vaultcrypto.DPoPMaxAge + 30*time.Second
 
 // dpopReplayKey builds the cache key that holds a spent DPoP jti.
 //
