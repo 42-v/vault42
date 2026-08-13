@@ -76,7 +76,13 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # and the expired-row reaper in internal/cache. Measured, not estimated: a full
 # cov_run over every suite reports 10784, after the gate-closing tests and the
 # vault_app privilege, honeypot parity and revocation-ordering work landed.
-BASELINE_TOTAL_STATEMENTS = 10784
+# Raised from 10784 to 10806 by the release-gate attack pass: +22 statements from
+# the DPoP crit/jwk/curve refusals in internal/crypto, the erasure-race guard in
+# internal/repository/postgres, the GitHub status and zero-id refusals plus the
+# account-state link ordering in internal/oauth2 and internal/handler, and the
+# tombstone-domain refusal in internal/sanitize. A full cov_run reports 10806,
+# all 22 covered by the tests those fixes shipped.
+BASELINE_TOTAL_STATEMENTS = 10806
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an

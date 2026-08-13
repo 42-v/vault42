@@ -360,7 +360,7 @@
     {
       "package": "internal/oauth2",
       "file": "internal/oauth2/github.go",
-      "line": 155,
+      "line": 172,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"github userinfo: build emails request: %w\", err)",
       "bucket": "C",
