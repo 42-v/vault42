@@ -152,15 +152,16 @@ type SocialAccount struct {
 // is erased. Payload is a hybrid-asymmetric ciphertext (see crypto.EncryptRecovery)
 // of the recoverable profile (email, created_at, roles, display_name). The
 // server cannot decrypt it — only the holder of the offline recovery private
-// key can, to restore the deleted user from backup. Pseudonym is an HMAC of the
-// user id so a record can be correlated to a (soft-deleted) user without
-// storing the plaintext identity here.
+// key can, to restore the deleted user from backup. Pseudonym is
+// HMAC-SHA256(userID + ":recovery") so a record can be correlated to a
+// (soft-deleted) user without storing the plaintext identity here.
 type AccountRecovery struct {
 	// ID is this escrow row's UUID.
 	ID string `json:"id"`
-	// Pseudonym is HMAC-SHA256 of the erased user id. Tagged json:"-" so a
-	// dump of this table cannot be joined back to a live identity without the
-	// HMAC secret; cmd/recover is the only intended consumer.
+	// Pseudonym is HMAC-SHA256(userID + ":recovery") under the server HMAC
+	// key. Tagged json:"-" so a dump of this table cannot be joined back to
+	// a live identity without that key; cmd/recover is the only intended
+	// consumer.
 	Pseudonym string `json:"-"`
 	// Payload is the hybrid-asymmetric ciphertext of the recoverable profile.
 	// Tagged json:"-" because the server holds only the public half and must
@@ -218,9 +219,12 @@ type RefreshToken struct {
 	// ClientID is the service client that requested the session, when one
 	// was named at login. Empty for a browser session with no client_id.
 	ClientID string `json:"client_id"`
-	// TokenHash is the HMAC of the opaque refresh token value. Tagged
-	// json:"-" because possession of the hash plus the HMAC secret is
-	// enough to mint a usable cookie; only the rotation path compares it.
+	// TokenHash is the unkeyed SHA-256 hex digest of the opaque refresh
+	// token (vaultcrypto.SHA256Hex). It is not HMAC: no server secret is
+	// mixed in, and the digest cannot reconstruct or mint a cookie. Tagged
+	// json:"-" so a listing or accidental encode cannot expose the stored
+	// verifier of a live session; only the rotation path hashes a presented
+	// cookie and compares.
 	TokenHash string `json:"-"`
 	// FamilyID groups the current token with its predecessors so a replay
 	// of any generation revokes the whole family.
@@ -228,10 +232,12 @@ type RefreshToken struct {
 	// DeviceID is the Device this session is bound to. Revoking the device
 	// revokes every token that carries this id.
 	DeviceID string `json:"device_id"`
-	// FingerprintHash is the HMAC of the device fingerprint captured at
-	// issuance. Tagged json:"-" because it correlates sessions across
-	// accounts; a mismatch on POST /auth/refresh is reported as
-	// invalid_token, not as a fingerprint leak.
+	// FingerprintHash is the unkeyed SHA-256 of length-prefixed IP,
+	// User-Agent, Accept-Language and TLS-fingerprint captured at issuance
+	// (vaultcrypto.ComputeFingerprint). It is not HMAC. Tagged json:"-"
+	// because the same inputs produce the same digest across accounts; a
+	// mismatch on POST /auth/refresh is reported as invalid_token, not as a
+	// fingerprint leak.
 	FingerprintHash string `json:"-"`
 	// ExpiresAt is when this refresh token stops being accepted, RFC3339
 	// UTC. A used or revoked token is rejected even before this instant.
@@ -256,13 +262,20 @@ type Device struct {
 	// UserID is the account this device belongs to. Deletes are scoped by
 	// this so one user cannot act on another's id.
 	UserID string `json:"user_id"`
-	// FingerprintHash is the HMAC of SHA256(IP + User-Agent +
-	// Accept-Language + TLS-fingerprint). Tagged json:"-" because it is a
-	// cross-account correlator. Device listings expose ID, not this hash;
-	// ID is the identifier a client or operator may act on.
+	// FingerprintHash is the unkeyed SHA-256 of length-prefixed IP,
+	// User-Agent, Accept-Language and TLS-fingerprint
+	// (vaultcrypto.ComputeFingerprint). It is not HMAC and not a hash of
+	// concatenated strings. Tagged json:"-" because it is a cross-account
+	// correlator. Device listings expose ID, not this hash; ID is the
+	// identifier a client or operator may act on.
 	FingerprintHash string `json:"-"`
-	// FriendlyName is the user-chosen label from PATCH /user/devices/{id}.
-	// Empty until the user names it; the server does not invent one.
+	// FriendlyName is the human-readable device label. On first login
+	// findOrCreateDevice sets it from the User-Agent via
+	// useragent.FriendlyName (for example "Chrome on Windows"). An empty
+	// or unrecognized User-Agent becomes "Unknown Device", so a
+	// login-created row is never empty. PATCH /user/devices/{id} can
+	// replace it. Subsequent logins on the same fingerprint update
+	// last-seen only and leave this name alone.
 	FriendlyName string `json:"friendly_name"`
 	// Trusted is reserved for a remembered-device exemption. It is stored
 	// and returned on session and device listings but no current login path
@@ -380,9 +393,10 @@ type RateLimit struct {
 
 // AuditEntry represents an audit log entry.
 //
-// FingerprintHash is an HMAC of a device fingerprint: it correlates events
-// across accounts and is never part of a response. DeviceID is the identifier
-// an operator can act on, and that is what the admin audit view carries.
+// FingerprintHash is the unkeyed SHA-256 device fingerprint
+// (ComputeFingerprint): it correlates events across accounts and is never
+// part of a response. DeviceID is the identifier an operator can act on,
+// and that is what the admin audit view carries.
 type AuditEntry struct {
 	// ID is this event's UUID. The table is append-only; this never changes.
 	ID string `json:"id"`
@@ -404,9 +418,11 @@ type AuditEntry struct {
 	// UserAgent is the User-Agent recorded with the event. Empty when the
 	// client sent none.
 	UserAgent string `json:"user_agent"`
-	// FingerprintHash is the HMAC of the request fingerprint. Tagged
-	// json:"-" because it correlates events across accounts; GET /admin/audit
-	// and GET /user/data-export both withhold it and expose DeviceID instead.
+	// FingerprintHash is the unkeyed SHA-256 request fingerprint
+	// (ComputeFingerprint), stored as the caller supplied it. Tagged
+	// json:"-" because it correlates events across accounts; GET
+	// /admin/audit and GET /user/data-export both withhold it and expose
+	// DeviceID instead.
 	FingerprintHash string `json:"-"`
 	// DeviceID is the device row the event is attributed to, when one was
 	// known. Empty on events with no device binding.
@@ -462,9 +478,10 @@ type Blob struct {
 	// id is not stored on this row, so the table cannot enumerate which
 	// users hold objects.
 	PseudonymID string `json:"pseudonym_id"`
-	// RefHash is HMAC of the reference name (empty for unnamed blobs).
-	// Tagged json:"-" so the plaintext name never appears in a listing or
-	// dump; named-blob lookup recomputes the hash from the path.
+	// RefHash is HMAC-SHA256("ref:" + name + ":" + PseudonymID) under the
+	// server HMAC key. Empty for unnamed blobs. Tagged json:"-" so the
+	// plaintext name never appears in a listing or dump; named-blob lookup
+	// recomputes the hash from the path.
 	RefHash string `json:"-"`
 	// LabelEnc is the AES-GCM ciphertext of the user-supplied label.
 	// Tagged json:"-" because the listing decrypts it into the view's
@@ -656,8 +673,10 @@ type AdminSession struct {
 	ID string `json:"id"`
 	// AdminID is the AdminUser this session authenticates.
 	AdminID string `json:"admin_id"`
-	// TokenHash is the HMAC of the session cookie value. Tagged json:"-"
-	// so a session listing cannot be turned into a stolen cookie.
+	// TokenHash is the unkeyed SHA-256 hex digest of the admin session
+	// cookie (hashSessionToken / sha256.Sum256). It is not HMAC, and the
+	// digest cannot reconstruct the cookie. Tagged json:"-" so a session
+	// listing cannot expose the stored verifier of a live admin session.
 	TokenHash string `json:"-"`
 	// IP is the remote address recorded at session creation.
 	IP string `json:"ip"`

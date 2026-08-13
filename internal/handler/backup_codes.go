@@ -94,6 +94,11 @@ func (h *BackupCodeHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// Code is one unused 16-hex backup code from POST
+		// /auth/2fa/backup-codes. Required. Empty is 400 code_required.
+		// A miss is 401 invalid_backup_code and records an MFA failure.
+		// Comparison is HMAC-SHA256 of the guess against every unused
+		// CodeHash.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Code == "" {

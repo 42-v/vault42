@@ -255,8 +255,15 @@ func (h *PasswordHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	var input struct {
+		// CurrentPassword is the password currently stored on the
+		// account. Required. A mismatch is 401 invalid_current_password.
 		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
+		// NewPassword is the replacement. Required. Shorter than the
+		// configured minimum (default 15 runes) is 400
+		// password_too_short. A match against the last 5 hashes is 400
+		// password_recently_used. A HIBP hit is 400 password_breached.
+		// Success revokes every refresh family for the account.
+		NewPassword string `json:"new_password"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_request")

@@ -216,6 +216,12 @@ func (h *AuthHandler) ConfirmPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// Password is the account password, required to open the 5-minute
+		// elevated-access window used by TOTP setup, WebAuthn
+		// register/delete and backup-code generation. Empty or a missing
+		// body is 400 password_required. A wrong value increments a
+		// per-user confirm lockout (5 failures / 15 minutes) and returns
+		// 401 invalid_password.
 		Password string `json:"password"` // #nosec G117 -- password field in request DTO, not stored
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Password == "" {
