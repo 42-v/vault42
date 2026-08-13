@@ -49,9 +49,108 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   The wipe is only sound because signing now holds the read lock for the whole of
   `SignToken`, so acquiring the write lock drains in-flight signers first; those two facts
   are documented together because they must change together.
+* **Refresh reuse detection did not burn the family.** Two requests presenting one stolen
+  refresh token both passed every check on the row they read. The loser called
+  `RevokeFamily`, which updates the rows a family has at that instant, and the winner then
+  inserted a successor no revocation had touched. The loser got `replay_detected`, the
+  winner kept a rotating session for the rest of the absolute session lifetime, and the
+  audit log said the family had died. The fix locks rather than reads: the rotation insert
+  is conditional on the family carrying no revoked row and takes `FOR UPDATE`, and
+  `RevokeFamily` pre-locks in a statement of its own. A re-read does not work, because a
+  snapshot read and a snapshot `UPDATE` can be mutually invisible, and the tests show it:
+  dropping only the `FOR UPDATE` leaves the end-to-end race test green.
+* **`vault_app` could publish its own verification key into JWKS.** `Refresh` loaded every
+  row's public key but decrypted the private half only for the active one, so an `INSERT`
+  with a garbage `private_key`, `status='retired'` and a null `expires_at` put an attacker's
+  key in `/.well-known/jwks.json` within one refresh interval: a signing oracle for any
+  subject, without the master key or any vault42 private key. Two variants had to be closed
+  separately. Requiring the private half to decrypt is not enough, because `UPDATE` can swap
+  `public_key` on a genuine row, so the published key is now compared against the public half
+  of what decrypted. Making revocation irreversible is not enough either, because a revoked
+  row's `kid` can be renamed to free the identifier, so migration 017 freezes revoked rows
+  entirely, `DELETE` included.
+* **Seeded users could never log in.** `cmd/vault` called `seed.Run` without the pepper while
+  the CLI and the admin gateway passed it, so the server stored `Argon2id(password)` and
+  login checked `Argon2id(HMAC(pepper, password))`. The pepper is mandatory in production and
+  `docs/config.md` recommends exactly the sealed-deployment configuration that triggers it,
+  so this was a certainty rather than an edge case. The pepper is a positional parameter now,
+  so omitting it cannot compile.
+* **An account lock did not stop a social login.** The OAuth callback checked deleted, banned
+  and disabled and never read `locked_until`, under a comment claiming parity with password
+  login. The documented response to a takeover closed every route except the one an attacker
+  with a linked identity already had. The same callback's unique-violation path also linked an
+  identity with no verified-email check, and `internal/oauth2/facebook.go` derived that flag
+  from `info.Email != ""`, so for Facebook "verified" meant "non-empty".
+* **The unverified-email login path was a password oracle.** The error was identical; the side
+  effects were not. A wrong guess advanced the lockout counter to a 403 while the correct
+  password answered 401 forever, so six attempts confirmed a real password.
+* **`keystore.Stop` zeroed the master key every other service was still using.** One slice was
+  shared with the identity, blob and TOTP paths, so a request draining through shutdown
+  encrypted against 32 zero bytes and wrote a permanently undecryptable row.
+* **The geo fence trusted whoever it was fencing.** The country header was read straight off
+  the request while every other caller-supplied signal is trusted-proxy gated, and omitting
+  the header skipped the check entirely.
+* **Lockout stopped holding during a cache outage.** The durable `failed_login_count` fallback
+  existed but was reached only when the cache was nil, never when a read errored.
+* **The audit log could lose a batch silently, and the loss was unobservable.** `Flush` emptied
+  the buffer under the lock and inserted outside it, so a transient database error destroyed
+  the entries it held with the error discarded. A rejected batch is now requeued at the front
+  of the buffer, and two counters reach `/metrics`: meeting a full buffer is a tuning problem,
+  while a batch the database rejected means entries already reported as written are gone.
+  Summed they could not distinguish the two, which is why they are separate series.
+* **Four declared audit events had no emission site.** MFA enrollment, removal, verification and
+  session revocation were never recorded, so an attacker who enrolled their own factor and
+  revoked the owner's sessions left no trace.
+* **The audit retention guard validated a different value than it applied.**
+  `audit.cleanup_old_entries` is the only path that can delete an audit row, since the
+  append-only trigger blocks every other one and this function disables it for one `DELETE`.
+  It compared the caller's `INTERVAL` against a one-day minimum and then subtracted that
+  interval from `NOW()` to build the predicate. Comparison canonicalizes a month to 30 days;
+  subtraction uses the real calendar month. `INTERVAL '1 mon -29 days'` compares as one day
+  and passes, and in February subtracts to a cutoff in the future, so the `DELETE` takes the
+  whole table while the guard reports the horizon was respected. Neither Go caller can reach
+  it, since both build a seconds-only interval from a `time.Duration`; the exposure is a
+  compromised `vault_app`, which holds `EXECUTE`. Migration 018 computes the cutoff once,
+  guards that variable, and deletes on it.
+* **A blocked role escalation left no trace.** Both escalation guards recorded the attempt by
+  inserting into `audit.audit_log` inside a `BEGIN`/`EXCEPTION` block and then raising. The
+  row never survived: the `RAISE` aborts the statement that fired the trigger and rolls the
+  insert back with it. The swallowed exception is what made it last, since the write was
+  already being discarded on purpose and nothing distinguished never writing a row from
+  writing one that was rolled back. Migration 019 emits `RAISE WARNING`, which is a log
+  message rather than a row and survives the abort.
+* **`POST /admin/users/{id}/lock` panicked.** `refreshTokenRepo` was built, used elsewhere, and
+  `nil` passed to `adminapi.NewHandler`. The lock committed, the nil dereference became a 500,
+  and the operator saw "lock failed" on an account that was locked, with sessions still alive
+  and no audit row written.
+* **`vault kms wrap` sealed nothing and reported success.** No length check ran between reading
+  the input and sealing it, so an empty or truncated input produced a well-formed envelope and
+  exit 0. This is a deploy-pipeline tool, so a failed earlier step yielded a valid looking
+  artifact that unwrapped to zero bytes, surfacing much later as an empty secret in a running
+  service. The guard rejects the input without trimming the payload, because a key legitimately
+  carries a trailing newline and trimming would seal it a byte short.
+* **The honeypot bridge aimed its own decoy at the operator.** `/admin` was a decoy prefix and
+  matching is by prefix, while vault42 serves its admin SPA and roughly thirty documented API
+  routes under `/admin/`. An operator opening the console through a bridge was flagged for the
+  full flag TTL and then served fabricated key, user, session and audit data. Bridge webhook
+  dispatch also moved off the request path, since it blocked the very request that had just
+  been flagged and let a scanner measure its own detection, and then behind a bounded worker
+  pool, since a goroutine per event let one cheap request open one connection to the operator's
+  alerting endpoint.
 
 ### Public API
 
+* **Minted tokens carry a `minted_by` claim** naming the client that requested the assertion.
+  `POST /mint` signs a subject vault42 never authenticated, and a relying party could tell
+  *that* a token was minted, from `token_type: "mint"` and a distinct audience, but not by
+  whom: the attribution existed only in a `token_minted` audit row that lives in vault42's
+  database and no relying party can read. The claim is deliberately not named `client_id`,
+  because the service document store treats that claim's presence as proof of an
+  authenticated service caller and uses it as the ownership axis, so a minted token carrying
+  it would be admitted as the minting client. `docs/security.md` AR-16 records the residual:
+  nothing binds a client to the subjects it may assert, so `mint:token` means the holder may
+  impersonate any subject the estate honors, and the four conditions under which that is
+  reachable are written out there.
 * **DPoP is no longer advertised.** `cnf.jkt` is declared and assigned nowhere, so no token
   is sender-constrained and the thumbprint comparison is dead code; the flag bought nothing
   in either position while the discovery document claimed RS256 and ES256 support
