@@ -60,7 +60,14 @@ import (
 // What is deliberately NOT checked: whether the subject exists in vault42. It
 // usually does not, and that is the point. The audit trail therefore records the
 // asserted subject alongside the client that asserted it, and a minted token is
-// a distinct event type from any self-authenticated one.
+// a distinct event type from any self-authenticated one. The token carries the
+// same attribution in its minted_by claim, because the audit trail answers "who
+// spoke for this subject" only for whoever can read vault42's database, and the
+// relying party holding the token cannot.
+//
+// None of this constrains which subject a given client may assert. Any holder of
+// the mint scope can name any subject, and vault42 has no client-to-subject
+// policy. That gap is stated in docs/security.md AR-16.
 
 // MintedTokenType is the token_type claim on a minted token.
 //
@@ -169,6 +176,13 @@ type MintRequest struct {
 	Scopes []string
 	// TTL is optional; zero means MintConfig.DefaultTTL.
 	TTL time.Duration
+	// MintedBy is the authenticated client asking for the assertion. It reaches
+	// the token as the minted_by claim so a relying party can attribute the
+	// assertion without vault42's audit log, which it cannot read. The caller
+	// supplies it from its own authenticated context, never from the request
+	// body: an attribution a mint client could choose would name whichever
+	// tenant it wanted to blame.
+	MintedBy string
 }
 
 // MintResult is a signed subject assertion.
@@ -299,9 +313,10 @@ func (s *MintService) Mint(req MintRequest) (*MintResult, error) {
 		// ClientID is deliberately absent. Setting it would make a minted token
 		// indistinguishable from a client-credentials token to any code that
 		// treats the claim's presence as proof of a service caller, including
-		// the service document store, which asserts exactly that. Attribution
-		// for the minting client lives in the audit event instead, where it
-		// cannot be replayed.
+		// the service document store, which asserts exactly that. The minting
+		// client is named in MintedBy, which carries no authority anywhere, so
+		// the two meanings stay apart.
+		MintedBy:  req.MintedBy,
 		TokenType: MintedTokenType,
 	}
 

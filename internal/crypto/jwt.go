@@ -33,6 +33,12 @@ type VaultClaims struct {
 	Fingerprint  string        `json:"fingerprint,omitempty"`
 	Confirmation *Confirmation `json:"cnf,omitempty"`
 	TokenType    string        `json:"token_type,omitempty"`
+	// MintedBy names the client that requested a minted subject assertion. It
+	// is set only by the mint path and carries no authority: it is attribution
+	// for a relying party, not a credential. It is deliberately not ClientID,
+	// which is the claim that marks a client-credentials caller and is read as
+	// such by the service document store.
+	MintedBy string `json:"minted_by,omitempty"`
 }
 
 // Confirmation holds DPoP proof-of-possession binding (RFC 9449).
