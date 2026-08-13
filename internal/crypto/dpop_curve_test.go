@@ -13,7 +13,7 @@ import (
 )
 
 // TestValidateDPoPProofRejectsAnES256ProofCarryingAP384Key covers the case
-// TestDPoPValidProofECP384NotAllowed only appears to cover.
+// TestDPoPProofNamingES384IsRejectedByTheAlgorithmAllowlist only appears to cover.
 //
 // That test labels its proof alg ES384, so WithValidMethods refuses it before
 // any key is looked at and the assertion holds no matter what the ES256
