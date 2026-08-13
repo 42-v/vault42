@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 )
 
 // RefreshTokenRepo implements repository.RefreshTokenRepository.
@@ -29,17 +30,39 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 // inside the same statement, and only a family with no rows yet (a genuine new
 // session) falls back to this token's own created_at. A caller cannot extend a
 // session by lying about it, because it never supplies the value.
+//
+// SECURITY INVARIANT (reuse detection): the insert is conditional on the family
+// carrying no revoked row, and returns repository.ErrFamilyRevoked instead of
+// inserting one when it does. Reuse detection revokes the rows a family has at
+// that instant, so a rotation that inserts its successor a moment later produced
+// a token no revocation ever touched: the caller who lost the race got
+// replay_detected, the caller who won kept a rotating session for the rest of the
+// absolute session lifetime, and the operator read the audit log and believed the
+// family had died.
+//
+// The guard locks the family's rows instead of reading them, because a snapshot
+// read cannot see a revocation that is still in flight. Locking makes the insert
+// wait for that revocation and then read the value it committed. Together with
+// the lock RevokeFamily takes, the two statements can no longer be invisible to
+// each other in either direction. The aggregate sits outside the locked scan so
+// that there is no filter on revoked for the planner to push down into it, which
+// would turn the lock back into a snapshot read.
 func (r *RefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
-	_, err := r.db.Pool.Exec(ctx, `
+	tag, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-		        COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9))`,
+		SELECT $1::uuid, $2::uuid, $3::uuid, $4::varchar, $5::uuid, $6::uuid, $7::varchar, $8::timestamptz, $9::timestamptz,
+		       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)
+		WHERE COALESCE((SELECT bool_or(family.revoked)
+		                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 FOR UPDATE) AS family), FALSE) = FALSE`,
 		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
 		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
 		token.ExpiresAt, token.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrFamilyRevoked
 	}
 	return nil
 }
@@ -87,9 +110,17 @@ func (r *RefreshTokenRepo) GetByTokenHash(ctx context.Context, hash string) (*mo
 	return &t, nil
 }
 
-// MarkUsed atomically marks a token as used. Returns true if the token was previously unused.
+// MarkUsed atomically marks a token as used. Returns true if the token was
+// previously unused and not revoked.
+//
+// The revoked half of the precondition is not redundant with the caller's own
+// check. This statement is the instant a token is spent, and the caller read the
+// row earlier: a revocation landing in between left the caller holding a snapshot
+// that says the family is live. Consuming the row on that stale read is how a
+// token in a family an operator has just burned still gets spent.
 func (r *RefreshTokenRepo) MarkUsed(ctx context.Context, id string) (bool, error) {
-	tag, err := r.db.Pool.Exec(ctx, `UPDATE auth.refresh_tokens SET used = TRUE WHERE id = $1 AND used = FALSE`, id)
+	tag, err := r.db.Pool.Exec(ctx,
+		`UPDATE auth.refresh_tokens SET used = TRUE WHERE id = $1 AND used = FALSE AND revoked = FALSE`, id)
 	if err != nil {
 		return false, fmt.Errorf("mark token used: %w", err)
 	}
@@ -115,9 +146,29 @@ func (r *RefreshTokenRepo) RevokeByDeviceID(ctx context.Context, deviceID string
 }
 
 // RevokeFamily revokes all tokens in a rotation family to prevent replay attacks.
+//
+// SECURITY INVARIANT (reuse detection): the family's rows are locked in a
+// statement of their own before the update, so that a rotation holding those rows
+// finishes first and the update below runs on a snapshot that already contains
+// the successor it inserted. A single UPDATE takes its snapshot when it starts,
+// which is before it waits for those locks, so it would revoke every row of the
+// family except the one the rotation it just waited for had added. That surviving
+// row is the whole stolen session: the replaying caller is told replay_detected
+// and the family keeps rotating.
 func (r *RefreshTokenRepo) RevokeFamily(ctx context.Context, familyID string) error {
-	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.refresh_tokens SET revoked = TRUE WHERE family_id = $1`, familyID)
+	tx, err := r.db.Pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("revoke family: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+
+	if _, err := tx.Exec(ctx, `SELECT id FROM auth.refresh_tokens WHERE family_id = $1 FOR UPDATE`, familyID); err != nil {
+		return fmt.Errorf("lock family: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.refresh_tokens SET revoked = TRUE WHERE family_id = $1`, familyID); err != nil {
+		return fmt.Errorf("revoke family: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("revoke family: %w", err)
 	}
 	return nil

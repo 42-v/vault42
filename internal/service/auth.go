@@ -898,26 +898,8 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		}
 	}
 	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
-	pair, err := s.tokenSvc.IssueRotatedPair(
-		stored.UserID, refreshRoles, []string{"read", "write"},
-		stored.ClientID, fp, stored.FamilyID, familyOrigin,
-	)
+	pair, err := s.issueRotatedPair(ctx, stored, refreshRoles, fp, familyOrigin, ip, ua)
 	if err != nil {
-		return nil, err
-	}
-
-	// Store new refresh token
-	newHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
-	newID, err := vaultcrypto.RandomUUID()
-	if err != nil {
-		return nil, fmt.Errorf("generate refresh token ID: %w", err)
-	}
-	if err := s.tokens.Create(ctx, &model.RefreshToken{
-		ID: newID, UserID: stored.UserID, ClientID: stored.ClientID,
-		TokenHash: newHash, FamilyID: stored.FamilyID,
-		DeviceID: stored.DeviceID, FingerprintHash: fp,
-		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
-	}); err != nil {
 		return nil, err
 	}
 
@@ -933,6 +915,48 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		RefreshToken: pair.RefreshToken,
 		CookieMaxAge: int(time.Until(pair.RefreshExpAt).Seconds()),
 	}, nil
+}
+
+// issueRotatedPair mints the successor of a consumed refresh token and persists
+// it in the same family.
+//
+// SECURITY INVARIANT (reuse detection): the store refuses to insert into a family
+// that has been revoked, and that refusal is reported as the replay it is. Two
+// requests presenting one stolen token both pass every check on the row they
+// read; one consumes it and the other, having lost that race, revokes the family.
+// The revocation only covers the rows that exist at that instant, so the winner's
+// successor is a token nothing has ever revoked. Treating the refused insert as a
+// successful rotation is what let the winner keep a rotating session for the rest
+// of the absolute session lifetime while the loser was told replay_detected and
+// the operator read the same in the audit log.
+func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.RefreshToken, roles []string, fp string, familyOrigin time.Time, ip, ua string) (*TokenPair, error) {
+	pair, err := s.tokenSvc.IssueRotatedPair(
+		stored.UserID, roles, []string{"read", "write"},
+		stored.ClientID, fp, stored.FamilyID, familyOrigin,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	newID, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token ID: %w", err)
+	}
+	if err := s.tokens.Create(ctx, &model.RefreshToken{
+		ID: newID, UserID: stored.UserID, ClientID: stored.ClientID,
+		TokenHash: vaultcrypto.SHA256Hex(pair.RefreshToken), FamilyID: stored.FamilyID,
+		DeviceID: stored.DeviceID, FingerprintHash: fp,
+		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
+	}); err != nil {
+		if errors.Is(err, repository.ErrFamilyRevoked) {
+			s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
+			s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"reason": "family_revoked_during_rotation", "family_id": stored.FamilyID}, 90)
+			return nil, ErrReplayDetected
+		}
+		return nil, err
+	}
+	return pair, nil
 }
 
 // Logout revokes all refresh tokens for a user.
