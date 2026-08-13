@@ -102,7 +102,13 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # 10870, all covered by the tests those fixes shipped; the five servicedoc
 # bucket-C exclusions were unchanged in substance and only relocated (+31 lines)
 # by the quota code inserted above them.
-BASELINE_TOTAL_STATEMENTS = 10870
+# Lowered from 10870 to 10844 by retiring the dead revoke-client and
+# rotate-client-secret CLI handlers (26 statements deleted): both ran UPDATEs the
+# vault_app role has never been granted on auth.clients (42501 since migration
+# 001), so they were dead code, and client revocation/secret rotation already live
+# on the admin gateway. A full cov_run reports 10844, still 100% of reachable
+# (10796/10796); the floor drops with the deletion in the same review.
+BASELINE_TOTAL_STATEMENTS = 10844
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
