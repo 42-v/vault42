@@ -53,7 +53,9 @@ type MintRequestBody struct {
 type MintResponse struct {
 	// AccessToken is the signed RS256 assertion. There is no refresh
 	// token and no stored session; the assertion cannot be rotated or
-	// revoked before ExpiresIn elapses.
+	// revoked before ExpiresIn elapses. It carries a minted_by claim naming
+	// the client that requested it, which is how a relying party attributes
+	// an assertion it did not authenticate; that claim confers nothing.
 	AccessToken string `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749
 	// TokenType is the HTTP presentation scheme, per RFC 6749. It is NOT the
 	// JWT's own token_type claim, which is "mint" and is what keeps a minted
@@ -140,6 +142,10 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		Roles:   req.Roles,
 		Scopes:  req.Scopes,
 		TTL:     time.Duration(req.TTLSeconds) * time.Second,
+		// The authenticated client, never anything from the body. MintRequestBody
+		// has no field for this, so a caller cannot name a different tenant's
+		// client as the one that spoke.
+		MintedBy: claims.ClientID,
 	})
 	if err != nil {
 		status, code := mintErrorCode(err)

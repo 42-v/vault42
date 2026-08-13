@@ -308,6 +308,81 @@ Both are closed. `Refresh` now opens every row before publishing any of it, and 
 
 ---
 
+### AR-16: A `mint:token` Holder Can Assert Any Subject the Estate Honors
+
+**Severity:** High (by design, off by default) | **Source:** 1.0.0 review of `POST /mint`
+
+`POST /mint` signs an assertion about a subject vault42 never authenticated. Nothing binds a
+calling client to the subjects it is allowed to name. Any client holding `mint:token` can assert
+any subject, and the token it gets back is signed with the same key, published under the same
+JWKS, and shaped like a token issued after a real login. In an estate where more than one
+tenant's service holds a mint credential, one tenant's minting client can speak as any of
+another tenant's subjects to every relying party that accepts a vault42-issued token.
+
+That is what the endpoint is for. It is not a bug in it, and 1.0.0 ships no client-to-subject
+policy. What follows is the exact set of conditions under which the exposure is reachable, so an
+operator can decide whether to enable it.
+
+**All four must hold:**
+
+1. `VAULT_MINT_ENABLED=true`, and `VAULT_MINT_AUDIENCE` set to a value other than
+   `VAULT_ORIGIN`. `POST /mint` is not mounted otherwise, and the server refuses to start if the
+   two are equal. Both default to off and unset.
+2. A service client record carries `mint:token` in its scope list, written into the seed file or
+   granted through the admin client API. Nothing grants it implicitly, and no user-token
+   issuance path can produce it.
+3. The caller holds that client's secret and exchanges it at `POST /client/token`. A user
+   session cannot reach the route: the handler refuses any token with no `client_id` claim,
+   ahead of the scope check.
+4. A relying party accepts tokens carrying `aud: VAULT_MINT_AUDIENCE` and does not reject
+   `token_type: "mint"`.
+
+Condition 4 is where the exposure lands, and vault42 cannot enforce it. Nothing in this service
+constrains what a relying party chooses to trust. An RP that checks the signature and the issuer
+and stops there treats a minted assertion and a real login as the same fact.
+
+**What a mint holder gets, and what it does not:**
+
+- **Any subject, unrestricted.** The subject is caller-supplied, is never looked up, and does
+  not have to exist in vault42. The only constraint is a charset and length limit
+  (`^[A-Za-z0-9][A-Za-z0-9._@-]*$`, 128 bytes) that keeps control characters out of a signed
+  claim and an audit row. It is not an authorization check.
+- **Not vault42 itself.** A minted token carries `token_type: "mint"`, which vault42's own auth
+  middleware rejects, and an audience that is not vault42's own; either alone stops it at the
+  door. Minted roles and scopes come from allow-lists that are empty by default, and
+  `mint:token`, `kms:unwrap`, the `svcdoc:` scopes and the admin scopes can never be minted. The
+  blast radius is the downstream estate, not this service.
+- **Nothing revocable.** vault42 keeps no record of a minted token beyond the audit event.
+  Rotating or deleting the client credential does not invalidate assertions already signed. The
+  only bound is the token lifetime: 5 minutes by default, 15 minutes at the hard ceiling.
+
+**Why this is accepted for 1.0.0:**
+
+- **Per-client subject policy is a feature, not a fix.** Constraining which subjects a client may
+  assert needs a schema for the binding, an admin surface to manage it, and a migration for
+  existing clients. It is out of scope for 1.0.0, and no configuration knob approximates it,
+  because a half-expressive one would read as a boundary without being one.
+- **The endpoint has no alternative shape.** Eleven legacy services hold foreign-key copies of
+  the platform's own user ids, so the token subject has to remain that id rather than a
+  vault42-native one. The alternative is rewriting every one of those tables.
+- **Reaching it takes four deliberate acts.** None of the conditions above is a default, and a
+  stock deployment has no mint at all.
+- **Use is attributable.** Every mint, accepted or refused, writes a `token_minted` audit event
+  naming the asserted subject, the calling client and the jti. Since 1.0.0 the token carries the
+  same attribution itself, in a `minted_by` claim holding the minting client's id, so a relying
+  party can attribute an assertion without reading vault42's database, which it cannot. The
+  claim is deliberately not named `client_id`: that claim marks an authenticated service caller
+  and is read as one by the service document store.
+- **Guarded against regression.** `TestMintHandler_AMintedTokenNamesTheClientThatRequestedIt`
+  and `TestMintHandler_AMintedTokenCarriesNoClientIDClaim` pin both halves against the token on
+  the wire, and `tests/spec/mint_claim_collision_test.go` fails the build if the minted claim set
+  ever sets `ClientID` or drops `MintedBy`.
+
+**Revisit when** a second tenant's service is granted `mint:token` in the same deployment. At
+that point the missing binding stops being an accepted risk and becomes a defect.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

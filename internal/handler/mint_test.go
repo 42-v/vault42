@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +113,95 @@ func mintRequest(t *testing.T, body MintRequestBody) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/mint", jsonBody(t, body))
 	req.RemoteAddr = "127.0.0.1:9999"
 	return req
+}
+
+// mintedTokenPayload decodes a minted token's JWT payload as raw JSON.
+//
+// The claim assertions below are about the names on the wire, because that is
+// what a relying party parses. Decoding into VaultClaims would assert Go field
+// names instead and would keep passing if a json tag were renamed underneath it.
+func mintedTokenPayload(t *testing.T, token string) map[string]interface{} {
+	t.Helper()
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) != 3 {
+		t.Fatalf("minted token has %d dot-separated parts, want 3", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode minted token payload: %v", err)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("parse minted token payload: %v", err)
+	}
+	return payload
+}
+
+// A minted token asserts a subject vault42 never authenticated, so the client
+// that asked for it is the only actor a relying party can hold responsible.
+// Without this claim an RP can see that a token was minted, because token_type
+// is "mint", but not by whom. Attribution then exists only in vault42's audit
+// log, which the RP cannot read, so an RP that finds a forged subject in its own
+// data has no way to narrow the incident to one mint credential.
+func TestMintHandler_AMintedTokenNamesTheClientThatRequestedIt(t *testing.T) {
+	const requestingClient = "7e2f9a10-2222-4000-8000-0000000000ab"
+
+	h := newMintTestHandler(t, nil)
+	req := withServiceClaims(mintRequest(t, MintRequestBody{Subject: "user-1"}), requestingClient, []string{MintScope})
+
+	rec := httptest.NewRecorder()
+	h.Mint(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint failed: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp MintResponse
+	decodeResponse(t, rec, &resp)
+
+	payload := mintedTokenPayload(t, resp.AccessToken)
+	if payload["minted_by"] != requestingClient {
+		t.Fatalf("minted_by = %v, want the authenticated client %q; the token does not say who minted it",
+			payload["minted_by"], requestingClient)
+	}
+}
+
+// The attribution claim must never be spelled client_id. requireClient in
+// servicedoc.go and ClientRateLimitKey both read a non-empty client_id claim as
+// proof of a service caller, so a minted token carrying one would be admitted to
+// the service document store as its minting client and could read and overwrite
+// that client's private documents for any subject the mint holder chose to name.
+func TestMintHandler_AMintedTokenCarriesNoClientIDClaim(t *testing.T) {
+	h := newMintTestHandler(t, nil)
+	rec := httptest.NewRecorder()
+	h.Mint(rec, withServiceClaims(mintRequest(t, MintRequestBody{Subject: "user-1"}), mintHandlerClient, []string{MintScope}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint failed: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp MintResponse
+	decodeResponse(t, rec, &resp)
+
+	payload := mintedTokenPayload(t, resp.AccessToken)
+	if value, present := payload["client_id"]; present {
+		t.Fatalf("minted token carries client_id = %v; every svcdoc route would read it as the calling service", value)
+	}
+}
+
+// The attribution is only worth reading if it comes from the authenticated
+// client rather than from the caller. If minted_by were ever accepted as a
+// request field, one stolen mint credential could sign assertions attributed to
+// a different tenant's client, and both the token and the audit row would name
+// the wrong service for the whole incident.
+func TestMintHandler_TheRequestBodyCannotChooseTheMintedByClaim(t *testing.T) {
+	h := newMintTestHandler(t, nil)
+	req := httptest.NewRequest(http.MethodPost, "/mint",
+		strings.NewReader(`{"subject":"user-1","minted_by":"another-tenants-client"}`))
+	req.RemoteAddr = "127.0.0.1:9999"
+	req = withServiceClaims(req, mintHandlerClient, []string{MintScope})
+
+	rec := httptest.NewRecorder()
+	h.Mint(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a caller-supplied minted_by was accepted with %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestMintHandler_IssuesToken(t *testing.T) {
