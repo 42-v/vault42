@@ -119,6 +119,37 @@ jobs:
             coverage.out
             coverage-test-output.txt
 
+  # A conditional job reports "skipped", and branch protection counts skipped as
+  # green, so the required check for coverage cannot be the conditional job
+  # itself: "Go coverage gate" would show green on a run where it never
+  # executed. That is the same shape as a gate that exits 0 having measured
+  # nothing. This one always runs and inspects the result.
+  #
+  # Make THIS the required status check in branch protection, not the job it
+  # watches.
+  coverage-gate-required:
+    name: Go coverage gate (required)
+    runs-on: ubuntu-latest
+    needs: [changes, coverage-gate]
+    if: always()
+    steps:
+      - name: Assert the gate ran when it had to
+        shell: bash
+        env:
+          NEEDED: ${{ needs.changes.outputs.go_changed }}
+          RESULT: ${{ needs.coverage-gate.result }}
+        run: |
+          set -eo pipefail
+          if [ "$NEEDED" != 'true' ]; then
+            echo "no coverage-relevant change in this PR; the gate was not required"
+            exit 0
+          fi
+          if [ "$RESULT" != 'success' ]; then
+            echo "coverage gate result is '$RESULT' on a change that requires it" >&2
+            exit 1
+          fi
+          echo "coverage gate ran and passed"
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

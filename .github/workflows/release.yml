@@ -86,9 +86,48 @@ jobs:
     with:
       full_scan: true
 
+  # The release advertises "100.00% of reachable statements", and until now
+  # nothing checked that sentence against the commit being published. release.yml
+  # ran only --version-only, and ci.yml fires on push to main and pull requests to
+  # main, never on a tag. So the gate was a pull-request check the release
+  # inherited by assumption, and an exclusion-set change that reached main through
+  # a PR the paths filter skipped would have been published unverified.
+  coverage:
+    name: Coverage gate
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The same canonical run ci.yml's coverage-gate performs, on the tagged ref.
+      - name: Canonical coverage run
+        shell: bash
+        run: |
+          set -eo pipefail
+          source scripts/lib/coverage-env.sh
+          cov_require_runtime
+          cov_run coverage.out coverage-test-output.txt
+          cov_check_failures coverage-test-output.txt
+
+      - name: Gate
+        run: scripts/release-check.sh --coverage-only coverage.out
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-coverage
+          path: |
+            coverage.out
+            coverage-test-output.txt
+
   images:
     name: Build & push images (${{ needs.detect.outputs.version }})
-    needs: [detect, security]
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
     outputs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
@@ -193,7 +232,7 @@ jobs:
   # SHA256SUMS, no SBOM, no detached signature.
   artifacts:
     name: Binaries, checksums & SBOMs
-    needs: [detect, security]
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -233,7 +272,7 @@ jobs:
 
   chart:
     name: Publish Helm chart
-    needs: [detect, security]
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -282,7 +321,7 @@ jobs:
 
   nuget:
     name: NuGet (${{ needs.detect.outputs.version }})
-    needs: [detect, security]
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
