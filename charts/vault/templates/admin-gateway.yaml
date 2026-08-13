@@ -69,6 +69,14 @@ spec:
               value: {{ .Values.database.sslmode | quote }}
             - name: MASTER_KEY_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.masterKey }}
+            # The account-erasure service is built only when the gateway has the
+            # HMAC secret: it derives the identity and blob pseudonyms from it, so
+            # without it DELETE /admin/users/{id} answers 503. This env was absent,
+            # which left the Article 17 erasure path off in every chart install
+            # until an operator noticed and added it by hand. The secret is the
+            # same one the server mounts; it is already in this volume.
+            - name: HMAC_SECRET_FILE
+              value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.hmacSecret }}
             - name: DB_ADMIN_PASSWORD_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.adminGateway.dbAdminPasswordKey }}
             - name: DB_MIG_PASSWORD_FILE
