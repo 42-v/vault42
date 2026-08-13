@@ -98,12 +98,20 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, e
 }
 
 // Update persists changes to a user's profile fields and sets updated_at to now.
+//
+// email is deliberately absent from the SET clause. It never carried a change:
+// PUT /user/profile merges display_name, avatar_url and locale and writes back
+// the address it just read. But PostgreSQL checks the column privilege on every
+// target of an UPDATE whether or not the value differs, so naming it here forced
+// a standing UPDATE(email) grant on vault_app, and with it the ability to point
+// any account at any address. The address is immutable to this role by design;
+// migration 015 is what makes the database agree.
 func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 	_, err := r.db.Pool.Exec(ctx, `
-		UPDATE auth.users SET email=$2, display_name=$3, avatar_url=$4, locale=$5,
-		       mfa_required=$6, updated_at=$7
+		UPDATE auth.users SET display_name=$2, avatar_url=$3, locale=$4,
+		       mfa_required=$5, updated_at=$6
 		WHERE id = $1`,
-		user.ID, user.Email, nullStr(user.DisplayName), nullStr(user.AvatarURL),
+		user.ID, nullStr(user.DisplayName), nullStr(user.AvatarURL),
 		user.Locale, user.MFARequired, time.Now(),
 	)
 	if err != nil {
@@ -117,12 +125,18 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 // real email survives only in the encrypted account-recovery log. The row is
 // kept (not removed) so foreign keys stay valid; the account-state gate rejects
 // deleted=true users at login and refresh.
+//
+// The write goes through auth.erase_user_identity() rather than an UPDATE of its
+// own. Running it inline needed column-level UPDATE on email, display_name and
+// avatar_url, and a column grant is standing: it also authorises
+// `UPDATE auth.users SET email=... WHERE id=<anyone>`, which is an account
+// takeover because password reset follows the address. The function is SECURITY
+// DEFINER, owned by the migration role, and writes nothing but a tombstone, so
+// the roles keep erasure and lose arbitrary identity writes (migration 015).
+// tombstoneEmail must be deleted-<id>@<domain>.invalid; the function refuses
+// anything else.
 func (r *UserRepo) SoftDeleteScrub(ctx context.Context, id, tombstoneEmail string) error {
-	_, err := r.db.Pool.Exec(ctx, `
-		UPDATE auth.users
-		SET email=$2, display_name=NULL, avatar_url=NULL,
-		    deleted=TRUE, deleted_at=NOW(), updated_at=NOW()
-		WHERE id=$1`, id, tombstoneEmail)
+	_, err := r.db.Pool.Exec(ctx, `SELECT auth.erase_user_identity($1, $2)`, id, tombstoneEmail)
 	if err != nil {
 		return fmt.Errorf("soft-delete scrub user: %w", err)
 	}

@@ -50,15 +50,19 @@ func applyRealGrants(t *testing.T, adminPool *pgxpool.Pool) {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		for _, stmt := range strings.Split(string(raw), ";") {
-			// A statement carries the comment lines that preceded it, so strip them
-			// before deciding what it is — otherwise every grant introduced by a
-			// comment (which, in these migrations, is most of them) is skipped and
-			// the test silently proves nothing.
+		// Comments come off BEFORE the split, not after. Splitting first meant a
+		// semicolon inside a comment, which is ordinary English punctuation and is
+		// already present in several of these files, cut the statement it introduced in
+		// half, left the comment's own tail at the front of the second piece, and
+		// the prefix check below then skipped the grant. Silently: the suite went
+		// green while exercising a privilege model missing whatever those grants
+		// made. That is the exact failure mode this file exists to catch, so it
+		// must not be reintroduced by the fixture that catches it.
+		for _, stmt := range strings.Split(stripSQLComments(string(raw)), ";") {
 			var body []string
 			for _, line := range strings.Split(stmt, "\n") {
 				l := strings.TrimSpace(line)
-				if l == "" || strings.HasPrefix(l, "--") {
+				if l == "" {
 					continue
 				}
 				body = append(body, l)
@@ -73,6 +77,21 @@ func applyRealGrants(t *testing.T, adminPool *pgxpool.Pool) {
 			}
 		}
 	}
+}
+
+// stripSQLComments drops whole-line `--` comments. It is deliberately not a SQL
+// lexer: the migrations put every comment on its own line, and a parser that
+// also handled trailing comments would have to know about string literals and
+// dollar quoting to avoid eating a `--` inside one.
+func stripSQLComments(sql string) string {
+	var kept []string
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // appRolePool opens a pool authenticated as the real vault_app role.

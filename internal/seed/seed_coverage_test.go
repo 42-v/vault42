@@ -44,10 +44,21 @@ type seedAdminRepo struct {
 	repository.AdminUserRepository
 	getByUsername func(context.Context, string) (*model.AdminUser, error)
 	create        func(context.Context, *model.AdminUser) error
+	list          func(context.Context) ([]*model.AdminUser, error)
 }
 
 func (m *seedAdminRepo) Create(ctx context.Context, a *model.AdminUser) error {
 	return m.create(ctx, a)
+}
+
+// List is what seedAdmin consults to attribute a seeded row to a creator, which
+// migration 016 requires once any admin exists. A nil list stands for an empty
+// table, so the seeded admin goes in unattributed the way first boot does.
+func (m *seedAdminRepo) List(ctx context.Context) ([]*model.AdminUser, error) {
+	if m.list == nil {
+		return nil, nil
+	}
+	return m.list(ctx)
 }
 
 func (m *seedAdminRepo) GetByUsername(ctx context.Context, u string) (*model.AdminUser, error) {
@@ -190,6 +201,47 @@ func TestRunAdmins(t *testing.T) {
 		}
 		if err := RunAdmins(ctx, sf, createErr, ""); err == nil {
 			t.Error("expected create error")
+		}
+	})
+
+	// A seed file names a role and never an actor. Migration 016 refuses an admin
+	// row that outranks its creator and refuses an unattributed one once any admin
+	// exists, so a seeded super_admin must be attributed to an account that can
+	// carry it or the insert dies at the database.
+	t.Run("attributes the seeded admin to the highest-ranked existing one", func(t *testing.T) {
+		var got *model.AdminUser
+		repo := &seedAdminRepo{
+			getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
+			create:        func(_ context.Context, a *model.AdminUser) error { got = a; return nil },
+			list: func(context.Context) ([]*model.AdminUser, error) {
+				return []*model.AdminUser{
+					nil,
+					{ID: "viewer-id", Role: "viewer"},
+					{ID: "boss-id", Role: "super_admin"},
+					{ID: "unknown-id", Role: "not-a-role"},
+					{ID: "op-id", Role: "operator"},
+				}, nil
+			},
+		}
+		if err := RunAdmins(ctx, sf, repo, ""); err != nil {
+			t.Fatalf("RunAdmins: %v", err)
+		}
+		if got == nil {
+			t.Fatal("the seeded admin was never created")
+		}
+		if got.CreatedBy != "boss-id" {
+			t.Fatalf("CreatedBy = %q, want the super_admin's id", got.CreatedBy)
+		}
+	})
+
+	t.Run("a failed creator lookup stops the seed", func(t *testing.T) {
+		repo := &seedAdminRepo{
+			getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
+			create:        func(context.Context, *model.AdminUser) error { t.Fatal("must not create without a creator"); return nil },
+			list:          func(context.Context) ([]*model.AdminUser, error) { return nil, errors.New("db") },
+		}
+		if err := RunAdmins(ctx, sf, repo, ""); err == nil {
+			t.Error("expected the list error to propagate")
 		}
 	})
 }

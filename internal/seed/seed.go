@@ -14,6 +14,7 @@ import (
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
 )
 
@@ -281,6 +282,11 @@ func seedAdmin(ctx context.Context, as AdminSeed, admins repository.AdminUserRep
 		return fmt.Errorf("hash password: %w", err)
 	}
 
+	createdBy, err := seedAdminCreator(ctx, admins)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
 	admin := &model.AdminUser{
 		ID:           id,
@@ -289,6 +295,7 @@ func seedAdmin(ctx context.Context, as AdminSeed, admins repository.AdminUserRep
 		Role:         as.Role,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		CreatedBy:    createdBy,
 	}
 
 	if err := admins.Create(ctx, admin); err != nil {
@@ -297,6 +304,46 @@ func seedAdmin(ctx context.Context, as AdminSeed, admins repository.AdminUserRep
 
 	fmt.Printf("seed: admin %q created (id=%s, role=%s)\n", as.Username, id, as.Role)
 	return nil
+}
+
+// seedAdminCreator picks the admin that a seeded row is attributed to.
+//
+// A seed file names a role and never an actor, so before migration 016 these
+// rows went in with created_by NULL. 016 refuses an unattributed admin once any
+// admin exists, because "omit created_by" would otherwise be the whole bypass of
+// the rank ceiling. The deployment owner applying the seed file is, in practice,
+// whoever holds the highest-ranked account, so that is the account recorded; it
+// is also the only choice that can satisfy the ceiling for a seeded super_admin.
+//
+// An empty table means first boot and there is nothing to attribute to, which is
+// the one case 016 lets through with no creator.
+func seedAdminCreator(ctx context.Context, admins repository.AdminUserRepository) (string, error) {
+	existing, err := admins.List(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list admins: %w", err)
+	}
+
+	best, bestRank := "", -1
+	for _, a := range existing {
+		if a == nil {
+			continue
+		}
+		if rank := adminRoleRank(a.Role); rank > bestRank {
+			best, bestRank = a.ID, rank
+		}
+	}
+	return best, nil
+}
+
+// adminRoleRank mirrors the rank column of auth.admin_roles. Unknown roles sort
+// below every known one so they are never chosen as a creator.
+func adminRoleRank(role string) int {
+	for i, r := range rbac.ValidRoles {
+		if string(r) == role {
+			return i
+		}
+	}
+	return -1
 }
 
 func seedUser(ctx context.Context, us UserSeed, users repository.UserRepository, pepper string) error {
