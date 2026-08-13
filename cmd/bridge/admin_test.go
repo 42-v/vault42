@@ -484,29 +484,26 @@ func TestAdminUnflagResponseShape(t *testing.T) {
 	}
 }
 
-// TestAdminFlagAcceptsAnythingAsAnIP records that the endpoint does not check
-// that "ip" is an address.
+// TestAdminFlagRejectsInvalidIP is why the endpoint exists as an operator
+// tool rather than a free-form key/value store.
 //
-// Any string is accepted and stored, so a typo such as an address with a stray
-// character, a hostname, or a whole CIDR range is reported back as a successful
-// 201 and then never matches a client, because routing compares against the
-// exact string clientIP produced. The operator believes an address is contained
-// when nothing is. The stored key is also what goes into Redis as
-// "bridge:flag:<value>", so an arbitrary string ends up in the shared keyspace.
-//
-// The test asserts the current behavior so that adding validation, which would
-// mean rejecting these with a 400, shows up here as a deliberate change.
-func TestAdminFlagAcceptsAnythingAsAnIP(t *testing.T) {
+// A previous check only rejected the empty string, so "10.0.0.256", a hostname,
+// or a CIDR all returned 201 and were stored. Routing compares against the
+// exact string clientIP produced, so none of those keys ever matched a client.
+// The operator believed an address was contained when nothing was, and the
+// same string was written to Redis as bridge:flag:<value>.
+func TestAdminFlagRejectsInvalidIP(t *testing.T) {
 	notAddresses := []struct {
 		name  string
 		value string
 	}{
 		{"octet out of range", "10.0.0.256"},
-		{"trailing space", "10.0.0.1 "},
 		{"a CIDR range", "10.0.0.0/24"},
 		{"a hostname", "vault.example.com"},
 		{"an SQL fragment", "'; DROP TABLE flags; --"},
 		{"512 bytes of padding", strings.Repeat("a", 512)},
+		{"host:port", "10.0.0.1:8080"},
+		{"empty after trim", "   "},
 	}
 
 	for _, tt := range notAddresses {
@@ -523,15 +520,51 @@ func TestAdminFlagAcceptsAnythingAsAnIP(t *testing.T) {
 			w := httptest.NewRecorder()
 			ah.ServeFlag(w, req)
 
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body %s", w.Code, http.StatusBadRequest, w.Body.String())
+			}
+			if len(fs.List()) != 0 {
+				t.Errorf("an invalid ip was still stored: %+v", fs.List())
+			}
+		})
+	}
+}
+
+// TestAdminFlagAcceptsValidAddresses is the success side of the same check.
+// Both families have to work: clientIP returns IPv6 from a bracketed
+// RemoteAddr, and rejecting that family would make an operator unable to
+// contain the address they can see in the logs.
+func TestAdminFlagAcceptsValidAddresses(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"IPv4", "10.0.0.1", "10.0.0.1"},
+		{"IPv4 with surrounding space", "  203.0.113.9  ", "203.0.113.9"},
+		{"IPv6", "2001:db8::1", "2001:db8::1"},
+		{"loopback", "127.0.0.1", "127.0.0.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := NewFlagStore(time.Hour, "")
+			ah := NewAdminHandler(fs, "token")
+
+			body, err := json.Marshal(map[string]string{"ip": tt.value, "reason": "manual"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/bridge/flag", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer token")
+			w := httptest.NewRecorder()
+			ah.ServeFlag(w, req)
+
 			if w.Code != http.StatusCreated {
-				t.Fatalf("status = %d, want %d; validation was added, so this test needs updating", w.Code, http.StatusCreated)
+				t.Fatalf("status = %d, want %d; body %s", w.Code, http.StatusCreated, w.Body.String())
 			}
-			if !fs.IsFlagged(tt.value) {
-				t.Errorf("%q was accepted but not stored", tt.value)
-			}
-			// It matches nothing clientIP could ever produce for a real client.
-			if trimmed := strings.TrimSpace(tt.value); trimmed != tt.value && fs.IsFlagged(trimmed) {
-				t.Errorf("%q also matched its trimmed form", tt.value)
+			if !fs.IsFlagged(tt.want) {
+				t.Errorf("%q was accepted but %q is not flagged", tt.value, tt.want)
 			}
 		})
 	}
