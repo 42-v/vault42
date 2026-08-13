@@ -90,6 +90,99 @@ func TestLoadRefusesACountryCodeThatIsNotTwoLetters(t *testing.T) {
 	}
 }
 
+// Length is not the whole rule. A two-character entry that is not two letters
+// passes a length test and still matches nothing, because the middleware
+// compares the code against the header value verbatim. GEO_BLOCKLIST=R7 is a
+// shifted keystroke away from RU, and the deployment that results refuses
+// nobody while the manifest records a country the operator believes is banned.
+func TestLoadRefusesATwoCharacterCountryCodeThatIsNotTwoLetters(t *testing.T) {
+	tests := []struct {
+		key   string
+		value string
+	}{
+		{"GEO_BLOCKLIST", "R7"},
+		{"GEO_ALLOWLIST", "S-"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Setenv("VAULT_PROFILE", "dev")
+			t.Setenv(tt.key, tt.value)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load accepted %s=%q; it can never match the header, so the fence covers nothing", tt.key, tt.value)
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Errorf("error %q does not name %s", err, tt.key)
+			}
+			if !strings.Contains(err.Error(), tt.value) {
+				t.Errorf("error %q does not quote the offending entry %q", err, tt.value)
+			}
+			if !strings.Contains(err.Error(), "alpha-2") {
+				t.Errorf("error %q does not say what a legal entry looks like", err)
+			}
+		})
+	}
+}
+
+// A proxy header nobody is trusted to set is a header that is never read.
+// ClientIP falls back to the peer address when TrustedProxies is empty, so
+// every client behind the ingress collapses into one rate-limit bucket, one
+// lockout counter and one address in the audit log, while the operator's only
+// evidence that per-client attribution works is the variable they set. This one
+// warns instead of refusing, so the warning is the entire control: without it
+// the misconfiguration has no symptom until an incident needs the audit log.
+func TestValidateWarnsThatAProxyHeaderWithNoTrustedProxyIsNeverRead(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Config)
+		key  string
+	}{
+		{"client address header", func(c *Config) { c.RealIPHeader = "X-Forwarded-For" }, "REAL_IP_HEADER"},
+		{"TLS fingerprint header", func(c *Config) { c.TLSFingerprintHeader = "X-JA3-Fingerprint" }, "VAULT_TLS_FINGERPRINT_HEADER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := prodConfig()
+			tt.set(c)
+
+			var err error
+			logged := cliconfigCaptureLog(t, func() { err = c.Validate() })
+
+			if err != nil {
+				t.Fatalf("a header with no trusted proxy must warn, not refuse; a running deployment would stop booting on upgrade: %v", err)
+			}
+			if !strings.Contains(logged, tt.key) {
+				t.Errorf("nothing warned that %s is never read; log was:\n%s", tt.key, logged)
+			}
+			if !strings.Contains(logged, "TRUSTED_PROXIES") {
+				t.Errorf("the warning does not name the setting that would fix it; log was:\n%s", logged)
+			}
+		})
+	}
+
+	// The negative control. A warning that fires on the working shape is one an
+	// operator learns to scroll past, and this one has to be read.
+	t.Run("a trusted proxy silences it", func(t *testing.T) {
+		c := prodConfig()
+		c.RealIPHeader = "X-Forwarded-For"
+		c.TLSFingerprintHeader = "X-JA3-Fingerprint"
+		c.TrustedProxies = []string{"10.0.0.0/8"}
+
+		logged := cliconfigCaptureLog(t, func() {
+			if err := c.Validate(); err != nil {
+				t.Fatalf("a complete proxy configuration was rejected: %v", err)
+			}
+		})
+
+		if strings.Contains(logged, "REAL_IP_HEADER") || strings.Contains(logged, "VAULT_TLS_FINGERPRINT_HEADER") {
+			t.Errorf("a correctly configured proxy still warned; log was:\n%s", logged)
+		}
+	})
+}
+
 // An entry that net.ParseCIDR cannot read is dropped by the middleware with a
 // warning that scrolls past during startup. For IP_BLOCKLIST that means the
 // range the operator banned is not banned; for TRUSTED_PROXIES it means the

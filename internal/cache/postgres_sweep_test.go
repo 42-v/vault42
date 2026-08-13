@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -14,16 +15,34 @@ import (
 
 // recordingPG is a PostgreSQL wire peer that completes the startup handshake
 // and records the SQL text of every simple-protocol query it is asked to run,
-// answering each with a zero-row DELETE tag.
+// answering each with a zero-row DELETE tag unless answerWith says otherwise.
 type recordingPG struct {
 	mu      sync.Mutex
 	queries []string
+	tag     string
+	before  func()
 }
 
-func (r *recordingPG) record(sql string) {
+// answerWith replies to every subsequent query with tag, and runs before, if
+// set, ahead of that reply. Running the hook before the reply rather than after
+// is what makes a test deterministic: the client is still blocked waiting for
+// this statement, so it cannot yet have moved on to the next one.
+func (r *recordingPG) answerWith(tag string, before func()) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tag = tag
+	r.before = before
+}
+
+func (r *recordingPG) record(sql string) (tag string, before func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.queries = append(r.queries, sql)
-	r.mu.Unlock()
+	tag = r.tag
+	if tag == "" {
+		tag = "DELETE 0"
+	}
+	return tag, r.before
 }
 
 func (r *recordingPG) seen() []string {
@@ -54,8 +73,11 @@ func (r *recordingPG) serve(conn net.Conn) {
 		}
 		switch m := msg.(type) {
 		case *pgproto3.Query:
-			r.record(m.String)
-			backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("DELETE 0")})
+			tag, before := r.record(m.String)
+			if before != nil {
+				before()
+			}
+			backend.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
 			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 			if err := backend.Flush(); err != nil {
 				return
@@ -146,6 +168,39 @@ func TestClosingThePostgresCacheStopsTheBackgroundSweep(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if after := len(peer.seen()); after != before {
 		t.Fatalf("sweeper issued %d more queries after Close; it must stop", after-before)
+	}
+}
+
+// The stop must also be honored between the batches of a single sweep, not
+// only between ticks. A rollout onto a table that already holds millions of
+// dead rows makes every tick a full run of pgSweepMaxBatches deletes, each with
+// its own pgSweepTimeout budget, so a sweep in progress can outlast the whole
+// shutdown window. main.go defers Close and then waits: without the per-batch
+// check, it waits on twenty more DELETE statements it has already asked for
+// none of, against a pool it is draining, and the graceful shutdown turns into
+// the kill timeout.
+func TestClosingThePostgresCacheAbandonsTheRestOfASweepInProgress(t *testing.T) {
+	pool, peer := newRecordingPGPool(t)
+
+	c, err := NewPostgresCache(pool)
+	if err != nil {
+		t.Fatalf("NewPostgresCache: %v", err)
+	}
+
+	// A full batch is the answer that tells the reaper there is more backlog to
+	// work off, so it would issue another delete were it not closed.
+	peer.answerWith(fmt.Sprintf("DELETE %d", pgSweepBatch), func() { _ = c.Close() })
+
+	c.reapExpired()
+
+	var deletes int
+	for _, q := range peer.seen() {
+		if strings.Contains(q, "DELETE") && strings.Contains(q, "auth.cache") {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("the reaper ran %d delete batches against a closed cache, want 1; shutdown waits on every batch it does not abandon", deletes)
 	}
 }
 

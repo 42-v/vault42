@@ -218,6 +218,27 @@ func TestProfileDefaults_UnknownProfile(t *testing.T) {
 		}
 	})
 
+	// A blank value is not the same string as an unset one: an unset variable
+	// never reaches the parser, while a chart that renders `VAULT_PROFILE: " "`
+	// from an empty template expression hands over spaces. Refusing those would
+	// make the deployment a boot loop over whitespace, and answering with
+	// anything other than production would silently relax TLS, rate limiting
+	// and CORS on the strictest profile a deployment can ask for.
+	t.Run("a blank profile is production", func(t *testing.T) {
+		t.Setenv("VAULT_PROFILE", "   ")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("a blank VAULT_PROFILE was refused: %v", err)
+		}
+		if cfg.Profile != ProfileProduction {
+			t.Errorf("blank profile became %q, want %q", cfg.Profile, ProfileProduction)
+		}
+		if !cfg.TLSEnabled || !cfg.RateLimitEnabled || cfg.CORSAllowAll {
+			t.Errorf("blank profile did not get the production baseline: TLS=%v rate limit=%v CORS open=%v",
+				cfg.TLSEnabled, cfg.RateLimitEnabled, cfg.CORSAllowAll)
+		}
+	})
+
 	// A name nobody implements used to become production silently. That hid the
 	// one case where the fallback is not the strict choice: every profile-keyed
 	// control compares against an exact string, so a misspelled honeypot ran as
