@@ -1654,21 +1654,22 @@ func TestBridgeDecoyPathsAreServedLocally(t *testing.T) {
 	}
 }
 
-// TestBridgeDecoyPrefixSwallowsTheProductsOwnAdminSurface is a finding, not a
-// specification.
+// TestBridgeDoesNotSwallowTheProductsOwnAdminSurface is the inverted form of a
+// test that used to pin a finding.
 //
-// decoyPaths registers "/admin" and IsDecoyPath matches any path under it. The
-// admin gateway in this same repository registers thirty-odd routes under
-// /admin/, starting with POST /admin/auth/login, and docs/spec.md publishes every
-// one of them. Any of those requests arriving at a bridge is therefore answered
-// with a fake admin login page and flags the caller's address for the full
-// BRIDGE_FLAG_TTL, which then routes that operator's every subsequent request to
-// the honeypot. The operator sees a plausible but fabricated vault and has no
-// signal that anything switched.
+// decoyPaths registered "/admin", and IsDecoyPath matches any path under a
+// prefix. The admin gateway in this same repository registers thirty-odd routes
+// under /admin/, starting with POST /admin/auth/login, and docs/spec.md
+// publishes every one of them. So any of those requests arriving at a bridge was
+// answered with a fake admin login page and flagged the caller's address for the
+// full BRIDGE_FLAG_TTL, after which that operator's every request went to the
+// honeypot and showed them a plausible but fabricated vault with no signal
+// anything had switched.
 //
-// The test asserts the current behaviour so the collision cannot be lost, and so
-// that narrowing the decoy prefix shows up here as a deliberate change.
-func TestBridgeDecoyPrefixSwallowsTheProductsOwnAdminSurface(t *testing.T) {
+// The prefix is gone, and these paths now proxy through untouched. The caller
+// must also be unflagged: reaching the real vault while still being marked would
+// leave the operator poisoned for the next request instead of this one.
+func TestBridgeDoesNotSwallowTheProductsOwnAdminSurface(t *testing.T) {
 	realAdminRoutes := []string{
 		"/admin/auth/login",
 		"/admin/status",
@@ -1684,14 +1685,16 @@ func TestBridgeDecoyPrefixSwallowsTheProductsOwnAdminSurface(t *testing.T) {
 			resp, body := f.get(t, path)
 			resp.Body.Close()
 
-			if f.real.count() != 0 {
-				t.Fatalf("%s reached the real vault; the decoy prefix was narrowed and this test needs updating", path)
+			if f.real.count() != 1 {
+				t.Fatalf("%s did not reach the real vault (%d upstream requests); "+
+					"a decoy prefix is shadowing the product's own admin surface", path, f.real.count())
 			}
-			if !strings.Contains(body, "<html") && !strings.Contains(body, "<!DOCTYPE") {
-				t.Errorf("%s was not answered with a decoy page: %.120q", path, body)
+			if strings.Contains(body, "<!DOCTYPE") && strings.Contains(body, "login") {
+				t.Errorf("%s was answered with what looks like a decoy page: %.120q", path, body)
 			}
-			if !f.bridge.flags.IsFlagged("127.0.0.1") {
-				t.Errorf("%s did not flag the caller", path)
+			if f.bridge.flags.IsFlagged("127.0.0.1") {
+				t.Errorf("%s flagged the caller; an operator opening the admin console "+
+					"would be served fabricated data for the whole flag TTL", path)
 			}
 		})
 	}
@@ -1713,8 +1716,8 @@ func TestIsDecoyPathDoesNotOverreach(t *testing.T) {
 		{"/auth/admin", false},
 		{"/administrator", true},
 		{"/administrators", false},
-		{"/admin/", true},
-		{"/admin/auth/login", true},
+		{"/admin/", false},
+		{"/admin/auth/login", false},
 	}
 
 	for _, tt := range tests {

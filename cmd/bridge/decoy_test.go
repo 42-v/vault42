@@ -25,7 +25,12 @@ func TestIsDecoyPath(t *testing.T) {
 		{"/pma", true, "phpmyadmin.html"},
 		{"/cpanel", true, "cpanel.html"},
 		{"/webmail", true, "cpanel.html"},
-		{"/admin", true, "admin.html"},
+		// /admin is deliberately NOT a decoy: vault42 serves its admin SPA and
+		// roughly thirty documented API routes under it, and flagging an operator
+		// for opening the admin console is a self-inflicted outage.
+		// tests/spec/decoy_paths_test.go enforces that against the real routes.
+		{"/admin", false, ""},
+		{"/admin/auth/login", false, ""},
 		{"/administrator", true, "admin.html"},
 		{"/auth/login", false, ""},
 		{"/healthz", false, ""},

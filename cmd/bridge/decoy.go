@@ -39,6 +39,23 @@ func NewDecoyHandler(flags *FlagStore, webhook *WebhookSender) *DecoyHandler {
 }
 
 // decoyPaths maps URL path prefixes to their decoy template.
+//
+// Every prefix here must be one vault42 does not itself serve. A decoy is not a
+// passive 404: hitting one flags the caller for BRIDGE_FLAG_TTL, and for that
+// whole window every request from them is answered with fabricated key, user,
+// session and audit data, with nothing to indicate the switch. Aiming that at a
+// real route aims it at whoever legitimately uses the route.
+//
+// `/admin` used to be in this list and did exactly that. vault42 serves its
+// admin SPA and roughly thirty documented API routes under `/admin/`, and
+// IsDecoyPath matches by prefix, so an operator opening the admin console
+// through a bridge was flagged for twenty-four hours and then shown a fabricated
+// console. `POST /admin/auth/login` is the first request they make.
+// `/administrator` stays: it is Joomla's, not ours, and nothing under it is
+// registered.
+//
+// tests/spec/decoy_paths_test.go holds this property down against the real
+// route registrations rather than against this comment.
 var decoyPaths = map[string]string{
 	"/wp-admin":      "wp-login.html",
 	"/wp-login.php":  "wp-login.html",
@@ -46,7 +63,6 @@ var decoyPaths = map[string]string{
 	"/pma":           "phpmyadmin.html",
 	"/cpanel":        "cpanel.html",
 	"/webmail":       "cpanel.html",
-	"/admin":         "admin.html",
 	"/administrator": "admin.html",
 }
 
