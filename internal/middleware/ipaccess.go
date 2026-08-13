@@ -259,9 +259,35 @@ func IPAccess() func(http.Handler) http.Handler {
 			// Geo checks — only when a geo header is configured
 			geoHeader := loadGeoIPHeader()
 			if geoHeader != "" && (len(geoAllow) > 0 || len(geoBlock) > 0) {
-				country := strings.ToUpper(strings.TrimSpace(r.Header.Get(geoHeader)))
+				// The country is believed only from a hop the operator trusts,
+				// the same contract ClientIP applies to X-Forwarded-For and to
+				// the app header. It used to be read straight off the request, so
+				// anyone reaching the origin directly, through a leaked ClusterIP,
+				// a NodePort, a mis-published Service, or any hop that forwards
+				// client headers, simply sent the country the list wanted.
+				// IPAccess is mounted globally and ahead of authentication, so
+				// that was the entire fence for login, register, reset and the
+				// client-credentials grant.
+				var country string
+				if isTrustedProxy(stripPort(r.RemoteAddr)) {
+					country = strings.ToUpper(strings.TrimSpace(r.Header.Get(geoHeader)))
+				}
 
-				// Skip geo checks if no country header present (not behind the proxy)
+				// An allowlist says only these countries may reach this service,
+				// so a caller whose country cannot be established is not one of
+				// them. Skipping the ladder on an absent header made omitting it
+				// the simplest bypass available, requiring no knowledge of which
+				// countries were listed.
+				//
+				// A blocklist is the other shape. It names what is refused, so an
+				// unknown country matches nothing on it, and denying there would
+				// quietly turn a blocklist into an allowlist of one.
+				if country == "" && len(geoAllow) > 0 {
+					log.Printf("ip_access: deny req=%s ip=%s reason=geo_country_unknown", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+					httputil.WriteError(w, http.StatusForbidden, "access_denied")
+					return
+				}
+
 				if country != "" {
 					if len(geoAllow) > 0 && !geoAllow[country] {
 						log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
