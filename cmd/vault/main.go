@@ -478,6 +478,29 @@ func main() {
 		})
 		ks.StartRefreshLoop(ctx, cfg.KeyRefreshInterval)
 		defer ks.Stop()
+
+		// Expired-key sweeper. Retired keys leave the verification set at their
+		// expiry and stayed in the table forever afterwards, each one holding the
+		// encrypted private half of a key that no longer verifies anything.
+		//
+		// Below the CLI check for the same reason as the audit and recovery
+		// sweepers: the sweep runs immediately on start, so above it every
+		// `vault list-clients` would reap signing key rows as a side effect of
+		// listing clients.
+		keyRetention := keystore.NewRetention(ks)
+		keyRetention.Start(ctx)
+		defer keyRetention.Stop()
+
+		// A retention period shorter than the access token TTL strands tokens on
+		// every rotation: the key stops verifying while tokens it signed are still
+		// inside their lifetime. That was survivable while the row lingered, since
+		// an operator could push expires_at back out and recover. Reaping makes it
+		// permanent, so the misconfiguration has to be visible before it bites.
+		if cfg.KeyRetentionPeriod < cfg.AccessTokenTTL {
+			log.Printf("WARNING: VAULT_KEY_RETENTION_PERIOD (%s) is shorter than the access token TTL (%s); "+
+				"rotation will strand tokens that are still within their lifetime",
+				cfg.KeyRetentionPeriod, cfg.AccessTokenTTL)
+		}
 	}
 
 	// Readiness dependencies
