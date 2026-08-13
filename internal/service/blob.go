@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
@@ -46,6 +47,45 @@ func NewBlobService(repo repository.BlobRepository, masterKey, hmacSecret []byte
 }
 
 // Pseudonym computes the deterministic pseudonym for a user ID.
+
+// blobDataAAD and blobLabelAAD build the additional authenticated data that
+// binds a blob's ciphertext to its id and its owner.
+//
+// The two namespaces are NOT prefix-free. blobDataAAD is "<id>:<pseudonym>" and
+// blobLabelAAD is "label:<id>:<pseudonym>", so a blob whose id were literally
+// "label:X" would produce the same AAD as the LABEL of blob "X", and the two
+// ciphertexts could be exchanged without AES-GCM noticing.
+//
+// What closes that is the id being a server-generated UUID, which contains no
+// colon. That is a real guarantee but it was an incidental one: nothing said so,
+// and nothing checked it. These helpers state it and enforce it.
+//
+// The AAD format itself is deliberately unchanged. A length-prefixed or
+// domain-tagged encoding would be the better construction on a blank sheet, and
+// adopting one now would make every blob already in the database undecryptable,
+// which is a worse outcome than a weakness that cannot currently be reached.
+func blobAADSafeID(id string) bool {
+	return !strings.Contains(id, ":")
+}
+
+// errBlobIDNamespace is returned when a blob id would make the data and label
+// AAD namespaces ambiguous.
+var errBlobIDNamespace = errors.New("blob: id must not contain ':'")
+
+func blobDataAAD(id, pseudo string) ([]byte, error) {
+	if !blobAADSafeID(id) {
+		return nil, errBlobIDNamespace
+	}
+	return []byte(id + ":" + pseudo), nil
+}
+
+func blobLabelAAD(id, pseudo string) ([]byte, error) {
+	if !blobAADSafeID(id) {
+		return nil, errBlobIDNamespace
+	}
+	return []byte("label:" + id + ":" + pseudo), nil
+}
+
 func (s *BlobService) Pseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":objects"), s.hmacSecret)
 }
@@ -125,7 +165,10 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 	}
 
 	// AAD binds ciphertext to this specific blob + owner
-	dataAAD := []byte(id + ":" + pseudo)
+	dataAAD, err := blobDataAAD(id, pseudo)
+	if err != nil {
+		return nil, err
+	}
 
 	// Encrypt compressed data
 	dataEnc, err := vaultcrypto.Encrypt(compressed.Bytes(), s.masterKey, dataAAD)
@@ -136,7 +179,10 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 	// Encrypt label if provided
 	var labelEnc []byte
 	if label != "" {
-		labelAAD := []byte("label:" + id + ":" + pseudo)
+		labelAAD, aadErr := blobLabelAAD(id, pseudo)
+		if aadErr != nil {
+			return nil, aadErr
+		}
 		labelEnc, err = vaultcrypto.Encrypt([]byte(label), s.masterKey, labelAAD)
 		if err != nil {
 			return nil, fmt.Errorf("blob label encrypt: %w", err)
@@ -190,7 +236,10 @@ func (s *BlobService) decryptBlob(blob *model.Blob, pseudo string) (data []byte,
 	}
 
 	// Decrypt (AAD must match what was used during encryption)
-	dataAAD := []byte(blob.ID + ":" + pseudo)
+	dataAAD, err := blobDataAAD(blob.ID, pseudo)
+	if err != nil {
+		return nil, "", "", err
+	}
 	compressed, err := vaultcrypto.Decrypt(blob.DataEnc, s.masterKey, dataAAD)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("blob decrypt: %w", err)
@@ -211,7 +260,10 @@ func (s *BlobService) decryptBlob(blob *model.Blob, pseudo string) (data []byte,
 
 	// Decrypt label
 	if len(blob.LabelEnc) > 0 {
-		labelAAD := []byte("label:" + blob.ID + ":" + pseudo)
+		labelAAD, aadErr := blobLabelAAD(blob.ID, pseudo)
+		if aadErr != nil {
+			return nil, "", "", aadErr
+		}
 		labelBytes, err := vaultcrypto.Decrypt(blob.LabelEnc, s.masterKey, labelAAD)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("blob label decrypt: %w", err)
@@ -248,7 +300,10 @@ func (s *BlobService) List(ctx context.Context, userID string) ([]*BlobMeta, *Bl
 		}
 		// Decrypt label for listing
 		if len(b.LabelEnc) > 0 {
-			labelAAD := []byte("label:" + b.ID + ":" + pseudo)
+			labelAAD, aadErr := blobLabelAAD(b.ID, pseudo)
+			if aadErr != nil {
+				continue
+			}
 			labelBytes, err := vaultcrypto.Decrypt(b.LabelEnc, s.masterKey, labelAAD)
 			if err == nil {
 				meta.Label = string(labelBytes)
