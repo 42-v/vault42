@@ -27,17 +27,50 @@ const (
 	argon2KeyLen      = 32
 
 	// argon2MaxConcurrent limits concurrent argon2id operations to prevent OOM.
-	// Each operation allocates ~46 MiB; 4 concurrent = ~184 MiB peak.
-	// With 512 MiB pod memory, leaves ~328 MiB for Go runtime + heap + connections.
+	//
+	// Issuing allocates ~46 MiB per operation, so the common case is ~184 MiB at
+	// four concurrent. The number that has to be budgeted for is the WORST case,
+	// not the common one: verification allocates whatever the stored hash string
+	// declares, and argon2MaxVerifyMemory caps that at 64 MiB. Four concurrent
+	// verifications therefore peak at ~256 MiB, leaving ~256 MiB of a 512 MiB pod
+	// for the Go runtime, heap and connections.
+	//
+	// The ceiling and this figure are one calculation. Raising either without the
+	// other is what made the original comment false, and
+	// TestArgon2Attack_VerifyStaysWithinTheSemaphoreBudget fails if they diverge.
 	argon2MaxConcurrent = 4
 
 	// argon2AcquireTimeout is how long to wait for the semaphore before rejecting.
 	argon2AcquireTimeout = 5 * time.Second
+
+	// argon2MaxVerifyMemory caps the memory a stored hash may request, in KiB.
+	//
+	// It used to be 128 MiB, which made the semaphore's sizing argument false:
+	// four concurrent verifications of a 128 MiB hash reserve 512 MiB, the entire
+	// documented pod budget, before the Go runtime has taken anything. The bound
+	// was unreachable in practice because nothing in the product issues a
+	// non-spec hash, but "unreachable because nobody currently writes one" is an
+	// assumption rather than a control, and the comment above stated the
+	// conclusion as though it were enforced.
+	//
+	// 64 MiB is 1.4x the issuing parameter, so every hash this product has ever
+	// written verifies, while four concurrent worst cases stay at 256 MiB. Raising
+	// it means raising the peak in the comment above and re-checking it against
+	// the pod's memory limit.
+	argon2MaxVerifyMemory = 64 * 1024
 )
 
 // argon2Sem limits concurrent argon2id operations to prevent memory exhaustion.
 // Buffered channel acts as a counting semaphore.
 var argon2Sem = make(chan struct{}, argon2MaxConcurrent)
+
+// argon2Waiting tracks callers queued for a slot, and argon2WaitNanos their
+// cumulative wait. Together they make queueing visible before it becomes
+// rejection.
+var (
+	argon2Waiting   atomic.Int64
+	argon2WaitNanos atomic.Int64
+)
 
 // argon2Active tracks current concurrent argon2 operations for observability.
 var argon2Active atomic.Int64
@@ -50,14 +83,33 @@ var argon2Rejected atomic.Int64
 var ErrArgon2Overloaded = errors.New("argon2: too many concurrent hashing operations")
 
 // acquireArgon2 blocks until a semaphore slot is available or the timeout expires.
+//
+// The waiting count and cumulative wait exist because rejection is a terrible
+// early warning. The semaphore queues rather than sheds, so under load a
+// legitimate login simply gets slower: measured here, victim latency grows about
+// 9 ms per concurrent password operation, and at 128 concurrent a login already
+// waits over a second while the rejection counter is still zero. Nothing is
+// rejected until the queue is deep enough to burn the whole 5 s acquire timeout,
+// roughly 558 concurrent operations, so the only overload signal the package
+// exported fired long after users had noticed. These two are the signal that
+// moves while the service is merely degrading.
 func acquireArgon2() error {
 	ctx, cancel := context.WithTimeout(context.Background(), argon2AcquireTimeout)
 	defer cancel()
+
+	start := time.Now()
+	argon2Waiting.Add(1)
+	defer func() {
+		argon2Waiting.Add(-1)
+		argon2WaitNanos.Add(time.Since(start).Nanoseconds())
+	}()
+
 	select {
 	case argon2Sem <- struct{}{}:
 		n := argon2Active.Add(1)
 		if n >= int64(argon2MaxConcurrent) {
-			log.Printf("argon2: semaphore at capacity (%d/%d active)", n, argon2MaxConcurrent)
+			log.Printf("argon2: semaphore at capacity (%d/%d active, %d waiting)",
+				n, argon2MaxConcurrent, argon2Waiting.Load())
 		}
 		return nil
 	case <-ctx.Done():
@@ -86,6 +138,21 @@ func Argon2RejectedCount() int64 {
 // Argon2MaxConcurrent returns the semaphore capacity.
 func Argon2MaxConcurrent() int {
 	return argon2MaxConcurrent
+}
+
+// Argon2WaitingCount returns how many callers are currently queued for a
+// semaphore slot. It rises as soon as the service starts queueing, which is the
+// point at which logins start getting slower, rather than at the point work is
+// finally refused.
+func Argon2WaitingCount() int64 {
+	return argon2Waiting.Load()
+}
+
+// Argon2WaitNanos returns the cumulative time callers have spent waiting for a
+// semaphore slot. Divided by the number of operations it gives mean queueing
+// delay, which is the number an alert should be written against.
+func Argon2WaitNanos() int64 {
+	return argon2WaitNanos.Load()
 }
 
 // DummyHash is an Argon2id hash used for constant-time user enumeration
@@ -296,8 +363,9 @@ func parseArgon2Hash(encoded string) (salt, hash []byte, params argon2Params, er
 	if params.memory < 8*uint32(params.parallelism) {
 		return nil, nil, params, errors.New("argon2: memory too small")
 	}
-	if params.memory > 128*1024 { // 128 MiB maximum
-		return nil, nil, params, errors.New("argon2: memory exceeds maximum (128 MiB)")
+	if params.memory > argon2MaxVerifyMemory {
+		return nil, nil, params, fmt.Errorf("argon2: memory exceeds maximum (%d MiB)",
+			argon2MaxVerifyMemory/1024)
 	}
 
 	salt, err = base64.RawStdEncoding.DecodeString(parts[4])

@@ -120,6 +120,11 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 	}
 	var samples []sample
 
+	// peakWaiting is the highest queue depth observed while the probes ran. It is
+	// sampled rather than derived, because the gauge's whole purpose is to be
+	// readable live during an incident, not reconstructable afterwards.
+	var peakWaiting int64
+
 	for _, workers := range []int{8, 32, 128} {
 		rejectedBefore := vaultcrypto.Argon2RejectedCount()
 		release := saturate(t, workers)
@@ -130,6 +135,9 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 			start := time.Now()
 			_, err := vaultcrypto.VerifyPassword("victim password", vaultcrypto.DummyHash)
 			total += time.Since(start)
+			if w := vaultcrypto.Argon2WaitingCount(); w > peakWaiting {
+				peakWaiting = w
+			}
 			if errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 				t.Logf("workers=%d: probe %d was rejected outright", workers, i)
 			}
@@ -147,6 +155,8 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 		t.Logf("%3d concurrent password operations: legitimate login waits %-14v, "+
 			"Argon2RejectedCount +%d", s.workers, s.wait, s.rejected)
 	}
+	t.Logf("peak Argon2WaitingCount %d, cumulative wait %v",
+		peakWaiting, time.Duration(vaultcrypto.Argon2WaitNanos()))
 
 	first, last := samples[0], samples[len(samples)-1]
 	perRequest := float64(last.wait-first.wait) / float64(last.workers-first.workers)
@@ -156,15 +166,29 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 		"are needed before ANY caller is rejected",
 		5*time.Second, float64(5*time.Second)/perRequest)
 
-	// The finding: real degradation with no signal. If a future change makes
-	// the semaphore shed load early, this stops being true and the test should
-	// be revisited.
+	// The finding was that this degradation had no signal at all: the semaphore
+	// queues rather than sheds, so a login just gets slower, and the only counter
+	// exported was rejections, which stay at zero until the queue is deep enough
+	// to burn the whole acquire timeout. Roughly 558 concurrent operations, long
+	// after users have noticed.
+	//
+	// The fix is not to shed earlier. Rejecting a legitimate login to keep a
+	// latency number down is worse than serving it slowly. The fix is that the
+	// degradation is now measurable while it is happening, so what this asserts
+	// is the existence of a signal that moves, not the absence of queueing.
 	if last.rejected == 0 && last.wait > 500*time.Millisecond {
-		t.Errorf("at %d concurrent operations a legitimate login already waits %v, "+
-			"yet Argon2RejectedCount is still 0. The only overload signal the package "+
-			"exports does not fire until the queue is deep enough to burn the full %v "+
-			"acquire timeout, so the degradation is invisible to monitoring.",
-			last.workers, last.wait, 5*time.Second)
+		if vaultcrypto.Argon2WaitNanos() <= 0 {
+			t.Errorf("at %d concurrent operations a legitimate login waits %v with "+
+				"Argon2RejectedCount still 0, and the cumulative wait counter is also 0. "+
+				"The degradation is invisible to monitoring.", last.workers, last.wait)
+		}
+	}
+
+	// The queue-depth gauge has to have moved too, otherwise the only evidence of
+	// contention is a cumulative total that cannot be alerted on live.
+	if peakWaiting <= 0 {
+		t.Errorf("Argon2WaitingCount never rose above 0 across %d concurrent operations; "+
+			"queue depth is the signal an operator watches during an incident", last.workers)
 	}
 }
 
@@ -197,7 +221,7 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 //
 // What makes it worth fixing anyway is that the failure is silent and
 // misattributed: the audit record says the admin got their password wrong.
-func TestArgon2Attack_AdminLoginCountsOverloadAsWrongPassword(t *testing.T) {
+func TestArgon2Attack_AdminLoginSeparatesOverloadFromWrongPassword(t *testing.T) {
 	// Counting the guards is load-independent and does not go stale the way a
 	// copied snippet would.
 	userPlane := countOverloadGuards(t, filepath.Join("..", "..", "internal", "service", "auth.go")) +
@@ -241,25 +265,29 @@ func countOverloadGuards(t *testing.T, path string) int {
 //	"Each operation allocates ~46 MiB; 4 concurrent = ~184 MiB peak.
 //	 With 512 MiB pod memory, leaves ~328 MiB for Go runtime + heap"
 //
-// That is true for hashes vault42 issues, which are always m=47104,t=1,p=1. It
-// is not true for hashes vault42 will VERIFY. parseArgon2Hash reads m, t and p
-// out of the stored string and passes them to argon2.IDKey, capped at 128 MiB,
-// 10 iterations and parallelism 4. Four concurrent verifications of a 128 MiB
-// hash is 512 MiB, the entire documented pod budget, and the semaphore permits
-// it by construction because it counts operations, not bytes.
+// That was true for hashes vault42 issues, which are always m=47104,t=1,p=1, and
+// false for hashes vault42 will VERIFY. parseArgon2Hash reads m, t and p out of
+// the stored string and passes them to argon2.IDKey, and the ceiling used to be
+// 128 MiB. Four concurrent verifications of a 128 MiB hash is 512 MiB, the whole
+// documented pod budget, and the semaphore permitted it by construction because
+// it counts operations rather than bytes.
 //
-// Reachability is the honest limit on this one: nothing in the product writes a
-// non-spec hash. Registration, password change and reset all go through
-// HashPassword, and the admin import API imports no password material. It takes
-// a direct write to auth.users.password_hash. Ranked accordingly, but the
-// safety argument in the comment is still false as written, and the fix is one
-// line.
-func TestArgon2Attack_VerifyHonorsParametersFarAboveTheSemaphoreBudget(t *testing.T) {
+// Nothing in the product writes a non-spec hash, so it took a direct write to
+// auth.users.password_hash to reach. That made it unreachable in practice and
+// still wrong to rely on: "nobody currently writes one" is an assumption, not a
+// control, and the comment stated the conclusion as though it were enforced.
+//
+// argon2MaxVerifyMemory is now 64 MiB, 1.4x the issuing parameter, so every hash
+// this product has written verifies while four concurrent worst cases stay at
+// 256 MiB. This test measures the real worst case the parser admits and holds it
+// under the budget the semaphore comment claims, so raising one without the
+// other fails here.
+func TestArgon2Attack_VerifyStaysWithinTheSemaphoreBudget(t *testing.T) {
 	salt := base64.RawStdEncoding.EncodeToString(make([]byte, 16))
 	body := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
 
-	// The maximum parseArgon2Hash accepts: 128 MiB, 10 passes, parallelism 4.
-	worst := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", 128*1024, 10, 4, salt, body)
+	// The maximum parseArgon2Hash accepts: 64 MiB, 10 passes, parallelism 4.
+	worst := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", 64*1024, 10, 4, salt, body)
 	spec := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", 47104, 1, 1, salt, body)
 
 	measure := func(encoded string) (time.Duration, uint64) {
@@ -283,7 +311,7 @@ func TestArgon2Attack_VerifyHonorsParametersFarAboveTheSemaphoreBudget(t *testin
 	worstTime, worstAlloc := measure(worst)
 
 	t.Logf("spec  hash (m=47104,t=1,p=1): %v, %d MiB allocated", specTime, specAlloc/(1024*1024))
-	t.Logf("worst hash (m=131072,t=10,p=4): %v, %d MiB allocated", worstTime, worstAlloc/(1024*1024))
+	t.Logf("worst hash (m=65536,t=10,p=4): %v, %d MiB allocated", worstTime, worstAlloc/(1024*1024))
 	t.Logf("cost ratio: %.1fx time, %.1fx memory",
 		float64(worstTime)/float64(specTime), float64(worstAlloc)/float64(specAlloc))
 	t.Logf("%d concurrent worst-case verifications = %d MiB, against the %d MiB pod budget "+
@@ -292,12 +320,17 @@ func TestArgon2Attack_VerifyHonorsParametersFarAboveTheSemaphoreBudget(t *testin
 		uint64(vaultcrypto.Argon2MaxConcurrent())*worstAlloc/(1024*1024),
 		512)
 
-	// The failing assertion: the semaphore is documented as bounding peak
-	// memory, and it does not, because it counts operations rather than cost.
+	// The assertion the ceiling exists to satisfy: the semaphore is documented as
+	// bounding peak memory, and that is only true while the parser's ceiling and
+	// the sizing comment agree.
+	// 256 MiB is the figure the sizing comment now derives from
+	// argon2MaxVerifyMemory, rather than from the issuing constant. A little slack
+	// is allowed for allocator overhead; the point is that the ceiling and the
+	// documented peak cannot drift apart.
 	peakMiB := uint64(vaultcrypto.Argon2MaxConcurrent()) * worstAlloc / (1024 * 1024)
-	if peakMiB > 184 {
+	if peakMiB > 272 {
 		t.Errorf("the semaphore admits %d concurrent verifications whose peak is %d MiB, "+
-			"but its sizing comment claims '4 concurrent = ~184 MiB peak' and budgets "+
+			"but its sizing comment budgets for 256 MiB and budgets "+
 			"against 512 MiB of pod memory. The bound holds only for hashes vault42 "+
 			"issued itself; parseArgon2Hash accepts up to m=131072,t=10,p=4 from the "+
 			"stored string.", vaultcrypto.Argon2MaxConcurrent(), peakMiB)
@@ -320,8 +353,10 @@ func TestArgon2Attack_ParameterBoundsAccepted(t *testing.T) {
 		wantAccept bool
 	}{
 		{"spec parameters", mk(47104, 1, 1), true},
-		{"memory at the cap", mk(128*1024, 1, 1), true},
-		{"memory over the cap", mk(128*1024+1, 1, 1), false},
+		{"memory at the cap", mk(64*1024, 1, 1), true},
+		{"memory over the cap", mk(64*1024+1, 1, 1), false},
+		// The old 128 MiB ceiling, kept as a case so a silent widening fails here.
+		{"the retired 128 MiB ceiling", mk(128*1024, 1, 1), false},
 		{"iterations at the cap", mk(47104, 10, 1), true},
 		{"iterations over the cap", mk(47104, 11, 1), false},
 		{"parallelism at the cap", mk(47104, 1, 4), true},
@@ -329,7 +364,7 @@ func TestArgon2Attack_ParameterBoundsAccepted(t *testing.T) {
 		{"zero iterations", mk(47104, 0, 1), false},
 		{"zero parallelism", mk(47104, 1, 0), false},
 		{"memory below 8*parallelism", mk(8, 1, 4), false},
-		{"everything at the cap", mk(128*1024, 10, 4), true},
+		{"everything at the cap", mk(64*1024, 10, 4), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := vaultcrypto.VerifyPassword("guess", tc.hash)
