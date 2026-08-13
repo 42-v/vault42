@@ -116,3 +116,59 @@ func TestLoadLeavesAdminTokenFileForTheCLI(t *testing.T) {
 		t.Fatalf("config consumed ADMIN_TOKEN_FILE before internal/cli could read it: %v", err)
 	}
 }
+
+// TestDevProfileWarnsAboutAShortAdminTokenInsteadOfRefusing pins the one profile
+// where a guessable admin token is not a boot failure. Dev has to stay usable
+// with a token someone typed, but the admin CLI can add clients and revoke every
+// session and nothing rate limits it, so the leniency must be loud: a silent
+// accept is how a short token reaches a deployment that is only nominally dev.
+func TestDevProfileWarnsAboutAShortAdminTokenInsteadOfRefusing(t *testing.T) {
+	const token = "hunter2"
+	t.Setenv("VAULT_PROFILE", "dev")
+	t.Setenv("ADMIN_TOKEN_FILE", writeAdminTokenFile(t, token+"\n"))
+
+	var err error
+	logged := cliconfigCaptureLog(t, func() { err = loadAndValidate(t) })
+
+	if err != nil {
+		t.Fatalf("the dev profile refused to start on a short admin token: %v", err)
+	}
+	if !strings.Contains(logged, "SECURITY WARNING") {
+		t.Errorf("a short admin token was accepted without a warning; log was:\n%s", logged)
+	}
+	if !strings.Contains(logged, "ADMIN_TOKEN_FILE") {
+		t.Errorf("the warning does not name the setting it is about; log was:\n%s", logged)
+	}
+	if strings.Contains(logged, token) {
+		t.Error("the admin token itself was written to the log, which under systemd is the journal")
+	}
+}
+
+// TestLoadRejectsAnArgon2idHashWithAnEmptySegment covers the truncation that a
+// segment count alone cannot catch. A PHC string cut at a "$" boundary, or
+// written by a shell pipeline that dropped a field, still has six segments and
+// still announces itself as Argon2id, but it carries no salt or no digest and
+// therefore verifies against nothing. Accepting it would start a server whose
+// admin CLI can never be authenticated, with the mounted file looking correct.
+func TestLoadRejectsAnArgon2idHashWithAnEmptySegment(t *testing.T) {
+	const prefix = "$argon2id$v=19$m=47104,t=1,p=1"
+	const salt = "c2FsdHNhbHRzYWx0c2FsdA"
+	const digest = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+	cases := []struct {
+		name     string
+		contents string
+	}{
+		{"digest cut off after the final separator", prefix + "$" + salt + "$"},
+		{"salt field empty", prefix + "$$" + digest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VAULT_PROFILE", "production")
+			t.Setenv("ADMIN_TOKEN_FILE", writeAdminTokenFile(t, tc.contents+"\n"))
+
+			mustRejectAdminTokenFile(t, "an Argon2id hash with an empty segment in ADMIN_TOKEN_FILE")
+		})
+	}
+}
