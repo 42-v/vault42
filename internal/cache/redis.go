@@ -72,16 +72,22 @@ func (r *RedisCache) SetIfNotExists(ctx context.Context, key string, value strin
 // first increment (when the value transitions from 0 to 1). This eliminates
 // the race condition between separate INCR and EXPIRE commands where a key
 // could be incremented but never expire (causing permanent rate limiting).
-const incrWithExpireScript = `local v=redis.call('INCR',KEYS[1]) if v==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end return v`
+//
+// ARGV[1] is milliseconds, and a non-positive value leaves the counter with no
+// expiry rather than deleting it, which is what PEXPIRE with a zero or negative
+// argument would do.
+const incrWithExpireScript = `local v=redis.call('INCR',KEYS[1]) if v==1 then local ms=tonumber(ARGV[1]) if ms and ms>0 then redis.call('PEXPIRE',KEYS[1],ms) end end return v`
 
 // Increment atomically increments a counter and sets expiry on the first
 // increment using a Lua script to avoid the INCR+EXPIRE race condition.
+//
+// The TTL travels in milliseconds. Converting through whole seconds floored the
+// window, so a caller asking for anything under a second reached a clamp and a
+// fractional window lost its remainder, while the memory and Postgres backends
+// applied the duration as given. The counter's lifetime is the lockout and the
+// rate-limit window, so the three backends have to measure it the same way.
 func (r *RedisCache) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
-	ttlSec := int64(ttl.Seconds())
-	if ttlSec <= 0 {
-		ttlSec = 1
-	}
-	val, err := r.client.Eval(ctx, incrWithExpireScript, 1, key, strconv.FormatInt(ttlSec, 10))
+	val, err := r.client.Eval(ctx, incrWithExpireScript, 1, key, strconv.FormatInt(ttl.Milliseconds(), 10))
 	if err != nil {
 		return 0, err
 	}

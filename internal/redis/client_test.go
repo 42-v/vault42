@@ -22,7 +22,8 @@ type mockRedis struct {
 	data    map[string]mockEntry
 	done    chan struct{}
 	wg      sync.WaitGroup
-	authPwd string // required password (empty = no auth)
+	authPwd string       // required password (empty = no auth)
+	accepts atomic.Int64 // connections accepted, so tests can see pool churn
 }
 
 type mockEntry struct {
@@ -71,6 +72,7 @@ func (m *mockRedis) serve() {
 				continue
 			}
 		}
+		m.accepts.Add(1)
 		m.wg.Add(1)
 		go m.handleConn(conn)
 	}

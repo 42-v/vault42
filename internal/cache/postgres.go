@@ -3,21 +3,92 @@ package cache
 import (
 	"context"
 	"errors"
+	"log"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Sweep tuning for the expired-row reaper. Variables rather than constants so
+// tests can drive a sweep without waiting out the production period.
+var (
+	pgSweepInterval = time.Minute
+	// Delete in bounded batches: an existing deployment can already hold
+	// millions of dead rows, and one unbounded DELETE against the live auth
+	// database on the first tick after rollout is its own outage.
+	pgSweepBatch      = 2000
+	pgSweepMaxBatches = 20
+	pgSweepTimeout    = 30 * time.Second
+)
+
 // PostgresCache implements Cache using PostgreSQL as a fallback.
 type PostgresCache struct {
-	pool *pgxpool.Pool
+	pool      *pgxpool.Pool
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewPostgresCache creates a PostgreSQL-backed cache (fallback).
 // The cache table must exist via migration (017_create_cache_table.sql).
 func NewPostgresCache(pool *pgxpool.Pool) (*PostgresCache, error) {
-	return &PostgresCache{pool: pool}, nil
+	p := &PostgresCache{pool: pool, done: make(chan struct{})}
+	if pool != nil {
+		go p.sweep(pgSweepInterval)
+	}
+	return p, nil
+}
+
+// sweep reclaims expired rows on a period.
+//
+// The read paths filter on expires_at but never delete, so without this the
+// table only grows. Every request through the IP rate limiter mints a key with
+// a TTL measured in seconds, which makes the growth rate the request rate and
+// makes the eventual failure a write failure on the auth database. The memory
+// backend and Redis both reclaim, so this is what keeps the three backends
+// interchangeable rather than one of them being a slow disk leak.
+func (p *PostgresCache) sweep(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.done:
+			return
+		case <-ticker.C:
+			p.reapExpired()
+		}
+	}
+}
+
+// reapExpired deletes expired rows in bounded batches so a backlog is worked
+// off over several ticks instead of in one statement that holds locks on the
+// live table for as long as it takes.
+func (p *PostgresCache) reapExpired() {
+	ctx, cancel := context.WithTimeout(context.Background(), pgSweepTimeout)
+	defer cancel()
+
+	for i := 0; i < pgSweepMaxBatches; i++ {
+		select {
+		case <-p.done:
+			return
+		default:
+		}
+		tag, err := p.pool.Exec(ctx, `
+			DELETE FROM auth.cache WHERE key IN (
+				SELECT key FROM auth.cache
+				WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+				LIMIT $1
+			)
+		`, pgSweepBatch)
+		if err != nil {
+			log.Printf("cache: expired-entry sweep failed: %v", err)
+			return
+		}
+		if tag.RowsAffected() < int64(pgSweepBatch) {
+			return
+		}
+	}
 }
 
 // Get retrieves a value by key, filtering out expired entries. Returns ErrNotFound if missing.
@@ -136,7 +207,13 @@ func (p *PostgresCache) Exists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
-// Close is a no-op because the connection pool is managed externally.
+// Close stops the background sweep. The connection pool itself is managed
+// externally and is deliberately left open. Safe to call multiple times.
 func (p *PostgresCache) Close() error {
-	return nil // Pool is managed externally
+	p.closeOnce.Do(func() {
+		if p.done != nil {
+			close(p.done)
+		}
+	})
+	return nil
 }
