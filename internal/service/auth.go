@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -459,6 +460,59 @@ type LoginResult struct {
 	// is retained so the transport layer keeps compiling until its 202 branch is
 	// removed, and `omitempty` keeps it off the wire.
 	ImportClaimRequired bool `json:"import_claim_required,omitempty"`
+}
+
+// loginResultWire is the serialized form of LoginResult.
+//
+// The MFA challenge is emitted under both spellings, for the same reason
+// mfaStatusWire does it. mfa_required and mfa_methods are the canonical names:
+// they match ProfileResponse.mfa_methods and the MFAStatus response, and the
+// product has more than two factors, so "2fa" only survives in the URL paths
+// BeOn3 is live on. requires_2fa and available_methods are the pre-1.0.0 names,
+// kept as deprecated aliases for clients written against them; remove both at
+// the next major version.
+//
+// The alias was added to MFAStatus and not here, which left the two responses
+// of one login flow disagreeing about what the field is called. GET /mfa/status
+// answered a client reading mfa_methods and POST /auth/login did not, and the
+// login response is the one whose factor list changes what the client must do
+// next, so a client that had migrated saw an empty list exactly when it
+// mattered.
+type loginResultWire struct {
+	AccessToken         string   `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749
+	TokenType           string   `json:"token_type"`
+	ExpiresIn           int      `json:"expires_in"`
+	Requires2FA         bool     `json:"requires_2fa,omitempty"`
+	MFARequired         bool     `json:"mfa_required,omitempty"`
+	ChallengeToken      string   `json:"challenge_token,omitempty"`
+	AvailableMethods    []string `json:"available_methods,omitempty"`
+	MFAMethods          []string `json:"mfa_methods,omitempty"`
+	ImportClaimRequired bool     `json:"import_claim_required,omitempty"`
+}
+
+// MarshalJSON emits both spellings of the MFA challenge.
+//
+// Both stay omitempty and therefore appear and disappear together. The ordinary
+// single-step login is the overwhelming majority of responses, and adding
+// mfa_required:false plus an empty mfa_methods to every one of them would change
+// the shape of the common case for a client that tests for the key rather than
+// its value.
+//
+// RefreshToken and CookieMaxAge are absent by construction rather than by tag:
+// the refresh credential travels in a Set-Cookie header, and a wire type that
+// simply has no field for it cannot leak it into a response body.
+func (r LoginResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(loginResultWire{
+		AccessToken:         r.AccessToken,
+		TokenType:           r.TokenType,
+		ExpiresIn:           r.ExpiresIn,
+		Requires2FA:         r.Requires2FA,
+		MFARequired:         r.Requires2FA,
+		ChallengeToken:      r.ChallengeToken,
+		AvailableMethods:    r.AvailableMethods,
+		MFAMethods:          r.AvailableMethods,
+		ImportClaimRequired: r.ImportClaimRequired,
+	})
 }
 
 // Login authenticates a user and issues tokens.
