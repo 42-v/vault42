@@ -326,7 +326,6 @@ func TestLoadSecretsFromFiles(t *testing.T) {
 	t.Setenv("VAULT_PROFILE", "dev")
 
 	writeSecret("MASTER_KEY", "01234567890123456789012345678901")
-	writeSecret("ADMIN_TOKEN", "admin-hash-value")
 	writeSecret("VAULT_PEPPER", "pepper-value")
 	writeSecret("HMAC_SECRET", "01234567890123456789012345678901") // 32 bytes
 	writeSecret("DB_MIG_PASSWORD", "mig-pass")
@@ -340,9 +339,8 @@ func TestLoadSecretsFromFiles(t *testing.T) {
 	if string(cfg.MasterKey) != "01234567890123456789012345678901" {
 		t.Errorf("MasterKey not loaded: %q", cfg.MasterKey)
 	}
-	if cfg.AdminTokenHash != "admin-hash-value" {
-		t.Errorf("AdminTokenHash not loaded: %q", cfg.AdminTokenHash)
-	}
+	// ADMIN_TOKEN is not in this list on purpose: cli.New owns that read. See
+	// TestLoadLeavesAdminTokenFileForTheCLI.
 	if cfg.Pepper != "pepper-value" {
 		t.Errorf("Pepper not loaded: %q", cfg.Pepper)
 	}

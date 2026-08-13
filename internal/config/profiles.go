@@ -18,11 +18,11 @@ const (
 	// ProfileEmbedded is tuned for resource-constrained environments (e.g., RPi5)
 	// with in-memory cache, 5 database connections, and auto-migration enabled.
 	ProfileEmbedded Profile = "embedded"
-	// ProfileDev extends ProfileProduction with debug logging, permissive CORS,
-	// auto-migration, 24-hour refresh tokens, and a 5-second shutdown timeout.
+	// ProfileDev extends ProfileProduction with permissive CORS, auto-migration,
+	// 24-hour refresh tokens, and a 5-second shutdown timeout.
 	ProfileDev Profile = "dev"
-	// ProfileHoneypot extends ProfileProduction with debug-level logging,
-	// auto-migration, and full request logging for threat observation.
+	// ProfileHoneypot extends ProfileProduction with auto-migration and the
+	// embedded SPA, so the deployment looks like a real one to an attacker.
 	ProfileHoneypot Profile = "honeypot"
 )
 
@@ -33,7 +33,6 @@ func applyProfileDefaults(c *Config) {
 	switch c.Profile {
 	case ProfileDev:
 		// Save pre-profile values to detect env var overrides
-		origLogLevel := c.LogLevel
 		origRefreshTTL := c.RefreshTokenTTL
 		origShutdownTimeout := c.ShutdownTimeout
 		rateLimitExplicit := os.Getenv("VAULT_RATE_LIMIT_ENABLED") != ""
@@ -47,9 +46,6 @@ func applyProfileDefaults(c *Config) {
 		}
 
 		// Dev overrides — only if not explicitly set via env vars
-		if origLogLevel == "" {
-			c.LogLevel = "debug"
-		}
 		c.AutoMigrate = true
 		if os.Getenv("CORS_ALLOW_ALL") == "" {
 			c.CORSAllowAll = true
@@ -63,7 +59,6 @@ func applyProfileDefaults(c *Config) {
 
 	case ProfileEmbedded:
 		setDefault(&c.ListenAddr, ":8443")
-		setDefault(&c.LogLevel, "info")
 		setDefaultBool(&c.TLSEnabled, true, "VAULT_TLS_ENABLED")
 		setDefaultBool(&c.RateLimitEnabled, true, "VAULT_RATE_LIMIT_ENABLED")
 		setDefaultBool(&c.AutoMigrate, true, "VAULT_AUTO_MIGRATE")
@@ -77,10 +72,7 @@ func applyProfileDefaults(c *Config) {
 
 	case ProfileHoneypot:
 		applyProductionDefaults(c)
-		// Honeypot overrides: insane logging, easy deployment, looks real
-		if os.Getenv("LOG_LEVEL") == "" {
-			c.LogLevel = "debug"
-		}
+		// Honeypot overrides: easy deployment, looks real
 		if os.Getenv("VAULT_AUTO_MIGRATE") == "" {
 			c.AutoMigrate = true
 		}
@@ -100,7 +92,6 @@ func applyProfileDefaults(c *Config) {
 // applyProductionDefaults sets the production baseline values.
 func applyProductionDefaults(c *Config) {
 	setDefault(&c.ListenAddr, ":8443")
-	setDefault(&c.LogLevel, "warn")
 	setDefaultBool(&c.TLSEnabled, true, "VAULT_TLS_ENABLED")
 	setDefaultBool(&c.RateLimitEnabled, true, "VAULT_RATE_LIMIT_ENABLED")
 	setDefaultBool(&c.AutoMigrate, false, "VAULT_AUTO_MIGRATE")

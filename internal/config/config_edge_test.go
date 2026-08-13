@@ -26,12 +26,6 @@ func TestProfileDefaults_Production(t *testing.T) {
 		}
 	})
 
-	t.Run("log level", func(t *testing.T) {
-		if cfg.LogLevel != "warn" {
-			t.Errorf("LogLevel = %q, want warn", cfg.LogLevel)
-		}
-	})
-
 	t.Run("TLS enabled", func(t *testing.T) {
 		if !cfg.TLSEnabled {
 			t.Error("TLS should be enabled in production")
@@ -101,12 +95,6 @@ func TestProfileDefaults_Embedded(t *testing.T) {
 		}
 	})
 
-	t.Run("log level is info", func(t *testing.T) {
-		if cfg.LogLevel != "info" {
-			t.Errorf("LogLevel = %q, want info", cfg.LogLevel)
-		}
-	})
-
 	t.Run("TLS enabled", func(t *testing.T) {
 		if !cfg.TLSEnabled {
 			t.Error("TLS should be enabled in embedded")
@@ -162,12 +150,6 @@ func TestProfileDefaults_Dev(t *testing.T) {
 	t.Run("listen addr from production", func(t *testing.T) {
 		if cfg.ListenAddr != ":8443" {
 			t.Errorf("ListenAddr = %q, want :8443 (production base)", cfg.ListenAddr)
-		}
-	})
-
-	t.Run("log level is debug", func(t *testing.T) {
-		if cfg.LogLevel != "debug" {
-			t.Errorf("LogLevel = %q, want debug", cfg.LogLevel)
 		}
 	})
 

@@ -791,9 +791,10 @@ All commands require `--admin-token`:
 | `export-audit` | Export audit log entries as JSONL to stdout |
 
 **Admin token lifecycle:**
-1. Generated on first boot (256-bit random), displayed once to stdout
+1. Taken from `ADMIN_TOKEN_FILE` on first boot when that is set, as either the token or its Argon2id hash. Otherwise generated (256-bit random) and displayed once to stdout.
 2. Stored as Argon2id hash in `auth.admin_config` table
 3. Verified with `VerifyPassword` (Argon2id) on every CLI command
+4. Replaced by `rotate-admin-token`, after which `ADMIN_TOKEN_FILE` no longer applies and later boots keep the rotated hash
 
 **Source:** `internal/cli/cli.go`
 
@@ -1652,7 +1653,6 @@ worse:
 | `VAULT_PROFILE` | `production` | Deployment profile |
 | `LISTEN_ADDR` | `:8443` | Listen address |
 | `VAULT_ORIGIN` | (required) | Public-facing URL |
-| `LOG_LEVEL` | `warn` (prod) / `debug` (dev) | Log verbosity |
 | `VAULT_TLS_ENABLED` | `true` | Enable HTTPS |
 | `VAULT_TLS_CERT_FILE` | (optional) | TLS certificate PEM path |
 | `VAULT_TLS_KEY_FILE` | (optional) | TLS private key PEM path |
@@ -1802,7 +1802,7 @@ worse:
 
 **On the prefix.** Four conventions coexist: unprefixed, `VAULT_`, `ADMIN_GW_` (admin gateway) and
 `BRIDGE_` (honeypot bridge). The unprefixed set includes generically-named variables --
-`LISTEN_ADDR`, `LOG_LEVEL`, `MASTER_KEY`, `HMAC_SECRET`, `ADMIN_TOKEN`, `ISSUER`, `CLIENT_ID`,
+`LISTEN_ADDR`, `MASTER_KEY`, `HMAC_SECRET`, `ADMIN_TOKEN`, `ISSUER`, `CLIENT_ID`,
 `CLIENT_SECRET`, `SCOPES`, `REDIS_ADDR`, `CACHE_BACKEND`, `DB_*`, `SMTP_*`, `CORS_*`, `IP_*`,
 `GEO_*`, `TRUSTED_PROXIES`, `REAL_IP_HEADER`, `KMS_ROOT_KEY`, `SENDGRID_API_KEY` -- several of
 which are exactly the names an OIDC-adjacent deployment is likely to have already set for something
@@ -1811,6 +1811,21 @@ else. Operators SHOULD scope vault42's environment rather than share one.
 Renaming these is a breaking configuration change under section 0.4, so it cannot happen inside 1.x.
 The compatible path is to accept `VAULT_`-prefixed aliases alongside the bare names in a 1.x
 release and to drop the bare names at 2.0.0.
+
+<!-- loglevel-gate:begin -->
+**On log verbosity.** vault42 has no log-verbosity control, and `LOG_LEVEL` is not configuration.
+Before 1.0.0 it was parsed into a config field and given a per-profile default while no binary read
+it, so `LOG_LEVEL=error` and `LOG_LEVEL=debug` produced byte-for-byte identical output. Advertising
+a control the server does not implement is worse than having no control, so 1.0.0 removes the
+variable; section 0.4 permits that only at a major version, which makes 1.0.0 the point to do it.
+
+The server still looks for `LOG_LEVEL` in its environment and logs one line at startup stating that
+it is ignored. It does not refuse to start, because `LOG_LEVEL` is precisely the kind of
+generically-named variable the paragraph above warns about: in a shared environment it is likely to
+have been set for some other process, and rejecting it would convert a harmless inherited value into
+a boot loop. Every log line is emitted regardless of what `LOG_LEVEL` says. Operators who need to
+reduce log volume should filter at the collector.
+<!-- loglevel-gate:end -->
 
 ### 14.2 Profiles
 
@@ -1844,7 +1859,7 @@ All secrets use the `_FILE` suffix convention: the env var points to a file cont
 | Env Var | Secret |
 |---------|--------|
 | `MASTER_KEY_FILE` | AES-256 key (32 bytes) for TOTP encryption |
-| `ADMIN_TOKEN_FILE` | Admin CLI token (Argon2id hash) |
+| `ADMIN_TOKEN_FILE` | Admin CLI token, or its Argon2id hash |
 | `VAULT_PEPPER_FILE` | Server-side password pepper |
 | `HMAC_SECRET_FILE` | HMAC-SHA256 key (min 32 bytes in prod) |
 | `DB_MIG_PASSWORD_FILE` | Migration role password |

@@ -59,6 +59,8 @@ microk8s enable dns storage ingress helm3
 
 This generates all required secrets including `signing-key` (RSA-2048 PKCS#8 PEM for JWT signing). Save the admin token printed at the end -- it is shown only once.
 
+That token is the admin credential, not a placeholder. Mounted as `ADMIN_TOKEN_FILE`, it seeds `admin_config.admin_token_hash` on first boot and is what `--admin-token` is checked against from then on. Mount a file holding its Argon2id hash instead if you would rather the secret in the cluster not be usable as a credential; both forms are accepted. See [config.md](config.md#admin-token-provisioning).
+
 ### 3. Create Kubernetes Resources
 
 ```bash
