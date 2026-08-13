@@ -328,8 +328,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	confirmRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey,
 	}, rlEnabled)
+	// FailClosed because this route verifies a client secret with Argon2, which
+	// makes it a guessing surface exactly like login. Without it a cache outage
+	// drops each pod to its own in-memory counter, so the budget multiplies by
+	// the replica count (three by chart default, ten at the HPA ceiling) while
+	// the pods stay in rotation, since a degraded cache still reports ready.
 	clientTokenRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	// Account erasure is irreversible (recoverable only via the offline key); cap
 	// it tightly and fail closed so a cache outage cannot widen the limit.
