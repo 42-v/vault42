@@ -25,12 +25,47 @@ func NewClientHandler(clients repository.ClientRepository, tokenSvc *service.Tok
 	return &ClientHandler{clients: clients, tokenSvc: tokenSvc, auditLog: auditLog}
 }
 
+// clientAuthFailureIDLimit caps the attempted client id written to the audit
+// record. The id is attacker-controlled on the unknown-client path, and an
+// unbounded one lets anyone write arbitrarily large rows into the audit table
+// at one row per request.
+const clientAuthFailureIDLimit = 128
+
+// auditClientAuthFailure records a rejected client-credentials grant.
+//
+// Every rejection was silent. audit.ClientAuth was emitted only after a
+// successful grant, so the four failure paths (unparseable credentials, unknown
+// client, inactive client, wrong secret) wrote a 401 and nothing else. The only
+// other control on this endpoint is a 10/minute IP-keyed limiter, so a
+// distributed brute force against a service client's secret, the credential
+// that gates kms:unwrap, mint:token and the service-document store, produced no
+// audit trail at all: nothing to alert on, and nothing to reconstruct
+// afterwards.
+//
+// The reason is recorded because the audit log is not visible to the caller.
+// Distinguishing an unknown client from a wrong secret is exactly what the 401
+// must not do and exactly what an investigator needs.
+func (h *ClientHandler) auditClientAuthFailure(r *http.Request, clientID, reason string) {
+	if h.auditLog == nil {
+		return
+	}
+	if len(clientID) > clientAuthFailureIDLimit {
+		clientID = clientID[:clientAuthFailureIDLimit]
+	}
+	h.auditLog.Log(r.Context(), audit.ClientAuth, "", clientID, middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"result": "failure",
+			"reason": reason,
+		}, 30)
+}
+
 // Token handles POST /client/token (client credentials grant).
 func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8192) // explicit limit for gosec G120 visibility
 
 	clientID, clientSecret, ok := parseClientCredentials(r)
 	if !ok {
+		h.auditClientAuthFailure(r, "", "unparseable_credentials")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -42,6 +77,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
+		h.auditClientAuthFailure(r, clientID, "unknown_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -52,6 +88,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
+		h.auditClientAuthFailure(r, client.ID, "inactive_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -63,6 +100,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if verifyErr != nil || !valid {
+		h.auditClientAuthFailure(r, client.ID, "wrong_secret")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
