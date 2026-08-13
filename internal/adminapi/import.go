@@ -131,7 +131,8 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:users_import", "", "", "", "", "", "", // #nosec G104 -- audit is best-effort
+		actor := GetAdmin(r.Context())
+		h.auditLog.Log(r.Context(), "admin:users_import", actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{
 				"source": source, "submitted": len(req.Users), "imported": imported,
 				"consent_failed": consentFailed,
