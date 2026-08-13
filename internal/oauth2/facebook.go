@@ -143,9 +143,27 @@ func (f *FacebookProvider) UserInfo(ctx context.Context, accessToken string) (*U
 	}
 
 	return &UserInfo{
-		ID:            info.ID,
-		Email:         info.Email,
-		EmailVerified: info.Email != "",
+		ID:    info.ID,
+		Email: info.Email,
+		// Facebook publishes no per-address verification signal. The Graph user
+		// node documents `email` as the address listed on the profile, which is a
+		// string the account holder set, and the only `verified` field it ever had
+		// is deprecated and answers a different question: whether the account was
+		// confirmed by mobile or credit card, not whether anyone proved they own
+		// this address. There is nothing here to check, so nothing is claimed.
+		//
+		// This used to be `info.Email != ""`, which made a non-empty string the
+		// whole proof of ownership. Whoever could make Graph return a victim's
+		// address satisfied the both-sides-verified rule in
+		// internal/handler/oauth.go, had (facebook, their own provider id) linked
+		// to the victim's user, and received the victim's tokens on every later
+		// Facebook login. Google, GitHub and the OIDC providers each read an
+		// explicit verification answer instead; Facebook has none to read.
+		//
+		// Facebook logins still work: they sign in, create accounts, and link by
+		// (provider, provider_user_id). The single thing they cannot do is claim
+		// an existing local account by naming its address.
+		EmailVerified: false,
 		Name:          info.Name,
 		AvatarURL:     info.Picture.Data.URL,
 		Provider:      "facebook",
