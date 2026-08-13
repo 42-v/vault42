@@ -140,8 +140,12 @@ func TestPostgresUserRepo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetByID: %v", err)
 		}
-		if got.Email != "updated@test.com" {
-			t.Errorf("Email = %q, want %q", got.Email, "updated@test.com")
+		// Update does not carry the address, and a caller that changes the field
+		// on its model must not be able to move an account to a new inbox through
+		// the profile path. Migration 015 revoked UPDATE(email) from vault_app to
+		// match; the only writer left is the erasure tombstone.
+		if got.Email != "update@test.com" {
+			t.Errorf("Email = %q, want it unchanged at %q", got.Email, "update@test.com")
 		}
 		if got.DisplayName != "Updated Name" {
 			t.Errorf("DisplayName = %q, want %q", got.DisplayName, "Updated Name")

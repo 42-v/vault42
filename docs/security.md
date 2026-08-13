@@ -272,6 +272,24 @@ Related: AR-4 covers the same class of limitation for string-typed secrets, and 
 
 ---
 
+### AR-14: The Admin Role-Escalation Triggers Are Not a Boundary Against SQL That Reaches the Database
+
+**Severity:** Low | **Source:** red-team review of `auth.deny_role_escalation` (1.0.0)
+
+`auth.admin_users` carries two triggers. `auth.deny_role_escalation` (BEFORE UPDATE, migration 001) refuses to raise an existing admin's role. `auth.deny_role_escalation_on_insert` (BEFORE INSERT, migration 016) refuses to create an admin outranking the creator named in `created_by`, and refuses an admin with no creator at all once the first one exists.
+
+Until 016 there was no INSERT half, and the gap was not theoretical: `vault_admin` holds full INSERT on the table, so a statement running as that role could write a brand-new `super_admin` row, with a password hash of its choosing, next to the row the UPDATE trigger was watching. Migration 001 advertised the UPDATE trigger as the injection backstop -- "even if SQL injection reaches the DB, a lower-ranked admin cannot promote themselves to a higher rank" -- and `docs/admin-gateway.md` repeated it. That claim has been removed from both.
+
+**Why the residue is accepted:**
+
+- **The INSERT ceiling is forgeable and says so.** The UPDATE trigger compares against `OLD.role`, which comes from the row, so a caller cannot choose it. On an INSERT every value comes from the statement, and `vault_admin` also holds SELECT on `auth.admin_users`, so a caller can read a genuine `super_admin` id and name it in `created_by`. The guard raises the cost from one statement to two. It does not stop anyone.
+- **A real ceiling needs credentials the deployment does not have.** Making this a boundary means one database login per admin rank, so the rank is carried by the connection rather than by the statement. Every admin tier shares the single `vault_admin` login by design, and splitting it means three secrets, three pools and a rank-to-credential mapping in the gateway -- a larger attack surface than the one it closes.
+- **No injection sink is reachable.** Every admin-plane query is parameterised (`internal/adminapi`, `internal/repository/postgres`), and that, not the trigger, is what actually closes injection here. `tests/attack/sql_injection_test.go` and the parameterisation of the admin repositories are the controls under review.
+- **What the guard does buy is worth keeping.** It enforces a stateable invariant -- no admin row outranks its recorded creator, and no admin row after the first lacks one -- so an RBAC regression in Go that let a viewer-ranked session mint a `super_admin` fails at the database instead of shipping quietly, and existing rows can be audited against it.
+- **Guarded against regression.** `TestAdminEscalationTriggerIgnoresInsert` connects as the real `vault_admin` role with the real grants and asserts all four paths: UPDATE promotion, `ON CONFLICT DO UPDATE`, `session_replication_role`, and the plain INSERT that used to succeed.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

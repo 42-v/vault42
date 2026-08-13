@@ -17,7 +17,7 @@ Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
 ```
 
 The admin gateway is a separate Go binary with its own:
-- Database role (`vault_admin`) -- full CRUD on admin tables, read/update on user tables
+- Database role (`vault_admin`) -- full CRUD on admin tables, read on user tables plus lock/unlock and erasure
 - TLS configuration -- mTLS with client certificate verification
 - Session system -- 64-byte tokens, SHA256-hashed, stored in `auth.admin_sessions`
 - RBAC model -- hardcoded in Go (not configurable via SQL, preventing injection-based escalation)
@@ -190,7 +190,7 @@ Migration `001_initial_schema.sql` creates (among other tables):
 
 | Role | Scope |
 |------|-------|
-| `vault_admin` | Full CRUD on admin tables, read/update on user tables (lock/unlock), full on clients + config, read + append on audit |
+| `vault_admin` | Full CRUD on admin tables, read on user tables plus lock/unlock and `EXECUTE` on the erasure tombstone, full on clients + config, read + append on audit |
 | `vault_app` | SELECT only on admin tables (for verification), no INSERT/UPDATE/DELETE |
 
 ---
@@ -223,7 +223,7 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 | Table | `vault_app` | `vault_admin` |
 |-------|-------------|---------------|
-| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `created_at`) | SELECT, INSERT (import) + column-level UPDATE (lock/unlock and the erasure tombstone) |
+| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` only |
 | `auth.clients` | SELECT, INSERT | SELECT, INSERT, UPDATE |
 | `auth.admin_config` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE, DELETE |
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
@@ -234,11 +234,15 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 The erasure cascade behind `DELETE /admin/users/{id}` additionally gives `vault_admin` DELETE on the per-user tables plus column-level `SELECT (user_id)` on `auth.social_accounts`, `auth.password_history`, `auth.totp_secrets`, `auth.webauthn_credentials` and `auth.backup_codes`. PostgreSQL requires SELECT on every column read in a `WHERE` clause, so DELETE alone is not enough to run `DELETE ... WHERE user_id = $1`; the grant is column-level so the role still cannot read the encrypted TOTP secret, the WebAuthn public keys, the backup-code hashes or the password history it is allowed to destroy.
 
+The erasure tombstone is not in that table because it is not a grant. Scrubbing a user row writes `email`, `display_name` and `avatar_url`, and a column grant for those is standing: it authorises `UPDATE auth.users SET email = ... WHERE id = <anyone>` just as much as it authorises the scrub, which is an account takeover because password reset follows the address. Migration 009 made that grant to both roles and migration 015 revoked it. The tombstone now runs inside `auth.erase_user_identity(user_id, tombstone_email)`, a SECURITY DEFINER function owned by the migration role with `EXECUTE` revoked from `PUBLIC` and granted to `vault_app` and `vault_admin`. It refuses any address that is not `deleted-<the id of the row being scrubbed>@<domain>.invalid`, so the one write it can perform is one nobody can receive mail at.
+
 Neither role may purge the audit log: `EXECUTE` on `audit.cleanup_old_entries()` is revoked from `PUBLIC` and granted to `vault_app` alone, which is where the retention sweeper runs.
 
-This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is intentionally restricted from modifying user identity data (password, email, display name, avatar) -- it can only lock/unlock accounts.
+This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is restricted from modifying user identity data (password, email, display name, avatar) -- it can lock/unlock an account and erase one, and nothing else on the user row.
 
-A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders protection against admin role escalation: even if SQL injection reaches the `vault_admin` role, a lower-ranked admin cannot promote themselves to a higher rank.
+Two database triggers back the Go RBAC model on `auth.admin_users`. `auth.deny_role_escalation` (BEFORE UPDATE) refuses to raise an existing admin's role, and `auth.deny_role_escalation_on_insert` (BEFORE INSERT, migration 016) refuses to create an admin that outranks the creator recorded in `created_by`, or to create one with no creator at all once the first admin exists.
+
+The UPDATE half is a real ceiling: it compares against `OLD.role`, which comes from the row. The INSERT half is not, and this document used to claim otherwise. On an INSERT every value comes from the statement, and `vault_admin` can read `auth.admin_users`, so anything able to write that table can first look up a genuine `super_admin` id and put it in `created_by`. The trigger turns a one-statement backdoor into a two-statement one and enforces a useful invariant against RBAC regressions in Go; it is not a boundary against a caller that reaches the database. What actually closes SQL injection here is that every admin-plane query is parameterised. See AR-14 in [security.md](security.md).
 
 ## Security Properties
 

@@ -309,7 +309,9 @@ GRANT USAGE ON SCHEMA identity TO vault_app;
 GRANT USAGE ON SCHEMA objects TO vault_app;
 
 -- auth.users: full CRUD, column-level UPDATE restriction
--- Immutable columns (id, email, created_at) cannot be updated by vault_app
+-- Immutable columns (id, email, created_at) cannot be updated by vault_app.
+-- 009 broke that for email and 015 restored it. The erasure tombstone, the only
+-- writer email ever had, runs inside auth.erase_user_identity() instead.
 GRANT SELECT, INSERT, DELETE ON auth.users TO vault_app;
 GRANT UPDATE (password_hash, display_name, avatar_url, locale, mfa_required, email_verified, locked_until, failed_login_count, updated_at) ON auth.users TO vault_app;
 
@@ -372,8 +374,21 @@ REVOKE INSERT, UPDATE, DELETE ON auth.admin_sessions FROM vault_app;
 
 -- ============================================================================
 -- Trigger: prevent admin role escalation via direct SQL
--- Belt-and-suspenders with Go RBAC — even if SQL injection reaches the DB,
--- a lower-ranked admin cannot promote themselves to a higher rank.
+--
+-- Belt-and-suspenders with Go RBAC: an existing admin row cannot have its role
+-- raised, because the ceiling is OLD.role and comes from the row rather than
+-- from the statement.
+--
+-- This comment used to read "even if SQL injection reaches the DB, a
+-- lower-ranked admin cannot promote themselves to a higher rank". It did not
+-- cover INSERT, which is not a promotion and fires no trigger here, so a new
+-- super_admin row could simply be written next to the one being watched.
+-- Migration 016 adds the BEFORE INSERT half and states the residual limit: on
+-- INSERT every value is supplied by the statement, so a caller that can write
+-- auth.admin_users can also read a real super_admin's id and name it in
+-- created_by. Neither trigger makes the database safe to reach. What closes SQL
+-- injection is that every admin-plane query is parameterised. See AR-14 in
+-- docs/security.md.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION auth.deny_role_escalation() RETURNS TRIGGER AS $$
@@ -432,7 +447,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON auth.admin_sessions TO vault_admin;
 GRANT SELECT ON auth.admin_roles TO vault_admin;
 
 -- vault_admin: read + column-level update on user tables (lock/unlock only)
--- Admin cannot modify user identity data (password, email, display_name, avatar)
+-- Admin cannot modify user identity data (password, email, display_name, avatar).
+-- 009 granted the identity columns for the erasure tombstone and broke that. 015
+-- revoked them and put the tombstone behind auth.erase_user_identity(). 012 adds
+-- INSERT for the user-import endpoint, which creates rows rather than editing
+-- them. The two columns below are still the only in-place edit the role has.
 GRANT SELECT ON auth.users TO vault_admin;
 GRANT UPDATE (locked_until, failed_login_count) ON auth.users TO vault_admin;
 GRANT SELECT ON auth.refresh_tokens TO vault_admin;
