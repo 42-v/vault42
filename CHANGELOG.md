@@ -192,6 +192,16 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   proof was concatenated raw, and on the Postgres backend a key past the btree index limit
   errors the replay check rather than answering it, which the middleware logs and allows for a
   token that is not DPoP-bound. Hashed now, so the key is a fixed width.
+* **A seed file naming an admin role that does not exist now fails validation.** The seed
+  validator carried its own hand-written list of role names, a third source of truth alongside
+  `rbac.ValidRoles` and `auth.admin_roles`, and it accepted `admin`, for which rbac defines no
+  tier. It failed closed downstream at the foreign key, so the effect was an opaque insert
+  error at boot instead of a validation message naming the role and the valid tiers. It now
+  validates through `rbac.IsValidRole`. Relatedly, the seeder no longer derives an admin's
+  privilege rank from a role's index in the exported `rbac.ValidRoles` slice: an importer
+  sorting that slice in place would have inverted the ranking migration 016 enforces, at
+  runtime and with the source unchanged, so the rank is now read from a private map gated
+  against the ranks migration 001 seeds.
 * **`ES256` verified against a key on any curve.** `VerifyES256` derived the expected raw
   signature length from whatever curve the presented key carried and never compared that curve
   against the one `alg` names, though RFC 7518 assigns exactly P-256 to `ES256`. A proof
