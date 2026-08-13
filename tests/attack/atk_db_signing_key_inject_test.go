@@ -142,12 +142,14 @@ func TestSigningKeyInjectionAsVaultApp(t *testing.T) {
 			t.Fatalf("MarshalPKIXPublicKey: %v", err)
 		}
 
-		// status 'retired' so nothing competes with the active row, expires_at
-		// NULL so Refresh's WHERE never drops it, private_key junk because until
-		// the fix nothing read it.
+		// status 'retired' so nothing competes with the active row, expires_at in
+		// the future so Refresh's WHERE keeps loading it (027 refuses a retired row
+		// with a NULL expiry, so this attack can no longer use NULL to make the row
+		// permanent; a future expiry loads it just the same), private_key junk
+		// because until the fix nothing read it.
 		if _, err := app.Exec(ctx, `
 			INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at, expires_at)
-			VALUES ($1, $2, $3, 'RS256', 'retired', NOW(), NULL)`,
+			VALUES ($1, $2, $3, 'RS256', 'retired', NOW(), NOW() + INTERVAL '1 hour')`,
 			attackerKID, []byte{0x00}, attackerPub); err != nil {
 			t.Fatalf("the premise of this test is that vault_app can write this row: %v", err)
 		}

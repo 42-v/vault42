@@ -1,0 +1,66 @@
+-- ============================================================================
+-- 027: a retired signing key must carry an expiry, so it can never be parked in
+--      the verification set with no expiry at all
+-- ============================================================================
+--
+-- 026 made the retired row terminal against the writes it could see, but its
+-- retire-path trigger fires only WHEN OLD.status = 'retired'. That leaves one
+-- edge unjudged: the move INTO 'retired' from 'active'. 001 grants vault_app
+-- UPDATE on auth.signing_keys, so a single statement reaching the database as the
+-- vault's own least-privilege role can retire the live key and clear its expiry
+-- in the same breath:
+--
+--     UPDATE auth.signing_keys
+--     SET status = 'retired', expires_at = NULL
+--     WHERE status = 'active';
+--
+-- OLD.status is 'active' here, so 026's guard never runs, and no CHECK forbids a
+-- retired row whose expires_at IS NULL. The row that results is the worst of both
+-- lifecycle states at once, and every mechanism that would remove it reads the
+-- NULL expiry as a reason to keep it:
+--
+--   * Refresh publishes `expires_at IS NULL OR expires_at > NOW()`. A NULL expiry
+--     keeps the row in JWKS forever, exactly as the active key's own NULL expiry
+--     does, so the rotated-out material stays in the verification set for good.
+--   * CleanupExpired reaps only `status = 'retired' AND expires_at IS NOT NULL
+--     AND expires_at < NOW()`. A NULL expiry is never past NOW(), so the reaper
+--     never becomes eligible to delete it.
+--   * 020's reap-scope trigger refuses vault_app any DELETE that is not of a
+--     retired, expired row, so even a deliberate hand-cleanup DELETE of this row
+--     is refused. The role that planted it cannot take it back out.
+--
+-- So one UPDATE installs a permanent verification key that outlives rotation (the
+-- active key rolls on, this one stays) and outlives the reaper (it is never
+-- eligible). If that key's private material ever leaks, forged tokens verify
+-- indefinitely against this issuer and every service polling its JWKS.
+--
+-- ----------------------------------------------------------------------------
+-- The fix: a CHECK, not another trigger
+-- ----------------------------------------------------------------------------
+--
+-- `status <> 'retired' OR expires_at IS NOT NULL` makes the retired-with-no-expiry
+-- state unrepresentable on every INSERT and every UPDATE, for every role, in one
+-- clause. A CHECK is chosen over a fourth BEFORE trigger for the one property no
+-- trigger has: session_replication_role = replica and ALTER TABLE ... DISABLE
+-- TRIGGER both suspend row triggers, and 016, 017, 020, 023, 024 and 026 all name
+-- that as a limit the migration role still holds. A CHECK constraint has no such
+-- off switch; the table itself enforces it on every write regardless of role or
+-- replication role. It also carries no WHEN-clause bookkeeping and cannot be
+-- out-ordered by another same-event trigger.
+--
+-- Legitimate code never meets it. keystore.Import retires the outgoing key with
+-- SET status = 'retired', ..., expires_at = now + retentionPeriod, always a
+-- concrete timestamp, and inserts the incoming key as 'active' with a NULL expiry,
+-- which this constraint permits. No product path writes a retired row without an
+-- expiry, so the constraint costs no real write and forbids only the state the
+-- attack needs. The Refresh predicate is tightened in the same change so a retired
+-- row can no longer ride the NULL branch into JWKS even before this constraint is
+-- reached.
+-- ============================================================================
+
+-- DROP + ADD rather than a bare ADD so the migration re-runs on a server that
+-- already carries the constraint.
+ALTER TABLE auth.signing_keys DROP CONSTRAINT IF EXISTS signing_keys_retired_has_expiry;
+ALTER TABLE auth.signing_keys
+    ADD CONSTRAINT signing_keys_retired_has_expiry
+    CHECK (status <> 'retired' OR expires_at IS NOT NULL);
