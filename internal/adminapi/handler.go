@@ -325,10 +325,27 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A lock that leaves live sessions running is not containment. This is the
+	// documented first response to a suspected account takeover, and setting
+	// locked_until alone only stopped logins that had not happened yet: an
+	// attacker holding a refresh token kept rotating it. Refresh now rejects a
+	// locked account too, so this revocation is defence in depth rather than the
+	// only barrier, but it is what makes containment immediate instead of
+	// dependent on when the attacker next rotates.
+	//
+	// Best-effort by design: the lock itself has already been written, and
+	// failing the request here would tell the operator the account is not locked
+	// when it is. The audit event records whether the revocation succeeded.
+	revoked := true
+	if err := h.tokens.RevokeAllForUser(r.Context(), id); err != nil {
+		revoked = false
+	}
+
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserLock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
-		"target_user": id,
-		"until":       until.Format(time.RFC3339),
+		"target_user":      id,
+		"until":            until.Format(time.RFC3339),
+		"sessions_revoked": revoked,
 	}, 0)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "locked", "until": until.Format(time.RFC3339)})

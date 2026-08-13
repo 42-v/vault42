@@ -807,13 +807,25 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	// Account state can change between login and refresh — a banned, disabled,
 	// deleted (or vanished) account must not mint new tokens. Revoke the whole
 	// family so the session is fully terminated, not just this rotation.
-	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled {
+	//
+	// A lock counts, and its absence here made the documented response to a
+	// suspected takeover ineffective. An operator locks the account; the attacker
+	// keeps rotating a refresh token they already hold; the session survives for
+	// the absolute session lifetime (720h by default, unbounded when
+	// VAULT_MAX_SESSION_LIFETIME is 0) rather than the remaining access-token TTL
+	// that docs/security.md AR-5 promised. Login has always rejected a lock, so
+	// locking stopped exactly the sessions that had not started yet.
+	refreshLocked := refreshUser != nil && refreshUser.LockedUntil != nil &&
+		time.Now().Before(*refreshUser.LockedUntil)
+	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled || refreshLocked {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
 		switch {
 		case refreshUser != nil && refreshUser.Banned:
 			return nil, ErrAccountBanned
 		case refreshUser != nil && refreshUser.Disabled:
 			return nil, ErrAccountDisabled
+		case refreshLocked:
+			return nil, ErrAccountLocked
 		default:
 			return nil, ErrTokenInvalid
 		}
@@ -904,6 +916,32 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	// Issue tokens — same per-user roles flow as the password login
 	// path; 2FA verify shares the post-auth shape.
 	mfaUser, _ := s.users.GetByID(ctx, userID)
+
+	// Account state is re-read here rather than trusted from the password step.
+	// Minutes pass between the two: the challenge TTL is the window, and it is
+	// exactly the window in which an operator reacting to a compromise bans,
+	// disables or locks the account. Without this gate the second factor issued a
+	// full session to a subject the platform had already cut off, and Login,
+	// Refresh and the OAuth callback all gate here, so its absence was an
+	// oversight rather than a policy.
+	//
+	// A nil user is deliberately NOT rejected. That case is pinned by
+	// TestCompleteMFALoginNilUserDefaultsRoles: a subject the repository cannot
+	// resolve falls back to the least-privileged role set rather than failing the
+	// login, and changing it is a separate decision from closing this gap.
+	if mfaUser != nil {
+		switch {
+		case mfaUser.Deleted:
+			return nil, ErrTokenInvalid
+		case mfaUser.Banned:
+			return nil, ErrAccountBanned
+		case mfaUser.Disabled:
+			return nil, ErrAccountDisabled
+		case mfaUser.LockedUntil != nil && time.Now().Before(*mfaUser.LockedUntil):
+			return nil, ErrAccountLocked
+		}
+	}
+
 	var mfaRoles []string
 	if mfaUser != nil {
 		mfaRoles = s.effectiveRoles(ctx, mfaUser.Roles)

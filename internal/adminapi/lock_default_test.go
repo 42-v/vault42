@@ -25,10 +25,20 @@ func TestLockUser_UnparseableBodyStillLocksForTheDefault(t *testing.T) {
 	for _, body := range []string{"", "not json", `{"duration": ""}`, `{"duration": "-5h"}`} {
 		t.Run(body, func(t *testing.T) {
 			var lockedUntil time.Time
+			var revokedFor string
 			h := &Handler{
 				users: &mocks.MockUserRepo{
 					LockUntilFn: func(_ context.Context, _ string, until time.Time) error {
 						lockedUntil = until
+						return nil
+					},
+				},
+				// Locking revokes the user's refresh tokens, so the repository is
+				// no longer optional here. A lock that leaves live sessions
+				// rotating is not containment.
+				tokens: &mocks.MockRefreshTokenRepo{
+					RevokeAllForUserFn: func(_ context.Context, userID string) error {
+						revokedFor = userID
 						return nil
 					},
 				},
@@ -45,6 +55,10 @@ func TestLockUser_UnparseableBodyStillLocksForTheDefault(t *testing.T) {
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if revokedFor != "u-1" {
+				t.Errorf("revoked sessions for %q, want u-1: the lock must terminate the "+
+					"sessions the compromised account already holds", revokedFor)
 			}
 			if !lockedUntil.After(time.Now().Add(23 * time.Hour)) {
 				t.Errorf("locked until %v — an account the operator believes is locked would accept a login immediately", lockedUntil)

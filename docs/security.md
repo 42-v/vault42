@@ -98,9 +98,22 @@ Two consequences are accepted:
   claim that is advisory to relying parties rather than load-bearing inside Vault42: no vault42
   route authorizes on `claims.Roles`. Machine authorization uses scopes
   (`middleware.RequireScope`, `internal/middleware/auth.go`), not roles.
-- **Operators who need immediate revocation have a mechanism.** Revoking the user's sessions
-  (`POST /admin/sessions/revoke-all`, or locking the account) invalidates the refresh family
-  and caps exposure at the remaining access-token TTL.
+- **Operators who need immediate revocation have a mechanism.** Locking the account
+  (`POST /admin/users/{id}/lock`) revokes every refresh token the user holds and makes
+  `Refresh` reject the account for as long as the lock stands, so exposure is capped at the
+  remaining access-token TTL. Ban, disable and delete are gated the same way.
+
+  Until 1.0.0 this paragraph was false in the way that matters. Locking wrote `locked_until`
+  and revoked nothing, and `Refresh` never read the column, so an attacker holding a refresh
+  token kept rotating it and the session survived for the absolute session lifetime (720h by
+  default, unbounded when `VAULT_MAX_SESSION_LIFETIME` is 0). Locking stopped only the logins
+  that had not happened yet, which is the opposite of what a containment action is for.
+  `TestAtk_AdminLockDoesNotStopRefresh` and `TestAtk_LockedAccountRefreshChainSurvives` hold
+  the fix down.
+
+  Note that `POST /admin/sessions/revoke-all` is **global**: it revokes every user's sessions,
+  not one user's. It is a break-glass control, not the per-user tool this paragraph used to
+  imply.
 
 **Not covered by this risk: the admin plane.** The admin gateway does not use JWT roles. Its
 authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 29
