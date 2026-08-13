@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -121,8 +122,19 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify password
+	// Verify password.
+	//
+	// Argon2 backpressure is not a wrong password. Folding it into the failure
+	// branch counted a server-side rejection against the admin's lockout budget
+	// and wrote an audit record saying "wrong_password" about a password the
+	// server never checked, so a busy process could lock out an operator and then
+	// misattribute why. Every user-plane call site already separates the two
+	// (internal/handler/auth.go and account.go); the admin plane did not.
 	valid, err := vaultcrypto.VerifyPassword(req.Password, admin.PasswordHash, h.pepper)
+	if errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
 	if err != nil || !valid {
 		h.handleFailedLogin(ctx, admin, clientIP, r.UserAgent())
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")

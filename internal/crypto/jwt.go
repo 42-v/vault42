@@ -82,9 +82,29 @@ func MarshalSigningKeyPEM(key *rsa.PrivateKey) ([]byte, error) {
 }
 
 // KIDFromPublicKey derives a deterministic key ID from the RSA public key.
-// Format: first 16 hex chars of SHA-256(N bytes), split as xxxxxxxx-xxxxxxxx.
+// Format: first 16 hex chars of SHA-256 over the PKIX DER encoding, split as
+// xxxxxxxx-xxxxxxxx.
+//
+// The DER covers both the modulus and the exponent. Hashing N alone meant two
+// keys sharing a modulus but differing in exponent produced the same kid, and
+// keystore.Import upserts ON CONFLICT (kid) DO UPDATE, so importing the second
+// overwrote the first key's private material in place. Reaching it needs admin
+// import of a crafted key, which is why this is hardening rather than a live
+// break, but the fix costs nothing.
+//
+// Changing the derivation does not disturb existing keys. Both call sites derive
+// the kid once, when a key is generated or imported, and store it; nothing
+// recomputes a kid and compares it against a stored one, so keys already in the
+// keystore keep the id they were filed under and the JWKS keeps publishing it.
 func KIDFromPublicKey(pub *rsa.PublicKey) string {
-	h := sha256.Sum256(pub.N.Bytes())
+	// MarshalPKIXPublicKey fails only for a key type it does not understand, and
+	// this one is *rsa.PublicKey. Falling back to the modulus keeps the function
+	// total rather than introducing an error return that no caller can act on.
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		der = pub.N.Bytes()
+	}
+	h := sha256.Sum256(der)
 	s := hex.EncodeToString(h[:8])
 	return s[:8] + "-" + s[8:]
 }

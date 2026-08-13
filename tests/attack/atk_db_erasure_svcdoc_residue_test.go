@@ -73,15 +73,21 @@ func TestAdminErasureLeavesServiceDocumentsBehind(t *testing.T) {
 		return vaultcrypto.HMACSign([]byte(userID+":svcdoc"), atkDBHMACSecret)
 	}
 
-	t.Run("admin-gateway wiring: document survives the erasure", func(t *testing.T) {
+	t.Run("admin-gateway wiring: document is erased", func(t *testing.T) {
 		user := atkDBSeedUser(t, owner, "victim-admin-erase@test.com")
 		seedServiceDoc(t, ctx, svcDocs, clientID, subjectHashFor(user.ID), "profile")
 
-		// Reconstruct the ErasureService EXACTLY as cmd/admin-gateway/main.go:201
-		// does: every repository, but no SetServiceDocs. recoveryPub nil disables
-		// escrow (irrelevant to this cascade); auditLog nil is tolerated by
-		// DeleteAccount's `if s.auditLog != nil` guard.
+		// Reconstruct the ErasureService exactly as cmd/admin-gateway/main.go
+		// does, INCLUDING the SetServiceDocs call it was missing. recoveryPub nil
+		// disables escrow (irrelevant to this cascade); auditLog nil is tolerated
+		// by DeleteAccount's `if s.auditLog != nil` guard.
+		//
+		// That this test constructs the wiring rather than reading it is the
+		// limit of what it can prove. It shows the cascade reaches the store when
+		// the setter is called; tests/spec/erasure_cascade_test.go is what shows
+		// every production call site actually calls it, by parsing them.
 		svc := atkDBNewErasureLikeAdminGateway(db)
+		svc.SetServiceDocs(svcDocs)
 
 		if err := svc.DeleteAccount(ctx, user.ID, "admin:"+atkDBRandomID(t), "admin_request"); err != nil {
 			t.Fatalf("DeleteAccount (admin path): %v", err)
@@ -90,8 +96,7 @@ func TestAdminErasureLeavesServiceDocumentsBehind(t *testing.T) {
 		remaining := countDocsForSubject(t, ctx, owner, subjectHashFor(user.ID))
 		if remaining != 0 {
 			t.Errorf("admin erasure reported success but %d service document(s) survived for the erased user; "+
-				"objects.service_documents retains personal data across an Art. 17 erasure "+
-				"(admin-gateway never calls SetServiceDocs)", remaining)
+				"objects.service_documents retains personal data across an Art. 17 erasure", remaining)
 		}
 	})
 
