@@ -10,7 +10,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +177,80 @@ func TestRun_OutFileSurvivesAnIncompleteRun(t *testing.T) {
 	recs := records(t, string(data))
 	if len(recs) != 1 || recs[0].Email != sampleEmail {
 		t.Errorf("file holds %+v, want the one recoverable account", recs)
+	}
+}
+
+// The records are written straight to the descriptor, so a close that fails is
+// the first and only news that some of them never reached the disk: a quota, a
+// full filesystem, or a writeback error on the network mount an operator ran
+// this from. Exiting 0 there would hand a restore a file that is short by an
+// unknown number of accounts and looks complete, so the close error has to
+// promote the exit code and the truncated file has to go with it.
+func TestOpenOutput_AFailedCloseIsFatalAndTakesThePartialFileWithIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovered.jsonl")
+	var stderr strings.Builder
+	logger := log.New(&stderr, "", 0)
+
+	out, closeOut, ok := openOutput(logger, path, nil)
+	if !ok {
+		t.Fatalf("openOutput refused a fresh path:\n%s", stderr.String())
+	}
+	f, isFile := out.(*os.File)
+	if !isFile {
+		t.Fatalf("openOutput returned %T, want the *os.File it opened", out)
+	}
+	// Closing the descriptor early is the one close(2) failure a test can produce
+	// on demand; the storage failures named above reach the same statement.
+	if err := f.Close(); err != nil {
+		t.Fatalf("close output: %v", err)
+	}
+
+	code := 0
+	closeOut(&code)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1: a recovery whose output could not be closed did not complete", code)
+	}
+	if !strings.Contains(stderr.String(), "recover: close output:") {
+		t.Errorf("stderr does not name the output file as the problem:\n%s", stderr.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		data, _ := os.ReadFile(path)
+		t.Errorf("a file that could not be closed survived the run: %q (stat err %v)", data, err)
+	}
+}
+
+// When the partial output cannot be unlinked the operator has to be told. The
+// file is the personal data an erasure removed, the run that created it has just
+// died, and nothing else in the output says a fragment of the recovery is still
+// on the disk waiting to be shredded by hand.
+func TestRun_SaysSoWhenThePartialOutputCannotBeRemoved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovered.jsonl")
+	t.Setenv("DATABASE_URL", "")
+
+	// The escrow log is opened after the output file, so this is the window in
+	// which the removal can start failing. Unlinking the file here is the
+	// deterministic way in; in the field the same statement is reached by a
+	// directory the operator cannot unlink from, which is the read-only mount
+	// this tool is documented to run from mid-incident.
+	open := func(context.Context, string, int) (rowSource, func(), error) {
+		if err := os.Remove(path); err != nil {
+			t.Errorf("take the output file away from the run: %v", err)
+		}
+		return nil, nil, errors.New("connect: connection refused")
+	}
+
+	var stdout, stderr strings.Builder
+	code := run([]string{"--key", writeKey(t, escrowKey), "--dsn", "postgres://offline/vault", "--out", path}, &stdout, &stderr, open)
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1\n%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "recover: remove partial output:") {
+		t.Errorf("stderr does not say the partial output was left behind:\n%s", stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("stdout = %q, want empty: a run that died before the escrow log must emit nothing", stdout.String())
 	}
 }
 
