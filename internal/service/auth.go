@@ -694,11 +694,18 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, ErrInvalidCredentials
 	}
 
-	// Reset failed login count (both DB and cache)
+	// Reset the durable failed-login count now the password is proven. Only the
+	// password path writes that column, so clearing it here cannot erase a
+	// second-factor failure. The cache lockout counter is NOT cleared yet: it is
+	// shared with the MFA path (RecordMFAFailure feeds the same key), and a first
+	// factor that still owes a second one must not reset the second factor's
+	// brute-force budget. Clearing it early let an attacker holding the password
+	// re-login between guesses to zero the counter, so the H2 lockout never
+	// tripped. It is cleared below on the single-step path, and by
+	// CompleteMFALogin once the second factor also succeeds.
 	if err := s.users.ResetFailedLogin(ctx, user.ID); err != nil {
 		log.Printf("auth: failed to reset login count for %s: %v", user.ID, err)
 	}
-	s.clearLockout(ctx, user.ID)
 
 	// Compute fingerprint
 	input.Fingerprint.IP = ip
@@ -741,6 +748,11 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		}
 	}
+
+	// Single-step login: no second factor is owed, so the login is complete and
+	// the shared lockout counter can be cleared (the MFA path defers this to
+	// CompleteMFALogin).
+	s.clearLockout(ctx, user.ID)
 
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, user.ID); err != nil {
