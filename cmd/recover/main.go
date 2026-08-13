@@ -77,9 +77,16 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))
 }
 
+// exitIncomplete is returned when the run finished but at least one escrow
+// record did not yield a restorable account. It is distinct from the fatal 1 so
+// an operator can tell a run that could not start from one that ran and came
+// back short.
+const exitIncomplete = 3
+
 // run is the whole tool. It returns the process exit code: 2 for a flag error
-// (the stdlib's own convention), 1 for a fatal error, 0 otherwise. Individual
-// records that fail to decrypt are counted and reported, not fatal, so one
+// (the stdlib's own convention), 1 for a fatal error, 3 when the run completed
+// with at least one unrecoverable record, 0 when every record was recovered.
+// Individual records that fail are counted and reported, not fatal, so one
 // corrupt row cannot abort an entire restore.
 func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 	logger := log.New(stderr, "", log.LstdFlags)
@@ -151,6 +158,24 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 			continue
 		}
 
+		// A payload that decrypts and parses can still carry no identity: JSON
+		// null and {} both unmarshal cleanly into a zero escrowedPayload. Emitting
+		// those produced a well-formed record with an empty email and the genuine
+		// audit columns, counted among the successes, and an operator restoring
+		// from that output would create accounts that never existed.
+		//
+		// This is reachable by an adversary rather than only by corruption. The
+		// running server holds the recovery PUBLIC key and appends these rows, so
+		// anything that can write the escrow log can seal an arbitrary number of
+		// empty payloads without ever holding the private key.
+		if p.Email == "" {
+			failures++
+			fmt.Fprintf(stderr, "recover: payload carries no identity (deleted_at=%s); "+
+				"decrypted and parsed but has no email, so there is no account to restore\n",
+				deletedAt.Format(time.RFC3339))
+			continue
+		}
+
 		out := recoveredRecord{
 			Email:       p.Email,
 			DisplayName: p.DisplayName,
@@ -172,6 +197,19 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 	}
 
 	fmt.Fprintf(stderr, "recover: %d record(s) decrypted, %d failure(s)\n", count, failures)
+
+	// Exit status has to distinguish "recovered nothing because there was
+	// nothing" from "recovered nothing because every record failed". Both used
+	// to exit 0, so `recover --key wrong.pem > accounts.jsonl || alert` wrote an
+	// empty file and reported success, which is the wrong direction to fail for
+	// a restore driven from a script. The failure count only ever existed on
+	// stderr, which a pipeline does not read.
+	//
+	// Individual failures stay non-fatal mid-run, so one corrupt row still does
+	// not abort a restore; the status is reported once at the end.
+	if failures > 0 {
+		return exitIncomplete
+	}
 	return 0
 }
 

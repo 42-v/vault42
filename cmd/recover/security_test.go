@@ -190,6 +190,11 @@ func TestRun_RejectedRecordsEmitNoPlaintext(t *testing.T) {
 // A damaged record must not take its neighbours down with it. This is the
 // property the continue in the decrypt loop exists for: an operator recovering
 // 400 accounts after a bad deletion cannot lose 399 of them to one corrupt row.
+//
+// The run still ends in exitIncomplete, because it did come back short and the
+// caller has to be able to see that. Non-fatal mid-run and non-zero at the end
+// are not in tension: the first keeps the restore going, the second stops a
+// pipeline reading a partial result as a complete one.
 func TestRun_OneBadRecordDoesNotStopTheRest(t *testing.T) {
 	bad := goodRow(t, "corrupt@example.invalid")
 	bad.payload = sealTo(t, &wrongKey.PublicKey, escrowJSON(t, "corrupt@example.invalid", "Wrong Key", nil))
@@ -201,8 +206,9 @@ func TestRun_OneBadRecordDoesNotStopTheRest(t *testing.T) {
 	)
 	got := exercise(t, args, o)
 
-	if got.code != 0 {
-		t.Fatalf("exit code = %d, want 0\n%s", got.code, got.stderr)
+	if got.code != exitIncomplete {
+		t.Fatalf("exit code = %d, want %d: one record was unrecoverable, so the run "+
+			"completed short and must not report success\n%s", got.code, exitIncomplete, got.stderr)
 	}
 	recs := records(t, got.stdout)
 	if len(recs) != 2 {
@@ -223,11 +229,11 @@ func TestRun_OneBadRecordDoesNotStopTheRest(t *testing.T) {
 // fail-open would be worst: the tool would emit whatever the mismatched key
 // produced. Every record must be refused and stdout must be byte-for-byte empty.
 //
-// The exit status is asserted as 0 to pin the behaviour rather than to bless it:
-// a run where every record failed to decrypt is indistinguishable, by status
-// alone, from a run against an empty escrow log. A wrapper that only checks the
-// status will treat a wrong-key run as a completed restore. The failure count is
-// on stderr and in the summary line, which is the only signal available.
+// The exit status carries the outcome. It used to be 0, which made a run where
+// every record failed indistinguishable by status from a run against an empty
+// escrow log, so `recover --key wrong.pem > accounts.jsonl || alert` wrote an
+// empty file and reported success. The failure count existed only on stderr,
+// which a pipeline does not read.
 func TestRun_WrongKeyRecoversNothing(t *testing.T) {
 	rows := make([]escrowRow, 0, 3)
 	for _, email := range []string{"a@example.invalid", "b@example.invalid", "c@example.invalid"} {
@@ -245,8 +251,9 @@ func TestRun_WrongKeyRecoversNothing(t *testing.T) {
 	if !strings.Contains(got.stderr, "recover: 0 record(s) decrypted, 3 failure(s)") {
 		t.Errorf("summary did not report a total failure:\n%s", got.stderr)
 	}
-	if got.code != 0 {
-		t.Errorf("exit code = %d, want 0 (pinning current behaviour, see the comment on this test)", got.code)
+	if got.code != exitIncomplete {
+		t.Errorf("exit code = %d, want %d: every record failed to decrypt, which must "+
+			"never be reported as a successful restore", got.code, exitIncomplete)
 	}
 	mustNotLeak(t, "wrong-key diagnostics", got.stderr, "a@example.invalid", "b@example.invalid", "c@example.invalid", sampleDisplayName)
 	mustNotLeak(t, "wrong-key diagnostics", got.stderr, keyMaterial(t, wrongKey)...)
@@ -348,9 +355,8 @@ func TestRun_PlaintextThatIsNotAProfileIsDropped(t *testing.T) {
 // audit columns from the row. An operator, or a script, restoring from that
 // output is restoring accounts that never existed. The fix is a validity check on
 // the decrypted profile (a non-empty email at minimum) before the record is
-// encoded and counted; when that lands, this test should flip to asserting the
-// record is dropped and counted as a failure.
-func TestRun_EmptyProfileIsEmittedRatherThanRejected(t *testing.T) {
+// encoded and counted. That check now exists, and this test holds it down.
+func TestRun_IdentityFreePayloadIsRejected(t *testing.T) {
 	for _, plain := range []string{`null`, `{}`, `{"email":""}`} {
 		t.Run(plain, func(t *testing.T) {
 			by := "admin:real"
@@ -363,15 +369,23 @@ func TestRun_EmptyProfileIsEmittedRatherThanRejected(t *testing.T) {
 			o, args := withRows(t, row)
 			got := exercise(t, args, o)
 
-			recs := records(t, got.stdout)
-			if len(recs) != 1 {
-				t.Fatalf("recovered %d records, want 1: %q", len(recs), got.stdout)
+			if got.stdout != "" {
+				t.Fatalf("stdout = %q, want empty: a payload with no identity is not an "+
+					"account and must not appear in a restore", got.stdout)
 			}
-			if recs[0].Email != "" {
-				t.Fatalf("email = %q, want empty: the fixture carries no identity", recs[0].Email)
+			if !strings.Contains(got.stderr, "recover: 0 record(s) decrypted, 1 failure(s)") {
+				t.Errorf("an identity-free record was not counted as a failure:\n%s", got.stderr)
 			}
-			if !strings.Contains(got.stderr, "recover: 1 record(s) decrypted, 0 failure(s)") {
-				t.Errorf("an identity-free record was not counted as decrypted:\n%s", got.stderr)
+			if !strings.Contains(got.stderr, "carries no identity") {
+				t.Errorf("the rejection was not explained on stderr:\n%s", got.stderr)
+			}
+			if got.code != exitIncomplete {
+				t.Errorf("exit code = %d, want %d", got.code, exitIncomplete)
+			}
+			// The audit columns are what made the forgery convincing, so make sure
+			// they did not survive into the output by another route.
+			if strings.Contains(got.stdout, "admin:real") {
+				t.Error("the row's audit columns reached stdout without an identity to attach to")
 			}
 		})
 	}
