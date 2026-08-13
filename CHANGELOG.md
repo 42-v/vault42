@@ -167,6 +167,28 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   already refused that pair, so the default install was a CrashLoopBackOff with the reason
   one line deep in the pod logs rather than a silently dropped cookie. Secure cookies are the
   default now, and the chart refuses to render the combination outside dev.
+* **Attacker-chosen values reached logs unescaped.** `SafeLogValue` replaced only NUL, tab, CR
+  and LF, so ESC, the C1 range, VT, FF, BS, BEL, DEL and the Unicode line separators passed
+  through. `net/url` accepts a percent-encoded ESC in the request line, and the resulting path is
+  written by the access logger on every request, so an operator tailing logs during a scan had
+  the sequence executed rather than displayed: `\x1b[2J\x1b[1;1H` clears the screen and homes
+  the cursor, letting records already printed be overpainted with forged ones. Around twenty call
+  sites carried a `#nosec` annotation resting on that guarantee. The bridge logged a decoy hit's
+  raw path under an annotation claiming the path came from a known set, when decoy matching is by
+  prefix and everything after it is attacker-chosen.
+* **Every unrouted scan probe was logged as `GET /`.** The SPA fallback rewrote `r.URL.Path` in
+  place before passing the request on, and both the access logger and the honeypot logger read
+  that field after the handler returns. The honeypot profile serves the SPA specifically to look
+  like a real app, which made the profile that exists to collect probe paths the one that
+  destroyed them. Rewritten on a copy of the request.
+* **`RedirectPath` was weaker than its own client-side mirror.** It accepted control characters
+  and dot segments, which the WHATWG URL parser strips or collapses before resolving, so
+  `/\n//evil.com` resolves protocol-relative and off-origin. Not an open redirect, because the
+  client-side validator rejects them, but the server-side check was the weaker of the two.
+* **`Email` accepted the full RFC 5322 mailbox grammar while the caller stored the whole
+  string.** Registering as `admin <attacker@evil.com>` put a display name in the address column
+  and split the uniqueness check, since `admin <a@b.com>` and `a@b.com` compared as different
+  rows.
 * **A stolen security key plus a password was enough.** `webauthn.Config` was built without
   `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
   check compared it against `VerificationRequired`, which is false on every assertion. A
