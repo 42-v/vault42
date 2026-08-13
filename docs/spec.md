@@ -1912,7 +1912,7 @@ The Vue SPA can be served directly from the Go binary via `go:embed`. The build 
 
 Multi-stage build, every stage pinned by digest:
 1. **Frontend:** `node:22-alpine` -- builds the Vue SPA for embedding
-2. **Builder:** `golang:1.26.5-alpine` -- builds the static binary (`CGO_ENABLED=0`)
+2. **Builder:** `golang:1.26.6-alpine` -- builds the static binary (`CGO_ENABLED=0`)
 3. **Runtime:** `gcr.io/distroless/static-debian12:nonroot`
 
 Properties:
