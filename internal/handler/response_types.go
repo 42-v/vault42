@@ -363,8 +363,9 @@ type DataExportAccount struct {
 	AvatarURL string `json:"avatar_url"`
 	// Locale is the stored BCP 47 tag.
 	Locale string `json:"locale"`
-	// Roles is the application-role list that would be issued at login.
-	// Always an array.
+	// Roles is the stored User.Roles slice copied as-is. It is not
+	// passed through effectiveRoles, so it can include admin-tier
+	// names that JWT issuance would strip. Always an array.
 	Roles []string `json:"roles"`
 	// MFARequired is the per-account column on model.User, not the
 	// server-wide VAULT_MFA_REQUIRED flag that GET /user/profile reports.

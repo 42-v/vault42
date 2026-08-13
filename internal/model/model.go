@@ -15,11 +15,11 @@ import "time"
 
 // User represents a registered user.
 //
-// Roles carries the JWT "roles" claim issued at login. Empty defaults to
-// ["user"] in the auth flow. Reserved admin-tier role names ("admin",
-// "super_admin") are rejected by the seed validator and filtered before
-// JWT issuance — those tiers belong to AdminUser and are reachable only
-// through the admin gateway.
+// Roles is the persisted application-role list. Empty defaults to
+// ["user"] at JWT issuance. Reserved admin-tier role names ("admin",
+// "super_admin") are rejected by the seed validator and stripped by
+// FilterUserRoles before they reach a user JWT. Those tiers belong to
+// AdminUser and are reachable only through the admin gateway.
 type User struct {
 	// ID is the account's stable UUID. It is the JWT subject on every
 	// self-authenticated user token and the foreign key every other user-scoped
@@ -64,8 +64,12 @@ type User struct {
 	// UpdatedAt is when any persisted profile or state column last changed,
 	// RFC3339 UTC.
 	UpdatedAt time.Time `json:"updated_at"`
-	// Roles is the application-role list copied into the JWT "roles" claim at
-	// login. Empty is issued as ["user"]. Admin-tier names never appear here.
+	// Roles is the persisted application-role list. JWT issuance copies it
+	// through effectiveRoles, which runs FilterUserRoles (and the optional
+	// catalog) and treats empty as ["user"]. Admin-tier names (admin,
+	// super_admin) are not forbidden on this stored slice: a direct SQL
+	// write can leave them here. They are stripped at issuance so they
+	// never reach a user JWT.
 	Roles []string `json:"roles"`
 	// Disabled is an operator-set flag that refuses login with a distinct
 	// account_disabled error. Used for the legacy-platform Active=false
@@ -201,7 +205,11 @@ type Client struct {
 	// Empty on a client that only uses the client-credentials grant.
 	RedirectURIs []string `json:"redirect_uris"`
 	// Active is false after an operator deactivates the client. POST
-	// /client/token then returns 401 client_revoked rather than issuing.
+	// /client/token then returns 401 invalid_client_credentials rather
+	// than issuing, the same code as a missing, unknown or wrong secret,
+	// so a caller cannot distinguish a deactivated client from a bad
+	// credential. The handler burns Argon2 time first so the response
+	// time also does not leak this flag.
 	Active bool `json:"active"`
 	// CreatedAt is when the client was registered, RFC3339 UTC.
 	CreatedAt time.Time `json:"created_at"`
