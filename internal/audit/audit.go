@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 )
@@ -219,6 +220,11 @@ func isCriticalEvent(eventType string) bool {
 // upper bound on what was actually lost rather than the loss itself. Reading it
 // as "events missing from the audit trail" over-reports by the number of
 // critical events that arrived under buffer pressure.
+//
+// It also sums two conditions that need different responses, which is why the
+// scrape does not use it: /metrics reports vault_audit_buffer_full_total and
+// vault_audit_events_dropped_total separately. This total stays a per-Logger
+// figure for callers holding one.
 func (l *Logger) DroppedTotal() int64 {
 	return l.droppedTotal.Load()
 }
@@ -277,6 +283,7 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		if len(l.buffer) >= l.bufferSize {
 			l.mu.Unlock()
 			l.droppedTotal.Add(1)
+			metrics.RecordAuditBufferFull()
 			// Critical security events are written synchronously even when buffer is full.
 			if isCriticalEvent(eventType) {
 				if err := l.repo.Insert(ctx, entry); err != nil {
@@ -339,10 +346,12 @@ func (l *Logger) requeue(entries []*model.AuditEntry) {
 	room := l.bufferSize - len(l.buffer)
 	if room <= 0 {
 		l.droppedTotal.Add(int64(len(entries)))
+		metrics.RecordAuditEventsDropped(int64(len(entries)))
 		return
 	}
 	if len(entries) > room {
 		l.droppedTotal.Add(int64(len(entries) - room))
+		metrics.RecordAuditEventsDropped(int64(len(entries) - room))
 		entries = entries[:room]
 	}
 	l.buffer = append(entries, l.buffer...)

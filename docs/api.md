@@ -278,6 +278,14 @@ vault_tokens_issued_total 76
 # HELP vault_tokens_refreshed_total Total token refresh operations
 # TYPE vault_tokens_refreshed_total counter
 vault_tokens_refreshed_total 120
+
+# HELP vault_audit_buffer_full_total Audit events that arrived to a full in-memory buffer
+# TYPE vault_audit_buffer_full_total counter
+vault_audit_buffer_full_total 0
+
+# HELP vault_audit_events_dropped_total Buffered audit entries discarded because a rejected batch would not fit back into the buffer
+# TYPE vault_audit_events_dropped_total counter
+vault_audit_events_dropped_total 0
 ```
 
 **Exposed metrics:**
@@ -292,6 +300,24 @@ vault_tokens_refreshed_total 120
 | `vault_login_failed_total` | Counter | Total failed logins |
 | `vault_tokens_issued_total` | Counter | Total access tokens issued (login + MFA completion) |
 | `vault_tokens_refreshed_total` | Counter | Total token refresh operations |
+| `vault_audit_buffer_full_total` | Counter | Audit events that arrived to a full in-memory buffer. Non-critical events were discarded; critical event types were written straight to the store instead |
+| `vault_audit_events_dropped_total` | Counter | Buffered audit entries discarded because the store rejected the batch and the retry would not fit back into the buffer |
+
+**Audit loss alerting:**
+
+Both audit counters mean records went missing, and both are worth an alert, but
+they are answered differently and should not be summed into one rule.
+
+`vault_audit_buffer_full_total` rising means the process is producing audit
+events faster than `VAULT_AUDIT_FLUSH_INTERVAL` drains them. The store is
+healthy. Raise `VAULT_AUDIT_BUFFER_SIZE`, shorten the flush interval, or shed
+load. Sustained growth here can also be someone flooding an audited path to bury
+activity in discarded events.
+
+`vault_audit_events_dropped_total` rising means the audit store rejected a batch
+and the retry had nowhere to put the entries. Those entries were already
+reported to their callers as written, so each one is a hole in an append-only
+trail that has no second copy. Treat any increase as a database incident.
 
 **curl example:**
 
