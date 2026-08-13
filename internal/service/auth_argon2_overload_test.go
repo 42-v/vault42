@@ -157,6 +157,29 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 			notWant: ErrInvalidCredentials,
 		},
 		{
+			// A soft-deleted account is masked as "no such user"; under load it must
+			// answer with the same overload error, not the faster no-burn
+			// ErrInvalidCredentials that would re-reveal the soft delete by timing.
+			name: "login as a soft-deleted account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{
+							ID: "user-1", Email: "deleted@example.com",
+							PasswordHash: hash, EmailVerified: true, Deleted: true,
+						}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "deleted@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
 			name: "login as an imported account awaiting its claim link",
 			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
 				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
