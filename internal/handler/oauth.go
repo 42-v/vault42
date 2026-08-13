@@ -365,7 +365,18 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// Find or create user
 	var userID string
 	if h.social != nil {
-		existing, _ := h.social.GetByProviderAndID(r.Context(), providerName, userInfo.ID)
+		// GetByProviderAndID returns (nil, nil) on a clean miss and (nil, err)
+		// on a read fault. Discarding the error collapsed the two: a linked
+		// identity that momentarily could not be read was treated as absent, so
+		// the callback ran the create-or-link-by-email path and, on a free
+		// address, wrote a user row whose (provider, provider_user_id) is already
+		// claimed. The later social.Create then fails and leaves that row
+		// orphaned, squatting the address. Fail closed instead.
+		existing, lookupErr := h.social.GetByProviderAndID(r.Context(), providerName, userInfo.ID)
+		if lookupErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
 		if existing != nil {
 			userID = existing.UserID
 		}
@@ -388,8 +399,16 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	linkIdentity := false
 
 	if userID == "" && userInfo.Email != "" {
-		// Check if a user with this email already exists
-		existingUser, _ := h.users.GetByEmail(r.Context(), userInfo.Email)
+		// Check if a user with this email already exists. A read fault here is
+		// (nil, err), indistinguishable from a clean (nil, nil) miss once the
+		// error is dropped, and dropping it sent a fault down the create branch
+		// to write a row for an address the failed read never got to resolve.
+		// Fail closed rather than create on a lookup that did not complete.
+		existingUser, emailErr := h.users.GetByEmail(r.Context(), userInfo.Email)
+		if emailErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
 		if existingUser != nil {
 			if !linkableToExistingAccount(userInfo, existingUser) {
 				logRefusedLink(providerName, userInfo, existingUser)
