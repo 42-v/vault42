@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -19,8 +20,8 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	// configures and all subsequent calls are no-ops. The default values are
 	// "vault"/"vault". We verify that calling it multiple times does not panic
 	// and that the output still produces valid JWTs with the original iss/aud.
-	ConfigureFakeJWT("should-be-ignored", "should-be-ignored")
-	ConfigureFakeJWT("also-ignored", "also-ignored")
+	ConfigureFakeJWT("should-be-ignored", "should-be-ignored", 15*time.Minute)
+	ConfigureFakeJWT("also-ignored", "also-ignored", 15*time.Minute)
 
 	token, err := GenerateFakeJWT()
 	if err != nil {

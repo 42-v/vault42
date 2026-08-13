@@ -201,12 +201,18 @@ type Logger struct {
 // match is by prefix so a future svcdoc_ type cannot silently fall back to the
 // droppable buffer the way token_minted did when it was added without updating
 // this function.
+//
+// HoneypotTrigger is the only durable record that a trap credential was used.
+// The webhook beside it is rate limited and best-effort, and the honeypot's
+// process log is not evidence. The attacker also chooses how much traffic the
+// trap sees, so leaving the trigger droppable handed them the buffer pressure
+// that erases their own visit.
 func isCriticalEvent(eventType string) bool {
 	if strings.HasPrefix(eventType, svcDocEventPrefix) {
 		return true
 	}
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger:
 		return true
 	}
 	return false

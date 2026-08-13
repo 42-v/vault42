@@ -567,39 +567,17 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// resend, import claim, lockout alert, email-OTP). Empty => global branding.
 	app := vaultemail.AppFromContext(ctx)
 
-	// Honeypot: trap user check — return fake tokens to deceive attackers
-	if s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email) {
-		// Run dummy Argon2id to maintain constant timing (identical to anti-enumeration path)
-		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
-			return nil, err // 503 — consistent with real-user path under load
-		}
-
-		// Fire alert asynchronously (use Background — request ctx canceled after response)
-		go s.honeypotAlert.Alert(context.Background(), honeypot.HoneypotEvent{ // #nosec G118 -- intentional: honeypot alert outlives HTTP request
-			Timestamp: time.Now(),
-			EventType: "trap_login",
-			IP:        ip,
-			UserAgent: ua,
-			Email:     email,
-			RiskScore: 100,
-		})
-
-		fakeJWT, err := honeypot.GenerateFakeJWT()
-		if err != nil {
-			return nil, fmt.Errorf("honeypot: fake JWT: %w", err)
-		}
-		fakeRefresh, err := honeypot.GenerateFakeRefresh()
-		if err != nil {
-			return nil, fmt.Errorf("honeypot: fake refresh: %w", err)
-		}
-		return &LoginResult{
-			AccessToken:  fakeJWT,
-			TokenType:    "Bearer",
-			ExpiresIn:    int(s.tokenSvc.accessTokenTTL.Seconds()),
-			RefreshToken: fakeRefresh,
-			CookieMaxAge: int(s.tokenSvc.refreshTokenTTL.Seconds()),
-		}, nil
-	}
+	// Honeypot: does this address match a planted trap credential?
+	//
+	// The answer is computed here but acted on below, because the branch used to
+	// sit above the IP-lockout gate and above the address lookup and return from
+	// there. That made the trap the one address in the deployment that still
+	// answered 200 from a locked-out IP, which an attacker reaches by burning the
+	// lockout and then walking their candidate list. It also meant the trap
+	// answered a successful login with no database round trips at all, so success
+	// came back faster than failure: the reverse of every real deployment, and an
+	// oracle needing no reference host to read.
+	trap := s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email)
 
 	// Check IP-wide lockout (prevents credential stuffing from a single IP)
 	if s.isIPLocked(ctx, ip) {
@@ -611,6 +589,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	user, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
 		return nil, err
+	}
+
+	if trap {
+		return s.trapLogin(ctx, input, email, ip, ua)
 	}
 
 	// Constant-time: verify against dummy hash even if user not found (prevent timing leak).
@@ -801,6 +783,149 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		RefreshToken: pair.RefreshToken,
 		CookieMaxAge: int(time.Until(pair.RefreshExpAt).Seconds()),
 	}, nil
+}
+
+// trapLogin answers a planted credential the way a successful login answers a
+// real one.
+//
+// It repeats the round trips a success makes, because an attacker measures the
+// endpoint as well as reading it. The reads it repeats are the ones the
+// honeypot's own database can answer for a user id that is not in it, so none of
+// them writes a row or trips a foreign key. The two writes a real success makes
+// that would need the row to exist, the refresh-token insert and the device
+// insert, are left out; that residual is the one part of the timing gap this
+// path does not close.
+//
+// Every lookup is keyed by the same id the token's sub carries, so the honeypot
+// queries the account it claims to have authenticated.
+func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip, ua string) (*LoginResult, error) {
+	// The dummy Argon2id burn every non-authenticating path shares.
+	if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+		return nil, err // 503, the same status the real-user path answers with under load
+	}
+
+	// Fire the alert asynchronously. It uses Background because the request
+	// context is canceled once the response is written.
+	go s.honeypotAlert.Alert(context.Background(), honeypot.HoneypotEvent{ // #nosec G118 -- intentional: honeypot alert outlives HTTP request
+		Timestamp: time.Now(),
+		EventType: "trap_login",
+		IP:        ip,
+		UserAgent: ua,
+		Email:     email,
+		RiskScore: 100,
+	})
+
+	// The user id this address is answered with, on every login for the life of
+	// the process. It is both the token's subject and the key of the lookups
+	// below, so the two cannot drift apart.
+	sub, err := honeypot.TrapSubject(email)
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: trap subject: %w", err)
+	}
+
+	// The counter reset and lockout clear a success does. Every repository call
+	// on this path is issued for its round trip and its result is deliberately
+	// not consulted: there is no user row behind this id, so there is nothing a
+	// caller or an operator could do with the answer, and a log line per trap
+	// login would hand the attacker the honeypot's disk.
+	_ = s.users.ResetFailedLogin(ctx, sub)
+	s.clearLockout(ctx, sub)
+
+	input.Fingerprint.IP = ip
+	input.Fingerprint.UserAgent = ua
+	fp := vaultcrypto.ComputeFingerprint(input.Fingerprint)
+
+	// The second-factor gate. With VAULT_MFA_REQUIRED=true every login in the
+	// deployment answers with a challenge and no tokens, so a trap login that
+	// handed tokens straight back was the only login in the system that did not,
+	// and the attacker learns the deployment's policy from any other account.
+	//
+	// The email OTP a real fallback sends is deliberately not sent. The trap
+	// address is operator-configured and usually has no mailbox, the attacker
+	// cannot observe whether mail went out, and the real send is asynchronous, so
+	// omitting it costs neither realism nor time and avoids turning a login loop
+	// into a mail amplifier pointed at the operator.
+	if s.mfaSvc != nil {
+		status, _ := s.mfaSvc.GetStatus(ctx, sub)
+		hasMethods := status != nil && len(status.Methods) > 0
+		if hasMethods || s.mfaSvc.IsRequired() {
+			methods := []string{"email_otp"}
+			if hasMethods {
+				methods = status.Methods
+			}
+			challengePair, err := s.tokenSvc.IssueChallengeToken(sub, fp)
+			if err != nil {
+				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
+			}
+			s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"mfa_required": true}, 0)
+			return &LoginResult{
+				Requires2FA:      true,
+				ChallengeToken:   challengePair,
+				AvailableMethods: methods,
+			}, nil
+		}
+	}
+
+	if err := s.checkSessionLimit(ctx, sub); err != nil {
+		return nil, err
+	}
+	// The device lookup a success makes. The insert that follows it on a real
+	// success needs the user row to exist, so only the read is repeated.
+	_, _ = s.devices.GetByFingerprint(ctx, sub, fp)
+
+	fakeJWT, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{
+		Identity:    email,
+		ClientID:    input.ClientID,
+		Fingerprint: fp,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: fake JWT: %w", err)
+	}
+	fakeRefresh, err := honeypot.GenerateFakeRefresh()
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: fake refresh: %w", err)
+	}
+
+	_ = s.users.SetLastLogin(ctx, sub)
+
+	// /metrics is unauthenticated. Counting the attempt and not the success let
+	// an attacker scrape before and after a login they had just been handed
+	// tokens for and watch vault_login_success_total stand still, which says the
+	// endpoint did not consider it a login.
+	if s.metrics != nil {
+		s.metrics.RecordLoginSuccess()
+		s.metrics.RecordTokenIssued()
+	}
+	s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+
+	return &LoginResult{
+		AccessToken:  fakeJWT,
+		TokenType:    "Bearer",
+		ExpiresIn:    int(s.tokenSvc.accessTokenTTL.Seconds()),
+		RefreshToken: fakeRefresh,
+		CookieMaxAge: s.trapCookieMaxAge(input.RememberMe),
+	}, nil
+}
+
+// trapCookieMaxAge is the refresh-cookie lifetime a real login would have
+// answered this caller with, remember-me and the absolute session bound
+// included.
+//
+// The trap used to answer with the ordinary refresh TTL whatever the caller
+// asked for. The two lifetimes are days apart and arrive in a Set-Cookie header,
+// so a remember_me login that comes back with the short cookie is read off one
+// response.
+func (s *AuthService) trapCookieMaxAge(rememberMe bool) int {
+	ttl := s.tokenSvc.refreshTokenTTL
+	if rememberMe {
+		ttl = s.tokenSvc.rememberMeTTL
+	}
+	// The same clamp IssueTokenPair applies to a new family.
+	if bound := s.tokenSvc.MaxSessionLifetime(); bound > 0 && bound < ttl {
+		ttl = bound
+	}
+	return int(ttl.Seconds())
 }
 
 // recordLoginFailure applies the bookkeeping every rejected login shares: the DB

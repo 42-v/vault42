@@ -156,7 +156,7 @@ func decodeHeaderMap(t *testing.T, token string) map[string]any {
 // the deception: the attacker stops feeding the trap, and every observation the
 // honeypot exists to collect is lost.
 func TestTheFakeAccessTokenCarriesTheSameClaimsInTheSameOrderAsARealOne(t *testing.T) {
-	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience)
+	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience, 15*time.Minute)
 
 	fake, err := honeypot.GenerateFakeJWT()
 	if err != nil {
@@ -176,7 +176,7 @@ func TestTheFakeAccessTokenCarriesTheSameClaimsInTheSameOrderAsARealOne(t *testi
 // tell, and it is the kind an attacker's tooling reports for free: a JWT
 // debugger renders the two differently.
 func TestTheFakeAccessTokenEncodesAudienceAsAnArrayLikeARealOne(t *testing.T) {
-	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience)
+	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience, 15*time.Minute)
 
 	fake, err := honeypot.GenerateFakeJWT()
 	if err != nil {

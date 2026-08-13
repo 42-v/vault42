@@ -296,8 +296,12 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 // FakeLoginResponse returns a realistic-looking but fake login response.
-// The access_token looks like a JWT but has a gibberish signature.
-// The refresh_token is a random hex string.
+//
+// expires_in is read from the same configuration the token's own exp is built
+// from. A hardcoded 900 agreed with the token only on a deployment that had
+// never set VAULT_ACCESS_TOKEN_TTL, and a response whose stated lifetime
+// disagrees with the lifetime inside the token it wraps is a tell that needs no
+// second request.
 func FakeLoginResponse() (map[string]interface{}, error) {
 	jwt, err := GenerateFakeJWT()
 	if err != nil {
@@ -306,7 +310,7 @@ func FakeLoginResponse() (map[string]interface{}, error) {
 	return map[string]interface{}{
 		"access_token": jwt,
 		"token_type":   "Bearer",
-		"expires_in":   900,
+		"expires_in":   int(currentFakeJWTConfig().accessTTL.Seconds()),
 	}, nil
 }
 
