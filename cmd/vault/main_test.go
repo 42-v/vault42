@@ -161,13 +161,13 @@ func TestSanitizeDBError(t *testing.T) {
 		{
 			name:   "credentials in a connection url are replaced",
 			in:     errors.New(`failed to connect to postgres://vault_app:hunter2@db.internal:5432/vault: timeout`),
-			want:   "failed to connect to postgres://***@db.internal:5432/vault: timeout",
+			want:   "failed to connect to postgres://***:***@db.internal:5432/vault: timeout",
 			unwant: "hunter2",
 		},
 		{
 			name:   "every url in the message is redacted",
 			in:     fmt.Errorf("primary postgres://a:p1@h1/db failed, replica postgres://b:p2@h2/db failed"),
-			want:   "primary postgres://***@h1/db failed, replica postgres://***@h2/db failed",
+			want:   "primary postgres://***:***@h1/db failed, replica postgres://***:***@h2/db failed",
 			unwant: "p2",
 		},
 		{
@@ -178,7 +178,7 @@ func TestSanitizeDBError(t *testing.T) {
 		{
 			name:   "percent encoded credentials are redacted too",
 			in:     errors.New(`cannot parse postgres://vault_app:p%40ss%20word@db:5432/vault`),
-			want:   "cannot parse postgres://***@db:5432/vault",
+			want:   "cannot parse postgres://***:***@db:5432/vault",
 			unwant: "p%40ss%20word",
 		},
 	} {
