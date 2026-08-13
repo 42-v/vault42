@@ -167,11 +167,7 @@ func main() {
 	// reached by a test.
 	ks, err := keystore.New(db.Pool, masterKey, time.Hour)
 	if err != nil {
-		// Drain before dying, because log.Fatalf skips the deferred Close and
-		// would take the buffered audit rows with it. Same shape as the seed
-		// failure below.
-		_ = auditLogger.Close(ctx)
-		log.Fatalf("admin-gateway: keystore init: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		fatalAfterDrain(ctx, auditLogger, "admin-gateway: keystore init: %v", err)
 	}
 	if err := ks.EnsureKey(ctx, nil); err != nil {
 		log.Printf("admin-gateway: keystore ensure key error: %v", err)
@@ -210,8 +206,7 @@ func main() {
 		if len(cfg.RecoveryPublicKeyPEM) > 0 {
 			recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)
 			if err != nil {
-				_ = auditLogger.Close(ctx)
-				log.Fatalf("admin-gateway: failed to load recovery public key: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+				fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to load recovery public key: %v", err)
 			}
 		}
 		erasureSvc := service.NewErasureService(
@@ -248,13 +243,11 @@ func main() {
 	// Load mTLS configuration
 	clientCA, err := os.ReadFile(cfg.ClientCAFile)
 	if err != nil {
-		_ = auditLogger.Close(ctx)
-		log.Fatalf("admin-gateway: failed to read client CA: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to read client CA: %v", err)
 	}
 	clientCAPool := x509.NewCertPool()
 	if !clientCAPool.AppendCertsFromPEM(clientCA) {
-		_ = auditLogger.Close(ctx)
-		log.Fatal("admin-gateway: failed to parse client CA certificate")
+		fatalAfterDrain(ctx, auditLogger, "%s", "admin-gateway: failed to parse client CA certificate")
 	}
 
 	// Zero master key from config after passing to handlers
@@ -298,4 +291,19 @@ func main() {
 	}
 
 	log.Println("admin-gateway: stopped")
+}
+
+// fatalAfterDrain flushes the audit buffer and then exits.
+//
+// log.Fatalf calls os.Exit, which runs no deferred function, including the
+// auditLogger.Close deferred at startup. Every audit row buffered up to the
+// moment of the failure would leave with the process, and a gateway dying
+// during startup is exactly when the record of what it managed to do matters.
+//
+// It is a function rather than four copies so an unreachable call site costs one
+// statement instead of two. Three of the four sites are reachable and cover this
+// body, which leaves only the genuinely unreachable one to exclude.
+func fatalAfterDrain(ctx context.Context, auditLogger *audit.Logger, format string, v ...any) {
+	_ = auditLogger.Close(ctx)
+	log.Fatalf(format, v...) //nolint:gocritic // exitAfterDefer is intentional; we drained above
 }
