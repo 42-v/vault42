@@ -127,6 +127,12 @@ func (f *FacebookProvider) UserInfo(ctx context.Context, accessToken string) (*U
 		return nil, fmt.Errorf("facebook userinfo: %w", err)
 	}
 	defer resp.Body.Close()
+	// Same rule the exchange applies: a status other than 200 is not a profile.
+	// A Graph error body decodes into this struct with every field zeroed, which
+	// the caller would otherwise receive as a profile with a nil error.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("facebook userinfo: status %d", resp.StatusCode)
+	}
 
 	var info struct {
 		ID      string `json:"id"`
