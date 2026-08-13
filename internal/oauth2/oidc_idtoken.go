@@ -74,6 +74,15 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 				return nil, fmt.Errorf("oidc id_token: rejected header %q", h)
 			}
 		}
+		// crit names JOSE extensions the recipient must implement to accept the
+		// token (RFC 7515 4.1.11). vault42 implements none, so any crit at all,
+		// including the empty array the RFC forbids outright, is a MUST-reject.
+		// The verifier already refuses this class of header for its own access
+		// tokens and DPoP proofs; the id_token path is the same rule for a token
+		// an external issuer signs.
+		if _, ok := t.Header["crit"]; ok {
+			return nil, fmt.Errorf("oidc id_token: rejected crit header, no JOSE extensions are implemented")
+		}
 		kid, _ := t.Header["kid"].(string)
 		key, err := p.signingKey(ctx, kid)
 		if err != nil {
