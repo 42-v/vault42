@@ -119,26 +119,28 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	ip := middleware.ClientIP(r)
 	ua := r.Header.Get("User-Agent")
 
-	// Always return success to prevent user enumeration
+	// Always return the same response so the body is not an enumeration signal.
 	defer func() {
 		WriteJSON(w, http.StatusOK, StatusResponse{
 			Status: "If that email exists, a reset link has been sent.",
 		})
 	}()
 
-	user, err := h.users.GetByEmail(r.Context(), input.Email)
-	if err != nil || user == nil {
-		// Constant-time: verify against dummy hash to match the found-user path timing.
-		// ErrArgon2Overloaded is intentionally discarded here: the deferred response always
-		// returns 200 regardless, so no user enumeration signal is possible.
-		// Result discarded; deferred 200 prevents enumeration.
-		_, _ = vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash, h.pepper)
-		return
-	}
+	// Spend the same dominant work on every request so response TIMING is not an
+	// enumeration signal either: one Argon2 verification (the ~50ms cost that a
+	// login would pay, and the only large, reliable timing component here) and one
+	// token generation, whether or not the address maps to an eligible account.
+	// Only an existing, non-deleted, non-banned, non-disabled account then has the
+	// token stored and mailed. A locked-out account is still eligible: resetting
+	// the password is a legitimate way out of a failed-login lockout. The residual
+	// difference from the store/audit writes on the eligible path is sub-millisecond
+	// and dominated by the shared Argon2 cost. ErrArgon2Overloaded is discarded: the
+	// deferred 200 is returned regardless, so no path reveals more than another.
+	_, _ = vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash, h.pepper)
+	token, tokenErr := vaultcrypto.RandomHex(32)
 
-	// Generate reset token
-	token, err := vaultcrypto.RandomHex(32)
-	if err != nil {
+	user, err := h.users.GetByEmail(r.Context(), input.Email)
+	if err != nil || user == nil || user.Deleted || user.Banned || user.Disabled || tokenErr != nil {
 		return
 	}
 

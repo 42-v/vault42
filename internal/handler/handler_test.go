@@ -855,6 +855,58 @@ func TestResetRequestNonexistentEmail(t *testing.T) {
 	}
 }
 
+// A deleted, banned or disabled account must not receive a reset link: the
+// address exists, so the old code minted and mailed a token for it. The response
+// stays an indistinguishable 200, but no token is stored and no mail is sent.
+func TestResetRequest_IneligibleAccountsGetNoLink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		user *model.User
+	}{
+		{name: "deleted", user: &model.User{ID: "u1", Email: "u@example.com", Deleted: true}},
+		{name: "banned", user: &model.User{ID: "u1", Email: "u@example.com", Banned: true}},
+		{name: "disabled", user: &model.User{ID: "u1", Email: "u@example.com", Disabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			users := &mocks.MockUserRepo{
+				GetByEmailFn: func(context.Context, string) (*model.User, error) { return tc.user, nil },
+			}
+			storedResetKey := false
+			cacheSpy := &mocks.MockCache{
+				SetFn: func(_ context.Context, key, _ string, _ time.Duration) error {
+					if strings.HasPrefix(key, "reset:") {
+						storedResetKey = true
+					}
+					return nil
+				},
+				GetFn: func(context.Context, string) (string, error) { return "", cache.ErrNotFound },
+			}
+			mailed := false
+			mailer := &mocks.MockEmailSender{
+				SendFn: func(context.Context, string, string, string, string) error { mailed = true; return nil },
+			}
+			h := NewPasswordHandler(users, &mocks.MockPasswordHistoryRepo{}, &mocks.MockRefreshTokenRepo{},
+				mailer, newTestAuditLogger(), cacheSpy, "https://vault.test", "TestVault", "", 15, nil, false)
+
+			body := jsonBody(t, map[string]string{"email": "u@example.com"})
+			req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", body)
+			req.RemoteAddr = "127.0.0.1:9999"
+			rec := httptest.NewRecorder()
+			h.ResetRequest(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: an ineligible account must not be distinguishable", rec.Code)
+			}
+			if storedResetKey {
+				t.Errorf("a %s account had a reset token stored; ineligible accounts must not get a link", tc.name)
+			}
+			if mailed {
+				t.Errorf("a %s account was mailed a reset link", tc.name)
+			}
+		})
+	}
+}
+
 func TestChangePasswordSuccess(t *testing.T) {
 	currentPassword := "myCurrentP@ssw0rd"
 	currentHash, err := vaultcrypto.HashPassword(currentPassword)
