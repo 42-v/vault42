@@ -23,6 +23,14 @@ on:
         description: 'Version to publish, without the leading v (e.g. 1.0.0)'
         required: true
 
+# Disable Testcontainers' Ryuk reaper. ci.yml sets this at workflow level, but a
+# workflow-level env does NOT propagate into a called reusable workflow, so the
+# attack suite that nightly-security runs on the release path was starting Ryuk
+# and tripping SELinux AVC denials on hardened hosts. Every suite tears down its
+# own containers via defer, so the reaper is redundant.
+env:
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
 permissions:
   contents: write
   packages: write

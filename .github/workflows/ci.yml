@@ -39,14 +39,33 @@ jobs:
       - name: Unit + handler + middleware + service tests
         run: go test ./internal/... -count=1 -race -v -coverprofile=coverage-unit.out -coverpkg=./internal/... 2>&1 | tee test-output.txt
 
-      - name: Attack tests
-        run: go test ./tests/attack/... -count=1 -v -timeout 300s 2>&1 | tee -a test-output.txt
+      # The race detector used to see ./internal/... and nothing else, which is
+      # backwards: the suites that actually drive concurrency live under tests/.
+      # backup_code_race, cache_atomicity, semaphore_enumeration, the handler
+      # backpressure tests and the two-replica keystore tests were all written to
+      # provoke races and were all run without the detector.
+      #
+      # Measured on this tree before wiring it up, so the timeouts are numbers
+      # rather than guesses: attack 36s, unit 24s, fuzz 2s, spec 1s, and the
+      # container-backed integration 458s plus compliance 48s. Zero races across
+      # every one of them, so this starts green and stays honest about it.
+      #
+      # tests/unit was not run by this job at all. It reached CI only through
+      # coverage-gate, which is skipped when no Go file changed.
+      - name: Attack, unit, fuzz and spec tests (race)
+        run: go test ./tests/attack/... ./tests/unit/... ./tests/fuzz/... ./tests/spec/... -count=1 -race -v -timeout 600s 2>&1 | tee -a test-output.txt
 
-      - name: Compliance tests
-        run: go test ./tests/compliance/... -count=1 -v 2>&1 | tee -a test-output.txt
+      # -p 1 matches the canonical coverage run: integration and compliance each
+      # start their own Postgres, and in parallel they contend for ports.
+      - name: Integration and compliance tests (race)
+        run: go test ./tests/integration/... ./tests/compliance/... -count=1 -p 1 -race -v -timeout 1800s 2>&1 | tee -a test-output.txt
 
-      - name: E2E tests (skipped if no server)
-        run: go test ./tests/e2e/... -count=1 -v 2>&1 | tee -a test-output.txt
+      # tests/e2e/multireplica runs here: it starts its own containers. The outer
+      # tests/e2e suite needs a deployed cluster and skips without one, which is
+      # why VAULT_E2E_REQUIRED is deliberately NOT set. That skip is a real gap
+      # rather than a passing gate, and the step name says so.
+      - name: E2E tests (multireplica only; the cluster suite skips here)
+        run: go test ./tests/e2e/... -count=1 -race -v -timeout 1800s 2>&1 | tee -a test-output.txt
 
       - name: Upload unit coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -276,6 +295,15 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+              # The coverage gate is gated on this filter, and every ratchet it
+              # enforces lives in files that are not Go. A PR adding an exclusion
+              # entry, raising a baseline, or editing the gate itself would
+              # otherwise skip the one job that checks it.
+              - '.coverage-exclusions.json'
+              - 'scripts/cov-gaps.py'
+              - 'scripts/release-check.sh'
+              - 'scripts/coverage.sh'
+              - 'scripts/lib/coverage-env.sh'
 
   modules:
     name: Go module hygiene

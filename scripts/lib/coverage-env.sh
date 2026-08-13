@@ -5,6 +5,14 @@
 #
 # ONE canonical package set, ONE canonical number.
 #
+# The set spans internal/ AND cmd/. It used to be internal/ only, which meant
+# 996 statements of main(), CLI, config parsing, the offline recovery tool and
+# the honeypot bridge sat in neither the numerator nor the denominator of a
+# badge reading "100.00% reachable". They were not covered and not excluded, the
+# one state the exclusion policy says is impossible. Two of those binaries had
+# no test file at all, including cmd/recover, which reconstructs data from the
+# GDPR erasure escrow.
+#
 # The set spans every suite that exercises internal/ in-process: unit, attack and
 # fuzz, plus the DB-backed integration and compliance suites. Large parts of
 # internal/ — repository/postgres, keystore, migrate, the cache backends, the
@@ -18,6 +26,7 @@
 # shellcheck disable=SC2034  # consumed by the sourcing script
 COV_PKGS=(
   ./internal/...
+  ./cmd/...
   ./tests/unit/...
   ./tests/attack/...
   ./tests/fuzz/...
@@ -72,9 +81,10 @@ MSG
 
 # cov_run PROFILE TESTOUT — the canonical coverage test invocation.
 #
-# -coverpkg=./internal/... attributes coverage from tests that live under tests/
-# back to the internal packages they exercise; without it those suites are a
-# silent no-op for the profile.
+# -coverpkg attributes coverage from tests that live under tests/ back to the
+# packages they exercise; without it those suites are a silent no-op for the
+# profile. cmd/ is listed alongside internal/ so the binaries are measured by the
+# same run that measures the library, and cannot drift out of the claim again.
 # -count=1 disables the test cache: a cached package is skipped but produces no
 # coverage, so a second run would report a lower number than the first.
 # -p 1 serializes package binaries — integration and compliance each spin up
@@ -90,7 +100,7 @@ cov_run() {
   # profile with no FAIL line, so the raw code is the only signal that the number
   # is incomplete rather than a real regression.
   local rc=0
-  go test -count=1 -p 1 -timeout 30m -v -coverprofile="$profile" -coverpkg=./internal/... \
+  go test -count=1 -p 1 -timeout 40m -v -coverprofile="$profile" -coverpkg=./internal/...,./cmd/... \
       "${COV_PKGS[@]}" > "$out" 2>&1 || rc=$?
   echo "$rc" > "${out}.rc"
 }
