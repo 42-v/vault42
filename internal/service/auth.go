@@ -1323,6 +1323,20 @@ func (s *AuthService) VerifyEmailOTP(ctx context.Context, userID, code string) e
 	return nil
 }
 
+// FindOrCreateDevice resolves the device a session belongs to on behalf of a
+// login path that mints its refresh-token family outside Login and
+// CompleteMFALogin.
+//
+// The OAuth/social callback writes the refresh-token row itself, so it needs the
+// same device binding the password path applies. Without it the row carries a
+// NULL device_id, the session never shows in GET /user/sessions (which lists
+// devices), and RevokeByDeviceID cannot reach it because its WHERE device_id =
+// $1 never matches a NULL. Semantics match the password path, including the
+// non-critical, log-but-do-not-fail behavior of findOrCreateDevice.
+func (s *AuthService) FindOrCreateDevice(ctx context.Context, userID, fp, ip, ua string) string {
+	return s.findOrCreateDevice(ctx, userID, fp, ip, ua)
+}
+
 // findOrCreateDevice looks up a device by fingerprint or creates a new one.
 // This is non-critical — errors are logged but do not fail the auth flow.
 func (s *AuthService) findOrCreateDevice(ctx context.Context, userID, fp, ip, ua string) string {

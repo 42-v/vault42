@@ -601,28 +601,36 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Store refresh token (hashed) in database
 	tokenHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
-	rtID, err := vaultcrypto.RandomUUID()
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
 	if h.tokens != nil {
 		// The concurrent-session cap applies here for the same reason it applies to a
 		// password login: this path writes a refresh-token family. The MFA-completing
 		// OAuth path is already covered because it finishes through CompleteMFALogin.
 		// Client credentials are structurally exempt rather than missing, since that
 		// path discards its refresh token and creates no family at all.
+		deviceID := ""
 		if h.authSvc != nil {
 			if err := h.authSvc.CheckSessionLimit(r.Context(), userID); err != nil {
 				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
 				return
 			}
+			// Bind the family to a device with the same fingerprint the row stores,
+			// so this session lists in GET /user/sessions and RevokeByDeviceID can
+			// reach it. Match the password path's fp/ip/ua threading.
+			deviceID = h.authSvc.FindOrCreateDevice(r.Context(), userID, fp, middleware.ClientIP(r), r.Header.Get("User-Agent"))
+		}
+		// Draw the refresh-token ID last, right before the store, the same order the
+		// password path uses in storeRefreshToken.
+		rtID, err := vaultcrypto.RandomUUID()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
 		}
 		if err := h.tokens.Create(r.Context(), &model.RefreshToken{
 			ID:              rtID,
 			UserID:          userID,
 			TokenHash:       tokenHash,
 			FamilyID:        pair.FamilyID,
+			DeviceID:        deviceID,
 			FingerprintHash: fp,
 			ExpiresAt:       pair.RefreshExpAt,
 			CreatedAt:       time.Now(),
