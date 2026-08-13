@@ -167,6 +167,31 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   already refused that pair, so the default install was a CrashLoopBackOff with the reason
   one line deep in the pod logs rather than a silently dropped cookie. Secure cookies are the
   default now, and the chart refuses to render the combination outside dev.
+* **A stolen security key plus a password was enough.** `webauthn.Config` was built without
+  `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
+  check compared it against `VerificationRequired`, which is false on every assertion. A
+  credential enrolled with a PIN could be asserted with CTAP2 `uv=false` and a single touch,
+  and vault42 issued tokens. The sign-count path then wrote the UV-less flags over the stored
+  ones, clearing the record that the credential had ever been enrolled with verification.
+  Refused now, before any counter or flag write, and only for credentials actually recorded as
+  user-verified, so PIN-less keys are unaffected.
+* **A credential id could be registered twice.** WebAuthn level 2 requires refusing a
+  credential id already registered, and the column had no unique constraint. Attestation is
+  `none`, so the id comes from the authenticator, and `verify/begin` hands out the victim's
+  ids in `allowCredentials`. Nothing authenticates by credential id alone today, so this was a
+  trap rather than a bypass; it springs when a passkey login path resolves a credential with
+  no user in hand. The handler refuses duplicates and migration 021 adds the index, since the
+  handler check reads then writes.
+* **A typo in `CACHE_BACKEND` silently became a per-process cache.** Any unrecognized value
+  fell through to in-memory with no error, and the production guard only fires on the exact
+  string `redis`, so `CACHE_BACKEND=Redis` skipped it while `/readyz` reported healthy. At
+  four replicas the lockout threshold becomes 20 rather than 5, one captured TOTP code is
+  redeemable on each pod inside its window, and one 2FA challenge token mints four session
+  families. An unrecognized backend is an error now.
+* **The DPoP replay key was the one cache key an attacker sized.** The jti from a self-signed
+  proof was concatenated raw, and on the Postgres backend a key past the btree index limit
+  errors the replay check rather than answering it, which the middleware logs and allows for a
+  token that is not DPoP-bound. Hashed now, so the key is a fixed width.
 * **`ES256` verified against a key on any curve.** `VerifyES256` derived the expected raw
   signature length from whatever curve the presented key carried and never compared that curve
   against the one `alg` names, though RFC 7518 assigns exactly P-256 to `ES256`. A proof
