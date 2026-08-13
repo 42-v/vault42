@@ -256,3 +256,46 @@ func TestEmail(t *testing.T) {
 		})
 	}
 }
+
+// TestEmailRefusesTheErasureTombstoneDomain pins the closure of the erasure
+// tombstone squat. Erasure scrubs a user's email to
+// "deleted-<uuid>@deleted.invalid", and email is a full unique column, so an
+// attacker who registers that exact address ahead of the victim's erasure makes
+// the scrub's UPDATE fail with a unique violation. The erasure then aborts and
+// the victim's identity is never removed. The user id is the JWT subject, public
+// to every relying party, so the address is not a secret. Registration input
+// must therefore refuse the tombstone domain outright.
+func TestEmailRefusesTheErasureTombstoneDomain(t *testing.T) {
+	// A real tombstone: "deleted-" + a v4 uuid + "@deleted.invalid".
+	const victimTombstone = "deleted-3f2504e0-4f89-11d3-9a0c-0305e82c3301@deleted.invalid"
+
+	refused := []struct {
+		name  string
+		input string
+	}{
+		{"a real tombstone address", victimTombstone},
+		{"any local part in the tombstone domain", "anything@deleted.invalid"},
+		{"the domain spelled in mixed case", "deleted-3f2504e0-4f89-11d3-9a0c-0305e82c3301@Deleted.Invalid"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			if Email(tt.input) {
+				t.Errorf("Email(%q) = true; registering a tombstone address squats the row "+
+					"erasure will later write, which aborts the victim's erasure on a unique "+
+					"violation and leaves their identity in place", tt.input)
+			}
+		})
+	}
+
+	// A negative control: a normal address in a real domain that merely contains
+	// the word "deleted" must still be accepted, so the rule is the tombstone
+	// domain and not a substring match.
+	if !Email("deleted-user@example.com") {
+		t.Error("Email(\"deleted-user@example.com\") = false; the rule must be the " +
+			"tombstone domain deleted.invalid, not a substring of the local part")
+	}
+	if !Email("user@deleted.example.com") {
+		t.Error("Email(\"user@deleted.example.com\") = false; only the exact tombstone " +
+			"domain is refused, not every domain with 'deleted' in it")
+	}
+}

@@ -117,6 +117,11 @@ func AvatarURL(rawURL string) string {
 	return rawURL
 }
 
+// tombstoneEmailDomain is the domain erasure writes into the email column when
+// it scrubs an account (internal/service/erasure.go builds
+// "deleted-<uuid>@deleted.invalid"). It is refused as registration input below.
+const tombstoneEmailDomain = "deleted.invalid"
+
 // Email reports whether email is an address and nothing else.
 //
 // net/mail.ParseAddress implements the whole RFC 5322 mailbox grammar, so it
@@ -126,6 +131,15 @@ func AvatarURL(rawURL string) string {
 // rejected here: otherwise a display name ends up in the email column, shown as
 // the account's address while the mail goes elsewhere, and the exact-match
 // uniqueness lookup treats it as a second, unrelated account.
+//
+// A tombstone address is refused too. Erasure scrubs a user's email to
+// "deleted-<uuid>@deleted.invalid", and email is a full unique column, so an
+// address in that domain registered ahead of time squats the exact row erasure
+// will later write. The scrub's UPDATE then fails with a unique violation and
+// the whole erasure aborts, leaving the victim's identity in place; the user id
+// is the JWT subject, so any relying party that has seen it can pre-squat.
+// .invalid is RFC 2606 reserved and never a deliverable address, so refusing the
+// tombstone domain turns away no legitimate registration.
 func Email(email string) bool {
 	if len(email) > 254 {
 		return false
@@ -134,5 +148,11 @@ func Email(email string) bool {
 	if err != nil {
 		return false
 	}
-	return addr.Address == email
+	if addr.Address != email {
+		return false
+	}
+	if at := strings.LastIndexByte(email, '@'); at >= 0 && strings.EqualFold(email[at+1:], tombstoneEmailDomain) {
+		return false
+	}
+	return true
 }
