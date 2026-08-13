@@ -28,7 +28,7 @@ func TestMapClaimsReadsAnExpOfZeroAsExpiredNotAsAbsent(t *testing.T) {
 	if got == nil {
 		t.Fatal("exp 0 read back as no expiry; a token stamped 1970 would never expire")
 	}
-	if !got.Time.Equal(time.Unix(0, 0)) {
+	if !got.Equal(time.Unix(0, 0)) {
 		t.Fatalf("exp 0 read back as %v, want the epoch", got.Time)
 	}
 
@@ -65,11 +65,11 @@ func TestMapClaimsReadsANotBeforeOfZeroAsAlreadyReached(t *testing.T) {
 	claims := MapClaims{"sub": "alice", "nbf": float64(0), "iat": float64(0)}
 
 	nbf := claims.GetNotBefore()
-	if nbf == nil || !nbf.Time.Equal(time.Unix(0, 0)) {
+	if nbf == nil || !nbf.Equal(time.Unix(0, 0)) {
 		t.Fatalf("nbf 0 read back as %v, want the epoch", nbf)
 	}
 	iat := claims.GetIssuedAt()
-	if iat == nil || !iat.Time.Equal(time.Unix(0, 0)) {
+	if iat == nil || !iat.Equal(time.Unix(0, 0)) {
 		t.Fatalf("iat 0 read back as %v, want the epoch", iat)
 	}
 	if err := validateClaims(claims, &validationConfig{verifyIat: true}); err != nil {
