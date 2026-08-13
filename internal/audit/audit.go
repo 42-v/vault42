@@ -305,7 +305,47 @@ func (l *Logger) Flush(ctx context.Context) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	return l.repo.InsertBatch(ctx, entries)
+	if err := l.repo.InsertBatch(ctx, entries); err != nil {
+		l.requeue(entries)
+		return err
+	}
+	return nil
+}
+
+// requeue puts a rejected batch back at the front of the buffer.
+//
+// Flush empties the buffer under the lock and inserts outside it, so before
+// this existed a repository error left the entries already gone and nothing put
+// them back: one transient database problem destroyed a whole batch of audit
+// records. batchLoop discarded the error too, under a comment claiming errors
+// were logged inside Flush, so the loss was silent at both levels and
+// DroppedTotal did not move. The audit log is the only copy of those records,
+// and the events most likely to be in flight during a database problem are the
+// ones describing what was happening at the time.
+//
+// They go at the FRONT because they are older than anything logged while the
+// insert was in flight, and an append-only trail should lose its newest records
+// rather than its oldest when it has to lose some.
+//
+// The retry is bounded by the buffer, deliberately. A store that stays down
+// would otherwise grow this slice without limit inside a process that is
+// already unhealthy. What does not fit is counted in droppedTotal, so the
+// figure an operator alerts on stays honest instead of the loss simply moving
+// somewhere quieter.
+func (l *Logger) requeue(entries []*model.AuditEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	room := l.bufferSize - len(l.buffer)
+	if room <= 0 {
+		l.droppedTotal.Add(int64(len(entries)))
+		return
+	}
+	if len(entries) > room {
+		l.droppedTotal.Add(int64(len(entries) - room))
+		entries = entries[:room]
+	}
+	l.buffer = append(entries, l.buffer...)
 }
 
 // Close flushes remaining entries and stops the batch loop. Safe to call multiple times.
@@ -326,8 +366,14 @@ func (l *Logger) batchLoop() {
 		case <-l.done:
 			return
 		case <-ticker.C:
-			// Periodic flush is best-effort; errors are logged inside Flush.
-			_ = l.Flush(context.Background())
+			// The error is logged rather than discarded. It used to be dropped
+			// under a comment saying Flush logged it, which Flush did not do, so
+			// a store that was rejecting every batch produced no signal at all.
+			// Flush puts the entries back, so this is a report rather than a
+			// loss, and it is the only place that report can come from.
+			if err := l.Flush(context.Background()); err != nil {
+				log.Printf("audit: flush failed, entries retained for the next attempt: %v", err)
+			}
 		}
 	}
 }
