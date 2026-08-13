@@ -177,6 +177,29 @@ func isSafeAuthorizeRedirect(raw string) bool {
 	return u.Scheme == "https" && u.Host != ""
 }
 
+// linkableToExistingAccount reports whether a provider identity may be attached
+// to an account that already holds this email address. Both sides have to be
+// verified: the IdP's assertion about the address, and the account's own
+// email_verified. Either half alone lets an attacker who can assert an address
+// they do not own inherit somebody else's account, and the link is permanent,
+// so it becomes a standing passwordless login as that user.
+//
+// It is a function rather than two inline conditions because the callback
+// reaches this decision twice, and the second site did not have it. The
+// lookup-hit branch enforced the predicate while the 23505 race fallback adopted
+// whichever row won the race, which is the same takeover with a race window in
+// front of it. Both sites call this now so they cannot drift apart again.
+func linkableToExistingAccount(userInfo *oauth2.UserInfo, existing *model.User) bool {
+	return userInfo.EmailVerified && existing.EmailVerified
+}
+
+// logRefusedLink records a refused identity link. Both refusal sites log the
+// same shape so the two are indistinguishable in an incident review.
+func logRefusedLink(providerName string, userInfo *oauth2.UserInfo, existing *model.User) {
+	log.Printf("oauth: refusing to link %s to existing user %s (oauth_verified=%v, user_verified=%v)", // #nosec G706 -- sanitized via SafeLogValue
+		httputil.SafeLogValue(providerName), existing.ID, userInfo.EmailVerified, existing.EmailVerified)
+}
+
 // Callback handles GET /auth/oauth2/callback/{provider}.
 //
 //nolint:gocognit,gocyclo // OAuth2 callback enforces the full state-validation + nonce-binding + PKCE-exchange flow inline; splitting would scatter the security invariants
@@ -306,12 +329,8 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		// Check if a user with this email already exists
 		existingUser, _ := h.users.GetByEmail(r.Context(), userInfo.Email)
 		if existingUser != nil {
-			// SECURITY: Only link to existing account when BOTH the OAuth provider
-			// confirms the email is verified AND the existing account's email is verified.
-			// This prevents account takeover via unverified OAuth emails.
-			if !userInfo.EmailVerified || !existingUser.EmailVerified {
-				log.Printf("oauth: refusing to link %s to existing user %s (oauth_verified=%v, user_verified=%v)", // #nosec G706 -- sanitized via SafeLogValue
-					httputil.SafeLogValue(providerName), existingUser.ID, userInfo.EmailVerified, existingUser.EmailVerified)
+			if !linkableToExistingAccount(userInfo, existingUser) {
+				logRefusedLink(providerName, userInfo, existingUser)
 				WriteError(w, http.StatusConflict, "email_already_registered")
 				return
 			}
@@ -336,11 +355,28 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			}); err != nil {
 				// Handle concurrent registration race: if another request created
 				// a user with this email between our lookup and insert, look them up.
+				//
+				// The re-lookup lands on a row this flow has never vetted, so it has
+				// to re-apply the same predicate as the lookup-hit branch above
+				// rather than trust the row for having won a race. Skipping it was a
+				// takeover with a race window: a victim registers victim@ex.com
+				// (email_verified=false), an attacker completes a social login
+				// asserting that address, the GetByEmail above misses, the victim's
+				// INSERT commits first, the attacker's Create comes back 23505 and
+				// the attacker adopted the victim's id with their own IdP account
+				// linked to it. UNIQUE(provider, provider_user_id) does not cover
+				// this: it stops one IdP account attaching twice, not a new IdP
+				// account attaching to somebody else's user row.
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 					raceUser, lookupErr := h.users.GetByEmail(r.Context(), userInfo.Email)
 					if lookupErr != nil || raceUser == nil {
 						WriteError(w, http.StatusInternalServerError, "internal_error")
+						return
+					}
+					if !linkableToExistingAccount(userInfo, raceUser) {
+						logRefusedLink(providerName, userInfo, raceUser)
+						WriteError(w, http.StatusConflict, "email_already_registered")
 						return
 					}
 					userID = raceUser.ID
@@ -383,9 +419,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce account state on the OAuth path too (parity with password login +
 	// token refresh; 2nd-pass review): OAuth must not become a bypass for a
-	// banned/disabled/deleted account. An unclaimed imported account is claimed
-	// here — the OAuth provider has verified ownership of the email, which is a
-	// valid claim — clearing import_pending so later logins behave normally.
+	// banned/disabled/deleted/locked account. An unclaimed imported account is
+	// claimed here, because the OAuth provider has verified ownership of the email
+	// and that is a valid claim, clearing import_pending so later logins behave
+	// normally.
 	acct, _ := h.users.GetByID(r.Context(), userID)
 	if acct == nil || acct.Deleted {
 		WriteError(w, http.StatusForbidden, "account_unavailable")
@@ -397,6 +434,30 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if acct.Disabled {
 		WriteError(w, http.StatusForbidden, "account_disabled")
+		return
+	}
+	// The lock was missing from this gate while the comment above already claimed
+	// parity, and that gap made POST /admin/users/{id}/lock useless against the
+	// attacker it exists for. Login answered account_locked and Refresh burned the
+	// family, so an operator responding to a suspected takeover saw both of those
+	// paths close, while an attacker holding a linked social identity completed a
+	// callback and collected a brand new refresh family. The lock stopped every
+	// login that had not happened yet except the one already in play.
+	//
+	// Both sources count, matching Login: the persisted locked_until an operator
+	// writes, and the cache auto-lockout the failed-password counter trips.
+	// MFAVerifyLocked is the exported reader for that counter.
+	//
+	// This sits ahead of the import claim and ahead of the 2FA branch on purpose.
+	// A locked row must not be claimed (import_pending is cleared once and never
+	// comes back), and a locked account must not receive a challenge token, which
+	// is a bearer credential carrying its own window to finish in.
+	if acct.LockedUntil != nil && time.Now().Before(*acct.LockedUntil) {
+		WriteError(w, http.StatusForbidden, "account_locked")
+		return
+	}
+	if h.authSvc != nil && h.authSvc.MFAVerifyLocked(r.Context(), acct.ID) {
+		WriteError(w, http.StatusForbidden, "account_locked")
 		return
 	}
 	if acct.ImportPending {
