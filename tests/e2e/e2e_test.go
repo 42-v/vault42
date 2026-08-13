@@ -25,6 +25,23 @@ var (
 	mailpitURL = "http://mail.localhost"
 )
 
+// TestMain gates the suite on a reachable deployment.
+//
+// This suite talks to a real vault42 over HTTPS and reaches into the cluster
+// with kubectl to reset state, so it cannot run without one. When no server
+// answers it exits 0, which is right for a developer running `go test ./...` on
+// a laptop and wrong everywhere a green result is read as evidence.
+//
+// It was read as evidence. The CI step named "E2E tests (skipped if no server)"
+// never started a server, so the suite skipped itself on every run since it was
+// written and reported success for doing nothing. A suite that passes by not
+// running is worse than no suite, because it occupies the slot where a real one
+// would be missed.
+//
+// VAULT_E2E_REQUIRED closes that. Set it anywhere a skip must not read as a
+// pass, and an unreachable server becomes a failure that names the URL it tried
+// and how to bring one up. The default stays a skip so the laptop case is
+// unaffected.
 func TestMain(m *testing.M) {
 	if u := os.Getenv("VAULT_E2E_URL"); u != "" {
 		baseURL = u
@@ -33,7 +50,6 @@ func TestMain(m *testing.M) {
 		mailpitURL = u
 	}
 
-	// Skip entire suite if server is unreachable
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 		Transport: &http.Transport{
@@ -41,7 +57,19 @@ func TestMain(m *testing.M) {
 		},
 	}
 	if _, err := client.Get(baseURL + "/healthz"); err != nil {
-		fmt.Fprintf(os.Stderr, "SKIP e2e: vault server not reachable at %s: %v\n", baseURL, err)
+		if os.Getenv("VAULT_E2E_REQUIRED") == "1" {
+			fmt.Fprintf(os.Stderr,
+				"FAIL e2e: VAULT_E2E_REQUIRED=1 but no vault42 answered at %s: %v\n"+
+					"This suite needs a deployment. Bring one up with scripts/deploy-dev.sh, or\n"+
+					"point VAULT_E2E_URL at an existing one. Unset VAULT_E2E_REQUIRED only where a\n"+
+					"skipped run is genuinely acceptable, which is not a release gate.\n",
+				baseURL, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr,
+			"SKIP e2e: vault server not reachable at %s: %v\n"+
+				"Nothing in this suite ran. Set VAULT_E2E_REQUIRED=1 to make this a failure.\n",
+			baseURL, err)
 		os.Exit(0)
 	}
 
