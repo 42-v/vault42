@@ -460,7 +460,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 773,
+      "line": 804,
       "occurrence": 3,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -470,7 +470,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 777,
+      "line": 808,
       "occurrence": 4,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -480,7 +480,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 787,
+      "line": 818,
       "occurrence": 5,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -490,7 +490,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 853,
+      "line": 884,
       "occurrence": 2,
       "source": "\t\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -500,7 +500,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 906,
+      "line": 937,
       "occurrence": 8,
       "source": "\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
