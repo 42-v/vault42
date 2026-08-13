@@ -36,6 +36,48 @@ type Collector struct {
 	svcDocRejects atomic.Int64
 }
 
+// The audit drop tallies are package level, unlike every counter above, because
+// of where the audit logger sits in startup. It is built before the collector
+// exists and is handed to the auth service, the honeypot alerter and the admin
+// API, none of which hold a collector, so giving it one would mean threading a
+// collector through every one of those call sites for a figure that is
+// process-wide anyway. The argon2 counters in crypto are package level for the
+// same reason and are read here through accessor functions instead.
+//
+// They are kept here rather than read out of internal/audit so this package
+// keeps importing nothing from the rest of vault42. That is what lets any
+// subsystem report into it without risking the import cycle the argon2
+// accessors exist to avoid.
+//
+// Two series rather than one. Both mean audit records were lost, but they are
+// lost at different stages, by different causes, and are fixed by different
+// people. A full buffer means the process is producing events faster than the
+// flush interval drains them: the store is healthy and the answer is a larger
+// VAULT_AUDIT_BUFFER_SIZE, a shorter flush interval or load shedding. A drop at
+// flush means the store rejected a batch and the retry had nowhere to put it:
+// the answer is to fix the database, and every lost entry had already been
+// reported to its caller as written. Summing them produces a number that pages
+// the wrong team half the time.
+var (
+	auditBufferFull    atomic.Int64
+	auditEventsDropped atomic.Int64
+)
+
+// RecordAuditBufferFull counts an audit event that arrived to a full in-memory
+// buffer. Critical event types are written straight to the store instead of
+// being discarded, so this is an upper bound on what was lost at enqueue rather
+// than the loss itself.
+func RecordAuditBufferFull() { auditBufferFull.Add(1) }
+
+// RecordAuditEventsDropped counts buffered audit entries discarded because a
+// rejected batch would not fit back into the buffer. Every one is a hole in the
+// audit trail, which has no second copy.
+func RecordAuditEventsDropped(n int64) {
+	if n > 0 {
+		auditEventsDropped.Add(n)
+	}
+}
+
 // NewCollector creates a new metrics collector. The argon2 accessor functions
 // are passed in to avoid a circular import between crypto and metrics.
 func NewCollector(argon2Active, argon2Rejected func() int64, argon2MaxConcurrent func() int) *Collector {
@@ -124,6 +166,14 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_svcdoc_rejected_total Service document requests refused on validation, quota or scope.\n")
 		fmt.Fprintf(w, "# TYPE vault_svcdoc_rejected_total counter\n")
 		fmt.Fprintf(w, "vault_svcdoc_rejected_total %d\n", c.svcDocRejects.Load())
+
+		fmt.Fprintf(w, "# HELP vault_audit_buffer_full_total Audit events that arrived to a full in-memory buffer. Non-critical events were discarded here; critical ones were written straight to the store.\n")
+		fmt.Fprintf(w, "# TYPE vault_audit_buffer_full_total counter\n")
+		fmt.Fprintf(w, "vault_audit_buffer_full_total %d\n", auditBufferFull.Load())
+
+		fmt.Fprintf(w, "# HELP vault_audit_events_dropped_total Buffered audit entries discarded because a rejected batch would not fit back into the buffer. Each one is a missing audit record.\n")
+		fmt.Fprintf(w, "# TYPE vault_audit_events_dropped_total counter\n")
+		fmt.Fprintf(w, "vault_audit_events_dropped_total %d\n", auditEventsDropped.Load())
 
 		fmt.Fprintf(w, "# HELP vault_login_failed_total Total failed logins.\n")
 		fmt.Fprintf(w, "# TYPE vault_login_failed_total counter\n")
