@@ -43,7 +43,7 @@ func TestGetConfig_RedactsAdminTokenHash(t *testing.T) {
 	}
 
 	if _, leaked := body.Entries["admin_token_hash"]; leaked {
-		t.Errorf("admin_token_hash returned to a config reader: %s — a viewer must not receive the CLI admin token hash", rec.Body.String())
+		t.Errorf("admin_token_hash returned to a config reader: %s, a viewer must not receive the CLI admin token hash", rec.Body.String())
 	}
 	if body.Entries["login_banner"] != "Authorized use only" {
 		t.Errorf("non-sensitive config was dropped: entries = %v", body.Entries)

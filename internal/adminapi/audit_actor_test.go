@@ -39,7 +39,7 @@ func actorReq(method, target, body string) *http.Request {
 // The role catalog and the bulk-import endpoints mutate authorization state:
 // CreateRole/DeleteRole change which strings a user JWT may assert, and
 // ImportUsers creates accounts in bulk with pre-set credentials. Each writes an
-// audit row on success, but wrote it with an empty actor, IP and user-agent —
+// audit row on success, but wrote it with an empty actor, IP and user-agent
 // so the record proved something happened while dropping the one fact asked
 // first after an incident: which admin did it, from where. The row must
 // attribute the action to the authenticated admin.
@@ -51,7 +51,7 @@ func TestPrivilegedMutations_AuditAttributeTheActor(t *testing.T) {
 	assertAttributed := func(t *testing.T, e *model.AuditEntry) {
 		t.Helper()
 		if e.UserID != wantActor {
-			t.Errorf("audit %s: actor = %q, want %q — no record of which admin made the change", e.EventType, e.UserID, wantActor)
+			t.Errorf("audit %s: actor = %q, want %q, no record of which admin made the change", e.EventType, e.UserID, wantActor)
 		}
 		if e.IP != wantIP {
 			t.Errorf("audit %s: ip = %q, want %q", e.EventType, e.IP, wantIP)

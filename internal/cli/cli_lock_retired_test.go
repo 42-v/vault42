@@ -8,10 +8,10 @@ import (
 )
 
 // lock-user and unlock-user used to run as the vault_app role and write
-// auth.users.locked_until directly: no audit row, no session revocation, and —
-// because vault_app writes the same column the admin plane uses for containment
-// — able to release or override a lock an admin had imposed. Both are retired in
-// favour of POST /admin/users/{id}/lock and /unlock on the admin gateway, which
+// auth.users.locked_until directly: no audit row, no session revocation, and
+// because vault_app writes the same column the admin plane uses for containment,
+// able to release or override a lock an admin had imposed. Both are retired in
+// favor of POST /admin/users/{id}/lock and /unlock on the admin gateway, which
 // audits the action, revokes the target's refresh tokens, and runs as
 // vault_admin. The CLI must refuse the action, name the admin route, stay a
 // recognized command (so cmd/vault does not fall through to booting the
