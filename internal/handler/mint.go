@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/middleware"
@@ -131,9 +130,16 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TTLSeconds < 0 {
-		h.audit(r, claims.ClientID, req.Subject, "invalid_ttl")
-		WriteError(w, http.StatusBadRequest, "invalid_ttl")
+	// The wire carries a lifetime in seconds and the service takes a Duration,
+	// so the conversion is bounded before the multiply rather than after it. A
+	// Duration is int64 nanoseconds and wraps, and a wrapped product can land
+	// back inside the ceiling, which would turn an out-of-range request into an
+	// issued token rather than the refusal below.
+	ttl, err := service.MintTTLFromSeconds(req.TTLSeconds)
+	if err != nil {
+		status, code := mintErrorCode(err)
+		h.audit(r, claims.ClientID, req.Subject, code)
+		WriteError(w, status, code)
 		return
 	}
 
@@ -141,7 +147,7 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		Subject: req.Subject,
 		Roles:   req.Roles,
 		Scopes:  req.Scopes,
-		TTL:     time.Duration(req.TTLSeconds) * time.Second,
+		TTL:     ttl,
 		// The authenticated client, never anything from the body. MintRequestBody
 		// has no field for this, so a caller cannot name a different tenant's
 		// client as the one that spoke.

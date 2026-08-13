@@ -86,6 +86,31 @@ const mintTTLCeiling = 15 * time.Minute
 // mintSubjectMaxLen bounds the caller-supplied subject.
 const mintSubjectMaxLen = 128
 
+// MintTTLFromSeconds converts a caller-supplied lifetime in seconds into a
+// Duration, refusing any value outside the range a minted token could ever be
+// granted.
+//
+// The bound has to be applied to the seconds, before the multiply, and not left
+// to the range check on the resulting Duration. A Duration is int64 nanoseconds
+// and time.Second is 1e9 = 2^9 * 1953125; the odd factor is invertible modulo a
+// power of two, so seconds values differing by 2^55 multiply to the identical
+// nanosecond count. 36028797018964268 seconds is about 1.1 billion years and
+// converts to exactly five minutes. A ceiling check applied after the multiply
+// sees an ordinary lifetime and grants it, so the endpoint answers an
+// out-of-range request with a signed subject assertion instead of the refusal
+// the contract promises, and neither the caller nor the audit row shows that
+// anything was out of range.
+//
+// The bound is the hard ceiling rather than the configured MaxTTL, because
+// MaxTTL is the operator's policy and belongs to Mint; this function's job is
+// only to make the conversion exact for everything it lets through.
+func MintTTLFromSeconds(seconds int) (time.Duration, error) {
+	if seconds < 0 || int64(seconds) > int64(mintTTLCeiling/time.Second) {
+		return 0, ErrMintTTLInvalid
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
 // mintDeniedScopes can never appear on a minted token, whatever the operator
 // configures.
 //
