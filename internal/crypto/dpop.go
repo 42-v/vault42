@@ -50,9 +50,9 @@ func ValidateDPoPProof(proofString, httpMethod, httpURI string, accessTokenHash 
 		return "", "", errors.New("dpop: invalid typ header")
 	}
 
-	// Must NOT have kid header (DPoP proofs carry the key in jwk header)
-	if _, hasKid := unverified.Header["kid"]; hasKid {
-		return "", "", errors.New("dpop: kid header not allowed in DPoP proof")
+	// No kid (RFC 9449 4.2) and no crit (RFC 7515 4.1.11); see dpop_jose.go.
+	if err := rejectDPoPJOSEHeaders(unverified.Header); err != nil {
+		return "", "", err
 	}
 
 	// Extract public key from jwk header
