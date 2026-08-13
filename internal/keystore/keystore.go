@@ -349,7 +349,7 @@ func (ks *KeyStore) Refresh(ctx context.Context) error {
 		SELECT kid, private_key, public_key, algorithm, status, created_at, retired_at, expires_at
 		FROM auth.signing_keys
 		WHERE status != 'revoked'
-		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND (expires_at > NOW() OR (expires_at IS NULL AND status = 'active'))
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
