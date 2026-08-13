@@ -81,9 +81,14 @@ func atkAuthTokService(t *testing.T) (*service.AuthService, *atkAuthTokDeps) {
 // revoke-all, is a global nuke of every user's sessions (RefreshTokenRepo.RevokeAll
 // runs an unfiltered UPDATE), not the surgical per-user tool the wording implies.
 //
-// This assertion encodes the SECURE behavior the register promises. It FAILS
-// against the current code, and that failure is the proof: Refresh hands back a
-// new pair for a locked account.
+// This assertion encodes the secure behavior the register promises. It was
+// written failing, as proof that Refresh handed back a new pair for a locked
+// account, and it passes now: the check landed at internal/service/auth.go in
+// the account-state ladder Refresh runs after resolving the user.
+//
+// The name is kept as it was. It says what the test is watching for rather than
+// what the code does today, and renaming it to something reassuring is how a
+// regression test stops being read as one.
 func TestAtk_AdminLockDoesNotStopRefresh(t *testing.T) {
 	svc, d := atkAuthTokService(t)
 
