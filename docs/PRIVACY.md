@@ -45,6 +45,7 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 | P8 | **Account import** -- migrating a pre-existing account from a prior system | Email, source-system tag, source-system id, import-pending flag | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in service continuity |
 | P9 | **Transactional email** -- verification, password reset, MFA codes, security notices | Email address | Art. 6(1)(b) contract (necessary to operate the account) |
 | P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
+| P12 | **Service-scoped documents** -- opaque JSON a trusted service stores about a user on the platform's behalf, private to the writing service unless it marks a document shared | Encrypted document payload + HMAC pseudonym of the user id, owning client id, document key, size and visibility | Art. 6(1)(b) contract, on the same footing as P6: the Operator's service requests the storage. The contents are opaque to vault42, so the Operator remains responsible for what its services write |
 | P11 | **Account-deletion recovery escrow** -- keeping a recoverable record of an erased account so an accidental or malicious deletion can be reversed | Encrypted payload (email, creation date, roles, display name) + HMAC pseudonym of the user id, requester and reason tag | Art. 6(1)(f) legitimate interest in the integrity and availability of user accounts. Only when the Operator configures a recovery key; see §3.1, §4 and §5.3 |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
@@ -169,6 +170,10 @@ recovery key).
 | **objects.blobs** (encrypted, pseudonym-keyed) | | | |
 | data_enc (payload), label_enc | P6 | Until blob deleted or account erased | 6(1)(b) |
 | ref_hash, checksum, size_bytes, stored_bytes | P6 | As above | 6(1)(b) |
+| **objects.service_documents** (encrypted, pseudonym-keyed, off unless configured) | | | |
+| value_enc (payload) | P12 | Until the document is deleted or the account is erased | 6(1)(b) |
+| client_id (owning service), doc_key, visibility, size_bytes | P12 | As above | 6(1)(b) |
+| subject_hash (HMAC pseudonym of the user id) | P12 | As above | 6(1)(b) |
 | **audit.audit_log** (append-only) | | | |
 | user_id, client_id | P4 | Per audit retention (§4) | 6(1)(f)/6(1)(c) |
 | ip, user_agent, fingerprint_hash, device_id | P4 | Per audit retention (§4) | 6(1)(f) |
@@ -205,6 +210,11 @@ or the session they belong to. The following periods apply:
   under Art. 5(1)(e) must set a horizon explicitly. Audit entries are deliberately exempt from the
   account-erasure cascade (Art. 17(3)(b)/(e)), which is precisely why they need a time-based
   purge of their own.
+- **Service-scoped documents:** kept until the owning service deletes the document or the
+  account is erased. There is no time-based sweeper, because vault42 cannot see inside a document
+  and so cannot judge when its purpose is spent. The store is off unless the Operator enables it,
+  and an Operator that enables it takes on the Art. 5(1)(e) judgement for whatever its services
+  write: the per-subject and per-document quotas bound volume, not age.
 - **Account-recovery escrow:** where the Operator configures a recovery key
   (`VAULT_RECOVERY_PUBLIC_KEY_FILE`), one encrypted record per erasure is retained so the
   deletion can be reversed, then purged. The retention horizon is **operator-set** via
@@ -253,8 +263,8 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 - The user can read the currently stored identity profile via **`GET /user/identity`**, and
   review active sessions and devices via **`GET /user/sessions`** and **`GET /user/devices`**.
 - A consolidated, machine-readable export of all personal data associated with the account --
-  profile, identity, blob metadata, linked social accounts, devices, and the user-scoped audit
-  events -- is provided via the data-export facility (**`GET /user/data-export`**) where the
+  profile, identity, blob metadata, service-scoped documents, linked social accounts, devices,
+  and the user-scoped audit events -- is provided via the data-export facility (**`GET /user/data-export`**) where the
   deployment exposes it; otherwise the Operator produces the same export on request. The export
   is delivered in a structured, commonly used, machine-readable format (JSON) so it can be ported
   to another controller.
@@ -283,7 +293,10 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   auth record: password history, refresh tokens (deleted outright, not merely revoked — a revoked
   row still carries a fingerprint hash and a device reference), devices, TOTP secrets, WebAuthn
   credentials, backup codes, and social-account links, plus the pseudonym-keyed identity profile
-  and blobs. The MFA authenticators are deleted explicitly rather than by database cascade: the
+  blobs and service-scoped documents. Documents written about the user by a service are personal
+  data under Art. 4(1) whichever service authored them, so the cascade reaches them on both the
+  self-service and the administrator paths. The MFA authenticators are deleted explicitly rather
+  than by database cascade: the
   account row is scrubbed in place (an `UPDATE`) so that foreign keys stay valid, which means the
   `ON DELETE CASCADE` on those tables never fires. Backup codes are **purged**, not merely marked
   used — invalidating a code leaves its hash and the user ID in the table, which is enough to end
