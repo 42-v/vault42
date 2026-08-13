@@ -87,7 +87,7 @@ func (f *FacebookProvider) Exchange(ctx context.Context, code, codeVerifier stri
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponse))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("facebook exchange: HTTP %d: %s", resp.StatusCode, string(body))
 	}
@@ -138,7 +138,7 @@ func (f *FacebookProvider) UserInfo(ctx context.Context, accessToken string) (*U
 			} `json:"data"`
 		} `json:"picture"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&info); err != nil {
 		return nil, fmt.Errorf("facebook userinfo: decode: %w", err)
 	}
 

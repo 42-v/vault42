@@ -87,7 +87,7 @@ func (g *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponse))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github exchange: HTTP %d: %s", resp.StatusCode, string(body))
 	}
@@ -138,7 +138,7 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		Email     string `json:"email"`
 		AvatarURL string `json:"avatar_url"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&info); err != nil {
 		return nil, fmt.Errorf("github userinfo: decode: %w", err)
 	}
 
@@ -165,7 +165,7 @@ func (g *GitHubProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 			Primary  bool   `json:"primary"`
 			Verified bool   `json:"verified"`
 		}
-		if err := json.NewDecoder(emailResp.Body).Decode(&emails); err == nil {
+		if err := json.NewDecoder(io.LimitReader(emailResp.Body, maxProviderResponse)).Decode(&emails); err == nil {
 			for _, e := range emails {
 				if e.Primary && e.Verified {
 					primaryEmail = e.Email
