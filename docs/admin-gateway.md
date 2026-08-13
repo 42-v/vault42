@@ -223,8 +223,8 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 | Table | `vault_app` | `vault_admin` |
 |-------|-------------|---------------|
-| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` only |
-| `auth.clients` | SELECT, INSERT | SELECT, INSERT, UPDATE |
+| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`, `banned`, `ban_reason`, `disabled`; `email_verified` and `import_pending` narrowed by trigger, below) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` only |
+| `auth.clients` | SELECT, INSERT (narrowed by trigger, below) | SELECT, INSERT, UPDATE |
 | `auth.admin_config` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE, DELETE |
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
 | `auth.admin_sessions` | none (revoked in 002) | Full CRUD |
@@ -245,6 +245,31 @@ fire in name order and `signing_keys_reap_scope` sorts ahead of
 clause is what leaves migration 017 as the only guard that answers for a revoked
 key. `vault_admin` holds no DELETE here, and 020 states the revoke explicitly so
 the absence reads as a decision rather than an oversight.
+
+`vault_app`'s INSERT on `auth.clients` is the other grant a trigger rather than
+the grant itself makes safe. The grant exists so declarative seeding can register
+clients at startup, and `scopes` is a plain `TEXT[]`, so it also authorized
+writing a client row carrying `mint:token` and `kms:unwrap` with a chosen
+`secret_hash` and then authenticating as it at `POST /client/token` -- the whole
+authorization behind the two privileged endpoints, reachable by INSERT. Migration
+023 pairs the grant with `clients_capability_scope_guard`, which refuses any row
+carrying a scope in `auth.capability_scopes()` unless the writer holds
+`vault_admin`. `POST /admin/clients` is therefore the only way to create a
+privileged client: it is gated on `clients:create`, which belongs to
+`super_admin` alone, and writes an `admin:client_create` audit row naming the
+acting admin. A `VAULT_SEED_FILE` or a `vault add-client` that asks for a
+capability scope now fails, loudly, naming the scope. Ordinary client seeding is
+unchanged.
+
+The account-state columns of `auth.users` are split the same way, by migration
+024. `banned`, `ban_reason` and `disabled` have no UPDATE writer anywhere in the
+tree -- they are set once at INSERT by the import path -- so the grant 004 made to
+`vault_app` is revoked outright rather than guarded. `email_verified` and
+`import_pending` keep theirs, because email confirmation and import claiming are
+`vault_app`'s own work, and `users_account_state_transitions` narrows each to the
+one direction its writer moves in: an address that is confirmed stays confirmed,
+and an account that is claimed stays claimed. `locked_until` is deliberately not
+narrowed; see AR-18 in [security.md](security.md).
 
 The erasure cascade behind `DELETE /admin/users/{id}` additionally gives `vault_admin` DELETE on the per-user tables plus column-level `SELECT (user_id)` on `auth.social_accounts`, `auth.password_history`, `auth.totp_secrets`, `auth.webauthn_credentials` and `auth.backup_codes`. PostgreSQL requires SELECT on every column read in a `WHERE` clause, so DELETE alone is not enough to run `DELETE ... WHERE user_id = $1`; the grant is column-level so the role still cannot read the encrypted TOTP secret, the WebAuthn public keys, the backup-code hashes or the password history it is allowed to destroy.
 
@@ -348,4 +373,4 @@ ghcr.io/42-v/vault42-admin-gateway:latest
 
 The main vault42 binary still provides CLI admin commands (rotate, list, revoke keys; manage clients; declarative seeding) via `--admin-*` flags. These require pod exec access (shell access to the running container), which provides equivalent security to the admin gateway's SSH tunnel. The CLI uses the DB-stored admin token hash for authentication.
 
-Declarative seeding is also available at startup via the `VAULT_SEED_FILE` env var, which loads a JSON file and idempotently creates clients and users before the server starts. See `seed.example.json` for the file format.
+Declarative seeding is also available at startup via the `VAULT_SEED_FILE` env var, which loads a JSON file and idempotently creates clients and users before the server starts. See `seed.example.json` for the file format. A seeded client may not carry a vault42 capability scope (`mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read`, `admin:write`): the seeder runs under `vault_app` and migration 023 reserves those for `POST /admin/clients`, so a seed file asking for one aborts startup naming the scope.
