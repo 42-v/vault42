@@ -61,10 +61,40 @@ type UserSeed struct {
 	Roles         []string `json:"roles,omitempty"`
 }
 
-// ReservedAdminRoles are role names that the User table is FORBIDDEN from
-// granting. Only the AdminUser table (admins seed array) can hold these.
-// Defense-in-depth: the auth/login JWT issuer also strips these from
-// user.Roles in case a row was inserted directly by SQL.
+// ReservedAdminRoles are role names the User table is forbidden from granting.
+// Only the AdminUser table (the admins seed array) may hold these, and the
+// auth/login JWT issuer strips them from user.Roles in case a row was written
+// directly by SQL.
+//
+// This deliberately does NOT mirror rbac.ValidRoles, and that difference is the
+// thing to understand before editing it.
+//
+// vault42 carries two role vocabularies that overlap by name:
+//
+//   - rbac.ValidRoles, the admin-plane tiers {viewer, operator, super_admin},
+//     which govern auth.admin_users.role and reach only the admin gateway.
+//   - auth.app_roles, the end-user roles a JWT carries. Migration 005 seeds
+//     'user', 'viewer' and 'operator' there as reserved core roles.
+//
+// So 'viewer' and 'operator' are legitimate names for an ordinary user to hold.
+// Adding them here would strip them from every user JWT that carries them and
+// break whatever a relying party does with them. That is an outage, not a
+// hardening, which is why the obvious-looking symmetry is not applied.
+//
+// 'admin' is listed although rbac defines no such tier. It is harmless and
+// predates the current vocabulary, but it is why this list cannot be read as an
+// inventory of real roles.
+//
+// The residual risk is ambiguity rather than escalation: a relying party seeing
+// roles ["operator"] cannot tell which vocabulary it came from. In practice it
+// can only be the app role, because an admin tier never reaches a user JWT.
+// Admin authorization runs off auth.admin_users.role through a session token and
+// never off this claim. Resolving the ambiguity means renaming one vocabulary,
+// which is a data migration against deployed installs.
+//
+// TestReservedAdminRolesDecisionIsRevisitedWhenATierIsAdded holds the
+// relationship, so a new admin tier forces a decision here rather than silently
+// becoming grantable to users.
 var ReservedAdminRoles = map[string]bool{
 	"admin":       true,
 	"super_admin": true,
