@@ -655,7 +655,20 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Check email verified — return ErrInvalidCredentials (not ErrEmailNotVerified)
 	// to prevent user enumeration: an attacker cannot distinguish "unverified" from
 	// "wrong password" or "no such user".
+	//
+	// The failure bookkeeping runs too, and that is not hygiene, it is the
+	// anti-enumeration property itself. Returning early with the right error and
+	// none of the side effects left the lockout counter advancing only on WRONG
+	// passwords: a wrong guess reached lockoutThreshold and the endpoint started
+	// answering 403 account_locked, while the correct password answered 401
+	// forever because it incremented nothing. Six attempts therefore told an
+	// attacker whether their candidate was the real password, which is exactly
+	// the distinction the paragraph above claims cannot be made. It also let
+	// anyone holding the correct password of an unverified account guess against
+	// it indefinitely without ever locking out, writing no audit rows and
+	// leaving vault_login_failed_total flat.
 	if !user.EmailVerified {
+		s.recordLoginFailure(ctx, user, ip, ua, app, "email_not_verified", 20)
 		return nil, ErrInvalidCredentials
 	}
 
