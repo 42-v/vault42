@@ -425,7 +425,7 @@ bound nor the 1024-key bound is operator-tunable, and they are not in the table 
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `VAULT_SEED_FILE` | string | *(none)* | No | Path to a JSON file for declarative client and user seeding at startup. When set, the file is loaded and processed idempotently after `InitAdminToken` and before the CLI check. Existing entries (matched by client name or user email) are skipped. Client secrets are generated and printed to stdout. See `seed.example.json` for the file format. |
+| `VAULT_SEED_FILE` | string | *(none)* | No | Path to a JSON file for declarative client and user seeding at startup. When set, the file is loaded and processed idempotently on the server path only, after the CLI check, so an admin subcommand such as `vault list-clients` does not create the declared clients and users as a side effect. To seed on demand, use the `vault seed` subcommand. Existing entries (matched by client name or user email) are skipped. Client secrets are generated and printed to stdout. See `seed.example.json` for the file format. |
 
 ### Key Rotation
 
