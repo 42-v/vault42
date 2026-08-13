@@ -43,7 +43,7 @@ GOSEC_VERSION=v2.28.0
 # the ratchet, so lowering it is a one-line edit against a measured number.
 # CI blocks on new findings only (--new-from-merge-base), so this ratchet gates
 # the release, not the pull request.
-GOLANGCI_MAX_ISSUES=${GOLANGCI_MAX_ISSUES:-143}
+GOLANGCI_MAX_ISSUES=${GOLANGCI_MAX_ISSUES:-113}
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
