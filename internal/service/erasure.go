@@ -20,10 +20,12 @@ var ErrUserNotFound = errors.New("user not found")
 
 // ErasureService performs GDPR account erasure with key-recoverable escrow.
 //
-// On deletion it (optionally) writes an encrypted recovery record, cascade-
-// deletes the user's PII, revokes all sessions, then scrubs and soft-deletes the
-// user row. When a recovery public key is configured the escrow write happens
-// FIRST and must succeed — the service fails closed rather than erase a user
+// On deletion it (optionally) writes an encrypted recovery record, then scrubs
+// and soft-deletes the user row, then cascade-deletes the user's PII and
+// hard-deletes every refresh token. That order is the safety property and not an
+// accident; DeleteAccount explains why, and the doc that used to be here had it
+// backwards. When a recovery public key is configured the escrow write happens
+// FIRST and must succeed: the service fails closed rather than erase a user
 // without a recoverable record.
 type ErasureService struct {
 	users       repository.UserRepository
@@ -91,7 +93,7 @@ func NewErasureService(
 const recoveryPayloadVersion = 2
 
 // recoveryPayload is the minimal recoverable profile escrowed on deletion. It is
-// JSON-marshalled and encrypted; only the offline recovery private key can read it.
+// JSON-marshaled and encrypted; only the offline recovery private key can read it.
 //
 // UserID is what makes a recovered record self-describing. The escrow row names
 // its subject only as an HMAC pseudonym, which the offline tool cannot invert, so

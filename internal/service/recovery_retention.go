@@ -54,7 +54,7 @@ func NewRecoveryRetention(pruner repository.AccountRecoveryPruner, period time.D
 }
 
 // Done is closed once the sweep loop has exited, whether it ended via Stop or
-// via its context being cancelled. A caller that closes the database pool on its
+// via its context being canceled. A caller that closes the database pool on its
 // return can otherwise race a sweep that is mid-DELETE. The channel never closes
 // if Start was not called.
 func (r *RecoveryRetention) Done() <-chan struct{} { return r.doneCh }
@@ -65,7 +65,7 @@ func (r *RecoveryRetention) Enabled() bool { return r != nil && r.period > 0 && 
 // Sweep deletes every escrow record older than the retention horizon and returns
 // how many rows went.
 //
-// Serialised across replicas: the underlying prune takes an ACCESS EXCLUSIVE
+// Serialized across replicas: the underlying prune takes an ACCESS EXCLUSIVE
 // lock on the escrow table (it disables the append-only trigger to delete), so
 // only one replica may sweep at a time. A replica that does not get the lock
 // returns (0, nil) and tries again next tick — the work is idempotent, so there
@@ -87,11 +87,18 @@ func (r *RecoveryRetention) Sweep(ctx context.Context) (int64, error) {
 // Start runs the sweeper until Stop is called. It sweeps once immediately: a
 // process that restarts more often than the interval would otherwise never reach
 // a tick and the purge would never happen.
+//
+// Calling it more than once starts nothing further. Two loops would share one
+// doneCh, and the second one to exit would close an already-closed channel: an
+// unrecoverable panic raised from a deferred call in a background goroutine,
+// which no handler can catch and which takes the process with it.
 func (r *RecoveryRetention) Start(ctx context.Context) {
 	if !r.Enabled() {
 		return
 	}
-	r.started.Store(true)
+	if !r.started.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		defer close(r.doneCh)
 		ticker := time.NewTicker(RecoverySweepInterval)

@@ -174,11 +174,11 @@ func TestRecoveryRetention_SweepErrorDoesNotKillTheSweeper(t *testing.T) {
 	}
 }
 
-// A cancelled context must end the loop, otherwise the sweeper outlives shutdown
+// A canceled context must end the loop, otherwise the sweeper outlives shutdown
 // and keeps issuing deletes against a closing pool.
 //
 // This deliberately does not call Stop: the loop parks in a select over stopCh,
-// ctx.Done and the ticker, and Go picks at random among ready cases, so signalling
+// ctx.Done and the ticker, and Go picks at random among ready cases, so signaling
 // both would make which return statement the coverage profile records a coin flip.
 func TestRecoveryRetention_StopsOnContextCancel(t *testing.T) {
 	pruner := newStubPruner(0, true, nil)
@@ -197,7 +197,44 @@ func TestRecoveryRetention_StopsOnContextCancel(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("sweeper did not exit when its context was cancelled, it would outlive shutdown")
+		t.Fatal("sweeper did not exit when its context was canceled, it would outlive shutdown")
+	}
+}
+
+// Start has to be idempotent the way Stop is. Two calls used to launch two sweep
+// loops over one pair of channels, and the second goroutine's deferred
+// close(doneCh) closed an already-closed channel: an unrecoverable panic that
+// takes the whole auth server down, some hours after start-up, from a defer in a
+// background goroutine that no handler can recover.
+//
+// It is reachable from ordinary wiring - a second Start in a restart path, or a
+// caller that starts the sweeper on config reload - and the two loops would also
+// double the rate at which an ACCESS EXCLUSIVE lock is taken on the escrow table.
+func TestRecoveryRetention_StartTwiceRunsOneSweeperAndDoesNotPanic(t *testing.T) {
+	pruner := newStubPruner(0, true, nil)
+	r := NewRecoveryRetention(pruner, 30*24*time.Hour)
+
+	r.Start(context.Background())
+	select {
+	case <-pruner.swept:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweeper never ran")
+	}
+
+	r.Start(context.Background())
+
+	// A second loop sweeps immediately on start, so its arrival is observable.
+	select {
+	case <-pruner.swept:
+		t.Fatal("a second Start launched a second sweep loop; its deferred close of the done channel panics the process")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	r.Stop()
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Stop returned while a sweep loop was still running")
 	}
 }
 

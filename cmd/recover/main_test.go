@@ -577,6 +577,64 @@ func TestRun_LimitReachesTheQuery(t *testing.T) {
 	}
 }
 
+// A run that read exactly as many records as --limit allowed has almost certainly
+// left some behind, and until the run says so its summary reads like a complete
+// one. The default is 10000: a deployment past that number gets a file holding the
+// 10000 most recent erasures, a "0 failure(s)" summary and exit 0, and an operator
+// answering a regulator from it has silently dropped every older account.
+func TestRun_ReachingTheRecordLimitIsAnnounced(t *testing.T) {
+	rows := make([]escrowRow, 0, 3)
+	for _, email := range []string{"a@example.invalid", "b@example.invalid", "c@example.invalid"} {
+		rows = append(rows, goodRow(t, email))
+	}
+
+	o, base := withRows(t, rows...)
+	got := exercise(t, append(base, "--limit", "3"), o)
+
+	if got.code != 0 {
+		t.Fatalf("exit code = %d, want 0\n%s", got.code, got.stderr)
+	}
+	if len(records(t, got.stdout)) != 3 {
+		t.Fatalf("recovered %q, want the three records: the warning has to be about a full read", got.stdout)
+	}
+	if !strings.Contains(got.stderr, "--limit 3 was reached") {
+		t.Errorf("a run that filled its limit did not say so, so a truncated restore looks complete:\n%s", got.stderr)
+	}
+}
+
+// The warning has to be tied to actually filling the limit. Firing it on every run
+// would make an operator stop reading it, which costs exactly the case above.
+func TestRun_NoLimitWarningWhenTheWholeLogWasRead(t *testing.T) {
+	o, base := withRows(t, goodRow(t, sampleEmail), goodRow(t, "second@example.invalid"))
+	got := exercise(t, append(base, "--limit", "3"), o)
+
+	if got.code != 0 {
+		t.Fatalf("exit code = %d, want 0\n%s", got.code, got.stderr)
+	}
+	if strings.Contains(got.stderr, "was reached") {
+		t.Errorf("a run that read fewer records than its limit claimed the limit was reached:\n%s", got.stderr)
+	}
+}
+
+// Rows that failed still came out of the escrow log, so they count towards the
+// limit. Counting only the successes would hide the truncation in exactly the run
+// where the operator is already dealing with bad records.
+func TestRun_LimitWarningCountsRowsReadNotRecordsRecovered(t *testing.T) {
+	bad := goodRow(t, "corrupt@example.invalid")
+	bad.payload = sealTo(t, &wrongKey.PublicKey,
+		escrowJSON(t, "corrupt@example.invalid", "Wrong Key", nil), bindingFor("corrupt@example.invalid"))
+
+	o, base := withRows(t, goodRow(t, sampleEmail), bad)
+	got := exercise(t, append(base, "--limit", "2"), o)
+
+	if got.code != exitIncomplete {
+		t.Fatalf("exit code = %d, want %d\n%s", got.code, exitIncomplete, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "--limit 2 was reached") {
+		t.Errorf("a full read of two rows, one of them unrecoverable, did not report the limit as reached:\n%s", got.stderr)
+	}
+}
+
 // A non-numeric --limit is a flag error, not a silent fallback to the default.
 // Silently reading 10000 records because the operator typed --limit=all would
 // pull far more personal data than they asked for.
