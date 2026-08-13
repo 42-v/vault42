@@ -87,3 +87,12 @@ __pycache__/
 # source tarball and every goreleaser archive.
 .review.md
 .task.md
+
+# Compiled commands. `go build ./cmd/<name>` without -o drops the binary in the
+# repository root, where a `git add -A` would otherwise commit 13 MB of object
+# code into an unrelated change. tests/spec/tracked_artifacts_test.go enforces
+# that every cmd/ name appears here.
+/admin-gateway
+/bridge
+/recover
+/vault
