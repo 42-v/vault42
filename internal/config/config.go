@@ -644,6 +644,22 @@ func (c *Config) Validate() error {
 	if !c.RateLimitEnabled && !envBool("VAULT_ALLOW_RATE_LIMIT_DISABLED") {
 		return fmt.Errorf("refusing to disable rate limiting in %s profile; set VAULT_ALLOW_RATE_LIMIT_DISABLED=true to override", c.Profile)
 	}
+	// The rate limiter above only limits what it can see. Production defaults
+	// CACHE_BACKEND to redis, and the cache is where every cross-pod control
+	// lives: the login and password-reset limiters, the KMS unwrap budget, the
+	// OAuth state written by one pod and read by another, and the TOTP replay
+	// guard. An unset REDIS_ADDR failed the ping, main logged one line and
+	// substituted an in-process memory cache, and the server reported itself
+	// healthy while every one of those silently became per-pod. With four
+	// replicas the login limiter admits four times its configured attempts and
+	// an OAuth callback landing on the wrong pod cannot find its own state.
+	//
+	// Production only. The embedded profile is a single process, where the
+	// memory cache is not a downgrade but the same thing by another name, and
+	// nothing there is shared across replicas to lose.
+	if c.Profile == ProfileProduction && c.CacheBackend == "redis" && c.RedisAddr == "" {
+		return fmt.Errorf("REDIS_ADDR required when CACHE_BACKEND=redis in %s profile; without it the cache falls back to per-process memory and every shared-state control degrades by the replica count", c.Profile)
+	}
 	// M5: refuse to silently disable TLS.
 	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
 		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)

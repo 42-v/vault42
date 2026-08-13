@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -112,11 +113,26 @@ func main() {
 	}
 	defer db.Close()
 
-	// Initialize cache
+	// Initialize cache.
+	//
+	// cacheDegraded is remembered rather than only logged, because the fallback
+	// changes what this process can enforce. The shared cache holds the login
+	// and password-reset limiters, the KMS unwrap budget, the OAuth state
+	// written on /authorize and read back on the callback, the email OTP codes,
+	// and the TOTP replay guard. On the memory fallback all of them become
+	// per-pod: with four replicas the login limiter admits four times its
+	// configured attempts and an OAuth callback routed to another pod cannot
+	// find its own state. /readyz reports this, so the condition is visible for
+	// as long as it lasts rather than in one line at startup that has scrolled
+	// away by the time anyone looks.
+	cacheDegraded := false
 	appCache, err := cache.NewCache(cfg.CacheBackend, cfg.RedisAddr, cfg.RedisPass, db.Pool)
 	if err != nil {
-		log.Printf("Cache init failed, falling back to memory: %v", err)
+		log.Printf("WARNING: cache init failed, falling back to per-process memory: %v. "+
+			"Cross-replica rate limiting, OAuth state and TOTP replay protection are degraded "+
+			"until the cache returns; /readyz reports cache=degraded.", err)
 		appCache = cache.NewMemoryCache()
+		cacheDegraded = true
 	}
 	defer func() { _ = appCache.Close() }()
 
@@ -458,6 +474,41 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			return db.Pool.Ping(ctx)
+		},
+		// The cache probe reports two different losses through one signal.
+		//
+		// cacheDegraded is set when NewCache failed at startup and this process
+		// is running on the per-process memory fallback. Nothing else announces
+		// that: the fallback is one log line, and every cross-replica control
+		// silently becomes per-pod, so the login and password-reset limiters
+		// multiply by the replica count, OAuth state written on one pod cannot
+		// be read on another, and the TOTP replay guard only blocks a replay
+		// that lands on the pod that saw the first use.
+		//
+		// The round trip below catches the other case, where the cache was fine
+		// at boot and has since gone away. It writes and reads its own key so a
+		// backend that accepts writes and returns nothing is not reported
+		// healthy.
+		//
+		// A failing probe reports "degraded" and deliberately still answers 200,
+		// which is pinned in internal/handler. Taking every replica out of
+		// rotation the moment Redis blinks is worse for an auth service than
+		// running degraded and saying so.
+		PingCache: func() error {
+			if cacheDegraded {
+				return errors.New("cache fell back to per-process memory at startup")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			const probeKey = "readyz:probe"
+			if err := appCache.Set(ctx, probeKey, "1", 10*time.Second); err != nil {
+				return fmt.Errorf("cache write: %w", err)
+			}
+			if _, err := appCache.Get(ctx, probeKey); err != nil {
+				return fmt.Errorf("cache read back: %w", err)
+			}
+			return nil
 		},
 	}
 
