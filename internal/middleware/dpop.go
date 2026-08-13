@@ -72,7 +72,7 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 						return
 					}
 				} else {
-					key := "dpop_jti:" + jti
+					key := dpopReplayKey(jti)
 					isNew, err := c.SetIfNotExists(r.Context(), key, "1", vaultcrypto.DPoPMaxAge+30*time.Second)
 					if err != nil {
 						if tokenRequiresDPoP {
@@ -99,4 +99,19 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// dpopReplayKey builds the cache key that holds a spent DPoP jti.
+//
+// The jti is hashed rather than concatenated. It arrives inside a self-signed
+// proof, so it is the one cache key suffix in this service that an attacker
+// chooses freely, at whatever length the 4 KB proof cap allows. Raw, it lands in
+// a TEXT PRIMARY KEY on the Postgres backend, where a value past roughly 2704
+// bytes exceeds the btree index limit: the replay check then errors instead of
+// answering, and for a token that is not DPoP-bound that path logs and allows.
+//
+// Hashing also makes the key a fixed width regardless of input, so one caller
+// cannot decide how much of the keyspace a single entry occupies.
+func dpopReplayKey(jti string) string {
+	return "dpop_jti:" + vaultcrypto.SHA256Hex(jti)
 }
