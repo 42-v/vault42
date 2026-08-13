@@ -240,6 +240,25 @@ The audit log is append-only at the database level: a trigger refuses DELETE and
 
 ---
 
+### AR-13: A Rotated-Out RSA Signing Key Is Not Actually Erased From Memory
+
+**Severity:** Low | **Source:** empirical check of `zeroPrivateKey` against the Go 1.26 toolchain (1.0.0)
+
+Key rotation calls `TokenService.UpdateSigningKey`, which clears the exported secret fields of the key it replaces: `D`, the primes, and the three CRT values. That reads as an erase, and until 1.0.0 the surrounding comment described it as one.
+
+It is not one. Since Go 1.24 `crypto/rsa` derives an unexported representation of a private key on first use and signs from that, so the fields cleared here are copies the signing path no longer consults. A key that has been through `zeroPrivateKey` still signs, and the signature is byte for byte identical to the one it produced before the clear. The secret components remain resident in memory the process cannot address.
+
+**Why this is accepted:**
+
+- **It is not reachable from outside the standard library.** The cached representation is unexported and has no accessor. There is no `unsafe`-free way to clear it, and reaching into it with `unsafe` would risk corrupting live key state on every rotation in order to erase a copy an attacker can only read with the process memory access that already loses them the active key outright.
+- **The threat it would defend against already implies process compromise.** An adversary able to read heap memory can read the active key, which is by definition present, so erasing the retired one changes the outcome only for a key that has already been rotated away from.
+- **The clear still runs, and still helps.** Zeroing the reachable fields costs nothing, removes the copies a heap dump surfaces most readily, and becomes a real control again unmodified the day the standard library stops caching.
+- **The limit is executable, not documentary.** `TestZeroPrivateKeyLeavesTheKeyUsable` asserts that a wiped key still produces the same valid signature. If a future toolchain makes the wipe effective, that test fails, and this entry is deleted rather than quietly outliving its truth.
+
+Related: AR-4 covers the same class of limitation for string-typed secrets, and AR-25 in `docs/COMPLIANCE.md` covers the decrypted signing-key PEM buffer in the keystore.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

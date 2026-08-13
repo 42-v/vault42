@@ -208,15 +208,21 @@ func (s *TokenService) AccessTokenTTL() time.Duration {
 	return s.accessTokenTTL
 }
 
-// UpdateSigningKey updates the signing key and kid for key rotation, and wipes
-// the private components of the key it replaces.
+// UpdateSigningKey updates the signing key and kid for key rotation, and clears
+// the exported private components of the key it replaces.
 //
-// SECURITY INVARIANT: the wipe is sound only because every signer holds the read
-// lock for the whole of SignToken. Acquiring the write lock therefore drains the
-// in-flight signers, and no goroutine can still reach the old key once it does. A
-// signer that copied the pointer and signed outside the lock would read a
-// half-zeroed modulus and mint a corrupt token, so those two facts must change
-// together or not at all.
+// The wipe is far narrower than it looks; zeroPrivateKey documents why the
+// retired key stays usable afterwards. It runs anyway, because clearing the
+// fields that are reachable beats leaving them set, and because it becomes a
+// real control again the day the standard library stops caching the key
+// internally.
+//
+// Signers hold the read lock for the whole of SignToken. That is deliberate
+// ordering hygiene rather than a consequence of the wipe: it stops a rotation
+// publishing a new kid while a signature is still being produced under the old
+// one, which is what would otherwise let a token carry a kid its signature does
+// not match. It is not load-bearing for memory safety, because signing does not
+// read the words the wipe overwrites.
 func (s *TokenService) UpdateSigningKey(key *rsa.PrivateKey, kid string) {
 	s.mu.Lock()
 	old := s.privateKey
@@ -236,6 +242,18 @@ func (s *TokenService) UpdateSigningKey(key *rsa.PrivateKey, kid string) {
 // This is best-effort in the same sense as config.ZeroBytes: it clears the words
 // currently backing each value, but the Go runtime may already have copied them
 // during earlier big.Int arithmetic, and those copies are unreachable (see AR-4).
+//
+// It is weaker still than that caveat suggests, and the weakness is worth stating
+// plainly because the function name promises more than it delivers. Since Go 1.24
+// crypto/rsa derives an unexported representation of the key on first use and
+// signs from it, so the fields cleared here are copies the signing path no longer
+// consults. A key that has been through this function still produces valid
+// signatures, byte for byte identical to the ones it produced before, and its
+// secret components remain resident where no Go program can reach them.
+// TestZeroPrivateKeyLeavesTheKeyUsable asserts exactly that, so the limit is
+// recorded as executable fact rather than as a comment that can quietly rot.
+// Recorded as an accepted risk in docs/security.md; it cannot be fixed from
+// outside the standard library.
 func zeroPrivateKey(key *rsa.PrivateKey) {
 	if key == nil {
 		return
