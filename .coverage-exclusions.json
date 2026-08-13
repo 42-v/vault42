@@ -380,22 +380,22 @@
     {
       "package": "internal/service",
       "file": "internal/service/auth.go",
-      "line": 589,
+      "line": 883,
       "occurrence": 1,
-      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
+      "source": "\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test."
+      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test. The statement was de-indented when the trap branch moved below the IP-lockout gate; it is the same return in the same function and the frozen text is updated to match."
     },
     {
       "package": "internal/service",
       "file": "internal/service/auth.go",
-      "line": 593,
+      "line": 887,
       "occurrence": 1,
-      "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
+      "source": "\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token."
+      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token. The statement was de-indented when the trap branch moved below the IP-lockout gate; it is the same return in the same function and the frozen text is updated to match."
     },
     {
       "package": "internal/service",
