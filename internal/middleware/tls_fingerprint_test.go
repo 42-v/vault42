@@ -8,7 +8,13 @@ import (
 func TestTLSFingerprintEmpty(t *testing.T) {
 	// No header configured — should return empty
 	SetTLSFingerprintHeader("")
+	// A declared proxy: the value is only believed from a trusted hop, so a
+	// case about parsing the header has to arrive through one.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
+
 	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("X-TLS-Fingerprint", "ja4_value")
 
 	if got := TLSFingerprint(req); got != "" {
@@ -20,7 +26,13 @@ func TestTLSFingerprintConfigured(t *testing.T) {
 	SetTLSFingerprintHeader("X-TLS-Fingerprint")
 	defer SetTLSFingerprintHeader("") // cleanup
 
+	// A declared proxy: the value is only believed from a trusted hop, so a
+	// case about parsing the header has to arrive through one.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
+
 	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("X-TLS-Fingerprint", "t13d1516h2_8daaf6152771_b0da82dd1658")
 
 	got := TLSFingerprint(req)
@@ -45,7 +57,13 @@ func TestTLSFingerprintTrimmed(t *testing.T) {
 	SetTLSFingerprintHeader("X-TLS-Fingerprint")
 	defer SetTLSFingerprintHeader("")
 
+	// A declared proxy: the value is only believed from a trusted hop, so a
+	// case about parsing the header has to arrive through one.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
+
 	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("X-TLS-Fingerprint", "  ja4_value  ")
 
 	got := TLSFingerprint(req)
@@ -59,7 +77,13 @@ func TestSetTLSFingerprintHeaderOverwrites(t *testing.T) {
 	SetTLSFingerprintHeader("X-New-Header")
 	defer SetTLSFingerprintHeader("")
 
+	// A declared proxy: the value is only believed from a trusted hop, so a case
+	// about which header name wins has to arrive through one.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
+
 	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("X-Old-Header", "old_value")
 	req.Header.Set("X-New-Header", "new_value")
 

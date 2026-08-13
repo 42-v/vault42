@@ -65,11 +65,27 @@ func SetTLSFingerprintHeader(header string) {
 	tlsFingerprintHeader.Store(header)
 }
 
-// TLSFingerprint returns the TLS fingerprint from the configured header, or empty
-// string if no header is configured or the header is absent from the request.
+// TLSFingerprint returns the TLS fingerprint from the configured header, or
+// empty when no header is configured, the header is absent, or the peer is not
+// a trusted proxy.
 func TLSFingerprint(r *http.Request) string {
 	h, _ := tlsFingerprintHeader.Load().(string)
 	if h == "" {
+		return ""
+	}
+	// Only a hop the operator has declared can know a JA4, so only that hop is
+	// believed, matching ClientIP and AppContext.
+	//
+	// This was the one device signal with no trust gate. The fingerprint exists
+	// to bind a token to a device behind a shared address, which is the ordinary
+	// case under NAT or a Helm default with no trustedProxies, where every
+	// ingress client hashes as the ingress pod. The IP, the User-Agent and the
+	// Accept-Language are all already attacker-controlled on a replay, so the
+	// JA4 was the only component actually telling two callers on one address
+	// apart. Read straight off the request, it meant an attacker holding a
+	// stolen bearer token replayed it with the victim's fingerprint in the
+	// header, and the check meant to stop them was supplied by them.
+	if !isTrustedProxy(stripPort(r.RemoteAddr)) {
 		return ""
 	}
 	return strings.TrimSpace(r.Header.Get(h))
