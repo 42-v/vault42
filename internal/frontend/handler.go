@@ -25,8 +25,20 @@ func Handler() http.Handler {
 				return
 			}
 		}
-		// SPA fallback: serve index.html for all other paths (client-side routing)
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
+		// SPA fallback: serve index.html for all other paths (client-side routing).
+		//
+		// The rewrite happens on a copy because the middleware wrapped around this
+		// handler still holds the original request and reads r.URL.Path after
+		// ServeHTTP returns: middleware.Logger writes the access-log line there, and
+		// honeypot.LoggingMiddleware writes the record the honeypot profile exists to
+		// collect. Every unrouted path lands in this branch, so rewriting in place
+		// would file every scan probe under "/" and lose the one field that says what
+		// was probed.
+		fallback := *r
+		spaRoot := *r.URL
+		spaRoot.Path = "/"
+		spaRoot.RawPath = ""
+		fallback.URL = &spaRoot
+		fileServer.ServeHTTP(w, &fallback)
 	})
 }

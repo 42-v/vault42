@@ -5,12 +5,22 @@ import (
 	"strings"
 )
 
-// SafeLogValue strips control characters (newlines, null bytes, carriage returns,
-// tabs) from a string to prevent log injection (CWE-117, OWASP). Use on any
-// value logged that could theoretically contain attacker-influenced data.
+// SafeLogValue replaces every character that can forge a log record or drive a
+// terminal with '_', to prevent log injection (CWE-117, OWASP). Use on any value
+// logged that could theoretically contain attacker-influenced data.
+//
+// The set is wider than CR/LF/NUL/tab because a log line has two readers and
+// each has its own escape hatch. A log shipper splits records on U+0085, U+2028
+// and U+2029 as readily as on a newline. A terminal acts on what it is sent:
+// ESC opens a control sequence that can clear the screen, reposition the cursor
+// over records already printed, or set the window title, U+009B opens the same
+// sequence on its own in 8-bit mode, and backspace alone is enough to rewrite a
+// line as it is drawn. Neutralizing only the characters that end a line would
+// leave an operator's terminal as the injection point.
 func SafeLogValue(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '\x00' || r == '\t' {
+		switch {
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == '\u2028', r == '\u2029':
 			return '_'
 		}
 		return r
