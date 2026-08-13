@@ -140,6 +140,14 @@ func Argon2MaxConcurrent() int {
 	return argon2MaxConcurrent
 }
 
+// Argon2MaxVerifyMemory returns the memory ceiling, in KiB, that a stored hash
+// may declare. Exported so a test can build a worst-case hash from the real
+// bound instead of copying the number, which is how the client-backpressure
+// fixture silently stopped being verifiable when the ceiling moved.
+func Argon2MaxVerifyMemory() uint32 {
+	return argon2MaxVerifyMemory
+}
+
 // Argon2WaitingCount returns how many callers are currently queued for a
 // semaphore slot. It rises as soon as the service starts queueing, which is the
 // point at which logins start getting slower, rather than at the point work is
