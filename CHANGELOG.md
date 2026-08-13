@@ -175,6 +175,24 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   ones, clearing the record that the credential had ever been enrolled with verification.
   Refused now, before any counter or flag write, and only for credentials actually recorded as
   user-verified, so PIN-less keys are unaffected.
+* **Clone-detection containment could silently not happen.** A WebAuthn signature-counter
+  regression is the strongest compromise signal this service has, and the response to it,
+  revoking every active refresh-token family, discarded its error. The assertion was still
+  refused, so the request was fail-closed, but on a transient database error every
+  pre-detection session stayed alive and the trail was identical to the case where containment
+  worked. The revoke stays non-blocking and now reaches the log, and the attempt is recorded as
+  a `token_revoke` audit row whether it succeeded or failed. That event type is in the critical
+  set, so the row is written synchronously rather than through a buffer a burst can drop, which
+  is exactly the condition this signal shows up under.
+* **The WebAuthn ceremony deadline was not enforced by the server.** `Timeouts.*.Enforce`
+  defaulted to false, so the library stamped no expiry on the session and its own expiry check
+  never ran; the challenge was retired only by its cache entry's TTL. Both now derive from one
+  constant, so the enforced deadline cannot drift from the cache lifetime.
+* **`sign_count` could not hold the whole `uint32` range.** The column was `INTEGER`, which
+  stops at half the WebAuthn counter's maximum. Since the counter write is fail-closed and the
+  stored value never advances on failure, an authenticator past 2^31 would stop working
+  permanently rather than transiently. Widened to `BIGINT`; the Go side already holds the range
+  on both shipped architectures.
 * **A credential id could be registered twice.** WebAuthn level 2 requires refusing a
   credential id already registered, and the column had no unique constraint. Attestation is
   `none`, so the id comes from the authenticator, and `verify/begin` hands out the victim's
