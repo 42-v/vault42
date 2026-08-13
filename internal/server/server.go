@@ -229,11 +229,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	totpHandler := handler.NewTOTPHandler(d.TOTP, d.MasterKey, cfg.Origin, d.Cache, d.AuthSvc, secureCookies)
 	// Initialize WebAuthn
 	var webauthnHandler *handler.WebAuthnHandler
-	wan, err := webauthn.New(&webauthn.Config{
-		RPDisplayName: cfg.AppName,
-		RPID:          cfg.RPHost(),
-		RPOrigins:     []string{cfg.Origin},
-	})
+	wan, err := webauthn.New(webAuthnConfig(cfg))
 	if err != nil {
 		log.Printf("WebAuthn init failed (endpoints disabled): %v", err)
 		webauthnHandler = handler.NewWebAuthnHandler(d.WebAuthn, d.Users, d.Cache, nil, d.AuthSvc, secureCookies)
@@ -443,6 +439,22 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// 2FA — WebAuthn (sensitive ops require confirmation)
 	mux.Handle("POST /auth/2fa/webauthn/register/begin", confirmed(webauthnHandler.RegisterBegin))
 	mux.Handle("POST /auth/2fa/webauthn/register/finish", confirmed(webauthnHandler.RegisterFinish))
+	// The verify pair carries no limiter, unlike its TOTP, backup-code and
+	// email-OTP siblings on totpRL, and that asymmetry is deliberate rather than
+	// an oversight. Those three cap a guessing budget: a six-digit code falls to
+	// 10^6 tries, so the limit is the control that makes the factor worth
+	// anything. An assertion is a signature over a server-chosen challenge and has
+	// no budget to cap. What is left is one signature check on finish and one
+	// cache entry per user that the next begin overwrites rather than adds to,
+	// both reached only by a caller already holding a signed challenge or access
+	// token.
+	//
+	// Adding one would cost the owner more than it costs an attacker. A ceremony
+	// is two requests, so totpRL's five per five minutes leaves a user two
+	// attempts to land a touch, and its key is the IP everyone behind one NAT
+	// shares. Any per-IP budget small enough to bound the work here signs a whole
+	// office out of its own second factor; any budget loose enough to leave them
+	// alone bounds nothing.
 	mux.Handle("POST /auth/2fa/webauthn/verify/begin", authedChallenge(webauthnHandler.VerifyBegin))
 	mux.Handle("POST /auth/2fa/webauthn/verify/finish", authedChallenge(webauthnHandler.VerifyFinish))
 	mux.Handle("GET /auth/2fa/webauthn/credentials", authed(webauthnHandler.ListCredentials))
@@ -618,6 +630,41 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	}
 
 	return mux
+}
+
+// webAuthnConfig is the relying-party configuration both WebAuthn ceremonies
+// run under.
+//
+// Timeouts are set because go-webauthn only stamps SessionData.Expires when
+// Enforce is true, and only compares it when it is non-zero. Left at the
+// library default both halves are skipped: the timeout handed to the browser is
+// advisory, the server keeps none of its own, and the only thing retiring a
+// challenge is the TTL on the cache entry holding it. That is a live control
+// today, so this closes no hole by itself; what it buys is a second, independent
+// deadline, so a cache backend that outlives its own TTL cannot quietly extend
+// how long a challenge stays answerable.
+//
+// Both durations are handler.WebAuthnCeremonyTTL, the lifetime of that cache
+// entry, so the two deadlines cannot disagree. TimeoutUVD carries the same value
+// as Timeout rather than the library's shorter default: it is the branch taken
+// when user verification is discouraged, and a ceremony window that changes with
+// the verification requirement would put the cache entry and the enforced
+// deadline back out of step.
+func webAuthnConfig(cfg *config.Config) *webauthn.Config {
+	ceremony := webauthn.TimeoutConfig{
+		Enforce:    true,
+		Timeout:    handler.WebAuthnCeremonyTTL,
+		TimeoutUVD: handler.WebAuthnCeremonyTTL,
+	}
+	return &webauthn.Config{
+		RPDisplayName: cfg.AppName,
+		RPID:          cfg.RPHost(),
+		RPOrigins:     []string{cfg.Origin},
+		Timeouts: webauthn.TimeoutsConfig{
+			Login:        ceremony,
+			Registration: ceremony,
+		},
+	}
 }
 
 // parseCORSOrigins splits a comma-separated CORS_ORIGINS string into a slice.

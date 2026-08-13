@@ -22,6 +22,17 @@ import (
 	"github.com/42-v/vault42/internal/service"
 )
 
+// WebAuthnCeremonyTTL is how long a started registration or assertion ceremony
+// stays completable. It is the lifetime of the cached session data, which holds
+// the challenge the response is checked against, so once it lapses the ceremony
+// cannot be finished and a fresh one must be begun.
+//
+// Exported because the relying-party configuration in internal/server enforces
+// the same window inside go-webauthn. One deadline written as two independent
+// numbers drifts, and this particular pair decides how long a challenge stays
+// answerable.
+const WebAuthnCeremonyTTL = 5 * time.Minute
+
 // WebAuthnHandler handles WebAuthn/FIDO2 endpoints.
 type WebAuthnHandler struct {
 	webauthnRepo  repository.WebAuthnRepository
@@ -66,6 +77,51 @@ func (h *WebAuthnHandler) logEvent(r *http.Request, event, userID string, meta m
 		r.Header.Get("User-Agent"), "", "", meta, 0)
 }
 
+// cloneWarningRisk tags the audit row a sign-counter regression produces. Above
+// the 90 the refresh-token replay path uses: a replay proves a token was copied,
+// a counter regression proves the credential private key answered from two
+// places, which no amount of session hygiene fixes.
+const cloneWarningRisk = 100
+
+// containClone revokes every active refresh-token family for the user after a
+// cloned-authenticator signal, and records what came of it either way.
+//
+// Deliberately non-blocking. The assertion is refused whether or not the revoke
+// lands, because making the refusal wait on a database write would turn a
+// database outage into a way to keep a cloned authenticator working.
+//
+// But a revoke that fails silently is worse than one that never ran. The
+// refusal and the clone-warning log line at the call site read the same either
+// way, so an operator seeing a clone warning with no failure beside it concludes
+// the sessions are gone, while the attacker keeps every session opened before
+// detection for the full refresh-token lifetime. A sign-counter regression is
+// the strongest compromise signal this service can produce, and swallowing the
+// error is how the response to it evaporates without anyone learning that it
+// did.
+//
+// Filed as token_revoke, the action attempted, rather than a new event type:
+// token_revoke is already in the audit logger's critical set, so this row is
+// written synchronously instead of going through the buffer a burst can
+// overflow. The outcome key, not the presence of the row, says whether
+// containment succeeded.
+func (h *WebAuthnHandler) containClone(r *http.Request, userID string) {
+	outcome := "revoked"
+	if err := h.authSvc.RevokeAllTokensForUser(r.Context(), userID); err != nil {
+		log.Printf("webauthn: CRITICAL clone containment failed for user %s: %v",
+			httputil.SafeLogValue(userID), err)
+		outcome = "revoke_failed"
+	}
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), audit.TokenRevoke, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks the refusal
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"reason":  "cloned_authenticator",
+			"method":  "webauthn",
+			"outcome": outcome,
+		}, cloneWarningRisk)
+}
+
 // RegisterBegin handles POST /auth/2fa/webauthn/register/begin.
 func (h *WebAuthnHandler) RegisterBegin(w http.ResponseWriter, r *http.Request) {
 	if h.wan == nil {
@@ -100,14 +156,13 @@ func (h *WebAuthnHandler) RegisterBegin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Store session data in cache (5 min TTL)
 	sessionBytes, err := json.Marshal(session)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 	cacheKey := "webauthn_reg:" + claims.Subject
-	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), 5*time.Minute); err != nil {
+	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), WebAuthnCeremonyTTL); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -244,7 +299,7 @@ func (h *WebAuthnHandler) VerifyBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cacheKey := "webauthn_auth:" + claims.Subject
-	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), 5*time.Minute); err != nil {
+	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), WebAuthnCeremonyTTL); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -316,7 +371,7 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		// log records (CWE-117).
 		log.Printf("webauthn: CRITICAL clone warning user=%s cred=%s",
 			strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
-		_ = h.authSvc.RevokeAllTokensForUser(r.Context(), claims.Subject)
+		h.containClone(r, claims.Subject)
 		WriteError(w, http.StatusUnauthorized, "cloned_authenticator_detected")
 		return
 	}
