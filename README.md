@@ -26,7 +26,10 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key), bounded by `VAULT_RECOVERY_RETENTION_DAYS` + sweeper
 - **IP access control and geo-fencing**: allowlist/blocklist, dynamic runtime bans, proxy-agnostic
 - **Append-only audit log**: DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
-- **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA
+- **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA.
+  Built into the container images and the release archives; a `go install` build embeds a
+  placeholder instead, because it cannot run a frontend build. Run `scripts/build-all.sh`
+  first to embed the real dashboard.
 - **Honeypot mode**: trap user detection, webhook alerts, full interaction capture
 - **Honeypot bridge**: transparent reverse proxy with attacker detection, decoy pages, score-based routing
 - **Client credentials**: service-to-service auth grant

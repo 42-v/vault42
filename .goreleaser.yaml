@@ -14,6 +14,19 @@ project_name: vault42
 before:
   hooks:
     - go mod download
+    # The Vue dashboard is embedded with go:embed from internal/frontend/dist,
+    # and only a placeholder index.html is tracked there. Without this the
+    # release archives shipped that placeholder, so every downloaded binary
+    # served a dashboard-less page while the images built from the Dockerfile
+    # served a real one. Same version, two different products.
+    #
+    # `go install` still gets the placeholder, because it cannot run a hook.
+    # That is why the placeholder is now a self-contained page that says so
+    # rather than a copy of a real build referencing assets that are not there.
+    - pnpm install --frozen-lockfile
+    - pnpm -C packages/vue build
+    - pnpm -C web build
+    - bash -c 'rm -rf internal/frontend/dist && cp -r web/dist internal/frontend/dist'
 
 builds:
   - id: vault

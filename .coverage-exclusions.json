@@ -90,7 +90,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/argon2.go",
-      "line": 119,
+      "line": 186,
       "occurrence": 1,
       "source": "\t\th = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
       "bucket": "C",
@@ -240,7 +240,7 @@
     {
       "package": "internal/kms",
       "file": "internal/kms/kms.go",
-      "line": 84,
+      "line": 114,
       "occurrence": 1,
       "source": "\t\treturn nil, err",
       "bucket": "C",
@@ -250,7 +250,7 @@
     {
       "package": "internal/kms",
       "file": "internal/kms/kms.go",
-      "line": 101,
+      "line": 131,
       "occurrence": 2,
       "source": "\t\treturn nil, ErrUnwrap",
       "bucket": "C",
@@ -350,7 +350,7 @@
     {
       "package": "internal/keystore",
       "file": "internal/keystore/keystore.go",
-      "line": 144,
+      "line": 182,
       "occurrence": 1,
       "source": "\t\treturn \"\", fmt.Errorf(\"keystore: marshal public key: %w\", err)",
       "bucket": "C",
