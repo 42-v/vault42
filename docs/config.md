@@ -18,7 +18,7 @@ The startup sequence is: read env vars, apply profile defaults for unset fields,
 
 ## Profiles
 
-Four profiles provide sensible defaults so you only need to set the variables that differ from the baseline. An unrecognized profile value falls back to production.
+Four profiles provide sensible defaults so you only need to set the variables that differ from the baseline. An unset profile is production; a profile name that is set and unrecognized refuses to start. Case and surrounding whitespace are normalized, so `VAULT_PROFILE=Honeypot` selects the honeypot profile rather than becoming production.
 
 ### Production (`VAULT_PROFILE=production`, default)
 
@@ -145,14 +145,13 @@ The `dev` profile is exempt from both: `Config.Validate` returns before either
 check, so dev serves plaintext with cookies that are not `Secure` and needs no
 override variable to do it.
 
-**Parsing.** `VAULT_TLS_ENABLED` goes through `strconv.ParseBool`, which is not
-the rule described under [Boolean Parsing](#boolean-parsing). It accepts `1`, `t`,
-`T`, `TRUE`, `true`, `True`, `0`, `f`, `F`, `FALSE`, `false` and `False`; any
-other value, an empty value included, leaves the profile default of `true` in
-place. So `VAULT_TLS_ENABLED=no` still serves HTTPS. `VAULT_FORCE_SECURE_COOKIES`
-and `VAULT_ALLOW_PLAINTEXT` use the document-wide rule and are case-sensitive:
-only `true`, `1` and `yes` are truthy, so `VAULT_ALLOW_PLAINTEXT=TRUE` does not
-lift the refusal and startup still fails.
+**Parsing.** All four follow the single rule described under
+[Boolean Parsing](#boolean-parsing): every recognized spelling means what it
+says, an empty value means "unset", and an unrecognized one refuses to start.
+So `VAULT_TLS_ENABLED=no` turns TLS off, and `VAULT_ALLOW_PLAINTEXT=TRUE` lifts
+the refusal. These two used to be read by different parsers, and each answered
+"use the default" outside its own set: `VAULT_TLS_ENABLED=no` served HTTPS
+anyway, and `VAULT_ALLOW_PLAINTEXT=TRUE` did not lift anything.
 
 The table below is executed against `config.Load`, `Config.Validate` and
 `internal/server` by `tests/spec/tls_cookie_docs_test.go`, under each of the
@@ -173,9 +172,9 @@ fails the build.
 | `false` | unset | `true` | unset | false | starts | set | plaintext |
 | `false` | unset | unset | `true` | false | starts | unset | plaintext |
 | `false` | unset | `true` | `true` | false | starts | set | plaintext |
-| `no` | set | unset | unset | true | starts | set | HTTPS |
+| `no` | set | unset | unset | false | refused | n/a | n/a |
 | `0` | unset | `true` | unset | false | starts | set | plaintext |
-| `false` | unset | unset | `TRUE` | false | refused | n/a | n/a |
+| `false` | unset | unset | `TRUE` | false | starts | unset | plaintext |
 
 <!-- END TLS COOKIE MATRIX -->
 
@@ -197,7 +196,7 @@ hop and the reason the first row of that pair is the documented answer.
 | `DB_HOST` | string | `localhost` | No | PostgreSQL hostname. |
 | `DB_PORT` | string | `5432` | No | PostgreSQL port. |
 | `DB_NAME` | string | `vault` | No | PostgreSQL database name. |
-| `DB_SSLMODE` | string | `require` | No | PostgreSQL SSL mode (`require`, `verify-full`, `disable`). In the dev profile, `DatabaseURL()` forces this to `disable` regardless of the configured value. |
+| `DB_SSLMODE` | string | `require` | No | PostgreSQL SSL mode. One of `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`; anything else refuses to start. `disable`, `allow` and `prefer` do not guarantee an encrypted connection, and the startup banner says so in a non-dev profile. In the dev profile, `DatabaseURL()` forces this to `disable` regardless of the configured value. |
 | `DB_MAX_CONNS` | int | `0` (profile sets) | No | Maximum database connections. Profile defaults: `25` (production/dev), `5` (embedded). |
 | `DB_MIG_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_mig` role password. Used for schema migrations at startup. See [Secret Loading](#secret-loading-_file-convention). |
 | `DB_APP_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_app` role password. Used for all runtime queries. See [Secret Loading](#secret-loading-_file-convention). |
@@ -784,11 +783,27 @@ See `charts/vault/values.yaml` for production defaults and `charts/vault/values-
 
 ## Boolean Parsing
 
-Boolean env vars accept: `true`, `1`, or `yes` (case-sensitive) as truthy. All other values (including empty) are treated as `false`.
+Boolean env vars accept `true`, `t`, `yes`, `y`, `on` and `1` as truthy, and
+`false`, `f`, `no`, `n`, `off` and `0` as falsy. Case does not matter and
+surrounding whitespace is trimmed. An empty value is the same as an unset one:
+the profile default applies.
 
-Exception: `VAULT_HIBP_CHECK` defaults to `true` when unset and must be explicitly set to a non-truthy value to disable it.
+**Any other value refuses to start**, naming the variable. Two parsers used to
+share this job and each answered "false" or "use the default" for everything
+outside its own set, so `VAULT_MFA_REQUIRED=True` left the deployment
+password-only, `VAULT_DPOP_ENABLED=True` left the token endpoints without proof
+of possession, and `VAULT_AUTO_MIGRATE=no` on the embedded profile ran the
+migrations anyway. A control that was configured must not be able to end up off
+with nothing said.
 
-## Duration Parsing
+## Duration and Number Parsing
+
+A duration or number that is set but cannot be parsed, or that falls outside the
+range its consumer can honor, refuses to start naming the variable. It used to
+fall back to the default, so `VAULT_ACCESS_TOKEN_TTL=15` (no unit) silently
+issued 15-minute tokens, `VAULT_AUDIT_RETENTION_DAYS=30d` silently disabled the
+retention sweeper, and `VAULT_KEY_REFRESH_INTERVAL=0` panicked the key-refresh
+goroutine after the listener was already up.
 
 Duration env vars use Go's standard `time.ParseDuration` format:
 

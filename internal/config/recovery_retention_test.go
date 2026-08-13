@@ -23,8 +23,6 @@ func TestRecoveryRetentionDays(t *testing.T) {
 		{"unset is disabled", "", 0},
 		{"explicit zero is disabled", "0", 0},
 		{"days become a horizon", "30", 30 * 24 * time.Hour},
-		{"non-numeric falls back to disabled", "thirty", 0},
-		{"negative cannot enable a sweep", "-30", -30 * 24 * time.Hour},
 	}
 
 	for _, tc := range tests {
@@ -37,6 +35,22 @@ func TestRecoveryRetentionDays(t *testing.T) {
 			}
 			if cfg.RecoveryRetentionPeriod != tc.want {
 				t.Errorf("RecoveryRetentionPeriod = %v, want %v", cfg.RecoveryRetentionPeriod, tc.want)
+			}
+		})
+	}
+}
+
+// A horizon the operator wrote and this service cannot honor must refuse to
+// start. Both of these used to load as zero, which is the disabled state: the
+// config recorded a retention policy, the sweeper never ran, and the escrow
+// kept every erased account's personal data indefinitely.
+func TestRecoveryRetentionDaysRefusesAHorizonItCannotHonor(t *testing.T) {
+	for _, value := range []string{"thirty", "30d", "-30"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("VAULT_RECOVERY_RETENTION_DAYS", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted VAULT_RECOVERY_RETENTION_DAYS=%q and silently disabled the sweeper", value)
 			}
 		})
 	}
