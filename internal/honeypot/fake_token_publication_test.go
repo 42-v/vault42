@@ -115,17 +115,26 @@ func honeypotDecodeClaims(token string) (issuer, audience string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	// aud arrives as an array, the same shape a real access token carries it in.
 	var claims struct {
-		Iss string `json:"iss"`
-		Aud string `json:"aud"`
+		Iss string   `json:"iss"`
+		Aud []string `json:"aud"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", "", err
 	}
-	return claims.Iss, claims.Aud, nil
+	if len(claims.Aud) != 1 {
+		return "", "", errTokenAudience
+	}
+	return claims.Iss, claims.Aud[0], nil
 }
 
 // errTokenShape marks a token that is not three dot-separated segments. A fake
 // token that failed this check would not look like a JWT to the attacker it is
 // meant to fool.
 var errTokenShape = errors.New("honeypot: fake token is not three segments")
+
+// errTokenAudience marks a token whose aud is not the single-element array a
+// real access token carries. A trap token with a different audience shape is one
+// base64 decode away from giving the deployment away.
+var errTokenAudience = errors.New("honeypot: fake token aud is not a one-element array")
