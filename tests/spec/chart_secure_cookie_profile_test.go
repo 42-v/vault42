@@ -140,7 +140,7 @@ func shippedValuesFiles(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatalf("read %s: %v", chartDir, err)
 	}
-	var out []string
+	out := make([]string, 0, len(entries))
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasPrefix(name, "values") || !strings.HasSuffix(name, ".yaml") {
