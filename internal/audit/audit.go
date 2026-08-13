@@ -184,7 +184,14 @@ func isCriticalEvent(eventType string) bool {
 	return false
 }
 
-// DroppedTotal returns the total number of audit events dropped due to buffer overflow.
+// DroppedTotal returns the number of times an event met a full buffer.
+//
+// It counts occurrences, not losses, and the difference matters to anyone
+// reading it as an alert: a critical event that meets a full buffer increments
+// this counter and is then written synchronously anyway, so the figure is an
+// upper bound on what was actually lost rather than the loss itself. Reading it
+// as "events missing from the audit trail" over-reports by the number of
+// critical events that arrived under buffer pressure.
 func (l *Logger) DroppedTotal() int64 {
 	return l.droppedTotal.Load()
 }

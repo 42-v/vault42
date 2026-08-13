@@ -45,7 +45,7 @@ type Mailer struct {
 // overrides still apply, on the default address).
 func NewMailer(renderer *TemplateRenderer, sender Sender, store OverrideStore, defaults Branding, allowedFromDomains []string) *Mailer {
 	if renderer == nil {
-		renderer = defaultRenderer
+		renderer = currentRenderer()
 	}
 	allowed := make(map[string]bool, len(allowedFromDomains))
 	for _, d := range allowedFromDomains {
