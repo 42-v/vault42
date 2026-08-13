@@ -4,18 +4,69 @@
 package honeypot
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/httputil"
 )
+
+// The attacker decides how often the trap fires, so they decide how many webhook
+// posts leave the host unless something bounds it. Without a bound, a login loop
+// against a trap address is an amplifier pointed at the operator's own alert
+// channel, and the first alert (the one worth reading) arrives buried under
+// thousands of copies. Each dispatch also holds a goroutine and a connection for
+// up to the client timeout, so the same loop is a way to spend the honeypot's
+// memory and sockets from off-host.
+//
+// The bound covers the outbound channel only. Every trigger is still audited.
+const (
+	// webhookBurst is how many alerts can leave back to back from a cold start.
+	webhookBurst = 20
+	// webhookRefillInterval is how long one dispatch slot takes to come back,
+	// so a sustained attack costs the alert channel 20 posts a minute.
+	webhookRefillInterval = 3 * time.Second
+)
+
+// alertBudget is a token bucket over webhook dispatches.
+type alertBudget struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+}
+
+func newAlertBudget(now time.Time) *alertBudget {
+	return &alertBudget{tokens: webhookBurst, last: now}
+}
+
+// take reports whether a dispatch may go out now, spending a slot when it may.
+func (b *alertBudget) take(now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if elapsed := now.Sub(b.last); elapsed > 0 {
+		b.tokens += elapsed.Seconds() / webhookRefillInterval.Seconds()
+		if b.tokens > webhookBurst {
+			b.tokens = webhookBurst
+		}
+		b.last = now
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
 
 // HoneypotEvent contains details about a suspicious activity detected in honeypot mode.
 type HoneypotEvent struct {
@@ -35,6 +86,10 @@ type Alerter struct {
 	trapUsers  map[string]bool
 	auditLog   *audit.Logger
 	client     *http.Client
+	budget     *alertBudget
+	// suppressed counts alerts dropped since the last dispatch, so a flood is
+	// reported as a number rather than silently swallowed.
+	suppressed atomic.Int64
 }
 
 // NewAlerter creates a honeypot alerter. The trapUsers slice is normalized to
@@ -62,6 +117,7 @@ func NewAlerter(webhookURL string, trapUsers []string, auditLog *audit.Logger) *
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		budget: newAlertBudget(time.Now()),
 	}
 }
 
@@ -88,6 +144,20 @@ func (a *Alerter) Alert(ctx context.Context, event HoneypotEvent) {
 		return
 	}
 
+	// The audit entry above is written for every trigger; only the outbound
+	// dispatch is rationed, so a flood costs the operator's alert channel but
+	// never the record of what was tried.
+	if !a.budget.take(time.Now()) {
+		if a.suppressed.Add(1) == 1 {
+			log.Print("honeypot: webhook alert budget exhausted, further alerts suppressed until it refills")
+		}
+		return
+	}
+	suppressed := a.suppressed.Swap(0)
+	if suppressed > 0 {
+		log.Printf("honeypot: %d webhook alerts were suppressed since the last dispatch", suppressed)
+	}
+
 	body, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("honeypot: marshal alert: %v", err)
@@ -110,11 +180,14 @@ func (a *Alerter) Alert(ctx context.Context, event HoneypotEvent) {
 
 	// Audit log the alert dispatch
 	if a.auditLog != nil {
-		a.auditLog.Log(ctx, audit.HoneypotAlert, "", "", event.IP, event.UserAgent, "", "", // #nosec G104 -- audit is best-effort
-			map[string]interface{}{
-				"webhook_status": resp.StatusCode,
-				"event_type":     event.EventType,
-			}, 0)
+		meta := map[string]interface{}{
+			"webhook_status": resp.StatusCode,
+			"event_type":     event.EventType,
+		}
+		if suppressed > 0 {
+			meta["suppressed_since_last"] = suppressed
+		}
+		a.auditLog.Log(ctx, audit.HoneypotAlert, "", "", event.IP, event.UserAgent, "", "", meta, 0) // #nosec G104 -- audit is best-effort
 	}
 
 	if resp.StatusCode >= 400 {
@@ -200,6 +273,26 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Flush and Hijack forward to the wrapped writer, the same two the standard
+// logging middleware's recorder forwards.
+//
+// This wrapper is the one the handler sees, and only in the honeypot profile.
+// Swallowing the two capabilities would make a streaming response buffer and a
+// connection upgrade fail on the trap while both work on the real deployment,
+// which is a difference an attacker gets for the price of one request.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("honeypot: underlying ResponseWriter does not implement http.Hijacker")
 }
 
 // FakeLoginResponse returns a realistic-looking but fake login response.

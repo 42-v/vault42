@@ -27,7 +27,7 @@ func TestAlerter_TrapUserMatching(t *testing.T) {
 	a := NewAlerter("", []string{"trap@example.com", "admin@example.com"}, nil)
 
 	if !a.IsTrapUser("trap@example.com") {
-		t.Error("a configured trap user was not recognised — the attacker would get a real error instead of the honeypot")
+		t.Error("a configured trap user was not recognized, so the attacker gets a real error instead of the honeypot")
 	}
 	if a.IsTrapUser("real-user@example.com") {
 		t.Error("a real user was treated as a trap account and served a fake session")

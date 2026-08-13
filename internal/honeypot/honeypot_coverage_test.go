@@ -49,9 +49,12 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	if !ok || iss == "" {
 		t.Error("iss claim should be a non-empty string")
 	}
-	aud, ok := claims["aud"].(string)
-	if !ok || aud == "" {
-		t.Error("aud claim should be a non-empty string")
+	// aud is an array on every token the vault signs, because jwt.ClaimStrings
+	// marshals as one. A trap token that spelled it as a bare string could be
+	// told apart from a real one by decoding a single segment.
+	aud, ok := claims["aud"].([]interface{})
+	if !ok || len(aud) == 0 {
+		t.Errorf("aud claim should be a non-empty array like a real token's, got %#v", claims["aud"])
 	}
 }
 
