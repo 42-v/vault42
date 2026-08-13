@@ -84,7 +84,14 @@ Built-in fake login pages served directly by the bridge (never proxied):
 | `/wp-admin*`, `/wp-login.php` | WordPress login |
 | `/phpmyadmin*`, `/pma*` | phpMyAdmin login |
 | `/cpanel*`, `/webmail*` | cPanel login |
-| `/admin*`, `/administrator*` | Generic admin panel |
+| `/administrator*` | Generic admin panel (Joomla) |
+
+`/admin*` is deliberately absent. vault42 serves its own admin SPA and roughly
+thirty documented API routes under `/admin/`, and decoy matching is by prefix, so
+listing it aimed the honeypot at the operator: opening the admin console through
+a bridge flagged them for the full `BRIDGE_FLAG_TTL` and then answered every
+later request with fabricated key, user, session and audit data. `/administrator`
+stays because it is Joomla's and nothing under it is registered.
 
 POST on decoy forms returns fake "invalid credentials". All subsequent requests from that IP route to the honeypot.
 

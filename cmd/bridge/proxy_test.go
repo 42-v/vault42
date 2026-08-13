@@ -2696,6 +2696,23 @@ func TestWebhookCloseFlushesQueuedEvents(t *testing.T) {
 func TestWebhookDispatchStaysBoundedWhileAScannerFloodsTheDecoys(t *testing.T) {
 	const events = 200
 
+	// The ceiling is a literal here rather than webhookWorkers, because a test
+	// that measures a constant against itself cannot fail when that constant is
+	// wrong. Phrased against webhookWorkers, raising it to 4096 keeps this test
+	// green while the amplification it exists to stop comes straight back.
+	//
+	// The number is what the operator's alerting endpoint cares about: a flood
+	// of any size must not open more than a couple of dozen connections against
+	// it. webhookWorkers may be tuned underneath this without editing the line,
+	// and is held below it separately.
+	const maxConcurrentDeliveries = 16
+
+	if webhookWorkers > maxConcurrentDeliveries {
+		t.Fatalf("webhookWorkers is %d, above the %d this test treats as the safe ceiling. "+
+			"Either the pool grew past what the alerting endpoint should absorb, or the ceiling "+
+			"needs raising deliberately.", webhookWorkers, maxConcurrentDeliveries)
+	}
+
 	release := make(chan struct{})
 	var mu sync.Mutex
 	var inFlight, peak int
@@ -2730,7 +2747,7 @@ func TestWebhookDispatchStaysBoundedWhileAScannerFloodsTheDecoys(t *testing.T) {
 		mu.Lock()
 		seen := peak
 		mu.Unlock()
-		if seen > webhookWorkers {
+		if seen > maxConcurrentDeliveries {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -2743,10 +2760,10 @@ func TestWebhookDispatchStaysBoundedWhileAScannerFloodsTheDecoys(t *testing.T) {
 	close(release)
 	ws.Close()
 
-	if got > webhookWorkers {
+	if got > maxConcurrentDeliveries {
 		t.Errorf("the receiver saw %d concurrent deliveries for %d events, want at most %d; "+
 			"dispatch is unbounded, so a scanner sets how many connections the bridge opens against the alerting endpoint",
-			got, events, webhookWorkers)
+			got, events, maxConcurrentDeliveries)
 	}
 	if got == 0 {
 		t.Error("the receiver saw no deliveries at all, so the bound is not what this measured")
