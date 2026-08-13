@@ -2356,10 +2356,12 @@ func TestNewWebhookSenderDisabledByEmptyURL(t *testing.T) {
 // TestWebhookSenderNilReceiverIsANoOp is the safety net behind that convention.
 // Send is called on the request path with the sender read straight off the
 // Bridge, so a nil receiver has to be inert rather than a panic that would take
-// down the connection mid-request.
+// down the connection mid-request. Close is the same: main defers Bridge.Close
+// even when BRIDGE_WEBHOOK_URL is unset, and that calls through to a nil sender.
 func TestWebhookSenderNilReceiverIsANoOp(t *testing.T) {
 	var ws *WebhookSender
 	ws.Send(map[string]interface{}{"event": "auto_flag"})
+	ws.Close()
 }
 
 // TestWebhookSenderPostsJSON covers the wire format an operator's receiver has
