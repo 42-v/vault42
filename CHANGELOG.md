@@ -226,6 +226,26 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   fetched the signing keys over cleartext, which lets an on-path attacker substitute the JWKS and
   forge an `id_token` for any subject. Provider profile responses were also read unbounded, unlike
   every token exchange in the same package.
+* **`vault_app` could grant itself the capability scopes it is fenced off from.** It holds
+  `INSERT` on `auth.clients` and `scopes` is a plain `TEXT[]`, so one insert produced a working
+  client credential carrying `mint:token` and `kms:unwrap`: the ability to assert any subject to
+  every relying party and to open every KMS envelope, which is the entire trust model of those
+  two routes. `VAULT_MINT_SCOPES` does not reach it, because that allow-list governs what a
+  minted token may carry, not what a client row may hold. Migration 023 refuses any insert or
+  update naming a privileged scope unless the writer holds `vault_admin`. There is deliberately
+  no first-boot carve-out: `auth.clients` has no equivalent of the guarantee that
+  `auth.admin_users` stops being empty, so "empty means first boot" would leave the escalation
+  permanently open on any deployment that seeds no clients, and `vault_app` can read the table
+  to know when that window is open.
+* **`vault_app` could flip privileged account state.** Migration 024 revokes `UPDATE` on
+  `banned`, `ban_reason` and `disabled` outright, since no application path writes them, and
+  narrows the two that are written to their legitimate direction: `email_verified` may only go
+  false to true, `import_pending` only true to false. `locked_until` is not closed, because
+  `vault lock-user` and `vault unlock-user` genuinely run under the application role; that is a
+  Go change and is recorded as AR-18. Stated plainly rather than glossed: `vault_app` keeps
+  `UPDATE (password_hash)` and always will, so takeover through a compromised application role
+  is not closed and cannot be. What 024 removes is what password control does not reach, namely
+  lifting a ban and mass account disablement.
 * **A stolen security key plus a password was enough.** `webauthn.Config` was built without
   `AuthenticatorSelection`, so `UserVerification` was the zero value and the user-verification
   check compared it against `VerificationRequired`, which is false on every assertion. A
