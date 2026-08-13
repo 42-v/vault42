@@ -55,10 +55,12 @@ type PasswordResetConfirmInput struct {
 	// Unknown, expired or already-used values all return
 	// invalid_or_expired_token.
 	Token string `json:"token"`
-	// Password is the new password. Required. Minimum 15 characters
-	// (NIST SP 800-63B); a match against the last 5 hashes is
-	// password_recently_used. Completing the reset revokes every refresh
-	// family for the account.
+	// Password is the new password. Required. Shorter than the
+	// configured minimum (VAULT_PASSWORD_MIN_LENGTH / h.minLength,
+	// default 15 runes) is 400 password_too_short. A match against
+	// the last 5 hashes is 400 password_recently_used. A HIBP hit is
+	// 400 password_breached. Completing the reset revokes every
+	// refresh family for the account.
 	Password string `json:"password"` // #nosec G117 -- password field in request DTO, not stored
 }
 

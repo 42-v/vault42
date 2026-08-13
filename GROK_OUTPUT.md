@@ -160,6 +160,15 @@ code. The document was not edited.
     this one). A client written from the per-route tables will look
     for an error code the server does not emit.
 
+18. **POST /client/token inactive client error code.**
+    api.md lists `401 client_revoked` for a deactivated client.
+    `ClientHandler.Token` returns `401 invalid_client_credentials`
+    when `client.Active` is false (after burning Argon2 time against
+    the stored secret). The same code is used for missing, unknown
+    and wrong credentials, so the Active flag cannot be enumerated.
+    A client written from the error table will look for a code the
+    server does not emit.
+
 ## What was documented
 
 Every exported struct field in `internal/model` (22 persistence
@@ -213,6 +222,23 @@ in `internal/handler/backup_codes.go`). `ProfileResponse.MFAMethods`
 lists only the names GetStatus appends. The api.md disagreements
 are items 13 and 14.
 
+This-turn remediations (prior-review fail):
+
+- `PasswordResetConfirmInput.Password` now names the configured
+  minimum (`VAULT_PASSWORD_MIN_LENGTH` / `h.minLength`, default
+  15 runes) and the same 400 codes as change-password
+  (`password_too_short`, `password_recently_used`,
+  `password_breached`). The previous "Minimum 15 characters"
+  text treated a configurable rune bound as a fixed character
+  count.
+- `User.Roles` (and the User type comment) now say admin-tier
+  names are stripped at JWT issuance (`effectiveRoles` /
+  `FilterUserRoles`), not forbidden on the stored slice.
+  `DataExportAccount.Roles` copies that stored slice as-is.
+- `Client.Active` documents the code path: POST /client/token
+  returns `401 invalid_client_credentials` when Active is false.
+  The api.md `client_revoked` row is item 18, not the comment.
+
 ## Self-review
 
 1. **Would my tests fail if my code were wrong?**
@@ -232,13 +258,15 @@ are items 13 and 14.
    and the disagreement is listed above.
 
 3. **Can a failure look like a success?**
-   Not introduced. One pre-existing case is now written down:
+   Not introduced. Pre-existing cases now written down:
    PUT /user/profile accepts a non-HTTPS `avatar_url` and stores
    empty, which is a 200 that looks like "cleared" rather than
-   "rejected". Listed as discrepancy 10. A user with only the
-   email-OTP fallback has `mfa_methods: []` on profile/status
-   while login reports `available_methods: ["email_otp"]`.
-   Listed as discrepancy 14.
+   "rejected" (item 10). A user with only the email-OTP fallback
+   has `mfa_methods: []` on profile/status while login reports
+   `available_methods: ["email_otp"]` (item 14). An inactive
+   client gets the same `401 invalid_client_credentials` as a
+   missing or wrong secret (item 18); that is intentional so the
+   Active flag cannot be enumerated.
 
 4. **Did I weaken anything to get green?**
    No assertions, bounds or counts were edited. No behaviour
@@ -265,6 +293,16 @@ are items 13 and 14.
   now has a comment immediately above it. Anonymous request
   structs (`password`, `code`, `friendly_name`, `current_password`,
   `new_password`) also have field comments.
+- `ClientHandler.Token` writes `invalid_client_credentials` when
+  `!client.Active`. The `Client.Active` comment and item 18 match
+  that call site; they do not follow api.md's `client_revoked`.
+- `ResetConfirm` compares `utf8.RuneCountInString` to `h.minLength`
+  (wired from `VAULT_PASSWORD_MIN_LENGTH`, default 15). The
+  Password field comment matches that, not a hardcoded 15-character
+  floor.
+- `effectiveRoles` calls `seed.FilterUserRoles` then the optional
+  catalog. `DataExportAccount.Roles` assigns `user.Roles` directly.
+  The Roles comments match those two paths.
 - `findOrCreateDevice` sets `FriendlyName: useragent.FriendlyName(ua)`.
   Empty/unrecognized UA is "Unknown Device". The FriendlyName
   comments match that, not "empty until PATCH".
@@ -277,9 +315,10 @@ are items 13 and 14.
   the versions I read before editing.
 - `#nosec G117` trailers on `access_token`, `password` and
   `plaintext` are still present.
-- No new em-dashes in comments I wrote. Pre-existing em-dashes
-  in `model.User` and `model.AccountRecovery` type comments were
-  left untouched.
+- No new em-dashes in comments I wrote. The `model.User` type
+  comment em-dash was replaced when aligning the Roles wording.
+  The pre-existing em-dash in `model.AccountRecovery`'s type
+  comment was left untouched.
 - Exported constants already had comments and still do.
 
 **Could not verify:**
@@ -289,7 +328,7 @@ are items 13 and 14.
 - Whether revive treats a field comment that does not start with
   the identifier as undocumented. Every new field comment starts
   with the field name.
-- Live responses against a running server. Discrepancies 1-17
+- Live responses against a running server. Discrepancies 1-18
   are from source vs `docs/api.md`, not from captured traffic.
 
 **Unsure:**
