@@ -22,6 +22,15 @@
 #
 # tests/e2e/multireplica is excluded on purpose: its two in-process replicas are
 # flaky under coverage instrumentation and double-count in-process code.
+#
+# tests/honeypot, tests/stress, tests/admin, tests/browser and tests/e2e-browser
+# are also out of this set. None of them exercise internal/ in-process on a CI
+# runner: honeypot needs locally-tagged vault:dev / vault-bridge:dev images and
+# a five-container topology whose host-mapped DB ports do not reach siblings;
+# stress, admin, browser and e2e-browser need a deployed cluster (and Chrome or
+# Playwright for the last two). Adding a skip-only package would spend a test
+# binary on a profile it cannot change. The suites are invoked from the test
+# job so the skip is visible; they are not part of the coverage number.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script
 COV_PKGS=(
