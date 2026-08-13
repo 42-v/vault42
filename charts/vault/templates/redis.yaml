@@ -1,4 +1,26 @@
 {{- if .Values.redis.enabled }}
+{{- $requirePassword := ne (.Values.secrets.keys.redisPassword | default "") "" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vault.fullname" . }}-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+    app: redis
+# The settings that used to be command-line flags. A config file is what lets
+# requirepass arrive through an include instead of through argv, and the rest
+# moved with it so there is one place to read the running configuration from.
+# Persistence is deliberately not named here, so redis keeps the same built-in
+# save rules it had when it was started with flags alone.
+data:
+  redis.conf: |
+    maxmemory {{ .Values.redis.maxMemory | default "64mb" }}
+    maxmemory-policy allkeys-lru
+{{- if $requirePassword }}
+    include /run/redis/requirepass.conf
+{{- end }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,23 +54,40 @@ spec:
           image: "{{ .Values.redis.image.repository | default "redis" }}:{{ .Values.redis.image.tag | default "7-alpine" }}"
           ports:
             - containerPort: 6379
-          args:
-            - "--maxmemory"
-            - "{{ .Values.redis.maxMemory | default "64mb" }}"
-            - "--maxmemory-policy"
-            - "allkeys-lru"
-            {{- if .Values.secrets.keys.redisPassword }}
-            - "--requirepass"
-            - "$(REDIS_PASSWORD)"
-            {{- end }}
-          {{- if .Values.secrets.keys.redisPassword }}
-          env:
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vault.secretName" . }}
-                  key: {{ .Values.secrets.keys.redisPassword }}
-          {{- end }}
+{{- if $requirePassword }}
+          # The password reaches redis as a config file it reads at startup,
+          # never as an argument. kubelet expands $(VAR) before exec, so
+          # "--requirepass $(REDIS_PASSWORD)" put the cleartext password in
+          # /proc/<pid>/cmdline, where every process in the pod's PID namespace
+          # and anything on the node that can read that namespace could take it,
+          # and where a crash dump or a ps in a debug sidecar records it.
+          #
+          # umask keeps the written file unreadable to anything but redis, and
+          # the double-quoted form with backslashes escaped is what makes a
+          # password containing a space or a quote parse back to itself.
+          command:
+            - sh
+            - -c
+            - |
+              umask 077
+              printf 'requirepass "%s"\n' "$(sed 's/[\\"]/\\&/g' /run/secrets/redis-password)" > /run/redis/requirepass.conf
+              exec redis-server /etc/redis/redis.conf
+{{- else }}
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+{{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+{{- if $requirePassword }}
+            - name: password
+              mountPath: /run/secrets
+              readOnly: true
+            - name: runtime
+              mountPath: /run/redis
+{{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -56,6 +95,26 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vault.fullname" . }}-redis
+{{- if $requirePassword }}
+        # Only the one key. The release Secret also holds the master key, the
+        # HMAC secret and the pepper, and redis has no business being able to
+        # read any of them.
+        - name: password
+          secret:
+            secretName: {{ include "vault.secretName" . }}
+            items:
+              - key: {{ .Values.secrets.keys.redisPassword }}
+                path: redis-password
+        # Memory-backed so the generated requirepass file never reaches a disk.
+        - name: runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
