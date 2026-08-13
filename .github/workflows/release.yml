@@ -486,9 +486,22 @@ jobs:
           tag_name:    ${{ needs.detect.outputs.tag }}
           name:        Vault42 ${{ needs.detect.outputs.version }}
           prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
+          make_latest:  ${{ !contains(needs.detect.outputs.version, '-') }}
           generate_release_notes: true
           files: dist/*
           body: |
+            ## Vault42 ${{ needs.detect.outputs.version }}
+
+            > ### Support policy
+            >
+            > **1.0.0 and later are the only production-ready releases.** Every tag
+            > before 1.0.0 was a development preview and is not fit for production.
+            >
+            > Vault42 is supported latest-only. Only the most recent stable release
+            > receives fixes and security patches. Older releases are archived as
+            > published and are not patched, so run the latest tag and upgrade
+            > forward rather than pinning to a version and holding it.
+
             **Commit:** ${{ github.sha }}
 
             ```
