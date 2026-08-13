@@ -741,6 +741,7 @@ Key Helm values and their corresponding env vars:
 | `tls.enabled` | `VAULT_TLS_ENABLED` |
 | `tls.certFile` | `VAULT_TLS_CERT_FILE` |
 | `tls.keyFile` | `VAULT_TLS_KEY_FILE` |
+| `forceSecureCookies` | `VAULT_FORCE_SECURE_COOKIES` |
 | `passwordMinLength` | `VAULT_PASSWORD_MIN_LENGTH` |
 | `hibpCheck` | `VAULT_HIBP_CHECK` |
 | `emailFrom` | `VAULT_EMAIL_FROM` |
@@ -766,6 +767,14 @@ Secrets are mapped via `secrets.keys.*`:
 | `secrets.keys.hmacSecret` | `HMAC_SECRET_FILE` |
 | `secrets.keys.adminToken` | `ADMIN_TOKEN_FILE` |
 | `secrets.keys.redisPassword` | `REDIS_PASS_FILE` |
+
+`forceSecureCookies` defaults to `true`, because `tls.enabled` defaults to `false`:
+the chart expects TLS to terminate at an ingress or a tunnel. Outside the `dev`
+profile the chart refuses to render when both are false, and names them in the
+error. That combination sends the `__Host-refresh_token` cookie without `Secure`,
+which a browser discards, and `Config.Validate` refuses to start on it, so the
+install would reach the operator as a `CrashLoopBackOff` rather than as a
+message. See [TLS and Cookies](#tls-and-cookies).
 
 See `charts/vault/values.yaml` for production defaults and `charts/vault/values-dev.yaml` for the dev overlay.
 

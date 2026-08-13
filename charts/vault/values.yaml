@@ -98,8 +98,14 @@ keyRotation:
   refreshInterval: "60s"
 
 # -- Force Secure flag on cookies even without local TLS (VAULT_FORCE_SECURE_COOKIES)
-# Useful behind TLS-terminating proxies like Cloudflare Tunnel.
-forceSecureCookies: false
+# On by default because tls.enabled is off by default: this chart expects TLS to
+# terminate at an ingress or a tunnel. The refresh cookie is named
+# __Host-refresh_token, and a browser discards a __Host- cookie that arrives
+# without Secure, so with both off the chart shipped a production profile whose
+# refresh could never work. Config.Validate refuses to start on that pair, so
+# the pod never reached the browser to prove it; it sat in CrashLoopBackOff with
+# the reason one line deep in the logs.
+forceSecureCookies: true
 
 # -- Trusted proxy CIDR ranges for X-Forwarded-For (TRUSTED_PROXIES)
 trustedProxies: ""
