@@ -43,12 +43,24 @@ type PasswordHandler struct {
 
 // PasswordResetRequestInput represents the reset request payload.
 type PasswordResetRequestInput struct {
+	// Email is the account to send a reset link to. Required. The response
+	// is identical whether the address exists or not, so this field cannot
+	// be used as an enumeration oracle.
 	Email string `json:"email"`
 }
 
 // PasswordResetConfirmInput represents the reset confirmation payload.
 type PasswordResetConfirmInput struct {
-	Token    string `json:"token"`
+	// Token is the single-use value from the reset email. Required.
+	// Unknown, expired or already-used values all return
+	// invalid_or_expired_token.
+	Token string `json:"token"`
+	// Password is the new password. Required. Shorter than the
+	// configured minimum (VAULT_PASSWORD_MIN_LENGTH / h.minLength,
+	// default 15 runes) is 400 password_too_short. A match against
+	// the last 5 hashes is 400 password_recently_used. A HIBP hit is
+	// 400 password_breached. Completing the reset revokes every
+	// refresh family for the account.
 	Password string `json:"password"` // #nosec G117 -- password field in request DTO, not stored
 }
 
@@ -245,8 +257,15 @@ func (h *PasswordHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	var input struct {
+		// CurrentPassword is the password currently stored on the
+		// account. Required. A mismatch is 401 invalid_current_password.
 		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
+		// NewPassword is the replacement. Required. Shorter than the
+		// configured minimum (default 15 runes) is 400
+		// password_too_short. A match against the last 5 hashes is 400
+		// password_recently_used. A HIBP hit is 400 password_breached.
+		// Success revokes every refresh family for the account.
+		NewPassword string `json:"new_password"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_request")
