@@ -153,6 +153,13 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 		return nil, errors.New("invalid jwk header format")
 	}
 
+	// RFC 9449 4.3 step 7: the jwk header must not contain a private key. The
+	// struct below reads only the public members, so nothing else in this
+	// function would notice one. See jwkPrivateMember.
+	if member, private := jwkPrivateMember(jwkMap); private {
+		return nil, fmt.Errorf("jwk header carries private key material (%q)", member)
+	}
+
 	jwkBytes, err := json.Marshal(jwkMap)
 	if err != nil {
 		return nil, fmt.Errorf("marshal jwk: %w", err)
