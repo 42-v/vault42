@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"regexp"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -36,6 +38,12 @@ import (
 //     token stream, before the decoder ever builds a value.
 //   - Ownership is a SQL predicate on every request-path read, not a comparison
 //     the caller performs after fetching a row.
+//   - The quota decision and the write it authorises are one serialised step per
+//     subject. Reading the totals and then writing them is a check-then-act:
+//     writers that arrive together each observe the pre-write state, each pass,
+//     and each land. The unique index on (client_id, subject_hash, doc_key)
+//     cannot catch that, because a count quota and a byte quota are breached with
+//     DIFFERENT keys, which is exactly the case the index lets through.
 
 // GlobalSubject is the sentinel path segment for documents that belong to a
 // service rather than to any user: feature flags, per-service settings.
@@ -59,6 +67,14 @@ const (
 	svcDocMaxKeyLen = 128
 	// svcDocMaxSubjectLen bounds the subject path segment before it is hashed.
 	svcDocMaxSubjectLen = 128
+	// svcDocLockStripes is how many in-process mutexes the write path spreads
+	// subjects over. A fixed table rather than a map of subject to mutex: a map
+	// keyed by caller-supplied subjects grows for every subject ever written and
+	// never shrinks, which hands an attacker a memory-growth primitive for the
+	// price of one write each. Two subjects landing on the same stripe wait for
+	// each other needlessly, which costs a little throughput on a contended
+	// deployment and cannot cost correctness.
+	svcDocLockStripes = 64
 )
 
 // Sentinel errors returned by ServiceDocumentService. The handler maps these to
@@ -123,6 +139,28 @@ type ServiceDocumentMetrics interface {
 	RecordSvcDocRejected()
 }
 
+// SubjectWriteSerializer is the capability a ServiceDocumentRepository
+// advertises when it can serialise every writer for one subject across every
+// process that talks to the same store.
+//
+// It is an optional interface, discovered with a type assertion, rather than a
+// method on ServiceDocumentRepository. The quota policy lives in this file and
+// nowhere else: what the repository is asked for is mutual exclusion, not a
+// second copy of the rules. Making it optional also means a store that cannot
+// offer cross-process exclusion (an in-memory one, a future backend without
+// advisory locks) stays usable and simply falls back to the in-process lock,
+// instead of every implementation being forced to grow a method it would have
+// to fake.
+//
+// fn must run exactly once, synchronously, and must receive a context that
+// carries whatever transaction the lock was taken in, so that the reads fn makes
+// and the write it authorises are the same unit of work as the lock. An
+// implementation that ran fn outside the locked transaction would satisfy the
+// signature and none of the point.
+type SubjectWriteSerializer interface {
+	WithSubjectWriteLock(ctx context.Context, subjectHash string, fn func(context.Context) error) error
+}
+
 // ServiceDocumentService stores and retrieves encrypted, service-scoped JSON
 // documents.
 type ServiceDocumentService struct {
@@ -132,6 +170,11 @@ type ServiceDocumentService struct {
 	hmacSecret []byte
 	cfg        ServiceDocumentConfig
 	metrics    ServiceDocumentMetrics
+	// writeLocks serialises the quota-decision-and-write section per subject
+	// within this process. It is an array of mutexes rather than a pointer to
+	// one, so the zero value works and nothing has to be initialised; the service
+	// is only ever used through a pointer, so the array is never copied.
+	writeLocks [svcDocLockStripes]sync.Mutex
 }
 
 // NewServiceDocumentService creates a service document service. clients may be
@@ -271,73 +314,151 @@ func (s *ServiceDocumentService) Put(
 
 	subjHash := s.subjectHash(subject)
 
-	// Quota is checked against the state the write would produce, so a
-	// replacement is not charged twice and does not consume a document slot it
-	// already holds.
-	existing, err := s.repo.Get(ctx, clientID, subjHash, docKey)
-	if err != nil {
-		return nil, false, fmt.Errorf("svcdoc load existing: %w", err)
-	}
-
+	// Encryption runs before the subject is locked. It is the most expensive step
+	// on this path and it reads nothing the quota decision depends on, so doing it
+	// inside the critical section would hold the lock, and against Postgres a
+	// pooled connection and an open transaction, for the length of an AES-GCM seal
+	// while every other writer for the same subject queues behind it.
 	enc, err := vaultcrypto.Encrypt(canonical, s.masterKey, docAAD(clientID, subjHash, docKey))
 	if err != nil {
 		return nil, false, fmt.Errorf("svcdoc encrypt: %w", err)
 	}
 
-	if err := s.checkQuota(ctx, clientID, subjHash, existing, len(enc)); err != nil {
-		s.rejected()
+	var (
+		created bool
+		meta    *ServiceDocumentMeta
+	)
+	// Load, decide and write as one step. Splitting them is the whole bug: the
+	// count and the byte sum describe the state a moment ago, and a second writer
+	// that read the same state writes a DIFFERENT key, so the unique index has
+	// nothing to collide with and both rows land over the cap.
+	err = s.serializeSubjectWrite(ctx, subjHash, func(ctx context.Context) error {
+		// Quota is checked against the state the write would produce, so a
+		// replacement is not charged twice and does not consume a document slot it
+		// already holds.
+		existing, getErr := s.repo.Get(ctx, clientID, subjHash, docKey)
+		if getErr != nil {
+			return fmt.Errorf("svcdoc load existing: %w", getErr)
+		}
+		if quotaErr := s.checkQuota(ctx, clientID, subjHash, existing, len(enc)); quotaErr != nil {
+			return quotaErr
+		}
+
+		var id string
+		if existing != nil {
+			id = existing.ID
+		} else {
+			var uuidErr error
+			id, uuidErr = vaultcrypto.RandomUUID()
+			if uuidErr != nil {
+				return fmt.Errorf("svcdoc uuid: %w", uuidErr)
+			}
+		}
+
+		doc := &repository.ServiceDocument{
+			ID:          id,
+			ClientID:    clientID,
+			SubjectHash: subjHash,
+			DocKey:      docKey,
+			Visibility:  visibility,
+			DataEnc:     enc,
+			SizeBytes:   len(canonical),
+			StoredBytes: len(enc),
+			Version:     1,
+		}
+		var upsertErr error
+		created, upsertErr = s.repo.Upsert(ctx, doc)
+		if upsertErr != nil {
+			return fmt.Errorf("svcdoc store: %w", upsertErr)
+		}
+
+		now := time.Now().UTC()
+		meta = &ServiceDocumentMeta{
+			Key:         docKey,
+			OwnerID:     clientID,
+			Visibility:  VisibilityName(visibility),
+			SizeBytes:   doc.SizeBytes,
+			StoredBytes: doc.StoredBytes,
+			Mine:        true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if existing != nil {
+			meta.CreatedAt = existing.CreatedAt
+		}
+		return nil
+	})
+	if err != nil {
+		// A write refused by the quota returns the sentinel itself, not the
+		// serialiser's wrapping of it. A caller must not be able to tell whether it
+		// lost a race or simply arrived last: same error value here means the same
+		// 409 and the same quota_exceeded code out of the handler, which is the
+		// contract the sequential path already had.
+		if errors.Is(err, ErrSvcDocQuotaExceeded) {
+			s.rejected()
+			return nil, false, ErrSvcDocQuotaExceeded
+		}
 		return nil, false, err
 	}
 
-	var id string
-	if existing != nil {
-		id = existing.ID
-	} else {
-		id, err = vaultcrypto.RandomUUID()
-		if err != nil {
-			return nil, false, fmt.Errorf("svcdoc uuid: %w", err)
-		}
-	}
-
-	doc := &repository.ServiceDocument{
-		ID:          id,
-		ClientID:    clientID,
-		SubjectHash: subjHash,
-		DocKey:      docKey,
-		Visibility:  visibility,
-		DataEnc:     enc,
-		SizeBytes:   len(canonical),
-		StoredBytes: len(enc),
-		Version:     1,
-	}
-	created, err := s.repo.Upsert(ctx, doc)
-	if err != nil {
-		return nil, false, fmt.Errorf("svcdoc store: %w", err)
-	}
 	if s.metrics != nil {
 		s.metrics.RecordSvcDocWrite()
-	}
-
-	now := time.Now().UTC()
-	meta := &ServiceDocumentMeta{
-		Key:         docKey,
-		OwnerID:     clientID,
-		Visibility:  VisibilityName(visibility),
-		SizeBytes:   doc.SizeBytes,
-		StoredBytes: doc.StoredBytes,
-		Mine:        true,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if existing != nil {
-		meta.CreatedAt = existing.CreatedAt
 	}
 	return meta, created, nil
 }
 
+// serializeSubjectWrite runs fn as the only quota-decision-and-write in flight
+// for subjectHash.
+//
+// Two layers, always in the same order. The in-process stripe lock is taken
+// first: it is cheap, it collapses same-replica contention before it reaches the
+// database, and it is the only layer a repository that cannot serialise (an
+// in-memory store, a test double) has. The repository's own lock is taken second
+// and only if it offers one; that is the layer that holds across replicas, where
+// a mutex in one process means nothing to another.
+//
+// The order matters and is fixed: process lock, then database lock, never the
+// reverse. One hierarchy means a writer can wait for the database while holding
+// a stripe, and never the other way round, so two writers cannot each hold what
+// the other is waiting for.
+//
+// The lock is per SUBJECT, deliberately, and never per client. The byte budget
+// is documented as spanning every owning service, so two different clients
+// writing about the same user are exactly the pair that has to contend; scoping
+// this to (client, subject) would leave the cross-tenant breach wide open while
+// looking like a fix.
+func (s *ServiceDocumentService) serializeSubjectWrite(ctx context.Context, subjectHash string, fn func(context.Context) error) error {
+	stripe := &s.writeLocks[svcDocLockStripe(subjectHash)]
+	stripe.Lock()
+	defer stripe.Unlock()
+
+	if serializer, ok := s.repo.(SubjectWriteSerializer); ok {
+		return serializer.WithSubjectWriteLock(ctx, subjectHash, fn)
+	}
+	return fn(ctx)
+}
+
+// svcDocLockStripe maps a subject pseudonym onto one of the write stripes. Two
+// subjects that collide serialise against each other, which is a throughput
+// question and never a correctness one; what must never happen is one subject
+// mapping to two stripes, and a pure function of the pseudonym cannot.
+func svcDocLockStripe(subjectHash string) uint32 {
+	h := fnv.New32a()
+	// Hash.Write is documented never to return an error.
+	_, _ = h.Write([]byte(subjectHash))
+	return h.Sum32() % svcDocLockStripes
+}
+
 // checkQuota rejects a write that would breach the document count for this
 // (client, subject) or the byte budget for this subject across every client.
-// Both are evaluated before the row is written; there is no compensating delete.
+//
+// It is only ever called from inside serializeSubjectWrite, and the totals it
+// reads are only meaningful there: outside that section they are a snapshot that
+// another writer may already have invalidated. There is no compensating delete
+// after the fact, and there must not be one. A delete that runs after the row is
+// committed leaves a window in which the quota is over, and if the process dies
+// in that window the row stays; worse, deciding which of two winners to delete
+// means deleting a document a caller was already told was stored.
 func (s *ServiceDocumentService) checkQuota(
 	ctx context.Context, clientID, subjHash string,
 	existing *repository.ServiceDocument, newStored int,

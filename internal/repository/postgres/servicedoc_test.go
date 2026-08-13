@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/42-v/vault42/internal/repository"
+	"github.com/42-v/vault42/internal/service"
 )
 
 // Compile-time interface satisfaction. A signature drift here is a build
@@ -593,7 +597,205 @@ func TestServiceDocumentRepo_AgainstPostgres(t *testing.T) {
 			t.Fatalf("erasure of one subject removed %d rows from another", 1-len(bystanders))
 		}
 	})
+
+	// -----------------------------------------------------------------------
+	// The subject write lock
+	// -----------------------------------------------------------------------
+	//
+	// A document quota is a rule about a set of rows, and the service enforces it
+	// by counting the set and then adding to it. Those are two statements, and at
+	// READ COMMITTED two statements are two snapshots: a second writer that reads
+	// the same count writes a DIFFERENT key, so the unique index on
+	// (client_id, subject_hash, doc_key) never fires and both rows land over the
+	// cap. Folding the count into the INSERT as a subquery does not help, for the
+	// same reason: the subquery reads its own statement's snapshot, and Postgres
+	// only re-checks a conditional write when it conflicts on a unique index.
+	//
+	// WithSubjectWriteLock is what closes that. The three subtests below check the
+	// three things that have to hold for it to be worth anything: the window is
+	// real without it, the lock removes it, and the statements a closure issues
+	// really do run inside the locked transaction rather than on a second pooled
+	// connection, where the lock would be protecting nothing.
+
+	// countThenWrite is the service's write path in miniature: count what this
+	// owner already holds for the subject, refuse at the cap, otherwise insert.
+	// pause widens the gap between the count and the insert, so an unprotected
+	// interleaving is a certainty rather than a coin flip.
+	countThenWrite := func(ctx context.Context, id, clientID, subj, key string, capDocs int, pause time.Duration) error {
+		n, err := repo.CountForOwner(ctx, clientID, subj)
+		if err != nil {
+			return fmt.Errorf("count: %w", err)
+		}
+		if pause > 0 {
+			time.Sleep(pause)
+		}
+		if n >= capDocs {
+			return errSvcDocTestAtCap
+		}
+		if _, err := repo.Upsert(ctx, svcDocFixture(id, clientID, subj, key,
+			repository.VisibilityPrivate, "quota-body")); err != nil {
+			return fmt.Errorf("upsert: %w", err)
+		}
+		return nil
+	}
+
+	// The premise. If this ever stops breaching, the sibling test below proves
+	// nothing, because the database would be serialising these writers on its own.
+	t.Run("two writers that count before either writes both land, which is the finding", func(t *testing.T) {
+		const subj = "subject-quota-window"
+		counted := make([]chan struct{}, 2)
+		for i := range counted {
+			counted[i] = make(chan struct{})
+		}
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := range 2 {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				// Rendezvous: neither writer inserts until both have counted. No
+				// sleeps and no scheduler luck, so the breach is deterministic.
+				n, err := repo.CountForOwner(ctx, svcDocPGClientA, subj)
+				if err != nil {
+					errs[i] = err
+					close(counted[i])
+					return
+				}
+				close(counted[i])
+				<-counted[1-i]
+				if n >= 1 {
+					errs[i] = errSvcDocTestAtCap
+					return
+				}
+				_, errs[i] = repo.Upsert(ctx, svcDocFixture(
+					fmt.Sprintf("11111111-0000-4000-8000-0000000300%02d", i+1),
+					svcDocPGClientA, subj, fmt.Sprintf("doc-%d", i),
+					repository.VisibilityPrivate, "quota-body"))
+			}(i)
+		}
+		wg.Wait()
+
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("writer %d: %v", i, err)
+			}
+		}
+		rows, err := repo.ListAllForSubject(ctx, subj)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("the unprotected check-then-write stored %d rows under a cap of 1; "+
+				"the window it is meant to demonstrate is gone, so the lock test below "+
+				"could pass without the lock doing anything", len(rows))
+		}
+	})
+
+	t.Run("the subject lock serialises the count against the write it authorises", func(t *testing.T) {
+		const subj = "subject-quota-locked"
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := range 2 {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				// The pause sits between the count and the insert, inside the lock.
+				// Without the lock the second writer would count during the first
+				// writer's pause and both would insert; with it, the second writer
+				// cannot begin until the first has committed.
+				errs[i] = repo.WithSubjectWriteLock(ctx, subj, func(ctx context.Context) error {
+					return countThenWrite(ctx,
+						fmt.Sprintf("11111111-0000-4000-8000-0000000310%02d", i+1),
+						svcDocPGClientA, subj, fmt.Sprintf("doc-%d", i), 1, 200*time.Millisecond)
+				})
+			}(i)
+		}
+		wg.Wait()
+
+		var stored, refused int
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				stored++
+			case errors.Is(err, errSvcDocTestAtCap):
+				refused++
+			default:
+				t.Fatalf("writer %d failed for a reason that is not the cap: %v", i, err)
+			}
+		}
+		if stored != 1 || refused != 1 {
+			t.Errorf("two locked writers under a cap of 1 produced %d stored and %d refused, want 1 and 1", stored, refused)
+		}
+
+		rows, err := repo.ListAllForSubject(ctx, subj)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Errorf("subject holds %v under a cap of 1", svcDocKeysOf(rows))
+		}
+	})
+
+	// The lock is only worth anything if the statements it protects run inside its
+	// transaction. A repository that took the lock and then issued its reads on a
+	// second pooled connection would hold a lock around nothing, and would also
+	// read state that its own uncommitted write is not part of, which is how a
+	// replacement ends up counted as a new document.
+	t.Run("a closure reads its own uncommitted write and leaves nothing behind when it fails", func(t *testing.T) {
+		const subj = "subject-quota-tx"
+		sentinel := errors.New("closure refused after writing")
+
+		err := repo.WithSubjectWriteLock(ctx, subj, func(ctx context.Context) error {
+			if _, upErr := repo.Upsert(ctx, svcDocFixture("11111111-0000-4000-8000-000000032001",
+				svcDocPGClientA, subj, "doc-rolled-back", repository.VisibilityPrivate, "body")); upErr != nil {
+				return upErr
+			}
+			// Inside the transaction the row exists, and the count a quota decision
+			// would read includes it.
+			got, getErr := repo.Get(ctx, svcDocPGClientA, subj, "doc-rolled-back")
+			if getErr != nil {
+				return getErr
+			}
+			if got == nil {
+				return errors.New("a read inside the lock could not see the write the same closure just made, " +
+					"so it ran outside the locked transaction")
+			}
+			n, cntErr := repo.CountForOwner(ctx, svcDocPGClientA, subj)
+			if cntErr != nil {
+				return cntErr
+			}
+			if n != 1 {
+				return fmt.Errorf("count inside the lock is %d, want 1: the count ran outside the transaction", n)
+			}
+			return sentinel
+		})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("WithSubjectWriteLock returned %v, want the closure's own error unwrapped", err)
+		}
+
+		rows, listErr := repo.ListAllForSubject(ctx, subj)
+		if listErr != nil {
+			t.Fatalf("list: %v", listErr)
+		}
+		if len(rows) != 0 {
+			t.Errorf("a closure that failed left %v committed", svcDocKeysOf(rows))
+		}
+	})
 }
+
+// errSvcDocTestAtCap stands in for service.ErrSvcDocQuotaExceeded. The
+// repository has no opinion about quotas, so the tests that exercise the lock
+// bring their own cap and their own refusal.
+var errSvcDocTestAtCap = errors.New("at the document cap")
+
+// The document service does not name this type; it type-asserts the repository
+// for exactly this method and falls back to a weaker in-process lock when the
+// assertion fails. A rename or a signature change here would therefore break no
+// build anywhere, it would quietly stop protecting anything beyond one replica.
+// Pin the shape so it breaks here instead.
+var _ service.SubjectWriteSerializer = (*ServiceDocumentRepo)(nil)
 
 // ---------------------------------------------------------------------------
 // Rows the schema cannot produce

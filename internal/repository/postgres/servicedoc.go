@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/42-v/vault42/internal/repository"
 )
@@ -20,6 +21,29 @@ const serviceDocumentColumns = `id, client_id, subject_hash, doc_key, visibility
 const serviceDocumentMetaColumns = `id, client_id, subject_hash, doc_key, visibility,
 	size_bytes, stored_bytes, version, created_at, updated_at`
 
+// svcDocAdvisoryLockClass namespaces this store's advisory locks. Advisory
+// locks share one cluster-wide space with every other user of the mechanism, so
+// the two-key form is used with a fixed first key ("SVCD" in ASCII) and the
+// subject in the second. Without the namespace, some unrelated code hashing an
+// unrelated string to the same number would silently serialise against document
+// writes, or worse, be serialised by them.
+const svcDocAdvisoryLockClass = 0x53564344
+
+// svcDocTxKey carries the transaction a subject lock was taken in. It is an
+// unexported empty struct type, so no other package can put a value under this
+// key and nothing can collide with it.
+type svcDocTxKey struct{}
+
+// svcDocQuerier is the subset of pgx both *pgxpool.Pool and pgx.Tx satisfy.
+// Every statement in this file goes through it, so a query issued inside a
+// subject lock runs in that lock's transaction and a query issued outside runs
+// on the pool, without either call site knowing which.
+type svcDocQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
 // ServiceDocumentRepo implements repository.ServiceDocumentRepository.
 type ServiceDocumentRepo struct {
 	db *DB
@@ -28,6 +52,76 @@ type ServiceDocumentRepo struct {
 // NewServiceDocumentRepo creates a new PostgreSQL-backed service document repository.
 func NewServiceDocumentRepo(db *DB) *ServiceDocumentRepo {
 	return &ServiceDocumentRepo{db: db}
+}
+
+// q returns the transaction this call belongs to, or the pool when it belongs to
+// none. Reaching for r.db.Pool directly inside a subject lock would run the
+// statement on a second connection, outside the locked transaction, which is the
+// bug this file exists to close; going through q makes that impossible to do by
+// accident.
+func (r *ServiceDocumentRepo) q(ctx context.Context) svcDocQuerier {
+	if tx, ok := ctx.Value(svcDocTxKey{}).(pgx.Tx); ok {
+		return tx
+	}
+	return r.db.Pool
+}
+
+// WithSubjectWriteLock runs fn as the only service-document write in flight for
+// subjectHash, anywhere in the fleet. It implements the optional capability the
+// document service looks for (service.SubjectWriteSerializer); the service holds
+// the quota policy, this holds the mutual exclusion.
+//
+// Why a lock rather than a conditional write. The obvious-looking alternative is
+// to fold the quota into the write statement:
+//
+//	INSERT ... SELECT ... WHERE (SELECT count(*) ...) < cap
+//
+// and treat zero rows affected as a refusal. That does not work here. At READ
+// COMMITTED each statement reads from the snapshot it started with, so two
+// concurrent INSERTs of DIFFERENT keys both evaluate their subquery against the
+// pre-write state, both find room, and both insert. Postgres only re-checks a
+// conditional write when it collides on a unique index, and distinct keys never
+// collide. A cross-row aggregate guard is a write-skew anomaly, and MVCC does
+// not prevent write skew below SERIALIZABLE. The conditional write would look
+// like a fix, pass a sequential test, and leave the finding standing.
+//
+// SERIALIZABLE would be sound, but it converts contention into serialization
+// failures the whole write path would then have to retry, and the retry loop is
+// more machinery and more failure modes than an explicit lock.
+//
+// pg_advisory_xact_lock is held to the end of the transaction and released by
+// COMMIT or ROLLBACK, including the implicit rollback when a backend dies, so no
+// crash can strand it. hashtext folds the subject into 32 bits: two subjects can
+// collide and then wait for each other needlessly, but one subject can never map
+// to two lock words, and only the second of those would matter. hashtext's exact
+// values are not guaranteed stable across major versions, which is fine because
+// nothing persists them; all that is required is that every backend on one
+// cluster agrees at one moment.
+func (r *ServiceDocumentRepo) WithSubjectWriteLock(ctx context.Context, subjectHash string, fn func(context.Context) error) error {
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin service document subject lock: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // rollback after commit is a no-op
+
+	// Taken before anything is read. A lock taken after the count would be a
+	// lock around nothing: the number it is meant to protect was already read.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		svcDocAdvisoryLockClass, subjectHash); err != nil {
+		return fmt.Errorf("lock service document subject: %w", err)
+	}
+
+	if err := fn(context.WithValue(ctx, svcDocTxKey{}, tx)); err != nil {
+		// Returned exactly as fn produced it. The caller matches sentinel errors
+		// against this value to decide an HTTP status, so wrapping it here would
+		// change what a rejected caller sees depending on which layer refused.
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit service document write: %w", err)
+	}
+	return nil
 }
 
 func scanServiceDocument(row pgx.Row) (*repository.ServiceDocument, error) {
@@ -42,7 +136,7 @@ func scanServiceDocument(row pgx.Row) (*repository.ServiceDocument, error) {
 
 // Get returns one document owned by clientID, or nil, nil if absent.
 func (r *ServiceDocumentRepo) Get(ctx context.Context, clientID, subjectHash, docKey string) (*repository.ServiceDocument, error) {
-	doc, err := scanServiceDocument(r.db.Pool.QueryRow(ctx, `
+	doc, err := scanServiceDocument(r.q(ctx).QueryRow(ctx, `
 		SELECT `+serviceDocumentColumns+`
 		FROM objects.service_documents
 		WHERE client_id = $1 AND subject_hash = $2 AND doc_key = $3`,
@@ -59,7 +153,7 @@ func (r *ServiceDocumentRepo) Get(ctx context.Context, clientID, subjectHash, do
 // ListSharedByKey returns every shared document at (subjectHash, docKey) not
 // owned by excludeClientID.
 func (r *ServiceDocumentRepo) ListSharedByKey(ctx context.Context, subjectHash, docKey, excludeClientID string) ([]*repository.ServiceDocument, error) {
-	rows, err := r.db.Pool.Query(ctx, `
+	rows, err := r.q(ctx).Query(ctx, `
 		SELECT `+serviceDocumentColumns+`
 		FROM objects.service_documents
 		WHERE subject_hash = $1 AND doc_key = $2 AND visibility = 1 AND client_id <> $3
@@ -94,7 +188,7 @@ func (r *ServiceDocumentRepo) ListSharedByKey(ctx context.Context, subjectHash, 
 // means a document's identity survives being rewritten.
 func (r *ServiceDocumentRepo) Upsert(ctx context.Context, doc *repository.ServiceDocument) (bool, error) {
 	var created bool
-	err := r.db.Pool.QueryRow(ctx, `
+	err := r.q(ctx).QueryRow(ctx, `
 		INSERT INTO objects.service_documents
 			(id, client_id, subject_hash, doc_key, visibility, data_enc, size_bytes, stored_bytes, version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
@@ -117,7 +211,7 @@ func (r *ServiceDocumentRepo) Upsert(ctx context.Context, doc *repository.Servic
 
 // Delete removes one document owned by clientID.
 func (r *ServiceDocumentRepo) Delete(ctx context.Context, clientID, subjectHash, docKey string) (bool, error) {
-	tag, err := r.db.Pool.Exec(ctx, `
+	tag, err := r.q(ctx).Exec(ctx, `
 		DELETE FROM objects.service_documents
 		WHERE client_id = $1 AND subject_hash = $2 AND doc_key = $3`,
 		clientID, subjectHash, docKey)
@@ -128,7 +222,7 @@ func (r *ServiceDocumentRepo) Delete(ctx context.Context, clientID, subjectHash,
 }
 
 func (r *ServiceDocumentRepo) listMeta(ctx context.Context, what, query string, args ...any) ([]*repository.ServiceDocument, error) {
-	rows, err := r.db.Pool.Query(ctx, query, args...)
+	rows, err := r.q(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", what, err)
 	}
@@ -167,7 +261,7 @@ func (r *ServiceDocumentRepo) ListSharedForSubject(ctx context.Context, subjectH
 // ListAllForSubject returns every document for a subject across all owning
 // clients, with data_enc, for the Art. 15 export.
 func (r *ServiceDocumentRepo) ListAllForSubject(ctx context.Context, subjectHash string) ([]*repository.ServiceDocument, error) {
-	rows, err := r.db.Pool.Query(ctx, `
+	rows, err := r.q(ctx).Query(ctx, `
 		SELECT `+serviceDocumentColumns+`
 		FROM objects.service_documents
 		WHERE subject_hash = $1
@@ -191,7 +285,7 @@ func (r *ServiceDocumentRepo) ListAllForSubject(ctx context.Context, subjectHash
 // CountForOwner returns how many documents clientID holds for a subject.
 func (r *ServiceDocumentRepo) CountForOwner(ctx context.Context, clientID, subjectHash string) (int, error) {
 	var n int
-	err := r.db.Pool.QueryRow(ctx, `
+	err := r.q(ctx).QueryRow(ctx, `
 		SELECT COALESCE(COUNT(*), 0) FROM objects.service_documents
 		WHERE client_id = $1 AND subject_hash = $2`, clientID, subjectHash).Scan(&n)
 	if err != nil {
@@ -204,7 +298,7 @@ func (r *ServiceDocumentRepo) CountForOwner(ctx context.Context, clientID, subje
 // every owning client.
 func (r *ServiceDocumentRepo) SumBytesForSubject(ctx context.Context, subjectHash string) (int, error) {
 	var n int
-	err := r.db.Pool.QueryRow(ctx, `
+	err := r.q(ctx).QueryRow(ctx, `
 		SELECT COALESCE(SUM(stored_bytes), 0) FROM objects.service_documents
 		WHERE subject_hash = $1`, subjectHash).Scan(&n)
 	if err != nil {
@@ -218,7 +312,7 @@ func (r *ServiceDocumentRepo) SumBytesForSubject(ctx context.Context, subjectHas
 // erasure must succeed for a subject no service ever wrote a document about,
 // and the cascade is re-run after an interruption.
 func (r *ServiceDocumentRepo) DeleteAllForSubject(ctx context.Context, subjectHash string) error {
-	_, err := r.db.Pool.Exec(ctx, `
+	_, err := r.q(ctx).Exec(ctx, `
 		DELETE FROM objects.service_documents WHERE subject_hash = $1`, subjectHash)
 	if err != nil {
 		return fmt.Errorf("delete all service documents for subject: %w", err)
