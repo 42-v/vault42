@@ -125,10 +125,10 @@ func (m *memDocRepo) CountForOwner(_ context.Context, clientID, subjectHash stri
 	return n, nil
 }
 
-func (m *memDocRepo) SumBytesForSubject(_ context.Context, subjectHash string) (int, error) {
+func (m *memDocRepo) SumBytesForSubjectAndClient(_ context.Context, subjectHash, clientID string) (int, error) {
 	total := 0
 	for k, d := range m.rows {
-		if k.subject == subjectHash {
+		if k.subject == subjectHash && k.client == clientID {
 			total += d.StoredBytes
 		}
 	}
@@ -660,9 +660,10 @@ func TestServiceDocumentHandler_QuotaBreachIsAConflict(t *testing.T) {
 		}
 	})
 
-	// The byte budget is per subject across every owning client, so one user's
-	// footprint stays bounded however many services write about them.
-	t.Run("byte budget spans every owning client", func(t *testing.T) {
+	// The byte budget is per (client, subject): a service is charged against its
+	// own footprint, so one service filling its budget cannot lock another out of
+	// the same subject.
+	t.Run("byte budget is per owning client", func(t *testing.T) {
 		h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 			cfg.QuotaBytesPerSubject = 200
 		})
@@ -674,13 +675,22 @@ func TestServiceDocumentHandler_QuotaBreachIsAConflict(t *testing.T) {
 			t.Fatalf("first write: %d %s", rec.Code, rec.Body.String())
 		}
 
+		// A second document by the same client breaches that client's own budget.
 		rec = httptest.NewRecorder()
-		h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "second", "", body), svcDocHandlerClientB, nil))
+		h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "second", "", body), svcDocHandlerClientA, nil))
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("status %d, want 409 (%s)", rec.Code, rec.Body.String())
 		}
 		if !strings.Contains(rec.Body.String(), "quota_exceeded") {
 			t.Fatalf("body = %s", rec.Body.String())
+		}
+
+		// A different client writing about the same subject is charged only
+		// against its own bytes, so the first client's usage does not block it.
+		rec = httptest.NewRecorder()
+		h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "theirs", "", body), svcDocHandlerClientB, nil))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("another client blocked by the first's usage: %d %s", rec.Code, rec.Body.String())
 		}
 	})
 }

@@ -38,8 +38,8 @@ var _ repository.ServiceDocumentRepository = (*ServiceDocumentRepo)(nil)
 //     so a failed write would be reported to the caller as a successful update.
 //   - Delete returning (true, nil) reads as "removed", so a caller would be told
 //     data was deleted while it was still there.
-//   - CountForOwner and SumBytesForSubject returning 0 fail the quota open: a
-//     caller could write past both limits during a database outage.
+//   - CountForOwner and SumBytesForSubjectAndClient returning 0 fail the quota
+//     open: a caller could write past both limits during a database outage.
 //   - DeleteAllForSubject returning nil reads as a completed erasure step, and
 //     the cascade would move on leaving the documents in place.
 func TestServiceDocumentRepo_SurfacesDatabaseFailures(t *testing.T) {
@@ -90,12 +90,12 @@ func TestServiceDocumentRepo_SurfacesDatabaseFailures(t *testing.T) {
 		t.Errorf("CountForOwner returned %d on failure", count)
 	}
 
-	sum, err := repo.SumBytesForSubject(ctx, "subj")
+	sum, err := repo.SumBytesForSubjectAndClient(ctx, "subj", "client-1")
 	if err == nil {
-		t.Error("SumBytesForSubject reported success against an unreachable database")
+		t.Error("SumBytesForSubjectAndClient reported success against an unreachable database")
 	}
 	if sum != 0 {
-		t.Errorf("SumBytesForSubject returned %d on failure", sum)
+		t.Errorf("SumBytesForSubjectAndClient returned %d on failure", sum)
 	}
 
 	if err := repo.DeleteAllForSubject(ctx, "subj"); err == nil {
@@ -490,11 +490,11 @@ func TestServiceDocumentRepo_AgainstPostgres(t *testing.T) {
 		}
 	})
 
-	// The count bounds one client's documents for one subject; the byte sum bounds
-	// a subject's footprint across every service that writes about them. Swapping
-	// the two scopes would let one service exhaust another's allowance, or let a
-	// subject's total grow without limit.
-	t.Run("the document count is per owner while the byte sum spans every owner", func(t *testing.T) {
+	// The count and the byte sum are both per (owner, subject): one service's
+	// documents never count against another's allowance, in either dimension.
+	// A byte sum that spanned every owner would let one service exhaust another's
+	// allowance and report one service's footprint to another.
+	t.Run("the document count and the byte sum are both per owner", func(t *testing.T) {
 		const subj = "subject-quota"
 		a1 := svcDocFixture("11111111-0000-4000-8000-00000000fff1", svcDocPGClientA, subj, "one", repository.VisibilityPrivate, "a-one")
 		a2 := svcDocFixture("11111111-0000-4000-8000-00000000fff2", svcDocPGClientA, subj, "two", repository.VisibilityPrivate, "a-two")
@@ -511,18 +511,25 @@ func TestServiceDocumentRepo_AgainstPostgres(t *testing.T) {
 			t.Errorf("count for service-a = %d, want 2 (its own rows only)", n)
 		}
 
-		sum, err := repo.SumBytesForSubject(ctx, subj)
+		sumA, err := repo.SumBytesForSubjectAndClient(ctx, subj, svcDocPGClientA)
 		if err != nil {
-			t.Fatalf("sum: %v", err)
+			t.Fatalf("sum service-a: %v", err)
 		}
-		want := a1.StoredBytes + a2.StoredBytes + b1.StoredBytes
-		if sum != want {
-			t.Errorf("byte sum = %d, want %d across every owning client", sum, want)
+		if want := a1.StoredBytes + a2.StoredBytes; sumA != want {
+			t.Errorf("byte sum for service-a = %d, want %d (its own rows only)", sumA, want)
+		}
+
+		sumB, err := repo.SumBytesForSubjectAndClient(ctx, subj, svcDocPGClientB)
+		if err != nil {
+			t.Fatalf("sum service-b: %v", err)
+		}
+		if sumB != b1.StoredBytes {
+			t.Errorf("byte sum for service-b = %d, want %d (its own row only)", sumB, b1.StoredBytes)
 		}
 	})
 
 	t.Run("the byte sum of a subject nothing was written about is zero and not an error", func(t *testing.T) {
-		sum, err := repo.SumBytesForSubject(ctx, "subject-never-written")
+		sum, err := repo.SumBytesForSubjectAndClient(ctx, "subject-never-written", svcDocPGClientA)
 		if err != nil {
 			t.Fatalf("sum over an empty subject: %v", err)
 		}

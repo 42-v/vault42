@@ -159,7 +159,9 @@ func (s *exportSvcDocStore) CountForOwner(context.Context, string, string) (int,
 	return 0, nil
 }
 
-func (s *exportSvcDocStore) SumBytesForSubject(context.Context, string) (int, error) { return 0, nil }
+func (s *exportSvcDocStore) SumBytesForSubjectAndClient(context.Context, string, string) (int, error) {
+	return 0, nil
+}
 
 func (s *exportSvcDocStore) DeleteAllForSubject(context.Context, string) error { return nil }
 

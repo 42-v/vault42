@@ -294,15 +294,18 @@ func (r *ServiceDocumentRepo) CountForOwner(ctx context.Context, clientID, subje
 	return n, nil
 }
 
-// SumBytesForSubject returns the total stored bytes held for a subject across
-// every owning client.
-func (r *ServiceDocumentRepo) SumBytesForSubject(ctx context.Context, subjectHash string) (int, error) {
+// SumBytesForSubjectAndClient returns the stored bytes one client holds for a
+// subject, for the per-(client, subject) byte quota. Scoping the sum to the
+// owning client is what keeps one service from filling a byte budget every other
+// service then fails against, and keeps one service's footprint out of another's
+// quota view.
+func (r *ServiceDocumentRepo) SumBytesForSubjectAndClient(ctx context.Context, subjectHash, clientID string) (int, error) {
 	var n int
 	err := r.q(ctx).QueryRow(ctx, `
 		SELECT COALESCE(SUM(stored_bytes), 0) FROM objects.service_documents
-		WHERE subject_hash = $1`, subjectHash).Scan(&n)
+		WHERE subject_hash = $1 AND client_id = $2`, subjectHash, clientID).Scan(&n)
 	if err != nil {
-		return 0, fmt.Errorf("sum service document bytes: %w", err)
+		return 0, fmt.Errorf("sum service document bytes for client: %w", err)
 	}
 	return n, nil
 }

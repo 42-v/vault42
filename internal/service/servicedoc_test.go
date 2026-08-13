@@ -137,13 +137,13 @@ func (f *fakeSvcDocRepo) CountForOwner(_ context.Context, clientID, subjectHash 
 	return n, nil
 }
 
-func (f *fakeSvcDocRepo) SumBytesForSubject(_ context.Context, subjectHash string) (int, error) {
+func (f *fakeSvcDocRepo) SumBytesForSubjectAndClient(_ context.Context, subjectHash, clientID string) (int, error) {
 	if err := f.fail("sum"); err != nil {
 		return 0, err
 	}
 	total := 0
 	for k, d := range f.rows {
-		if k.subject == subjectHash {
+		if k.subject == subjectHash && k.client == clientID {
 			total += d.StoredBytes
 		}
 	}
@@ -617,28 +617,135 @@ func TestPut_DocumentCountQuota(t *testing.T) {
 	}
 }
 
-// The byte quota spans every owning client, so one user's footprint is bounded
-// no matter how many services write about them.
-func TestPut_ByteQuotaSpansAllClientsAndDiscountsTheRowBeingReplaced(t *testing.T) {
+// The byte quota is enforced per (client, subject): the caller is charged
+// against its own footprint, never a cross-client total. Before the fix the sum
+// spanned every owning client, so one svcdoc:write client could fill a subject's
+// shared budget and every OTHER service's write for that subject then failed 409
+// forever. The last assertion below is that write-DoS fix.
+func TestPut_ByteQuotaIsPerClientAndDiscountsTheReplacedRow(t *testing.T) {
+	ctx := context.Background()
+	body := []byte(`{"pad":"` + strings.Repeat("x", 100) + `"}`)
+
+	// One document's stored size, measured rather than hardcoding the AES-GCM
+	// overhead, so the budget can be sized to admit two documents but not three.
+	probeRepo := newFakeSvcDocRepo()
+	probe := newSvcDocService(t, probeRepo, defaultSvcDocConfig())
+	pm, _, err := probe.Put(ctx, svcDocClientA, "user-1", "probe", body, repository.VisibilityPrivate)
+	if err != nil {
+		t.Fatalf("probe write: %v", err)
+	}
+	one := pm.StoredBytes
+
 	cfg := defaultSvcDocConfig()
-	cfg.QuotaBytesPerSubject = 400
+	cfg.QuotaBytesPerSubject = 2*one + one/2
 	repo := newFakeSvcDocRepo()
 	svc := newSvcDocService(t, repo, cfg)
+
+	// Client A fills its own budget to two documents.
+	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "a", body, repository.VisibilityPrivate); err != nil {
+		t.Fatalf("A first write: %v", err)
+	}
+	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "b", body, repository.VisibilityPrivate); err != nil {
+		t.Fatalf("A second write: %v", err)
+	}
+	// A third document by A breaches A's own budget.
+	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "c", body, repository.VisibilityPrivate); !errors.Is(err, ErrSvcDocQuotaExceeded) {
+		t.Fatalf("A's own byte budget not enforced: %v", err)
+	}
+	// Rewriting an existing document at the same size discounts the row it
+	// replaces, so it stays inside the budget.
+	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "a", body, repository.VisibilityPrivate); err != nil {
+		t.Fatalf("replacement double-counted its own bytes: %v", err)
+	}
+	// Client B writing about the SAME subject is charged only against B's own
+	// bytes, so it succeeds even though A has filled A's budget. Before the fix
+	// the budget spanned clients and this was a permanent 409.
+	if _, _, err := svc.Put(ctx, svcDocClientB, "user-1", "b", body, repository.VisibilityPrivate); err != nil {
+		t.Fatalf("another client's write blocked by A's usage (cross-service write-DoS): %v", err)
+	}
+}
+
+// A listing reports only the CALLER'S own used_bytes. A cross-client total would
+// tell any svcdoc:read caller that another service holds data about the subject,
+// and how much, which is the presence oracle the pseudonymised subject denies.
+func TestList_UsedBytesIsCallerScopedNotCrossClient(t *testing.T) {
+	repo := newFakeSvcDocRepo()
+	svc := newSvcDocService(t, repo, defaultSvcDocConfig())
 	ctx := context.Background()
 
 	body := []byte(`{"pad":"` + strings.Repeat("x", 100) + `"}`)
-	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "a", body, repository.VisibilityPrivate); err != nil {
-		t.Fatalf("first write: %v", err)
+	aMeta, _, err := svc.Put(ctx, svcDocClientA, "user-1", "a", body, repository.VisibilityPrivate)
+	if err != nil {
+		t.Fatalf("A write: %v", err)
 	}
-	if _, _, err := svc.Put(ctx, svcDocClientB, "user-1", "b", body, repository.VisibilityPrivate); err != nil {
-		t.Fatalf("second write: %v", err)
+
+	// B holds nothing of its own for the subject, so its used_bytes is zero and
+	// must not carry A's footprint.
+	_, quotaB, err := svc.List(ctx, svcDocClientB, "user-1")
+	if err != nil {
+		t.Fatalf("B list: %v", err)
 	}
-	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "c", body, repository.VisibilityPrivate); !errors.Is(err, ErrSvcDocQuotaExceeded) {
-		t.Fatalf("byte quota did not span clients: %v", err)
+	if quotaB.UsedBytes != 0 {
+		t.Fatalf("used_bytes leaked another client's footprint: got %d, want 0", quotaB.UsedBytes)
 	}
-	// Rewriting an existing document at the same size stays inside the quota.
-	if _, _, err := svc.Put(ctx, svcDocClientA, "user-1", "a", body, repository.VisibilityPrivate); err != nil {
-		t.Fatalf("replacement double-counted its own bytes: %v", err)
+
+	// A's own listing still reports A's own footprint.
+	_, quotaA, err := svc.List(ctx, svcDocClientA, "user-1")
+	if err != nil {
+		t.Fatalf("A list: %v", err)
+	}
+	if quotaA.UsedBytes != aMeta.StoredBytes {
+		t.Fatalf("caller's own used_bytes = %d, want %d", quotaA.UsedBytes, aMeta.StoredBytes)
+	}
+}
+
+// The shared kill switch gates reads as well as writes. A row shared while the
+// tier was on must stop being readable or listable by other clients the moment
+// an operator turns the tier off, rather than staying visible until it is
+// rewritten. The owner keeps its own row throughout.
+func TestSharedReadPathsAreGatedOnSharedEnabled(t *testing.T) {
+	repo := newFakeSvcDocRepo()
+	ctx := context.Background()
+
+	on := newSvcDocService(t, repo, defaultSvcDocConfig())
+	if _, _, err := on.Put(ctx, svcDocClientA, "user-1", "flags", []byte(`{"beta":true}`), repository.VisibilityShared); err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	// Sanity: with the tier on, another client can read the shared row.
+	if _, _, err := on.Get(ctx, svcDocClientB, "user-1", "flags", ""); err != nil {
+		t.Fatalf("shared read with the tier on: %v", err)
+	}
+
+	offCfg := defaultSvcDocConfig()
+	offCfg.SharedEnabled = false
+	off := newSvcDocService(t, repo, offCfg)
+
+	if _, _, err := off.Get(ctx, svcDocClientB, "user-1", "flags", ""); !errors.Is(err, ErrSvcDocNotFound) {
+		t.Fatalf("shared row readable after the tier was disabled: %v", err)
+	}
+	if _, _, err := off.Get(ctx, svcDocClientB, "user-1", "flags", "service-a"); !errors.Is(err, ErrSvcDocNotFound) {
+		t.Fatalf("shared row readable by named owner after the tier was disabled: %v", err)
+	}
+	metas, _, err := off.List(ctx, svcDocClientB, "user-1")
+	if err != nil {
+		t.Fatalf("B list: %v", err)
+	}
+	for _, m := range metas {
+		if m.OwnerID == svcDocClientA {
+			t.Fatalf("another client's shared row listed after the tier was disabled: %+v", m)
+		}
+	}
+
+	// The owner still reads and lists its own row regardless of the tier.
+	if _, _, err := off.Get(ctx, svcDocClientA, "user-1", "flags", ""); err != nil {
+		t.Fatalf("owner lost its own row when the tier was disabled: %v", err)
+	}
+	ownMetas, _, err := off.List(ctx, svcDocClientA, "user-1")
+	if err != nil {
+		t.Fatalf("A list: %v", err)
+	}
+	if len(ownMetas) != 1 {
+		t.Fatalf("owner's own listing = %d rows, want 1", len(ownMetas))
 	}
 }
 

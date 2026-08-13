@@ -46,8 +46,10 @@ func (stubServiceDocRepo) ListAllForSubject(context.Context, string) ([]*reposit
 	return nil, nil
 }
 func (stubServiceDocRepo) CountForOwner(context.Context, string, string) (int, error) { return 0, nil }
-func (stubServiceDocRepo) SumBytesForSubject(context.Context, string) (int, error)    { return 0, nil }
-func (stubServiceDocRepo) DeleteAllForSubject(context.Context, string) error          { return nil }
+func (stubServiceDocRepo) SumBytesForSubjectAndClient(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+func (stubServiceDocRepo) DeleteAllForSubject(context.Context, string) error { return nil }
 
 var _ repository.ServiceDocumentRepository = stubServiceDocRepo{}
 
