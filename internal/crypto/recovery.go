@@ -291,9 +291,15 @@ func openRecovery(priv *rsa.PrivateKey, body, label, aad []byte) ([]byte, error)
 
 	wrappedLen := binary.BigEndian.Uint32(body[:4])
 	// Compared in uint64 because the declared length is four bytes of
-	// attacker-controlled big-endian: on a 32-bit build the int conversion this
-	// replaces could wrap and turn a hostile length into a passing check.
-	if uint64(wrappedLen) > uint64(len(body)-4) {
+	// attacker-controlled big-endian: on a 32-bit build an int conversion could
+	// wrap and turn a hostile length into a passing check.
+	//
+	// Written as an addition rather than as len(body)-4 so that neither side of
+	// the comparison converts a value that could be negative. uint64(wrappedLen)
+	// is at most 2^32-1 and adding 4 cannot overflow a uint64, and len is
+	// non-negative by definition, so the safety is visible to a reader and to
+	// gosec instead of resting on the bounds check three lines above.
+	if uint64(wrappedLen)+4 > uint64(len(body)) {
 		return nil, errors.New("recovery: corrupt blob (wrapped key length)")
 	}
 	wrappedKey := body[4 : 4+wrappedLen]
