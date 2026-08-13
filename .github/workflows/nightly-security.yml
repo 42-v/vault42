@@ -58,24 +58,44 @@ jobs:
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 
+      # gosec exits non-zero on any finding at all, including the LOW and MEDIUM
+      # ones this gate deliberately tolerates, so its exit status cannot be the
+      # gate. The report is. That makes a scanner which produced no report the
+      # dangerous case, and it used to be the silent one: the check was wrapped
+      # in `if [ -s gosec-results.json ]`, so a gosec that crashed, ran out of
+      # memory or failed to install wrote nothing, the guard evaluated false, and
+      # the step exited green on a release-blocking path.
       - name: Run gosec
         run: gosec -fmt json -out gosec-results.json ./... || true
 
       - name: Check findings
         run: |
-          if [ -s gosec-results.json ]; then
-            python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          issues = data.get('Issues', [])
-          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
-          if high:
-              for i in high:
-                  print(f\"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}\")
-              sys.exit(1)
-          print(f'No HIGH/CRITICAL findings ({len(issues)} total issues)')
-          " < gosec-results.json
+          set -euo pipefail
+          if [ ! -s gosec-results.json ]; then
+            echo "gosec produced no report at all. That is a failed scan, not a clean one." >&2
+            exit 1
           fi
+          python3 - gosec-results.json <<'PY'
+          import json, sys
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  data = json.load(fh)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"gosec report is not valid JSON, so the scan did not complete: {exc}")
+
+          issues = data.get('Issues')
+          if issues is None:
+              sys.exit("gosec report has no Issues key; the report format changed "
+                       "or the scan aborted midway")
+
+          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
+          for i in high:
+              print(f"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}")
+          if high:
+              sys.exit(f"{len(high)} HIGH/CRITICAL gosec finding(s)")
+          print(f"No HIGH/CRITICAL findings ({len(issues)} total issues)")
+          PY
 
   trivy-source:
     name: Trivy Source Scan
