@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -31,27 +32,49 @@ type Bridge struct {
 // ScoreMap tracks cumulative scores per IP.
 type ScoreMap struct {
 	mu     sync.Mutex
-	scores map[string]int
+	scores map[string]scoreEntry
+}
+
+type scoreEntry struct {
+	n    int
+	seen time.Time
 }
 
 // NewScoreMap creates a new score tracker.
 func NewScoreMap() *ScoreMap {
-	return &ScoreMap{scores: make(map[string]int)}
+	return &ScoreMap{scores: make(map[string]scoreEntry)}
 }
 
 // Add adds a score delta and returns the new total.
 func (sm *ScoreMap) Add(ip string, delta int) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.scores[ip] += delta
-	return sm.scores[ip]
+	ent := sm.scores[ip]
+	ent.n += delta
+	ent.seen = time.Now()
+	sm.scores[ip] = ent
+	return ent.n
 }
 
 // Get returns the current score for an IP.
 func (sm *ScoreMap) Get(ip string) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	return sm.scores[ip]
+	return sm.scores[ip].n
+}
+
+// Reap drops addresses that have not scored within maxAge. Live totals are
+// left alone: decaying an active score would reset a scanner's budget every
+// sweep and let it stay under the flag threshold indefinitely.
+func (sm *ScoreMap) Reap(maxAge time.Duration) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	for ip, ent := range sm.scores {
+		if ent.seen.Before(cutoff) {
+			delete(sm.scores, ip)
+		}
+	}
 }
 
 // NewBridge creates the bridge proxy.
@@ -82,10 +105,32 @@ func NewBridge(cfg *Config) (*Bridge, error) {
 	b.admin = NewAdminHandler(b.flags, cfg.AdminToken)
 	b.health = NewHealthHandler(cfg.RealUpstream, cfg.HoneypotUpstream)
 
+	// Remember the inbound path before Director rewrites URL.Path to include
+	// the upstream prefix. inspectLoginResponse has to compare that inbound
+	// path, not the outbound one.
+	b.realProxy.Director = rememberInboundPath(b.realProxy.Director)
 	// ModifyResponse on realProxy: inspect login failures
 	b.realProxy.ModifyResponse = b.inspectLoginResponse
 
 	return b, nil
+}
+
+// inboundPathKey is the request-context slot for the path the client sent,
+// captured before NewSingleHostReverseProxy joins it onto the upstream URL.
+type inboundPathKey struct{}
+
+func rememberInboundPath(director func(*http.Request)) func(*http.Request) {
+	return func(req *http.Request) {
+		*req = *req.WithContext(context.WithValue(req.Context(), inboundPathKey{}, req.URL.Path))
+		director(req)
+	}
+}
+
+func inboundPath(r *http.Request) string {
+	if v, ok := r.Context().Value(inboundPathKey{}).(string); ok {
+		return v
+	}
+	return r.URL.Path
 }
 
 // ServeHTTP is the main request handler.
@@ -133,10 +178,10 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if score > 0 {
 		total := b.scores.Add(ip, score)
 		if total >= b.cfg.FlagThreshold {
-			reason := "auto:score"
-			if uaScore > 0 {
-				reason = "auto:automation_ua"
-			}
+			// score is only nonzero via the UA or rate branches. Rate
+			// wins when both fire. The old auto:score default was
+			// unreachable and is gone.
+			reason := "auto:automation_ua"
 			if count > b.cfg.RateThreshold {
 				reason = "auto:rate_exceeded"
 			}
@@ -179,11 +224,14 @@ func (b *Bridge) handleBridgePath(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
-	// Only inspect POST /auth/login returning 401
+	// Only inspect POST /auth/login returning 401. Compare the inbound
+	// path: resp.Request.URL.Path is the outbound URL after Director has
+	// joined the upstream prefix, so BRIDGE_REAL_UPSTREAM=.../api would
+	// make it /api/auth/login and silently skip every failure.
 	if resp.Request.Method != http.MethodPost {
 		return nil
 	}
-	if resp.Request.URL.Path != "/auth/login" {
+	if inboundPath(resp.Request) != "/auth/login" {
 		return nil
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -218,7 +266,11 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 func (b *Bridge) setProxyHeaders(r *http.Request, ip string) {
 	r.Header.Set("X-Real-IP", ip)
 	r.Header.Set("X-Forwarded-Proto", "https")
-	if prior := r.Header.Get("X-Forwarded-For"); prior != "" {
+	// Only extend a client-supplied XFF when the peer is a trusted proxy.
+	// Otherwise the leftmost entry is whatever the client wrote, which is
+	// the value most parsers treat as the originating address.
+	prior := r.Header.Get("X-Forwarded-For")
+	if prior != "" && b.isTrustedProxy(extractIP(r.RemoteAddr)) {
 		r.Header.Set("X-Forwarded-For", prior+", "+ip)
 	} else {
 		r.Header.Set("X-Forwarded-For", ip)
@@ -284,19 +336,23 @@ func (b *Bridge) StartReaper(interval time.Duration) {
 			b.flags.Reap()
 			b.rateTracker.Reap()
 			b.loginFails.Reap()
+			b.scores.Reap(b.cfg.FlagTTL)
 		}
 	}()
 }
 
-// Close cleans up bridge resources.
+// Close cleans up bridge resources and waits for in-flight webhook deliveries
+// so a shutdown does not drop the event that triggered it.
 func (b *Bridge) Close() {
 	b.flags.Close()
+	b.webhook.Close()
 }
 
 // WebhookSender sends JSON webhook notifications.
 type WebhookSender struct {
 	url    string
 	client *http.Client
+	wg     sync.WaitGroup
 }
 
 // NewWebhookSender creates a webhook sender. Returns nil-safe (all methods are no-ops if url is empty).
@@ -312,11 +368,32 @@ func NewWebhookSender(webhookURL string) *WebhookSender {
 	}
 }
 
-// Send dispatches a JSON payload to the webhook URL. Best-effort — errors are logged.
+// Send queues a JSON payload for the webhook URL and returns immediately.
+// The request that triggered the alert must not wait on the receiver: a
+// scanner watching its own latency would otherwise see the moment it was
+// flagged. Errors are logged. Close waits for queued deliveries so a
+// shutdown does not drop the event.
 func (ws *WebhookSender) Send(payload map[string]interface{}) {
 	if ws == nil {
 		return
 	}
+	ws.wg.Add(1)
+	go func() {
+		defer ws.wg.Done()
+		ws.deliver(payload)
+	}()
+}
+
+// Close waits for in-flight deliveries. It is safe on a nil sender and
+// safe to call more than once.
+func (ws *WebhookSender) Close() {
+	if ws == nil {
+		return
+	}
+	ws.wg.Wait()
+}
+
+func (ws *WebhookSender) deliver(payload map[string]interface{}) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("bridge: webhook marshal error: %v", err)

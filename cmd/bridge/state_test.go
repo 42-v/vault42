@@ -1111,6 +1111,10 @@ func TestFlagStoreLoadsExistingFlagsFromRedis(t *testing.T) {
 	f.preload("bridge:flag:4.4.4.4", "auto:score|100")
 	// An unparseable timestamp lands the entry in year one, so it is dropped.
 	f.preload("bridge:flag:5.5.5.5", "auto:score|100|not-a-timestamp")
+	// A decoy reason with a pipe in the path. Old rows used this same
+	// reason|score|timestamp shape, so a parser that still splits on the first
+	// two pipes will shift the fields and drop the flag as expired.
+	f.preload("bridge:flag:6.6.6.6", "decoy:/wp-admin/a|b|100|"+recent)
 	// An unrelated key in the same database must be ignored by the MATCH pattern.
 	f.preload("other:key", "should not be loaded")
 
@@ -1132,13 +1136,16 @@ func TestFlagStoreLoadsExistingFlagsFromRedis(t *testing.T) {
 	if fs.IsFlagged("5.5.5.5") {
 		t.Error("5.5.5.5 was restored despite an unparseable timestamp")
 	}
+	if !fs.IsFlagged("6.6.6.6") {
+		t.Error("6.6.6.6 was not restored; a pipe in the reason shifted the timestamp and the flag was dropped as expired")
+	}
 	if fs.IsFlagged("other:key") || fs.IsFlagged("key") {
 		t.Error("a key outside the bridge:flag namespace was loaded as a flag")
 	}
 
 	entries := fs.List()
-	if len(entries) != 2 {
-		t.Fatalf("List() = %d entries, want 2: %+v", len(entries), entries)
+	if len(entries) != 3 {
+		t.Fatalf("List() = %d entries, want 3: %+v", len(entries), entries)
 	}
 
 	// Reason and score must survive the round trip, since the admin flag list is
@@ -1152,6 +1159,9 @@ func TestFlagStoreLoadsExistingFlagsFromRedis(t *testing.T) {
 	}
 	if got := byIP["2.2.2.2"]; got.Reason != "manual flag" || got.Score != 100 {
 		t.Errorf("2.2.2.2 restored as %q/%d, want manual flag/100", got.Reason, got.Score)
+	}
+	if got := byIP["6.6.6.6"]; got.Reason != "decoy:/wp-admin/a|b" || got.Score != 100 {
+		t.Errorf("6.6.6.6 restored as %q/%d, want decoy:/wp-admin/a|b/100", got.Reason, got.Score)
 	}
 }
 
@@ -1223,26 +1233,24 @@ func TestFlagStoreLoadSurvivesScanFailure(t *testing.T) {
 	}
 }
 
-// TestFlagStoreRedisReasonWithPipeIsLostOnRestart documents a real encoding
-// defect rather than an intended behaviour.
+// TestFlagStoreRedisReasonWithPipeSurvivesRestart is the decoy path that made
+// the encoding matter.
 //
-// Flag serialises as "reason|score|timestamp" and loadFromRedis splits on the
-// first two pipes, so a reason containing a pipe shifts the score and timestamp
-// fields. The timestamp then fails to parse, ExpiresAt lands in year one, and
-// the entry is dropped as expired. Reasons are not a closed set: a decoy hit
-// uses "decoy:" followed by the raw request path, and a pipe is legal in a URL
-// path, so an attacker who requests /wp-admin/a|b picks a reason that will not
-// survive a bridge restart. The admin API accepts an arbitrary reason too.
-//
-// The test asserts the current behaviour so the loss is visible, and so that a
-// fix (escaping the reason, or splitting from the right) shows up here as a
-// deliberate change rather than as a silent one.
-func TestFlagStoreRedisReasonWithPipeIsLostOnRestart(t *testing.T) {
+// Flag used to serialise as reason|score|timestamp and loadFromRedis split on
+// the first two pipes, so a reason containing a pipe shifted the score and
+// timestamp. The timestamp failed to parse, ExpiresAt landed in year one, and
+// the entry was dropped as expired. Decoy reasons are "decoy:" plus the raw
+// request path, and a pipe is legal in a URL path, so GET /wp-admin/a|b flagged
+// an attacker in memory and then forgot them on the next restart. Old rows
+// without a pipe in the reason must keep loading, which is why the writer also
+// stores a plain decoy reason next to the pipe-bearing one.
+func TestFlagStoreRedisReasonWithPipeSurvivesRestart(t *testing.T) {
 	f := newFakeRedis(t)
 
 	writer := NewFlagStore(24*time.Hour, f.addr())
 	writer.Flag("198.51.100.4", "decoy:/wp-admin/a|b", 100)
 	writer.Flag("198.51.100.5", "decoy:/wp-admin", 100)
+	writer.Flag("198.51.100.6", "manual|investigation|notes", 80)
 	writer.Close()
 
 	if _, ok := f.snapshot()["bridge:flag:198.51.100.4"]; !ok {
@@ -1255,8 +1263,107 @@ func TestFlagStoreRedisReasonWithPipeIsLostOnRestart(t *testing.T) {
 	if !reloaded.IsFlagged("198.51.100.5") {
 		t.Error("a plain reason did not survive the restart")
 	}
-	if reloaded.IsFlagged("198.51.100.4") {
-		t.Error("a pipe-bearing reason now survives the restart, so the encoding was fixed and this test needs updating")
+	if !reloaded.IsFlagged("198.51.100.4") {
+		t.Fatal("a pipe-bearing decoy reason was dropped on reload")
+	}
+	if !reloaded.IsFlagged("198.51.100.6") {
+		t.Fatal("a multi-pipe admin reason was dropped on reload")
+	}
+
+	byIP := map[string]FlagEntry{}
+	for _, e := range reloaded.List() {
+		byIP[e.IP] = e
+	}
+	if got := byIP["198.51.100.4"]; got.Reason != "decoy:/wp-admin/a|b" || got.Score != 100 {
+		t.Errorf("198.51.100.4 restored as %q/%d, want decoy:/wp-admin/a|b/100", got.Reason, got.Score)
+	}
+	if got := byIP["198.51.100.5"]; got.Reason != "decoy:/wp-admin" || got.Score != 100 {
+		t.Errorf("198.51.100.5 restored as %q/%d, want decoy:/wp-admin/100", got.Reason, got.Score)
+	}
+	if got := byIP["198.51.100.6"]; got.Reason != "manual|investigation|notes" || got.Score != 80 {
+		t.Errorf("198.51.100.6 restored as %q/%d, want manual|investigation|notes/80", got.Reason, got.Score)
+	}
+}
+
+// TestParseFlagValueSplitsFromTheRight is the parser itself, including the
+// truncated and unparseable rows loadFromRedis has to skip. The reload tests
+// prove a Flag() write comes back; this table proves a hostile or partial
+// value cannot shift the timestamp into a live expiry.
+func TestParseFlagValueSplitsFromTheRight(t *testing.T) {
+	ts := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	encoded := ts.Format(time.RFC3339)
+
+	tests := []struct {
+		name       string
+		val        string
+		wantOK     bool
+		wantReason string
+		wantScore  int
+		wantZero   bool
+	}{
+		{
+			name:       "legacy three field row",
+			val:        "auto:rate_exceeded|150|" + encoded,
+			wantOK:     true,
+			wantReason: "auto:rate_exceeded",
+			wantScore:  150,
+		},
+		{
+			name:       "pipe in a decoy path",
+			val:        "decoy:/wp-admin/a|b|100|" + encoded,
+			wantOK:     true,
+			wantReason: "decoy:/wp-admin/a|b",
+			wantScore:  100,
+		},
+		{
+			name:       "several pipes in an admin reason",
+			val:        "a|b|c|80|" + encoded,
+			wantOK:     true,
+			wantReason: "a|b|c",
+			wantScore:  80,
+		},
+		{
+			name:   "truncated, no timestamp",
+			val:    "auto:score|100",
+			wantOK: false,
+		},
+		{
+			name:   "no separators",
+			val:    "not-a-flag",
+			wantOK: false,
+		},
+		{
+			name:       "unparseable timestamp still reports the reason",
+			val:        "auto:score|100|not-a-timestamp",
+			wantOK:     true,
+			wantReason: "auto:score",
+			wantScore:  100,
+			wantZero:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason, score, flaggedAt, ok := parseFlagValue(tt.val)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (reason=%q score=%d at=%v)", ok, tt.wantOK, reason, score, flaggedAt)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if reason != tt.wantReason || score != tt.wantScore {
+				t.Errorf("parsed %q/%d, want %q/%d", reason, score, tt.wantReason, tt.wantScore)
+			}
+			if tt.wantZero {
+				if !flaggedAt.IsZero() {
+					t.Errorf("flaggedAt = %v, want zero for an unparseable timestamp", flaggedAt)
+				}
+				return
+			}
+			if !flaggedAt.Equal(ts) {
+				t.Errorf("flaggedAt = %v, want %v", flaggedAt, ts)
+			}
+		})
 	}
 }
 

@@ -295,7 +295,9 @@ func TestDecoyWebhookCarriesTheEvidence(t *testing.T) {
 	defer hook.Close()
 
 	fs := NewFlagStore(time.Hour, "")
-	dh := NewDecoyHandler(fs, NewWebhookSender(hook.URL))
+	ws := NewWebhookSender(hook.URL)
+	defer ws.Close()
+	dh := NewDecoyHandler(fs, ws)
 
 	req := httptest.NewRequest(http.MethodPost, "/phpmyadmin/index.php", nil)
 	req.Header.Set("User-Agent", "sqlmap/1.7.2")
