@@ -108,7 +108,11 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # 001), so they were dead code, and client revocation/secret rotation already live
 # on the admin gateway. A full cov_run reports 10844, still 100% of reachable
 # (10796/10796); the floor drops with the deletion in the same review.
-BASELINE_TOTAL_STATEMENTS = 10844
+# Lowered from 10844 to 10842 by closing the password-reset timing oracle: hoisting
+# the Argon2 burn and token generation ahead of the user lookup let the separate
+# token-error return collapse into the single eligibility guard, a net 2 fewer
+# statements. A full cov_run reports 10842, still 100% of reachable (10794/10794).
+BASELINE_TOTAL_STATEMENTS = 10842
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
