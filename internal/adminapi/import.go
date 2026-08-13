@@ -3,13 +3,13 @@ package adminapi
 import (
 	"encoding/json"
 	"net/http"
-	"net/mail"
 	"strings"
 	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/sanitize"
 	"github.com/42-v/vault42/internal/seed"
 	"github.com/42-v/vault42/internal/service"
 )
@@ -70,7 +70,7 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	var imported, consentFailed int
 	for _, u := range req.Users {
 		email := strings.ToLower(strings.TrimSpace(u.Email))
-		if _, err := mail.ParseAddress(email); err != nil {
+		if !sanitize.Email(email) {
 			results = append(results, importResult{Email: u.Email, Status: "error", Error: "invalid_email"})
 			continue
 		}
