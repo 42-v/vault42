@@ -82,7 +82,12 @@ func (dh *DecoyHandler) ServeDecoy(w http.ResponseWriter, r *http.Request, ip st
 	// Flag IP immediately — decoy hit = instant flag
 	reason := "decoy:" + r.URL.Path
 	dh.flags.Flag(ip, reason, 100)
-	log.Printf("bridge: decoy hit from %s path=%s", ip, r.URL.Path) // #nosec G706 -- IP from RemoteAddr, path from known decoy set
+	// Quoted, not interpolated. IsDecoyPath matches by prefix, so everything
+	// after the prefix is chosen by the caller: /wp-admin/<anything> is a hit.
+	// %q escapes control bytes, which stops an escape sequence clearing the
+	// terminal of whoever is reading these logs during the scan that wrote them,
+	// and stops a newline forging a whole record.
+	log.Printf("bridge: decoy hit from %s path=%q", ip, r.URL.Path) // #nosec G706 -- IP from RemoteAddr, path quoted
 
 	if dh.webhook != nil {
 		dh.webhook.Send(map[string]interface{}{
