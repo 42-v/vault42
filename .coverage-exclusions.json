@@ -90,7 +90,7 @@
     {
       "package": "cmd/recover",
       "file": "cmd/recover/main.go",
-      "line": 117,
+      "line": 136,
       "occurrence": 1,
       "source": "\tos.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))",
       "bucket": "B",
@@ -200,7 +200,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/jwt.go",
-      "line": 105,
+      "line": 111,
       "occurrence": 1,
       "source": "\t\tder = pub.N.Bytes()",
       "bucket": "C",
@@ -250,7 +250,7 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 106,
+      "line": 161,
       "occurrence": 1,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
@@ -260,8 +260,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 107,
-      "occurrence": 6,
+      "line": 162,
+      "occurrence": 7,
       "source": "\t\treturn",
       "bucket": "C",
       "confirmed": true,
@@ -270,8 +270,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 225,
-      "occurrence": 6,
+      "line": 298,
+      "occurrence": 7,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
       "confirmed": true,
@@ -280,8 +280,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 226,
-      "occurrence": 21,
+      "line": 299,
+      "occurrence": 24,
       "source": "\t\treturn",
       "bucket": "C",
       "confirmed": true,
@@ -310,7 +310,7 @@
     {
       "package": "internal/jwt",
       "file": "internal/jwt/es256.go",
-      "line": 40,
+      "line": 54,
       "occurrence": 1,
       "source": "\t\t\treturn fmt.Errorf(\"%w: %w\", ErrTokenSignatureInvalid, err)",
       "bucket": "C",
@@ -320,7 +320,7 @@
     {
       "package": "internal/jwt",
       "file": "internal/jwt/jwt.go",
-      "line": 76,
+      "line": 107,
       "occurrence": 1,
       "source": "\t\treturn \"\", fmt.Errorf(\"marshal header: %w\", err)",
       "bucket": "C",
@@ -360,7 +360,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/auth.go",
-      "line": 549,
+      "line": 589,
       "occurrence": 1,
       "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
       "bucket": "B",
@@ -370,7 +370,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/auth.go",
-      "line": 553,
+      "line": 593,
       "occurrence": 1,
       "source": "\t\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
       "bucket": "B",
