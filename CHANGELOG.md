@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 (2026-08-10)
+## 1.0.0 (2026-08-13)
 
 The version number is the coverage figure, so 1.0.0 could only ever mean a fully covered
 tree. It turned out not to be honestly reachable, and saying why is most of what this
