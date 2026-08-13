@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -415,5 +418,47 @@ func TestDecoyHandlerConcurrentUse(t *testing.T) {
 		if !fs.IsFlagged(ip) {
 			t.Errorf("%s was not flagged", ip)
 		}
+	}
+}
+
+// TestDecoyHitLogNeutralizesAnAttackerChosenPath is the log-injection guard on
+// the one bridge log line that carried a raw request path.
+//
+// IsDecoyPath matches by prefix, so /wp-admin/<anything> is a decoy hit and
+// everything after the prefix is chosen by the caller. The line carried a
+// "#nosec G706 -- path from known decoy set" annotation, which was false for
+// exactly that reason.
+//
+// What breaks without this: an operator tailing bridge logs during an active
+// scan has the escape sequence executed rather than displayed. "\x1b[2J\x1b[1;1H"
+// clears the terminal and homes the cursor, so records already on screen can be
+// overpainted with forged ones, and a newline forges a whole record. The bridge
+// log is the record of who probed what, and it is being read precisely when
+// someone is probing.
+func TestDecoyHitLogNeutralizesAnAttackerChosenPath(t *testing.T) {
+	var buf bytes.Buffer
+	priorFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetFlags(priorFlags) })
+
+	dh := NewDecoyHandler(NewFlagStore(time.Hour, ""), nil)
+
+	const hostile = "/wp-admin/\x1b[2J\x1b[1;1Hforged\nbridge: decoy hit from 10.0.0.1 path=/innocent"
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/x", nil)
+	req.URL.Path = hostile
+
+	dh.ServeDecoy(httptest.NewRecorder(), req, "203.0.113.7", "wp-login.html")
+
+	line := buf.String()
+	for _, bad := range []string{"\x1b", "\n\nbridge", "\x1b[2J"} {
+		if strings.Contains(strings.TrimSuffix(line, "\n"), bad) {
+			t.Errorf("the decoy log line carries %q raw: %q\n"+
+				"An operator reading this during a scan has it executed by the terminal, not "+
+				"shown. Quote the value so control bytes are escaped.", bad, line)
+		}
+	}
+	if !strings.Contains(line, "wp-admin") {
+		t.Errorf("the path was neutralized so hard it stopped identifying the probe: %q", line)
 	}
 }
