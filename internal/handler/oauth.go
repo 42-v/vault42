@@ -371,6 +371,22 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// linkIdentity records that this callback resolved an account without an
+	// existing (provider, provider_user_id) row, so one still has to be written.
+	// The write itself waits for the account-state gate below, because a row in
+	// auth.social_accounts is a standing passwordless login: the next callback
+	// finds it through GetByProviderAndID, never reaches the verified-email gate
+	// again, and is answered with that account's refresh-token family.
+	//
+	// Writing it first meant a refused callback still handed the account a
+	// credential it did not have before. locked_until is a timestamp, so the
+	// refusal lifts on its own while the row stays, and banned, disabled and
+	// deleted accounts collected identities through a 403 as well. The gate's
+	// own suite already holds this line for the import claim, on the grounds
+	// that a locked row must come out of the callback in the state it went in.
+	// The identity table is the half of that rule that grants access.
+	linkIdentity := false
+
 	if userID == "" && userInfo.Email != "" {
 		// Check if a user with this email already exists
 		existingUser, _ := h.users.GetByEmail(r.Context(), userInfo.Email)
@@ -451,27 +467,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Link social account — the social link is the identity bridge;
-		// if it fails, the OAuth flow must fail to prevent orphaned users.
-		if h.social != nil {
-			saID, err := vaultcrypto.RandomUUID()
-			if err != nil {
-				WriteError(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
-			if err := h.social.Create(r.Context(), &model.SocialAccount{
-				ID:             saID,
-				UserID:         userID,
-				Provider:       providerName,
-				ProviderUserID: userInfo.ID,
-				Email:          userInfo.Email,
-				CreatedAt:      time.Now(),
-			}); err != nil {
-				log.Printf("oauth: failed to link social account for %s", httputil.SafeLogValue(userID)) // #nosec G706 -- sanitized via SafeLogValue
-				WriteError(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
-		}
+		linkIdentity = h.social != nil
 	}
 
 	if userID == "" {
@@ -522,6 +518,29 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "account_locked")
 		return
 	}
+
+	// Link social account — the social link is the identity bridge;
+	// if it fails, the OAuth flow must fail to prevent orphaned users.
+	if linkIdentity {
+		saID, err := vaultcrypto.RandomUUID()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		if err := h.social.Create(r.Context(), &model.SocialAccount{
+			ID:             saID,
+			UserID:         userID,
+			Provider:       providerName,
+			ProviderUserID: userInfo.ID,
+			Email:          userInfo.Email,
+			CreatedAt:      time.Now(),
+		}); err != nil {
+			log.Printf("oauth: failed to link social account for %s", httputil.SafeLogValue(userID)) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+	}
+
 	if acct.ImportPending {
 		if err := h.users.ClearImportPending(r.Context(), acct.ID); err != nil {
 			WriteError(w, http.StatusInternalServerError, "internal_error")
