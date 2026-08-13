@@ -173,13 +173,13 @@ func sqlCapabilityScopes(t *testing.T, root string) (scopes []string, migration 
 			t.Fatalf("migrations/%s defines auth.capability_scopes() with no ARRAY literal, so this "+
 				"gate cannot read the list it is supposed to compare", name)
 		}
-		close := strings.Index(body[open:], "]")
-		if close < 0 {
+		closeIdx := strings.Index(body[open:], "]")
+		if closeIdx < 0 {
 			t.Fatalf("migrations/%s has an unterminated ARRAY literal in auth.capability_scopes()", name)
 		}
 
 		var found []string
-		for _, m := range sqlScopeLiteral.FindAllStringSubmatch(body[open:open+close], -1) {
+		for _, m := range sqlScopeLiteral.FindAllStringSubmatch(body[open:open+closeIdx], -1) {
 			found = append(found, m[1])
 		}
 		sort.Strings(found)
