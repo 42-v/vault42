@@ -195,8 +195,15 @@ type Client struct {
 	// credential that is equivalent to the signing key's blast radius for
 	// any scope the client holds.
 	SecretHash string `json:"-"`
-	// Role is the client's catalog role, distinct from a user's Roles claim.
-	// It is an operator-assigned label, not a JWT role.
+	// Role is the operator-assigned catalog role stored on the client
+	// row (seed and admin create/update write it). POST /client/token
+	// copies it into the access token as the sole member of the JWT
+	// roles claim: IssueTokenPair(client.ID, []string{client.Role},
+	// grantedScopes, ...). That path does not run FilterUserRoles.
+	// The JSON body of POST /client/token does not include this field;
+	// a consumer that needs the value decodes the token. vault42
+	// privileged routes authorize on scopes (mint:token, kms:unwrap,
+	// svcdoc:read, svcdoc:write), not on this claim.
 	Role string `json:"role"`
 	// Scopes is the set POST /client/token may grant. A requested scope list
 	// is intersected with this; an empty request grants the whole set.
@@ -467,9 +474,11 @@ type IdentityProfile struct {
 	// Tagged json:"-" so GET /user/identity can only return the decrypted
 	// view the handler builds; the ciphertext never belongs on the wire.
 	DataEnc []byte `json:"-"`
-	// Version is the compare-and-set generation. PUT /user/identity and
-	// POST /user/marketing/unsubscribe increment it so a concurrent write
-	// cannot silently clobber a withdrawal.
+	// Version is the identity.profiles.version column (schema DEFAULT 1).
+	// IdentityService.Upsert and upsertCAS both write 1 on every store;
+	// nothing increments it. Concurrent writers are serialized by
+	// UpdatedAt (UpsertCAS matches the previously read updated_at), not
+	// by this field. GET /user/identity does not emit it.
 	Version int `json:"version"`
 	// UpdatedAt is when DataEnc was last rewritten, RFC3339 UTC. GET
 	// /user/identity surfaces it as updated_at.
