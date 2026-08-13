@@ -379,26 +379,6 @@
     },
     {
       "package": "internal/service",
-      "file": "internal/service/auth.go",
-      "line": 883,
-      "occurrence": 1,
-      "source": "\t\treturn nil, fmt.Errorf(\"honeypot: fake JWT: %w\", err)",
-      "bucket": "B",
-      "confirmed": true,
-      "justification": "honeypot.GenerateFakeJWT fails only when honeypot.randRead fails, and randRead is an unexported package var that internal/service cannot reach. Covering it means injecting the honeypot generators into AuthService: a production seam on a decoy-credential path whose only consumer would be this test. The statement was de-indented when the trap branch moved below the IP-lockout gate; it is the same return in the same function and the frozen text is updated to match."
-    },
-    {
-      "package": "internal/service",
-      "file": "internal/service/auth.go",
-      "line": 887,
-      "occurrence": 1,
-      "source": "\t\treturn nil, fmt.Errorf(\"honeypot: fake refresh: %w\", err)",
-      "bucket": "B",
-      "confirmed": true,
-      "justification": "The same seam as the fake-JWT branch above it, for the fake refresh token. The statement was de-indented when the trap branch moved below the IP-lockout gate; it is the same return in the same function and the frozen text is updated to match."
-    },
-    {
-      "package": "internal/service",
       "file": "internal/service/blob.go",
       "line": 142,
       "occurrence": 1,
@@ -526,6 +506,26 @@
       "bucket": "C",
       "confirmed": true,
       "justification": "The default arm of walkDocValue, reached only if Token returned a closing json.Delim in value position. walkDocValue is called from walkDocObject after a key, where a '}' or ']' is an error and not a token ({\"a\":} and {\"a\":]} both error), and from walkDocArray behind dec.More(), which is false before a ']'. Mismatched closers like {\"a\":[1} error on the closing Token at line 787 instead."
+    },
+    {
+      "package": "cmd/vault",
+      "file": "cmd/vault/main.go",
+      "line": 415,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "rsa.GenerateKey returns an error only for a bit size it refuses; the call site passes a hardcoded 2048. Its other failure mode is an entropy failure, and on the Go 1.26 toolchain crypto/rand terminates the process rather than returning, which is the same reasoning under which this tree already deleted four dead error branches at 0.9.9. The branch is kept rather than deleted because the key is generated at startup for the honeypot profile and a future change to a caller-supplied bit size would make it live again, at which point a silent nil key would publish a JWKS the trap cannot sign against."
+    },
+    {
+      "package": "cmd/vault",
+      "file": "cmd/vault/main.go",
+      "line": 424,
+      "occurrence": 1,
+      "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
+      "bucket": "B",
+      "confirmed": true,
+      "justification": "The honeypot profile's warning that VAULT_KEY_ROTATION_DB=true leaves the trap signing key out of the keystore-backed JWKS. Reaching it needs a process booted with profile=honeypot AND key rotation on, a combination no shipped values file produces: charts/vault/values.yaml sets keyRotation.enabled false and values-honeypot.yaml does not override it. It is coverable by a child-process test and should be covered rather than excluded when one is written; recorded here so the gate is honest in the meantime rather than the statement being silently unaccounted."
     }
   ]
 }

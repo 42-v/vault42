@@ -74,8 +74,9 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # internal/oauth2, the strict enum and boolean validation in internal/config, the
 # --out and argv-warning paths in cmd/recover, the honeypot token parity work,
 # and the expired-row reaper in internal/cache. Measured, not estimated: a full
-# cov_run over every suite reports 10737, after the gate-closing tests landed.
-BASELINE_TOTAL_STATEMENTS = 10737
+# cov_run over every suite reports 10784, after the gate-closing tests and the
+# vault_app privilege, honeypot parity and revocation-ordering work landed.
+BASELINE_TOTAL_STATEMENTS = 10784
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
