@@ -316,16 +316,6 @@ func login(t *testing.T, client *http.Client, username, password string) string 
 	return token
 }
 
-// getAdminPassword returns the first-boot admin password from env.
-func getAdminPassword(t *testing.T) string {
-	t.Helper()
-	pw := os.Getenv("ADMIN_FIRST_PASSWORD")
-	if pw == "" {
-		t.Skip("ADMIN_FIRST_PASSWORD not set")
-	}
-	return pw
-}
-
 // ---------------------------------------------------------------------------
 // Authenticated request helpers
 // ---------------------------------------------------------------------------
