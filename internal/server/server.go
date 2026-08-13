@@ -514,6 +514,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		// would throttle its whole fleet as a single tenant. Not fail-closed — this
 		// releases only what the caller itself wrote, and a cache blip must not take
 		// profile reads down across every consuming service.
+		//
+		// The limiter has to sit INSIDE authMw. ClientRateLimitKey reads the client
+		// id out of the request's claims, and claims are put there by authMw, so a
+		// limiter mounted outside it saw a nil context every time and silently fell
+		// back to the IP bucket this comment exists to avoid. That is the failure
+		// mode where the configuration reads correctly and does nothing.
+		//
+		// An unauthenticated request is therefore rejected by authMw before it
+		// reaches this bucket, which is the right order anyway: refusing a bad token
+		// is cheap, and what needs bounding is the authenticated work behind it.
 		svcDocWriteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
 		}, rlEnabled)
@@ -521,10 +531,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 			Limit: 300, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
 		}, rlEnabled)
 		docWrite := func(h http.HandlerFunc) http.Handler {
-			return svcDocWriteRL(authMw(middleware.RequireScope("svcdoc:write")(h)))
+			return authMw(svcDocWriteRL(middleware.RequireScope("svcdoc:write")(h)))
 		}
 		docRead := func(h http.HandlerFunc) http.Handler {
-			return svcDocReadRL(authMw(middleware.RequireScope("svcdoc:read")(h)))
+			return authMw(svcDocReadRL(middleware.RequireScope("svcdoc:read")(h)))
 		}
 		mux.Handle("PUT /service/documents/{subject}/{key}", docWrite(svcDocHandler.Put))
 		mux.Handle("GET /service/documents/{subject}/{key}", docRead(svcDocHandler.Get))
@@ -580,7 +590,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		mintRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey, FailClosed: true,
 		}, rlEnabled)
-		mux.Handle("POST /mint", mintRL(authMw(middleware.RequireScope(handler.MintScope)(dpopWrap(http.HandlerFunc(mintHandler.Mint))))))
+		// Inside authMw for the same reason as the document routes: mintRL is keyed
+		// by client and the claims that carry the client id do not exist until
+		// authMw has run.
+		mux.Handle("POST /mint", authMw(mintRL(middleware.RequireScope(handler.MintScope)(dpopWrap(http.HandlerFunc(mintHandler.Mint))))))
 	}
 
 	// Embedded frontend (SPA catch-all) — off by default, enabled via VAULT_SERVE_FRONTEND or honeypot profile
