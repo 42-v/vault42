@@ -279,7 +279,17 @@ func (h *WebAuthnHandler) VerifyBegin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existing, err := h.webauthnRepo.ListByUser(r.Context(), claims.Subject)
-	if err != nil || len(existing) == 0 {
+	if err != nil {
+		// A lookup that failed says nothing about whether the account has a
+		// passkey. Reporting no_webauthn_credentials here would turn a transient
+		// database fault into a claim the factor is gone, which a client can act
+		// on by falling back to a weaker method mid-login. Fail closed with the
+		// same internal error every other lookup failure in this handler returns.
+		log.Printf("webauthn: failed to list credentials for %s: %v", httputil.SafeLogValue(claims.Subject), err)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if len(existing) == 0 {
 		WriteError(w, http.StatusBadRequest, "no_webauthn_credentials")
 		return
 	}
