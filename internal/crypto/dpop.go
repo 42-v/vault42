@@ -205,13 +205,13 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 			E: int(eBig.Int64()),
 		}, nil
 	case "EC":
-		var curve elliptic.Curve
-		switch jwk.CRV {
-		case "P-256":
-			curve = elliptic.P256()
-		case "P-384":
-			curve = elliptic.P384()
-		default:
+		// P-256 and nothing else. RFC 7518 3.4 assigns exactly that curve to
+		// ES256, and ES256 is the only EC algorithm ValidateDPoPProof allows, so
+		// a key on any other curve died one call later in VerifyES256, which
+		// pins the same curve. Building it here anyway left a branch whose only
+		// remaining effect was to go live unreviewed the day another EC
+		// algorithm joined that allowlist.
+		if jwk.CRV != "P-256" {
 			return nil, fmt.Errorf("unsupported curve: %s", jwk.CRV)
 		}
 		xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
@@ -223,7 +223,7 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 			return nil, fmt.Errorf("decode y: %w", err)
 		}
 		key := &ecdsa.PublicKey{
-			Curve: curve,
+			Curve: elliptic.P256(),
 			X:     new(big.Int).SetBytes(xBytes),
 			Y:     new(big.Int).SetBytes(yBytes),
 		}

@@ -399,29 +399,10 @@ func TestParseJWKHeaderValidECP256(t *testing.T) {
 	}
 }
 
-func TestParseJWKHeaderValidECP384(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	xPadded, yPadded := ecCoords(&key.PublicKey)
-
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-384",
-		"x":   base64.RawURLEncoding.EncodeToString(xPadded),
-		"y":   base64.RawURLEncoding.EncodeToString(yPadded),
-	}
-
-	pubKey, err := parseJWKHeader(jwk)
-	if err != nil {
-		t.Fatalf("valid EC P-384 JWK should parse: %v", err)
-	}
-	ecKey, ok := pubKey.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatal("should return *ecdsa.PublicKey")
-	}
-	if ecKey.Curve != elliptic.P384() {
-		t.Error("curve should be P-384")
-	}
-}
+// The P-384 case this test used to assert now lives in
+// TestParseJWKHeaderRejectsACurveNoDPoPAlgorithmCanVerify, which asserts the
+// opposite: parseJWKHeader admits only the curve the algorithms its single
+// caller allows can verify. See dpop_jose_test.go for why.
 
 func TestParseJWKHeaderMissingKTY(t *testing.T) {
 	jwk := map[string]interface{}{
