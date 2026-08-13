@@ -29,7 +29,7 @@ import (
 // The memory figure is read from the parser's own ceiling rather than copied.
 // It used to be the literal 128 MiB, and when argon2MaxVerifyMemory was lowered
 // to 64 MiB this hash stopped being verifiable at all, so the test failed on its
-// own fixture instead of on the behaviour it exists to check. Iterations and
+// own fixture instead of on the behavior it exists to check. Iterations and
 // parallelism stay at their caps, so the hash remains far more expensive than
 // any hash this product issues.
 func blobClientCostlyHash() string {

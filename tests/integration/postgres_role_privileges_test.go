@@ -84,8 +84,9 @@ func applyRealGrants(t *testing.T, adminPool *pgxpool.Pool) {
 // also handled trailing comments would have to know about string literals and
 // dollar quoting to avoid eating a `--` inside one.
 func stripSQLComments(sql string) string {
-	var kept []string
-	for _, line := range strings.Split(sql, "\n") {
+	lines := strings.Split(sql, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "--") {
 			continue
 		}

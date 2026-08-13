@@ -25,8 +25,8 @@ const serviceDocumentMetaColumns = `id, client_id, subject_hash, doc_key, visibi
 // locks share one cluster-wide space with every other user of the mechanism, so
 // the two-key form is used with a fixed first key ("SVCD" in ASCII) and the
 // subject in the second. Without the namespace, some unrelated code hashing an
-// unrelated string to the same number would silently serialise against document
-// writes, or worse, be serialised by them.
+// unrelated string to the same number would silently serialize against document
+// writes, or worse, be serialized by them.
 const svcDocAdvisoryLockClass = 0x53564344
 
 // svcDocTxKey carries the transaction a subject lock was taken in. It is an

@@ -242,11 +242,11 @@ func (m *atkSvcDocRepo) storedBytes() int {
 	return total
 }
 
-// atkDocHandler builds a real ServiceDocumentService and handler over repo. The
+// atkDocHandler builds a real DocumentService and handler over repo. The
 // clients repository is nil, which the service tolerates and the write path never
 // consults. A nil audit logger is a supported no-op.
-func atkDocHandler(repo repository.ServiceDocumentRepository, mutate func(*service.ServiceDocumentConfig)) *handler.ServiceDocumentHandler {
-	cfg := service.ServiceDocumentConfig{
+func atkDocHandler(repo repository.ServiceDocumentRepository, mutate func(*service.DocumentConfig)) *handler.ServiceDocumentHandler {
+	cfg := service.DocumentConfig{
 		MaxDocumentBytes:     64 * 1024,
 		MaxDocsPerSubject:    32,
 		QuotaBytesPerSubject: 1 << 20,
@@ -261,7 +261,7 @@ func atkDocHandler(repo repository.ServiceDocumentRepository, mutate func(*servi
 		master[i] = byte(i * 3)
 		hmacSecret[i] = byte(i * 7)
 	}
-	svc := service.NewServiceDocumentService(repo, nil, master, hmacSecret, cfg, nil)
+	svc := service.NewDocumentService(repo, nil, master, hmacSecret, cfg, nil)
 	return handler.NewServiceDocumentHandler(svc, nil)
 }
 
@@ -294,7 +294,7 @@ func TestAtkSvcDocCountQuotaConcurrentBypass(t *testing.T) {
 	const writers = 2
 
 	repo := newAtkSvcDocRepo(newAtkBarrier(writers))
-	h := atkDocHandler(repo, func(c *service.ServiceDocumentConfig) {
+	h := atkDocHandler(repo, func(c *service.DocumentConfig) {
 		c.MaxDocsPerSubject = 1 // one document per (client, subject)
 	})
 
@@ -351,7 +351,7 @@ func TestAtkSvcDocByteQuotaConcurrentBypass(t *testing.T) {
 	budget := one + one/2
 
 	repo := newAtkSvcDocRepo(newAtkBarrier(2))
-	h := atkDocHandler(repo, func(c *service.ServiceDocumentConfig) {
+	h := atkDocHandler(repo, func(c *service.DocumentConfig) {
 		c.QuotaBytesPerSubject = budget
 	})
 

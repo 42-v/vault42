@@ -11,7 +11,7 @@ import (
 
 // Service documents are the one store in the cascade whose row key the erasure
 // service derives on its own instead of asking the owning service for it.
-// ErasureService.svcDocPseudonym and ServiceDocumentService.SubjectPseudonym are
+// ErasureService.svcDocPseudonym and DocumentService.SubjectPseudonym are
 // two independent copies of the same HMAC, and nothing in the type system ties
 // them together.
 //
@@ -23,11 +23,11 @@ import (
 // another service wrote about that user is still in the table, which is exactly
 // what docs/PRIVACY.md §5.3 promises does not happen under Art. 17.
 
-func newErasureSvcDocService(t *testing.T, repo *fakeSvcDocRepo) *ServiceDocumentService {
+func newErasureSvcDocService(t *testing.T, repo *fakeSvcDocRepo) *DocumentService {
 	t.Helper()
 	// testHMAC is the same secret newErasureService hands the cascade, which is
 	// the production arrangement: one VAULT_HMAC_SECRET, two derivations of it.
-	return NewServiceDocumentService(repo, nil, bytes.Repeat([]byte{0x42}, 32), testHMAC, defaultSvcDocConfig(), nil)
+	return NewDocumentService(repo, nil, bytes.Repeat([]byte{0x42}, 32), testHMAC, defaultSvcDocConfig(), nil)
 }
 
 // The derivations must agree byte for byte, on any subject the store accepts.

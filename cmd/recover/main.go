@@ -33,6 +33,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -122,6 +123,29 @@ func main() {
 // back short.
 const exitIncomplete = 3
 
+// decryptEscrowed runs exactly one decryption attempt with the primitive that
+// matches the framing already classified from the blob's own bytes.
+//
+// Trying bound first and falling back to legacy on failure was rejected: a
+// failed bound decrypt is indistinguishable from a wrong key or a corrupt row,
+// so every one of those would quietly become a second attempt down the weaker
+// path, and the tool could not honestly report which format it had read.
+func decryptEscrowed(priv *rsa.PrivateKey, format vaultcrypto.RecoveryFormat, payload []byte, recordID, pseudonym string) ([]byte, error) {
+	switch format {
+	case vaultcrypto.RecoveryFormatBound:
+		// The binding is rebuilt from this row's own columns, so a payload moved
+		// here from another row cannot produce the AES key: the OAEP unwrap fails
+		// and nothing downstream ever runs.
+		return vaultcrypto.DecryptRecovery(priv, payload, vaultcrypto.RecoveryBinding(recordID, pseudonym))
+	case vaultcrypto.RecoveryFormatLegacy:
+		return vaultcrypto.DecryptRecoveryLegacy(priv, payload)
+	case vaultcrypto.RecoveryFormatUnknown:
+		return nil, errors.New("unrecognized escrow blob framing")
+	default:
+		return nil, errors.New("unrecognized escrow blob framing")
+	}
+}
+
 // run is the whole tool. It returns the process exit code: 2 for a flag error
 // (the stdlib's own convention), 1 for a fatal error, 3 when the run completed
 // with at least one unrecoverable record, 0 when every record was recovered.
@@ -205,18 +229,7 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) int {
 			continue
 		}
 
-		var plain []byte
-		switch format {
-		case vaultcrypto.RecoveryFormatBound:
-			// The binding is rebuilt from this row's own columns, so a payload
-			// moved here from another row cannot produce the AES key: the OAEP
-			// unwrap fails and nothing downstream ever runs.
-			plain, err = vaultcrypto.DecryptRecovery(priv, payload, vaultcrypto.RecoveryBinding(recordID, pseudonym))
-		case vaultcrypto.RecoveryFormatLegacy:
-			plain, err = vaultcrypto.DecryptRecoveryLegacy(priv, payload)
-		default:
-			err = errors.New("unrecognised escrow blob framing")
-		}
+		plain, err := decryptEscrowed(priv, format, payload, recordID, pseudonym)
 		if err != nil {
 			// Wrong key or corrupt record — report on stderr and continue so one
 			// bad row does not abort the whole restore.

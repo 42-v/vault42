@@ -224,7 +224,7 @@ func TestRun_RejectedRecordsEmitNoPlaintext(t *testing.T) {
 	}
 }
 
-// A damaged record must not take its neighbours down with it. This is the
+// A damaged record must not take its neighbors down with it. This is the
 // property the continue in the decrypt loop exists for: an operator recovering
 // 400 accounts after a bad deletion cannot lose 399 of them to one corrupt row.
 //
@@ -386,7 +386,7 @@ func TestRun_PlaintextThatIsNotAProfileIsDropped(t *testing.T) {
 // recovered record and counted as a success, because the tool checks only that
 // json.Unmarshal returned no error and never that a profile actually came back.
 //
-// This test pins the behaviour rather than endorsing it. It matters because the
+// This test pins the behavior rather than endorsing it. It matters because the
 // running server holds the recovery public key and appends the rows this tool
 // reads: an attacker who reaches it can seal `null` or `{}` into as many escrow
 // records as they like, and each one arrives in the recovery output as a

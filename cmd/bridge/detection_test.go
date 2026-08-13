@@ -141,7 +141,7 @@ func TestScoreAutomationUALeavesRealBrowsersAlone(t *testing.T) {
 // hundred that takes four requests to become a flag, which ordinary browsing
 // reaches easily.
 //
-// The behaviour is deliberate for the long patterns and simply a consequence for
+// The behavior is deliberate for the long patterns and simply a consequence for
 // the short ones. The test pins it so that tightening the match, for instance by
 // requiring a delimiter, shows up here.
 func TestScoreAutomationUAMatchesOnBareSubstrings(t *testing.T) {

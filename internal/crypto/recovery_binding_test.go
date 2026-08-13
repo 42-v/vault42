@@ -266,7 +266,7 @@ func TestRecoveryLegacy_PreBindingRecordsStillOpen(t *testing.T) {
 	blob := sealLegacy(t, &bindingKey.PublicKey, secret)
 
 	if got := RecoveryBlobFormat(blob); got != RecoveryFormatLegacy {
-		t.Fatalf("format = %v, want legacy: a stored record is not being recognised for what it is", got)
+		t.Fatalf("format = %v, want legacy: a stored record is not being recognized for what it is", got)
 	}
 	got, err := DecryptRecoveryLegacy(bindingKey, blob)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestRecoveryBlobFormat_ClassifiesHostileInput(t *testing.T) {
 		}
 	}
 
-	// A blob carrying the magic but an unrecognised version is refused by both
+	// A blob carrying the magic but an unrecognized version is refused by both
 	// readers rather than being guessed at. A future format must never be
 	// readable as this one.
 	future := append([]byte(recoveryMagic), 0x03)

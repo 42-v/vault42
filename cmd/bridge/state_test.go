@@ -1224,9 +1224,9 @@ func TestFlagStoreLoadSurvivesScanFailure(t *testing.T) {
 }
 
 // TestFlagStoreRedisReasonWithPipeIsLostOnRestart documents a real encoding
-// defect rather than an intended behaviour.
+// defect rather than an intended behavior.
 //
-// Flag serialises as "reason|score|timestamp" and loadFromRedis splits on the
+// Flag serializes as "reason|score|timestamp" and loadFromRedis splits on the
 // first two pipes, so a reason containing a pipe shifts the score and timestamp
 // fields. The timestamp then fails to parse, ExpiresAt lands in year one, and
 // the entry is dropped as expired. Reasons are not a closed set: a decoy hit
@@ -1234,7 +1234,7 @@ func TestFlagStoreLoadSurvivesScanFailure(t *testing.T) {
 // path, so an attacker who requests /wp-admin/a|b picks a reason that will not
 // survive a bridge restart. The admin API accepts an arbitrary reason too.
 //
-// The test asserts the current behaviour so the loss is visible, and so that a
+// The test asserts the current behavior so the loss is visible, and so that a
 // fix (escaping the reason, or splitting from the right) shows up here as a
 // deliberate change rather than as a silent one.
 func TestFlagStoreRedisReasonWithPipeIsLostOnRestart(t *testing.T) {

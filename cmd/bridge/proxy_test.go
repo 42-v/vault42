@@ -111,7 +111,7 @@ func (u *upstream) only(t *testing.T) recordedRequest {
 
 // fixture is a bridge wired to two live upstreams and exposed on a real
 // listener, so tests exercise the whole net/http stack rather than a handler in
-// isolation. A proxy's interesting behaviour lives in the transport, and a
+// isolation. A proxy's interesting behavior lives in the transport, and a
 // httptest.NewRecorder cannot show connection reuse, streaming or hop-by-hop
 // header handling.
 type fixture struct {
@@ -186,7 +186,7 @@ func (f *fixture) get(t *testing.T, path string) (*http.Response, string) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -278,7 +278,7 @@ func TestNewBridgeRejectsUnparseableUpstreams(t *testing.T) {
 	}
 }
 
-// TestNewBridgeWiresLoginInspection is a structural check with a behavioural
+// TestNewBridgeWiresLoginInspection is a structural check with a behavioral
 // consequence: login-failure scoring only ever runs from ModifyResponse on the
 // real proxy. If that hook is attached to the honeypot proxy, or to neither,
 // failed logins stop scoring and the detection signal documented in
@@ -321,7 +321,7 @@ func TestBridgeForwardsRequestFaithfully(t *testing.T) {
 	req.Header.Add("X-Multi", "one")
 	req.Header.Add("X-Multi", "two")
 
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body) // #nosec G104 -- draining for connection reuse
 
@@ -386,7 +386,7 @@ func TestBridgeOverwritesClientSuppliedRealIP(t *testing.T) {
 }
 
 // TestBridgeAppendsToClientSuppliedForwardedFor documents a real weakness rather
-// than a designed behaviour.
+// than a designed behavior.
 //
 // setProxyHeaders appends the resolved client IP to whatever X-Forwarded-For the
 // client sent, and it does so unconditionally, without regard to whether the
@@ -396,7 +396,7 @@ func TestBridgeOverwritesClientSuppliedRealIP(t *testing.T) {
 // position, which is exactly the position most X-Forwarded-For parsers treat as
 // the originating client.
 //
-// The test asserts the current behaviour so the forwarding is visible and so a
+// The test asserts the current behavior so the forwarding is visible and so a
 // fix, which would be to replace the header rather than extend it when the peer
 // is untrusted, shows up here as a deliberate change.
 func TestBridgeAppendsToClientSuppliedForwardedFor(t *testing.T) {
@@ -675,7 +675,7 @@ func TestBridgeStreamsResponseIncrementally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 
 	<-arrived
@@ -714,7 +714,7 @@ func TestBridgeStreamsResponseIncrementally(t *testing.T) {
 }
 
 // TestBridgeStreamsRequestBodyIncrementally is the same guarantee in the upload
-// direction. A bridge that read a request body to completion before dialling the
+// direction. A bridge that read a request body to completion before dialing the
 // upstream would let any client pin bridge memory by opening a slow upload, and
 // would break any endpoint that reacts to a body as it arrives.
 func TestBridgeStreamsRequestBodyIncrementally(t *testing.T) {
@@ -752,7 +752,7 @@ func TestBridgeStreamsRequestBodyIncrementally(t *testing.T) {
 	respCh := make(chan *http.Response, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		resp, err := f.front.Client().Do(req)
+		resp, err := f.front.Client().Do(req) //nolint:bodyclose // handed to respCh and closed by the receiving select below
 		if err != nil {
 			errCh <- err
 			return
@@ -824,7 +824,7 @@ func TestBridgeCarriesLargeBodiesIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 
 	if got := resp.Header.Get("X-Received-Bytes"); got != fmt.Sprint(size) {
@@ -1016,20 +1016,20 @@ func TestBridgeToleratesASlowUpstream(t *testing.T) {
 
 // TestBridgeCancelsUpstreamWorkWhenTheClientGoesAway matters because the clients
 // this proxy serves include the ones deliberately abandoning requests. If a
-// cancelled request left the vault working, an attacker could pile up upstream
+// canceled request left the vault working, an attacker could pile up upstream
 // work at no cost to itself, which is a denial of service against the service
 // the bridge is protecting.
 func TestBridgeCancelsUpstreamWorkWhenTheClientGoesAway(t *testing.T) {
 	started := make(chan struct{})
-	cancelled := make(chan bool, 1)
+	canceled := make(chan bool, 1)
 
 	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		close(started)
 		select {
 		case <-r.Context().Done():
-			cancelled <- true
+			canceled <- true
 		case <-time.After(5 * time.Second):
-			cancelled <- false
+			canceled <- false
 		}
 	}, nil, nil)
 
@@ -1051,9 +1051,9 @@ func TestBridgeCancelsUpstreamWorkWhenTheClientGoesAway(t *testing.T) {
 	cancel()
 
 	select {
-	case got := <-cancelled:
+	case got := <-canceled:
 		if !got {
-			t.Error("the upstream request context never fired after the client cancelled")
+			t.Error("the upstream request context never fired after the client canceled")
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the upstream handler never returned")
@@ -1096,7 +1096,7 @@ func TestBridgeRejectsMalformedRequestsWithoutProxying(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestBridgeRoutesFlaggedTrafficToHoneypotTransparently is the core deception
-// behaviour. The switch has to be invisible, so the honeypot must receive the
+// behavior. The switch has to be invisible, so the honeypot must receive the
 // same request the real vault would have, down to the body and the headers: a
 // request that arrived at the honeypot stripped of its cookie would produce a
 // different failure than the attacker was expecting and give the game away.
@@ -1112,7 +1112,7 @@ func TestBridgeRoutesFlaggedTrafficToHoneypotTransparently(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cookie", "session=stolen")
 
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1182,7 +1182,7 @@ func TestBridgeAutoFlagsOnAutomationUserAgent(t *testing.T) {
 	}
 	req.Header.Set("User-Agent", "sqlmap/1.7.2#stable (https://sqlmap.org)")
 
-	resp := f.do(t, req)
+	resp := f.do(t, req) //nolint:bodyclose // closed on the next line; bodyclose cannot see through f.do
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1853,7 +1853,7 @@ func TestClientIPResolution(t *testing.T) {
 			want:       "2001:db8::1",
 		},
 		{
-			name:       "a trusted IPv6 peer is honoured",
+			name:       "a trusted IPv6 peer is honored",
 			trusted:    []string{"2001:db8::/32"},
 			remoteAddr: "[2001:db8::1]:443",
 			headers:    map[string]string{"X-Forwarded-For": "198.51.100.7"},
@@ -2002,7 +2002,7 @@ func TestIsTrustedProxy(t *testing.T) {
 	}
 }
 
-// TestExtractIP pins the fallback behaviour that makes clientIP total. Anything
+// TestExtractIP pins the fallback behavior that makes clientIP total. Anything
 // that does not split into host and port is returned whole rather than turned
 // into an empty string, because an empty client IP would key every such request
 // to the same bucket and let one client's score flag all of them.
@@ -2289,7 +2289,7 @@ func TestWebhookSenderPostsJSON(t *testing.T) {
 // service, and none of them may propagate into the request that triggered the
 // alert.
 func TestWebhookSenderSwallowsFailures(t *testing.T) {
-	t.Run("payload that cannot be marshalled", func(t *testing.T) {
+	t.Run("payload that cannot be marshaled", func(t *testing.T) {
 		reached := make(chan struct{}, 1)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reached <- struct{}{}
@@ -2427,7 +2427,7 @@ func TestBridgeSendsWebhookOnLoginFailureFlag(t *testing.T) {
 // hit, which is also a cheap way to make the bridge's connections pile up.
 //
 // The fix is to dispatch the webhook from its own goroutine. The test asserts
-// the current behaviour so the change is visible when it is made.
+// the current behavior so the change is visible when it is made.
 func TestWebhookDispatchIsSynchronousAndObservable(t *testing.T) {
 	const hookDelay = 400 * time.Millisecond
 

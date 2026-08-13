@@ -148,7 +148,7 @@ func TestKMSAttack_CrossKidReplayIsRejected(t *testing.T) {
 		t.Fatalf("Wrap: %v", err)
 	}
 
-	// Neighbouring kids, kids that differ only by the separator the info label
+	// Neighboring kids, kids that differ only by the separator the info label
 	// ends with, and kids that would collide under a naive concatenation.
 	for _, kid := range []string{
 		"tenant-b",

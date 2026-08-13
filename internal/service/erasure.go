@@ -191,7 +191,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	//
 	// The lock is best-effort in one direction only: a repository that does not
 	// implement the serialiser still gets the plain delete, which is the previous
-	// behaviour, never a skipped delete.
+	// behavior, never a skipped delete.
 	if s.svcDocs != nil {
 		pseudonym := s.svcDocPseudonym(userID)
 		deleteDocs := func(ctx context.Context) error {
@@ -332,7 +332,7 @@ func (s *ErasureService) recoveryPseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":recovery"), s.hmacSecret)
 }
 
-// svcDocPseudonym must derive exactly what ServiceDocumentService.SubjectPseudonym
+// svcDocPseudonym must derive exactly what DocumentService.SubjectPseudonym
 // derives. A divergence would not fail loudly: the delete would match no rows and
 // the erasure would report success while the documents survived.
 func (s *ErasureService) svcDocPseudonym(userID string) string {

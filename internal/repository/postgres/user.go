@@ -128,7 +128,7 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 //
 // The write goes through auth.erase_user_identity() rather than an UPDATE of its
 // own. Running it inline needed column-level UPDATE on email, display_name and
-// avatar_url, and a column grant is standing: it also authorises
+// avatar_url, and a column grant is standing: it also authorizes
 // `UPDATE auth.users SET email=... WHERE id=<anyone>`, which is an account
 // takeover because password reset follows the address. The function is SECURITY
 // DEFINER, owned by the migration role, and writes nothing but a tombstone, so

@@ -79,7 +79,7 @@ type KeyStore struct {
 	masterKey     []byte
 	masterKeyGone bool
 
-	// refreshMu serialises Refresh end to end. Without it two refreshes could
+	// refreshMu serializes Refresh end to end. Without it two refreshes could
 	// interleave their SELECT and their apply, so a slower one could publish a
 	// key set it read before the faster one committed, and the notification that
 	// follows would hand the token service a key the database has already

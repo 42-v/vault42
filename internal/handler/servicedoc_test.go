@@ -174,9 +174,9 @@ func (r *memClientRepo) Deactivate(context.Context, string) error      { return 
 // Harness
 // ---------------------------------------------------------------------------
 
-func newDocHandler(t *testing.T, auditLog *audit.Logger, mutate func(*service.ServiceDocumentConfig)) (*ServiceDocumentHandler, *memDocRepo) {
+func newDocHandler(t *testing.T, auditLog *audit.Logger, mutate func(*service.DocumentConfig)) (*ServiceDocumentHandler, *memDocRepo) {
 	t.Helper()
-	cfg := service.ServiceDocumentConfig{
+	cfg := service.DocumentConfig{
 		MaxDocumentBytes:     64 * 1024,
 		MaxDocsPerSubject:    32,
 		QuotaBytesPerSubject: 1024 * 1024,
@@ -192,7 +192,7 @@ func newDocHandler(t *testing.T, auditLog *audit.Logger, mutate func(*service.Se
 		master[i] = byte(i * 3)
 		hmacSecret[i] = byte(i * 7)
 	}
-	svc := service.NewServiceDocumentService(repo, newMemClientRepo(), master, hmacSecret, cfg, nil)
+	svc := service.NewDocumentService(repo, newMemClientRepo(), master, hmacSecret, cfg, nil)
 	return NewServiceDocumentHandler(svc, auditLog), repo
 }
 
@@ -380,7 +380,7 @@ func TestServiceDocumentHandler_ErrorMapping(t *testing.T) {
 // The route prefix is exempt from the global 8 KiB body cap, so the handler has
 // to bound the body itself or the exemption is an unbounded-body hole.
 func TestServiceDocumentHandler_EnforcesItsOwnBodyLimit(t *testing.T) {
-	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.ServiceDocumentConfig) {
+	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 		cfg.MaxDocumentBytes = 2048
 	})
 	oversize := `{"pad":"` + strings.Repeat("x", 8192) + `"}`
@@ -394,7 +394,7 @@ func TestServiceDocumentHandler_EnforcesItsOwnBodyLimit(t *testing.T) {
 // A document larger than the cap but inside the reader's slack must still be
 // refused by the service, so the two limits cannot disagree.
 func TestServiceDocumentHandler_RefusesDocumentsInsideTheReaderSlack(t *testing.T) {
-	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.ServiceDocumentConfig) {
+	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 		cfg.MaxDocumentBytes = 2048
 	})
 	oversize := `{"pad":"` + strings.Repeat("x", 2200) + `"}`
@@ -406,7 +406,7 @@ func TestServiceDocumentHandler_RefusesDocumentsInsideTheReaderSlack(t *testing.
 }
 
 func TestServiceDocumentHandler_SharedTierGate(t *testing.T) {
-	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.ServiceDocumentConfig) {
+	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 		cfg.SharedEnabled = false
 	})
 	rec := httptest.NewRecorder()
@@ -632,7 +632,7 @@ func TestServiceDocumentHandler_ListRejectsAnInvalidSubject(t *testing.T) {
 
 func TestServiceDocumentHandler_QuotaBreachIsAConflict(t *testing.T) {
 	t.Run("document count per owner", func(t *testing.T) {
-		h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.ServiceDocumentConfig) {
+		h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 			cfg.MaxDocsPerSubject = 1
 		})
 
@@ -663,7 +663,7 @@ func TestServiceDocumentHandler_QuotaBreachIsAConflict(t *testing.T) {
 	// The byte budget is per subject across every owning client, so one user's
 	// footprint stays bounded however many services write about them.
 	t.Run("byte budget spans every owning client", func(t *testing.T) {
-		h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.ServiceDocumentConfig) {
+		h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
 			cfg.QuotaBytesPerSubject = 200
 		})
 		body := `{"pad":"` + strings.Repeat("x", 100) + `"}`

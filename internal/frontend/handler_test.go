@@ -10,7 +10,7 @@ import (
 // servedIndex drives the handler and returns the body it produced for path.
 //
 // These tests used to assert the body contained the brand string "The Vault".
-// That coupled them to the wording of a page rather than to the behaviour of the
+// That coupled them to the wording of a page rather than to the behavior of the
 // handler, and it broke the moment the embedded placeholder was rewritten to
 // explain itself instead of impersonating a real build. What the handler
 // actually promises is that every non-asset path is answered with the SAME

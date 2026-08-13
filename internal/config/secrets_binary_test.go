@@ -130,7 +130,7 @@ func TestLoadSecretBinaryRequiresTheEnvVar(t *testing.T) {
 	}
 }
 
-// TestLoadSecretStillTrimsTextSecrets pins the behaviour the binary loader was
+// TestLoadSecretStillTrimsTextSecrets pins the behavior the binary loader was
 // split away from. Text secrets are written by `openssl rand -hex`, and a
 // trailing newline there is noise rather than key material.
 func TestLoadSecretStillTrimsTextSecrets(t *testing.T) {

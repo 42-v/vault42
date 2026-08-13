@@ -63,7 +63,7 @@ const (
 // row it lives in: the keystore binds the kid, the identity store binds the
 // pseudonym, service documents bind client, subject and key, the admin TOTP
 // secret binds the admin id. The escrow bound nothing, the RSA-OAEP wrap used a
-// nil label, and the marshalled payload carried no user id either.
+// nil label, and the marshaled payload carried no user id either.
 //
 // auth.account_recovery stores deleted_at, deleted_by and reason as ordinary
 // columns beside the ciphertext, and cmd/recover joins the decrypted payload to
@@ -351,7 +351,7 @@ func TestRecoveryAttack_ErrorsCarryNoKeyMaterialOrPlaintext(t *testing.T) {
 	}
 }
 
-// assertNoLeak fails if msg quotes any recognisable run of the plaintext.
+// assertNoLeak fails if msg quotes any recognizable run of the plaintext.
 func assertNoLeak(t *testing.T, msg string, secret []byte) {
 	t.Helper()
 	if strings.Contains(msg, string(secret)) {
@@ -399,7 +399,7 @@ func TestRecoveryAttack_IdenticalPayloadsDoNotProduceIdenticalBlobs(t *testing.T
 
 // PEM loading, reached by cmd/recover with an operator-supplied --key path. A
 // malformed file must produce an error, never a panic, and never a partially
-// initialised key that would later be used to decrypt.
+// initialized key that would later be used to decrypt.
 func TestRecoveryAttack_MalformedPEMIsRejected(t *testing.T) {
 	inputs := map[string]string{
 		"empty":              "",

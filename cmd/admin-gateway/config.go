@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/42-v/vault42/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/42-v/vault42/internal/config"
 )
 
 // Config holds all configuration for the admin gateway.

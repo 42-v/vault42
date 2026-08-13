@@ -44,7 +44,7 @@ func TestVersionFlagNeedsNothingButTheBinary(t *testing.T) {
 
 // TestVersionFlagOnlyMatchesTheFirstArgument keeps --version from swallowing an
 // invocation that merely mentions it. The check reads os.Args[1] and nothing
-// else, and the CLI below it treats an unrecognised argument as an
+// else, and the CLI below it treats an unrecognized argument as an
 // authentication-required subcommand, so `vault list-clients --version` must be
 // rejected as an unauthenticated admin command rather than answered as a version
 // query.
@@ -56,7 +56,7 @@ func TestVersionFlagOnlyMatchesTheFirstArgument(t *testing.T) {
 	res := runVault(t, vaultRun{args: []string{"list-clients", "--version"}, env: env})
 
 	if strings.Contains(res.stdout, "vault "+Version) {
-		t.Fatalf("--version was honoured in a non-leading position\nstdout:\n%s", res.stdout)
+		t.Fatalf("--version was honored in a non-leading position\nstdout:\n%s", res.stdout)
 	}
 	requireExit(t, res, 1, "ERROR: Admin authentication required.")
 }

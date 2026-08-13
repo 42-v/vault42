@@ -35,7 +35,7 @@ var adminTokenHash = sync.OnceValue(func() string {
 	return hash
 })
 
-// authenticatedStub is a database that recognises adminToken.
+// authenticatedStub is a database that recognizes adminToken.
 func authenticatedStub(t *testing.T) *pgStub {
 	t.Helper()
 	return startPGStub(t, adminTokenRule(adminTokenHash()))
@@ -56,7 +56,7 @@ func TestAdminCommandsRequireAuthentication(t *testing.T) {
 		{name: "wrong token", args: []string{"list-clients", "--admin-token", "not-the-token"}},
 		{name: "destructive command with no token", args: []string{"revoke-all-sessions"}},
 		{name: "flag with no value", args: []string{"list-clients", "--admin-token"}},
-		{name: "unrecognised subcommand", args: []string{"definitely-not-a-command"}},
+		{name: "unrecognized subcommand", args: []string{"definitely-not-a-command"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := authenticatedStub(t)
@@ -74,7 +74,7 @@ func TestAdminCommandsRequireAuthentication(t *testing.T) {
 }
 
 // TestAuthenticatedCommandReturnsBeforeTheServerStarts pins the handled branch.
-// A recognised subcommand must end the process with a zero status and must not
+// A recognized subcommand must end the process with a zero status and must not
 // bring up an HTTP listener on the way out: `vault list-clients` run on a host
 // that already has a vault42 replica would otherwise fight it for the port.
 func TestAuthenticatedCommandReturnsBeforeTheServerStarts(t *testing.T) {
@@ -152,7 +152,7 @@ func TestAuthenticatedCommandWithMissingArgumentsPrintsUsage(t *testing.T) {
 }
 
 // TestUnknownAuthenticatedSubcommandFallsThroughToTheServer pins the other side
-// of the seam. With a valid token, a subcommand the CLI does not recognise is
+// of the seam. With a valid token, a subcommand the CLI does not recognize is
 // reported as unhandled and main() carries on into server startup. That is how
 // the binary can be launched with arguments it does not own, and it is the only
 // path in main() where the CLI check returns false with a non-empty argv.

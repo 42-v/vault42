@@ -494,7 +494,7 @@ func TestAdminUnflagResponseShape(t *testing.T) {
 // when nothing is. The stored key is also what goes into Redis as
 // "bridge:flag:<value>", so an arbitrary string ends up in the shared keyspace.
 //
-// The test asserts the current behaviour so that adding validation, which would
+// The test asserts the current behavior so that adding validation, which would
 // mean rejecting these with a 400, shows up here as a deliberate change.
 func TestAdminFlagAcceptsAnythingAsAnIP(t *testing.T) {
 	notAddresses := []struct {

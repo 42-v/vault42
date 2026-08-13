@@ -94,7 +94,7 @@ type RecoveryFormat int
 
 const (
 	// RecoveryFormatUnknown is a blob that is neither framing: too short to
-	// classify, or carrying the magic with an unrecognised version.
+	// classify, or carrying the magic with an unrecognized version.
 	RecoveryFormatUnknown RecoveryFormat = iota
 	// RecoveryFormatBound is the current format, sealed to a row binding.
 	RecoveryFormatBound
@@ -109,7 +109,12 @@ func (f RecoveryFormat) String() string {
 		return "bound"
 	case RecoveryFormatLegacy:
 		return "legacy"
+	case RecoveryFormatUnknown:
+		return "unknown"
 	default:
+		// A value outside the enum, which only a cast can produce. It reads the
+		// same as Unknown here rather than panicking, because this String is
+		// called from error paths that are already reporting something wrong.
 		return "unknown"
 	}
 }

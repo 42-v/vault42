@@ -246,24 +246,24 @@ func TestDPoPAttack_MalformedAndConfusedJWKs(t *testing.T) {
 	bigModulus.SetBit(bigModulus, 0, 1)
 
 	cases := map[string]map[string]any{
-		"empty jwk":                {},
-		"unknown kty":              {"kty": "OKP", "crv": "Ed25519", "x": "AAAA"},
-		"RSA with EC fields":       {"kty": "RSA", "crv": "P-256", "x": "AAAA", "y": "AAAA"},
-		"EC with RSA fields":       {"kty": "EC", "n": "AAAA", "e": "AQAB"},
-		"EC missing crv":           {"kty": "EC", "x": "AAAA", "y": "AAAA"},
-		"EC unsupported curve":     atkECJWKWith(p256, "P-521"),
-		"P-384 point labelled 256": atkECJWKWith(p384, "P-256"),
-		"P-256 point labelled 384": atkECJWKWith(p256, "P-384"),
-		"EC point not on curve":    {"kty": "EC", "crv": "P-256", "x": strings.Repeat("A", 43), "y": strings.Repeat("A", 43)},
-		"EC identity point":        {"kty": "EC", "crv": "P-256", "x": "", "y": ""},
-		"EC bad base64":            {"kty": "EC", "crv": "P-256", "x": "!!!!", "y": "!!!!"},
-		"RSA modulus too small":    {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(big.NewInt(65537).Bytes()), "e": "AQAB"},
-		"RSA modulus 8192 bits":    {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(bigModulus.Bytes()), "e": "AQAB"},
-		"RSA exponent 1":           {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(1).Bytes())},
-		"RSA exponent 0":           {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": ""},
-		"RSA exponent oversized":   {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(new(big.Int).Lsh(big.NewInt(1), 40).Bytes())},
-		"RSA bad base64 n":         {"kty": "RSA", "n": "!!!!", "e": "AQAB"},
-		"RSA n zero":               {"kty": "RSA", "n": "", "e": "AQAB"},
+		"empty jwk":               {},
+		"unknown kty":             {"kty": "OKP", "crv": "Ed25519", "x": "AAAA"},
+		"RSA with EC fields":      {"kty": "RSA", "crv": "P-256", "x": "AAAA", "y": "AAAA"},
+		"EC with RSA fields":      {"kty": "EC", "n": "AAAA", "e": "AQAB"},
+		"EC missing crv":          {"kty": "EC", "x": "AAAA", "y": "AAAA"},
+		"EC unsupported curve":    atkECJWKWith(p256, "P-521"),
+		"P-384 point labeled 256": atkECJWKWith(p384, "P-256"),
+		"P-256 point labeled 384": atkECJWKWith(p256, "P-384"),
+		"EC point not on curve":   {"kty": "EC", "crv": "P-256", "x": strings.Repeat("A", 43), "y": strings.Repeat("A", 43)},
+		"EC identity point":       {"kty": "EC", "crv": "P-256", "x": "", "y": ""},
+		"EC bad base64":           {"kty": "EC", "crv": "P-256", "x": "!!!!", "y": "!!!!"},
+		"RSA modulus too small":   {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(big.NewInt(65537).Bytes()), "e": "AQAB"},
+		"RSA modulus 8192 bits":   {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(bigModulus.Bytes()), "e": "AQAB"},
+		"RSA exponent 1":          {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(1).Bytes())},
+		"RSA exponent 0":          {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": ""},
+		"RSA exponent oversized":  {"kty": "RSA", "n": base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(new(big.Int).Lsh(big.NewInt(1), 40).Bytes())},
+		"RSA bad base64 n":        {"kty": "RSA", "n": "!!!!", "e": "AQAB"},
+		"RSA n zero":              {"kty": "RSA", "n": "", "e": "AQAB"},
 	}
 
 	for name, jwk := range cases {
@@ -526,7 +526,7 @@ func TestTOTPAttack_MeasureLengthMismatchTiming(t *testing.T) {
 	expected := strings.Repeat("a", 64)
 	lengths := []int{0, 1, 63, 64, 65, 1024}
 
-	var report []string
+	report := make([]string, 0, len(lengths))
 	for _, n := range lengths {
 		candidate := strings.Repeat("b", n)
 		const runs = 20001

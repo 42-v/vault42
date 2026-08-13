@@ -404,12 +404,12 @@ func TestKIDAttack_ExponentIsNotCovered(t *testing.T) {
 	// well-formed *rsa.PublicKey, and the kid does not change.
 	variant := key.PublicKey
 	variant.E = 3
-	if key.PublicKey.E == 3 {
+	if key.E == 3 {
 		variant.E = 65537
 	}
 	variantKID := vaultcrypto.KIDFromPublicKey(&variant)
 
-	t.Logf("e=%d -> kid %s", key.PublicKey.E, original)
+	t.Logf("e=%d -> kid %s", key.E, original)
 	t.Logf("e=%d -> kid %s", variant.E, variantKID)
 
 	if original != variantKID {

@@ -85,8 +85,8 @@ func TestDataExport_ServiceFailuresNeverReturnAPartialExport(t *testing.T) {
 
 	t.Run("the service documents cannot be read", func(t *testing.T) {
 		store := &exportSvcDocStore{failListAll: boom}
-		svcDocSvc := service.NewServiceDocumentService(store, nil, masterKey, hmacSecret,
-			service.ServiceDocumentConfig{MaxDocumentBytes: 64 << 10, MaxDocsPerSubject: 32, QuotaBytesPerSubject: 1 << 20}, nil)
+		svcDocSvc := service.NewDocumentService(store, nil, masterKey, hmacSecret,
+			service.DocumentConfig{MaxDocumentBytes: 64 << 10, MaxDocsPerSubject: 32, QuotaBytesPerSubject: 1 << 20}, nil)
 
 		h := NewDataExportHandler(liveUser, &mocks.MockDeviceRepo{}, &mocks.MockSocialAccountRepo{},
 			&mocks.MockAuditRepo{}, nil, nil, svcDocSvc, newTestAuditLogger())
@@ -106,7 +106,7 @@ func TestDataExport_ServiceFailuresNeverReturnAPartialExport(t *testing.T) {
 }
 
 // exportSvcDocStore is an in-memory service-document store. The export path is
-// tested through the real ServiceDocumentService rather than a stubbed one, so
+// tested through the real DocumentService rather than a stubbed one, so
 // the rows it reads are genuinely encrypted under the AAD the service binds them
 // with: a subject, client or key mismatch fails to decrypt exactly as it would
 // in the database.
@@ -176,8 +176,8 @@ func TestDataExport_IncludesServiceDocumentBodiesButNotGlobalOnes(t *testing.T) 
 	const clientID = "11111111-1111-1111-1111-111111111111"
 
 	store := &exportSvcDocStore{}
-	svcDocSvc := service.NewServiceDocumentService(store, nil, masterKey, hmacSecret,
-		service.ServiceDocumentConfig{MaxDocumentBytes: 64 << 10, MaxDocsPerSubject: 32, QuotaBytesPerSubject: 1 << 20}, nil)
+	svcDocSvc := service.NewDocumentService(store, nil, masterKey, hmacSecret,
+		service.DocumentConfig{MaxDocumentBytes: 64 << 10, MaxDocsPerSubject: 32, QuotaBytesPerSubject: 1 << 20}, nil)
 
 	ctx := context.Background()
 	if _, _, err := svcDocSvc.Put(ctx, clientID, "user-1", "loyalty", []byte(`{"tier":"gold"}`), repository.VisibilityPrivate); err != nil {

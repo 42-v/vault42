@@ -245,9 +245,9 @@ func svcDocRegisteredClients() *fakeSvcDocClients {
 	)
 }
 
-func newSvcDocService(t *testing.T, repo *fakeSvcDocRepo, cfg ServiceDocumentConfig) *ServiceDocumentService {
+func newSvcDocService(t *testing.T, repo *fakeSvcDocRepo, cfg DocumentConfig) *DocumentService {
 	t.Helper()
-	return NewServiceDocumentService(repo, svcDocRegisteredClients(),
+	return NewDocumentService(repo, svcDocRegisteredClients(),
 		svcDocMasterKey(32), svcDocHMACSecret(), cfg, nil)
 }
 
@@ -256,13 +256,13 @@ func newSvcDocService(t *testing.T, repo *fakeSvcDocRepo, cfg ServiceDocumentCon
 // down, a metrics collector, or a master key the AES layer refuses.
 func newSvcDocServiceWith(
 	repo *fakeSvcDocRepo, clients repository.ClientRepository,
-	cfg ServiceDocumentConfig, metrics ServiceDocumentMetrics, masterKey []byte,
-) *ServiceDocumentService {
-	return NewServiceDocumentService(repo, clients, masterKey, svcDocHMACSecret(), cfg, metrics)
+	cfg DocumentConfig, metrics DocumentMetrics, masterKey []byte,
+) *DocumentService {
+	return NewDocumentService(repo, clients, masterKey, svcDocHMACSecret(), cfg, metrics)
 }
 
-func defaultSvcDocConfig() ServiceDocumentConfig {
-	return ServiceDocumentConfig{
+func defaultSvcDocConfig() DocumentConfig {
+	return DocumentConfig{
 		MaxDocumentBytes:     64 * 1024,
 		MaxDocsPerSubject:    32,
 		QuotaBytesPerSubject: 1024 * 1024,

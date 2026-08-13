@@ -81,7 +81,7 @@ func atkAuthTokService(t *testing.T) (*service.AuthService, *atkAuthTokDeps) {
 // revoke-all, is a global nuke of every user's sessions (RefreshTokenRepo.RevokeAll
 // runs an unfiltered UPDATE), not the surgical per-user tool the wording implies.
 //
-// This assertion encodes the SECURE behaviour the register promises. It FAILS
+// This assertion encodes the SECURE behavior the register promises. It FAILS
 // against the current code, and that failure is the proof: Refresh hands back a
 // new pair for a locked account.
 func TestAtk_AdminLockDoesNotStopRefresh(t *testing.T) {
@@ -149,7 +149,7 @@ func TestAtk_LockedAccountRefreshChainSurvives(t *testing.T) {
 	}
 
 	// The store hands back a fresh live row for whatever hash is presented,
-	// modelling a family that keeps rotating. MarkUsed defaults to true (unused).
+	// modeling a family that keeps rotating. MarkUsed defaults to true (unused).
 	d.tokens.GetByTokenHashFn = func(_ context.Context, _ string) (*model.RefreshToken, error) {
 		return &model.RefreshToken{
 			ID:        "rt-chain",
@@ -161,7 +161,7 @@ func TestAtk_LockedAccountRefreshChainSurvives(t *testing.T) {
 
 	first, err := svc.Refresh(context.Background(), "held-1", "9.9.9.9", "UA", vaultcrypto.FingerprintInput{})
 	if err != nil {
-		// Secure behaviour reached the finish line: nothing to prove here.
+		// Secure behavior reached the finish line: nothing to prove here.
 		return
 	}
 	// Rotate again with the token the locked account just minted.

@@ -329,7 +329,7 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 	// documented first response to a suspected account takeover, and setting
 	// locked_until alone only stopped logins that had not happened yet: an
 	// attacker holding a refresh token kept rotating it. Refresh now rejects a
-	// locked account too, so this revocation is defence in depth rather than the
+	// locked account too, so this revocation is defense in depth rather than the
 	// only barrier, but it is what makes containment immediate instead of
 	// dependent on when the attacker next rotates.
 	//

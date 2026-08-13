@@ -15,7 +15,7 @@
 // Precomputed fields that zeroPrivateKey clears. Signing therefore never reads
 // the words the wipe overwrites: there is no torn read, no corrupt signature,
 // and no data race on that path. TestZeroPrivateKeyLeavesTheKeyUsable in
-// token_zeroization_test.go demonstrates the underlying behaviour directly.
+// token_zeroization_test.go demonstrates the underlying behavior directly.
 //
 // This test holds the composite path down anyway, because the reasoning that
 // makes it safe lives in the standard library and can change under us. It
@@ -96,7 +96,7 @@ func verifyRS256(t *testing.T, token string, pubs map[string]*rsa.PublicKey) {
 	}
 
 	// The kid is read out of the header rather than tracked alongside the token,
-	// so a token signed with one key and labelled with another fails here too.
+	// so a token signed with one key and labeled with another fails here too.
 	kid := ""
 	if i := strings.Index(string(hdr), `"kid":"`); i >= 0 {
 		rest := string(hdr)[i+len(`"kid":"`):]

@@ -45,7 +45,7 @@ func LoadSecret(envKey string) (string, error) {
 // one is stripped, and only when doing so produces the expected length, so a raw
 // key that genuinely ends in 0x0A is kept rather than truncated.
 //
-// The consume-on-read behaviour is identical to LoadSecret.
+// The consume-on-read behavior is identical to LoadSecret.
 func LoadSecretBinary(envKey string, wantLen int) ([]byte, error) {
 	path := os.Getenv(envKey + "_FILE")
 	if path == "" {

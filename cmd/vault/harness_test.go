@@ -96,7 +96,7 @@ type vaultProc struct {
 }
 
 // startVault launches the binary and returns without waiting for it. Use it for
-// the server path, where the process only exits once it is signalled.
+// the server path, where the process only exits once it is signaled.
 func startVault(t *testing.T, r vaultRun) *vaultProc {
 	t.Helper()
 
@@ -123,7 +123,7 @@ func startVault(t *testing.T, r vaultRun) *vaultProc {
 		if p.waited {
 			return
 		}
-		// A test that failed before signalling would otherwise leave a server
+		// A test that failed before signaling would otherwise leave a server
 		// holding a port for the rest of the run.
 		_ = cmd.Process.Kill()
 		<-p.done
@@ -206,8 +206,9 @@ func (p *vaultProc) awaitStderr(t *testing.T, want string, timeout time.Duration
 // shell would otherwise silently reconfigure the process under test and make a
 // green run mean nothing.
 func childEnv(overrides map[string]string, args []string) []string {
-	var env []string
-	for _, kv := range os.Environ() {
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+len(overrides))
+	for _, kv := range parent {
 		name, _, _ := strings.Cut(kv, "=")
 		if configEnvVar(name) {
 			continue

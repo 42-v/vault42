@@ -116,7 +116,7 @@ func TestNewDecoyHandlerLoadsEveryTemplate(t *testing.T) {
 
 // TestDecoyPagesLookLikeTheirTargets keeps the pages convincing. A decoy that no
 // longer resembles the product it imitates is worse than no decoy: an attacker
-// who recognises the page as a trap learns that the host runs a deception layer,
+// who recognizes the page as a trap learns that the host runs a deception layer,
 // which is the single fact the design is trying to withhold.
 func TestDecoyPagesLookLikeTheirTargets(t *testing.T) {
 	tests := []struct {
@@ -201,7 +201,7 @@ func (b *brokenResponseWriter) Write(p []byte) (int, error) {
 func (b *brokenResponseWriter) WriteHeader(code int) { b.code = code }
 
 // TestDecoyTolerantOfAClientThatHangsUp covers the render error. A scanner that
-// fires a request and closes the socket without reading is ordinary behaviour
+// fires a request and closes the socket without reading is ordinary behavior
 // for automated tooling, so the write failure must be logged and swallowed
 // rather than propagated, and the flag must already have been applied.
 func TestDecoyTolerantOfAClientThatHangsUp(t *testing.T) {

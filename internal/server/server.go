@@ -491,18 +491,18 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Service-scoped JSON document store. Off by default: unlike blobs this is new
 	// surface reachable by every existing client-credentials holder, so enabling it
 	// is an explicit operator decision rather than a consequence of upgrading.
-	var svcDocSvc *service.ServiceDocumentService
+	var svcDocSvc *service.DocumentService
 	if d.ServiceDocs != nil && cfg.SvcDocEnabled {
 		// A nil *metrics.Collector must reach the service as a nil interface. Passing
 		// the typed nil gives a non-nil interface that panics on first use, so a
 		// deployment with metrics off would crash on its first document write.
-		var svcDocMetrics service.ServiceDocumentMetrics
+		var svcDocMetrics service.DocumentMetrics
 		if d.Metrics != nil {
 			svcDocMetrics = d.Metrics
 		}
-		svcDocSvc = service.NewServiceDocumentService(
+		svcDocSvc = service.NewDocumentService(
 			d.ServiceDocs, d.Clients, d.MasterKey, d.HMACSecret,
-			service.ServiceDocumentConfig{
+			service.DocumentConfig{
 				MaxDocumentBytes:     cfg.SvcDocMaxSize,
 				MaxDocsPerSubject:    cfg.SvcDocMaxPerSubject,
 				QuotaBytesPerSubject: cfg.SvcDocQuotaBytes,

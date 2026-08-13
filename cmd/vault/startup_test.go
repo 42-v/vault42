@@ -4,7 +4,7 @@ package main
 //
 // vault42 is a fail-fast binary: nearly every configuration mistake is meant to
 // stop the process before it listens, with a message an operator can act on.
-// That behaviour has no other test. The 1.0.0 coverage claim is measured over
+// That behavior has no other test. The 1.0.0 coverage claim is measured over
 // ./internal/..., so the file that decides whether a misconfigured deployment
 // refuses to start or starts anyway was outside it entirely.
 //
@@ -474,7 +474,7 @@ func TestDatabaseConnectFailureIsFatalAndRedacted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSecretFileConsumeDestroysTheFileAfterReading pins VAULT_SECRET_FILE_CONSUME,
-// the defence-in-depth wipe. It is opt-in precisely because it destroys the
+// the defense-in-depth wipe. It is opt-in precisely because it destroys the
 // operator's keyfile, so both directions are asserted: with it on the file is
 // gone after startup, and with it off the file survives byte-for-byte. A
 // regression in either direction is severe. Silently keeping the file defeats
@@ -542,7 +542,7 @@ func TestSecretFileTrailingNewlineIsTrimmed(t *testing.T) {
 
 // TestKeystoreInitFailureIsFatal covers the DB-backed keystore branch. The
 // keystore owns the JWT signing keys, so a server that carried on past a
-// keystore it could not initialise would either sign with nothing or sign with a
+// keystore it could not initialize would either sign with nothing or sign with a
 // key no other replica knows about.
 func TestKeystoreInitFailureIsFatal(t *testing.T) {
 	stub := bootedStub(t)

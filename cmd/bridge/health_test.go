@@ -115,10 +115,10 @@ func TestReadyzReportsEachUpstreamSeparately(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			real := newUpstreamProbe(t, tt.realStatus)
+			realUp := newUpstreamProbe(t, tt.realStatus)
 			honeypot := newUpstreamProbe(t, tt.honeyStatus)
 
-			hh := NewHealthHandler(real.srv.URL, honeypot.srv.URL)
+			hh := NewHealthHandler(realUp.srv.URL, honeypot.srv.URL)
 
 			w := httptest.NewRecorder()
 			hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil))
@@ -144,7 +144,7 @@ func TestReadyzReportsEachUpstreamSeparately(t *testing.T) {
 			// Both upstreams are probed on every call, and on /healthz rather
 			// than on the base URL, so an upstream root that happens to return
 			// 200 cannot mask a dead service.
-			for name, p := range map[string]*upstreamProbe{"real": real, "honeypot": honeypot} {
+			for name, p := range map[string]*upstreamProbe{"real": realUp, "honeypot": honeypot} {
 				paths := p.probedPaths()
 				if len(paths) != 1 {
 					t.Fatalf("%s upstream saw %d probes, want 1", name, len(paths))

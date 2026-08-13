@@ -237,8 +237,11 @@ func TestRunAdmins(t *testing.T) {
 	t.Run("a failed creator lookup stops the seed", func(t *testing.T) {
 		repo := &seedAdminRepo{
 			getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
-			create:        func(context.Context, *model.AdminUser) error { t.Fatal("must not create without a creator"); return nil },
-			list:          func(context.Context) ([]*model.AdminUser, error) { return nil, errors.New("db") },
+			create: func(context.Context, *model.AdminUser) error {
+				t.Fatal("must not create without a creator")
+				return nil
+			},
+			list: func(context.Context) ([]*model.AdminUser, error) { return nil, errors.New("db") },
 		}
 		if err := RunAdmins(ctx, sf, repo, ""); err == nil {
 			t.Error("expected the list error to propagate")

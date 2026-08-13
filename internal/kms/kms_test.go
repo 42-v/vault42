@@ -120,7 +120,7 @@ func TestClose_WipesRoot(t *testing.T) {
 	svc.Close()
 
 	// A wrap after Close must FAIL, and the reason is not tidiness. A wiped root
-	// is 32 zero bytes, which HKDF accepts, so the old behaviour was to keep
+	// is 32 zero bytes, which HKDF accepts, so the old behavior was to keep
 	// producing envelopes that looked correct and were sealed under a key anyone
 	// can reconstruct by building a Service over 32 zeros. Returning an envelope
 	// here is worse than returning nothing.

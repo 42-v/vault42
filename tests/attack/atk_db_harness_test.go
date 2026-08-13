@@ -34,7 +34,7 @@ import (
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
-// atkDBSkipIfNoDocker honours the same opt-out switch the integration suite uses,
+// atkDBSkipIfNoDocker honors the same opt-out switch the integration suite uses,
 // so a machine with no container runtime can still run the pure-Go tests.
 func atkDBSkipIfNoDocker(t *testing.T) {
 	t.Helper()

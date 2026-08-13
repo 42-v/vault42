@@ -4,8 +4,8 @@ package attack
 //
 // atk_api_svcdoc_quota_test.go proves the store no longer overruns its caps
 // under concurrency. That property is easy to obtain and ruin the contract in
-// the process, because the fix moves the decision into a serialised section and
-// a serialised section has failure modes of its own: a lock error, a rolled-back
+// the process, because the fix moves the decision into a serialized section and
+// a serialized section has failure modes of its own: a lock error, a rolled-back
 // transaction, a wrapped sentinel. Any of those reaching the handler turns a
 // 409 quota_exceeded into a 500 internal_error, and a service whose retry logic
 // keys on 409 would then hammer a store that is simply full.
@@ -20,7 +20,7 @@ package attack
 //
 // The single-writer path is the one the fix must not have moved. Everything
 // below the concurrency test is the sequential contract as it stood before, with
-// the replacement case included, because the most tempting way to serialise a
+// the replacement case included, because the most tempting way to serialize a
 // check-then-write is to make every write take a slot, and that would refuse a
 // caller rewriting a document it already owns.
 
@@ -58,7 +58,7 @@ func atkPut(h interface {
 func TestSvcDocQuotaSequentialRefusalIsUnchanged(t *testing.T) {
 	t.Run("count cap", func(t *testing.T) {
 		repo := newAtkSvcDocRepo(nil)
-		h := atkDocHandler(repo, func(c *service.ServiceDocumentConfig) {
+		h := atkDocHandler(repo, func(c *service.DocumentConfig) {
 			c.MaxDocsPerSubject = 1
 		})
 
@@ -75,7 +75,7 @@ func TestSvcDocQuotaSequentialRefusalIsUnchanged(t *testing.T) {
 		}
 
 		// A rewrite of a document that already exists consumes no slot, so it must
-		// still be admitted at a cap that is already full. Serialising the write
+		// still be admitted at a cap that is already full. Serializing the write
 		// must not have turned "you own this row" into "you are at your limit".
 		if got := atkPut(h, atkClientA, "user-seq-count", "doc-a", `{"v":2}`); got.status != http.StatusOK {
 			t.Errorf("replacement at a full count cap: status %d, want 200 (%s)", got.status, got.body)
@@ -95,7 +95,7 @@ func TestSvcDocQuotaSequentialRefusalIsUnchanged(t *testing.T) {
 		one := probe.storedBytes()
 
 		repo := newAtkSvcDocRepo(nil)
-		h := atkDocHandler(repo, func(c *service.ServiceDocumentConfig) {
+		h := atkDocHandler(repo, func(c *service.DocumentConfig) {
 			c.QuotaBytesPerSubject = one + one/2
 		})
 
@@ -125,7 +125,7 @@ func TestSvcDocQuotaSequentialRefusalIsUnchanged(t *testing.T) {
 // the loser was told the same thing a late arrival is told, so a caller cannot
 // learn from its own error whether someone else is writing about this subject.
 func TestSvcDocQuotaRefusalIsIdenticalUnderConcurrency(t *testing.T) {
-	cap1 := func(c *service.ServiceDocumentConfig) { c.MaxDocsPerSubject = 1 }
+	cap1 := func(c *service.DocumentConfig) { c.MaxDocsPerSubject = 1 }
 
 	sequential := func() atkQuotaResponse {
 		h := atkDocHandler(newAtkSvcDocRepo(nil), cap1)
@@ -151,7 +151,8 @@ func TestSvcDocQuotaRefusalIsIdenticalUnderConcurrency(t *testing.T) {
 
 	// Exactly one writer wins. Which one is timing, and the test must not care;
 	// that there is exactly one winner and exactly one refusal is the invariant.
-	var accepted, refused []atkQuotaResponse
+	accepted := make([]atkQuotaResponse, 0, len(results))
+	refused := make([]atkQuotaResponse, 0, len(results))
 	for _, r := range results {
 		if r.status == http.StatusCreated {
 			accepted = append(accepted, r)

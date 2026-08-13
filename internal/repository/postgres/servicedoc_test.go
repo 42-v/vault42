@@ -640,7 +640,7 @@ func TestServiceDocumentRepo_AgainstPostgres(t *testing.T) {
 	}
 
 	// The premise. If this ever stops breaching, the sibling test below proves
-	// nothing, because the database would be serialising these writers on its own.
+	// nothing, because the database would be serializing these writers on its own.
 	t.Run("two writers that count before either writes both land, which is the finding", func(t *testing.T) {
 		const subj = "subject-quota-window"
 		counted := make([]chan struct{}, 2)
@@ -692,7 +692,7 @@ func TestServiceDocumentRepo_AgainstPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("the subject lock serialises the count against the write it authorises", func(t *testing.T) {
+	t.Run("the subject lock serializes the count against the write it authorizes", func(t *testing.T) {
 		const subj = "subject-quota-locked"
 
 		var wg sync.WaitGroup

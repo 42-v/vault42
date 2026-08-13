@@ -33,7 +33,7 @@ func legacyRow(t *testing.T, email string) escrowRow {
 	return row
 }
 
-// legacyJSON is the payload shape the erasure service marshalled before the fix:
+// legacyJSON is the payload shape the erasure service marshaled before the fix:
 // four fields, no "v", no "user_id". Spelled out rather than derived from the
 // current struct so that a future change to escrowedPayload cannot quietly
 // redefine what "legacy" means.
@@ -276,7 +276,7 @@ func TestRun_LegacyRecordIsReportedAsLegacy(t *testing.T) {
 		t.Errorf("user_id = %q, want empty: the legacy payload never carried one", recs[0].UserID)
 	}
 	if recs[1].EscrowFormat != "bound" {
-		t.Errorf("the bound record in the same run was labelled %q", recs[1].EscrowFormat)
+		t.Errorf("the bound record in the same run was labeled %q", recs[1].EscrowFormat)
 	}
 
 	for _, want := range []string{

@@ -42,7 +42,7 @@ func TestZeroPrivateKeyLeavesTheKeyUsable(t *testing.T) {
 
 	zeroPrivateKey(key)
 
-	// The exported fields really are cleared. This half of the behaviour is what
+	// The exported fields really are cleared. This half of the behavior is what
 	// makes the other half surprising.
 	if key.D.Sign() != 0 {
 		t.Error("zeroPrivateKey left the exported private exponent set")

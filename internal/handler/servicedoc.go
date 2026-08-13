@@ -49,12 +49,12 @@ func ClientRateLimitKey(r *http.Request) string {
 // reaching a method already proves an authenticated caller with the right
 // scope. That is not sufficient on its own; see requireClient.
 type ServiceDocumentHandler struct {
-	svc      *service.ServiceDocumentService
+	svc      *service.DocumentService
 	auditLog *audit.Logger
 }
 
 // NewServiceDocumentHandler creates a service document handler.
-func NewServiceDocumentHandler(svc *service.ServiceDocumentService, auditLog *audit.Logger) *ServiceDocumentHandler {
+func NewServiceDocumentHandler(svc *service.DocumentService, auditLog *audit.Logger) *ServiceDocumentHandler {
 	return &ServiceDocumentHandler{svc: svc, auditLog: auditLog}
 }
 
@@ -73,10 +73,10 @@ type ServiceDocumentResponse struct {
 
 // ServiceDocumentListResponse is returned by GET /service/documents/{subject}.
 type ServiceDocumentListResponse struct {
-	Subject   string                         `json:"subject"`
-	Documents []*service.ServiceDocumentMeta `json:"documents"`
-	Count     int                            `json:"count"`
-	Quota     *service.ServiceDocumentQuota  `json:"quota"`
+	Subject   string                  `json:"subject"`
+	Documents []*service.DocumentMeta `json:"documents"`
+	Count     int                     `json:"count"`
+	Quota     *service.DocumentQuota  `json:"quota"`
 }
 
 // requireClient resolves the calling service client, rejecting anything that is

@@ -203,7 +203,7 @@ const (
 var sampleCreatedAt = time.Date(2023, 4, 5, 6, 7, 8, 0, time.UTC)
 
 // escrowJSON is the plaintext the erasure service writes before encrypting. The
-// object is spelled out rather than marshalled from escrowedPayload so the
+// object is spelled out rather than marshaled from escrowedPayload so the
 // fixture pins the wire format independently of the struct the tool parses it
 // with: renaming a json tag on one side has to break these tests.
 func escrowJSON(t *testing.T, email, displayName string, roles []string) []byte {
@@ -360,7 +360,7 @@ func exercise(t *testing.T, args []string, o *opened) result {
 	return result{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
-// withRows is the common case: a valid key file and a DSN that is never dialled.
+// withRows is the common case: a valid key file and a DSN that is never dialed.
 func withRows(t *testing.T, rows ...escrowRow) (*opened, []string) {
 	t.Helper()
 	o := &opened{rows: &fakeRows{rows: rows}}
@@ -377,8 +377,9 @@ func records(t *testing.T, stdout string) []recoveredRecord {
 	if !strings.HasSuffix(stdout, "\n") {
 		t.Fatalf("output is not newline-terminated, a truncated last line would be parsed as a record: %q", stdout)
 	}
-	var out []recoveredRecord
-	for i, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+	out := make([]recoveredRecord, 0, len(lines))
+	for i, line := range lines {
 		var rec recoveredRecord
 		if err := decodeStrict(line, &rec); err != nil {
 			t.Fatalf("line %d is not one JSON record (%v): %q", i+1, err, line)

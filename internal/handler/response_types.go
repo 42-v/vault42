@@ -266,7 +266,7 @@ type DataExportResponse struct {
 	// this subject, including ones marked private. A service's privacy from other
 	// services is not privacy from the data subject: Art. 15 entitles them to the
 	// personal data, not to the subset the authoring service chose to publish.
-	ServiceDocuments []*service.ServiceDocumentExport `json:"service_documents"`
+	ServiceDocuments []*service.DocumentExport `json:"service_documents"`
 
 	// AuditEventsTotal is how many user-scoped audit events are held, which can
 	// exceed the number in AuditEvents: the export caps the list at

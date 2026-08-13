@@ -46,7 +46,7 @@ func (r *lockRecordingSvcDocs) DeleteAllForSubject(_ context.Context, subjectHas
 //
 // The lock is asserted to be taken under the SAME subject hash the delete uses.
 // A lock on any other key would satisfy a naive "was the lock called" check and
-// serialise nothing at all.
+// serialize nothing at all.
 func TestErasureDeletesServiceDocumentsUnderTheSubjectLock(t *testing.T) {
 	repo := &lockRecordingSvcDocs{}
 	m := newErasureMocks()
@@ -69,7 +69,7 @@ func TestErasureDeletesServiceDocumentsUnderTheSubjectLock(t *testing.T) {
 	}
 	if repo.lockedSubject != want {
 		t.Errorf("locked subject %q but deleted %q; a lock on a different key "+
-			"serialises nothing", repo.lockedSubject, repo.deletedAt)
+			"serializes nothing", repo.lockedSubject, repo.deletedAt)
 	}
 }
 

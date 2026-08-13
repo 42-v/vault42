@@ -28,7 +28,7 @@ type DataExportHandler struct {
 	auditEvents repository.AuditRepository
 	identitySvc *service.IdentityService
 	blobSvc     *service.BlobService
-	svcDocSvc   *service.ServiceDocumentService
+	svcDocSvc   *service.DocumentService
 	auditLog    *audit.Logger
 }
 
@@ -43,7 +43,7 @@ func NewDataExportHandler(
 	auditEvents repository.AuditRepository,
 	identitySvc *service.IdentityService,
 	blobSvc *service.BlobService,
-	svcDocSvc *service.ServiceDocumentService,
+	svcDocSvc *service.DocumentService,
 	auditLog *audit.Logger,
 ) *DataExportHandler {
 	return &DataExportHandler{
@@ -100,7 +100,7 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		Blobs:            []DataExportBlob{},
 		SocialAccounts:   []DataExportSocialAccount{},
 		AuditEvents:      []DataExportAuditEvent{},
-		ServiceDocuments: []*service.ServiceDocumentExport{},
+		ServiceDocuments: []*service.DocumentExport{},
 	}
 
 	// Identity profile (decrypted PII). Absent profile is not an error.

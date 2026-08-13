@@ -49,7 +49,7 @@ func setRequiredUpstreams(t *testing.T) {
 }
 
 // TestLoadConfigDefaults pins every default in one place. These numbers are the
-// deployed behaviour of any bridge whose Helm values leave the tuning knobs
+// deployed behavior of any bridge whose Helm values leave the tuning knobs
 // alone, and they are published in docs/bridge.md, so a change to one of them is
 // a change to a documented contract and should have to be made deliberately.
 func TestLoadConfigDefaults(t *testing.T) {
@@ -194,7 +194,7 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 	}
 }
 
-// TestLoadConfigIgnoresUnparseableNumbers pins a genuinely dangerous behaviour
+// TestLoadConfigIgnoresUnparseableNumbers pins a genuinely dangerous behavior
 // so that it is at least a known one: a malformed threshold or window is not an
 // error, it silently reverts to the default. An operator who writes
 // BRIDGE_FLAG_THRESHOLD=1O0 with a letter O gets 100, and an operator who writes
@@ -410,7 +410,7 @@ func TestEnvInt(t *testing.T) {
 		{"absent", "", false, 42},
 		{"empty", "", true, 42},
 		{"valid", "7", true, 7},
-		{"zero is honoured, not treated as unset", "0", true, 0},
+		{"zero is honored, not treated as unset", "0", true, 0},
 		{"negative", "-5", true, -5},
 		{"trailing space is not a number", "7 ", true, 42},
 		{"float", "7.5", true, 42},
@@ -443,7 +443,7 @@ func TestEnvDuration(t *testing.T) {
 		{"minutes", "15m", 15 * time.Minute},
 		{"hours", "24h", 24 * time.Hour},
 		{"compound", "1h30m", 90 * time.Minute},
-		{"zero is honoured, not treated as unset", "0s", 0},
+		{"zero is honored, not treated as unset", "0s", 0},
 		{"a bare number has no unit", "60", 90 * time.Second},
 		{"nonsense", "a while", 90 * time.Second},
 	}

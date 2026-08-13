@@ -339,9 +339,9 @@ func TestKeystoreAttack_RaceDetectorIsBlindToAESKeyReads(t *testing.T) {
 // This is why the race above is a key-destruction bug and not just a detector
 // complaint.
 func TestKeystoreAttack_ZeroedMasterKeyStillEncryptsAndLosesTheRow(t *testing.T) {
-	real := make([]byte, 32)
-	for i := range real {
-		real[i] = byte(i + 1)
+	realKey := make([]byte, 32)
+	for i := range realKey {
+		realKey[i] = byte(i + 1)
 	}
 	plaintext := []byte("-----BEGIN PRIVATE KEY----- signing key material")
 	const kid = "abcdef01-23456789"
@@ -355,7 +355,7 @@ func TestKeystoreAttack_ZeroedMasterKeyStillEncryptsAndLosesTheRow(t *testing.T)
 		{"one byte wiped", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			torn := append([]byte(nil), real...)
+			torn := append([]byte(nil), realKey...)
 			for i := 0; i < tc.zeroed; i++ {
 				torn[i] = 0
 			}
@@ -367,7 +367,7 @@ func TestKeystoreAttack_ZeroedMasterKeyStillEncryptsAndLosesTheRow(t *testing.T)
 			}
 
 			// The read every later pod performs, with the real key.
-			if _, err := vaultcrypto.Decrypt(ct, real, []byte(kid)); err == nil {
+			if _, err := vaultcrypto.Decrypt(ct, realKey, []byte(kid)); err == nil {
 				t.Fatal("row sealed under the torn key decrypted under the real key")
 			}
 			t.Logf("%d/32 bytes wiped: Encrypt succeeded and the row is permanently undecryptable", tc.zeroed)
@@ -410,7 +410,7 @@ func TestKeystoreAttack_DoubleStopIsSafe(t *testing.T) {
 // before wiping.
 //
 // The race detector cannot be relied on to catch a regression here, which is why
-// this test is structural rather than behavioural. The only read on the hot path
+// this test is structural rather than behavioral. The only read on the hot path
 // is aes.NewCipher's key schedule, which is assembly and uninstrumented, so a
 // torn read of the AES key produces no report at all. The identical pattern read
 // from Go IS reported, which makes the silence actively misleading.

@@ -38,7 +38,7 @@ import (
 //     token stream, before the decoder ever builds a value.
 //   - Ownership is a SQL predicate on every request-path read, not a comparison
 //     the caller performs after fetching a row.
-//   - The quota decision and the write it authorises are one serialised step per
+//   - The quota decision and the write it authorizes are one serialized step per
 //     subject. Reading the totals and then writing them is a check-then-act:
 //     writers that arrive together each observe the pre-write state, each pass,
 //     and each land. The unique index on (client_id, subject_hash, doc_key)
@@ -77,7 +77,7 @@ const (
 	svcDocLockStripes = 64
 )
 
-// Sentinel errors returned by ServiceDocumentService. The handler maps these to
+// Sentinel errors returned by DocumentService. The handler maps these to
 // status codes; nothing else about a failure reaches the caller.
 var (
 	// ErrSvcDocInvalidKey is returned for a document key outside the charset.
@@ -114,8 +114,8 @@ var (
 	svcDocSubjectCharset = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]*$`)
 )
 
-// ServiceDocumentConfig holds the operator-tunable limits.
-type ServiceDocumentConfig struct {
+// DocumentConfig holds the operator-tunable limits.
+type DocumentConfig struct {
 	// MaxDocumentBytes caps one document's canonical encoded size.
 	MaxDocumentBytes int
 	// MaxDocsPerSubject caps how many documents one client holds for one subject.
@@ -130,17 +130,17 @@ type ServiceDocumentConfig struct {
 	SharedEnabled bool
 }
 
-// ServiceDocumentMetrics is the subset of the metrics collector this service
+// DocumentMetrics is the subset of the metrics collector this service
 // records to. It is an interface so the service does not depend on the
 // collector, and so a deployment with metrics disabled passes nil.
-type ServiceDocumentMetrics interface {
+type DocumentMetrics interface {
 	RecordSvcDocWrite()
 	RecordSvcDocRead()
 	RecordSvcDocRejected()
 }
 
 // SubjectWriteSerializer is the capability a ServiceDocumentRepository
-// advertises when it can serialise every writer for one subject across every
+// advertises when it can serialize every writer for one subject across every
 // process that talks to the same store.
 //
 // It is an optional interface, discovered with a type assertion, rather than a
@@ -154,40 +154,40 @@ type ServiceDocumentMetrics interface {
 //
 // fn must run exactly once, synchronously, and must receive a context that
 // carries whatever transaction the lock was taken in, so that the reads fn makes
-// and the write it authorises are the same unit of work as the lock. An
+// and the write it authorizes are the same unit of work as the lock. An
 // implementation that ran fn outside the locked transaction would satisfy the
 // signature and none of the point.
 type SubjectWriteSerializer interface {
 	WithSubjectWriteLock(ctx context.Context, subjectHash string, fn func(context.Context) error) error
 }
 
-// ServiceDocumentService stores and retrieves encrypted, service-scoped JSON
+// DocumentService stores and retrieves encrypted, service-scoped JSON
 // documents.
-type ServiceDocumentService struct {
+type DocumentService struct {
 	repo       repository.ServiceDocumentRepository
 	clients    repository.ClientRepository
 	masterKey  []byte
 	hmacSecret []byte
-	cfg        ServiceDocumentConfig
-	metrics    ServiceDocumentMetrics
-	// writeLocks serialises the quota-decision-and-write section per subject
+	cfg        DocumentConfig
+	metrics    DocumentMetrics
+	// writeLocks serializes the quota-decision-and-write section per subject
 	// within this process. It is an array of mutexes rather than a pointer to
-	// one, so the zero value works and nothing has to be initialised; the service
+	// one, so the zero value works and nothing has to be initialized; the service
 	// is only ever used through a pointer, so the array is never copied.
 	writeLocks [svcDocLockStripes]sync.Mutex
 }
 
-// NewServiceDocumentService creates a service document service. clients may be
+// NewDocumentService creates a service document service. clients may be
 // nil, in which case owner names are omitted from listings and exports rather
 // than the operation failing. metrics may be nil.
-func NewServiceDocumentService(
+func NewDocumentService(
 	repo repository.ServiceDocumentRepository,
 	clients repository.ClientRepository,
 	masterKey, hmacSecret []byte,
-	cfg ServiceDocumentConfig,
-	metrics ServiceDocumentMetrics,
-) *ServiceDocumentService {
-	return &ServiceDocumentService{
+	cfg DocumentConfig,
+	metrics DocumentMetrics,
+) *DocumentService {
+	return &DocumentService{
 		repo: repo, clients: clients,
 		masterKey: masterKey, hmacSecret: hmacSecret,
 		cfg: cfg, metrics: metrics,
@@ -196,22 +196,22 @@ func NewServiceDocumentService(
 
 // MaxDocumentBytes exposes the per-document cap so the handler can size its own
 // body reader from the same number the service validates against.
-func (s *ServiceDocumentService) MaxDocumentBytes() int { return s.cfg.MaxDocumentBytes }
+func (s *DocumentService) MaxDocumentBytes() int { return s.cfg.MaxDocumentBytes }
 
 // SharedEnabled reports whether the shared visibility tier is available.
-func (s *ServiceDocumentService) SharedEnabled() bool { return s.cfg.SharedEnabled }
+func (s *DocumentService) SharedEnabled() bool { return s.cfg.SharedEnabled }
 
 // SubjectPseudonym computes the deterministic pseudonym for a user ID. The
 // erasure cascade derives the same value to find every document written about
 // an erased account, so this derivation and the one in ErasureService must stay
 // identical.
-func (s *ServiceDocumentService) SubjectPseudonym(userID string) string {
+func (s *DocumentService) SubjectPseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":svcdoc"), s.hmacSecret)
 }
 
 // subjectHash maps a path subject segment to its stored pseudonym, resolving
 // the global sentinel to its own fixed value.
-func (s *ServiceDocumentService) subjectHash(subject string) string {
+func (s *DocumentService) subjectHash(subject string) string {
 	if subject == GlobalSubject {
 		return vaultcrypto.HMACSign([]byte(GlobalSubject+":svcdoc:global"), s.hmacSecret)
 	}
@@ -227,9 +227,9 @@ func docAAD(clientID, subjectHash, docKey string) []byte {
 	return []byte("svcdoc:" + clientID + ":" + subjectHash + ":" + docKey)
 }
 
-// ServiceDocumentMeta is the metadata view of a document. It never carries the
+// DocumentMeta is the metadata view of a document. It never carries the
 // body.
-type ServiceDocumentMeta struct {
+type DocumentMeta struct {
 	Key         string    `json:"key"`
 	Owner       string    `json:"owner,omitempty"`
 	OwnerID     string    `json:"owner_id"`
@@ -241,18 +241,18 @@ type ServiceDocumentMeta struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// ServiceDocumentQuota summarizes a subject's document usage, mirroring the
+// DocumentQuota summarizes a subject's document usage, mirroring the
 // blob quota shape.
-type ServiceDocumentQuota struct {
+type DocumentQuota struct {
 	UsedBytes int `json:"used_bytes"`
 	MaxBytes  int `json:"max_bytes"`
 	UsedCount int `json:"used_count"`
 	MaxCount  int `json:"max_count"`
 }
 
-// ServiceDocumentExport is one document as it appears in a data export: the
+// DocumentExport is one document as it appears in a data export: the
 // decrypted body, plus who wrote it.
-type ServiceDocumentExport struct {
+type DocumentExport struct {
 	Key        string          `json:"key"`
 	Owner      string          `json:"owner,omitempty"`
 	OwnerID    string          `json:"owner_id"`
@@ -289,10 +289,10 @@ func ParseVisibility(s string) (repository.ServiceDocumentVisibility, bool) {
 // Put validates, canonicalises, encrypts and stores a document. It is a full
 // replace: there is no merge, so a caller that wants to change one field reads,
 // edits and writes the whole document.
-func (s *ServiceDocumentService) Put(
+func (s *DocumentService) Put(
 	ctx context.Context, clientID, subject, docKey string,
 	raw []byte, visibility repository.ServiceDocumentVisibility,
-) (*ServiceDocumentMeta, bool, error) {
+) (*DocumentMeta, bool, error) {
 	if err := ValidateDocKey(docKey); err != nil {
 		s.rejected()
 		return nil, false, err
@@ -326,7 +326,7 @@ func (s *ServiceDocumentService) Put(
 
 	var (
 		created bool
-		meta    *ServiceDocumentMeta
+		meta    *DocumentMeta
 	)
 	// Load, decide and write as one step. Splitting them is the whole bug: the
 	// count and the byte sum describe the state a moment ago, and a second writer
@@ -373,7 +373,7 @@ func (s *ServiceDocumentService) Put(
 		}
 
 		now := time.Now().UTC()
-		meta = &ServiceDocumentMeta{
+		meta = &DocumentMeta{
 			Key:         docKey,
 			OwnerID:     clientID,
 			Visibility:  VisibilityName(visibility),
@@ -412,7 +412,7 @@ func (s *ServiceDocumentService) Put(
 //
 // Two layers, always in the same order. The in-process stripe lock is taken
 // first: it is cheap, it collapses same-replica contention before it reaches the
-// database, and it is the only layer a repository that cannot serialise (an
+// database, and it is the only layer a repository that cannot serialize (an
 // in-memory store, a test double) has. The repository's own lock is taken second
 // and only if it offers one; that is the layer that holds across replicas, where
 // a mutex in one process means nothing to another.
@@ -427,7 +427,7 @@ func (s *ServiceDocumentService) Put(
 // writing about the same user are exactly the pair that has to contend; scoping
 // this to (client, subject) would leave the cross-tenant breach wide open while
 // looking like a fix.
-func (s *ServiceDocumentService) serializeSubjectWrite(ctx context.Context, subjectHash string, fn func(context.Context) error) error {
+func (s *DocumentService) serializeSubjectWrite(ctx context.Context, subjectHash string, fn func(context.Context) error) error {
 	stripe := &s.writeLocks[svcDocLockStripe(subjectHash)]
 	stripe.Lock()
 	defer stripe.Unlock()
@@ -439,7 +439,7 @@ func (s *ServiceDocumentService) serializeSubjectWrite(ctx context.Context, subj
 }
 
 // svcDocLockStripe maps a subject pseudonym onto one of the write stripes. Two
-// subjects that collide serialise against each other, which is a throughput
+// subjects that collide serialize against each other, which is a throughput
 // question and never a correctness one; what must never happen is one subject
 // mapping to two stripes, and a pure function of the pseudonym cannot.
 func svcDocLockStripe(subjectHash string) uint32 {
@@ -459,7 +459,7 @@ func svcDocLockStripe(subjectHash string) uint32 {
 // committed leaves a window in which the quota is over, and if the process dies
 // in that window the row stays; worse, deciding which of two winners to delete
 // means deleting a document a caller was already told was stored.
-func (s *ServiceDocumentService) checkQuota(
+func (s *DocumentService) checkQuota(
 	ctx context.Context, clientID, subjHash string,
 	existing *repository.ServiceDocument, newStored int,
 ) error {
@@ -497,7 +497,7 @@ func (s *ServiceDocumentService) checkQuota(
 // never as forbidden. The alternative turns the store into an oracle for
 // "does service X hold a record at key K about user U", which is exactly the
 // question the pseudonymised subject exists to make unanswerable.
-func (s *ServiceDocumentService) Get(ctx context.Context, clientID, subject, docKey, owner string) (json.RawMessage, *ServiceDocumentMeta, error) {
+func (s *DocumentService) Get(ctx context.Context, clientID, subject, docKey, owner string) (json.RawMessage, *DocumentMeta, error) {
 	if err := ValidateDocKey(docKey); err != nil {
 		return nil, nil, err
 	}
@@ -524,7 +524,7 @@ func (s *ServiceDocumentService) Get(ctx context.Context, clientID, subject, doc
 }
 
 // resolve picks the single document a caller may read at a key.
-func (s *ServiceDocumentService) resolve(ctx context.Context, clientID, subjHash, docKey, owner string) (*repository.ServiceDocument, error) {
+func (s *DocumentService) resolve(ctx context.Context, clientID, subjHash, docKey, owner string) (*repository.ServiceDocument, error) {
 	if owner == "" {
 		own, err := s.repo.Get(ctx, clientID, subjHash, docKey)
 		if err != nil {
@@ -568,7 +568,7 @@ func (s *ServiceDocumentService) resolve(ctx context.Context, clientID, subjHash
 // resolveOwnerID maps a client name to its id. Names are the human-facing
 // handle in the listing response, so the read path accepts the same value it
 // hands out rather than requiring the caller to know a UUID.
-func (s *ServiceDocumentService) resolveOwnerID(ctx context.Context, owner string) (string, error) {
+func (s *DocumentService) resolveOwnerID(ctx context.Context, owner string) (string, error) {
 	if s.clients == nil {
 		return "", ErrSvcDocUnknownOwner
 	}
@@ -584,7 +584,7 @@ func (s *ServiceDocumentService) resolveOwnerID(ctx context.Context, owner strin
 
 // Delete removes the caller's own document. A client can never delete another
 // client's row, shared or not.
-func (s *ServiceDocumentService) Delete(ctx context.Context, clientID, subject, docKey string) error {
+func (s *DocumentService) Delete(ctx context.Context, clientID, subject, docKey string) error {
 	if err := ValidateDocKey(docKey); err != nil {
 		return err
 	}
@@ -604,7 +604,7 @@ func (s *ServiceDocumentService) Delete(ctx context.Context, clientID, subject, 
 // List returns metadata for the caller's own documents plus the shared
 // documents other clients hold for the same subject, and the subject's quota
 // position. Bodies are never returned by a listing.
-func (s *ServiceDocumentService) List(ctx context.Context, clientID, subject string) ([]*ServiceDocumentMeta, *ServiceDocumentQuota, error) {
+func (s *DocumentService) List(ctx context.Context, clientID, subject string) ([]*DocumentMeta, *DocumentQuota, error) {
 	if err := ValidateSubject(subject); err != nil {
 		return nil, nil, err
 	}
@@ -623,7 +623,7 @@ func (s *ServiceDocumentService) List(ctx context.Context, clientID, subject str
 		return nil, nil, fmt.Errorf("svcdoc list quota: %w", err)
 	}
 
-	metas := make([]*ServiceDocumentMeta, 0, len(own)+len(shared))
+	metas := make([]*DocumentMeta, 0, len(own)+len(shared))
 	for _, d := range own {
 		metas = append(metas, s.metaOf(ctx, d, clientID))
 	}
@@ -631,7 +631,7 @@ func (s *ServiceDocumentService) List(ctx context.Context, clientID, subject str
 		metas = append(metas, s.metaOf(ctx, d, clientID))
 	}
 
-	quota := &ServiceDocumentQuota{
+	quota := &DocumentQuota{
 		UsedBytes: usedBytes,
 		MaxBytes:  s.cfg.QuotaBytesPerSubject,
 		UsedCount: len(own),
@@ -654,20 +654,20 @@ func (s *ServiceDocumentService) List(ctx context.Context, clientID, subject str
 //
 // A document that fails to decrypt is skipped rather than failing the whole
 // export: one unreadable row must not deny a subject the rest of their data.
-func (s *ServiceDocumentService) ExportForSubject(ctx context.Context, userID string) ([]*ServiceDocumentExport, error) {
+func (s *DocumentService) ExportForSubject(ctx context.Context, userID string) ([]*DocumentExport, error) {
 	subjHash := s.SubjectPseudonym(userID)
 	docs, err := s.repo.ListAllForSubject(ctx, subjHash)
 	if err != nil {
 		return nil, fmt.Errorf("svcdoc export: %w", err)
 	}
 
-	out := make([]*ServiceDocumentExport, 0, len(docs))
+	out := make([]*DocumentExport, 0, len(docs))
 	for _, d := range docs {
 		plaintext, decErr := vaultcrypto.Decrypt(d.DataEnc, s.masterKey, docAAD(d.ClientID, d.SubjectHash, d.DocKey))
 		if decErr != nil {
 			continue
 		}
-		out = append(out, &ServiceDocumentExport{
+		out = append(out, &DocumentExport{
 			Key:        d.DocKey,
 			Owner:      s.ownerName(ctx, d.ClientID),
 			OwnerID:    d.ClientID,
@@ -683,12 +683,12 @@ func (s *ServiceDocumentService) ExportForSubject(ctx context.Context, userID st
 
 // DeleteAllForSubject removes every document held about a user, across every
 // owning service. Called by the erasure cascade; idempotent.
-func (s *ServiceDocumentService) DeleteAllForSubject(ctx context.Context, userID string) error {
+func (s *DocumentService) DeleteAllForSubject(ctx context.Context, userID string) error {
 	return s.repo.DeleteAllForSubject(ctx, s.SubjectPseudonym(userID))
 }
 
-func (s *ServiceDocumentService) metaOf(ctx context.Context, d *repository.ServiceDocument, callerID string) *ServiceDocumentMeta {
-	return &ServiceDocumentMeta{
+func (s *DocumentService) metaOf(ctx context.Context, d *repository.ServiceDocument, callerID string) *DocumentMeta {
+	return &DocumentMeta{
 		Key:         d.DocKey,
 		Owner:       s.ownerName(ctx, d.ClientID),
 		OwnerID:     d.ClientID,
@@ -704,7 +704,7 @@ func (s *ServiceDocumentService) metaOf(ctx context.Context, d *repository.Servi
 // ownerName resolves a client id to its registered name. A lookup failure
 // degrades to an empty name rather than failing the request: the id is already
 // in the response and the name is a convenience.
-func (s *ServiceDocumentService) ownerName(ctx context.Context, clientID string) string {
+func (s *DocumentService) ownerName(ctx context.Context, clientID string) string {
 	if s.clients == nil {
 		return ""
 	}
@@ -715,7 +715,7 @@ func (s *ServiceDocumentService) ownerName(ctx context.Context, clientID string)
 	return c.Name
 }
 
-func (s *ServiceDocumentService) rejected() {
+func (s *DocumentService) rejected() {
 	if s.metrics != nil {
 		s.metrics.RecordSvcDocRejected()
 	}
@@ -746,7 +746,7 @@ func ValidateSubject(subject string) error {
 // canonicalize validates a submitted document and returns its canonical
 // encoding. Validation runs entirely on the token stream first; nothing is
 // unmarshalled until the body is known to be a bounded, well-formed object.
-func (s *ServiceDocumentService) canonicalize(raw []byte) ([]byte, error) {
+func (s *DocumentService) canonicalize(raw []byte) ([]byte, error) {
 	if len(raw) > s.cfg.MaxDocumentBytes {
 		return nil, ErrSvcDocTooLarge
 	}

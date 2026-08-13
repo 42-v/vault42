@@ -118,14 +118,15 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 		wait     time.Duration
 		rejected int64
 	}
-	var samples []sample
+	workerCounts := []int{8, 32, 128}
+	samples := make([]sample, 0, len(workerCounts))
 
 	// peakWaiting is the highest queue depth observed while the probes ran. It is
 	// sampled rather than derived, because the gauge's whole purpose is to be
 	// readable live during an incident, not reconstructable afterwards.
 	var peakWaiting int64
 
-	for _, workers := range []int{8, 32, 128} {
+	for _, workers := range workerCounts {
 		rejectedBefore := vaultcrypto.Argon2RejectedCount()
 		release := saturate(t, workers)
 
