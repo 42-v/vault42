@@ -86,7 +86,7 @@ func (r *Retention) Enabled() bool {
 }
 
 // Done is closed once the sweep loop has exited, whether it ended via Stop or
-// via its context being cancelled. The channel never closes if Start was not
+// via its context being canceled. The channel never closes if Start was not
 // called: a loop that never ran has nothing to wait for.
 func (r *Retention) Done() <-chan struct{} { return r.doneCh }
 
@@ -108,7 +108,7 @@ func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	return r.reaper.CleanupExpired(ctx)
 }
 
-// Start runs the sweeper until Stop is called or ctx is cancelled. It sweeps
+// Start runs the sweeper until Stop is called or ctx is canceled. It sweeps
 // once immediately: a deployment that rolls its pods more often than the
 // interval would otherwise never reach a tick and the reap would never happen.
 func (r *Retention) Start(ctx context.Context) {
