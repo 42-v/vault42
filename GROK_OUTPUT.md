@@ -169,6 +169,16 @@ code. The document was not edited.
     A client written from the error table will look for a code the
     server does not emit.
 
+19. **POST /client/token JWT `roles` claim.**
+    `ClientHandler.Token` calls
+    `IssueTokenPair(client.ID, []string{client.Role}, grantedScopes, ...)`,
+    so the access token's `roles` claim is the stored `Client.Role`.
+    `docs/spec.md` section 6.2 says the token carries the client's
+    role. api.md's POST /client/token section documents only the
+    JSON body (`access_token`, `token_type`, `expires_in`, `scope`)
+    and never mentions `roles` on the token. A client written from
+    api.md alone will not know the claim is present.
+
 ## What was documented
 
 Every exported struct field in `internal/model` (22 persistence
@@ -222,22 +232,36 @@ in `internal/handler/backup_codes.go`). `ProfileResponse.MFAMethods`
 lists only the names GetStatus appends. The api.md disagreements
 are items 13 and 14.
 
-This-turn remediations (prior-review fail):
+This-turn remediations (prior-review fail: comments followed a
+story, not the code):
 
-- `PasswordResetConfirmInput.Password` now names the configured
+- `IdentityProfile.Version` no longer claims an incrementing
+  compare-and-set generation. `IdentityService.Upsert` and
+  `upsertCAS` both write `Version: 1`. CAS is `UpdatedAt`
+  (`WHERE updated_at = $expected`). GET /user/identity does
+  not emit the field.
+- `Client.Role` no longer claims it is "not a JWT role".
+  POST /client/token writes it as the sole JWT roles member
+  (`IssueTokenPair(client.ID, []string{client.Role}, ...)`),
+  without `FilterUserRoles`. The JSON body still omits it.
+  `docs/spec.md` section 6.2 already says the token carries
+  the client's role; api.md does not (item 19).
+- `ClientTokenResponse.ExpiresIn` now names
+  `TokenService.AccessTokenTTL` / `VAULT_ACCESS_TOKEN_TTL`
+  (default 15m) instead of "typically 900".
+
+Earlier remediations (still in place):
+
+- `PasswordResetConfirmInput.Password` names the configured
   minimum (`VAULT_PASSWORD_MIN_LENGTH` / `h.minLength`, default
-  15 runes) and the same 400 codes as change-password
-  (`password_too_short`, `password_recently_used`,
-  `password_breached`). The previous "Minimum 15 characters"
-  text treated a configurable rune bound as a fixed character
-  count.
-- `User.Roles` (and the User type comment) now say admin-tier
-  names are stripped at JWT issuance (`effectiveRoles` /
-  `FilterUserRoles`), not forbidden on the stored slice.
-  `DataExportAccount.Roles` copies that stored slice as-is.
-- `Client.Active` documents the code path: POST /client/token
-  returns `401 invalid_client_credentials` when Active is false.
-  The api.md `client_revoked` row is item 18, not the comment.
+  15 runes) and the same 400 codes as change-password.
+- `User.Roles` (and the User type comment) say admin-tier
+  names are stripped at JWT issuance, not forbidden on the
+  stored slice. `DataExportAccount.Roles` copies the stored
+  slice as-is.
+- `Client.Active` documents `401 invalid_client_credentials`
+  when Active is false. The api.md `client_revoked` row is
+  item 18.
 
 ## Self-review
 
@@ -293,6 +317,13 @@ This-turn remediations (prior-review fail):
   now has a comment immediately above it. Anonymous request
   structs (`password`, `code`, `friendly_name`, `current_password`,
   `new_password`) also have field comments.
+- `IdentityService.Upsert` and `upsertCAS` both set `Version: 1`.
+  `IdentityRepo.UpsertCAS` matches `updated_at`, not `version`.
+  The `IdentityProfile.Version` comment matches those call sites.
+- `ClientHandler.Token` passes `[]string{client.Role}` to
+  `IssueTokenPair`, which writes `VaultClaims.Roles`. The
+  `Client.Role` comment matches that call site. `docs/spec.md`
+  6.2 agrees; api.md does not (item 19).
 - `ClientHandler.Token` writes `invalid_client_credentials` when
   `!client.Active`. The `Client.Active` comment and item 18 match
   that call site; they do not follow api.md's `client_revoked`.
@@ -328,7 +359,7 @@ This-turn remediations (prior-review fail):
 - Whether revive treats a field comment that does not start with
   the identifier as undocumented. Every new field comment starts
   with the field name.
-- Live responses against a running server. Discrepancies 1-18
+- Live responses against a running server. Discrepancies 1-19
   are from source vs `docs/api.md`, not from captured traffic.
 
 **Unsure:**

@@ -261,7 +261,8 @@ type ClientTokenResponse struct {
 	AccessToken string `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749
 	// TokenType is the HTTP presentation scheme. Always "Bearer".
 	TokenType string `json:"token_type"`
-	// ExpiresIn is the access-token lifetime in seconds, typically 900.
+	// ExpiresIn is TokenService.AccessTokenTTL in seconds
+	// (VAULT_ACCESS_TOKEN_TTL, default 15m so 900).
 	ExpiresIn int `json:"expires_in"`
 	// Scope is the space-separated grant, the intersection of the request
 	// and the client's allow-list. If the client requested nothing, it is
