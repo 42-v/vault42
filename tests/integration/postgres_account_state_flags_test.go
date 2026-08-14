@@ -188,18 +188,25 @@ func TestVaultAppCannotFlipThePrivilegedAccountStateColumns(t *testing.T) {
 		}
 	})
 
-	// locked_until is deliberately not narrowed, and this pins that decision so a
-	// later change to it is a deliberate one. `vault lock-user` and
-	// `vault unlock-user` (internal/cli/cli.go:263 and :277) run inside cmd/vault,
-	// which connects with cfg.DatabaseURL("app"), so clearing a live lock is a
-	// path vault_app genuinely takes.
-	t.Run("locking and unlocking stay open to the application role", func(t *testing.T) {
+	// locked_until was the one column 024 left open, because `vault lock-user` and
+	// `vault unlock-user` then ran inside cmd/vault under vault_app and wrote it.
+	// Those CLI subcommands are retired (internal/cli/cli.go, lockUser/unlockUser)
+	// and issue no database write, so migration 029 revoked UPDATE(locked_until)
+	// from vault_app. The only runtime writer left is the admin gateway under
+	// vault_admin (POST /admin/users/{id}/lock and /unlock). vault_app must now be
+	// refused the column; LockUntil writes it alone, and Unlock writes it alongside
+	// failed_login_count, so Postgres denies the whole statement with 42501.
+	t.Run("the application role can no longer lock or unlock", func(t *testing.T) {
 		u := seedAccountStateUser(t, ctx, ownerDB, "state-lock@test.com")
-		if err := app.LockUntil(ctx, u.ID, time.Now().Add(time.Hour)); err != nil {
-			t.Fatalf("vault lock-user is broken in every deployment: %v", err)
+		if err := app.LockUntil(ctx, u.ID, time.Now().Add(time.Hour)); !permissionDenied(err) {
+			t.Fatalf("vault_app wrote locked_until: err = %v.\n"+
+				"029 revoked UPDATE(locked_until); the admin gateway locks accounts under "+
+				"vault_admin, which audits the action and revokes the target's sessions.", err)
 		}
-		if err := app.Unlock(ctx, u.ID); err != nil {
-			t.Fatalf("vault unlock-user is broken in every deployment: %v", err)
+		if err := app.Unlock(ctx, u.ID); !permissionDenied(err) {
+			t.Fatalf("vault_app cleared locked_until: err = %v.\n"+
+				"Clearing a live lock the admin plane imposed for containment belongs to "+
+				"vault_admin, not the web-facing role.", err)
 		}
 	})
 

@@ -1,0 +1,36 @@
+-- ============================================================================
+-- 029: locked_until stops moving for the application role
+-- ============================================================================
+--
+-- 024 revoked banned, ban_reason and disabled from vault_app and left one column
+-- of the account-state set deliberately open: locked_until. Its reasoning (024,
+-- the locked_until section) was that `vault lock-user` and `vault unlock-user`
+-- ran inside cmd/vault under the vault_app role and wrote this column, so a REVOKE
+-- would have broken a working operator command. It named the fix as a change in
+-- Go, after which the column could be narrowed the way the other four were.
+--
+-- That Go change has landed. Both CLI subcommands are retired (internal/cli/cli.go,
+-- lockUser/unlockUser); they print an error and issue no database write. No other
+-- vault_app path writes locked_until: the web server's auto-lockout is cache-based
+-- (isAccountLocked/recordFailedAttempt in internal/service/auth.go), and its only
+-- vault_app write on the failed-login path is failed_login_count, a separate column
+-- vault_app keeps.
+--
+-- The sole runtime writer of locked_until is now the admin gateway, under
+-- vault_admin, from POST /admin/users/{id}/lock and /unlock
+-- (internal/adminapi/handler.go), which audits the action and revokes the target's
+-- sessions. vault_admin holds UPDATE (locked_until, failed_login_count) from 001
+-- and keeps it.
+--
+-- So 024's condition is met and the grant is surplus, which is what a REVOKE is
+-- for: with no vault_app writer, the privilege only lets the web-facing role clear
+-- or override a lock the admin plane imposed for containment, with no audit trail.
+-- Only locked_until comes off; vault_app keeps UPDATE (failed_login_count).
+--
+-- Written bare rather than inside a pg_roles guard, the way 015 and 024 argue: 001
+-- creates both roles unconditionally, and a statement nested in a DO block is
+-- skipped by the integration fixture's applyRealGrants(), which would leave that
+-- suite exercising the pre-029 privilege model.
+-- ============================================================================
+
+REVOKE UPDATE (locked_until) ON auth.users FROM vault_app;

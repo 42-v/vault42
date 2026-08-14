@@ -74,27 +74,26 @@
 --     account holder cannot clear that state from the outside, and the row looks
 --     ordinary in every listing.
 --
--- locked_until -- both directions, unchanged, and this is the gap that stays open.
+-- locked_until -- both directions. This was the gap 024 left open; migration 029
+-- has since closed it.
 --
---     The obvious rule is that vault_app may set a lock and may clear one only
---     after it has expired, leaving early release to the admin plane. It does not
---     survive contact with the tree. `vault lock-user` and `vault unlock-user`
---     (internal/cli/cli.go:263 and :277) call UserRepo.LockUntil and
---     UserRepo.Unlock, they live in cmd/vault, and cmd/vault opens its pool with
---     cfg.DatabaseURL("app"). Clearing a live lock is something vault_app does on
---     purpose, on an operator's command, and the database cannot tell that
---     invocation from the web-facing process because it is the same role.
+--     The rule that fits is that locked_until belongs to the admin plane:
+--     vault_admin sets a lock and clears one, and vault_app does not write the
+--     column at all. At 024 that did not survive contact with the tree.
+--     `vault lock-user` and `vault unlock-user` (internal/cli/cli.go,
+--     lockUser/unlockUser) called UserRepo.LockUntil and UserRepo.Unlock, they
+--     lived in cmd/vault, and cmd/vault opens its pool with cfg.DatabaseURL("app").
+--     Clearing a live lock was therefore a path the vault_app role genuinely took,
+--     on an operator's command, and a REVOKE here would have broken it.
 --
---     So the rule would break a working operator command, and the honest move is
---     to say so rather than ship a guard with a hole in the middle of it. The fix
---     is not a migration: POST /admin/users/{id}/lock and /unlock already do this
---     under vault_admin, which holds UPDATE (locked_until, failed_login_count)
---     from 001 and is gated on users:lock / users:unlock. Pointing the two CLI
---     subcommands at the admin DSN, or removing them in favour of the endpoints,
---     is a change in Go, after which the column can be narrowed the way the other
---     four are. Until then vault_app can release any lock, which is a smaller
---     capability than the UPDATE (password_hash) it must keep, and larger than
---     nothing.
+--     That Go change has since landed. Both CLI subcommands are retired: they
+--     print an error and issue no database write. Account containment runs on the
+--     admin gateway via POST /admin/users/{id}/lock and /unlock, under vault_admin,
+--     which holds UPDATE (locked_until, failed_login_count) from 001, is gated on
+--     users:lock / users:unlock, audits the action and revokes the target's
+--     sessions. With no vault_app writer left, migration 029 revokes
+--     UPDATE (locked_until) from vault_app, narrowing this column the way the other
+--     four above are narrowed. vault_app keeps UPDATE (failed_login_count).
 --
 -- ----------------------------------------------------------------------------
 -- Why the trigger is not keyed on the role, when 023's is
