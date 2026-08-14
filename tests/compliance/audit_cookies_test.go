@@ -30,12 +30,12 @@ import (
 // them.
 // =============================================================================
 
-// auditCookies_driveLogin constructs an AuthHandler exactly the way the
+// auditCookiesDriveLogin constructs an AuthHandler exactly the way the
 // internal/handler tests do (mocks + service.NewAuthService), with secure
 // cookies ENABLED (the production posture behind TLS), performs a real
 // successful password login, and returns the live __Host-refresh_token
 // cookie that the handler emitted on the response.
-func auditCookies_driveLogin(t *testing.T) *http.Cookie {
+func auditCookiesDriveLogin(t *testing.T) *http.Cookie {
 	t.Helper()
 
 	const password = "validpassword123"
@@ -121,7 +121,7 @@ func auditCookies_driveLogin(t *testing.T) *http.Cookie {
 // TestASVS_V3_3_1_LiveRefreshCookieIsSecure verifies V3.3.1 (Secure attribute)
 // against the actual Set-Cookie emitted by a live login, not config.
 func TestASVS_V3_3_1_LiveRefreshCookieIsSecure(t *testing.T) {
-	c := auditCookies_driveLogin(t)
+	c := auditCookiesDriveLogin(t)
 	if !c.Secure {
 		t.Fatalf("V3.3.1: live __Host-refresh_token cookie is not Secure: %+v", c)
 	}
@@ -130,7 +130,7 @@ func TestASVS_V3_3_1_LiveRefreshCookieIsSecure(t *testing.T) {
 // TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict verifies V3.3.2 (SameSite)
 // against the live Set-Cookie header.
 func TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict(t *testing.T) {
-	c := auditCookies_driveLogin(t)
+	c := auditCookiesDriveLogin(t)
 	if c.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("V3.3.2: live __Host-refresh_token cookie SameSite=%d, want Strict(%d)",
 			c.SameSite, http.SameSiteStrictMode)
@@ -142,7 +142,7 @@ func TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict(t *testing.T) {
 // when the cookie is also Secure, Path=/, and carries no Domain, so all three
 // are asserted alongside the name.
 func TestASVS_V3_3_3_LiveRefreshCookieHostPrefix(t *testing.T) {
-	c := auditCookies_driveLogin(t)
+	c := auditCookiesDriveLogin(t)
 	if c.Name != "__Host-refresh_token" {
 		t.Fatalf("V3.3.3: cookie name=%q, want __Host-refresh_token", c.Name)
 	}
@@ -161,7 +161,7 @@ func TestASVS_V3_3_3_LiveRefreshCookieHostPrefix(t *testing.T) {
 // TestASVS_V3_3_4_LiveRefreshCookieHttpOnly verifies V3.3.4 (HttpOnly)
 // against the live Set-Cookie header.
 func TestASVS_V3_3_4_LiveRefreshCookieHttpOnly(t *testing.T) {
-	c := auditCookies_driveLogin(t)
+	c := auditCookiesDriveLogin(t)
 	if !c.HttpOnly {
 		t.Fatalf("V3.3.4: live __Host-refresh_token cookie is not HttpOnly: %+v", c)
 	}

@@ -76,7 +76,7 @@ func parseCopyInstruction(line string) copyInstruction {
 		return copyInstruction{}
 	}
 	inst := copyInstruction{}
-	var operands []string
+	operands := make([]string, 0, len(fields)-1)
 	for _, f := range fields[1:] { // skip the COPY/ADD verb
 		if strings.HasPrefix(f, "--") {
 			if strings.HasPrefix(f, "--from=") {
