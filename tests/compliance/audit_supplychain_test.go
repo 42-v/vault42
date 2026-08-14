@@ -12,9 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/42-v/vault42/internal/oauth2"
 	"github.com/42-v/vault42/internal/service"
-	"gopkg.in/yaml.v3"
 )
 
 // =============================================================================
