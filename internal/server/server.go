@@ -25,6 +25,7 @@ import (
 	"github.com/42-v/vault42/internal/frontend"
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/honeypot"
+	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/kms"
 	"github.com/42-v/vault42/internal/metrics"
@@ -88,6 +89,11 @@ type Deps struct {
 
 	// Honeypot (nil unless profile=honeypot)
 	HoneypotAlerter *honeypot.Alerter
+
+	// IPIntel is the IP-intelligence table used to raise rate-limit scrutiny on
+	// VPN/hosting/Tor addresses (never to block them). Nil leaves the auth
+	// limiters at their default weight, so the feature is opt-in.
+	IPIntel *ipintel.DB
 
 	// Metrics (nil unless VAULT_METRICS_ENABLED=true)
 	Metrics *metrics.Collector
@@ -301,19 +307,25 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Rate limiting middleware factories
 	rlEnabled := cfg.RateLimitEnabled
+	// VPN/hosting/Tor scrutiny: a flagged IP consumes the credential-guessing
+	// buckets (login, register, password reset) 3x faster, so those callers meet
+	// the ordinary 429 sooner. It never blocks a VPN — that is the whole point of
+	// putting it here and not in ipaccess.go. nil when ipintel is not configured,
+	// leaving every limiter at its default weight (feature is opt-in).
+	vpnScrutiny := middleware.IPIntelWeight(d.IPIntel, 3)
 	// Auth-sensitive limiters fail closed on cache outage (audit L4): the per-pod
 	// in-memory fallback would multiply the effective limit across replicas.
 	loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true,
+		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	registerRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	refreshRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	passwordResetRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	totpRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,

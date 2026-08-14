@@ -4,6 +4,7 @@ package mocks
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
@@ -15,6 +16,7 @@ var (
 	_ repository.UserRepository            = (*MockUserRepo)(nil)
 	_ repository.RefreshTokenRepository    = (*MockRefreshTokenRepo)(nil)
 	_ repository.DeviceRepository          = (*MockDeviceRepo)(nil)
+	_ repository.LoginCountryRepository    = (*MockLoginCountryRepo)(nil)
 	_ repository.ClientRepository          = (*MockClientRepo)(nil)
 	_ repository.TOTPRepository            = (*MockTOTPRepo)(nil)
 	_ repository.WebAuthnRepository        = (*MockWebAuthnRepo)(nil)
@@ -320,6 +322,43 @@ func (m *MockDeviceRepo) DeleteAllForUser(ctx context.Context, userID string) er
 		return m.DeleteAllForUserFn(ctx, userID)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// MockLoginCountryRepo
+// ---------------------------------------------------------------------------
+
+// MockLoginCountryRepo is an in-memory stub of
+// repository.LoginCountryRepository. When UpsertAndWasNewFn is nil it behaves
+// like a real store: it remembers the countries seen per user, so wasNew and
+// hadAny follow the first-seen semantics without a database.
+type MockLoginCountryRepo struct {
+	UpsertAndWasNewFn func(ctx context.Context, userID, cc string) (bool, bool, error)
+
+	mu   sync.Mutex
+	seen map[string]map[string]bool
+}
+
+func (m *MockLoginCountryRepo) UpsertAndWasNew(ctx context.Context, userID, cc string) (bool, bool, error) {
+	if m.UpsertAndWasNewFn != nil {
+		return m.UpsertAndWasNewFn(ctx, userID, cc)
+	}
+	// The login success path calls this from a goroutine, so the default store
+	// is mutex-guarded to stay race-free under -race.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen == nil {
+		m.seen = make(map[string]map[string]bool)
+	}
+	countries := m.seen[userID]
+	hadAny := len(countries) > 0
+	if countries == nil {
+		countries = make(map[string]bool)
+		m.seen[userID] = countries
+	}
+	wasNew := !countries[cc]
+	countries[cc] = true
+	return wasNew, hadAny, nil
 }
 
 // ---------------------------------------------------------------------------

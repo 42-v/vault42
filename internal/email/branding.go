@@ -44,6 +44,7 @@ var knownTemplateNames = map[string]bool{
 	Template2FASetup:           true,
 	TemplateSuspiciousActivity: true,
 	TemplateEmailOTP:           true,
+	TemplateNewLocation:        true,
 }
 
 // ValidTemplateName reports whether name is a known email template type.
