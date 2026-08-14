@@ -7,8 +7,10 @@ package integration_test
 // What 004 and 006 left open is the rest of the account-state set: banned,
 // ban_reason, disabled, email_verified and import_pending. Every one of them
 // decides whether an account may authenticate, and the login gate reads all of
-// them (internal/service/auth.go: banned and disabled before the password check,
-// import_pending instead of it, email_verified after it).
+// them (internal/service/auth.go: deleted and import_pending instead of the
+// password check, banned, disabled and email_verified after it -- banned and
+// disabled are revealed only to a caller who proved the password, so they cannot
+// be used to enumerate accounts).
 //
 // A blanket REVOKE is wrong for two of the five, which is what makes this a
 // per-transition question rather than a privilege question. UserRepo clears

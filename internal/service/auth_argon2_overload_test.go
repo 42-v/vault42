@@ -225,6 +225,44 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 			notWant: ErrInvalidCredentials,
 		},
 		{
+			// A banned account is refused only after a successful password
+			// verification, so under load VerifyPassword short-circuits to the
+			// overload error before the banned check is reached; it must not answer
+			// ErrAccountBanned, which would leak that the address exists.
+			name: "login as a banned account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-3", Email: "banned@example.com", PasswordHash: hash, EmailVerified: true, Banned: true}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "banned@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrAccountBanned,
+		},
+		{
+			name: "login as a disabled account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-4", Email: "disabled@example.com", PasswordHash: hash, EmailVerified: true, Disabled: true}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "disabled@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrAccountDisabled,
+		},
+		{
 			name: "login as an imported account awaiting its claim link",
 			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
 				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {

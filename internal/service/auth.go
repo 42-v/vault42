@@ -652,9 +652,14 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, ErrInvalidCredentials
 	}
 
-	// Account-state gate (legacy-platform parity, migration 004). Reject banned/disabled/
-	// deleted accounts before password verification. A soft-deleted account is
-	// treated as "no such user" (ErrInvalidCredentials) to avoid revealing it.
+	// Account-state gate (legacy-platform parity, migration 004). A soft-deleted
+	// account is masked as "no such user" (ErrInvalidCredentials) before the
+	// password is verified, so its existence never leaks. Banned and disabled are
+	// administrative denials a proven-password caller is entitled to see, so they
+	// are checked after VerifyPassword succeeds (below): checking them here, before
+	// the password, would answer a banned or disabled address with a distinct 403
+	// while an unknown address answers 401, telling an unauthenticated caller the
+	// address is registered.
 	if user.Deleted {
 		// Masked as "no such user" (ErrInvalidCredentials) to avoid revealing the
 		// soft delete. The timing must match too: the user==nil and ImportPending
@@ -668,17 +673,6 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			map[string]interface{}{"reason": "account_deleted"}, 20)
 		return nil, ErrInvalidCredentials
 	}
-	if user.Banned {
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_banned"}, 30)
-		return nil, ErrAccountBanned
-	}
-	if user.Disabled {
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_disabled"}, 30)
-		return nil, ErrAccountDisabled
-	}
-
 	// Imported account, first login: no credential was ever imported, so there is
 	// no password to verify and no session to issue.
 	//
@@ -709,6 +703,23 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	if err != nil || !valid {
 		s.recordLoginFailure(ctx, user, ip, ua, app, "wrong_password", 20)
 		return nil, ErrInvalidCredentials
+	}
+
+	// Administrative-denial gate, after password proof. A banned or disabled
+	// account reaches here only by proving it owns the account, so revealing the
+	// denial is not an enumeration signal; a wrong password or an unknown address
+	// stayed masked as ErrInvalidCredentials above and never arrives. No failure is
+	// recorded and lockout does not progress: this refuses a valid credential by
+	// policy, it is not a credential failure.
+	if user.Banned {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_banned"}, 30)
+		return nil, ErrAccountBanned
+	}
+	if user.Disabled {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_disabled"}, 30)
+		return nil, ErrAccountDisabled
 	}
 
 	// Check email verified — return ErrInvalidCredentials (not ErrEmailNotVerified)
