@@ -5158,9 +5158,10 @@
         "internal/crypto/argon2.go:157"
       ],
       "tests": [
-        "TestNIST63B4_3_1_1_2_PasswordsAreSaltedAndHashed"
+        "TestNIST63B4_3_1_1_2_PasswordsAreSaltedAndHashed",
+        "TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors"
       ],
-      "notes": "Two distinct authentication factors, each meeting its own section 3 requirements."
+      "notes": "Two distinct authentication factors, each meeting its own section 3 requirements. Under the shipped section 5.2.4 combination rules, reaching AAL2 requires two distinct factors (a single factor resolves below AAL2), and the memorized-secret verifier meets its own requirements (Argon2id, salt, pepper)."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5288,9 +5289,10 @@
         "internal/service/auth.go"
       ],
       "tests": [
-        "TestNIST_MFA_TOTPRejectionOfInvalidCodes"
+        "TestNIST63B4_3_1_3_OutOfBandEmailOTPBindsToRequestAndExpires",
+        "TestASVSAuth_V6_6_2_EmailOTPBoundToOriginalRequest"
       ],
-      "notes": "Email OTP is bound to the authentication request that produced it and expires. The PSTN is not used."
+      "notes": "Email OTP is the out-of-band device. It is bound to the authenticating subject (cache key email_otp:<userID>, so a code minted for one request cannot complete another), is single-use via atomic GetAndDelete, and is stored with a finite 5-minute expiry. The PSTN is not used."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5336,9 +5338,9 @@
         "internal/handler/webauthn.go"
       ],
       "tests": [
-        "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
+        "TestNIST63B4_3_1_6_CryptographicAuthenticatorSignatureVerification"
       ],
-      "notes": "WebAuthn/FIDO2, with the authenticator performing activation."
+      "notes": "WebAuthn/FIDO2. The verifier accepts an assertion only when it carries a signature made by the private key matching the credential's stored public key; a forged signature is rejected and the sign counter is not advanced. Proven by driving the shipped VerifyFinish assertion path with a virtual ES256 authenticator (login verification, not a full attestation ceremony)."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5389,9 +5391,9 @@
         "internal/handler/webauthn.go"
       ],
       "tests": [
-        "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
+        "TestNIST63B4_3_2_5_VerifierImpersonationResistanceOriginBinding"
       ],
-      "notes": "WebAuthn provides verifier name binding through the relying-party identifier. It is available, not mandatory, which is what AAL2 permits."
+      "notes": "WebAuthn binds each assertion to the relying party. A correctly signed assertion is refused when the client origin does not match the configured RP origin, and when the authenticatorData is bound to a different RP identifier, so an assertion cannot be relayed from a phishing origin. It is available, not mandatory, which is what AAL2 permits."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5438,9 +5440,9 @@
         "internal/handler/webauthn.go"
       ],
       "tests": [
-        "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
+        "TestNIST63B4_3_2_8_AuthenticationIntentUserPresenceAndVerification"
       ],
-      "notes": "WebAuthn user presence supplies intent. Recommended rather than required at AAL2."
+      "notes": "WebAuthn user presence supplies intent: an assertion with the user-present flag clear is rejected, and a credential enrolled with user verification cannot be downgraded to a presence-only assertion. Both refusals occur before the sign counter is advanced. Recommended rather than required at AAL2."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5453,10 +5455,11 @@
         "internal/crypto/random.go"
       ],
       "tests": [
+        "TestNIST63B4_3_2_12_RandomSourceIsApprovedDRBG",
         "TestNIST_CSPRNGForRandomGeneration",
         "TestASVS_V6_3_2_NoSeededPRNG"
       ],
-      "notes": "All random values come from an approved DRBG (crypto/rand)."
+      "notes": "All random values come from an approved DRBG: internal/crypto/random.go draws from crypto/rand.Reader and imports no seeded PRNG, and the generators produce well-formed output. The distinct-output tests complement the source-primitive check."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5502,9 +5505,10 @@
         "internal/keystore/keystore.go:468"
       ],
       "tests": [
+        "TestNIST63B4_4_4_EphemeralAuthenticatorsExpire",
         "TestASVS_V6_4_2_KeyRotationPreservesOldTokens"
       ],
-      "notes": "Authenticators do not expire on a timer; signing keys do, and rotate with an overlap window."
+      "notes": "Persistent authenticators do not expire on a timer; the ephemeral ones do. The WebAuthn assertion ceremony and the out-of-band email code each carry a short, finite lifetime and cannot be used after it. Signing keys expire and rotate with an overlap window."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5547,10 +5551,12 @@
         "internal/handler/auth.go:294"
       ],
       "tests": [
-        "TestASVS_V3_4_CookieSecurityAttributes",
-        "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath"
+        "TestASVS_V3_3_1_LiveRefreshCookieIsSecure",
+        "TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict",
+        "TestASVS_V3_3_3_LiveRefreshCookieHostPrefix",
+        "TestASVS_V3_3_4_LiveRefreshCookieHttpOnly"
       ],
-      "notes": "__Host- prefix, HttpOnly, Secure, SameSite=Strict."
+      "notes": "__Host- prefix, HttpOnly, Secure, SameSite=Strict, asserted on the live Set-Cookie header emitted by a real login rather than on configuration alone."
     },
     {
       "standard": "NIST SP 800-63B-4",
