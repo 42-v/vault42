@@ -11,15 +11,6 @@ import (
 	"github.com/42-v/vault42/internal/service"
 )
 
-// Audit event types for the service document store.
-//
-// The svcdoc_ prefix is load-bearing in the same way blob_ is: the audit
-// scrubber drops an event class's sensitive keys by prefix, and these events
-// must never carry a document body. Nothing here logs one, since the metadata
-// is deliberately limited to the key, the size, the visibility and the outcome,
-// but the prefix keeps that true if a future caller is careless.
-const ()
-
 // ClientRateLimitKey buckets a rate limiter by the authenticated client rather
 // than by source IP.
 //

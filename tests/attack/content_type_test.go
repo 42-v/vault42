@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testJSONHandler is a minimal HTTP handler that decodes JSON using the same
@@ -164,10 +165,26 @@ func TestContentType_JSONBomb(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
+	// Go's json.Decoder caps nesting at 10000, and this payload sits under that,
+	// so the handler must resolve it promptly rather than hang or blow the stack.
+	// Run it off the test goroutine and bound the wait, so unbounded recursion
+	// surfaces as a clean timeout failure instead of hanging the whole suite.
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
 
-	// Should either reject (400) or handle without panic
-	if rec.Code != http.StatusBadRequest {
-		t.Logf("Deeply nested JSON: status=%d (decoder handled it)", rec.Code)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return within 5s for deeply nested JSON (possible unbounded recursion / DoS)")
+	}
+
+	// The concrete guarantee: it completes with a real client-side status, never
+	// a 5xx or a panic-driven crash. DisallowUnknownFields makes the top-level
+	// "a" an unknown field, so the decoder resolves this to 400.
+	if rec.Code >= http.StatusInternalServerError {
+		t.Fatalf("deeply nested JSON produced a server error: status=%d", rec.Code)
 	}
 }
