@@ -110,52 +110,75 @@ func RejectProxyHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// SessionAuth middleware validates admin session tokens from the Authorization header.
-// It looks up the session by SHA-256 hash, checks expiry and revocation, and loads
-// the admin user into context.
+// SessionAuth middleware validates admin session tokens from the Authorization
+// header. It looks up the session by SHA-256 hash, checks expiry and revocation,
+// and loads the admin user into context. Each token or session validity failure
+// (missing or malformed Authorization header, an unknown, revoked or expired
+// session, or a session whose admin no longer exists) is written to the
+// append-only audit log as an admin_session_rejected event naming the reason
+// (ASVS V16.3.2): the rejection is enforced regardless, and the record is what
+// makes session-token replay and bogus-token probing detectable after the fact.
+// auditLog may be nil, in which case the rejection is still enforced but not
+// recorded; the wired gateway always supplies one.
 //
 //nolint:gocognit // explicit branches for token-format check, hash lookup, expiry, revocation, killswitch — security boundary; flat is clearer than helpers
-func SessionAuth(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository) func(http.Handler) http.Handler {
+func SessionAuth(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository, auditLog *audit.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// reject records an admin_session_rejected audit event naming the
+			// reason (when a logger is wired) and answers 401. It covers the
+			// token and session validity failures only; the account_locked and
+			// 2fa_required policy gates below apply to an already-valid session
+			// and keep their own handling.
+			reject := func(reason string) {
+				if auditLog != nil {
+					_ = auditLog.Log(r.Context(), audit.AdminSessionRejected, "", "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+						"reason": reason,
+						"method": r.Method,
+						"path":   r.URL.Path,
+					}, 5)
+				}
+				httputil.WriteError(w, http.StatusUnauthorized, reason)
+			}
+
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
-				httputil.WriteError(w, http.StatusUnauthorized, "missing_authorization")
+				reject("missing_authorization")
 				return
 			}
 
 			parts := strings.SplitN(auth, " ", 2)
 			if len(parts) != 2 || parts[0] != "Bearer" {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_authorization")
+				reject("invalid_authorization")
 				return
 			}
 
 			token := parts[1]
 			if len(token) == 0 || len(token) > 256 {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_token")
+				reject("invalid_token")
 				return
 			}
 
 			hash := hashSessionToken(token)
 			session, err := sessions.GetByTokenHash(r.Context(), hash)
 			if err != nil || session == nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_session")
+				reject("invalid_session")
 				return
 			}
 
 			if session.Revoked {
-				httputil.WriteError(w, http.StatusUnauthorized, "session_revoked")
+				reject("session_revoked")
 				return
 			}
 
 			if time.Now().After(session.ExpiresAt) {
-				httputil.WriteError(w, http.StatusUnauthorized, "session_expired")
+				reject("session_expired")
 				return
 			}
 
 			admin, err := admins.GetByID(r.Context(), session.AdminID)
 			if err != nil || admin == nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "admin_not_found")
+				reject("admin_not_found")
 				return
 			}
 

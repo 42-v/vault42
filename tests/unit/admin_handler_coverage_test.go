@@ -420,7 +420,7 @@ func TestAdminMiddleware_GetSession_NoneReturnsNil(t *testing.T) {
 // SessionAuth has many rejection branches; one test per branch reaches a
 // distinct error path. A passing handler downstream confirms the happy path.
 func sessionAuthGuard(sessions *mockAdminSessionRepo, admins *mockAdminUserRepo) http.Handler {
-	mw := adminapi.SessionAuth(sessions, admins)
+	mw := adminapi.SessionAuth(sessions, admins, audit.NewLogger(&mocks.MockAuditRepo{}, 0))
 	return mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

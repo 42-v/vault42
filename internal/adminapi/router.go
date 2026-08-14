@@ -27,7 +27,7 @@ type RouterOpts struct {
 func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler {
 	mux := http.NewServeMux()
 
-	sessionAuth := SessionAuth(auth.sessions, auth.admins)
+	sessionAuth := SessionAuth(auth.sessions, auth.admins, api.auditLog)
 
 	// withPerm chains SessionAuth then RBACCheck for one route. It is a closure
 	// so every guarded route shares the one audit logger without threading it

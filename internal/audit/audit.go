@@ -130,6 +130,14 @@ const (
 	// required permission. The decision is enforced regardless of this record;
 	// the record is the trail a privilege-boundary probe leaves behind.
 	AdminAuthzDenied = "admin_authz_denied"
+	// AdminSessionRejected records an admin-plane session-token rejection: a
+	// request was refused before authentication because its bearer token or
+	// session failed a validity check (missing or malformed Authorization
+	// header, an unknown, revoked or expired session, or a session whose admin
+	// no longer exists). The reason is carried in the metadata. The decision is
+	// enforced regardless of this record; the record is the trail a session
+	// replay or bogus-token probe leaves behind.
+	AdminSessionRejected = "admin_session_rejected"
 
 	// SvcDocPut records a service document being created or replaced.
 	SvcDocPut = "svcdoc_put"

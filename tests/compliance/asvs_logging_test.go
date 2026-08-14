@@ -335,6 +335,44 @@ func TestASVS_V16_3_2_RBACDenialsAreAudited(t *testing.T) {
 	}
 }
 
+// The authentication half of V16.3.2 for the admin session gate. A rejected
+// admin session token must reach the append-only audit log, or a session-token
+// replay or a bogus-token probe leaves no trail while the RBAC denials and the
+// killswitch trip beside it are all logged. This drives a bogus bearer token
+// through the real SessionAuth middleware and asserts the record the repository
+// received: the event type and the reason it names. The oversize token trips the
+// token-validity check before any repository lookup, so no session or admin
+// repository is needed.
+func TestASVS_V16_3_2_AdminSessionRejectionsAreAudited(t *testing.T) {
+	repo := &captureRepo{}
+	logger := audit.NewLogger(repo, 0)
+
+	reached := false
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
+	guarded := adminapi.SessionAuth(nil, nil, logger)(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 300))
+	req.RemoteAddr = "127.0.0.1:5000"
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("V16.3.2: a rejected admin session returned %d, want 401", rec.Code)
+	}
+	if reached {
+		t.Fatal("V16.3.2: the guarded handler ran despite a session rejection")
+	}
+
+	entry := repo.last(t)
+	if entry.EventType != audit.AdminSessionRejected {
+		t.Errorf("V16.3.2: rejection wrote event %q, want %q", entry.EventType, audit.AdminSessionRejected)
+	}
+	if got := entry.Metadata["reason"]; got != "invalid_token" {
+		t.Errorf("V16.3.2: rejection record reason = %v, want %q", got, "invalid_token")
+	}
+}
+
 // --- V16.4.1: log data is encoded to prevent log injection ---
 
 // "Verify that all logging components appropriately encode data to prevent log
