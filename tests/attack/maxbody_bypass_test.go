@@ -1,6 +1,7 @@
 package attack
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,29 +50,34 @@ func TestMaxBodySkipsHEADRequests(t *testing.T) {
 // TestMaxBodyEnforcesOnPOST verifies that POST requests are still
 // body-limited — an attacker can't send a 1GB JSON payload.
 func TestMaxBodyEnforcesOnPOST(t *testing.T) {
-	bodyRead := false
+	var bytesRead int
+	var readErr error
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf := make([]byte, 1024)
-		n, _ := r.Body.Read(buf)
-		if n > 0 {
-			bodyRead = true
-		}
+		data, err := io.ReadAll(r.Body)
+		bytesRead = len(data)
+		readErr = err
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := middleware.MaxBody(100)(inner) // 100 byte limit
 
-	// POST with body larger than limit
-	bigBody := strings.NewReader(strings.Repeat("A", 200))
+	// POST with a body four times the limit.
+	bigBody := strings.NewReader(strings.Repeat("A", 400))
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", bigBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	// The middleware should wrap the body with a LimitReader.
-	// Reading beyond the limit will produce an error, not a crash.
-	// The handler may still get a 200 if it doesn't read the full body,
-	// but the body read should be capped.
-	_ = bodyRead
+	// MaxBody wraps the body in http.MaxBytesReader(w, r.Body, 100), so the
+	// handler can never read more than the cap: draining the body surfaces the
+	// "http: request body too large" error and yields at most 100 bytes. A no-op
+	// middleware would hand the handler all 400 bytes with a nil error, failing
+	// both checks, so this is the assertion that makes the DoS control real.
+	if readErr == nil {
+		t.Errorf("expected MaxBytesReader error draining oversized body, got nil (read %d bytes)", bytesRead)
+	}
+	if bytesRead > 100 {
+		t.Errorf("MaxBody cap breached: handler read %d bytes, want <= 100", bytesRead)
+	}
 }
 
 // TestMaxBodyZeroPOSTBody verifies that empty POST bodies pass through.
