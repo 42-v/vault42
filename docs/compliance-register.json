@@ -117,18 +117,6 @@
       "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
       "cost_of_closing": "A risk-score predicate on AuditFilter, a threshold constant, an extracted Dispatcher interface from the honeypot alerter, and removal of the profile gate on the risk path."
     },
-    "AR-16": {
-      "title": "RBAC permission denials on the admin plane are not audited",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "pending",
-      "rationale": "internal/adminapi/middleware.go RBACCheck answers 403 insufficient_permissions and returns without writing an audit record. Failed admin authentication, lockout and the killswitch trip are all logged; only the authorization decision is not.",
-      "compensating_control": "The denial is still enforced. The admin plane is loopback-only behind mutual TLS with a verified client certificate, so the set of principals that could generate a denial is small, enumerated and already authenticated.",
-      "residual_risk": "An administrator probing beyond their role leaves no trail, so privilege-boundary probing is not detectable after the fact.",
-      "revisit_when": "The admin plane becomes reachable from anything other than loopback, or the number of administrator accounts grows past the point where they are individually known.",
-      "cost_of_closing": "One audit.Log call in RBACCheck. It needs the audit logger threaded into the middleware, which is why it was not a one-line change."
-    },
     "AR-17": {
       "title": "No allowlist is enforced at the outbound HTTP client layer",
       "severity": "Low",
@@ -4885,17 +4873,16 @@
         "v4.0.3-7.2.2",
         "v4.0.3-8.3.5"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "AR-16",
+      "status": "Met",
       "evidence": [
-        "internal/adminapi/middleware.go:189",
+        "internal/adminapi/middleware.go:206",
         "internal/adminapi/auth.go:107"
       ],
       "tests": [
         "TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged",
-        "TestASVS_V16_3_2_RBACDenialsAreStillUnlogged"
+        "TestASVS_V16_3_2_RBACDenialsAreAudited"
       ],
-      "notes": "Failed admin authentication, lockout and the killswitch trip are all logged, but RBACCheck answers 403 without writing an audit record, so a permission denial leaves no trail. The denial is still enforced; only its observability is missing, and the admin plane is loopback-only behind mutual TLS so the population of possible callers is already small and identified."
+      "notes": "Both halves of the requirement are logged. Failed admin authentication, lockout and the killswitch trip were already recorded; RBACCheck now writes an admin_authz_denied event on a permission denial, so a failed authorization decision reaches the append-only audit log with the admin, the role and the permission it was refused. This closes what was tracked as AR-16. The admin plane is loopback-only behind mutual TLS, so the population of principals a denial can name is small and already identified."
     },
     {
       "standard": "OWASP ASVS",

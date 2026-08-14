@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
@@ -185,8 +186,13 @@ func isTOTPSetupPath(path string) bool {
 	return path == "/admin/admins/me/totp/setup" || path == "/admin/admins/me/totp/verify" || path == "/admin/ui/totp-setup"
 }
 
-// RBACCheck middleware enforces that the authenticated admin has the required permission.
-func RBACCheck(perm rbac.Permission) func(http.Handler) http.Handler {
+// RBACCheck middleware enforces that the authenticated admin has the required
+// permission. A permission denial is written to the append-only audit log as an
+// admin_authz_denied event (ASVS V16.3.2): the decision is enforced regardless,
+// and the record is what makes privilege-boundary probing detectable after the
+// fact. auditLog may be nil, in which case the denial is enforced but not
+// recorded — the wired gateway always supplies one.
+func RBACCheck(perm rbac.Permission, auditLog *audit.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			admin := GetAdmin(r.Context())
@@ -196,6 +202,14 @@ func RBACCheck(perm rbac.Permission) func(http.Handler) http.Handler {
 			}
 
 			if !rbac.HasPermission(rbac.Role(admin.Role), perm) {
+				if auditLog != nil {
+					_ = auditLog.Log(r.Context(), audit.AdminAuthzDenied, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+						"role":       admin.Role,
+						"permission": string(perm),
+						"method":     r.Method,
+						"path":       r.URL.Path,
+					}, 5)
+				}
 				httputil.WriteError(w, http.StatusForbidden, "insufficient_permissions")
 				return
 			}

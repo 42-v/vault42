@@ -171,7 +171,7 @@ func TestMaxBody_LimitsRequestSize(t *testing.T) {
 }
 
 func TestRBACCheck_RejectsMissingAdmin(t *testing.T) {
-	handler := RBACCheck("keys:list")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RBACCheck("keys:list", nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
