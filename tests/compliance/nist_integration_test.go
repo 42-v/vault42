@@ -564,8 +564,11 @@ func TestNIST_EmailVerificationEnforcement(t *testing.T) {
 			service.ErrInvalidCredentials,
 			service.ErrAccountLocked,
 		}
-		// ErrAccountLocked is the only other auth-related error exposed,
-		// and it's only returned AFTER successful credential validation.
+		// ErrAccountLocked is the only other auth-related error exposed. It is
+		// returned by the per-IP lockout (before any user lookup, so it reveals
+		// nothing about a specific account); the per-user login lock now answers
+		// ErrInvalidCredentials so a locked account cannot be told from an unknown
+		// one.
 		for _, e := range errs {
 			if e == nil {
 				t.Fatal("auth error should not be nil")

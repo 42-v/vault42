@@ -495,6 +495,37 @@ func TestLoginAccountLocked(t *testing.T) {
 	}
 }
 
+// A login from a locked-out IP still answers 403 account_locked. The per-IP
+// lockout is IP-scoped and reveals nothing about any specific account, so unlike
+// the per-user lock it keeps its distinct status. It is now the only login path
+// that reaches ErrAccountLocked at the handler, so this test is what covers that
+// arm of the login error switch.
+func TestLoginHandler_IPLockedReturns403(t *testing.T) {
+	users := &mocks.MockUserRepo{
+		GetByEmailFn: func(context.Context, string) (*model.User, error) { return nil, nil },
+	}
+	h, mockCache := newTestAuthHandler(t, users)
+	// Every lockout counter, including lockout_ip:<ip>, reads over threshold, so
+	// the IP lockout trips before any user lookup.
+	mockCache.GetFn = func(_ context.Context, _ string) (string, error) { return "999", nil }
+
+	body := jsonBody(t, map[string]string{"email": "whoever@example.com", "password": "x"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+	req.RemoteAddr = "203.0.113.7:5000"
+	rec := httptest.NewRecorder()
+
+	h.Login(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var result map[string]string
+	decodeResponse(t, rec, &result)
+	if result["error"] != "account_locked" {
+		t.Fatalf("expected error=account_locked, got %q", result["error"])
+	}
+}
+
 func TestRefreshMissingToken(t *testing.T) {
 	users := &mocks.MockUserRepo{}
 	h, _ := newTestAuthHandler(t, users)
