@@ -2,6 +2,7 @@ package ipintel
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func TestMarshalSkipsMalformedRanges(t *testing.T) {
 		return a
 	}
 	bad := []Range{
-		{},                                                             // invalid (zero) Lo/Hi
+		{}, // invalid (zero) Lo/Hi
 		{Lo: mustAddr("1.1.1.0"), Hi: mustAddr("2001:db8::")},          // mismatched family (v4 lo, v6 hi)
 		{Lo: mustAddr("1.1.1.255"), Hi: mustAddr("1.1.1.0"), CC: "AA"}, // v4 Hi < Lo
 		{Lo: mustAddr("2001:db8::ffff"), Hi: mustAddr("2001:db8::")},   // v6 Hi < Lo
@@ -92,7 +93,7 @@ func TestLoadRejectsUnsupportedVersion(t *testing.T) {
 		{Lo: netip.MustParseAddr("1.1.1.0"), Hi: netip.MustParseAddr("1.1.1.255"), CC: "AA"},
 	})
 	blob[4] = blobVersion + 1 // bump the version byte past what decode accepts
-	if _, err := Load(blob); err != ErrBadVersion {
+	if _, err := Load(blob); !errors.Is(err, ErrBadVersion) {
 		t.Fatalf("Load(bad version) error = %v, want ErrBadVersion", err)
 	}
 }
@@ -274,4 +275,25 @@ func TestDefaultFallsBackFromUnusableOverride(t *testing.T) {
 			t.Fatalf("Default with a corrupt override should fall back, got %v", err)
 		}
 	})
+}
+
+// TestDefaultFallsBackToEmptyWhenEmbeddedBlobIsAbsent covers the last arm of
+// Default: a build that stripped the embedded table (len(embeddedBlob) == 0)
+// degrades to an empty DB with a nil error rather than trying to decode a
+// zero-length blob. embeddedBlob is swapped out for the duration of the test and
+// restored after, and the override env is cleared so control reaches the
+// embedded arm rather than the file override.
+func TestDefaultFallsBackToEmptyWhenEmbeddedBlobIsAbsent(t *testing.T) {
+	saved := embeddedBlob
+	embeddedBlob = nil
+	t.Cleanup(func() { embeddedBlob = saved })
+	t.Setenv(EnvDataPath, "")
+
+	db, err := Default()
+	if err != nil {
+		t.Fatalf("Default with an empty embedded blob should return an empty table, got %v", err)
+	}
+	if got := db.LookupString("8.8.8.8"); (got != Info{}) {
+		t.Errorf("empty-embedded Default served data: %+v, want zero Info", got)
+	}
 }

@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-14 | Tests: 4265 | Total: 99.54% statement coverage
+Generated: 2026-08-14 | Tests: 4266 | Total: 99.55% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -20,6 +20,7 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/middleware` | 100.00% |
 | `internal/metrics` | 100.00% |
 | `internal/kms` | 100.00% |
+| `internal/ipintel` | 100.00% |
 | `internal/httputil` | 100.00% |
 | `internal/honeypot` | 100.00% |
 | `internal/frontend` | 100.00% |
@@ -33,7 +34,6 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/handler` | 99.67% |
 | `internal/keystore` | 99.53% |
 | `cmd/bridge` | 99.49% |
-| `internal/ipintel` | 99.42% |
 | `cmd/admin-gateway` | 99.42% |
 | `internal/jwt` | 99.22% |
 | `internal/service` | 99.12% |

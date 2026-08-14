@@ -9,7 +9,7 @@ import (
 )
 
 // These two tests close the remaining branches in notifyNewCountry that the
-// behaviour-focused tests in auth_new_location_test.go do not reach: the
+// behavior-focused tests in auth_new_location_test.go do not reach: the
 // country-store error path, and the fail-open guard for a missing cache or email
 // sender. Both must degrade to "no notice" without disturbing the login.
 

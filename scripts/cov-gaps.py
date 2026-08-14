@@ -118,7 +118,12 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # unverifiable first-time sign-in with a neutral redirect (net of the deleted
 # signup-verification-mail branch). A full cov_run reports 10852, still 100% of
 # reachable (10804/10804).
-BASELINE_TOTAL_STATEMENTS = 10852
+# Raised from 10852 to 11075 by the AR-18 country-geo login-notice and VPN/anon
+# rate-limit feature: +223 statements, chiefly the internal/ipintel range-table
+# package (decode/lookup/Default) and its wiring into internal/service/auth.go
+# (notifyNewCountry), the ratelimit weighting, and cmd/vault/main.go. A full
+# cov_run reports 11075.
+BASELINE_TOTAL_STATEMENTS = 11075
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -170,7 +175,17 @@ BASELINE_TOTAL_STATEMENTS = 10852
 # was retiring two entries elsewhere; nothing else in the set had become
 # coverable, and inventing a reason to delete a justified exclusion in order to
 # make room is exactly the pressure this constant exists to resist.
-BASELINE_MAX_ENTRIES = 48
+# Raised from 48 to 50 by the AR-18 geo/VPN feature: +2 entries for the ipintel
+# fail-open branch in cmd/vault/main.go (the WARNING log line and the
+# ipintel.NewEmpty() substitution at main.go:363-364). ipintel.Default() returns
+# an error only when the embedded blob fails to decode (a build-time defect) and
+# its VAULT_IPINTEL_DATA override is fail-open, so neither statement is reachable
+# at runtime; they mirror the embedded-asset guards already excluded in
+# internal/adminapi and internal/email. The three cmd/vault fatal branches the
+# feature shifted (keystore init, honeypot key gen, honeypot rotation warning)
+# were relocated in place, not added, and the empty-embed fallback in
+# internal/ipintel/ipintel.go was covered by a test rather than excluded.
+BASELINE_MAX_ENTRIES = 50
 BASELINE_PACKAGES = (
     "internal/adminapi",
     "internal/audit",
