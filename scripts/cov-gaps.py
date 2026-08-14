@@ -112,7 +112,13 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # the Argon2 burn and token generation ahead of the user lookup let the separate
 # token-error return collapse into the single eligibility guard, a net 2 fewer
 # statements. A full cov_run reports 10842, still 100% of reachable (10794/10794).
-BASELINE_TOTAL_STATEMENTS = 10842
+# Raised from 10842 to 10852 by the fourth-pass enumeration fixes: the two login
+# lock branches now burn a dummy Argon2 and advance the per-IP failure counter
+# before returning invalid_credentials, and the OAuth callback refuses an
+# unverifiable first-time sign-in with a neutral redirect (net of the deleted
+# signup-verification-mail branch). A full cov_run reports 10852, still 100% of
+# reachable (10804/10804).
+BASELINE_TOTAL_STATEMENTS = 10852
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
