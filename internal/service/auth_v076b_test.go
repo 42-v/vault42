@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -59,27 +60,56 @@ func TestLoginIPLocked(t *testing.T) {
 	}
 }
 
-// Auto-lockout via the cache counter returns ErrAccountLocked even with a valid user.
-func TestLoginAutoLockout(t *testing.T) {
+// A locked account must be indistinguishable from an unknown email to an
+// unauthenticated login caller. Only an EXISTING account can reach the locked
+// state (the per-user lockout counter has no key for an unknown email), so a
+// distinct ErrAccountLocked/403 leaks that the address is registered; rotating
+// the probe IP defeats the per-IP limit and turns it into an enumeration oracle.
+// Both the cache auto-lockout and the admin lockout now answer
+// ErrInvalidCredentials, exactly like an unknown email and a wrong password. The
+// per-IP lockout (tested above) keeps ErrAccountLocked because it is IP-scoped
+// and reveals nothing about any account.
+func TestLoginLockoutDoesNotLeakExistence(t *testing.T) {
 	hash := validPasswordHash(t)
-	svc, o := newMockAuthService(t)
-	o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
-		return &model.User{ID: "user-1", Email: "auto@example.com", PasswordHash: hash, EmailVerified: true}, nil
-	}
-	o.cache.GetFn = func(_ context.Context, key string) (string, error) {
-		// IP counter not locked; per-user lockout counter is over threshold.
-		if len(key) > 8 && key[:8] == "lockout:" {
-			return "10", nil
+	const pw = "correct-horse-battery-staple"
+	lockUntil := time.Now().Add(time.Hour)
+
+	assertInvalidCreds := func(t *testing.T, svc *AuthService, email, ip string) {
+		t.Helper()
+		_, err := svc.Login(context.Background(), LoginInput{Email: email, Password: pw}, ip, "UA")
+		if !errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrAccountLocked) {
+			t.Fatalf("%s: got %v, want ErrInvalidCredentials (a locked account must be indistinguishable from an unknown email)", email, err)
 		}
-		return "0", nil
 	}
 
-	_, err := svc.Login(context.Background(), LoginInput{
-		Email: "auto@example.com", Password: "correct-horse-battery-staple",
-	}, "1.2.3.4", "UA")
-	if !errors.Is(err, ErrAccountLocked) {
-		t.Fatalf("auto-lockout should return ErrAccountLocked, got %v", err)
-	}
+	t.Run("cache auto-lockout on an existing account", func(t *testing.T) {
+		svc, o := newMockAuthService(t)
+		o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
+			return &model.User{ID: "user-1", Email: "auto@example.com", PasswordHash: hash, EmailVerified: true}, nil
+		}
+		o.cache.GetFn = func(_ context.Context, key string) (string, error) {
+			// IP counter not locked; per-user lockout counter is over threshold.
+			if len(key) > 8 && key[:8] == "lockout:" {
+				return "10", nil
+			}
+			return "0", nil
+		}
+		assertInvalidCreds(t, svc, "auto@example.com", "1.2.3.4")
+	})
+
+	t.Run("admin lockout on an existing account", func(t *testing.T) {
+		svc, o := newMockAuthService(t)
+		o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
+			return &model.User{ID: "user-2", Email: "admin@example.com", PasswordHash: hash, EmailVerified: true, LockedUntil: &lockUntil}, nil
+		}
+		assertInvalidCreds(t, svc, "admin@example.com", "1.2.3.5")
+	})
+
+	t.Run("unknown email is the baseline", func(t *testing.T) {
+		svc, o := newMockAuthService(t)
+		o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) { return nil, nil }
+		assertInvalidCreds(t, svc, "nobody@example.com", "1.2.3.6")
+	})
 }
 
 // MFA required but no methods configured falls back to an email-OTP challenge.

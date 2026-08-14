@@ -180,6 +180,51 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 			notWant: ErrInvalidCredentials,
 		},
 		{
+			// A cache auto-locked account answers ErrInvalidCredentials (not a
+			// distinct ErrAccountLocked, which would leak that the address exists);
+			// under load it must burn the same Argon2 and answer with the overload
+			// error, not the faster no-burn path that re-reveals the lock by timing.
+			name: "login as an auto-locked account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-1", Email: "locked@example.com", PasswordHash: hash, EmailVerified: true}, nil
+					}
+					o.cache.GetFn = func(_ context.Context, key string) (string, error) {
+						if len(key) > 8 && key[:8] == "lockout:" {
+							return "10", nil
+						}
+						return "0", nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "locked@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
+			name: "login as an admin-locked account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					lockUntil := time.Now().Add(time.Hour)
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-2", Email: "adminlocked@example.com", PasswordHash: hash, EmailVerified: true, LockedUntil: &lockUntil}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "adminlocked@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
 			name: "login as an imported account awaiting its claim link",
 			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
 				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
