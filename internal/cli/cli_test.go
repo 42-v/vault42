@@ -115,6 +115,10 @@ type mockRefreshTokenRepo struct {
 }
 
 func (m *mockRefreshTokenRepo) Create(context.Context, *model.RefreshToken) error { return nil }
+func (m *mockRefreshTokenRepo) CreateWithinCap(context.Context, *model.RefreshToken, int) error {
+	return nil
+}
+
 func (m *mockRefreshTokenRepo) GetByTokenHash(context.Context, string) (*model.RefreshToken, error) {
 	return nil, nil
 }
