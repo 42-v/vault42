@@ -28,6 +28,7 @@ package ipintel
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
@@ -108,7 +109,7 @@ func (d *DB) Reload(blob []byte) error {
 // or empty it degrades to an empty DB rather than failing.
 func Default() (*DB, error) {
 	if p := strings.TrimSpace(os.Getenv(EnvDataPath)); p != "" {
-		if data, err := os.ReadFile(p); err == nil { // #nosec G304 -- operator-controlled path, read-only, fail-open to embedded on any error
+		if data, err := os.ReadFile(filepath.Clean(p)); err == nil { // #nosec G304 -- operator-controlled path, read-only, fail-open to embedded on any error
 			if d, err := Load(data); err == nil {
 				return d, nil
 			}

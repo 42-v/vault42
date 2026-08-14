@@ -150,8 +150,8 @@ func Marshal(ranges []Range) []byte {
 	out := make([]byte, headerLen+len(v4)*v4RecLen+len(v6)*v6RecLen)
 	copy(out[0:4], blobMagic[:])
 	out[4] = blobVersion
-	binary.LittleEndian.PutUint32(out[8:12], uint32(len(v4)))
-	binary.LittleEndian.PutUint32(out[12:16], uint32(len(v6)))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(len(v4)))  // #nosec G115 -- range count is bounded by the RIR/prefix data, far below uint32 max
+	binary.LittleEndian.PutUint32(out[12:16], uint32(len(v6))) // #nosec G115 -- range count is bounded by the RIR/prefix data, far below uint32 max
 	off := headerLen
 	for _, r := range v4 {
 		binary.LittleEndian.PutUint32(out[off:off+4], r.start)
