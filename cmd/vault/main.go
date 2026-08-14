@@ -22,6 +22,7 @@ import (
 	"github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/honeypot"
+	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/kms"
 	"github.com/42-v/vault42/internal/metrics"
@@ -165,6 +166,7 @@ func main() {
 	serviceDocRepo := postgres.NewServiceDocumentRepo(db)
 	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
 	rateLimitRepo := postgres.NewRateLimitRepo(db)
+	loginCountryRepo := postgres.NewLoginCountryRepo(db)
 
 	// Initialize audit logger
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
@@ -349,6 +351,20 @@ func main() {
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
 	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
 	tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)
+
+	// IP-intelligence: prefers VAULT_IPINTEL_DATA, else the embedded blob. Load
+	// is fail-open — a corrupt embedded blob (a build-time defect) must not stop
+	// the service, so degrade to an empty table and continue. The empty table
+	// makes both dependent features (the new-location notice and VPN rate-limit
+	// scrutiny) inert rather than erroring. Wired into the auth service for the
+	// new-location notice and into the server (deps below) for rate-limit weight.
+	ipIntelDB, err := ipintel.Default()
+	if err != nil {
+		log.Printf("WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)", err)
+		ipIntelDB = ipintel.NewEmpty()
+	}
+	authSvc.SetIPIntel(ipIntelDB)
+	authSvc.SetLoginCountryRepo(loginCountryRepo)
 	// Catalog-aware role validation: JWT issuance keeps only roles defined in
 	// auth.app_roles (in addition to the admin-reserved filter).
 	authSvc.SetRoleCatalog(service.NewRoleCatalog(postgres.NewAppRoleRepo(db), 60*time.Second))
@@ -605,6 +621,7 @@ func main() {
 		HIBPEnabled:       cfg.HIBPCheck,
 		ReadyDeps:         readyDeps,
 		HoneypotAlerter:   honeypotAlerter,
+		IPIntel:           ipIntelDB,
 		Metrics:           metricsCollector,
 		KeyStore:          ks,
 		KMS:               kmsSvc,

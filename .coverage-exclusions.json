@@ -120,12 +120,32 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 248,
+      "line": 250,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:212 is the same length check on the same slice, four lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:242 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+    },
+    {
+      "package": "cmd/vault",
+      "file": "cmd/vault/main.go",
+      "line": 363,
+      "occurrence": 1,
+      "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "The fail-open arm of ipintel.Default() in main. Default (internal/ipintel/ipintel.go:109) returns a non-nil error only when Load(embeddedBlob) cannot decode the embedded table, a build-time defect in the go:embed constant internal/ipintel/data/ipintel.bin rather than a runtime input: an absent or empty embed returns an empty table with a nil error at ipintel.go:119-120, and the VAULT_IPINTEL_DATA override is fail-open, ignoring any unreadable or undecodable path and falling through to the embedded blob (asserted by TestDefaultFallsBackFromUnusableOverride). No operator input and no runtime state reaches this branch, which mirrors the embedded-asset guards excluded in internal/adminapi/frontend.go and internal/email/templates.go. The block is two statements, this log line and the ipintel.NewEmpty() substitution below it; both are named so the whole block is excluded."
+    },
+    {
+      "package": "cmd/vault",
+      "file": "cmd/vault/main.go",
+      "line": 364,
+      "occurrence": 1,
+      "source": "\t\tipIntelDB = ipintel.NewEmpty()",
+      "bucket": "C",
+      "confirmed": true,
+      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:363: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
     },
     {
       "package": "internal/adminapi",
@@ -260,7 +280,7 @@
     {
       "package": "internal/email",
       "file": "internal/email/templates.go",
-      "line": 267,
+      "line": 276,
       "occurrence": 1,
       "source": "\t\tpanic(\"email: failed to initialize default templates: \" + err.Error())",
       "bucket": "C",
@@ -510,7 +530,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 415,
+      "line": 431,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -520,7 +540,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 424,
+      "line": 440,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",

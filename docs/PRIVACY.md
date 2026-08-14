@@ -47,6 +47,7 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 | P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
 | P12 | **Service-scoped documents** -- opaque JSON a trusted service stores about a user on the platform's behalf, private to the writing service unless it marks a document shared | Encrypted document payload + HMAC pseudonym of the user id, owning client id, document key, size and visibility | Art. 6(1)(b) contract, on the same footing as P6: the Operator's service requests the storage. The contents are opaque to vault42, so the Operator remains responsible for what its services write |
 | P11 | **Account-deletion recovery escrow** -- keeping a recoverable record of an erased account so an accidental or malicious deletion can be reversed | Encrypted payload (email, creation date, roles, display name) + HMAC pseudonym of the user id, requester and reason tag | Art. 6(1)(f) legitimate interest in the integrity and availability of user accounts. Only when the Operator configures a recovery key; see §3.1, §4 and §5.3 |
+| P13 | **New-location login notice and VPN/anonymiser abuse scrutiny** -- warning a user when their account is accessed from a country it has not signed in from before, and raising rate-limit scrutiny on anonymising/hosting infrastructure. The client IP is resolved **locally** against an embedded IP-registration table (no third-party geo-IP lookup, no request leaves the service) to a coarse signal: the ISO 3166-1 alpha-2 registration country, and VPN/hosting/Tor flags. **Data minimisation: only the country code is derived and stored** -- never the IP, never a city or coordinates -- and the notice and its audit record carry the country code alone. The set of countries a user has logged in from (`auth.login_countries`) is user-id-owned and cascade-deleted on erasure. The VPN/hosting/Tor flags are used transiently to weight the login/register/reset rate limiters and are never stored; they only tighten a bucket, they never block a VPN. | Login country codes per user; transiently, VPN/hosting/Tor flags derived from the IP | Art. 6(1)(f) legitimate interest in account security and abuse prevention (notifying the user of an unusual location; resisting credential-stuffing from anonymising infrastructure) |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
 consent does not affect the lawfulness of processing carried out before withdrawal. Marketing
@@ -150,6 +151,8 @@ recovery key).
 | ip | P3, P4 | Until device removed or account erased | 6(1)(f) |
 | user_agent | P3, P4 | Until device removed or account erased | 6(1)(f) |
 | trusted, trusted_until, first/last_seen_at | P3 | Until device removed or account erased | 6(1)(f) |
+| **auth.login_countries** | | | |
+| country_code (ISO alpha-2), first_seen_at | P13 | Until account erased (cascade-deleted with the user) | 6(1)(f) |
 | **auth.totp_secrets** | | | |
 | secret_enc, verified | P2 | Until MFA removed or account erased | 6(1)(b)/6(1)(f) |
 | **auth.webauthn_credentials** | | | |
@@ -459,7 +462,10 @@ append-only audit log supports reconstructing the timeline of security-relevant 
 - **Data minimization and purpose limitation** are designed into the system: optional profile
   fields are collected only when the user provides them; credentials and tokens are hashed;
   the identity profile and blobs are encrypted and stored under pseudonymous keys; the audit log
-  records only what is needed for the security purpose.
+  records only what is needed for the security purpose. The new-location notice (P13) is a
+  deliberate example: the client IP is resolved locally to a country code and only that code is
+  kept -- country granularity only, no IP, no finer location -- so the feature warns the user of
+  an unusual sign-in without building a location history.
 - **Records of processing.** This document, together with the data inventory in §3 and the
   processor list in §6, forms the basis of the records of processing activities. The Operator
   maintains the deployment-specific record (configured processors, retention values, hosting

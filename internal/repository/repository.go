@@ -158,6 +158,25 @@ type DeviceRepository interface {
 	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
+// LoginCountryRepository records the set of ISO alpha-2 countries a user has
+// successfully logged in from, backing the new-location (AR-18) notice. It
+// stores country granularity only — never an IP — and the table is
+// user_id-cascaded so account erasure removes it automatically.
+type LoginCountryRepository interface {
+	// UpsertAndWasNew records that userID logged in from country cc and reports,
+	// in one round trip evaluated against a single snapshot:
+	//
+	//   wasNew  — cc was not already recorded for this user (a genuinely new
+	//             country for them);
+	//   hadAny  — the user already had at least one recorded country BEFORE this
+	//             call (so this is not their first-ever recorded login).
+	//
+	// The notice is sent only when wasNew && hadAny: a first-ever login seeds the
+	// set silently. cc must be a two-character country code; the caller passes
+	// the value from ipintel and never an empty string.
+	UpsertAndWasNew(ctx context.Context, userID, cc string) (wasNew bool, hadAny bool, err error)
+}
+
 // ClientRepository manages service client persistence.
 type ClientRepository interface {
 	// Create inserts a new service client record.

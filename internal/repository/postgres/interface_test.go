@@ -13,6 +13,7 @@ var (
 	_ repository.UserRepository            = (*UserRepo)(nil)
 	_ repository.RefreshTokenRepository    = (*RefreshTokenRepo)(nil)
 	_ repository.DeviceRepository          = (*DeviceRepo)(nil)
+	_ repository.LoginCountryRepository    = (*LoginCountryRepo)(nil)
 	_ repository.ClientRepository          = (*ClientRepo)(nil)
 	_ repository.TOTPRepository            = (*TOTPRepo)(nil)
 	_ repository.WebAuthnRepository        = (*WebAuthnRepo)(nil)
