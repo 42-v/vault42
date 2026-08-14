@@ -8,8 +8,8 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **367 requirements in scope across 6 standards: 275 Met, 21 Accepted Risk,
-> 71 Not Applicable. 0 unclassified.**
+> **367 requirements in scope across 6 standards: 283 Met, 21 Accepted Risk,
+> 63 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
 runs on every CI build. Every **Accepted Risk** carries a rationale, a
@@ -174,15 +174,15 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 183 | 13 | 67 | 263 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 192 | 12 | 59 | 263 |
 | NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
-| **Total** | **274** | **22** | **71** | **367** |
+| **Total** | **283** | **21** | **63** | **367** |
 
-The 22 Accepted Risk rows collapse to **13 distinct accepted risks**: several
+The 21 Accepted Risk rows collapse to **12 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
