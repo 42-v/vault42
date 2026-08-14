@@ -823,7 +823,7 @@ func (c *countErrAdminRepo) Count(_ context.Context) (int, error) {
 // ---------------------------------------------------------------------------
 
 func sessionAuthHandler(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository) http.Handler {
-	return SessionAuth(sessions, admins)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return SessionAuth(sessions, admins, testAuditLog())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 }
@@ -939,7 +939,7 @@ func TestSessionAuth_HappyPathLoadsAdmin(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 	var sawAdmin *model.AdminUser
-	mw := SessionAuth(sessions, admins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := SessionAuth(sessions, admins, testAuditLog())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawAdmin = GetAdmin(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
