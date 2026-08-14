@@ -106,21 +106,27 @@ func TestOAuth_Callback_CreateRaceRefusesUnverifiedWinner(t *testing.T) {
 	}
 }
 
-// The other half of the same predicate: the account is verified but the IdP did
-// not assert a verified email. The lookup-hit path refuses this; the race path
-// has to refuse it too, or the attacker simply picks a provider that will assert
-// an unverified address.
+// The other half of the same predicate: the IdP did not assert a verified email.
+// An unverified provider assertion no longer reaches the create-or-race path at
+// all — the callback refuses first-time sign-in from a provider that cannot prove
+// address ownership before it looks the address up, closing both the enumeration
+// oracle and this link-takeover. The refusal is the neutral verification-required
+// redirect and links nothing, which is strictly stronger than the old 409 at the
+// 23505 branch.
 func TestOAuth_Callback_CreateRaceRefusesUnverifiedProviderEmail(t *testing.T) {
 	out := runOAuthCreateRace(t, "race-unverified-provider", false,
 		&model.User{ID: "victim2", Email: "victim2@ex.com", EmailVerified: true})
 
-	if out.rec.Code != http.StatusConflict {
-		t.Fatalf("SECURITY: an unverified provider email was linked to an existing account "+
-			"through the 23505 path (got %d %s)", out.rec.Code, out.rec.Body.String())
+	if out.rec.Code != http.StatusFound {
+		t.Fatalf("an unverified provider assertion must be refused with the neutral "+
+			"verification-required redirect, got %d %s", out.rec.Code, out.rec.Body.String())
+	}
+	if loc := out.rec.Header().Get("Location"); loc != "https://vault.test/oauth/callback#error=verification_required" {
+		t.Fatalf("refusal redirect %q, want the neutral verification-required outcome", loc)
 	}
 	if out.linked {
 		t.Fatalf("SECURITY: a provider identity asserting an unverified email was linked to " +
-			"an existing account through the 23505 path")
+			"an existing account")
 	}
 }
 

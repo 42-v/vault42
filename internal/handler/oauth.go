@@ -399,6 +399,28 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	linkIdentity := false
 
 	if userID == "" && userInfo.Email != "" {
+		// A provider that cannot prove the caller owns this address (Facebook
+		// publishes no per-address verification signal, internal/oauth2/facebook.go;
+		// an OIDC issuer may answer email_verified:false) must not resolve or create
+		// an account by it. The address is attacker-supplied, so the create branch
+		// below would squat a free address and mail its real owner, while the
+		// existing-vs-free outcome (409 email_already_registered vs a created account
+		// + 302 #code) tells an unauthenticated caller, across a rotated IP, whether
+		// the address is registered. Return one neutral outcome BEFORE the existence
+		// lookup, byte-identical whether or not the address is registered, so there
+		// is nothing to observe and no account is squatted and no mail is sent.
+		//
+		// Providers that DO verify ownership (google, github, a verified OIDC issuer)
+		// still create/link/sign in below; an identity already linked by (provider,
+		// provider_user_id) resolved userID above and never reaches here. First-time
+		// sign-in from an unverified provider is simply not auto-provisioned.
+		if !userInfo.EmailVerified {
+			log.Printf("oauth: refusing first-time sign-in from unverified provider %s (no per-address ownership proof)", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
+			fragment := url.Values{}
+			fragment.Set("error", "verification_required")
+			http.Redirect(w, r, h.origin+"/oauth/callback#"+fragment.Encode(), http.StatusFound)
+			return
+		}
 		// Check if a user with this email already exists. A read fault here is
 		// (nil, err), indistinguishable from a clean (nil, nil) miss once the
 		// error is dropped, and dropping it sent a fault down the create branch
@@ -467,22 +489,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				userID = newID
-				// A provider that does not vouch for the address creates an
-				// unverified account, and without this mail that account can never
-				// become verified. GET /auth/verify-email consumes a token it never
-				// issues, so the only token that exists is one the user was sent;
-				// send none and there is no route left. The address is taken from
-				// here on, so a later login through a provider that does verify it
-				// is refused with 409 email_already_registered, and the user is
-				// locked out of an account they cannot reach and an address they
-				// cannot reuse.
-				//
-				// A provider that did verify the address created a verified account
-				// above, which needs no mail. Delivery is fire-and-forget: the row
-				// is committed, and a mailer outage must not fail the callback.
-				if !userInfo.EmailVerified && h.authSvc != nil {
-					h.authSvc.SendSignupVerification(r.Context(), userInfo.Email, userID, "")
-				}
+				// Only a provider that verified the address reaches this branch: the
+				// guard at the top of the block refuses unverified first-time sign-in
+				// before the lookup. So the account is created verified (EmailVerified
+				// is true here) and needs no verification mail.
 			}
 		}
 
