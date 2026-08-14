@@ -611,16 +611,38 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, ErrInvalidCredentials
 	}
 
-	// Check account lock (DB-level admin lockout OR cache-based auto-lockout)
+	// Check account lock (DB-level admin lockout OR cache-based auto-lockout). A
+	// locked account is answered exactly like a wrong password: only an EXISTING
+	// account can reach the locked state (the per-user counter has no key for an
+	// unknown email), so a distinct ErrAccountLocked/403 would tell an
+	// unauthenticated caller the address is registered. Rotating the probe IP
+	// slips past the per-IP login limit, turning that 403-vs-401 into a reliable
+	// enumeration oracle. Return ErrInvalidCredentials instead, and burn the same
+	// dummy Argon2 the user==nil path burns so neither the status nor the timing
+	// distinguishes a locked account from an unknown one. The lockout still holds:
+	// no password is verified and no token is issued, and the audit row keeps the
+	// real reason. MFA verify and refresh may still surface the lock, because
+	// reaching them already proves the caller knows the account exists.
+	// Burn the dummy hash BEFORE any side effect, exactly like the user==nil and
+	// user.Deleted branches: an overloaded semaphore must short-circuit to
+	// ErrArgon2Overloaded (503) having mutated nothing — no audit row, no metric.
+	// Auditing first would both leak a side effect under load and, in the
+	// saturation test harness, deadlock on the audit event-id's entropy read.
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_locked", "source": "admin"}, 30)
-		return nil, ErrAccountLocked
+		return nil, ErrInvalidCredentials
 	}
 	if s.isAccountLocked(ctx, user.ID) {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_locked", "source": "auto"}, 30)
-		return nil, ErrAccountLocked
+		return nil, ErrInvalidCredentials
 	}
 
 	// Account-state gate (legacy-platform parity, migration 004). Reject banned/disabled/
