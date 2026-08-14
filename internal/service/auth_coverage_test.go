@@ -246,7 +246,7 @@ func validPasswordHash(t *testing.T) string {
 	return hash
 }
 
-func TestLoginAccountLocked(t *testing.T) {
+func TestLoginAdminLockedReturnsInvalidCredentials(t *testing.T) {
 	hash := validPasswordHash(t)
 	lockedUntil := time.Now().Add(1 * time.Hour)
 	svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
@@ -263,8 +263,11 @@ func TestLoginAccountLocked(t *testing.T) {
 		Email: "locked@example.com", Password: "correct-horse-battery-staple",
 	}, "1.2.3.4", "TestAgent")
 
-	if !errors.Is(err, ErrAccountLocked) {
-		t.Errorf("locked account should return ErrAccountLocked, got %v", err)
+	// Only an existing account can reach the admin-locked state, so a distinct
+	// ErrAccountLocked leaks that the address is registered. The login path masks
+	// it as ErrInvalidCredentials, exactly like a wrong password or unknown email.
+	if !errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrAccountLocked) {
+		t.Errorf("an admin-locked account must be indistinguishable from an unknown email (ErrInvalidCredentials), got %v", err)
 	}
 }
 
