@@ -32,6 +32,12 @@ func statementsByMethod(t *testing.T) map[string][]string {
 		t.Fatalf("parse refresh_token.go: %v", err)
 	}
 
+	// A method may issue SQL held in a package-level const rather than an inline
+	// literal (Create and CreateWithinCap share one insert statement this way);
+	// resolve those const references so each locking statement is still attributed
+	// to the method that runs it.
+	sqlConsts := sqlStringConsts(file)
+
 	found := map[string][]string{}
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
@@ -39,15 +45,21 @@ func statementsByMethod(t *testing.T) map[string][]string {
 			return true
 		}
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			lit, ok := inner.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
+			switch node := inner.(type) {
+			case *ast.BasicLit:
+				if node.Kind != token.STRING {
+					return true
+				}
+				unquoted, err := strconv.Unquote(node.Value)
+				if err != nil || !strings.Contains(unquoted, "auth.refresh_tokens") {
+					return true
+				}
+				found[fn.Name.Name] = append(found[fn.Name.Name], unquoted)
+			case *ast.Ident:
+				if unquoted, ok := sqlConsts[node.Name]; ok && strings.Contains(unquoted, "auth.refresh_tokens") {
+					found[fn.Name.Name] = append(found[fn.Name.Name], unquoted)
+				}
 			}
-			unquoted, err := strconv.Unquote(lit.Value)
-			if err != nil || !strings.Contains(unquoted, "auth.refresh_tokens") {
-				return true
-			}
-			found[fn.Name.Name] = append(found[fn.Name.Name], unquoted)
 			return true
 		})
 		return false

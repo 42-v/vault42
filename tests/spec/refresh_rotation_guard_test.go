@@ -56,6 +56,12 @@ func refreshTokenStatements(t *testing.T, root string) []statement {
 		t.Fatalf("parse %s: %v", refreshTokenStorePath, err)
 	}
 
+	// A method may issue SQL held in a package-level const rather than an inline
+	// literal: the insert path shares one statement between Create and
+	// CreateWithinCap that way. Resolve those const references so every consuming
+	// and inserting statement is still seen, attributed to its call site.
+	sqlConsts := refreshTokenSQLConsts(file)
+
 	var out []statement
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -63,19 +69,31 @@ func refreshTokenStatements(t *testing.T, root string) []statement {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
+			switch node := n.(type) {
+			case *ast.BasicLit:
+				if node.Kind != token.STRING {
+					return true
+				}
+				sql, err := strconv.Unquote(node.Value)
+				if err != nil || !strings.Contains(sql, "auth.refresh_tokens") {
+					return true
+				}
+				out = append(out, statement{
+					method: fn.Name.Name,
+					line:   fset.Position(node.Pos()).Line,
+					sql:    normalizeSQL(sql),
+				})
+			case *ast.Ident:
+				sql, ok := sqlConsts[node.Name]
+				if !ok || !strings.Contains(sql, "auth.refresh_tokens") {
+					return true
+				}
+				out = append(out, statement{
+					method: fn.Name.Name,
+					line:   fset.Position(node.Pos()).Line,
+					sql:    normalizeSQL(sql),
+				})
 			}
-			sql, err := strconv.Unquote(lit.Value)
-			if err != nil || !strings.Contains(sql, "auth.refresh_tokens") {
-				return true
-			}
-			out = append(out, statement{
-				method: fn.Name.Name,
-				line:   fset.Position(lit.Pos()).Line,
-				sql:    normalizeSQL(sql),
-			})
 			return true
 		})
 	}
@@ -85,6 +103,38 @@ func refreshTokenStatements(t *testing.T, root string) []statement {
 			"seeing what it guards", refreshTokenStorePath)
 	}
 	return out
+}
+
+// refreshTokenSQLConsts maps every package-level string const in the parsed file
+// to its value, so a walk over a method body can resolve SQL lifted into a shared
+// const back to the statement the method issues.
+func refreshTokenSQLConsts(file *ast.File) map[string]string {
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if unquoted, err := strconv.Unquote(lit.Value); err == nil {
+					consts[name.Name] = unquoted
+				}
+			}
+		}
+	}
+	return consts
 }
 
 // normalizeSQL collapses the whitespace a multi-line literal carries so the

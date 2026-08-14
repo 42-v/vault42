@@ -124,6 +124,11 @@ func createStatementSQL(t *testing.T) string {
 		t.Fatalf("parse refresh_token.go: %v", err)
 	}
 
+	// The INSERT lives in a package-level const that Create references so the
+	// capped and uncapped insert paths share one statement; resolve those const
+	// references so the gate reads the SQL Create actually issues.
+	sqlConsts := sqlStringConsts(file)
+
 	var sql string
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
@@ -131,12 +136,17 @@ func createStatementSQL(t *testing.T) string {
 			return true
 		}
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			lit, ok := inner.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			if unquoted, err := strconv.Unquote(lit.Value); err == nil && strings.Contains(unquoted, "INSERT INTO auth.refresh_tokens") {
-				sql = unquoted
+			switch node := inner.(type) {
+			case *ast.BasicLit:
+				if node.Kind == token.STRING {
+					if unquoted, err := strconv.Unquote(node.Value); err == nil && strings.Contains(unquoted, "INSERT INTO auth.refresh_tokens") {
+						sql = unquoted
+					}
+				}
+			case *ast.Ident:
+				if unquoted, ok := sqlConsts[node.Name]; ok && strings.Contains(unquoted, "INSERT INTO auth.refresh_tokens") {
+					sql = unquoted
+				}
 			}
 			return true
 		})
@@ -147,6 +157,38 @@ func createStatementSQL(t *testing.T) string {
 		t.Fatal("no INSERT statement found in RefreshTokenRepo.Create")
 	}
 	return sql
+}
+
+// sqlStringConsts maps every package-level string const in the parsed file to its
+// value, so a walk over a method body can resolve SQL that has been lifted into a
+// shared const back to the statement the method issues.
+func sqlStringConsts(file *ast.File) map[string]string {
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if unquoted, err := strconv.Unquote(lit.Value); err == nil {
+					consts[name.Name] = unquoted
+				}
+			}
+		}
+	}
+	return consts
 }
 
 // highestPlaceholder reports the largest $N bound parameter in a statement.
