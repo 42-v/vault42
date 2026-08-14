@@ -205,9 +205,11 @@ func (p ietfStubProvider) AuthURL(state, nonce, _ string) string {
 	return "https://idp.example.test/authorize?state=" + url.QueryEscape(state) +
 		"&nonce=" + url.QueryEscape(nonce)
 }
+
 func (p ietfStubProvider) Exchange(_ context.Context, _, _ string) (*oauth2.TokenResponse, error) {
 	return nil, errors.New("stub: exchange not reached in these tests")
 }
+
 func (p ietfStubProvider) UserInfo(_ context.Context, _ string) (*oauth2.UserInfo, error) {
 	return nil, errors.New("stub: userinfo not reached in these tests")
 }

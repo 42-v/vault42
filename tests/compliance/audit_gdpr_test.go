@@ -29,10 +29,10 @@ import (
 //
 // Each of these seven rows was flagged "weak-met": the register pinned it to a
 // source/doc grep (does data_export.go contain "WriteJSON"? does PRIVACY.md
-// contain the word "processor"?) rather than to behaviour. These tests drive the
+// contain the word "processor"?) rather than to behavior. These tests drive the
 // SHIPPED code paths -- the real DataExportHandler, IdentityService, AuthService --
 // or assert the substantive content of the real shipped policy, so a green here
-// means the clause is actually honoured, not that a token appears in a file.
+// means the clause is actually honored, not that a token appears in a file.
 // =============================================================================
 
 // auditGDPRMasterKey / auditGDPRHMAC mirror the keys gdprIdentityService uses, so
@@ -233,7 +233,7 @@ func TestGDPR_Art15_RightOfAccessCategoriesAndTruncation(t *testing.T) {
 		return &mocks.MockAuditRepo{
 			CountByUserFn: func(_ context.Context, _ string) (int, error) { return held, nil },
 			QueryFn: func(_ context.Context, f repository.AuditFilter) ([]*model.AuditEntry, error) {
-				// Honour the cap the handler asks for, like the real repo does.
+				// Honor the cap the handler asks for, like the real repo does.
 				if f.Limit > 0 && len(entries) > f.Limit {
 					return entries[:f.Limit], nil
 				}
@@ -578,7 +578,7 @@ func TestGDPR_Arts16_18_21_RectifyRestrictObject(t *testing.T) {
 			t.Fatalf("MarketingAllowed: %v", err)
 		}
 		if allowed {
-			t.Error("Art. 21: marketing still authorised after the objection landed")
+			t.Error("Art. 21: marketing still authorized after the objection landed")
 		}
 	})
 }
@@ -617,7 +617,7 @@ func auditGDPRAuthService(t *testing.T, users *mocks.MockUserRepo) (*service.Aut
 // limitation. The real Art. 5(1)(b) enforcement is the marketing gate:
 // MarketingAllowed fails closed, so data collected under any other basis cannot be
 // repurposed to send marketing; only data affirmatively consented FOR the
-// marketing purpose authorises it. This drives that real gate, plus confirms the
+// marketing purpose authorizes it. This drives that real gate, plus confirms the
 // register binds the marketing purpose to its own basis (purpose specification).
 // -----------------------------------------------------------------------------
 
@@ -635,7 +635,7 @@ func TestGDPR_Art5_1b_PurposeLimitationEnforced(t *testing.T) {
 		{"imported opt-in was collected for another system's purpose", gdprStamped(true, service.ConsentSourceImport, "beon3"), false},
 		{"legacy bare bool has no marketing-purpose provenance", &service.IdentityData{MarketingEmails: &yes}, false},
 		{"no profile at all", nil, false},
-		{"affirmative consent FOR the marketing purpose authorises it", gdprStamped(true, service.ConsentSourceProfile, ""), true},
+		{"affirmative consent FOR the marketing purpose authorizes it", gdprStamped(true, service.ConsentSourceProfile, ""), true},
 		{"a recorded withdrawal closes the purpose", gdprStamped(false, service.ConsentSourceUnsubscribe, ""), false},
 	}
 	for _, tc := range cases {
