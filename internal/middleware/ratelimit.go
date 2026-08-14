@@ -14,6 +14,7 @@ import (
 
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/ipintel"
 )
 
 // trustedProxies holds the configured trusted proxy CIDRs/IPs.
@@ -116,8 +117,17 @@ type RateLimitConfig struct {
 	// security-sensitive limiters (login, register, password reset, TOTP): the
 	// in-memory fallback is per-pod, so under a cache outage the effective limit
 	// would otherwise multiply by the pod count, weakening brute-force protection
-	// (audit L4). Zero value keeps the prior graceful-degradation behaviour.
+	// (audit L4). Zero value keeps the prior graceful-degradation behavior.
 	FailClosed bool
+	// Weight optionally returns a per-request multiplier so a higher-scrutiny
+	// caller consumes the bucket faster. A request weighing w counts as w toward
+	// the limit, which lowers the effective limit for that caller to Limit/w
+	// without ever hard-blocking it: the outcome is still the ordinary 429 any
+	// caller hits, never a 403. Nil (the default) means every request weighs 1
+	// and behavior is exactly as before. A weight below 1 is clamped to 1, so a
+	// Weight func can never widen a bucket. Used to raise scrutiny on VPN/hosting/
+	// anonymising IPs (see IPIntelWeight) without denying them.
+	Weight func(r *http.Request) int
 }
 
 // localRateLimiter provides in-memory fallback rate limiting when the cache backend is unavailable.
@@ -222,7 +232,21 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 				count = local.increment(key, cfg.Window)
 			}
 
-			remaining := int64(cfg.Limit) - count
+			// Per-request weight (default 1). A flagged caller counts as `weight`
+			// against the shared bucket, so the bucket empties faster for them —
+			// raising scrutiny without ever hard-blocking: the only outcome is the
+			// ordinary 429 any caller hits, never a 403. The stored counter still
+			// increments by 1 (single atomic op); the weight is applied to the
+			// comparison, so it cannot widen a bucket and needs no new cache method.
+			weight := 1
+			if cfg.Weight != nil {
+				if w := cfg.Weight(r); w > 1 {
+					weight = w
+				}
+			}
+			weighted := count * int64(weight)
+
+			remaining := int64(cfg.Limit) - weighted
 			if remaining < 0 {
 				remaining = 0
 			}
@@ -231,7 +255,7 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
 			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(cfg.Window).Unix(), 10))
 
-			if count > int64(cfg.Limit) {
+			if weighted > int64(cfg.Limit) {
 				w.Header().Set("Retry-After", strconv.Itoa(int(cfg.Window.Seconds())))
 				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
 				return
@@ -239,6 +263,32 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// IPIntelWeight builds a RateLimitConfig.Weight function that raises the
+// per-request weight to heavy for a client IP that ipintel flags as anonymising
+// or hosting infrastructure (VPN/hosting/Tor), and leaves it at 1 for every
+// other address.
+//
+// This is scrutiny, not denial: a heavier weight only empties the shared bucket
+// faster, so a VPN caller meets the ordinary 429 sooner and is NEVER answered
+// with a 403 — VPN use is allowed. Hard blocks belong in ipaccess.go, not here.
+//
+// It returns nil when db is nil (ipintel not configured) or heavy <= 1, so the
+// limiter keeps its default behavior and the whole feature stays opt-in behind
+// a present ipintel handle. ipintel is fail-open: an unknown or private address
+// flags nothing and weighs 1.
+func IPIntelWeight(db *ipintel.DB, heavy int) func(*http.Request) int {
+	if db == nil || heavy <= 1 {
+		return nil
+	}
+	return func(r *http.Request) int {
+		info := db.LookupString(ClientIP(r))
+		if info.IsAnonymous || info.IsHosting {
+			return heavy
+		}
+		return 1
 	}
 }
 

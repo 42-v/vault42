@@ -141,18 +141,6 @@
       "revisit_when": "Any feature accepts a URL from a request.",
       "cost_of_closing": "A shared http.Client with a dial-time destination check."
     },
-    "AR-18": {
-      "title": "No notification of authentication attempts from an unusual location",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "pending",
-      "rationale": "ASVS 5.0.0 V6.3.5 is an L3 requirement and vault42 is assessed at L2. It is recorded rather than omitted because the omission is deliberate: implementing it requires IP geolocation, and vault42 deliberately does not geolocate, pseudonymising addresses to a /24 or /64 before they reach any log.",
-      "compensating_control": "Lockout notifications are sent; users can list their own active sessions and devices and revoke any of them.",
-      "residual_risk": "A successful authentication with stolen valid credentials from a new location is not proactively surfaced to the user.",
-      "revisit_when": "vault42 is assessed at L3, or a deployment accepts the privacy cost of geolocation.",
-      "cost_of_closing": "A geolocation dependency and a change to the data-minimisation position in docs/PRIVACY.md, which is the reason this is not simply a feature."
-    },
     "AR-20": {
       "title": "Authenticator loss is handled by operator escrow, not by repeated identity proofing",
       "severity": "Low",
@@ -1970,15 +1958,15 @@
       "superseded_ids": [
         "v4.0.3-2.2.3"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "AR-18",
+      "status": "Met",
       "evidence": [
-        "internal/service/auth.go:722"
+        "internal/service/auth.go",
+        "internal/ipintel/ipintel.go"
       ],
       "tests": [
-        "TestNIST63B4_4_6_SubscribersAreNotifiedOfLockout"
+        "TestASVS_AR18_NewLocationNoticeAndVPNScrutiny"
       ],
-      "notes": "Users are notified on lockout but not on an ordinary failed attempt from an unusual location, because vault42 deliberately does not perform IP geolocation (see the location-privacy position in docs/PRIVACY.md). This is an L3 requirement and vault42 is assessed at L2."
+      "notes": "Met: a login from a new country for the account triggers an out-of-band, throttled notification (internal/service/auth.go notifyNewCountry), with country derived locally from the embedded IP-intelligence table (internal/ipintel), country granularity only and the IP never stored, logged or emailed. VPN/hosting/Tor origins are additionally given heavier rate-limit scrutiny without being blocked. Asserted by TestASVS_AR18_NewLocationNoticeAndVPNScrutiny."
     },
     {
       "standard": "OWASP ASVS",

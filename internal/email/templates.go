@@ -33,6 +33,11 @@ const (
 	TemplateSuspiciousActivity = "suspicious_activity"
 	// TemplateEmailOTP is the email one-time password template for MFA fallback.
 	TemplateEmailOTP = "email_otp"
+	// TemplateNewLocation is the new-location (new country) login notice. It is
+	// deliberately distinct from TemplateSuspiciousActivity: it renders the
+	// country only and has no field for an IP, so the notice cannot carry one
+	// (docs/PRIVACY.md P4, data minimisation to country granularity).
+	TemplateNewLocation = "new_location"
 )
 
 //go:embed templates/*.html
@@ -46,12 +51,16 @@ var templateFS fs.FS = defaultTemplates
 // TemplateData holds the parameters used to render email templates.
 // Not all fields are used by every template.
 type TemplateData struct {
-	AppName      string
-	URL          string
-	Token        string
-	IP           string
-	Device       string
-	Code         string
+	AppName string
+	URL     string
+	Token   string
+	IP      string
+	Device  string
+	Code    string
+	// Country is the ISO 3166-1 alpha-2 country code shown in the new-location
+	// notice. It is the ONLY location field that template carries: the notice is
+	// reduced to country granularity so it can never quote the login IP.
+	Country      string
 	LogoURL      string
 	PrimaryColor string
 	Subject      string // populated internally during render
@@ -128,7 +137,7 @@ func NewTemplateRenderer(overrideDir string) (*TemplateRenderer, error) {
 	names := []string{
 		TemplateVerification, TemplatePasswordReset, TemplateNewDevice,
 		TemplateAccountLocked, Template2FASetup, TemplateSuspiciousActivity,
-		TemplateEmailOTP,
+		TemplateEmailOTP, TemplateNewLocation,
 	}
 
 	for _, name := range names {

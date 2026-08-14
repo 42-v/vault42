@@ -15,7 +15,7 @@ import (
 var apAllTemplateNames = []string{
 	TemplateVerification, TemplatePasswordReset, TemplateNewDevice,
 	TemplateAccountLocked, Template2FASetup, TemplateSuspiciousActivity,
-	TemplateEmailOTP,
+	TemplateEmailOTP, TemplateNewLocation,
 }
 
 // apUseTemplateFS swaps the built-in template source for one test.

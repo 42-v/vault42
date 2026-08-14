@@ -1,0 +1,11 @@
+{{define "subject"}}New login location - {{.AppName}}{{end}}
+{{define "content"}}
+<h2 style="margin:0 0 16px;color:#ffffff;font-size:22px">New Login Location</h2>
+<p style="margin:0 0 16px;color:#cccccc;font-size:15px;line-height:1.5">Your account was accessed from a country we haven't seen you sign in from before:</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;width:100%">
+<tr><td style="padding:12px 16px;background-color:#111111;border:1px solid #222222;border-radius:6px">
+<p style="margin:0;color:#cccccc;font-size:14px"><strong style="color:#ffffff">Country:</strong> {{.Country}}</p>
+</td></tr>
+</table>
+<p style="margin:0;color:#888888;font-size:13px">If this was you, no action is needed. If it wasn't, change your password immediately.</p>
+{{end}}

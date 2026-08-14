@@ -27,6 +27,13 @@ const (
 	LoginSuccess = "login_success"
 	// LoginFailure records a failed login attempt (wrong password, locked account, etc.).
 	LoginFailure = "login_failure"
+	// LoginNewCountry records a successful login from a country this user has not
+	// been seen logging in from before (and only when they already had at least
+	// one recorded country — a first-ever login seeds silently). Metadata carries
+	// the ISO alpha-2 country code only, never the IP: the notice is derived from
+	// coarse IP-registration data locally and reduced to country granularity
+	// before anything is stored (docs/PRIVACY.md P4, data minimisation).
+	LoginNewCountry = "login_new_country"
 	// Registration records a new user account creation.
 	Registration = "registration"
 	// TokenRefresh records a refresh token exchange for a new access token.

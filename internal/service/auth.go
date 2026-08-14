@@ -24,6 +24,7 @@ import (
 	vaultemail "github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -124,6 +125,8 @@ type AuthService struct {
 	emailSender        vaultemail.Sender
 	mailer             *vaultemail.Mailer
 	honeypotAlert      *honeypot.Alerter
+	ipIntel            *ipintel.DB
+	loginCountries     repository.LoginCountryRepository
 	metrics            *metrics.Collector
 	maxSessionsPerUser int
 	origin             string
@@ -135,7 +138,7 @@ type AuthService struct {
 	strictSessionLimit bool
 }
 
-// SetStrictSessionLimit controls checkSessionLimit's behaviour on a count-query
+// SetStrictSessionLimit controls checkSessionLimit's behavior on a count-query
 // error: true fails closed (rejects login + audits), false (default) fails open.
 func (s *AuthService) SetStrictSessionLimit(strict bool) {
 	s.strictSessionLimit = strict
@@ -205,6 +208,84 @@ func (s *AuthService) SetHoneypotAlerter(a *honeypot.Alerter) {
 	s.honeypotAlert = a
 }
 
+// SetIPIntel configures the IP-intelligence handle used to derive a coarse
+// country signal (and, in the rate limiter, VPN/hosting/Tor flags) from a
+// client address. When nil — the default — the new-location notice no-ops
+// entirely; the whole feature is gated on this handle being present.
+func (s *AuthService) SetIPIntel(db *ipintel.DB) {
+	s.ipIntel = db
+}
+
+// SetLoginCountryRepo configures the store that remembers which countries a user
+// has logged in from, backing the new-location notice. Without it (the default)
+// the notice no-ops: there is nothing to compare a login's country against.
+func (s *AuthService) SetLoginCountryRepo(r repository.LoginCountryRepository) {
+	s.loginCountries = r
+}
+
+// newLocationNotifyWindow throttles the new-location notice to at most one per
+// user per country per window, mirroring the once-per-window shape of the
+// account-lock notice.
+const newLocationNotifyWindow = 24 * time.Hour
+
+// notifyNewCountry records the country a successful login came from and, when it
+// is a NEW country for a user who already had at least one recorded country,
+// sends a throttled out-of-band notice. Country granularity only: the raw IP is
+// resolved to a country here and never leaves this function — not into the
+// store, not into the audit log, not into the email.
+//
+// It is fail-open and best-effort by construction: it is invoked in its own
+// goroutine from the login success paths, every error degrades to "no notice",
+// and nothing here can block or fail a login. When either the ipintel handle or
+// the country store is absent the feature no-ops.
+//
+// A first-ever login (the user had no recorded country) seeds the set silently:
+// the very first place someone logs in from is not a location change, so it must
+// not fire a notice.
+func (s *AuthService) notifyNewCountry(userID, emailAddr, ip, app string) {
+	if s.ipIntel == nil || s.loginCountries == nil {
+		return
+	}
+	cc := s.ipIntel.LookupString(ip).CountryCode
+	if cc == "" {
+		// Fail-open: an unknown/private/unparseable address yields no country, so
+		// there is nothing to compare or notify about.
+		return
+	}
+	ctx := context.Background()
+	wasNew, hadAny, err := s.loginCountries.UpsertAndWasNew(ctx, userID, cc)
+	if err != nil {
+		log.Printf("auth: login-country upsert failed for %s: %v", userID, err)
+		return
+	}
+	if !wasNew || !hadAny {
+		// Known country, or the first country ever recorded for this user.
+		return
+	}
+
+	// Audit the new-country event with the country only — never the IP.
+	if s.auditLog != nil {
+		s.auditLog.Log(ctx, audit.LoginNewCountry, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"country": cc}, 0)
+	}
+
+	// Throttle: one notice per user per country per window. Reuses the
+	// SetIfNotExists gate the account-lock notice uses.
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	notifyKey := fmt.Sprintf("newloc_notified:%s:%s", userID, cc)
+	if sent, _ := s.cache.SetIfNotExists(ctx, notifyKey, "1", newLocationNotifyWindow); !sent {
+		return
+	}
+	go func() { // #nosec G118 -- intentional: email send outlives the triggering request
+		// Email is best-effort; pass ONLY the country, never the IP.
+		_ = s.emailMailer().Send(context.Background(), app, vaultemail.TemplateNewLocation, emailAddr, vaultemail.TemplateData{
+			Country: cc,
+		})
+	}()
+}
+
 // SetMetrics configures the metrics collector for login/token counters.
 func (s *AuthService) SetMetrics(m *metrics.Collector) {
 	s.metrics = m
@@ -219,7 +300,7 @@ func (s *AuthService) SetMaxSessionsPerUser(n int) {
 
 // SetRoleCatalog enables catalog-aware role validation. When set, JWT issuance
 // keeps only roles present in the auth.app_roles catalog (in addition to the
-// admin-reserved filter). Nil (the default) preserves the prior behaviour.
+// admin-reserved filter). Nil (the default) preserves the prior behavior.
 func (s *AuthService) SetRoleCatalog(c *RoleCatalog) {
 	s.roleCatalog = c
 }
@@ -841,6 +922,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	}
 	s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, deviceID, nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
 
+	// New-location notice (AR-18): out of band, country granularity only, so it
+	// never blocks or fails the login.
+	go s.notifyNewCountry(user.ID, user.Email, ip, app) // #nosec G118 -- intentional: derivation + send outlive the HTTP request
+
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,
 		TokenType:    "Bearer",
@@ -1290,6 +1375,12 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	}
 	s.auditLog.Log(ctx, audit.LoginSuccess, userID, "", ip, ua, fingerprint, deviceID, // #nosec G104 -- audit is best-effort, never blocks auth flow
 		map[string]interface{}{"mfa_completed": true}, 0)
+
+	// New-location notice (AR-18) also fires on the MFA-completion path, so a
+	// login that finishes via a second factor gets the same country signal as a
+	// single-step one. Out of band, country granularity only. mfaUser is the
+	// re-read account resolved above (non-nil past the account-state gate).
+	go s.notifyNewCountry(userID, mfaUser.Email, ip, vaultemail.AppFromContext(ctx)) // #nosec G118 -- intentional: derivation + send outlive the HTTP request
 
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,
