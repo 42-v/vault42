@@ -301,8 +301,11 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 		{"users.UpdatePassword", func() error { return users.UpdatePassword(ctx, user.ID, "$argon2id$new") }},
 		{"users.IncrementFailedLogin", func() error { return users.IncrementFailedLogin(ctx, user.ID) }},
 		{"users.ResetFailedLogin", func() error { return users.ResetFailedLogin(ctx, user.ID) }},
-		{"users.LockUntil", func() error { return users.LockUntil(ctx, user.ID, now.Add(time.Minute)) }},
-		{"users.Unlock", func() error { return users.Unlock(ctx, user.ID) }},
+		// users.LockUntil and users.Unlock are deliberately absent: migration 029
+		// revoked UPDATE(locked_until) from vault_app, so locking and unlocking are
+		// no longer vault_app write paths. They run on the admin gateway under
+		// vault_admin, and TestVaultAppCannotFlipThePrivilegedAccountStateColumns
+		// asserts vault_app is now refused the column.
 		{"users.VerifyEmail", func() error { return users.VerifyEmail(ctx, user.ID) }},
 		{"users.SetLastLogin", func() error { return users.SetLastLogin(ctx, user.ID) }},
 
