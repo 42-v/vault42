@@ -987,10 +987,14 @@
       "superseded_ids": [
         "v4.0.3-3.4.1"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/handler/auth.go"
+      ],
+      "tests": [
+        "TestASVS_V3_3_1_LiveRefreshCookieIsSecure"
+      ],
+      "notes": "Met: the __Host-refresh_token session cookie is issued with the Secure attribute (forced by the __Host- prefix and TLS) by the login handler. The live Set-Cookie is asserted by TestASVS_V3_3_1_LiveRefreshCookieIsSecure. Previously mis-marked Not Applicable on a \"no browser-facing app\" premise that the SPA route and session cookies contradict."
     },
     {
       "standard": "OWASP ASVS",
@@ -1003,10 +1007,14 @@
       "superseded_ids": [
         "v4.0.3-3.4.3"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/handler/auth.go"
+      ],
+      "tests": [
+        "TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict"
+      ],
+      "notes": "Met: the refresh-token cookie sets SameSite=Strict on the live response, asserted by TestASVS_V3_3_2_LiveRefreshCookieSameSiteStrict. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1019,10 +1027,14 @@
       "superseded_ids": [
         "v4.0.3-3.4.4"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/handler/auth.go"
+      ],
+      "tests": [
+        "TestASVS_V3_3_3_LiveRefreshCookieHostPrefix"
+      ],
+      "notes": "Met: the session cookie uses the __Host- prefix (__Host-refresh_token), asserted on the live response by TestASVS_V3_3_3_LiveRefreshCookieHostPrefix. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1035,10 +1047,14 @@
       "superseded_ids": [
         "v4.0.3-3.4.2"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/handler/auth.go"
+      ],
+      "tests": [
+        "TestASVS_V3_3_4_LiveRefreshCookieHttpOnly"
+      ],
+      "notes": "Met: the refresh-token cookie sets HttpOnly on the live response, asserted by TestASVS_V3_3_4_LiveRefreshCookieHttpOnly. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1051,10 +1067,14 @@
       "superseded_ids": [
         "v4.0.3-14.4.5"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/middleware/security_headers.go"
+      ],
+      "tests": [
+        "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
+      ],
+      "notes": "Met: Strict-Transport-Security (max-age >= 1 year, includeSubDomains, preload) is set on every response by the security-headers middleware, asserted by TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1099,10 +1119,14 @@
       "superseded_ids": [
         "v4.0.3-14.4.4"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/middleware/security_headers.go"
+      ],
+      "tests": [
+        "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
+      ],
+      "notes": "Met: X-Content-Type-Options: nosniff is set on every response, asserted by TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1115,10 +1139,14 @@
       "superseded_ids": [
         "v4.0.3-14.4.6"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/middleware/security_headers.go"
+      ],
+      "tests": [
+        "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
+      ],
+      "notes": "Met: Referrer-Policy: no-referrer is set on every response, asserted by TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1131,10 +1159,14 @@
       "superseded_ids": [
         "v4.0.3-14.4.7"
       ],
-      "status": "Not Applicable",
-      "evidence": [],
-      "tests": [],
-      "notes": "vault42 ships no browser-facing application of its own. The Vue SPA in web/ is a separate deliverable assessed separately; the admin gateway HTML UI is loopback-only behind mutual TLS and is covered by V13 configuration rows."
+      "status": "Met",
+      "evidence": [
+        "internal/middleware/security_headers.go"
+      ],
+      "tests": [
+        "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
+      ],
+      "notes": "Met: anti-framing is enforced on every response via CSP frame-ancestors none and X-Frame-Options: DENY, asserted by TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse. Previously mis-marked Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
@@ -1639,9 +1671,9 @@
         "internal/handler/password.go"
       ],
       "tests": [
-        "TestNIST_PasswordHistoryReuse"
+        "TestASVSAuth_V6_2_2_UserCanChangePassword"
       ],
-      "notes": "POST /user/password."
+      "notes": "POST /user/password. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP ASVS",
@@ -2047,9 +2079,9 @@
         "internal/service/auth.go"
       ],
       "tests": [
-        "TestASVS_V2_5_5_NoSecretQuestions"
+        "TestASVSAuth_V6_4_2_NoKnowledgeBasedSecrets"
       ],
-      "notes": "No password hints and no knowledge-based authentication."
+      "notes": "No password hints and no knowledge-based authentication. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP ASVS",
@@ -2292,9 +2324,9 @@
         "internal/service/auth.go:811"
       ],
       "tests": [
-        "TestNIST_MFA_TOTPRejectionOfInvalidCodes"
+        "TestASVSAuth_V6_6_2_EmailOTPBoundToOriginalRequest"
       ],
-      "notes": "The MFA challenge token binds the second factor to the login attempt that produced it."
+      "notes": "The MFA challenge token binds the second factor to the login attempt that produced it. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP ASVS",
@@ -2858,9 +2890,9 @@
         "internal/service/blob.go:50"
       ],
       "tests": [
-        "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest"
+        "TestASVSAuth_V8_2_2_BlobAccessDeniedWithoutPermission"
       ],
-      "notes": "Object access is keyed on a pseudonym derived from the authenticated subject, so there is no caller-supplied object identifier to tamper with; the ciphertext is additionally bound to the owner as AAD, so a row moved between users fails to decrypt."
+      "notes": "Object access is keyed on a pseudonym derived from the authenticated subject, so there is no caller-supplied object identifier to tamper with; the ciphertext is additionally bound to the owner as AAD, so a row moved between users fails to decrypt. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP ASVS",
@@ -4192,9 +4224,9 @@
         "Dockerfile"
       ],
       "tests": [
-        "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned"
+        "TestASVS_V13_4_1_DeployedImageExcludesSourceControlMetadata"
       ],
-      "notes": "The image is built from a scratch-style final stage containing the binary and its static assets only."
+      "notes": "The image is built from a scratch-style final stage containing the binary and its static assets only. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP ASVS",
@@ -5909,9 +5941,10 @@
         "internal/handler/oauth.go"
       ],
       "tests": [
-        "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
+        "TestNIST_IA_8_FederatedIdentityAuthenticatedThroughOIDCFlow",
+        "TestNIST_IA_8_MismatchedIssuerRejected"
       ],
-      "notes": "Federated login through OIDC providers."
+      "notes": "Federated login through OIDC providers. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "NIST SP 800-53",
@@ -5939,9 +5972,9 @@
         ".github/workflows/nightly-security.yml:24"
       ],
       "tests": [
-        "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
+        "TestNIST_RA_5_NightlySecurityScannersEnforceHighCriticalGate"
       ],
-      "notes": "govulncheck, gosec and Trivy run nightly with a HIGH/CRITICAL gate."
+      "notes": "govulncheck, gosec and Trivy run nightly with a HIGH/CRITICAL gate. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6256,11 +6289,9 @@
         "internal/service/auth.go:105"
       ],
       "tests": [
-        "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
-        "TestNIST63B4_3_1_1_2_SingleFactorPasswordFloorIs15",
-        "TestNIST_HIBPBreachCheck"
+        "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "OWASP Top 10",
@@ -6323,9 +6354,9 @@
         "docs/PRIVACY.md"
       ],
       "tests": [
-        "TestASVS_V14_1_1_TheDataInventoryExistsAndIsEnforced"
+        "TestGDPR_Art5_1b_PurposeLimitationEnforced"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6388,9 +6419,9 @@
         "docs/PRIVACY.md"
       ],
       "tests": [
-        "TestGDPR_Art7_1_ConsentRecordProvenance"
+        "TestGDPR_Art6_LawfulBasisPrimaryAndConsentRecord"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6421,9 +6452,9 @@
         "internal/handler/data_export.go:63"
       ],
       "tests": [
-        "TestGDPR_Art15_Art20_ExportDeclaresItsOwnTruncation"
+        "TestGDPR_Art15_RightOfAccessCategoriesAndTruncation"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6453,9 +6484,9 @@
         "internal/handler/identity.go"
       ],
       "tests": [
-        "TestGDPR_Art7_3_UnsubscribeWithdrawsConsent"
+        "TestGDPR_Arts16_18_21_RectifyRestrictObject"
       ],
-      "notes": "Each right has an endpoint and each writes to the audit trail."
+      "notes": "Each right has an endpoint and each writes to the audit trail. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6468,9 +6499,9 @@
         "internal/handler/data_export.go:63"
       ],
       "tests": [
-        "TestGDPR_Art20_ExportIsStructuredAndMachineReadable"
+        "TestGDPR_Art20_ExportShapeIsPortableJSON"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6483,9 +6514,9 @@
         "docs/PRIVACY.md"
       ],
       "tests": [
-        "TestGDPR_Art28_ProcessorsAreDocumented"
+        "TestGDPR_Art28_ProcessorsEnumeratedInRegister"
       ],
-      "notes": ""
+      "notes": "Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "GDPR",
@@ -6556,9 +6587,9 @@
         "docs/PRIVACY.md"
       ],
       "tests": [
-        "TestGDPR_Art28_ProcessorsAreDocumented"
+        "TestGDPR_Art44_CrossBorderTransferSafeguards"
       ],
-      "notes": "Transfers are a deployment property; the processors and their locations are documented for the controller."
+      "notes": "Transfers are a deployment property; the processors and their locations are documented for the controller. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -6587,10 +6618,9 @@
         "internal/handler/oauth.go:104"
       ],
       "tests": [
-        "TestRFC9700_4_1_1_StateHMACIntegrity",
-        "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
+        "TestIETF_RFC9700_s411_StateIntegrityAndSessionBinding"
       ],
-      "notes": "Also ASVS 5.0.0 V10.2.1."
+      "notes": "Also ASVS 5.0.0 V10.2.1. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -6684,10 +6714,9 @@
         "internal/crypto/jwt.go:111"
       ],
       "tests": [
-        "TestASVS_V9_1_3_KeySourceHeadersAreRejected",
-        "TestASVS_V3_5_3_RejectDangerousHeaders"
+        "TestIETF_RFC8725_s38_VerifierRejectsInboundKeySourceHeaders"
       ],
-      "notes": "Also ASVS 5.0.0 V9.1.3."
+      "notes": "Also ASVS 5.0.0 V9.1.3. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -6700,10 +6729,9 @@
         "internal/jwt/validate.go:31"
       ],
       "tests": [
-        "TestASVS_V9_2_1_ValidityWindowClaimsAreVerified",
-        "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
+        "TestIETF_RFC8725_s39_ValidityWindowAndBindingFailClosed"
       ],
-      "notes": "Also ASVS 5.0.0 V9.2.1 and V9.2.3."
+      "notes": "Also ASVS 5.0.0 V9.2.1 and V9.2.3. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -6747,10 +6775,9 @@
         "internal/crypto/totp.go:89"
       ],
       "tests": [
-        "TestNIST_MFA_TOTPDeterministicGeneration",
-        "TestNIST_TOTPPeriod30Seconds"
+        "TestIETF_RFC6238_TOTPAppendixBKnownAnswerVectors"
       ],
-      "notes": "HMAC-SHA1 is mandated by the algorithm and is annotated at the import; it is not a free choice of hash. No MD5 exists anywhere in the repository."
+      "notes": "HMAC-SHA1 is mandated by the algorithm and is annotated at the import; it is not a free choice of hash. No MD5 exists anywhere in the repository. Test repointed in the register-integrity pass to a case that exercises the clause directly."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
