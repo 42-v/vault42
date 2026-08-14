@@ -41,6 +41,30 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   indefinitely. It now burns the same dummy Argon2id verification and returns the same
   `401 invalid_credentials` as a wrong password, with the shared bookkeeping extracted so the
   two paths cannot drift into distinguishable side effects.
+* **The login lockout was an account-existence oracle.** The per-user lockout counter only
+  advances for an address that exists, so a locked account answered `403 account_locked` while
+  an unknown one answered `401`, and rotating the probe IP slipped past the per-IP limit. Both
+  lock branches now burn the same dummy Argon2 and return `401 invalid_credentials`, and
+  advance the per-IP failure counter like every other failure path, so neither the immediate
+  response nor the IP-lockout progression distinguishes a locked account from an unregistered
+  one. The lockout still holds and the audit row keeps the true reason.
+* **The banned and disabled login checks were the last two of the same oracle.** Both ran
+  before the password was verified, so a real banned or disabled address answered `403` while
+  an unknown one answered `401`. They now run only after a successful `VerifyPassword`: a wrong
+  password or an unknown address stays masked as `401`, and only a caller who proves the
+  password learns the account is banned or disabled. With the locked and import-claim paths
+  this closes all four outcomes of ASVS V6.3.8 (accepted risk AR-19), now Met above the
+  assessed L2 baseline.
+* **The OAuth callback leaked which addresses were registered.** A provider that cannot prove
+  the caller owns the address (Facebook publishes no per-address verification signal; an OIDC
+  issuer can answer `email_verified:false`) let an attacker assert a victim's address. A
+  registered one returned `409 email_already_registered`; an unknown one created an account,
+  mailed the victim a verification link, and returned a success redirect -- an enumeration
+  oracle, a mailbox-squat and an unsolicited-send primitive at once. A first-time sign-in from
+  a provider that cannot prove ownership now returns one neutral `#error=verification_required`
+  redirect before any lookup, identical either way, creating nothing and mailing nothing.
+  Takeover was already blocked by the both-sides-verified link rule; verified providers and
+  already-linked identities are unaffected.
 * the concurrent-session cap now applies to OAuth logins, which wrote a refresh-token family
   without it. Client credentials remain exempt because that path discards its refresh token
   and creates no family, which is a structural exemption rather than a gap.

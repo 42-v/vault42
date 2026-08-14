@@ -504,8 +504,10 @@ Both fields carry `omitempty`, so on a non-MFA login they are absent rather than
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `invalid_request` | Malformed JSON |
-| 401 | `invalid_credentials` | Wrong email/password or email not verified (identical response for anti-enumeration) |
-| 403 | `account_locked` | Account locked due to too many failed attempts |
+| 401 | `invalid_credentials` | Wrong email/password, an unverified/deleted/import-pending account, or a banned/disabled account without the correct password (identical response for anti-enumeration) |
+| 403 | `account_locked` | The per-IP lockout tripped (IP-scoped; reveals nothing about any account). The per-user lockout answers 401 instead, so it cannot be used to enumerate. |
+| 403 | `account_banned` | The account is banned. Returned only after a successful password verification, so a caller without the password cannot distinguish it from an unknown address. |
+| 403 | `account_disabled` | The account is disabled. Returned only after a successful password verification, same anti-enumeration property as `account_banned`. |
 | 429 | `rate_limit_exceeded` | Login rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |

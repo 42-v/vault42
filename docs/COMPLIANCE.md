@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **367 requirements in scope across 6 standards: 274 Met, 22 Accepted Risk,
+> **367 requirements in scope across 6 standards: 275 Met, 21 Accepted Risk,
 > 71 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -205,7 +205,6 @@ are the pre-existing entries in [`docs/security.md`](security.md).
 | **AR-16** | Low | `RBACCheck` answers 403 without writing an audit record, so an admin permission denial leaves no trail. The denial is still enforced. | ASVS V16.3.2 |
 | **AR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
 | **AR-18** | Low | No notification of authentication from an unusual location. Implementing it requires IP geolocation, which vault42 deliberately does not do. L3 requirement. | ASVS V6.3.5 |
-| **AR-19** | Medium | Four login outcomes remain distinguishable without a valid password: `403 account_locked`, `403 account_banned`, `403 account_disabled` and `202 import_claim_required`. L3 requirement; scheduled to close in 1.0.0. | ASVS V6.3.8 |
 | **AR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
 | **AR-21** | Low | Tokens carry no `acr`, `amr` or `aal` claim, so a resource server cannot require a specific authentication strength. The AAL constants exist and are tested but have no non-test caller. | ASVS V6.8.4, V10.3.4 |
 | **AR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
@@ -274,17 +273,17 @@ go test ./tests/compliance/ -run TestComplianceRegister
 
 None. Every requirement is Met or carries an accepted risk with a named owner.
 
-Two items are recorded here because they are scheduled to close inside 1.0.0 on
-another work stream and the register will be updated when they land:
+One item is recorded here because it is scheduled to close inside 1.0.0 on
+another work stream and the register will be updated when it lands:
 
 1. **AR-14** closes when `SetMaxSessionLifetime` is called from
    `cmd/vault/main.go` with a configured default. The mechanism, the schema
    column and the fail-closed enforcement are already in place; only the wiring
    is missing. `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` fails when it
-   lands, 
-2. **AR-19** closes when the login handler collapses its account-state responses
-   to a single `invalid_credentials`. The audit trail already records the true
-   reason with a risk tag, so nothing operational is lost.
+   lands.
 
-Both are tracked by tests that fail on closure rather than on regression, so a
-fix cannot land without the register being updated in the same change.
+It is tracked by a test that fails on closure rather than on regression, so a
+fix cannot land without the register being updated in the same change. AR-19,
+the login-outcome enumeration oracle, has since closed: account_locked, the
+import-claim path, banned and disabled now all answer 401 invalid_credentials
+without a valid password.

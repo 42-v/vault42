@@ -313,10 +313,12 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 
 1. Client submits `email`, `password`, `remember_me` (optional), `client_id` (optional)
 2. If user not found, a dummy Argon2id verification runs to prevent timing-based enumeration (also runs on database error)
-3. Account lock check: both database `locked_until` field and cache-based auto-lockout (5 failures = 15-minute lockout, with DB fallback when cache unavailable)
-3b. IP-wide lockout check: 20 failures per IP within 15 minutes triggers IP-level lockout (via cache with PostgreSQL rate_limits fallback)
+3. Account lock check: the per-user lock (database `locked_until` and the cache auto-lockout, 5 failures = 15-minute lockout with DB fallback) is answered with `invalid_credentials` and burns the same dummy Argon2 as an unknown address, so a locked account cannot be told from an unregistered one. It also advances the per-IP counter like every other failure. Only the IP-wide lockout below surfaces `account_locked`.
+3b. IP-wide lockout check: 20 failures per IP within 15 minutes triggers IP-level lockout (via cache with PostgreSQL rate_limits fallback). It is IP-scoped and account-agnostic, so it keeps its distinct `account_locked` response.
+3c. Deleted and import-pending accounts are masked as `invalid_credentials` before the password is verified (both burn the dummy Argon2), so their existence never leaks.
 4. Password verified with Argon2id (constant-time comparison via `crypto/subtle`)
-5. Email verification check -- unverified emails cannot log in
+4b. Administrative-denial check: a banned or disabled account is refused (`account_banned` / `account_disabled`) only after the password verifies. A wrong password or an unknown address never reaches this point, so the denial cannot be used to enumerate accounts.
+5. Email verification check -- unverified emails cannot log in (masked as `invalid_credentials`)
 6. Failed login counter reset on success
 7. Device fingerprint computed: `SHA256(len‖IP ‖ len‖User-Agent ‖ len‖Accept-Language ‖ len‖TLS-fingerprint)` -- length-prefixed (4-byte big-endian) to prevent separator collision attacks
 8. MFA check: if user has any verified 2FA methods (TOTP, WebAuthn, backup codes, email OTP):

@@ -153,18 +153,6 @@
       "revisit_when": "vault42 is assessed at L3, or a deployment accepts the privacy cost of geolocation.",
       "cost_of_closing": "A geolocation dependency and a change to the data-minimisation position in docs/PRIVACY.md, which is the reason this is not simply a feature."
     },
-    "AR-19": {
-      "title": "Four login outcomes remain distinguishable without a valid password",
-      "severity": "Medium",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "pending",
-      "rationale": "Timing is equalised by the dummy-hash path and wrong-password is indistinguishable from unknown-account. Four outcomes still differ by status code with an arbitrary password: 403 account_locked, 403 account_banned, 403 account_disabled and 202 import_claim_required. The 202 is the strongest of the four because it additionally reveals import-pending state and triggers an email to the account holder. ASVS 5.0.0 V6.3.8 is an L3 requirement and vault42 is assessed at L2.",
-      "compensating_control": "Per-user and per-IP lockout bounds how many accounts an enumeration attempt can test; every attempt is audited with the true reason and a risk tag, so the enumeration itself is recorded even though the response is informative.",
-      "residual_risk": "An attacker holding a list of candidate addresses can determine which exist and which are locked, banned, disabled or import-pending.",
-      "revisit_when": "Immediately: collapsing these responses is scheduled in 1.0.0 on the auth-core stream. It is a breaking API change and therefore has to land before the semver commitment.",
-      "cost_of_closing": "Collapse the handler status mapping to a single invalid_credentials response and move the true reason into the audit metadata, which is already recorded. The test churn dominates the effort."
-    },
     "AR-20": {
       "title": "Authenticator loss is handled by operator escrow, not by repeated identity proofing",
       "severity": "Low",
@@ -2010,17 +1998,16 @@
       "chapter": "V6 Authentication",
       "level": "L3",
       "requirement": "Verify that valid users cannot be deduced from failed authentication challenges, such as by basing on error messages, HTTP response codes, or different response times. Registration and forgot password functionality must also have this protection.",
-      "status": "Accepted Risk",
-      "accepted_risk": "AR-19",
+      "status": "Met",
       "evidence": [
-        "internal/service/auth.go:527",
+        "internal/service/auth.go:651",
         "internal/handler/auth.go:91"
       ],
       "tests": [
         "TestNIST_DummyHashTimingProtection",
         "TestASVS_V3_7_1_AccountLockoutPreventsEnumeration"
       ],
-      "notes": "Timing is equalised by the dummy-hash path and the wrong-password and unknown-account cases are indistinguishable. Four outcomes still differ by status code without a valid password: 403 account_locked, 403 account_banned, 403 account_disabled and 202 import_claim_required. Collapsing them is in progress on the auth-core stream; until it lands the oracle is real. This is an L3 requirement and vault42 is assessed at L2, so it is recorded as accepted rather than as an in-scope failure."
+      "notes": "All four login outcomes that once differed by status code without a valid password now answer 401 invalid_credentials. account_locked and the import-claim path burn the same dummy Argon2 and mask; banned and disabled are revealed only after a successful password verification, so a caller without the password cannot tell any account state from an unknown address, and timing is equalised by the dummy-hash path. This L3 requirement is met above the assessed L2 baseline."
     },
     {
       "standard": "OWASP ASVS",
@@ -5909,7 +5896,7 @@
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
         "TestNIST_DummyHashTimingProtection"
       ],
-      "notes": "Credential failure is generic and constant-time. Four account-state outcomes remain distinguishable by status code; that residual is tracked as AR-19 under ASVS V6.3.8."
+      "notes": "Credential failure is generic and constant-time. The four account-state outcomes that once differed by status code (locked, import-claim, banned, disabled) now all answer 401 invalid_credentials without a valid password, closing what was tracked as AR-19 under ASVS V6.3.8."
     },
     {
       "standard": "NIST SP 800-53",
