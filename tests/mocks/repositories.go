@@ -156,6 +156,7 @@ func (m *MockUserRepo) VerifyEmail(ctx context.Context, id string) error {
 
 type MockRefreshTokenRepo struct {
 	CreateFn              func(ctx context.Context, token *model.RefreshToken) error
+	CreateWithinCapFn     func(ctx context.Context, token *model.RefreshToken, maxFamilies int) error
 	GetByTokenHashFn      func(ctx context.Context, hash string) (*model.RefreshToken, error)
 	MarkUsedFn            func(ctx context.Context, id string) (bool, error)
 	RevokeByIDFn          func(ctx context.Context, id string) error
@@ -169,6 +170,16 @@ type MockRefreshTokenRepo struct {
 }
 
 func (m *MockRefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
+	if m.CreateFn != nil {
+		return m.CreateFn(ctx, token)
+	}
+	return nil
+}
+
+func (m *MockRefreshTokenRepo) CreateWithinCap(ctx context.Context, token *model.RefreshToken, maxFamilies int) error {
+	if m.CreateWithinCapFn != nil {
+		return m.CreateWithinCapFn(ctx, token, maxFamilies)
+	}
 	if m.CreateFn != nil {
 		return m.CreateFn(ctx, token)
 	}

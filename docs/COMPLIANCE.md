@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **367 requirements in scope across 6 standards: 285 Met, 19 Accepted Risk,
+> **367 requirements in scope across 6 standards: 286 Met, 18 Accepted Risk,
 > 63 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -174,15 +174,15 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 194 | 10 | 59 | 263 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 195 | 9 | 59 | 263 |
 | NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
-| **Total** | **285** | **19** | **63** | **367** |
+| **Total** | **286** | **18** | **63** | **367** |
 
-The 19 Accepted Risk rows collapse to **10 distinct accepted risks**: several
+The 18 Accepted Risk rows collapse to **9 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -199,7 +199,6 @@ are the pre-existing entries in [`docs/security.md`](security.md).
 
 | ID | Severity | What is accepted | Requirements affected |
 |---|---|---|---|
-| **AR-13** | Low | The concurrent-session cap is soft: counting and inserting are not atomic, so racing logins can overshoot it. It is a resource control, not a security boundary, and confers no authentication bypass. | ASVS V2.3.4 |
 | **AR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
 | **AR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a hardcoded severity tag that no code reads, and the only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
 | **AR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |

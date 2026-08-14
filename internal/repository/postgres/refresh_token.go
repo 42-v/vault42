@@ -22,6 +22,39 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 	return &RefreshTokenRepo{db: db}
 }
 
+// refreshFamilyLockClass namespaces this store's per-user advisory locks so they
+// cannot collide with an advisory lock any other store takes. It is the first
+// argument to the two-int pg_advisory_xact_lock; the second is hashtext(user_id).
+const refreshFamilyLockClass int32 = 0x52544b46 // "RTKF"
+
+// insertRefreshRowSQL inserts one refresh-token row and carries the family's
+// birth date and both anti-race guards. It is shared verbatim by Create and
+// CreateWithinCap so the two insert paths cannot drift: see Create for what each
+// clause defends.
+const insertRefreshRowSQL = `
+	INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
+	SELECT $1::uuid, $2::uuid, $3::uuid, $4::varchar, $5::uuid, $6::uuid, $7::varchar, $8::timestamptz, $9::timestamptz,
+	       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)
+	WHERE COALESCE((SELECT bool_or(family.revoked)
+	                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 ORDER BY id FOR UPDATE) AS family), FALSE) = FALSE
+	  AND EXISTS (SELECT 1 FROM auth.users WHERE id = $2 AND deleted = FALSE)`
+
+// countActiveFamiliesSQL counts a user's distinct active token families. It is
+// shared by CountActiveFamilies and CreateWithinCap so the soft pre-check and
+// the atomic cap enforce the same definition of "active".
+const countActiveFamiliesSQL = `
+	SELECT COUNT(DISTINCT family_id) FROM auth.refresh_tokens
+	WHERE user_id = $1 AND revoked = FALSE AND used = FALSE AND expires_at > NOW()`
+
+// refreshTokenInsertArgs binds insertRefreshRowSQL's placeholders from a token.
+func refreshTokenInsertArgs(token *model.RefreshToken) []any {
+	return []any{
+		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
+		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
+		token.ExpiresAt, token.CreatedAt,
+	}
+}
+
 // Create inserts a new refresh token into the auth.refresh_tokens table.
 //
 // SECURITY INVARIANT (absolute session lifetime, migration 013): family_created_at
@@ -75,22 +108,71 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 // SHARE and is never blocked by a row a writer holds, so it adds no edge any
 // cycle could close.
 func (r *RefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
-	tag, err := r.db.Pool.Exec(ctx, `
-		INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
-		SELECT $1::uuid, $2::uuid, $3::uuid, $4::varchar, $5::uuid, $6::uuid, $7::varchar, $8::timestamptz, $9::timestamptz,
-		       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)
-		WHERE COALESCE((SELECT bool_or(family.revoked)
-		                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 ORDER BY id FOR UPDATE) AS family), FALSE) = FALSE
-		  AND EXISTS (SELECT 1 FROM auth.users WHERE id = $2 AND deleted = FALSE)`,
-		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
-		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
-		token.ExpiresAt, token.CreatedAt,
-	)
+	tag, err := r.db.Pool.Exec(ctx, insertRefreshRowSQL, refreshTokenInsertArgs(token)...)
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return repository.ErrFamilyRevoked
+	}
+	return nil
+}
+
+// CreateWithinCap inserts the first token of a new family only while the user
+// holds fewer than maxFamilies active families.
+//
+// SECURITY INVARIANT (concurrent-session cap, ASVS V2.3.4): the cap is a
+// limited-quantity resource, and counting it and then inserting under it is one
+// unit of work only because this transaction and this advisory lock make it one.
+// Without the lock the count and the insert are two statements a racing login
+// can interleave: each counts the same pre-insert total, each sees a free slot,
+// and both insert, so a cap of N admits N+k for k simultaneous logins. The
+// pg_advisory_xact_lock serializes every capped insert for one user, so the
+// count each login reads already includes every login that committed before it.
+//
+// The lock is taken before the count for the same reason WithSubjectWriteLock
+// takes it before its count: a lock acquired after the number it protects has
+// been read is a lock around nothing. The count is a statement of its own after
+// the lock so that, under READ COMMITTED, it takes a fresh snapshot that
+// contains the rows a just-released peer committed; folding it into the insert's
+// snapshot would reintroduce the race the lock closes.
+//
+// A maxFamilies of zero or less means no cap is configured, so the lock and the
+// count are skipped and the insert runs exactly as Create.
+func (r *RefreshTokenRepo) CreateWithinCap(ctx context.Context, token *model.RefreshToken, maxFamilies int) error {
+	if maxFamilies <= 0 {
+		return r.Create(ctx, token)
+	}
+
+	tx, err := r.db.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin session cap tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // rollback after commit is a no-op
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		refreshFamilyLockClass, token.UserID); err != nil {
+		return fmt.Errorf("lock user sessions: %w", err)
+	}
+
+	var active int
+	if err := tx.QueryRow(ctx, countActiveFamiliesSQL, token.UserID).Scan(&active); err != nil {
+		return fmt.Errorf("count active families: %w", err)
+	}
+	if active >= maxFamilies {
+		return repository.ErrSessionLimitReached
+	}
+
+	tag, err := tx.Exec(ctx, insertRefreshRowSQL, refreshTokenInsertArgs(token)...)
+	if err != nil {
+		return fmt.Errorf("insert refresh token within cap: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrFamilyRevoked
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit session cap tx: %w", err)
 	}
 	return nil
 }
@@ -314,9 +396,7 @@ func (r *RefreshTokenRepo) RevokeAll(ctx context.Context) error {
 // CountActiveFamilies returns the number of distinct active (non-revoked, non-expired) token families for a user.
 func (r *RefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID string) (int, error) {
 	var count int
-	err := r.db.Pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT family_id) FROM auth.refresh_tokens
-		WHERE user_id = $1 AND revoked = FALSE AND used = FALSE AND expires_at > NOW()`, userID).Scan(&count)
+	err := r.db.Pool.QueryRow(ctx, countActiveFamiliesSQL, userID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count active families: %w", err)
 	}

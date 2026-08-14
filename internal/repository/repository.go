@@ -106,12 +106,25 @@ type UserRepository interface {
 // the session.
 var ErrFamilyRevoked = errors.New("refresh token family is revoked")
 
+// ErrSessionLimitReached is returned by CreateWithinCap, which inserts nothing,
+// when the user already holds the maximum number of concurrent token families.
+// It is distinct from ErrFamilyRevoked so the caller can map it to the
+// caller-facing "too many sessions" outcome rather than a replay.
+var ErrSessionLimitReached = errors.New("concurrent session limit reached")
+
 // RefreshTokenRepository manages refresh token persistence.
 type RefreshTokenRepository interface {
 	// Create inserts a new refresh token record. Returns ErrFamilyRevoked, and
 	// inserts nothing, when the token's family already carries a revoked row or
 	// the owning account has been erased.
 	Create(ctx context.Context, token *model.RefreshToken) error
+	// CreateWithinCap inserts the first token of a new family only while the
+	// user holds fewer than maxFamilies active families, counting and inserting
+	// under one per-user lock so racing logins cannot overshoot the cap. A
+	// maxFamilies of zero or less disables the check and inserts unconditionally.
+	// Returns ErrSessionLimitReached, and inserts nothing, when the cap is
+	// already reached; ErrFamilyRevoked on the same conditions as Create.
+	CreateWithinCap(ctx context.Context, token *model.RefreshToken, maxFamilies int) error
 	// GetByTokenHash retrieves a refresh token by its SHA-256 hash. Returns nil, nil if not found.
 	GetByTokenHash(ctx context.Context, hash string) (*model.RefreshToken, error)
 	// MarkUsed atomically marks a token as used. Returns true if the token was

@@ -81,18 +81,6 @@
     }
   ],
   "accepted_risks": {
-    "AR-13": {
-      "title": "Concurrent-session cap is soft, not strictly enforced",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "pending",
-      "rationale": "The cap counts distinct token families and then inserts, without a lock, so simultaneous logins can overshoot it. The argument for accepting this is written in the code it describes, at internal/service/auth.go:1115-1124: the over-count is bounded by the number of racing logins, converges as families expire, and confers no authentication bypass. It is a resource control, not a security boundary.",
-      "compensating_control": "Per-user and per-IP rate limiting on the login endpoint bounds how many simultaneous logins an attacker can mount; families expire on the refresh TTL.",
-      "residual_risk": "A user may briefly hold more concurrent sessions than the configured cap.",
-      "revisit_when": "The cap becomes a hard security boundary rather than a resource control, or a customer contract specifies strict enforcement.",
-      "cost_of_closing": "A per-user advisory lock or a count-conditional INSERT on the login hot path."
-    },
     "AR-14": {
       "title": "No inactivity timeout, and the absolute session lifetime defaults well above the AAL2 recommendation",
       "severity": "Low",
@@ -886,15 +874,15 @@
       "superseded_ids": [
         "v4.0.3-11.1.6"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "AR-13",
+      "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1115"
+        "internal/repository/postgres/refresh_token.go:142",
+        "internal/service/auth.go:1777"
       ],
       "tests": [
-        "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
+        "TestASVS_V2_3_4_ConcurrentSessionCapIsLocked"
       ],
-      "notes": "The concurrent-session cap counts and inserts without a lock, so racing logins can overshoot it. The over-count is bounded by the number of simultaneous logins, converges as families expire, and confers no authentication bypass: it is a resource control, not a security boundary."
+      "notes": "The concurrent-session cap is enforced as one unit of work. storeRefreshToken issues the new-family insert through RefreshTokenRepository.CreateWithinCap, which counts the user's active token families and inserts under a single per-user advisory lock, so simultaneous logins cannot each read the same free slot and overshoot the cap. A count-only pre-check still fails fast, and a login that loses the race is refused with the same too-many-sessions outcome."
     },
     {
       "standard": "OWASP ASVS",

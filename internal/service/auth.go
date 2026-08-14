@@ -1780,10 +1780,20 @@ func (s *AuthService) storeRefreshToken(ctx context.Context, userID, clientID, d
 	if err != nil {
 		return fmt.Errorf("generate refresh token ID: %w", err)
 	}
-	return s.tokens.Create(ctx, &model.RefreshToken{
+	// The concurrent-session cap is enforced atomically here, not only by the
+	// earlier checkSessionLimit pre-check: CreateWithinCap counts the user's
+	// active families and inserts under one per-user lock, so simultaneous logins
+	// cannot each pass the pre-check and overshoot the cap (ASVS V2.3.4). A cap of
+	// zero disables the bound. ErrSessionLimitReached is the race-loser's outcome
+	// and is the same rejection the pre-check returns.
+	err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{
 		ID: rtID, UserID: userID, ClientID: clientID,
 		TokenHash: tokenHash, FamilyID: pair.FamilyID,
 		DeviceID: deviceID, FingerprintHash: fp,
 		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
-	})
+	}, s.maxSessionsPerUser)
+	if errors.Is(err, repository.ErrSessionLimitReached) {
+		return ErrTooManySessions
+	}
+	return err
 }
