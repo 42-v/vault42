@@ -479,14 +479,19 @@ func TestLoginAccountLocked(t *testing.T) {
 
 	h.Login(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected status 403, got %d; body: %s", rec.Code, rec.Body.String())
+	// A locked account must be indistinguishable from a wrong password or an
+	// unknown email at the login endpoint: only an existing account can reach the
+	// locked state, so a distinct 403 account_locked leaks that the address is
+	// registered (the login-lockout enumeration fix). The lockout still holds
+	// server side; the caller just cannot observe it.
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
 	var result map[string]string
 	decodeResponse(t, rec, &result)
-	if result["error"] != "account_locked" {
-		t.Fatalf("expected error=account_locked, got %q", result["error"])
+	if result["error"] != "invalid_credentials" {
+		t.Fatalf("expected error=invalid_credentials, got %q", result["error"])
 	}
 }
 
