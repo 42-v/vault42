@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-14 | Tests: 4202 | Total: 99.55% statement coverage
+Generated: 2026-08-14 | Tests: 4204 | Total: 99.56% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -30,7 +30,7 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/repository/postgres` | 99.90% |
 | `internal/adminapi` | 99.82% |
 | `internal/oauth2` | 99.73% |
-| `internal/handler` | 99.62% |
+| `internal/handler` | 99.67% |
 | `internal/keystore` | 99.53% |
 | `cmd/bridge` | 99.49% |
 | `cmd/admin-gateway` | 99.42% |
