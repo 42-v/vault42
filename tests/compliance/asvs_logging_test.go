@@ -3,15 +3,19 @@ package compliance
 import (
 	"context"
 	"go/ast"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/42-v/vault42/internal/adminapi"
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
 )
 
@@ -260,12 +264,11 @@ func TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes(t *testing.T)
 // "Verify that failed authorization attempts are logged. For L3, this must
 // include logging all authorization decisions."
 //
-// Scope note, recorded here because it is the honest half of this requirement:
-// vault42 logs every failed *authentication* attempt on the admin plane, and
-// logs the local-only killswitch trip, but RBACCheck answers 403 without
-// writing an audit record. V16.3.2 is therefore carried in the register as an
-// accepted risk (AR-16), not as Met. What this test pins is the part that does
-// hold, so the accepted risk cannot quietly widen to cover authentication too.
+// This pins the authentication half: vault42 logs every failed *authentication*
+// attempt on the admin plane and logs the local-only killswitch trip. The
+// authorization half — a failed RBAC decision — is pinned separately by
+// TestASVS_V16_3_2_RBACDenialsAreAudited, so neither half can regress without a
+// named test failing.
 func TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged(t *testing.T) {
 	for _, value := range []string{audit.AdminLogin, audit.AdminLoginFailure, audit.AdminAction, audit.AdminLockout} {
 		if value == "" {
@@ -287,21 +290,48 @@ func TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged(t *testing.T) {
 	}
 }
 
-// The gap named in AR-16, pinned so that closing it is detected. When
-// RBACCheck starts writing an audit record, this test fails and the register
-// row moves from Accepted Risk to Met.
-func TestASVS_V16_3_2_RBACDenialsAreStillUnlogged(t *testing.T) {
-	src := readProductionSource(t, "internal/adminapi/middleware.go")
-	idx := strings.Index(src, "func RBACCheck(")
-	if idx < 0 {
-		t.Skip("V16.3.2: RBACCheck has moved; re-derive AR-16 against the new enforcement point")
+// The authorization half of V16.3.2, and the closure of what was AR-16. A failed
+// RBAC decision on the admin plane must reach the append-only audit log, or a
+// privilege-boundary probe leaves no trail. This drives a denied permission
+// check through the real RBACCheck middleware and asserts the record the
+// repository received: the event type, the admin it names, and the permission it
+// was refused. When this passes the register row is Met, not an accepted risk.
+func TestASVS_V16_3_2_RBACDenialsAreAudited(t *testing.T) {
+	repo := &captureRepo{}
+	logger := audit.NewLogger(repo, 0)
+
+	// A viewer holds read verbs only, so config:write is denied.
+	admin := &model.AdminUser{ID: "admin-1", Username: "viewer", Role: string(rbac.RoleViewer)}
+
+	reached := false
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
+	guarded := adminapi.RBACCheck(rbac.ConfigWrite, logger)(next)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/config/some_key", nil)
+	req = req.WithContext(adminapi.WithAdmin(req.Context(), admin))
+	req.RemoteAddr = "127.0.0.1:5000"
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("V16.3.2: a denied RBAC check returned %d, want 403", rec.Code)
 	}
-	body := src[idx:]
-	if end := strings.Index(body, "\n}\n"); end > 0 {
-		body = body[:end]
+	if reached {
+		t.Fatal("V16.3.2: the guarded handler ran despite a permission denial")
 	}
-	if strings.Contains(body, "audit") {
-		t.Fatal("V16.3.2: RBACCheck now writes an audit record. AR-16 is closed: move the register row to Met and delete this test.")
+
+	entry := repo.last(t)
+	if entry.EventType != audit.AdminAuthzDenied {
+		t.Errorf("V16.3.2: denial wrote event %q, want %q", entry.EventType, audit.AdminAuthzDenied)
+	}
+	if entry.UserID != admin.ID {
+		t.Errorf("V16.3.2: denial record names user %q, want %q", entry.UserID, admin.ID)
+	}
+	if got := entry.Metadata["permission"]; got != string(rbac.ConfigWrite) {
+		t.Errorf("V16.3.2: denial record permission = %v, want %q", got, rbac.ConfigWrite)
+	}
+	if got := entry.Metadata["role"]; got != admin.Role {
+		t.Errorf("V16.3.2: denial record role = %v, want %q", got, admin.Role)
 	}
 }
 

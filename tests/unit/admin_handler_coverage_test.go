@@ -469,7 +469,7 @@ func TestSessionAuth_UnknownToken401(t *testing.T) {
 }
 
 func TestRBACCheck_NoAdmin401(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.AuditRead)
+	mw := adminapi.RBACCheck(rbac.AuditRead, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/audit", nil))
@@ -479,7 +479,7 @@ func TestRBACCheck_NoAdmin401(t *testing.T) {
 }
 
 func TestRBACCheck_AdminMissingPerm403(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.ConfigWrite)
+	mw := adminapi.RBACCheck(rbac.ConfigWrite, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	r := httptest.NewRequest(http.MethodPost, "/admin/config/x", nil)
 	r = r.WithContext(adminapi.WithAdmin(r.Context(), &model.AdminUser{Role: string(rbac.RoleViewer)}))
@@ -594,7 +594,7 @@ func TestSeed_RunAdminsCreatesAndSkips(t *testing.T) {
 }
 
 func TestRBACCheck_AdminWithPerm200(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.AuditRead)
+	mw := adminapi.RBACCheck(rbac.AuditRead, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	r := httptest.NewRequest(http.MethodGet, "/admin/audit", nil)
 	r = r.WithContext(adminapi.WithAdmin(r.Context(), &model.AdminUser{Role: string(rbac.RoleSuperAdmin)}))

@@ -29,6 +29,14 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 
 	sessionAuth := SessionAuth(auth.sessions, auth.admins)
 
+	// withPerm chains SessionAuth then RBACCheck for one route. It is a closure
+	// so every guarded route shares the one audit logger without threading it
+	// through a fourth positional argument at each call site; RBACCheck writes
+	// an admin_authz_denied record on a permission denial (ASVS V16.3.2).
+	withPerm := func(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
+		return sessionAuth(RBACCheck(perm, api.auditLog)(h))
+	}
+
 	// Public: login (rate-limited — 10 attempts per minute per IP)
 	loginRL := NewLoginRateLimit(10, time.Minute)
 	mux.HandleFunc("POST /admin/auth/login", loginRL.Wrap(auth.Login))
@@ -138,11 +146,6 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	}
 
 	return handler
-}
-
-// withPerm applies SessionAuth + RBACCheck middleware to a handler.
-func withPerm(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
-	return sessionAuth(RBACCheck(perm)(h))
 }
 
 // notImplemented answers a route that is mounted and permission-gated but has

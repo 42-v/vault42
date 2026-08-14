@@ -125,6 +125,11 @@ const (
 	AdminAccountRevoke = "admin_account_revoke"
 	// AdminLockout records an admin account being locked due to too many failed logins.
 	AdminLockout = "admin_lockout"
+	// AdminAuthzDenied records an admin-plane RBAC permission denial: an
+	// authenticated admin was refused a route because their role lacks the
+	// required permission. The decision is enforced regardless of this record;
+	// the record is the trail a privilege-boundary probe leaves behind.
+	AdminAuthzDenied = "admin_authz_denied"
 
 	// SvcDocPut records a service document being created or replaced.
 	SvcDocPut = "svcdoc_put"
