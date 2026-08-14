@@ -352,8 +352,9 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 5. User info fetched from provider API
 6. Account linking:
    - Existing social account link found: use that user
+   - Provider does not prove address ownership (no per-address signal, e.g. Facebook, or `email_verified:false`): a first-time sign-in is refused with a neutral `{origin}/oauth/callback#error=verification_required` redirect **before** any directory lookup -- no account created, no mail, and identical whether or not the address is registered (prevents mailbox squatting and directory enumeration)
    - Email matches existing user: link only if **both** OAuth provider confirms email verified AND existing account email is verified (prevents takeover via unverified OAuth emails)
-   - No match: create new user
+   - No match: create new user (reached only for a provider that proved ownership, so the account is created verified)
 7. MFA check (same as email/password login)
 8. A one-time exchange code generated, token data cached (`oauth_code:{hash}:{fingerprint}`, 60s TTL)
 9. Redirect to `{origin}/oauth/callback#code={exchangeCode}`

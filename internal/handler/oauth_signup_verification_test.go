@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,33 +25,17 @@ type sentMail struct {
 	text    string
 }
 
-// oauthMailProbe records what the OAuth signup path handed to the mailer, and
-// which row it inserted.
-type oauthMailProbe struct {
-	mails chan sentMail
-	// verifyKey is the cache key the verification token was stored under. It is
-	// written on the delivery goroutine before the mail is pushed onto mails, so
-	// a test that has received a mail may read it without a race.
-	verifyKey string
-	// created is the user row the callback inserted, or nil when it inserted none.
-	created *model.User
-}
-
-// awaitMail returns the next delivery. The send is fire-and-forget on its own
-// goroutine (matching the password-signup path), so the test has to wait for it.
-func (p *oauthMailProbe) awaitMail(t *testing.T) sentMail {
-	t.Helper()
-	select {
-	case m := <-p.mails:
-		return m
-	case <-time.After(2 * time.Second):
-		t.Fatal("no mail was sent by the OAuth signup path")
-		return sentMail{}
-	}
+// oauthSignupProbe records what the OAuth callback did with a provider assertion:
+// whether it consulted the directory (emailLookups), which row it created, and
+// any mail it sent.
+type oauthSignupProbe struct {
+	mails        chan sentMail
+	created      *model.User
+	emailLookups int
 }
 
 // expectNoMail fails when a delivery arrives.
-func (p *oauthMailProbe) expectNoMail(t *testing.T) {
+func (p *oauthSignupProbe) expectNoMail(t *testing.T) {
 	t.Helper()
 	select {
 	case m := <-p.mails:
@@ -61,14 +44,14 @@ func (p *oauthMailProbe) expectNoMail(t *testing.T) {
 	}
 }
 
-// newOAuthSignupHandler wires a callback that creates a brand new account from a
-// provider assertion, over a mailer whose deliveries the test observes.
-// providerVerified is what the identity provider claims about the address;
-// sendErr is what the mailer returns.
-func newOAuthSignupHandler(t *testing.T, providerVerified bool, sendErr error) (*OAuthHandler, *oauthMailProbe) {
+// newOAuthSignupHandler wires a facebook-style first-time callback over observable
+// mocks. providerVerified is what the IdP asserts about the address; existingUser
+// is what a lookup by that address would return (nil = a free address). The
+// GetByEmail counter proves whether the handler consulted the directory at all.
+func newOAuthSignupHandler(t *testing.T, providerVerified bool, existingUser *model.User) (*OAuthHandler, *oauthSignupProbe) {
 	t.Helper()
 
-	probe := &oauthMailProbe{mails: make(chan sentMail, 4)}
+	probe := &oauthSignupProbe{mails: make(chan sentMail, 4)}
 
 	provider := &mockProvider{
 		name: "facebook",
@@ -84,16 +67,13 @@ func newOAuthSignupHandler(t *testing.T, providerVerified bool, sendErr error) (
 
 	c := &mocks.MockCache{
 		GetAndDeleteFn: func(context.Context, string) (string, error) { return "verifier", nil },
-		SetFn: func(_ context.Context, key, _ string, _ time.Duration) error {
-			if strings.HasPrefix(key, "verify:") {
-				probe.verifyKey = key
-			}
-			return nil
-		},
 	}
 
 	users := &mocks.MockUserRepo{
-		GetByEmailFn: func(context.Context, string) (*model.User, error) { return nil, nil },
+		GetByEmailFn: func(context.Context, string) (*model.User, error) {
+			probe.emailLookups++
+			return existingUser, nil
+		},
 		CreateFn: func(_ context.Context, u *model.User) error {
 			probe.created = u
 			return nil
@@ -111,10 +91,13 @@ func newOAuthSignupHandler(t *testing.T, providerVerified bool, sendErr error) (
 		},
 	}
 	tokens := &mocks.MockRefreshTokenRepo{}
+	// If the callback ever mails on a first-time provider assertion it is a bug
+	// (unverified providers no longer provision; verified ones need no mail), so
+	// every delivery this sender sees is a test failure via expectNoMail.
 	sender := &mocks.MockEmailSender{
 		SendFn: func(_ context.Context, to, subject, _, text string) error {
 			probe.mails <- sentMail{to: to, subject: subject, text: text}
-			return sendErr
+			return nil
 		},
 	}
 
@@ -147,13 +130,13 @@ func oauthSignupCallback(t *testing.T, h *OAuthHandler, nonce string) *httptest.
 	return rec
 }
 
-// A provider that cannot vouch for the address creates an account with
-// email_verified false, and until it also mails a verification link that account
-// can never become verified: GET /auth/verify-email consumes a token the user
-// never received, no resend route exists, and the address is now taken, so a
-// later login through a provider that does verify it answers 409
-// email_already_registered. The account is unreachable and the address is burned.
-func TestOAuth_Callback_SignupWithAnUnverifiedProviderEmailSendsAVerificationMail(t *testing.T) {
+// A provider that cannot prove the caller owns the address (Facebook publishes no
+// per-address verification signal; an OIDC issuer may answer email_verified:false)
+// must not auto-provision an account on a first-time callback. The address is
+// attacker-supplied, so creating on it squats a stranger's mailbox and mails them.
+// The handler returns a neutral verification-required redirect, creates nothing,
+// consults no directory, and sends no mail.
+func TestOAuth_Callback_UnverifiedProviderDoesNotAutoProvision(t *testing.T) {
 	h, probe := newOAuthSignupHandler(t, false, nil)
 
 	rec := oauthSignupCallback(t, h, "unverified-signup-nonce")
@@ -161,52 +144,51 @@ func TestOAuth_Callback_SignupWithAnUnverifiedProviderEmailSendsAVerificationMai
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status %d, want 302 (%s)", rec.Code, rec.Body.String())
 	}
-	if probe.created == nil {
-		t.Fatal("the callback inserted no user row, so this test is not exercising the signup path")
+	if loc := rec.Header().Get("Location"); !strings.HasSuffix(loc, "/oauth/callback#error=verification_required") {
+		t.Fatalf("redirect %q, want the neutral verification-required outcome", loc)
 	}
-	if probe.created.EmailVerified {
-		t.Fatal("an account created from an unverified provider assertion must not be marked verified")
+	if probe.created != nil {
+		t.Fatalf("an unverified provider assertion must not create an account, created %+v", probe.created)
+	}
+	if probe.emailLookups != 0 {
+		t.Fatalf("the address was looked up %d time(s); the refusal must precede the existence check so it cannot leak registration", probe.emailLookups)
+	}
+	probe.expectNoMail(t)
+}
+
+// The refusal must be identical whether or not the address is registered, and it
+// must not even consult the directory: the lookup is the enumeration oracle this
+// closes. A registered address and a free one produce the same response and the
+// same (absent) side effects. Red-first parity across the existence boundary.
+func TestOAuth_Callback_UnverifiedProviderRefusalDoesNotLeakExistence(t *testing.T) {
+	registered := &model.User{ID: "victim-1", Email: oauthSignupEmail, EmailVerified: true}
+
+	run := func(t *testing.T, existing *model.User) (int, string, bool, int) {
+		t.Helper()
+		h, probe := newOAuthSignupHandler(t, false, existing)
+		rec := oauthSignupCallback(t, h, "parity-nonce")
+		probe.expectNoMail(t)
+		return rec.Code, rec.Header().Get("Location"), probe.created != nil, probe.emailLookups
 	}
 
-	m := probe.awaitMail(t)
-	if m.to != oauthSignupEmail {
-		t.Fatalf("verification mail went to %q, want %q", m.to, oauthSignupEmail)
+	codeFree, locFree, createdFree, lookupsFree := run(t, nil)
+	codeReg, locReg, createdReg, lookupsReg := run(t, registered)
+
+	if codeFree != codeReg || locFree != locReg {
+		t.Fatalf("registered vs free diverge: (%d %q) vs (%d %q) — an observable difference is an enumeration oracle", codeReg, locReg, codeFree, locFree)
 	}
-	if !strings.Contains(m.subject, "Verify") {
-		t.Fatalf("subject %q is not the verification template", m.subject)
+	if createdFree || createdReg {
+		t.Fatalf("neither case may create an account (free=%v registered=%v)", createdFree, createdReg)
 	}
-	if !strings.Contains(m.text, "https://vault.test/verify-email?token=") {
-		t.Fatalf("mail body carries no verification link: %s", m.text)
-	}
-	// A link whose token was never stored verifies nothing, so the mail alone is
-	// not the property: the token behind it has to be redeemable.
-	if !strings.HasPrefix(probe.verifyKey, "verify:") {
-		t.Fatalf("no verification token was stored (cache key %q), so the emailed link is dead on arrival", probe.verifyKey)
+	if lookupsFree != 0 || lookupsReg != 0 {
+		t.Fatalf("the address was looked up (free=%d registered=%d); the refusal must not consult existence", lookupsFree, lookupsReg)
 	}
 }
 
-// Delivery is best effort. A mailer outage must not turn a completed social
-// login into an error response: the account exists either way, and failing the
-// callback after the row is committed leaves the user with an account they were
-// told they do not have.
-func TestOAuth_Callback_AVerificationMailFailureDoesNotFailTheSignup(t *testing.T) {
-	h, probe := newOAuthSignupHandler(t, false, errors.New("smtp unavailable"))
-
-	rec := oauthSignupCallback(t, h, "mail-failure-nonce")
-
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status %d, want 302 (%s); a mailer outage must not fail the signup", rec.Code, rec.Body.String())
-	}
-	probe.awaitMail(t)
-	if probe.created == nil {
-		t.Fatal("the account must still exist after a failed verification mail")
-	}
-}
-
-// The trigger is the unverified flag, not "a signup happened". A provider that
-// already proved ownership creates a verified account, and mailing a
-// verification link to it would ask the user to redo work the IdP already did.
-func TestOAuth_Callback_SignupWithAVerifiedProviderEmailSendsNoVerificationMail(t *testing.T) {
+// A provider that already proved ownership still creates a verified account and
+// sends no verification mail: the guard only refuses UNVERIFIED first-time
+// assertions.
+func TestOAuth_Callback_VerifiedProviderCreatesVerifiedAccountNoMail(t *testing.T) {
 	h, probe := newOAuthSignupHandler(t, true, nil)
 
 	rec := oauthSignupCallback(t, h, "verified-signup-nonce")

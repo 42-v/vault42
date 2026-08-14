@@ -2581,9 +2581,9 @@ curl -v "https://vault42.example.com/auth/oauth2/authorize?provider=google"
 
 #### GET /auth/oauth2/callback/{provider}
 
-Handle the OAuth2 callback from the identity provider. Validates the state parameter (HMAC-signed with expiry), exchanges the authorization code for tokens using PKCE, fetches user info, and either creates a new account or links to an existing one.
+Handle the OAuth2 callback from the identity provider. Validates the state parameter (HMAC-signed with expiry), exchanges the authorization code for tokens using PKCE, fetches user info, and either signs in an already-linked identity, links to an existing account, or creates a new account.
 
-When the provider does not vouch for the address (Facebook publishes no per-address verification signal), the new account is created unverified and a verification email is sent, exactly as password registration does. Delivery is best effort: a mailer outage is logged and audited, never returned, so the login still completes.
+A first-time sign-in is auto-provisioned only when the provider proves the caller owns the address. A provider that publishes no per-address verification signal (Facebook) or an OIDC issuer that answers `email_verified:false` cannot prove ownership: the asserted address is attacker-supplied, so creating an account on it would squat a stranger's mailbox and the create-vs-refuse outcome would reveal whether the address is registered. For such providers a first-time callback (no existing linked identity) is refused with a neutral redirect to `{origin}/oauth/callback#error=verification_required`, identical whether or not the address is registered; no account is created and no mail is sent. An identity already linked by `(provider, provider_user_id)` still signs in normally.
 
 If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=true&challenge_token=...` instead of issuing full tokens.
 
@@ -2617,7 +2617,7 @@ Also sets the `refresh_token` HttpOnly cookie. The `code` is a one-time exchange
 | 400 | `invalid_or_reused_state` | PKCE verifier not found or already consumed |
 | 400 | `missing_code` | No authorization code in callback |
 | 400 | `unable_to_identify_user` | Could not determine user from provider response |
-| 409 | `email_already_registered` | Email exists but verification status prevents linking |
+| 409 | `email_already_registered` | A verified provider asserted an address held by an account whose own email is unverified; linking is refused to prevent takeover. Unverified providers are refused earlier via the `#error=verification_required` redirect. |
 | 502 | `provider_error` | Token exchange or user info request failed |
 | 500 | `internal_error` | Server error |
 
