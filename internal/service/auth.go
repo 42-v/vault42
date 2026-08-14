@@ -625,13 +625,19 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// reaching them already proves the caller knows the account exists.
 	// Burn the dummy hash BEFORE any side effect, exactly like the user==nil and
 	// user.Deleted branches: an overloaded semaphore must short-circuit to
-	// ErrArgon2Overloaded (503) having mutated nothing — no audit row, no metric.
-	// Auditing first would both leak a side effect under load and, in the
-	// saturation test harness, deadlock on the audit event-id's entropy read.
+	// ErrArgon2Overloaded (503) having mutated nothing. Then advance the per-IP
+	// failure counter the same way user==nil and a wrong password do. A locked
+	// branch that skipped recordFailedIP left the caller's IP counter frozen while
+	// an unknown address advanced it, so a run of probes trips the per-IP lockout
+	// (403 ip_locked) for an unknown address but never for a locked one: a
+	// 403-vs-401 progression that re-opens the very enumeration this branch closes.
+	// recordFailedIP runs after the overload check, so an overloaded semaphore
+	// still mutates nothing.
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
 		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 			return nil, err
 		}
+		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_locked", "source": "admin"}, 30)
 		return nil, ErrInvalidCredentials
@@ -640,6 +646,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 			return nil, err
 		}
+		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "account_locked", "source": "auto"}, 30)
 		return nil, ErrInvalidCredentials
