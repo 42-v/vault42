@@ -862,8 +862,10 @@ trusts vault42's JWKS. The controls are:
   ceiling is 15 minutes, enforced in the constructor rather than left to configuration, and a
   request above the operator's cap is refused rather than clamped: silently issuing something other
   than what was asked for hides a misconfigured caller until the day its tokens expire mid-flight.
-- **Rate limiting:** 60/min, fail-closed. The key function asks for the authenticated client, but
-  the limiter sits outside the auth middleware, so in practice the bucket is the source IP.
+- **Rate limiting:** 60/min per `client_id`, fail-closed. The limiter sits inside the auth
+  middleware, so the key function reads the authenticated client from the validated claims and
+  buckets by `client_id`; its source-IP fallback is unreachable, because a claimless request is
+  rejected before it reaches the limiter.
 - **Audit on every path.** One `token_minted` event per request, accepted or refused, recording the
   asserted subject and the asserting client. It is a distinct event type from `login_success`,
   `token_refresh` and `client_auth` because the signature is indistinguishable, so the log is the
@@ -1173,10 +1175,11 @@ not consume a document slot it already holds.
   `?owner=` naming an unregistered client collapses to the same `404`
 - `DELETE` only ever removes the caller's own row, shared or not
 
-**Rate limiting:** 60/min on writes, 300/min on reads, not fail-closed -- these routes release only
-what the caller itself wrote, and a cache blip must not take profile reads down across every
-consuming service. The key function asks for the authenticated client, but the limiter sits outside
-the auth middleware, so in practice the bucket is the source IP.
+**Rate limiting:** 60/min on writes, 300/min on reads, keyed by the authenticated `client_id`, not
+fail-closed -- these routes release only what the caller itself wrote, and a cache blip must not take
+profile reads down across every consuming service. The limiter sits inside the auth middleware, so
+the key function reads the client from the validated claims; its source-IP fallback is unreachable,
+because a claimless request is rejected first.
 
 **Body cap:** the `/service/documents` prefix is exempt from the global 8 KiB cap so a 64 KiB
 document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of
@@ -1223,10 +1226,10 @@ material.
 | `POST /auth/2fa/email-otp/verify` | 5 | 5 min | IP | Closed |
 | `POST /auth/2fa/email-otp/resend` | 5 | 5 min | IP | Closed |
 | `POST /kms/unwrap` | 30 | 1 min | IP | Closed |
-| `POST /mint` | 60 | 1 min | IP (see below) | Closed |
+| `POST /mint` | 60 | 1 min | client_id (see below) | Closed |
 | `POST /auth/refresh` | 30 | 1 min | IP | In-memory fallback |
 | `GET /auth/verify-email` | 10 | 1 hour | IP | In-memory fallback |
-| `POST /client/token` | 10 | 1 min | IP | In-memory fallback |
+| `POST /client/token` | 10 | 1 min | IP | Closed |
 | `GET /auth/oauth2/authorize` | 10 | 1 min | IP | In-memory fallback |
 | `POST /auth/oauth2/exchange` | 10 | 1 min | IP | In-memory fallback |
 | `POST /auth/confirm` | 5 | 15 min | user ID | In-memory fallback |
@@ -1244,20 +1247,20 @@ material.
 | `GET /user/blobs/{id}` | 30 | 1 min | IP | In-memory fallback |
 | `GET /user/blobs/named/{name}` | 30 | 1 min | IP | In-memory fallback |
 | `GET /user/data-export` | 5 | 1 min | IP | In-memory fallback |
-| `PUT /service/documents/{subject}/{key}` | 60 | 1 min | IP (see below) | In-memory fallback |
-| `DELETE /service/documents/{subject}/{key}` | 60 | 1 min | IP (see below) | In-memory fallback |
-| `GET /service/documents/{subject}/{key}` | 300 | 1 min | IP (see below) | In-memory fallback |
-| `GET /service/documents/{subject}` | 300 | 1 min | IP (see below) | In-memory fallback |
+| `PUT /service/documents/{subject}/{key}` | 60 | 1 min | client_id (see below) | In-memory fallback |
+| `DELETE /service/documents/{subject}/{key}` | 60 | 1 min | client_id (see below) | In-memory fallback |
+| `GET /service/documents/{subject}/{key}` | 300 | 1 min | client_id (see below) | In-memory fallback |
+| `GET /service/documents/{subject}` | 300 | 1 min | client_id (see below) | In-memory fallback |
 | `POST /admin/auth/login` | 10 | 1 min | IP | n/a (in-process) |
 
-**"IP (see below)"** marks the five routes configured with `handler.ClientRateLimitKey`, which
-buckets by the authenticated `client_id` and falls back to the source address when the request
-carries no claims. Every one of those limiters is mounted **outside** `authMw`
-(`internal/server/server.go:509-518, 564-570`), so the claims are never in context when the key is
-computed and the fallback is always taken. The effective bucket is the source IP. A caller behind a
-single in-cluster pod therefore shares one budget across its whole fleet, which is the outcome the
-client key was introduced to avoid; treat the numbers above as per-address until the chain order
-changes. That change would loosen a limit, which section 0.3 permits in a minor release.
+**"client_id (see below)"** marks the five routes configured with `handler.ClientRateLimitKey`,
+which buckets by the authenticated `client_id` and falls back to the source address only when the
+request carries no claims. Every one of those limiters is mounted **inside** `authMw`
+(`internal/server/server.go:561-570, 616-625`), so the validated claims are in context when the key
+is computed and the client bucket is the one taken. The source-address fallback is therefore
+unreachable in practice: a claimless request is rejected by `authMw` before it reaches the limiter. A
+caller behind a single in-cluster pod thus gets its own budget per `client_id` rather than sharing
+one across its whole fleet, which is the outcome the client key was introduced to secure.
 
 Every other route is unlimited at the middleware layer. `POST /user/marketing/unsubscribe` carries
 the *read* limit rather than the write one on purpose: withdrawing consent must be no harder than
@@ -2093,11 +2096,11 @@ probing.
 | `GET` | `/user/blobs/named/{name}` | Bearer | 30/m IP | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob by name |
 | `DELETE` | `/user/blobs/named/{name}` | Bearer + Confirmed | 5/15m user | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob by name |
 | `POST` | `/kms/unwrap` | Bearer + scope `kms:unwrap` | 30/m IP, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle (6.4) |
-| `POST` | `/mint` | Bearer + scope `mint:token` | 60/m IP, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject (6.5) |
-| `PUT` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m IP | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document (7.8) |
-| `GET` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:read` | 300/m IP | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document (7.8) |
-| `DELETE` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m IP | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document (7.8) |
-| `GET` | `/service/documents/{subject}` | Bearer + scope `svcdoc:read` | 300/m IP | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject (7.8) |
+| `POST` | `/mint` | Bearer + scope `mint:token` | 60/m client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject (6.5) |
+| `PUT` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document (7.8) |
+| `GET` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:read` | 300/m client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document (7.8) |
+| `DELETE` | `/service/documents/{subject}/{key}` | Bearer + scope `svcdoc:write` | 60/m client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document (7.8) |
+| `GET` | `/service/documents/{subject}` | Bearer + scope `svcdoc:read` | 300/m client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject (7.8) |
 
 #### Admin gateway
 
@@ -2436,7 +2439,7 @@ The following features match the original planning specification:
 - **WebAuthn/FIDO2:** full registration + authentication ceremony, sign count verification, multiple keys per user
 - **Backup codes:** 10 single-use codes, hashed with HMAC-SHA256
 - **Device fingerprinting:** SHA256(IP + UA + Accept-Language + TLS), stored with refresh tokens, verified on every request
-- **Rate limiting:** per-endpoint tiers with sliding window counters, response headers
+- **Rate limiting:** per-endpoint tiers with fixed-window counters, response headers
 - **Audit logging:** append-only, database-enforced (triggers), sensitive data scrubbing, risk scores
 - **Cache interface:** Redis / in-memory / PostgreSQL backends, graceful degradation
 - **Client authentication:** CLI-only registration, Argon2id-hashed secrets, client credentials grant, scope intersection

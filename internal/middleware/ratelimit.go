@@ -185,7 +185,7 @@ func addLimiter(l *localRateLimiter) {
 	})
 }
 
-// RateLimit returns a rate limiting middleware using a sliding window counter.
+// RateLimit returns a rate limiting middleware using a fixed-window counter.
 // Falls back to an in-memory counter when the cache backend is unavailable.
 func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handler) http.Handler {
 	local := &localRateLimiter{entries: make(map[string]*localRLEntry)}
