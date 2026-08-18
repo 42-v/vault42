@@ -1,4 +1,34 @@
 {{- if .Values.adminGateway.enabled }}
+{{- /*
+  Client revocation list wiring.
+
+  cmd/admin-gateway treats an unreadable ADMIN_GW_CLIENT_CRL_FILE as fatal on
+  purpose: a gateway that reports revocation checking as configured while
+  checking nothing is worse than one that refuses to start. This template used to
+  set that env from a bare path value and mount no volume anywhere, so the one
+  supported way to turn revocation on shipped an admin plane that
+  CrashLoopBackOffs on first boot -- on the setting whose whole purpose is to
+  harden it.
+
+  The path is now derived from the mounted source, so the two cannot disagree,
+  and the old setting fails the render with the two lines that replace it.
+*/ -}}
+{{- $crl := .Values.adminGateway.clientCRL | default dict }}
+{{- if .Values.adminGateway.clientCRLFile }}
+{{- fail "adminGateway.clientCRLFile is set, but this chart never mounted a revocation list at that path, and cmd/admin-gateway exits 1 when ADMIN_GW_CLIENT_CRL_FILE cannot be read -- so the setting rendered an admin plane that CrashLoopBackOffs on first boot. Put the CRL in a Secret or a ConfigMap and name it in adminGateway.clientCRL.secretName or adminGateway.clientCRL.configMapName, with the key(s) in adminGateway.clientCRL.keys. The container path is derived from adminGateway.clientCRL.mountPath, and adminGateway.clientCRLFile is no longer read." }}
+{{- end }}
+{{- if and $crl.secretName $crl.configMapName }}
+{{- fail "adminGateway.clientCRL.secretName and adminGateway.clientCRL.configMapName are both set, and the revocation list is mounted from exactly one volume. Pick the Secret or the ConfigMap; silently preferring one is how an operator ends up debugging a CRL they are certain they replaced." }}
+{{- end }}
+{{- $crlSource := or $crl.secretName $crl.configMapName }}
+{{- if and $crlSource (not $crl.keys) }}
+{{- fail "adminGateway.clientCRL names a source but adminGateway.clientCRL.keys is empty, so nothing would be mounted from it and ADMIN_GW_CLIENT_CRL_FILE would name no file. Set one key per CA in the client CA bundle that publishes a list." }}
+{{- end }}
+{{- $crlMountPath := $crl.mountPath | default "/run/crl" }}
+{{- $crlPaths := list }}
+{{- range $key := ($crl.keys | default list) }}
+{{- $crlPaths = append $crlPaths (printf "%s/%s" (trimSuffix "/" $crlMountPath) $key) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -72,9 +102,12 @@ spec:
             - name: ADMIN_GW_CLIENT_CN_ALLOWLIST
               value: {{ .Values.adminGateway.clientCNAllowlist | quote }}
             {{- end }}
-            {{- if .Values.adminGateway.clientCRLFile }}
+            {{- if $crlSource }}
+            # Derived from the mounted volume rather than set on its own: the
+            # gateway dies at boot on a path it cannot read, so the path and the
+            # mount have to come from one place.
             - name: ADMIN_GW_CLIENT_CRL_FILE
-              value: {{ .Values.adminGateway.clientCRLFile | quote }}
+              value: {{ join "," $crlPaths | quote }}
             {{- end }}
             - name: ADMIN_GW_SESSION_TTL
               value: {{ .Values.adminGateway.sessionTTL | quote }}
@@ -124,6 +157,11 @@ spec:
             - name: tls
               mountPath: /run/tls
               readOnly: true
+            {{- if $crlSource }}
+            - name: client-crl
+              mountPath: {{ $crlMountPath | quote }}
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
           resources:
@@ -161,6 +199,16 @@ spec:
         - name: tls
           secret:
             secretName: {{ required "adminGateway.tls.secretName is required when adminGateway is enabled" .Values.adminGateway.tls.secretName }}
+        {{- if $crlSource }}
+        - name: client-crl
+          {{- if $crl.secretName }}
+          secret:
+            secretName: {{ $crl.secretName | quote }}
+          {{- else }}
+          configMap:
+            name: {{ $crl.configMapName | quote }}
+          {{- end }}
+        {{- end }}
         - name: tmp
           emptyDir:
             medium: Memory

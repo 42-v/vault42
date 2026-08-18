@@ -600,14 +600,32 @@ adminGateway:
   # -- Listen address (127.0.0.1 for prod, 0.0.0.0 for dev behind ingress)
   listenAddr: "127.0.0.1:9443"
   # -- Comma-separated client certificate identities allowed to complete the mTLS
-  # handshake, matched exactly against the leaf's CN and its DNS/email/URI SANs.
+  # handshake. Each entry names the field it pins with a `cn:`, `dns:`, `email:`
+  # or `uri:` prefix and is matched exactly within it. An entry with no prefix
+  # matches a DNS SAN, and the common name only on a certificate carrying no SAN
+  # at all -- a certificate that carries SANs has no usable common name, which is
+  # the CA/Browser Forum rule and the only one X.509 name constraints can back.
   # Empty accepts every certificate the client CA has ever signed (AR-9), which
   # the gateway warns about at startup.
   clientCNAllowlist: ""
-  # -- Path to a PEM or DER certificate revocation list signed by the client CA.
-  # Checked on every handshake; an unreadable, unparseable, foreign-signed or
-  # expired list refuses the handshake. Empty checks nothing.
-  clientCRLFile: ""
+  # -- Client certificate revocation lists for the mTLS gate. Naming a source
+  # here is what mounts one and what sets ADMIN_GW_CLIENT_CRL_FILE; there is no
+  # bare path setting, because a path with nothing mounted at it is a fatal boot
+  # error and used to be the only way the chart could turn revocation on.
+  clientCRL:
+    # -- Name of an existing Secret holding the revocation list(s). Mutually
+    # exclusive with configMapName.
+    secretName: ""
+    # -- Name of an existing ConfigMap holding the revocation list(s). A CRL is
+    # signed and public, so a ConfigMap is a legitimate home for one.
+    configMapName: ""
+    # -- Keys inside that Secret or ConfigMap, one per CA in the client CA bundle
+    # that publishes a list. A CRL revokes only serials its own issuer signed, so
+    # a bundle with two CAs needs two lists or one of them can revoke nobody.
+    keys:
+      - client.crl
+    # -- Where the revocation lists are mounted in the container.
+    mountPath: /run/crl
   # -- Session token TTL
   sessionTTL: "1h"
   # -- Max failed login attempts before lockout
