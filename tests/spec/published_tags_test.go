@@ -68,6 +68,17 @@ func publishedTags(t *testing.T, root string) map[string]bool {
 	}
 }
 
+// publishedImageRefFloor is how many image references the tracked documents
+// carry today: one each in README.md, site/index.html and the deployment guide.
+//
+// The floor is what stops this gate passing vacuously. Both regular expressions
+// match a shape a document is free to reformat — a fenced block that becomes a
+// table, a `--set` that gains a line continuation — and a scan that matches
+// nothing reports the same "ok" as a scan that matched everything and found no
+// bad tag. The number may go up. It may not go down without saying which
+// published surface stopped publishing.
+const publishedImageRefFloor = 3
+
 // TestPublishedImageTagsExist fails when a document tells a reader to pull a tag
 // the release never publishes.
 //
@@ -77,6 +88,7 @@ func publishedTags(t *testing.T, root string) map[string]bool {
 func TestPublishedImageTagsExist(t *testing.T) {
 	root := repoRoot(t)
 	valid := publishedTags(t, root)
+	var checked int
 
 	for _, rel := range docsWithInstallCommands {
 		body, err := os.ReadFile(filepath.Join(root, rel))
@@ -94,6 +106,7 @@ func TestPublishedImageTagsExist(t *testing.T) {
 			for _, re := range imageRefs {
 				for _, m := range re.FindAllStringSubmatch(line, -1) {
 					tag := m[1]
+					checked++
 					switch {
 					case valid[tag]:
 					case strings.HasPrefix(tag, "sha-"):
@@ -107,6 +120,13 @@ func TestPublishedImageTagsExist(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	if checked < publishedImageRefFloor {
+		t.Fatalf("only %d image reference(s) found across %v, expected at least %d. The scan has "+
+			"stopped seeing what it guards: a document that reformats its install command out of "+
+			"reach of both patterns takes its tag with it, and this gate reports the same ok it "+
+			"reports when every tag is right.", checked, docsWithInstallCommands, publishedImageRefFloor)
 	}
 }
 
