@@ -382,4 +382,3 @@ func (rl *LoginRateLimit) Wrap(next http.HandlerFunc) http.HandlerFunc {
 
 // configKeyPattern validates config key names — alphanumeric, underscores, dots only.
 var configKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.]{0,63}$`)
-

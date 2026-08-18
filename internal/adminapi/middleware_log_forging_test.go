@@ -24,14 +24,14 @@ import (
 func TestLocalOnly_UserAgentCannotForgeALogRecord(t *testing.T) {
 	for name, bad := range map[string]string{
 		"ESC (opens a terminal control sequence)": "curl\x1b[2Kadmin-gateway: all clear",
-		"NUL":                                     "curl\x00admin-gateway: all clear",
-		"backspace (rewrites the line as drawn)":  "curl\x08\x08\x08admin-gateway: all clear",
-		"vertical tab":                            "curl\x0badmin-gateway: all clear",
-		"form feed":                               "curl\x0cadmin-gateway: all clear",
-		"U+0085 NEL (a record separator)":         "curladmin-gateway: all clear",
-		"U+009B (8-bit CSI)":                      "curladmin-gateway: all clear",
-		"U+2028 line separator":                   "curl admin-gateway: all clear",
-		"U+2029 paragraph separator":              "curl admin-gateway: all clear",
+		"NUL":                                    "curl\x00admin-gateway: all clear",
+		"backspace (rewrites the line as drawn)": "curl\x08\x08\x08admin-gateway: all clear",
+		"vertical tab":                           "curl\x0badmin-gateway: all clear",
+		"form feed":                              "curl\x0cadmin-gateway: all clear",
+		"U+0085 NEL (a record separator)":        "curladmin-gateway: all clear",
+		"U+009B (8-bit CSI)":                     "curladmin-gateway: all clear",
+		"U+2028 line separator":                  "curl admin-gateway: all clear",
+		"U+2029 paragraph separator":             "curl admin-gateway: all clear",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logged bytes.Buffer
