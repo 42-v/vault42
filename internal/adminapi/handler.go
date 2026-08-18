@@ -506,15 +506,44 @@ func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // RevokeAllSessions handles POST /admin/sessions/revoke-all.
+//
+// It revokes every USER's refresh tokens service-wide. That is the break-glass
+// containment for bulk refresh-token theft, and it is what docs/security.md,
+// docs/api.md, the SessionsRevoke permission's own definition in
+// internal/rbac/rbac.go and the mitigation named in
+// tests/attack/atk_authtok_lock_refresh_test.go all describe.
+//
+// It used to run UPDATE auth.admin_sessions instead. It touched zero rows in
+// auth.refresh_tokens, so the control four documents lean on did not exist: an
+// operator responding to mass token theft pressed it, was told
+// all_sessions_revoked, and nothing was contained. It also handed an
+// operator-tier admin an availability lever over every super_admin, because
+// revoking admin sessions logs the whole admin plane out and SessionsRevoke sits
+// one tier below the destructive permissions precisely because it was believed
+// to revoke user tokens.
+//
+// Admin sessions are deliberately left alone. Revoking them is a different
+// action with a different blast radius and belongs behind its own permission at
+// super_admin tier, not smuggled into the user-containment control.
 func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
-	if err := h.sessions.RevokeAll(r.Context()); err != nil {
+	// The nil check is not defensive noise. This repository arrives as a
+	// positional argument and cmd/admin-gateway has passed nil for it before, on
+	// this same handler. A containment control that answers 200 while holding
+	// nothing to revoke through is the defect this function was just fixed for,
+	// so an unwired one says so instead of repeating it.
+	if h.tokens == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "token_repository_not_configured")
+		return
+	}
+	if err := h.tokens.RevokeAll(r.Context()); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminSessionRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
-		"scope": "all",
+		"scope":  "all",
+		"target": "user_refresh_tokens",
 	}, 0)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "all_sessions_revoked"})
