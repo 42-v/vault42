@@ -141,10 +141,10 @@ versions should be able to see what changed and why.
 | Previous finding | Reality |
 |---|---|
 | **V6.2.2 Partial** -- "document the RFC 6238 SHA-1 constraint in the TOTP module" | The comment already existed, at `internal/crypto/totp.go:5`. The finding requested a remediation that had shipped. Now Met. |
-| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:721` precedes `Create` at `:766`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
+| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1173` precedes `Create` at `:1260`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
 | **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 259 lines and `charts/vault/values.yaml:283` enables it **by default**. Now Met. |
 | **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **11** string-typed configuration secrets, not 2. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. Scope corrected in `docs/security.md` AR-4 and in CR-25. |
-| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. The buffer that is not wiped, and which the finding never mentioned, is the decrypted **RSA private signing key PEM** at `internal/keystore/keystore.go:297`. Recorded in CR-25 at the severity it deserves. |
+| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. This row used to add that the decrypted **RSA private signing key PEM** was the buffer left unwiped, citing `internal/keystore/keystore.go:297`. That was itself wrong: `:297` is a comment line, and the PEM is wiped on both paths, at `:211` and `:442`, exactly as [`security.md`](security.md) already said. The buffers genuinely not wiped are the decrypted blob plaintext and label (`internal/service/blob.go:243,267,307`). CR-25 now says so. |
 | **AU-9 and GDPR-14** | The same finding, filed twice. The GDPR row even said "Tracked as AU-9 above" while being counted separately. Now one accepted risk, CR-24, referenced from both rows. |
 
 There is also a class of error the register makes impossible to repeat: **four of
@@ -231,7 +231,7 @@ neither namespace.
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
 | **CR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
-| **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, some decrypted buffers are not zeroed, including the RSA private signing key PEM. | RFC 9449 §4.10.1 |
+| **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, the decrypted blob plaintext and label are not zeroed (`internal/service/blob.go:243,267,307`). The signing-key PEM **is** zeroed; this row used to say otherwise. | RFC 9449 / RFC 9700, sender-constrained access tokens |
 
 ---
 
@@ -257,14 +257,14 @@ right things. The property tests are the answer to that:
 - no shipped code sets `InsecureSkipVerify`
 - every SQL call site in the repository layer is assembled only from literals,
   package constants and placeholder-only formatting, checked by a taint analysis
-  over 139 call sites, with a negative control that proves the detector fires on
-  four known-bad shapes
+  over every such call site, with a negative control that proves the detector
+  fires on four known-bad shapes
 - every route outside a declared public allowlist passes through an
   authentication guard
 - every mutating admin route is gated by a permission the read-only role does
   not hold, parsed out of the router
 - every server-error response in the HTTP layer carries a fixed message literal,
-  checked across 176 call sites
+  checked across every such call site the scan finds
 - every third-party GitHub Action is pinned to a commit SHA
 
 **What was not assessed.** The components listed under Scope as out of scope.
@@ -294,17 +294,26 @@ go test ./tests/compliance/ -run TestComplianceRegister
 
 None. Every requirement is Met or carries an accepted risk with a named owner.
 
-One item is recorded here because it is scheduled to close inside 1.0.0 on
-another work stream and the register will be updated when it lands:
+**Correction.** This section previously said CR-14's mandatory half was
+unwired and that `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` would fail
+when the wiring landed. Both halves were wrong. The wiring is present, at
+`cmd/vault/main.go:353` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
+fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:445`
+-- and no test of that name has ever existed. The tests that do exist are
+`TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented`, which asserts
+the mandatory SHALL is satisfied, and
+`TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue`,
+which fails the day the 720-hour default drops inside the AAL2 SHOULD.
 
-1. **CR-14** closes when `SetMaxSessionLifetime` is called from
-   `cmd/vault/main.go` with a configured default. The mechanism, the schema
-   column and the fail-closed enforcement are already in place; only the wiring
-   is missing. `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` fails when it
-   lands.
+What remains open under CR-14 is only the two advisory halves: the 720-hour
+default and the absence of an inactivity timeout.
 
-It is tracked by a test that fails on closure rather than on regression, so a
-fix cannot land without the register being updated in the same change. CR-19,
+A test named in a register row is checked by CI. A test named in prose was not,
+which is how a name that resolves to nothing survived a release.
+`TestComplianceDocs_EveryTestNamedInProseExists` closes that hole.
+
+Both remaining trackers fail on closure rather than on regression, so a fix
+cannot land without the register being updated in the same change. CR-19,
 the login-outcome enumeration oracle, has since closed: account_locked, the
 import-claim path, banned and disabled now all answer 401 invalid_credentials
 without a valid password. CR-16 has since closed too: `RBACCheck` now writes an

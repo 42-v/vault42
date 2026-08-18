@@ -96,7 +96,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "The mandatory half of SP 800-63B-4 section 2.2.3 is satisfied as of 1.0.0: migration 013 gives every rotation family a stored birth date that rotation cannot advance and pruning cannot reset, TokenService clamps a rotated pair to that origin plus the bound, AuthService.enforceSessionLifetime refuses a family past it and fails closed when the age cannot be determined, and cmd/vault/main.go:317 configures it from VAULT_MAX_SESSION_LIFETIME. Two advisory halves remain open. The default overall timeout is 720 hours where section 2.2.3 says it SHOULD be no more than 24 at AAL2, because a 24-hour default would force a daily re-login on a general-purpose authentication server whose deployments are not all AAL2. And there is no inactivity timeout at all: no column records last activity and no auth decision consults one.",
+      "rationale": "The mandatory half of SP 800-63B-4 section 2.2.3 is satisfied as of 1.0.0: migration 013 gives every rotation family a stored birth date that rotation cannot advance and pruning cannot reset, TokenService clamps a rotated pair to that origin plus the bound, AuthService.enforceSessionLifetime refuses a family past it and fails closed when the age cannot be determined, and cmd/vault/main.go:353 configures it from VAULT_MAX_SESSION_LIFETIME. Two advisory halves remain open. The default overall timeout is 720 hours where section 2.2.3 says it SHOULD be no more than 24 at AAL2, because a 24-hour default would force a daily re-login on a general-purpose authentication server whose deployments are not all AAL2. And there is no inactivity timeout at all: no column records last activity and no auth decision consults one.",
       "compensating_control": "Access tokens live 15 minutes; every refresh re-checks account state, re-verifies the device fingerprint, and rotates the token single-use with family revocation on replay; the absolute family bound is enforced and fails closed; users and administrators can revoke all sessions; the per-user session cap bounds how many can exist. An operator who needs the AAL2 figure can set VAULT_MAX_SESSION_LIFETIME=24h today.",
       "residual_risk": "A session left idle is not terminated for inactivity, and the shipped default permits a continuously-refreshing client to hold one session for 30 days.",
       "revisit_when": "Any deployment claims AAL2 conformance to a third party rather than self-assessing, in which case the default must move to 24 hours and an inactivity timeout must ship. Also revisit if a customer contract specifies an idle policy.",
@@ -108,7 +108,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:503-505. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:140-141 installs it only in the honeypot profile, so in production it is never wired at all.",
+      "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:532-534. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:155-156 installs it only in the honeypot profile, so in production it is never wired at all.",
       "compensating_control": "Every security-relevant event is recorded in an append-only store with the metadata needed to investigate, and the admin gateway exposes a filtered review interface. Detection is operator-driven rather than automated.",
       "residual_risk": "A slow credential-stuffing campaign or a data-access anomaly is visible in the audit trail but raises nothing, so time-to-detection depends on an operator looking.",
       "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
@@ -144,7 +144,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "AuthenticatorAssuranceLevel constants and AALForMethods exist at internal/service/mfa.go:16-79 and are unit-tested, but AALForMethods has no non-test caller and VaultClaims carries no acr, amr or aal field, so a resource server cannot ask which factors were used or how recently.",
+      "rationale": "AuthenticatorAssuranceLevel constants and AALForMethods exist at internal/service/mfa.go:11-79 and are unit-tested, but AALForMethods has no non-test caller and VaultClaims carries no acr, amr or aal field, so a resource server cannot ask which factors were used or how recently.",
       "compensating_control": "A resource server can require a scope that vault42 only issues after MFA, which gives a coarser version of the same guarantee.",
       "residual_risk": "A downstream service cannot distinguish a single-factor session from a multi-factor one from the token alone.",
       "revisit_when": "A relying party needs step-up authentication, or vault42 claims AAL2 conformance to a third party rather than self-assessing it.",
@@ -187,16 +187,16 @@
       "cost_of_closing": "A prev-hash column, a signing key held outside the process, read-time verification, and a checkpoint scheme that survives retention pruning. The batch insert path at internal/repository/postgres/audit.go:50 breaks a naive prev-hash chain and is the hard part."
     },
     "CR-25": {
-      "title": "DPoP proofs are validated but no token is sender-constrained, and some decrypted buffers are not zeroed",
+      "title": "DPoP proofs are validated but no token is sender-constrained, and the decrypted blob plaintext and label are not zeroed",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "Two related residuals in the same area. First, DPoP: internal/crypto/dpop.go validates a proof thoroughly, but no issuance path sets cnf.jkt, so claims.Confirmation is always nil and internal/middleware/dpop.go binds nothing. The code documents itself as experimental, VAULT_DPOP_ENABLED is off by default, and the discovery document does not advertise DPoP, so nothing is claimed to clients that is not delivered. Second, memory zeroing: the master key, KMS root key and HMAC secret are []byte and are zeroed, but the decrypted RSA private signing key PEM at internal/keystore/keystore.go:297 is not, nor are decrypted blob plaintexts and labels, the identity JSON before encryption, or the user and admin TOTP secrets. Eleven configuration secrets are Go strings and cannot be zeroed at all, which is the platform limitation already accepted as AR-4.",
+      "rationale": "Two related residuals in the same area. First, DPoP: internal/crypto/dpop.go validates a proof thoroughly, but no issuance path sets cnf.jkt, so claims.Confirmation is always nil and internal/middleware/dpop.go binds nothing. The code documents itself as experimental, VAULT_DPOP_ENABLED is off by default, and the discovery document does not advertise DPoP, so nothing is claimed to clients that is not delivered. Second, memory zeroing. This entry previously said the decrypted RSA private signing key PEM at internal/keystore/keystore.go:297 was not zeroed. That was wrong in two ways: :297 is a comment line, and the buffer is wiped on both paths, at internal/keystore/keystore.go:211 and :442. docs/security.md:307 already said so, so the two documents asserted opposite facts about one buffer. The decrypted identity plaintext is wiped too, at internal/service/identity.go:200. What is genuinely not wiped is narrower: the decrypted blob plaintext and the decrypted blob label in internal/service/blob.go, at :243 (the decrypted ciphertext), :267 (the decrypted label) and :307 (the label decrypted for a listing). Eleven configuration secrets are Go strings and cannot be zeroed at all, which is the platform limitation already accepted as docs/security.md AR-4, and the parsed RSA key itself cannot be zeroed for the reason docs/security.md AR-13 gives.",
       "compensating_control": "The process is short-lived and containerised with no core dumps; the signing key is regenerated on rotation; ASVS 5.0.0 removed the memory-zeroing requirement that the previous report filed this under (v4.0.3-8.3.2 is marked DELETED, NOT IN SCOPE in the official mapping), and the only surviving related requirement, V11.7.1 full memory encryption, is L3.",
-      "residual_risk": "A heap dump taken while the process is live could yield the JWT signing key or recently decrypted personal data.",
+      "residual_risk": "A heap dump taken while the process is live could yield a recently decrypted blob plaintext or label, and the parsed signing key that no wipe can reach. The decrypted signing-key PEM buffer is not part of this residual: it is wiped.",
       "revisit_when": "Either capability is advertised to a customer, or a deployment requires memory-dump resistance. Retracting the DPoP surface is preferable to leaving it half-built past 1.0.0.",
-      "cost_of_closing": "For DPoP: set cnf.jkt at issuance when a proof was presented, or remove the middleware. For zeroing: defer config.ZeroBytes on the keystore PEM and the blob and TOTP buffers, which is roughly a day and does not close the Go string half."
+      "cost_of_closing": "For DPoP: set cnf.jkt at issuance when a proof was presented, or remove the middleware. For zeroing: two defer config.ZeroBytes calls on the blob plaintext and label buffers in internal/service/blob.go. Neither closes the Go string half."
     }
   },
   "requirements": [
@@ -6652,7 +6652,7 @@
       "standard": "IETF RFC / OpenID Connect",
       "revision": "as cited per clause",
       "revision_date": "",
-      "requirement_id": "RFC 9449 s4.10.1",
+      "requirement_id": "RFC 9449 / RFC 9700 — sender-constrained access tokens",
       "requirement": "DPoP: sender-constrained access tokens",
       "status": "Accepted Risk",
       "accepted_risk": "CR-25",
@@ -6663,7 +6663,7 @@
       "tests": [
         "TestRFC9700_4_10_1_SenderConstrainedDPoP"
       ],
-      "notes": "Proof validation is complete and correct (typ, alg, jwk, htm, htu, iat freshness, one-time jti, ath, thumbprint), but no issuance path ever sets the cnf.jkt confirmation claim, so no token is actually sender-constrained and the middleware binds nothing. VAULT_DPOP_ENABLED is off by default and the code documents itself as experimental. The discovery document does not advertise DPoP, so the capability is not claimed to clients."
+      "notes": "Proof validation is complete and correct (typ, alg, jwk, htm, htu, iat freshness, one-time jti, ath, thumbprint), but no issuance path ever sets the cnf.jkt confirmation claim, so no token is actually sender-constrained and the middleware binds nothing. VAULT_DPOP_ENABLED is off by default and the code documents itself as experimental. The discovery document does not advertise DPoP, so the capability is not claimed to clients. Citation caveat: this row was filed as \"RFC 9449 s4.10.1\" while its own named test is TestRFC9700_4_10_1_SenderConstrainedDPoP, and RFC 9449 section 4 is \"DPoP Proof JWTs\" with no subsection 4.10.1. The row and the test disagreed about which document the requirement comes from. The identifier has been widened to name both documents rather than asserting a section number that was not verified against a primary source; pinning the exact clause is deferred to a revision that can check it."
     },
     {
       "standard": "IETF RFC / OpenID Connect",

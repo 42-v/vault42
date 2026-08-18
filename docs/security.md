@@ -118,7 +118,7 @@ Two consequences are accepted:
 
 **Not covered by this risk: the admin plane.** The admin gateway does not use JWT roles. Its
 authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 29
-`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 37 admin endpoints
+`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 36 admin endpoints
 are permission-gated in `adminapi.NewRouter` (`internal/adminapi/router.go`), including a
 role-catalog management API (`GET`/`POST`/`DELETE /admin/roles`), admin user management
 (`/admin/admins`) and an HTML dashboard. Every check re-reads the admin row from the database
