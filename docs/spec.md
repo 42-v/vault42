@@ -554,19 +554,19 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 
 ### 3.4 JWKS Key Rotation
 
-- **Endpoint:** `GET /.well-known/jwks.json` (public, cached 1 hour)
+- **Endpoint:** `GET /.well-known/jwks.json` (public, `Cache-Control: public, max-age=300`)
 - **Key format:** JWK with `kty=RSA`, `use=sig`, `alg=RS256`, `kid` identifier
 - **`kid` in JWT header** identifies which key signed the token
 - **Key generation:** `crypto/rand` source, 2048-bit RSA
 - **Old keys remain** in JWKS for validation of existing tokens until they expire
 - **Signing key update:** thread-safe via `sync.RWMutex` in `TokenService`
-- **`kid` derivation:** deterministic, computed as SHA-256 of the public key modulus
+- **`kid` derivation:** `KIDFromPublicKey`: first 16 hex characters of SHA-256 over the PKIX DER encoding of the public key, formatted `xxxxxxxx-xxxxxxxx`. Hashing the modulus alone is not what the process does. A UUID printed by `vault rotate-jwks` is discarded.
 
 #### Mode 1: File-Based (Default)
 
-- If `SIGNING_KEY_FILE` is set: RSA-2048 key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive pod restarts.
-- If not set (fallback): ephemeral key generated at startup. Tokens invalidated on restart. Multi-pod deployments will fail (each pod signs with a different key).
-- Key rotation via `TokenService.UpdateSigningKey()` or restart
+- If `SIGNING_KEY_FILE` is set: RSA-2048 key loaded from PKCS#8 PEM (`LoadSigningKeyPEM`, `x509.ParsePKCS8PrivateKey`). Shared across all pods for horizontal scaling. Tokens survive pod restarts. PKCS#1 (`BEGIN RSA PRIVATE KEY`) is a startup parse failure.
+- If not set (fallback): ephemeral key generated at startup, with a random UUID kid. Tokens invalidated on restart. Multi-pod deployments will fail (each pod signs with a different key).
+- There is no live swap in this mode. Generate a PKCS#8 PEM with `scripts/generate-secrets.sh` (`openssl genpkey`) and restart. `vault rotate-jwks` writes PKCS#1 and cannot be pointed at `SIGNING_KEY_FILE`. `TokenService.UpdateSigningKey` is wired only when `VAULT_KEY_ROTATION_DB=true`.
 
 #### Mode 2: DB-Backed (`VAULT_KEY_ROTATION_DB=true`)
 
@@ -817,7 +817,7 @@ All commands require `--admin-token`:
 | `unlock-user` | Retired: refuses and points at `POST /admin/users/{id}/unlock` |
 | `revoke-all-sessions` | Revoke all refresh tokens system-wide |
 | `rotate-admin-token` | Rotate the admin token itself |
-| `rotate-jwks` | Write a new RSA-2048 signing key to `--output` (mode 0600, `O_EXCL`). Does not touch the live keystore. Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. |
+| `rotate-jwks` | Write a new RSA-2048 PKCS#1 PEM (`BEGIN RSA PRIVATE KEY`) to `--output` (mode 0600, `O_EXCL`) and print a random UUID. That UUID is not the kid the process will use. The file cannot be loaded as `SIGNING_KEY_FILE` (`LoadSigningKeyPEM` accepts PKCS#8 only and derives kid via `KIDFromPublicKey`). Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. File-based keys are produced by `scripts/generate-secrets.sh` (`openssl genpkey`). |
 | `seed` | Declarative client + user creation from JSON file |
 | `cleanup-audit` | Retired: prints an error and writes nothing. Audit retention is `VAULT_AUDIT_RETENTION_DAYS`. |
 | `cleanup-recovery` | Delete account-recovery escrow records older than N days |
@@ -1920,11 +1920,11 @@ reduce log volume should filter at the collector.
 
 Dev profile extends production -- it inherits all production defaults, then applies minimal overrides. TLS, rate limits, listen address, and cache backend are all inherited from production unless explicitly overridden.
 
-Honeypot profile extends production -- it inherits all production defaults, then enables debug logging, auto-migration, and the embedded frontend. See section 14.4 for details.
+Honeypot profile extends production -- it inherits all production defaults, then enables auto-migration and the embedded frontend. Per-request honeypot logging (`honeypot.LoggingMiddleware`) is mounted when the profile is active. There is no debug log level; `LOG_LEVEL` is read and ignored. See section 14.4 for details.
 
 ### 14.3 Secret Loading (_FILE Convention)
 
-All secrets use the `_FILE` suffix convention: the env var points to a file containing the secret, not the secret itself. After reading, the file is zeroed (defense in depth).
+All secrets use the `_FILE` suffix convention: the env var points to a file containing the secret, not the secret itself. The vault binary zeros and removes the file only when `VAULT_SECRET_FILE_CONSUME=true` (exact string). The default leaves the file intact so a writable keyfile survives a restart. Two readers do not follow that convention: `BRIDGE_ADMIN_TOKEN_FILE` is always overwritten with zeros after the first read and ignores the flag; the admin gateway's own `loadSecret` never consumes (its `MASTER_KEY_FILE` still goes through `config.LoadSecretBinary`, so consume applies there).
 
 **Secrets loaded via `_FILE`:**
 
@@ -1942,7 +1942,7 @@ All secrets use the `_FILE` suffix convention: the env var points to a file cont
 | `VAULT_OAUTH_GOOGLE_CLIENT_SECRET_FILE` | Google OAuth2 secret |
 | `VAULT_OAUTH_GITHUB_CLIENT_SECRET_FILE` | GitHub OAuth2 secret |
 | `VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE` | Facebook OAuth2 secret |
-| `SIGNING_KEY_FILE` | RSA-2048 PKCS#8 PEM signing key (shared across pods) |
+| `SIGNING_KEY_FILE` | RSA-2048 PKCS#8 PEM signing key (shared across pods). PKCS#1, including `vault rotate-jwks` output, will not load. |
 | `SENDGRID_API_KEY_FILE` | SendGrid API key |
 
 **Source:** `internal/config/secrets.go`, `internal/config/config.go`
@@ -1951,16 +1951,15 @@ All secrets use the `_FILE` suffix convention: the env var points to a file cont
 
 The honeypot profile (`VAULT_PROFILE=honeypot`) is a 4th deployment profile designed for threat observation. It extends the production baseline with the following overrides:
 
-- **Debug logging:** all requests and responses logged at debug level
-- **Auto-migration:** schema migrations run automatically on startup
+- **Auto-migration:** schema migrations run automatically on startup (`VAULT_AUTO_MIGRATE` left unset)
 - **Embedded frontend:** the Vue SPA is served from the Go binary (`ServeFrontend=true`), making the deployment look like a fully operational application to attackers
-- **Full request logging middleware:** wraps all handlers to log method, path, IP, status, duration, and user-agent for every request
+- **Request logging middleware:** `honeypot.LoggingMiddleware` wraps all handlers and logs method, path, remote address, status, duration, user-agent and an automation risk score. There is no debug log level. `LOG_LEVEL` is read and ignored on every profile.
 
 **Trap user detection:** Configurable via `VAULT_HONEYPOT_TRAP_USERS` (comma-separated list of fake email addresses). When a login attempt matches a trap user, the honeypot alerter fires an audit event (`honeypot_trigger`) and dispatches a webhook alert.
 
 **Webhook alerting:** `VAULT_HONEYPOT_WEBHOOK` specifies a URL to POST JSON alerts to. Each alert includes timestamp, event type, IP, user-agent, headers (with Authorization/Cookie redacted), request body (with passwords redacted), and a risk score. Webhook dispatch is best-effort with a 5-second timeout; failures are logged but do not affect request handling. Successful dispatches are recorded as `honeypot_alert` audit events.
 
-**Fake JWT generation:** When a trap user login is detected, the system can return a realistic-looking but invalid JWT. The fake token has a valid RS256 header structure and plausible claims but a random 256-byte signature, making it useless for any real API call. A matching fake refresh token (random hex) is also generated.
+**Trap JWT generation:** When a trap user login is detected, the system returns a real RS256 JWT signed by a process-local trap key that this instance publishes in its own JWKS. The token verifies against the honeypot's JWKS and fails against any other instance, including the production vault behind the bridge, because the trap key is never persisted and is not the deployment signing key. A matching fake refresh token (random hex, not stored) is also generated.
 
 **Automation detection:** User-Agent strings are checked against a list of known automated tools (curl, wget, python-requests, sqlmap, nikto, burp, etc.) and assigned elevated risk scores.
 
@@ -2046,7 +2045,7 @@ Target: RPi5 (4GB). In-memory cache, 5 DB connections, auto-migration, 30s audit
 Single command: `scripts/deploy-dev.sh` handles certs (mkcert), Docker builds, namespace/secrets, `helm upgrade --install`. Access at `https://vault.localhost`.
 
 **Honeypot (`VAULT_PROFILE=honeypot`):**
-Threat observation deployment. Extends production with debug logging, auto-migration, embedded Vue frontend, full request logging, trap user detection, and webhook alerting. Designed to present a convincing attack surface while capturing attacker behavior. See section 14.4.
+Threat observation deployment. Extends production with auto-migration, embedded Vue frontend, per-request honeypot logging, trap user detection, and webhook alerting. There is no debug log level. Designed to present a convincing attack surface while capturing attacker behavior. See section 14.4.
 
 ### 15.4 TLS
 
@@ -2519,7 +2518,7 @@ The following features match the original planning specification:
 - **Security mitigations:** all JWT attacks, OAuth2 CSRF/PKCE, timing attacks, user enumeration prevention, constant-time comparisons
 - **Password policy:** NIST SP 800-63B (15-char minimum, no composition rules, HIBP breach check, history prevention)
 - **Email templates:** verification, password reset, new device, account locked, 2FA setup, suspicious activity
-- **Secrets architecture:** `_FILE` convention, file zeroing after read, secrets never in env vars
+- **Secrets architecture:** `_FILE` convention, consume-on-read opt-in via `VAULT_SECRET_FILE_CONSUME`, secrets never in env vars
 - **Docker image:** multi-stage, distroless, non-root, static binary, read-only filesystem
 - **Admin token:** generated on first boot, Argon2id hashed, required for all CLI commands
 - **Honeypot profile:** 4th deployment profile for threat observation with trap user detection, webhook alerting, fake JWT generation, and full request logging
@@ -2559,7 +2558,7 @@ The following features match the original planning specification:
 | Fingerprint separator collision prevention not specified | Length-prefixed fields (4-byte big-endian length + data) | Prevents crafted field values from producing identical hashes |
 | Password confirmation for sensitive ops not in spec | `POST /auth/confirm` + `Confirmed` middleware with 5-minute window | Added for TOTP setup/disable, WebAuthn register/delete, backup code generation |
 | MFA challenge flow not detailed in spec | 2FA challenge token (5-min JWT with `token_type: "2fa_challenge"`) | Implemented as a distinct token type with separate middleware |
-| `rotate-jwks` listed as CLI command | `vault rotate-jwks --admin-token <token> --output <path>` writes a new RSA-2048 key (mode 0600, `O_EXCL`) and prints the kid. It does not rotate the live keystore. Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. | SpecV0 implied an in-process rotate; the verb is offline key generation (`internal/cli/cli.go`). |
+| `rotate-jwks` listed as CLI command | `vault rotate-jwks --admin-token <token> --output <path>` writes a PKCS#1 RSA-2048 PEM (`BEGIN RSA PRIVATE KEY`, mode 0600, `O_EXCL`) and prints a random UUID. That UUID is not the kid JWKS will advertise (`KIDFromPublicKey` over PKIX DER). The file cannot be mounted as `SIGNING_KEY_FILE` (`LoadSigningKeyPEM` is PKCS#8 only). File-based keys come from `scripts/generate-secrets.sh`. Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. | SpecV0 implied an in-process rotate; the verb is offline PKCS#1 generation (`internal/cli/cli.go:363-400`). |
 | DPoP middleware listed in SpecV0 | Validator, wiring and issuance exist behind `VAULT_DPOP_ENABLED`. Access and challenge tokens issued with a proof carry `cnf.jkt`. Refresh tokens stay unbound; there is no `DPoP-Nonce` | Shipped control; the two remaining limits are excluded from the stability contract (section 0.6.2) |
 | Argon2id parameter bounds checking not specified | Parser rejects iterations > 10, parallelism > 4, memory > 128 MiB | Prevents DoS via crafted hashes |
 

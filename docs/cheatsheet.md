@@ -422,7 +422,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** Environment variables are visible in `/proc/self/environ`, `docker inspect`, crash dumps, and log aggregators.
 
-**Defense:** Secrets loaded via `_FILE` suffix convention -- env var points to a file path, not the secret itself. File is zeroed after reading.
+**Defense:** Secrets loaded via `_FILE` suffix convention -- env var points to a file path, not the secret itself. The vault binary zeros and removes the file only when `VAULT_SECRET_FILE_CONSUME=true`. The bridge always overwrites `BRIDGE_ADMIN_TOKEN_FILE` with zeros after read, regardless of that flag.
 
 **Test:** `tests/compliance/nist_800_63b_test.go` (secret loading tested indirectly)
 

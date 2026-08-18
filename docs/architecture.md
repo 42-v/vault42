@@ -134,7 +134,7 @@ internal/
   jwt/                       Stdlib-only JWT implementation (RS256 sign/verify, ES256 verify, parsing, claims)
   redis/                     Stdlib-only Redis RESP2 client with connection pooling (PING, GET, SET, DEL, GETDEL, INCR, EXPIRE, EXISTS)
   crypto/
-    jwks.go                  JWKS serialization, RSA key loading from SIGNING_KEY_FILE
+    jwt.go                   JWKS serialization, PKCS#8 RSA loading (LoadSigningKeyPEM), KIDFromPublicKey
     argon2.go                HashPassword, VerifyPassword (Argon2id, constant-time, semaphore-limited to 4 concurrent ops)
     fingerprint.go           ComputeFingerprint (SHA256 over length-prefixed fields)
     totp.go                  TOTP generation/validation (RFC 6238, hand-rolled)
@@ -773,11 +773,23 @@ See: `internal/crypto/jwt.go`, `internal/service/token.go`
 ```text
 /.well-known/jwks.json  <--  Serves the current public key set
 
-File-based rotation (CLI: vault rotate-jwks --admin-token <token> --output <path>):
-  1. Generate new RSA-2048 key pair
-  2. Generate new kid (UUID)
-  3. Write the private key to --output (mode 0600, O_EXCL). It is never printed.
-  4. Point SIGNING_KEY_FILE at that path and restart. There is no live swap.
+File-based keys (SIGNING_KEY_FILE; default):
+  Generate an RSA-2048 PKCS#8 PEM (`BEGIN PRIVATE KEY`) with
+  scripts/generate-secrets.sh or
+  `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`.
+  Point SIGNING_KEY_FILE at that path and restart. There is no live swap.
+
+  The kid the process advertises is KIDFromPublicKey: the first 16 hex
+  characters of SHA-256 over the PKIX DER of the public key, formatted
+  xxxxxxxx-xxxxxxxx. It is not a UUID you choose.
+
+  vault rotate-jwks is not this path. It writes PKCS#1
+  (`BEGIN RSA PRIVATE KEY`), prints a random UUID that LoadSigningKeyPEM
+  never reads, and a SIGNING_KEY_FILE pointed at that file fails at
+  startup with a parse error. Convert first
+  (`openssl pkcs8 -topk8 -nocrypt`) if you already have a PKCS#1 file,
+  then ignore the printed UUID and read the kid from
+  GET /.well-known/jwks.json after restart.
 
 DB-backed rotation (VAULT_KEY_ROTATION_DB=true):
   POST /admin/keys/rotate, or the VAULT_KEY_ROTATION_INTERVAL scheduler.
@@ -796,7 +808,7 @@ serving concurrent JWKS requests.
 
 At startup, key loading depends on configuration:
 
-- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive restarts. `kid` derived deterministically from SHA-256 of the public key modulus.
+- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM (`x509.ParsePKCS8PrivateKey` in `LoadSigningKeyPEM`). Shared across all pods for horizontal scaling. Tokens survive restarts. PKCS#1 (`BEGIN RSA PRIVATE KEY`), including the file `vault rotate-jwks` writes, is a startup parse failure. `kid` is `KIDFromPublicKey`: the first 16 hex characters of SHA-256 over the PKIX DER encoding of the public key, formatted `xxxxxxxx-xxxxxxxx`. Hashing the modulus alone is not what the process does.
 - **`SIGNING_KEY_FILE` not set (fallback):** ephemeral RSA-2048 key pair generated in memory. Tokens invalidated on restart. Suitable for single-pod deployments only.
 
 This mode is backward compatible and requires no additional configuration.
@@ -814,8 +826,9 @@ rotation without shared filesystem access.
   1 hour via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
   seamlessly.
 - Live key management (rotate, list, revoke) is performed via the admin
-  gateway (`cmd/admin-gateway/`). `vault rotate-jwks` writes a key file and
-  does not rotate the live store.
+  gateway (`cmd/admin-gateway/`). `vault rotate-jwks` writes a PKCS#1
+  key file and a discarded UUID; it does not rotate the live store and
+  cannot be mounted as `SIGNING_KEY_FILE`.
 - Revoked keys are removed from JWKS immediately. Expired retired keys are
   cleaned up automatically during the refresh cycle.
 
@@ -1021,7 +1034,6 @@ Four deployment profiles control default configuration values:
 |---------|-----------|-----|----------|----------|
 | Listen address | :8443 | :8443 | :8443 | :8443 |
 | TLS enabled | true | true | true | true |
-| Log level | warn | debug | info | debug |
 | Cache backend | redis | (inherited) | memory | redis |
 | DB max conns | 25 | 25 | 5 | 25 |
 | Auto-migrate | false | true | true | true |
@@ -1034,10 +1046,10 @@ Four deployment profiles control default configuration values:
 | Shutdown timeout | 15s | 5s | 5s | 15s |
 
 **Dev extends production** -- it starts from the production baseline and applies
-minimal overrides (debug logging, CORS allow-all, shorter refresh TTL, faster
-shutdown, auto-migration). TLS, rate limits, listen address, and cache backend
-are all inherited from production unless explicitly overridden via environment
-variables.
+minimal overrides (CORS allow-all, shorter refresh TTL, faster shutdown,
+auto-migration). TLS, rate limits, listen address, and cache backend are all
+inherited from production unless explicitly overridden via environment
+variables. There is no log-level control: `LOG_LEVEL` is read and ignored.
 
 **Embedded** is tuned for resource-constrained environments (e.g., Raspberry Pi 5)
 with in-memory cache, 5 DB connections, and auto-migration. Target memory
@@ -1051,8 +1063,10 @@ in `internal/config/secrets.go`:
 
 1. Reads `<ENV_KEY>_FILE` to get the file path
 2. Reads the file contents
-3. **Zeros the file** after reading (defense in depth)
-4. Trims whitespace and returns the value
+3. Trims whitespace and returns the value
+4. If `VAULT_SECRET_FILE_CONSUME=true` (exact string), zeros and removes the file. The default leaves the file intact.
+
+`LoadSecret` is the vault path. `BRIDGE_ADMIN_TOKEN_FILE` always overwrites the file with zeros and ignores the flag. The admin gateway's own `loadSecret` never consumes; its `MASTER_KEY_FILE` still goes through `LoadSecretBinary`, so consume applies there.
 
 Secrets are never passed as environment variables directly. This integrates with
 Kubernetes secrets mounted as files.

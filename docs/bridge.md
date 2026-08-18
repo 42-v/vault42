@@ -97,7 +97,7 @@ POST on decoy forms returns fake "invalid credentials". All subsequent requests 
 
 ## Admin API
 
-Protected by `BRIDGE_ADMIN_TOKEN_FILE` (constant-time comparison via `crypto/subtle`):
+Protected by `BRIDGE_ADMIN_TOKEN_FILE` (constant-time comparison via `crypto/subtle`). The file is always overwritten with zeros after the first read; `VAULT_SECRET_FILE_CONSUME` is ignored. Keep a copy of the token before pointing the bridge at a writable path:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -137,7 +137,7 @@ curl -X DELETE https://bridge/bridge/flag \
 | `BRIDGE_FLAG_TTL` | `24h` | How long an IP stays flagged |
 | `BRIDGE_FLAG_THRESHOLD` | `100` | Score threshold to trigger flag |
 | `BRIDGE_WEBHOOK_URL` | -- | Optional webhook for flag events |
-| `BRIDGE_ADMIN_TOKEN_FILE` | -- | Admin token (`_FILE` convention) |
+| `BRIDGE_ADMIN_TOKEN_FILE` | -- | Admin token file. Always overwritten with zeros after the first read. Ignores `VAULT_SECRET_FILE_CONSUME`. Keep a copy of the token before pointing the bridge at a writable path. |
 | `BRIDGE_REDIS_ADDR` | -- | Optional Redis for persistent flags |
 | `BRIDGE_TRUSTED_PROXIES` | -- | CIDR list for proxy IP detection |
 | `BRIDGE_REAL_IP_HEADER` | -- | Header from proxy (e.g. `CF-Connecting-IP`) |
