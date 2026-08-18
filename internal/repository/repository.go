@@ -392,6 +392,16 @@ type AdminConfigRepository interface {
 	Get(ctx context.Context, key string) (string, error)
 	// Set creates or updates a configuration key-value pair.
 	Set(ctx context.Context, key, value string) error
+	// ClaimIfAbsent records value under key when the key holds nothing yet, and
+	// returns whatever the key holds afterwards. The loser of a race gets the
+	// incumbent value, never its own.
+	//
+	// On the interface rather than only on the Postgres type because Get
+	// followed by Set is not the same operation and the difference is only
+	// visible when two processes boot together, which is the shipped
+	// configuration: replicaCount 3, each running the first-boot paths. A caller
+	// that cannot reach this one writes the read-then-write it makes a mistake.
+	ClaimIfAbsent(ctx context.Context, key, value string) (string, error)
 	// Delete removes a configuration entry by key.
 	Delete(ctx context.Context, key string) error
 }
@@ -549,8 +559,26 @@ type AccountRecoveryPruner interface {
 	// PruneLocked is Prune serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
+	//
+	// It deletes at most RecoveryCleanupBatch rows per call, so a caller with a
+	// backlog loops. A full batch means there is more; anything less means the
+	// horizon is clear.
 	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
+
+// RecoveryCleanupBatch is how many rows one PruneLocked call may delete, and
+// therefore how long one call holds ACCESS EXCLUSIVE on auth.account_recovery.
+//
+// Same reasoning as AuditCleanupBatch, against a different writer. The purge
+// disables the append-only trigger to delete anything, which is ALTER TABLE, and
+// what waits behind that lock is the erasure path: every Art. 17 deletion with a
+// recovery key configured appends its escrow record before the account goes. An
+// unbounded DELETE stalls erasures for the length of the whole purge.
+//
+// It lives on the interface because the implementation and the sweeper that
+// loops over it have to agree on it, and internal/service cannot import
+// internal/repository/postgres.
+const RecoveryCleanupBatch = 2000
 
 // AdminUserRepository manages admin gateway user persistence.
 type AdminUserRepository interface {

@@ -288,15 +288,19 @@ is discarded and must be re-applied before the rollout completes. Check with
 Migrations are numbered, forward-only and applied in filename order against the
 `public.schema_migrations` ledger (`migrate.Run`, `internal/migrate/migrate.go`). They run as the
 `vault_mig` role, whose connection is closed once they finish; there is no down-migration and
-no rollback path. Two ways to run them:
+no rollback path. What that means in practice, per migration, is in
+[UPGRADING.md](UPGRADING.md#rollback-what-is-and-is-not-reversible). Two ways to run them:
 
 - **`VAULT_AUTO_MIGRATE=true`** (the default in the `embedded`, `dev` and `honeypot` profiles):
-  each pod migrates at startup. Fine for a single replica.
+  each pod migrates at startup. `migrate.Run` takes a session-level advisory lock around the
+  whole run, so replicas starting together serialize rather than race: one applies, the rest
+  wait and then find the schema already at their version.
 - **Manually, before the rollout** (the default in `production`, where `autoMigrate` is
-  `false`): several replicas racing the same DDL is not a supported configuration. Run the new
-  image once as a job, or exec a single pod, then roll the rest.
+  `false`): still the better shape for a large migration, because it separates a slow DDL
+  from the rollout's readiness clock rather than making every replica wait behind it.
 
-Take a database backup before an upgrade that adds migrations. See [Backup](#backup).
+Take a database backup before an upgrade that adds migrations. It is the schema's only
+rollback path. See [Backup](#backup).
 
 ### Upgrading 0.9.x to 1.0.0
 

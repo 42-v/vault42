@@ -773,10 +773,11 @@ func (m *MockRateLimitRepo) DeleteExpired(ctx context.Context, before time.Time)
 // ---------------------------------------------------------------------------
 
 type MockAdminConfigRepo struct {
-	ListFn   func(ctx context.Context) (map[string]string, error)
-	GetFn    func(ctx context.Context, key string) (string, error)
-	SetFn    func(ctx context.Context, key, value string) error
-	DeleteFn func(ctx context.Context, key string) error
+	ListFn          func(ctx context.Context) (map[string]string, error)
+	GetFn           func(ctx context.Context, key string) (string, error)
+	SetFn           func(ctx context.Context, key, value string) error
+	ClaimIfAbsentFn func(ctx context.Context, key, value string) (string, error)
+	DeleteFn        func(ctx context.Context, key string) error
 }
 
 func (m *MockAdminConfigRepo) List(ctx context.Context) (map[string]string, error) {
@@ -791,6 +792,15 @@ func (m *MockAdminConfigRepo) Get(ctx context.Context, key string) (string, erro
 		return m.GetFn(ctx, key)
 	}
 	return "", nil
+}
+
+// ClaimIfAbsent defaults to winning the claim, which is the single-process case
+// every test that does not set ClaimIfAbsentFn is describing.
+func (m *MockAdminConfigRepo) ClaimIfAbsent(ctx context.Context, key, value string) (string, error) {
+	if m.ClaimIfAbsentFn != nil {
+		return m.ClaimIfAbsentFn(ctx, key, value)
+	}
+	return value, nil
 }
 
 func (m *MockAdminConfigRepo) Set(ctx context.Context, key, value string) error {

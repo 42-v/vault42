@@ -240,6 +240,7 @@ func (s *pgStub) handle(conn net.Conn) {
 	// is all pgx needs: it never shares a prepared statement across connections.
 	stmts := map[string]string{}
 	portals := map[string]string{}
+	bound := map[string][][]byte{}
 	var pending []byte
 	failed := false
 
@@ -275,6 +276,7 @@ func (s *pgStub) handle(conn net.Conn) {
 			portal := pgCString(&body)
 			stmt := pgCString(&body)
 			portals[portal] = stmts[stmt]
+			bound[portal] = pgBindParams(body)
 			if !failed {
 				pending = append(pending, pgMsg('2')...)
 			}
@@ -304,7 +306,7 @@ func (s *pgStub) handle(conn net.Conn) {
 				break
 			}
 			sql := portals[portal]
-			pending = append(pending, s.answer(sql, false)...)
+			pending = append(pending, s.answerBound(sql, false, bound[portal])...)
 			if rule := s.rule(sql); rule != nil && rule.errCode != "" {
 				failed = true
 			}
@@ -382,7 +384,26 @@ func pgHandshake(conn net.Conn, r *bufio.Reader) bool {
 // self-contained and ends with ReadyForQuery; in the extended protocol the row
 // description was already sent from Describe and ReadyForQuery follows at Sync.
 func (s *pgStub) answer(sql string, simple bool) []byte {
+	return s.answerBound(sql, simple, nil)
+}
+
+// answerBound is answer with the statement's bound parameters, which one
+// unscripted statement needs: see pgClaimReturns.
+func (s *pgStub) answerBound(sql string, simple bool, params [][]byte) []byte {
 	rule := s.rule(sql)
+
+	if rule == nil && pgClaimReturns(sql) {
+		var out []byte
+		if simple {
+			out = append(out, s.rowDescription(sql, true)...)
+		}
+		out = append(out, pgDataRow([][]byte{pgClaimedValue(params)})...)
+		out = append(out, pgMsg('C', pgCStr("INSERT 0 1"))...)
+		if simple {
+			out = append(out, pgReadyIdle()...)
+		}
+		return out
+	}
 
 	if rule != nil && rule.errCode != "" {
 		out := pgErrorResponse(rule.errCode, rule.errMsg)
@@ -423,9 +444,17 @@ func (s *pgStub) answer(sql string, simple bool) []byte {
 // and QueryRow reports pgx.ErrNoRows.
 func (s *pgStub) rowDescription(sql string, simple bool) []byte {
 	rule := s.rule(sql)
+	if rule == nil && pgClaimReturns(sql) {
+		return s.describe(textColumns("value"), simple)
+	}
 	if rule == nil || len(rule.cols) == 0 {
 		return pgMsg('n')
 	}
+	return s.describe(rule.cols, simple)
+}
+
+func (s *pgStub) describe(cols []pgColumn, simple bool) []byte {
+	rule := &pgRule{cols: cols}
 	parts := [][]byte{pgInt16(int16(len(rule.cols)))}
 	for i, col := range rule.cols {
 		format := pgWireFormat(col.oid)
@@ -635,4 +664,74 @@ func TestPGStubAnswersTheStartupProtocol(t *testing.T) {
 // because the stub refuses TLS.
 func pgStubDSN(s *pgStub) string {
 	return "postgres://vault_app:pw@" + s.ln.Addr().String() + "/vault?sslmode=disable"
+}
+
+// pgClaimReturns recognizes AdminConfigRepo.ClaimIfAbsent, the one statement in
+// the startup path that needs a row back from a write.
+//
+// `INSERT ... ON CONFLICT (key) DO UPDATE SET value = admin_config.value
+// RETURNING value` always returns exactly one row on a real server: the
+// incumbent on a conflict, the value just written otherwise. The stub has no
+// table, so it models the second case, which is the first boot every test here
+// describes. Without it the write reported pgx.ErrNoRows and both callers -- the
+// admin token and the cross-plane HMAC fingerprint -- read that as a failure
+// against a database that had in fact accepted the row.
+func pgClaimReturns(sql string) bool {
+	return strings.Contains(sql, "RETURNING value")
+}
+
+// pgClaimedValue is the value the caller bound as $2, which is what a real
+// server returns when the claim is won. The fallback keeps the simple protocol,
+// where no parameters are bound, answering with a row rather than nothing.
+func pgClaimedValue(params [][]byte) []byte {
+	if len(params) >= 2 {
+		return params[1]
+	}
+	return pgText("claimed")
+}
+
+// pgBindParams pulls the parameter values out of a Bind message body positioned
+// just after the portal and statement names.
+func pgBindParams(body []byte) [][]byte {
+	read16 := func() (int, bool) {
+		if len(body) < 2 {
+			return 0, false
+		}
+		v := int(int16(binary.BigEndian.Uint16(body[:2])))
+		body = body[2:]
+		return v, true
+	}
+
+	formats, ok := read16()
+	if !ok {
+		return nil
+	}
+	for range formats {
+		if _, ok := read16(); !ok {
+			return nil
+		}
+	}
+
+	count, ok := read16()
+	if !ok || count < 0 {
+		return nil
+	}
+	params := make([][]byte, 0, count)
+	for range count {
+		if len(body) < 4 {
+			return nil
+		}
+		size := int(int32(binary.BigEndian.Uint32(body[:4])))
+		body = body[4:]
+		if size < 0 { // SQL NULL
+			params = append(params, nil)
+			continue
+		}
+		if len(body) < size {
+			return nil
+		}
+		params = append(params, body[:size])
+		body = body[size:]
+	}
+	return params
 }

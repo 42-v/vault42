@@ -16,6 +16,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -438,7 +440,18 @@ func loadProvisionedAdminToken() (string, error) {
 	if os.Getenv("ADMIN_TOKEN_FILE") == "" {
 		return "", nil
 	}
-	return config.LoadSecret("ADMIN_TOKEN")
+	token, err := config.LoadSecret("ADMIN_TOKEN")
+	// This read is the one that destroys the file, so a boot that finds it gone
+	// under VAULT_SECRET_FILE_CONSUME is looking at its own earlier work, not at
+	// a mount that never arrived. Nothing is lost with the file: the hash went
+	// into auth.admin_config on the boot that consumed it and is what
+	// authenticates from then on. Without this arm every later boot reported
+	// "Admin token init error: read ADMIN_TOKEN_FILE ..." on a healthy
+	// deployment, and config.checkAdminTokenFile refused to start at all.
+	if err != nil && errors.Is(err, fs.ErrNotExist) && config.SecretFilesAreConsumed() {
+		return "", nil
+	}
+	return token, err
 }
 
 // InitAdminToken installs the initial admin token on first boot.
@@ -495,15 +508,45 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hash admin token: %w", err)
 	}
-	// Delivered before the hash is stored. InitAdminToken returns early once
-	// admin_token_hash is set, so storing the hash of a token the operator never
-	// received locks every administrative subcommand out with no way back.
+	// Claim first, deliver second, and deliver only if the claim was won.
+	//
+	// The Get above and a Set here are two statements, and cmd/vault runs this on
+	// every boot of every replica: the chart ships three. Each reads an empty
+	// key, each mints, and the last write wins, so the operator is handed three
+	// credentials of which exactly one authenticates -- reproduced 15 times out
+	// of 15 -- with nothing marking which. That was survivable while the
+	// credential went to a shared log an operator could search. It is not now
+	// that it goes to a per-pod memory volume that dies with its pod, while the
+	// hash persists and every subcommand that could rotate it is behind the
+	// token itself.
+	//
+	// ClaimIfAbsent is one statement, and the loser is handed the incumbent hash
+	// rather than its own.
+	claimed, err := c.adminConfig.ClaimIfAbsent(ctx, "admin_token_hash", hash)
+	if err != nil {
+		return err
+	}
+	if claimed != hash {
+		// Another replica minted the token that is in force. Delivering this one
+		// would hand the operator a second credential that authenticates as
+		// nothing, in a sink where it cannot be told from the real one.
+		fmt.Println("FIRST BOOT: another replica minted the admin token first; this one is not in force and was discarded.")
+		return nil
+	}
+
+	// The hash is committed and the token is still nobody's, which is the one
+	// window this ordering opens. Release the claim before refusing, or the next
+	// boot finds a hash it will not mint past and no admin token exists again.
+	// The refusal is firstboot's, and it does not return.
 	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", token)
 	if err != nil {
-		return fmt.Errorf("deliver admin token: %w", err)
-	}
-	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
-		return err
+		if delErr := c.adminConfig.Delete(ctx, "admin_token_hash"); delErr != nil {
+			log.Printf("CRITICAL: the admin token could not be delivered and its hash could not "+
+				"be withdrawn either (%v). admin_token_hash now holds the hash of a token nobody "+
+				"has; delete that row by hand before the next boot, or no admin token can ever "+
+				"be minted again.", delErr)
+		}
+		return firstboot.Refuse(fmt.Errorf("deliver admin token: %w", err))
 	}
 	fmt.Printf("FIRST BOOT: an admin token was generated and written to %s; it is not in this output and will not be shown again.\n", dest)
 	return nil

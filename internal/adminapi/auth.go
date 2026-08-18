@@ -470,7 +470,10 @@ func EnsureFirstAdmin(
 		UpdatedAt:    now,
 	}
 
-	dest, err := firstboot.Deliver("VAULT_FIRST_BOOT_SUPER_ADMIN_PASSWORD", password)
+	// MustDeliver, not Deliver: cmd/admin-gateway logs this function's error and
+	// serves anyway, so an unwritable sink left a gateway running with no
+	// super_admin at all and nothing but one log line to say so.
+	dest, err := firstboot.MustDeliver("VAULT_FIRST_BOOT_SUPER_ADMIN_PASSWORD", password)
 	if err != nil {
 		return fmt.Errorf("deliver first admin password: %w", err)
 	}

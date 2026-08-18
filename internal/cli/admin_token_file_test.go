@@ -284,3 +284,38 @@ func TestInitAdminTokenChecksAPlaintextFileAgainstTheStoredHash(t *testing.T) {
 		}
 	})
 }
+
+// The same absent file, one boot later, on a deployment that consumes its secret
+// files. This read is the one that destroys the file, so a boot that finds it
+// gone under VAULT_SECRET_FILE_CONSUME is looking at its own earlier work rather
+// than at a mount that never arrived. The credential is unaffected: its hash was
+// recorded on the first boot and is what authenticates from then on.
+//
+// Without this arm, every boot after the first logged
+// "Admin token init error: read ADMIN_TOKEN_FILE: ..." while the deployment was
+// in fact healthy, which is the kind of standing error that teaches an operator
+// to stop reading them.
+func TestInitAdminTokenTreatsAConsumedFileAsAlreadyRead(t *testing.T) {
+	t.Setenv("ADMIN_TOKEN_FILE", filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("VAULT_SECRET_FILE_CONSUME", "true")
+
+	admin := &mockAdminConfigRepo{}
+	admin.GetFn = func(context.Context, string) (string, error) {
+		return "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$hash-from-the-first-boot", nil
+	}
+	admin.ClaimIfAbsentFn = func(context.Context, string, string) (string, error) {
+		t.Error("a token was minted although one is already in force")
+		return "", nil
+	}
+
+	c := New(&mockClientRepo{}, &mockUserRepo{}, &mockRefreshTokenRepo{}, admin, &mockAuditRepo{}, "")
+	out := captureStdout(t, func() {
+		if err := c.InitAdminToken(context.Background()); err != nil {
+			t.Errorf("a consumed ADMIN_TOKEN_FILE was reported as an error on every later "+
+				"boot: %v", err)
+		}
+	})
+	if strings.Contains(out, "FIRST BOOT") {
+		t.Errorf("an admin token was generated on a boot whose file was merely consumed: %q", out)
+	}
+}

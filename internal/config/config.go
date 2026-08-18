@@ -880,6 +880,21 @@ func (c *Config) checkAdminTokenFile() error {
 	}
 	data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- path from operator env var (_FILE convention), cleaned with filepath.Clean
 	if err != nil {
+		// A file this deployment destroys on read is not a file whose absence
+		// means a broken mount. internal/cli performs the consuming read, so
+		// under VAULT_SECRET_FILE_CONSUME the first boot removes exactly this
+		// path and every boot after it arrived here and refused to start:
+		// "read ADMIN_TOKEN_FILE ...: no such file or directory". The token is
+		// not lost with the file -- its hash went into auth.admin_config on the
+		// first boot and is what authenticates from then on. Said out loud
+		// rather than skipped silently, because an absent mount and a consumed
+		// one look identical from here and only one of them is fine.
+		if os.IsNotExist(err) && SecretFilesAreConsumed() {
+			log.Printf("ADMIN_TOKEN_FILE %q is absent and VAULT_SECRET_FILE_CONSUME is set: "+
+				"treating it as consumed by an earlier boot. The admin token in force is the "+
+				"hash already recorded in auth.admin_config; this mount is not read again.", path)
+			return nil
+		}
 		return fmt.Errorf("read ADMIN_TOKEN_FILE %q: %w", path, err)
 	}
 

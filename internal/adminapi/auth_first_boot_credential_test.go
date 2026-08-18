@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 )
 
 // EnsureFirstAdmin mints the one credential that owns the admin plane, and it
@@ -62,15 +63,28 @@ func TestEnsureFirstAdmin_UndeliverableCredentialCreatesNoAdmin(t *testing.T) {
 
 	logged := captureLog(t)
 
+	// Without the swap this kills the test binary, which is what the gateway
+	// process does in a pod. Recording the code lets the rest of the assertions
+	// run on what the refusal left behind.
+	var exits []int
+	defer firstboot.SetExitForTest(func(code int) { exits = append(exits, code) })()
+
 	repo := newFakeAdminRepo()
 	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err == nil {
 		t.Fatal("EnsureFirstAdmin reported success though the credential could not be delivered")
 	}
+	if len(exits) != 1 || exits[0] != 1 {
+		t.Errorf("the process exited %v, want exactly one exit(1). Without it cmd/admin-gateway "+
+			"logs this error and serves a gateway with no super_admin at all.", exits)
+	}
 	if len(repo.users) != 0 {
 		t.Errorf("an admin was created whose password went nowhere: %d rows", len(repo.users))
 	}
-	_ = logged
+	if !strings.Contains(logged.String(), "REFUSING TO START") {
+		t.Error("the refusal is not in the log, so an operator sees a gateway that stopped and " +
+			"nothing saying why")
+	}
 }
 
 // captureLog redirects the standard logger for the duration of one test.

@@ -70,17 +70,29 @@ func LoadSecretBinary(envKey string, wantLen int) ([]byte, error) {
 	}
 }
 
+// SecretFilesAreConsumed reports whether a secret file is destroyed by the read
+// that consumes it.
+//
+// The one boolean in this package that is deliberately not resolved through
+// parseBoolEnv, and so the one where an unrecognized spelling is silently false.
+// Every other setting is a control whose absence is the hazard, so guessing
+// wrong there costs a security property; this one destroys the operator's key
+// material on a writable mount, so guessing wrong costs the deployment. Exactly
+// "true" is what docs/config.md documents and what cmd/vault/startup_test.go
+// pins in both directions.
+//
+// Exported because the answer decides more than whether to wipe: a file that
+// this process is expected to have destroyed cannot also be a file whose absence
+// means a broken mount, and the two readers of that distinction are in different
+// packages.
+func SecretFilesAreConsumed() bool {
+	return os.Getenv("VAULT_SECRET_FILE_CONSUME") == "true"
+}
+
 // consumeSecretFile applies the opt-in zero-and-remove wipe shared by LoadSecret
 // and LoadSecretBinary.
 func consumeSecretFile(path string, size int) {
-	// The one boolean in this package that is deliberately not resolved through
-	// parseBoolEnv, and so the one where an unrecognized spelling is silently
-	// false. Every other setting is a control whose absence is the hazard, so
-	// guessing wrong there costs a security property; this one destroys the
-	// operator's key material on a writable mount, so guessing wrong costs the
-	// deployment. Exactly "true" is what docs/config.md documents and what
-	// cmd/vault/startup_test.go pins in both directions.
-	if os.Getenv("VAULT_SECRET_FILE_CONSUME") != "true" {
+	if !SecretFilesAreConsumed() {
 		return
 	}
 	// path comes from an operator-controlled env var. Quote it, and the error

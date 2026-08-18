@@ -655,6 +655,15 @@ requirement text is about something else.
 
 ### Documentation
 
+* **`docs/UPGRADING.md` is new, and an upgrade should be read out of it rather than
+  reconstructed.** Nothing in the tree said what `helm rollback` does and does not restore.
+  It restores the chart; it cannot restore the schema, so the previous binary runs against a
+  database up to 23 migrations ahead of it, and at least one of those breaks it outright
+  (029 revokes `UPDATE (locked_until)` from `vault_app`, which is the role 0.9.9's
+  `lock-user` runs as). The document says which shapes of migration are reversible and which
+  only look it, states plainly that the schema's rollback path is the backup rather than a
+  script this repo can ship, and carries the orphan-delete recovery for a `helm upgrade` that
+  fails on an immutable field. Every procedure in it was executed against a live k3s cluster.
 * `docs/spec.md` claimed authority "as of 2026-03-02" while three commits had edited its body
   since, making it a partially-updated hybrid rather than cleanly stale. It is rewritten
   around the real route surface, which the sentinel-delimited inventory now enumerates in

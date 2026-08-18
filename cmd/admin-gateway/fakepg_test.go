@@ -191,10 +191,19 @@ func (f *fakePostgres) statement(sql string) (fields []pgproto3.FieldDescription
 	return fields, tag, nil, ok
 }
 
-// paramOIDs describes a statement's placeholders as text, one per $N up to the
-// highest N the SQL mentions. Every statement this stub answers binds strings,
-// and pgx sends text for an unspecified OID anyway.
+// paramOIDs describes a statement's placeholders, one per $N up to the highest N
+// the SQL mentions.
+//
+// Text for everything but the advisory lock, whose argument is a bigint. pgx
+// encodes to whatever OID it was told, so describing that one as text made it
+// refuse to bind at all -- `unable to encode 4245 into text format for text (OID
+// 25)` -- which is a fake disagreeing with the server it stands in for rather
+// than anything wrong with the caller.
 func paramOIDs(sql string) []uint32 {
+	oid := uint32(25) // text
+	if strings.Contains(sql, "pg_advisory_") {
+		oid = 20 // int8
+	}
 	highest := 0
 	for i := 0; i+1 < len(sql); i++ {
 		if sql[i] != '$' || sql[i+1] < '1' || sql[i+1] > '9' {
@@ -210,7 +219,7 @@ func paramOIDs(sql string) []uint32 {
 	}
 	oids := make([]uint32, highest)
 	for i := range oids {
-		oids[i] = 25 // text
+		oids[i] = oid
 	}
 	return oids
 }
@@ -458,13 +467,26 @@ func (f *fakePostgres) simpleQuery(be *pgproto3.Backend, sql string) {
 	be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 }
 
-// knownStatement recognizes the only two statements the stub answers
-// successfully, both of them owned by internal/migrate. Returning zero rows for
-// the applied-versions query is what makes an empty migrations directory a
+// knownStatement recognizes the only statements the stub answers successfully,
+// all of them owned by internal/migrate. Returning zero rows for the
+// applied-versions query is what makes an empty migrations directory a
 // complete, successful migration run, which is how the "migrations complete"
 // branch of main() is reached without executing any DDL.
+//
+// The advisory lock is answered rather than ignored because migrate.Run takes it
+// before anything else: a stub that did not know it returned 42P01 for the lock,
+// and every migration test here failed with "relation does not exist" against a
+// statement that names no relation.
 func knownStatement(sql string) (fields []pgproto3.FieldDescription, tag string, ok bool) {
 	switch {
+	case strings.Contains(sql, "pg_advisory_lock"), strings.Contains(sql, "pg_advisory_unlock"):
+		return []pgproto3.FieldDescription{{
+			Name:         []byte("pg_advisory_lock"),
+			DataTypeOID:  25, // text
+			DataTypeSize: -1,
+			TypeModifier: -1,
+			Format:       0,
+		}}, "SELECT 1", true
 	case strings.Contains(sql, "CREATE TABLE IF NOT EXISTS public.schema_migrations"):
 		return nil, "CREATE TABLE", true
 	case strings.Contains(sql, "FROM public.schema_migrations"):
