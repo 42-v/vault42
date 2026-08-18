@@ -9,8 +9,14 @@ import (
 // When serveFrontend is true, a permissive CSP is used for frontend routes
 // so the embedded Vue SPA can load its assets.
 func SecurityHeaders(serveFrontend bool) func(http.Handler) http.Handler {
-	apiCSP := "default-src 'none'; frame-ancestors 'none'"
-	frontendCSP := "default-src 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https:; font-src 'self'"
+	// object-src and base-uri are spelled out in both policies rather than left
+	// to default-src (ASVS V3.4.3). base-uri has no fallback at all — it is not
+	// a fetch directive — so without it an injected <base> re-points every
+	// relative URL on the page while default-src 'self' reports itself
+	// satisfied. object-src falls back to default-src only on CSP Level 3
+	// browsers, which is not a property to inherit a plugin surface from.
+	apiCSP := "default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+	frontendCSP := "default-src 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https:; font-src 'self'; object-src 'none'; base-uri 'none'"
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

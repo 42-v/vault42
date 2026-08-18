@@ -230,6 +230,13 @@ func TestSecurityHeaders_CSP_NoUnsafeInline(t *testing.T) {
 	if !strings.Contains(csp, "form-action 'self'") {
 		t.Errorf("CSP should restrict form-action: %s", csp)
 	}
+	// ASVS V3.4.3: base-uri has no default-src fallback, so an injected <base>
+	// would survive default-src 'none' and re-point every relative URL.
+	for _, directive := range []string{"object-src 'none'", "base-uri 'none'"} {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("CSP %q omits %q (ASVS V3.4.3)", csp, directive)
+		}
+	}
 }
 
 func TestRequestID_GeneratesUUID(t *testing.T) {
