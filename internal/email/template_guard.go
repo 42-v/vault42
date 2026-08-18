@@ -278,12 +278,82 @@ func walkGuardNode(n parse.Node) error {
 	case *parse.WithNode:
 		return walkGuardBranch(&node.BranchNode, "with")
 	case *parse.ActionNode:
-		if len(node.Pipe.Decl) > 0 && pipeUsesSecret(node.Pipe) {
+		if !pipeUsesSecret(node.Pipe) {
+			return nil
+		}
+		if len(node.Pipe.Decl) > 0 {
 			return guardRefusal("a template variable is assigned the link, token or code. A secret " +
 				"that reaches a variable can steer a branch the validator cannot see through")
 		}
+		// Emitting a derived value is the same oracle as branching on it, and
+		// the differential cannot see it: both canaries miss a probe like
+		// {{eq .Code "000000"}}, so both renders write "false" into
+		// https://evil/…/false and checkEmailURL allows the constant URL.
+		// Only a verbatim substitution (optionally case-folded or safeURL'd)
+		// may reach the document.
+		if !pipeIsVerbatimSecret(node.Pipe) {
+			return guardRefusal("a template action derives a value from the link, token or code " +
+				"rather than substituting it. Comparison, slicing and formatting of a secret are " +
+				"how a secret is exfiltrated a bit at a time, including into a URL that looks " +
+				"constant under the canaries")
+		}
+	case *parse.TemplateNode:
+		// {{template "name" .Code}} rebinds the callee's dot to the secret.
+		// The define body is also rendered alone under TemplateData during
+		// validation, so a naive {{if eq . "000000"}} fails closed by type
+		// error — but a dual-type body (printf "%T" then eq) executes cleanly
+		// under both shapes, looks constant across canaries, and beacons the
+		// live OTP. Refusing a secret-bearing pipeline at the call site is
+		// the structural answer; operator overrides have no need to pass a
+		// secret as the nested template's data.
+		if pipeUsesSecret(node.Pipe) {
+			return guardRefusal("a {{template}} call passes the link, token or code as the " +
+				"nested template's data. That rebinds the secret as {{.}} inside the define, " +
+				"where comparison oracles the differential cannot see recover it a bit at a time")
+		}
 	}
 	return nil
+}
+
+// pipeIsVerbatimSecret reports whether p is a bare secret field, optionally
+// piped through upper, lower or safeURL and nothing else. Those three are the
+// function-map entries that preserve the secret as itself (or the same link
+// case-folded / typed as a URL); every other pipeline is a derivation.
+func pipeIsVerbatimSecret(p *parse.PipeNode) bool {
+	if p == nil || len(p.Cmds) == 0 {
+		return false
+	}
+	first := p.Cmds[0]
+	if len(first.Args) != 1 || !nodeIsSecretField(first.Args[0]) {
+		return false
+	}
+	for _, cmd := range p.Cmds[1:] {
+		if len(cmd.Args) != 1 {
+			return false
+		}
+		id, ok := cmd.Args[0].(*parse.IdentifierNode)
+		if !ok {
+			return false
+		}
+		switch id.Ident {
+		case "upper", "lower", "safeURL":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func nodeIsSecretField(n parse.Node) bool {
+	switch node := n.(type) {
+	case *parse.FieldNode:
+		return len(node.Ident) == 1 && guardSecretFields[node.Ident[0]]
+	case *parse.VariableNode:
+		// $.Code / $.Token / $.URL are the same secrets as .Code / .Token / .URL;
+		// verbatim substitution must still be allowed, derivations refused.
+		return len(node.Ident) == 2 && node.Ident[0] == "$" && guardSecretFields[node.Ident[1]]
+	}
+	return false
 }
 
 func walkGuardBranch(b *parse.BranchNode, keyword string) error {
@@ -315,6 +385,11 @@ func pipeUsesSecret(p *parse.PipeNode) bool {
 func nodeUsesSecret(n parse.Node) bool {
 	switch node := n.(type) {
 	case *parse.FieldNode:
+		return identsUseSecret(node.Ident)
+	case *parse.VariableNode:
+		// $.Code is a VariableNode{Ident:{"$","Code"}}, not a FieldNode.
+		// Missing this case left {{eq $.Code "000000"}} invisible to the
+		// structural walk while both canaries still rendered /c/false.
 		return identsUseSecret(node.Ident)
 	case *parse.ChainNode:
 		return identsUseSecret(node.Field) || nodeUsesSecret(node.Node)
@@ -422,11 +497,20 @@ func containsSecretPlaceholder(s string) bool {
 
 // scanEmailDocument walks a masked rendered body and refuses anything outside
 // the allowlist, including anything it cannot tokenise.
+//
+// Text between tags is checked too. The attribute allowlist cannot see a bare
+// https://… run that carries a secret, and mail clients auto-linkify that text
+// into a fetch the operator never configured.
 func scanEmailDocument(doc string) error {
 	for i := 0; i < len(doc); {
 		next := strings.IndexByte(doc[i:], '<')
 		if next < 0 {
-			return nil
+			return checkEmailText(doc[i:])
+		}
+		if next > 0 {
+			if err := checkEmailText(doc[i : i+next]); err != nil {
+				return err
+			}
 		}
 		i += next
 		advanced, err := scanConstruct(doc, i)
@@ -436,6 +520,103 @@ func scanEmailDocument(doc string) error {
 		i = advanced
 	}
 	return nil
+}
+
+// checkEmailText refuses a text run that would auto-linkify into a fetch
+// carrying a live secret. Secrets used as ordinary body text (an OTP code, the
+// configured link copied whole) are untouched: after masking, the configured
+// link is the control-character placeholder, which is not URL-shaped, and a
+// bare code shares no scheme prefix with a link.
+func checkEmailText(text string) error {
+	if !containsSecretPlaceholder(text) {
+		return nil
+	}
+	// Character references are resolved before a mail client decides what is a
+	// link, so the check runs on what the client sees (https&#58;//… becomes
+	// https://…).
+	return refuseSecretBearingAutolink(decodeHTMLEntities(text))
+}
+
+// refuseSecretBearingAutolink walks URL-shaped runs in text and refuses any
+// that still carry a secret placeholder. The configured link alone cannot
+// match a scheme start after masking, so reaching a match means a host the
+// operator did not configure is about to receive the secret.
+func refuseSecretBearingAutolink(text string) error {
+	lower := strings.ToLower(text)
+	for i := 0; i < len(lower); {
+		start, ok := findAutolinkStart(lower, i)
+		if !ok {
+			return nil
+		}
+		end := extendAutolinkRun(text, start)
+		run := text[start:end]
+		if containsSecretPlaceholder(run) {
+			return guardRefusal("the rendered body carries a live token, code or link inside a "+
+				"URL-shaped run of text (%q). Mail clients auto-linkify that text and the secret "+
+				"leaves for a host the operator did not configure", clip(run))
+		}
+		if end <= start {
+			i = start + 1
+			continue
+		}
+		i = end
+	}
+	return nil
+}
+
+// findAutolinkStart locates the next scheme or www. prefix a mail client would
+// treat as the start of a link, at or after i.
+func findAutolinkStart(lower string, i int) (int, bool) {
+	for i < len(lower) {
+		rest := lower[i:]
+		switch {
+		case strings.HasPrefix(rest, "https://"):
+			return i, true
+		case strings.HasPrefix(rest, "http://"):
+			return i, true
+		case strings.HasPrefix(rest, "//"):
+			// Protocol-relative. Require a look of a host afterwards so a
+			// stray "//" in prose is not treated as a link start.
+			if i+2 < len(lower) && isAutolinkHostByte(lower[i+2]) {
+				return i, true
+			}
+		case strings.HasPrefix(rest, "www.") && (i == 0 || !isAutolinkHostByte(lower[i-1])):
+			return i, true
+		}
+		i++
+	}
+	return 0, false
+}
+
+// extendAutolinkRun returns the index just past the URL-shaped run that starts
+// at start. Stops at whitespace, quotes, or a character that ends a link in
+// common auto-linkifiers (and in the attribute walker).
+func extendAutolinkRun(text string, start int) int {
+	j := start
+	for j < len(text) {
+		b := text[j]
+		if isASCIISpace(b) || b == '"' || b == '\'' || b == '<' || b == '>' ||
+			b == '`' || b == ')' || b == ']' || b == '{' || b == '}' {
+			break
+		}
+		j++
+	}
+	// Trim a trailing ASCII punctuation mark that auto-linkifiers leave out of
+	// the URL (a closing paren already stopped us; period/comma/semicolon and
+	// the sentence-ending ones are common).
+	for j > start {
+		switch text[j-1] {
+		case '.', ',', ';', ':', '!', '?':
+			j--
+		default:
+			return j
+		}
+	}
+	return j
+}
+
+func isAutolinkHostByte(b byte) bool {
+	return isASCIILetter(b) || b >= '0' && b <= '9' || b == '[' // '[' covers an IPv6 literal
 }
 
 // scanConstruct classifies the construct starting at the '<' at index i and
