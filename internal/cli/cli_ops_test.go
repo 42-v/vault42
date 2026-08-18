@@ -237,6 +237,7 @@ func TestCLI_InitAdminToken(t *testing.T) {
 	c, _, _, _, admin := newTestCLI()
 
 	t.Run("generates when unset", func(t *testing.T) {
+		firstBootSink(t)
 		admin.GetFn = func(context.Context, string) (string, error) { return "", nil }
 		set := false
 		admin.SetFn = func(context.Context, string, string) error { set = true; return nil }

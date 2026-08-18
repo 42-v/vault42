@@ -436,6 +436,7 @@ func TestVerifyAdminToken(t *testing.T) {
 
 func TestInitAdminToken(t *testing.T) {
 	t.Run("success first boot", func(t *testing.T) {
+		sink := firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		var storedKey, storedValue string
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
@@ -462,8 +463,8 @@ func TestInitAdminToken(t *testing.T) {
 		if !strings.Contains(out, "FIRST BOOT") {
 			t.Error("expected FIRST BOOT message in output")
 		}
-		if !strings.Contains(out, "Admin token:") {
-			t.Error("expected Admin token in output")
+		if !strings.Contains(out, sink) {
+			t.Error("expected the output to name where the token was delivered")
 		}
 	})
 
@@ -487,6 +488,7 @@ func TestInitAdminToken(t *testing.T) {
 	})
 
 	t.Run("repo Set error", func(t *testing.T) {
+		firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil

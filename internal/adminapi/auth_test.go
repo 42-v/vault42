@@ -191,6 +191,7 @@ func TestAuthHandler_Logout(t *testing.T) {
 }
 
 func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
+	firstBootSink(t)
 	repo := newFakeAdminRepo()
 	err := EnsureFirstAdmin(context.Background(), repo, "")
 	if err != nil {

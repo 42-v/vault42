@@ -186,6 +186,7 @@ func TestValidate_DuplicateEmail(t *testing.T) {
 }
 
 func TestRun_NewClients(t *testing.T) {
+	firstBootSink(t)
 	clients := newMockClientRepo()
 	users := newMockUserRepo()
 

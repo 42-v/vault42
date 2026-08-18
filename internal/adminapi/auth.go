@@ -13,6 +13,7 @@ import (
 
 	"github.com/42-v/vault42/internal/audit"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/rbac"
@@ -376,9 +377,16 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // EnsureFirstAdmin creates a super_admin account on first boot if no admins exist.
-// The password is generated randomly and printed to stdout (one-time).
+// The password is generated randomly and handed to the operator through
+// firstboot.Deliver, which is never the process log.
 // pepper is applied to the password hash (must match the value the gateway
 // runtime uses; empty for no pepper).
+//
+// Delivery happens before the row is written, and a failed delivery abandons the
+// bootstrap. The other order is unrecoverable: auth.admin_users is non-empty from
+// the moment Create succeeds, so no later boot mints another, and the deployment
+// owns a super_admin whose password nobody holds and which no admin plane can
+// reset.
 func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository, pepper string) error {
 	count, err := admins.Count(ctx)
 	if err != nil {
@@ -414,17 +422,17 @@ func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository
 		UpdatedAt:    now,
 	}
 
+	dest, err := firstboot.Deliver("VAULT_FIRST_BOOT_SUPER_ADMIN_PASSWORD", password)
+	if err != nil {
+		return fmt.Errorf("deliver first admin password: %w", err)
+	}
+
 	if err := admins.Create(ctx, admin); err != nil {
 		return fmt.Errorf("create first admin: %w", err)
 	}
 
-	log.Println("════════════════════════════════════════════════════════════════")
-	log.Println("  FIRST BOOT: super_admin account created")
-	log.Printf("  Username: admin")
-	log.Printf("  Password: %s", password)
-	log.Println("  ⚠ This password will NOT be shown again. Save it now.")
-	log.Println("  ⚠ You must set up TOTP on first login.")
-	log.Println("════════════════════════════════════════════════════════════════")
+	log.Printf("FIRST BOOT: super_admin %q created; its password was written to %s and is not in this log. "+
+		"Rotate it after the first login, at which point TOTP enrolment is also required.", admin.Username, dest)
 
 	return nil
 }

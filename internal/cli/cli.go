@@ -20,6 +20,7 @@ import (
 
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/seed"
@@ -411,10 +412,17 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hash admin token: %w", err)
 	}
+	// Delivered before the hash is stored. InitAdminToken returns early once
+	// admin_token_hash is set, so storing the hash of a token the operator never
+	// received locks every administrative subcommand out with no way back.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", token)
+	if err != nil {
+		return fmt.Errorf("deliver admin token: %w", err)
+	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
 		return err
 	}
-	fmt.Printf("\n=== FIRST BOOT ===\nAdmin token: %s\nSave this token — it will NOT be shown again.\n================\n\n", token)
+	fmt.Printf("FIRST BOOT: an admin token was generated and written to %s; it is not in this output and will not be shown again.\n", dest)
 	return nil
 }
 

@@ -77,6 +77,7 @@ func TestSeedClient(t *testing.T) {
 	cs := ClientSeed{Name: "frontend", Role: "frontend", Scopes: []string{"user:read"}}
 
 	t.Run("creates a new client", func(t *testing.T) {
+		firstBootSink(t)
 		created := false
 		if err := seedClient(ctx, cs, okClientRepo(&created)); err != nil {
 			t.Fatalf("seedClient: %v", err)
@@ -99,6 +100,7 @@ func TestSeedClient(t *testing.T) {
 	})
 
 	t.Run("propagates lookup and create errors", func(t *testing.T) {
+		firstBootSink(t)
 		lookupErr := &seedClientRepo{getByName: func(context.Context, string) (*model.Client, error) { return nil, errors.New("db") }}
 		if err := seedClient(ctx, cs, lookupErr); err == nil {
 			t.Error("expected lookup error")
