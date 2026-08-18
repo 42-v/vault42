@@ -10,7 +10,17 @@
 #
 # The listen port stays 3000 (see nginx.conf). It is above 1024, so binding it
 # needs no capability, which is why the chart can drop them all.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+# Digest-pinned so a tag repoint cannot swap the base image under a release.
+# Resolved live from the Docker Hub registry API for THIS repository, not for
+# stock nginx: Scorecard's remediation text suggests a digest for `nginx`, whose
+# 1.27-alpine digest also begins 65, and that image starts as root. Pinning it
+# here would break readOnlyRootFilesystem and runAsNonRoot in the chart, which
+# is the whole reason this file uses nginx-unprivileged.
+#
+# Verified: the digest is an OCI index carrying linux/amd64 and linux/arm64, its
+# config sets User=101, and it is labelled "Unprivileged NGINX Dockerfiles".
+# Dependabot's docker ecosystem keeps it current.
+FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
 
 COPY dist/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
