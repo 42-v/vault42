@@ -22,17 +22,22 @@ type Config struct {
 	ClientCAFile string // ADMIN_GW_CLIENT_CA_FILE — CA for mTLS client verification
 
 	// ClientCNAllowlist pins which client identities may complete the handshake
-	// (ADMIN_GW_CLIENT_CN_ALLOWLIST, comma-separated). Each entry is matched
-	// exactly against the leaf certificate's subject common name and its DNS,
-	// email and URI SANs. Empty pins nothing, which is the pre-existing behavior:
-	// any certificate the client CA ever signed is accepted. See AR-9.
+	// (ADMIN_GW_CLIENT_CN_ALLOWLIST, comma-separated). Each entry names the
+	// certificate field it pins with a cn:, dns:, email: or uri: prefix and is
+	// matched exactly within it; an entry with no prefix matches a DNS SAN, and
+	// the common name only on a certificate carrying no SAN at all. Empty pins
+	// nothing, which is the pre-existing behavior: any certificate the client CA
+	// ever signed is accepted. See AR-9 and clientauth.go.
 	ClientCNAllowlist []string
 
-	// ClientCRLFile is an optional PEM or DER revocation list
-	// (ADMIN_GW_CLIENT_CRL_FILE) signed by the client CA. Every handshake is
-	// checked against it, and every failure to read, parse or authenticate it
-	// refuses the handshake. Empty checks nothing.
-	ClientCRLFile string
+	// ClientCRLFiles are optional PEM or DER revocation lists
+	// (ADMIN_GW_CLIENT_CRL_FILE, comma-separated), each signed by one of the CAs
+	// in the client CA bundle. Comma-separated rather than a single path because
+	// a CRL speaks only for its own issuer: a bundle holding two CAs needs two
+	// lists, or one of those CAs can revoke nobody. Every handshake is checked
+	// against all of them, and every failure to read, parse, authenticate or
+	// date-check one refuses the handshake. Empty checks nothing.
+	ClientCRLFiles []string
 
 	// Session configuration
 	SessionTTL time.Duration // ADMIN_GW_SESSION_TTL — default: 1h
@@ -108,7 +113,7 @@ func LoadConfig() (*Config, error) {
 		ClientCAFile: os.Getenv("ADMIN_GW_CLIENT_CA_FILE"),
 
 		ClientCNAllowlist: splitList(os.Getenv("ADMIN_GW_CLIENT_CN_ALLOWLIST")),
-		ClientCRLFile:     os.Getenv("ADMIN_GW_CLIENT_CRL_FILE"),
+		ClientCRLFiles:    splitList(os.Getenv("ADMIN_GW_CLIENT_CRL_FILE")),
 
 		SessionTTL: envDuration("ADMIN_GW_SESSION_TTL", time.Hour),
 		MaxFailed:  envInt("ADMIN_GW_MAX_FAILED_LOGINS", 5),

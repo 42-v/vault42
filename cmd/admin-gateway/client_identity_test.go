@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -183,15 +184,33 @@ func TestClientIdentityPolicyMatching(t *testing.T) {
 		{"empty allowlist pins nothing", nil, leaf("anyone", nil, nil), false},
 		{"common name matches", []string{"ops"}, leaf("ops", nil, nil), false},
 		{"dns SAN matches", []string{"ops.vault.internal"}, leaf("ops", []string{"ops.vault.internal"}, nil), false},
-		{"email SAN matches", []string{"ops@vault.test"}, leaf("ops", nil, []string{"ops@vault.test"}), false},
+		{"email SAN matches", []string{"email:ops@vault.test"}, leaf("ops", nil, []string{"ops@vault.test"}), false},
 		{"second entry matches", []string{"a", "ops"}, leaf("ops", nil, nil), false},
 		{"no identity matches", []string{"ops"}, leaf("intruder", []string{"other"}, nil), true},
 		{"a prefix is not a match", []string{"operator"}, leaf("oper", nil, nil), true},
+
+		// The typed forms, and the field confusion they exist to stop.
+		{"cn: matches a SAN-less common name", []string{"cn:ops"}, leaf("ops", nil, nil), false},
+		{"cn: does not match a DNS SAN", []string{"cn:ops"}, leaf("service", []string{"ops"}, nil), true},
+		{"dns: does not match a common name", []string{"dns:ops"}, leaf("ops", nil, nil), true},
+		{"email: does not match a DNS SAN", []string{"email:ops@vault.test"}, leaf("x", []string{"ops@vault.test"}, nil), true},
+		{"a prefix is case-insensitive", []string{"CN:ops"}, leaf("ops", nil, nil), false},
+		{"a value is case-sensitive", []string{"cn:ops"}, leaf("OPS", nil, nil), true},
+		{"an entry with no value matches nothing", []string{"cn:"}, leaf("", nil, nil), true},
+
+		// The CA/Browser Forum rule: a certificate carrying any SAN has no
+		// usable common name, whichever way the entry is written.
+		{"an untyped entry ignores the CN beside a SAN", []string{"ops"}, leaf("ops", []string{"elsewhere"}, nil), true},
+		{"cn: ignores the CN beside a SAN", []string{"cn:ops"}, leaf("ops", []string{"elsewhere"}, nil), true},
+		{"cn: ignores the CN beside an email SAN", []string{"cn:ops"}, leaf("ops", nil, []string{"x@y.test"}), true},
+
+		// An untyped entry reaches a DNS SAN and a SAN-less CN, and no further.
+		{"an untyped entry does not match an email SAN", []string{"ops@vault.test"}, leaf("x", nil, []string{"ops@vault.test"}), true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := clientIdentityPolicy{allowed: tt.allowed}
+			p := clientIdentityPolicy{allowed: parseAllowlist(tt.allowed)}
 			err := p.checkIdentity(tt.cert)
 			if tt.wantErr != (err != nil) {
 				t.Fatalf("checkIdentity() error = %v, wantErr %v", err, tt.wantErr)
@@ -200,12 +219,43 @@ func TestClientIdentityPolicyMatching(t *testing.T) {
 	}
 }
 
+// An untyped entry may match a URI SAN through uri: and never through the bare
+// value, so the URI leg needs its own certificates. leaf() above builds neither
+// URIs nor extensions, which is also what makes it the right place to check that
+// hasSAN falls back to the parsed fields when a certificate has no Extensions
+// slice at all -- every certificate a test constructs by hand is in that shape.
+func TestClientIdentityPolicyMatchesURISANsOnlyWhenAsked(t *testing.T) {
+	const spiffeID = "spiffe://vault42.test/ns/admin/sa/operator"
+
+	u, err := url.Parse(spiffeID)
+	if err != nil {
+		t.Fatalf("parse %q: %v", spiffeID, err)
+	}
+	cert := &x509.Certificate{
+		Subject:      pkix.Name{CommonName: "mesh-issued"},
+		URIs:         []*url.URL{u},
+		SerialNumber: big.NewInt(7),
+	}
+
+	if err := (clientIdentityPolicy{allowed: parseAllowlist([]string{"uri:" + spiffeID})}).checkIdentity(cert); err != nil {
+		t.Errorf("uri: entry did not match the URI SAN it names: %v", err)
+	}
+	if err := (clientIdentityPolicy{allowed: parseAllowlist([]string{spiffeID})}).checkIdentity(cert); err == nil {
+		t.Error("an untyped entry matched a URI SAN; the untyped form must reach only DNS SANs and a " +
+			"SAN-less common name, or the certificate holder chooses which field satisfies the pin")
+	}
+	// The CN is live on a certificate with no SAN and dead on this one.
+	if err := (clientIdentityPolicy{allowed: parseAllowlist([]string{"cn:mesh-issued"})}).checkIdentity(cert); err == nil {
+		t.Error("cn: matched the common name of a certificate carrying a URI SAN")
+	}
+}
+
 // verifyConnection is what the TLS stack calls. A state with no peer
 // certificate and no verified chain cannot happen behind
 // RequireAndVerifyClientCert, and it must refuse rather than fall through to a
 // nil dereference if it ever does.
 func TestVerifyConnectionRefusesAnEmptyPeerChain(t *testing.T) {
-	p := clientIdentityPolicy{allowed: []string{"ops"}}
+	p := clientIdentityPolicy{allowed: parseAllowlist([]string{"ops"})}
 	if err := p.verifyConnection(tls.ConnectionState{}); err == nil {
 		t.Fatal("verifyConnection with no peer certificate must refuse")
 	}
@@ -217,9 +267,9 @@ func TestVerifyConnectionRefusesAnEmptyPeerChain(t *testing.T) {
 func TestCRLThatBecomesUnreadableFailsTheHandshake(t *testing.T) {
 	f := newFixture(t)
 	crlFile := filepath.Join(t.TempDir(), "gone.crl")
-	p := clientIdentityPolicy{crlFile: crlFile, issuer: f.pki.ca.cert}
+	p := clientIdentityPolicy{crlFiles: []string{crlFile}, issuers: []*x509.Certificate{f.pki.ca.cert}}
 
-	if err := p.checkRevocation(&x509.Certificate{SerialNumber: big.NewInt(3)}); err == nil {
+	if err := p.checkRevocation([]*x509.Certificate{{SerialNumber: big.NewInt(3)}}); err == nil {
 		t.Fatal("an unreadable CRL must fail the handshake, not be ignored")
 	}
 }
@@ -229,9 +279,9 @@ func TestCRLThatBecomesUnreadableFailsTheHandshake(t *testing.T) {
 func TestStaleCRLFailsTheHandshake(t *testing.T) {
 	f := newFixture(t)
 	crlFile := f.pki.writeCRLAt(t, time.Now().Add(-48*time.Hour), big.NewInt(99))
-	p := clientIdentityPolicy{crlFile: crlFile, issuer: f.pki.ca.cert}
+	p := clientIdentityPolicy{crlFiles: []string{crlFile}, issuers: []*x509.Certificate{f.pki.ca.cert}}
 
-	if err := p.checkRevocation(&x509.Certificate{SerialNumber: big.NewInt(3)}); err == nil {
+	if err := p.checkRevocation([]*x509.Certificate{{SerialNumber: big.NewInt(3)}}); err == nil {
 		t.Fatal("a CRL past its nextUpdate must fail the handshake")
 	}
 }
@@ -243,6 +293,11 @@ func TestStaleCRLFailsTheHandshake(t *testing.T) {
 // such a deployment to leave ADMIN_GW_CLIENT_CN_ALLOWLIST empty, which is
 // precisely the "the CA is the only boundary" state AR-9 describes.
 //
+// The entry names its field. It did not have to when the list was untyped, and
+// that is the defect TestAllowlistEntriesNameTheFieldTheyPin covers: an untyped
+// entry was satisfied by whichever of four fields the certificate holder chose
+// to put the string in.
+//
 // The reject half is what makes it a pin rather than a lookup: the second
 // certificate carries a well-formed URI SAN from the same CA, and it must not
 // complete the handshake.
@@ -251,7 +306,7 @@ func TestAURISANIdentityCanBePinned(t *testing.T) {
 	const decommissioned = "spiffe://vault42.test/ns/admin/sa/decommissioned"
 
 	f := newFixture(t)
-	c := f.start(t, "ADMIN_GW_CLIENT_CN_ALLOWLIST="+allowed)
+	c := f.start(t, "ADMIN_GW_CLIENT_CN_ALLOWLIST=uri:"+allowed)
 
 	dial := func(cert tls.Certificate) (*http.Response, error) {
 		cfg := f.pki.tlsClientConfig()
@@ -318,13 +373,13 @@ func TestARevocationListIsRefusedWithNoIssuerToAuthenticateItAgainst(t *testing.
 
 	for _, tt := range bundles {
 		t.Run(tt.name, func(t *testing.T) {
-			issuer := firstCertificate(tt.bundle)
-			if issuer != nil {
-				t.Fatalf("firstCertificate returned a certificate (subject %q) for %s; loadCRL would "+
-					"then authenticate the revocation list against it", issuer.Subject, tt.name)
+			issuers := allCertificates(tt.bundle)
+			if len(issuers) != 0 {
+				t.Fatalf("allCertificates returned %d certificates (first subject %q) for %s; loadCRL "+
+					"would then authenticate the revocation list against them", len(issuers), issuers[0].Subject, tt.name)
 			}
 
-			if _, err := loadCRL(crlFile, issuer); err == nil {
+			if _, err := loadCRL(crlFile, issuers); err == nil {
 				t.Fatal("loadCRL accepted a revocation list with nothing to authenticate it against; " +
 					"an attacker-supplied file could revoke every operator, or unrevoke one")
 			} else if !strings.Contains(err.Error(), "no client CA certificate") {
@@ -334,8 +389,8 @@ func TestARevocationListIsRefusedWithNoIssuerToAuthenticateItAgainst(t *testing.
 			// The handshake is what the refusal has to reach. The leaf here is
 			// NOT on the list, so a policy that returned nil on an
 			// unauthenticated CRL would let it straight through.
-			p := clientIdentityPolicy{crlFile: crlFile, issuer: issuer}
-			if err := p.checkRevocation(&x509.Certificate{SerialNumber: big.NewInt(7)}); err == nil {
+			p := clientIdentityPolicy{crlFiles: []string{crlFile}, issuers: issuers}
+			if err := p.checkRevocation([]*x509.Certificate{{SerialNumber: big.NewInt(7)}}); err == nil {
 				t.Fatal("checkRevocation admitted a client while the CRL could not be authenticated")
 			}
 		})
@@ -350,18 +405,18 @@ func TestTheIssuerIsFoundPastNonCertificateBlocks(t *testing.T) {
 	f := newFixture(t)
 	bundle := append(keyPEM(t, f.pki.ca.key), certPEM(f.pki.ca.der)...)
 
-	issuer := firstCertificate(bundle)
-	if issuer == nil {
-		t.Fatal("firstCertificate stopped at the leading key block; a key-then-certificate bundle is " +
+	issuers := allCertificates(bundle)
+	if len(issuers) == 0 {
+		t.Fatal("allCertificates stopped at the leading key block; a key-then-certificate bundle is " +
 			"what most CA tooling emits, and a gateway reading one would authenticate no CRL at all")
 	}
-	if !issuer.Equal(f.pki.ca.cert) {
-		t.Fatalf("firstCertificate returned %q, want the CA %q", issuer.Subject, f.pki.ca.cert.Subject)
+	if !issuers[0].Equal(f.pki.ca.cert) {
+		t.Fatalf("allCertificates returned %q, want the CA %q", issuers[0].Subject, f.pki.ca.cert.Subject)
 	}
 
 	// And it is the issuer the CRL is checked against, so a correctly signed
 	// list now loads.
-	if _, err := loadCRL(f.pki.writeCRL(t, big.NewInt(4242)), issuer); err != nil {
+	if _, err := loadCRL(f.pki.writeCRL(t, big.NewInt(4242)), issuers); err != nil {
 		t.Fatalf("loadCRL with the issuer recovered from a key-first bundle: %v", err)
 	}
 }
