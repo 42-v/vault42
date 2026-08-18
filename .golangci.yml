@@ -68,8 +68,10 @@ linters:
       rules:
         - name: var-naming   # default; "crypto" package name conflict is intentional (imports use vaultcrypto alias)
         - name: exported
+        # HTTP handler and middleware signatures intentionally name parameters
+        # they do not use; unparam covers the cases that are really dead.
         - name: unused-parameter
-          disabled: true     # HTTP handler / middleware signatures intentionally name unused params; unparam covers the real cases
+          disabled: true
         - name: redefines-builtin-id
         - name: empty-block
         - name: superfluous-else

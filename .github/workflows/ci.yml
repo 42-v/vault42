@@ -752,3 +752,64 @@ jobs:
       - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ${{ matrix.dockerfile }}
+
+  lint-non-go:
+    # shellcheck, ruff, markdownlint and yamllint each have a configuration file
+    # in this repository, each was driven to zero by hand, and none of them ran
+    # in any workflow or precommit hook. "At zero" therefore described a moment
+    # rather than a property, and two of the four had already drifted back:
+    # yamllint had a line-length error in .golangci.yml, and markdownlint had
+    # four findings, three of which docs/deps.md's generator re-emitted on every
+    # regeneration -- so a commit that cleared 119 findings was followed by a
+    # regeneration that put some of them straight back.
+    #
+    # Versions are pinned for the same reason the actions are: a linter that
+    # picks up a new rule on its own turns an unrelated pull request red, which
+    # is how a gate stops being trusted.
+    name: Lint (non-Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install linters
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            'ruff==0.16.3' 'yamllint==1.38.0'
+          npm install --no-save --no-audit --no-fund 'markdownlint-cli2@0.23.2'
+
+      # shellcheck ships on the GitHub-hosted Ubuntu image, so it needs no
+      # install step. The file list comes from git rather than from find, so a
+      # vendored or generated script cannot silently widen the corpus.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files '*.sh')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "::error::no shell scripts found; this gate has stopped seeing what it guards"
+            exit 1
+          fi
+          printf 'checking %d shell scripts\n' "${#scripts[@]}"
+          shellcheck "${scripts[@]}"
+
+      # ruff check only. ruff.toml configures the rule set this repository holds
+      # at zero and says so; the formatter is a separate opinion the two scripts
+      # have never been run through, and adopting it here would be a reformat
+      # wearing a gate's clothes.
+      - name: ruff
+        run: ruff check --no-cache .
+
+      - name: markdownlint
+        run: npx --no-install markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
+
+      - name: yamllint
+        run: yamllint --strict .

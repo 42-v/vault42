@@ -277,9 +277,25 @@ EOF
 # ═══════════════════════════════════════════════════════════════
 # 8. Generate docs/deps.md
 # ═══════════════════════════════════════════════════════════════
+# Every row set is normalised to carry no trailing newline, and every blank
+# line in the document comes from the template below rather than from whichever
+# variable happened to end in one.
+#
+# They did not agree before. DIRECT_ROWS, INDIRECT_ROWS and CREATOR_ROWS are
+# built by appending literal newlines and so ended with one, while
+# COVERAGE_ROWS comes from a command substitution, which strips them. The
+# result was a heading pressed against the end of a table (MD022, MD058) and a
+# double blank line at the end of the file (MD012) -- emitted afresh on every
+# regeneration, so the markdownlint findings a previous commit cleared came
+# straight back.
+DIRECT_ROWS="${DIRECT_ROWS%"${DIRECT_ROWS##*[!$'\n']}"}"
+INDIRECT_ROWS="${INDIRECT_ROWS%"${INDIRECT_ROWS##*[!$'\n']}"}"
+CREATOR_ROWS="${CREATOR_ROWS%"${CREATOR_ROWS##*[!$'\n']}"}"
+
 COVERAGE_BLOCK=""
 if [ -n "$COVERAGE_ROWS" ]; then
   COVERAGE_BLOCK="
+
 ## Coverage by Package
 
 | Package | Coverage |
@@ -290,6 +306,7 @@ fi
 CREATORS_BLOCK=""
 if [ -n "$CREATOR_ROWS" ]; then
   CREATORS_BLOCK="
+
 ## Maintainers
 
 ${CREATOR_COUNT} maintainers behind Vault's dependency tree.
@@ -309,6 +326,7 @@ ${DIRECT_COUNT} direct dependencies. Everything else — TOTP, CORS, JWKS, confi
 | Dependency | Version | Purpose | Stars | Updated |
 |---|---|---|---|---|
 ${DIRECT_ROWS}
+
 ## Transitive (${INDIRECT_COUNT} pulled by the above)
 
 | Dependency | Version | Pulled by | Stars | Updated |

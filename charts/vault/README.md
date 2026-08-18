@@ -26,7 +26,7 @@ the reason only visible in `kubectl describe pod`. Create them before installing
 
 Keys in the two credential Secrets are named by `secrets.keys`:
 
-```
+```text
 master-key  db-mig-password  db-app-password  hmac-secret
 admin-token  redis-password  signing-key  pepper
 ```
