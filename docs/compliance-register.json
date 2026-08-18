@@ -126,7 +126,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:532-534. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:155-156 installs it only in the honeypot profile, so in production it is never wired at all.",
+      "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:569-571. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:187-188 installs it only in the honeypot profile, so in production it is never wired at all.",
       "compensating_control": "Every security-relevant event is recorded in an append-only store with the metadata needed to investigate, and the admin gateway exposes a filtered review interface. Detection is operator-driven rather than automated.",
       "residual_risk": "A slow credential-stuffing campaign or a data-access anomaly is visible in the audit trail but raises nothing, so time-to-detection depends on an operator looking.",
       "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
@@ -246,7 +246,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:654 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:746 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -1024,14 +1024,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:279",
+        "internal/server/server.go:397",
         "internal/middleware/ratelimit.go:172"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface."
+      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:397), so a cache outage refuses rather than degrades to unlimited."
     },
     {
       "standard": "OWASP ASVS",
@@ -1768,7 +1768,7 @@
       "status": "Not Applicable",
       "evidence": [
         "internal/handler/blob.go:294",
-        "internal/service/blob.go:90"
+        "internal/service/blob.go:142"
       ],
       "tests": [
         "TestASVS_V5_3_1_And_V5_4_3_StoredBytesTouchNoFilesystemAndReachNoOtherUser"
@@ -1790,12 +1790,12 @@
       "status": "Met",
       "evidence": [
         "docs/spec.md",
-        "internal/server/server.go:279"
+        "internal/server/server.go:397"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md."
+      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:397)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2091,13 +2091,13 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:105",
-        "internal/server/server.go:279"
+        "internal/server/server.go:397"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling"
       ],
-      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface."
+      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:397 constructs loginRL at Limit 5 over a 15-minute window)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2112,13 +2112,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/auth.go:384",
+        "internal/adminapi/auth.go:412",
+        "internal/adminapi/auth.go:452",
         "seed.dev.json:17"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
       ],
-      "notes": "No default account exists. The first-boot super admin is created with a 32-byte random password, and the dev seed file is loaded only when VAULT_SEED_FILE names it explicitly."
+      "notes": "No default account exists. EnsureFirstAdmin (internal/adminapi/auth.go:412) creates the first-boot super admin with a 32-byte CSPRNG password (:452), delivered through firstboot.Deliver rather than the process log, and the dev seed file is loaded only when VAULT_SEED_FILE names it explicitly."
     },
     {
       "standard": "OWASP ASVS",
@@ -2259,14 +2260,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/auth.go:384",
+        "internal/adminapi/auth.go:452",
         "internal/service/auth.go"
       ],
       "tests": [
         "TestNIST_PasswordResetSingleUse",
         "TestASVS_V2_5_6_ResetTokenSingleUse"
       ],
-      "notes": "System-generated credentials are CSPRNG-derived, single-use and short-lived."
+      "notes": "System-generated credentials are CSPRNG-derived, single-use and short-lived; the first-boot admin password is 32 bytes from vaultcrypto.RandomBytes (internal/adminapi/auth.go:452)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2549,12 +2550,13 @@
       "requirement": "Verify that a code based out-of-band authentication mechanism is protected against brute force attacks by using rate limiting. Consider also using a code with at least 64 bits of entropy.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:289"
+        "internal/server/server.go:409",
+        "internal/server/server.go:546"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "The email-OTP and TOTP endpoints carry fail-closed rate limiters."
+      "notes": "The email-OTP and TOTP endpoints carry fail-closed rate limiters: totpRL is 5 in 5 minutes keyed by IP with FailClosed set (internal/server/server.go:409) and is mounted on the TOTP verify route (:546)."
     },
     {
       "standard": "OWASP ASVS",
@@ -4129,7 +4131,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:163",
+        "internal/server/server.go:210",
         "cmd/admin-gateway/main.go:230",
         "internal/redis/pool.go:191"
       ],
@@ -4137,7 +4139,7 @@
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion",
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
       ],
-      "notes": "Inbound listeners are TLS 1.3. The Redis client floor is TLS 1.2, which this requirement permits; it is lower because the peer's capability is the operator's, not vault42's."
+      "notes": "Inbound listeners are TLS 1.3: the HTTP server sets MinVersion: tls.VersionTLS13 (internal/server/server.go:210). The Redis client floor is TLS 1.2, which this requirement permits; it is lower because the peer’s capability is the operator’s, not vault42’s."
     },
     {
       "standard": "OWASP ASVS",
@@ -4557,12 +4559,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:312"
+        "internal/server/server.go:279",
+        "internal/server/server.go:280"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "The metrics endpoint is mounted only when explicitly enabled; the admin plane is a separate binary on loopback behind mutual TLS."
+      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:279-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
     },
     {
       "standard": "OWASP ASVS",
@@ -5732,13 +5735,13 @@
       "status": "Met",
       "evidence": [
         "internal/oauth2/oidc.go:97",
-        "internal/server/server.go:163"
+        "internal/server/server.go:210"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned",
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
       ],
-      "notes": "Authenticated protected channels: TLS 1.3 inbound, pinned issuer and verified JWKS outbound."
+      "notes": "Authenticated protected channels: inbound TLS 1.3 via MinVersion: tls.VersionTLS13 (internal/server/server.go:210), pinned issuer and verified JWKS outbound."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -6096,12 +6099,12 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-15",
       "evidence": [
-        "internal/adminapi/handler.go:486"
+        "internal/adminapi/handler.go:597"
       ],
       "tests": [
         "TestOWASP_A09_2025_RiskScoreIsStillWriteOnly"
       ],
-      "notes": "Records are reviewable through the admin gateway with filtering by user, event type and time window. There is no automated analysis or correlation: risk_score is a hardcoded per-event severity tag that nothing reads, AuditFilter cannot select on it, and no threshold raises an alert."
+      "notes": "Records are reviewable through the admin gateway with filtering by user, event type and time window: the handler builds a repository.AuditFilter from the query string (internal/adminapi/handler.go:597). There is no automated analysis or correlation: risk_score is a hardcoded per-event severity tag that nothing reads, AuditFilter cannot select on it, and no threshold raises an alert."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6762,13 +6765,15 @@
       "requirement": "Right to erasure",
       "status": "Met",
       "evidence": [
-        "internal/service/erasure.go"
+        "internal/service/erasure.go:1",
+        "migrations/031_tombstone_scrubs_late_columns.sql:76",
+        "migrations/030_erase_login_countries.sql:1"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure",
         "TestGDPR_Art17_3_AuditExemptionIsBoundedByRetention"
       ],
-      "notes": ""
+      "notes": "Met, and the row carried no reason at all until this pass -- an empty notes field on a right-to-erasure claim is the shape of a row nobody re-read. Erasure is a tombstone rather than a row delete: eight tables carry a foreign key into auth.users, the account-state gate refuses a deleted row at login, and cmd/recover needs the id to restore from escrow. What matters is therefore what the surviving row is still allowed to contain, and until migration 031 the answer included password_hash -- a credential -- along with roles, ban_reason, last_login_at, imported_from and legacy_id, because the tombstone’s column list was frozen at 015 and every column added afterwards was simply never scrubbed. 031 scrubs them (:76). Separately, auth.login_countries was declared covered because its user_id cascades on delete, which is true and does not follow: this system never deletes the parent row, so nothing cascaded. 030 clears it. The derived gate in tests/spec requires every subject-linked table found in the migrations to declare an erasure story, so a ninth table cannot arrive without one."
     },
     {
       "standard": "GDPR",
@@ -7102,14 +7107,14 @@
       "requirement": "Broken Object Level Authorization",
       "status": "Met",
       "evidence": [
-        "internal/service/blob.go:90",
+        "internal/service/blob.go:142",
         "internal/handler/servicedoc.go:105",
         "internal/handler/blob.go:294"
       ],
       "tests": [
         "TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered"
       ],
-      "notes": "Met: object reads are keyed by (id, owner), not filtered after lookup. The blob service derives a pseudonym from the caller's authenticated subject and every repository read passes it (internal/service/blob.go:90, GetByIDAndPseudonym), so an object id held by a second authenticated user is a miss rather than a read. The service-document store carries a second ownership axis and asserts it directly: internal/handler/servicedoc.go:105 refuses a token with no client id, and the comment above it explains that the scope check alone is sufficient only by accident. TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered drives a real cross-user read."
+      "notes": "Met: object reads are keyed by (id, owner), not filtered after lookup. The blob service derives a pseudonym from the caller's authenticated subject and every repository read passes it (internal/service/blob.go:142, GetByIDAndPseudonym), so an object id held by a second authenticated user is a miss rather than a read. The service-document store carries a second ownership axis and asserts it directly: internal/handler/servicedoc.go:105 refuses a token with no client id, and the comment above it explains that the scope check alone is sufficient only by accident. TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered drives a real cross-user read."
     },
     {
       "standard": "OWASP API Top 10",
@@ -7153,9 +7158,9 @@
       "requirement": "Unrestricted Resource Consumption",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:158",
-        "internal/service/blob.go:134",
-        "internal/service/blob.go:153"
+        "internal/server/server.go:190",
+        "internal/service/blob.go:280",
+        "internal/service/blob.go:283"
       ],
       "tests": [
         "TestAPITop10_API4_2023_EveryConsumableResourceHasACeiling",
