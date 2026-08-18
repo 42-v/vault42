@@ -85,7 +85,7 @@ func (ah *AdminHandler) flagIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ah.flags.Flag(ip, req.Reason, 100)
-	log.Printf("bridge: admin flagged %s reason=%q", ip, req.Reason)
+	log.Printf("bridge: admin flagged %s reason=%q", obfuscatedIP(ip), req.Reason)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -114,7 +114,7 @@ func (ah *AdminHandler) unflagIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("bridge: admin unflagged %s", req.IP)
+	log.Printf("bridge: admin unflagged %s", obfuscatedIP(req.IP))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ // #nosec G104 -- HTTP response encoding best-effort

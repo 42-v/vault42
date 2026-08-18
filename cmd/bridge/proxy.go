@@ -226,7 +226,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Already flagged — route to honeypot
 	if b.flags.IsFlagged(ip) {
 		if b.cfg.LogLevel == "debug" {
-			log.Printf("bridge: routing flagged %s to honeypot", safeLogValue(ip)) // #nosec G706 -- sanitized
+			log.Printf("bridge: routing flagged %s to honeypot", obfuscatedIP(ip)) // #nosec G706 -- masked network, never a full address
 		}
 		b.setProxyHeaders(r, ip)
 		b.honeypotProxy.ServeHTTP(w, r)
@@ -260,7 +260,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reason = "auto:rate_exceeded"
 			}
 			b.flags.Flag(ip, reason, total)
-			log.Printf("bridge: auto-flagged %s score=%d reason=%s", safeLogValue(ip), total, reason) // #nosec G706 -- IP sanitized, reason is a constant
+			log.Printf("bridge: auto-flagged %s score=%d reason=%s", obfuscatedIP(ip), total, reason) // #nosec G706 -- masked network, reason is a constant
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -327,7 +327,7 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 		total := b.scores.Add(ip, failScore)
 		if total >= b.cfg.FlagThreshold {
 			b.flags.Flag(ip, "auto:login_failures", total)
-			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", safeLogValue(ip), count, total) // #nosec G706 -- IP sanitized
+			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", obfuscatedIP(ip), count, total) // #nosec G706 -- masked network, never a full address
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -390,6 +390,30 @@ func coercedSubresource(r *http.Request) bool {
 // httputil.SafeLogValue, so it carries its own. Client addresses reach
 // log.Printf from headers the operator has declared trusted, and a U+0085 or a
 // newline in one of those forges a whole log record.
+// obfuscatedIP renders a client address for a log line: IPv4 keeps its /24,
+// IPv6 keeps its /64, anything that does not parse becomes the constant
+// "invalid_ip".
+//
+// It mirrors httputil.ObfuscatedIP, which cmd/bridge cannot import for the
+// reason given on safeLogValue, and it answers a different question from that
+// function. safeLogValue stops a value forging a second log record; it has
+// nothing to say about writing a personal identifier into the first one.
+//
+// The bridge keeps whole addresses where an operator has to act on one: the
+// flag store, /bridge/flags and the webhook body. The process log is read by
+// everyone who can reach a log shipper and only needs to name the network, so
+// that is all it gets. See docs/PRIVACY.md section 3.3.
+func obfuscatedIP(v string) string {
+	ip := net.ParseIP(strings.TrimSpace(v))
+	if ip == nil {
+		return "invalid_ip"
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.Mask(net.CIDRMask(24, 32)).String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String()
+}
+
 func safeLogValue(v string) string {
 	const maxLoggedLen = 128
 	if len(v) > maxLoggedLen {
