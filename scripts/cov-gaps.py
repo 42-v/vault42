@@ -361,6 +361,80 @@ def split_key(key):
     return path, int(start.split(".")[0]), int(end.split(".")[0])
 
 
+def module_path():
+    """The module path from go.mod, or "" when it cannot be read.
+
+    Only the staleness check needs this, and it degrades to checking nothing
+    rather than failing a report that would otherwise be fine.
+    """
+    try:
+        with open("go.mod") as fh:
+            for line in fh:
+                if line.startswith("module "):
+                    return line.split(None, 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def check_profile_is_current(blocks, module):
+    """Abort when the profile describes a file longer than the one on disk.
+
+    A block whose start line is past its file's end cannot have come from the
+    working tree, so the profile carries counters compiled from a different
+    version of that file. On 2026-08-18 a shared 50 GB build cache served a
+    stale `cmd/bridge`, and under `-coverpkg` every test binary instruments
+    every listed package, so one stale entry put 90 phantom zero-count blocks
+    into the whole-suite profile. That read as 145 statements neither covered
+    nor excluded -- an invented coverage gap, in the gate the version number
+    rests on.
+
+    The failure is worth its own check because nothing else notices it.
+    `go tool cover -func` reads function start lines out of the profile itself,
+    so it reported every function at its correct line and fully covered while
+    the profile carried blocks past the end of the file. Neither `-count=1` nor
+    touching the source dislodges the entry: the first defeats only test-result
+    caching and the second is irrelevant to a content-keyed cache.
+
+    A phantom block can hide a real gap exactly as easily as invent one, so
+    this refuses rather than warns.
+    """
+    prefix = module + "/"
+    stale = []
+    lengths = {}
+    for key in blocks:
+        path, start, _ = split_key(key)
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):]
+        if rel not in lengths:
+            try:
+                with open(rel, "rb") as fh:
+                    lengths[rel] = fh.read().count(b"\n")
+            except OSError:
+                lengths[rel] = None
+        n = lengths[rel]
+        if n is not None and start > n:
+            stale.append((rel, start, n))
+
+    if not stale:
+        return
+    stale.sort(key=lambda t: (-(t[1] - t[2]), t[0]))
+    files = sorted({rel for rel, _, _ in stale})
+    print(f"FAIL  the profile is stale: {plural(len(stale), 'block')} start past the end of "
+          f"{plural(len(files), 'file')}", file=sys.stderr)
+    for rel, start, n in stale[:5]:
+        print(f"        {rel}: block starts at line {start}, file has {n}", file=sys.stderr)
+    if len(stale) > 5:
+        print(f"        ... and {len(stale) - 5} more", file=sys.stderr)
+    print("      Those counters were compiled from a different version of the file, so every "
+          "number below is measured against a tree that is not this one.\n"
+          "      Run `go clean -cache` and measure again. To confirm without clearing a shared "
+          "cache, re-run one package under GOCACHE=$(mktemp -d) and compare the block count.",
+          file=sys.stderr)
+    sys.exit(1)
+
+
 def totals(blocks):
     total = sum(s for s, _ in blocks.values())
     covered = sum(s for s, c in blocks.values() if c)
@@ -865,6 +939,7 @@ def verify_exclusions(args):
                         "scripts/coverage.sh writes.")
     else:
         blocks = load(args.profile)
+        check_profile_is_current(blocks, doc.get("module", ""))
         total, covered = totals(blocks)
         canon_problems, canon_notes = check_canonical(blocks, total, doc.get("module", ""))
         problems += canon_problems
@@ -1027,6 +1102,7 @@ def main():
         sys.exit("a coverage profile is required (scripts/coverage.sh writes one)")
 
     blocks = load(args.profile)
+    check_profile_is_current(blocks, module_path())
     if args.diff:
         diff(blocks, load(args.diff))
         return
