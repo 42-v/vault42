@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -432,4 +433,31 @@ func TestJWTEdge_IsValidKIDBoundary(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJWTEdge_KIDFallbackRunsForAKeyWithNoModulus reaches the fallback in
+// KIDFromPublicKey, which was carried as a coverage exclusion arguing that
+// reaching it "would need the standard library to stop understanding RSA public
+// keys". It does not. x509.MarshalPKIXPublicKey refuses a *rsa.PublicKey whose
+// modulus is nil — asn1 has nothing to encode for it — so the key type is
+// understood and the marshal still fails, and the fallback runs.
+//
+// What the fallback then does is the reason this is a test and not a fix:
+// pub.N.Bytes() dereferences the same nil modulus and panics. So the recovery
+// here is the assertion. A caller handing KIDFromPublicKey a structurally
+// invalid key gets a panic, not a kid derived from nothing — which is exactly
+// what the keystore exclusion for keystore.go:197 depends on, and until now
+// nothing executed the line that makes it true.
+func TestJWTEdge_KIDFallbackRunsForAKeyWithNoModulus(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("KIDFromPublicKey returned a kid for a key with a nil modulus. The fallback " +
+				"reads pub.N.Bytes() on that same nil modulus, so returning normally means either " +
+				"the fallback no longer runs or it no longer reads the modulus; the keystore " +
+				"exclusion at internal/keystore/keystore.go:197 rests on this panic happening.")
+		}
+	}()
+
+	// E is set so the value is a plausible key in every respect but the modulus.
+	_ = KIDFromPublicKey(&rsa.PublicKey{E: 65537})
 }
