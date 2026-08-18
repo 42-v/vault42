@@ -92,7 +92,7 @@ Enabling the gateway with neither fails the render with a message saying so.
 mTLS still requires a client certificate signed by `adminGateway.tls`. Two extra pins are optional and fail closed once set:
 
 - `adminGateway.clientCNAllowlist` becomes `ADMIN_GW_CLIENT_CN_ALLOWLIST`. Empty accepts every certificate the client CA has signed and the gateway warns at startup (AR-9).
-- `adminGateway.clientCRLFile` becomes `ADMIN_GW_CLIENT_CRL_FILE`. An unreadable path is fatal at boot. Empty checks nothing.
+- `adminGateway.clientCRL.secretName` or `.configMapName` names the source of the revocation lists, and `.keys` names one key per CA in the client CA bundle that publishes one. Naming a source is what mounts it and what sets `ADMIN_GW_CLIENT_CRL_FILE`; naming none checks nothing. There is no bare path setting: `adminGateway.clientCRLFile` was one, it mounted nothing at the path it set, and `cmd/admin-gateway` exits 1 on a CRL it cannot read, so the only thing it could produce was an admin plane in `CrashLoopBackOff`. The chart now fails the render if it is set, and says this.
 
 ## The settings this chart deliberately does not offer
 

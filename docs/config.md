@@ -866,7 +866,7 @@ Key Helm values and their corresponding env vars:
 | `metrics.port` | `VAULT_METRICS_ADDR` (`:<port>`) |
 | `keyRotation.enabled` | `VAULT_KEY_ROTATION_DB` |
 | `adminGateway.clientCNAllowlist` | `ADMIN_GW_CLIENT_CN_ALLOWLIST` |
-| `adminGateway.clientCRLFile` | `ADMIN_GW_CLIENT_CRL_FILE` |
+| `adminGateway.clientCRL.secretName` / `.configMapName` | `ADMIN_GW_CLIENT_CRL_FILE` (derived from `.mountPath` and `.keys`; the old `adminGateway.clientCRLFile` fails the render) |
 | `mfaRequired` | `VAULT_MFA_REQUIRED` |
 | `registrationEnabled` | `VAULT_REGISTRATION_ENABLED` |
 | `dpop.enabled` | `VAULT_DPOP_ENABLED` |
