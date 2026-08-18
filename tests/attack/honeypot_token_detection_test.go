@@ -379,8 +379,7 @@ func TestHoneypotToken_SignatureLengthRealistic(t *testing.T) {
 // a non-test caller. The live trap path builds its own LoginResult in
 // service.Login (internal/service/auth.go), from GenerateFakeJWTForIdentity and
 // GenerateFakeRefresh, so the two assertions below moved on to it. They live
-// beside the rest of the trap-login suite, after the harness, and are named
-// TestATrapLogin* with it.
+// beside the rest of the trap-login suite, after the harness that builds it.
 
 // ---------------------------------------------------------------------------
 // The trap login path

@@ -1,7 +1,6 @@
 package compliance
 
 import (
-	"crypto/subtle"
 	"strings"
 	"testing"
 	"time"
@@ -187,22 +186,36 @@ func TestNIST_ConstantTimeComparisonForSecrets(t *testing.T) {
 	}
 }
 
-// TestNIST_ConstantTimeComparisonBytes verifies byte-level constant-time comparison.
-func TestNIST_ConstantTimeComparisonBytes(t *testing.T) {
-	a := []byte{0x01, 0x02, 0x03, 0x04}
-	b := []byte{0x01, 0x02, 0x03, 0x04}
-	c := []byte{0x01, 0x02, 0x03, 0x05}
+// TestNIST_ConstantTimeComparisonThroughAShippedCaller drives the comparison
+// through HMACVerify, which is one of the callers that ships: it recomputes the
+// signature and hands both to SecureCompare.
+//
+// It used to exercise crypto.SecureCompareBytes, which nothing but tests called,
+// and its last assertion compared that helper against
+// subtle.ConstantTimeCompare — the function the helper is a two-line wrapper
+// around, so it was a tautology on top of an orphan.
+func TestNIST_ConstantTimeComparisonThroughAShippedCaller(t *testing.T) {
+	key := []byte("a-key-for-the-signature")
+	message := []byte("the message that was signed")
+	signature := vaultcrypto.HMACSign(message, key)
 
-	if !vaultcrypto.SecureCompareBytes(a, b) {
-		t.Fatal("Equal byte slices should compare as equal")
+	if !vaultcrypto.HMACVerify(message, key, signature) {
+		t.Fatal("a signature this key produced was refused")
 	}
-	if vaultcrypto.SecureCompareBytes(a, c) {
-		t.Fatal("Different byte slices should compare as not equal")
+	if vaultcrypto.HMACVerify(message, key, signature[:len(signature)-1]) {
+		t.Fatal("a truncated signature was accepted; the comparison is length-blind")
 	}
-
-	// Verify it matches crypto/subtle behavior
-	if (subtle.ConstantTimeCompare(a, b) == 1) != vaultcrypto.SecureCompareBytes(a, b) {
-		t.Fatal("SecureCompareBytes should match crypto/subtle.ConstantTimeCompare")
+	// Same length, last hex digit changed: the case a prefix comparison accepts.
+	last := signature[len(signature)-1]
+	replacement := byte('0')
+	if last == '0' {
+		replacement = '1'
+	}
+	if vaultcrypto.HMACVerify(message, key, signature[:len(signature)-1]+string(replacement)) {
+		t.Fatal("a signature differing only in its final digit was accepted")
+	}
+	if vaultcrypto.HMACVerify(message, []byte("a-different-key"), signature) {
+		t.Fatal("a signature verified under a key that did not produce it")
 	}
 }
 

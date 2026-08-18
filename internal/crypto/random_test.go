@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func TestRandomBytes(t *testing.T) {
 
 	// Two calls should produce different output
 	b2, _ := RandomBytes(32)
-	if SecureCompareBytes(b, b2) {
+	if bytes.Equal(b, b2) {
 		t.Error("two random calls produced identical output")
 	}
 }
