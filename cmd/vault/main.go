@@ -510,6 +510,7 @@ func main() {
 			vaultcrypto.Argon2WaitingCount,
 			vaultcrypto.Argon2WaitNanos,
 		)
+		metricsCollector.SetHIBPShed(hibpClient.ShedCount)
 		authSvc.SetMetrics(metricsCollector)
 		// The address is announced by the server when the listener binds. Saying
 		// "at GET /metrics" alone would now be misleading: the collector is not
