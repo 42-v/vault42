@@ -507,6 +507,11 @@ var commentTestNameExemptions = map[string]string{
 		"rewritten under a different name; naming the old one is the point",
 	"TestCLI_CleanupAudit": "retired along with the CLI subcommand it drove. " +
 		"cli_ops_test.go names it to say where the contract went",
+	"TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded": "retired the day it fired. " +
+		"register_gates_test.go names it in the comment explaining why that gate reads the " +
+		"register's prose as well as its tests[] arrays, so naming it is the point",
+	"TestSSDF_800_218_DependencyUpdateAutomationIsAbsent": "retired the day it fired, and named " +
+		"in the same comment for the same reason as its sibling above",
 	"TestComplianceRegister": "a `go test -run` regular expression, not a function: it matches " +
 		"every TestComplianceRegister_* gate in tests/compliance",
 	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "a name that has never existed, quoted " +

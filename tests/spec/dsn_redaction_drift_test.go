@@ -32,6 +32,15 @@ import (
 	"testing"
 )
 
+// minScannedForDSNDrift is the anti-vacuity floor for the walk below.
+//
+// The corpus is a directory walk, so a moved package, a renamed suffix or an
+// error swallowed by the callback leaves the loop body running zero times and
+// the test reporting "no drift found" after reading nothing. It sits far below
+// the real count on purpose: it catches a walk that found almost nothing, and
+// is not a number to re-tune whenever a file lands.
+const minScannedForDSNDrift = 50
+
 // redactionOwner is the one file allowed to compile a DSN-shaped pattern.
 var redactionOwner = filepath.Join("internal", "httputil", "dberror.go")
 
@@ -55,6 +64,12 @@ func TestDSNRedactionHasOneDefinition(t *testing.T) {
 		pattern string
 	}
 	var found []finding
+	// scanned is the anti-vacuity floor. The corpus comes from a directory walk,
+	// so a moved package, a renamed suffix or an error swallowed by the callback
+	// leaves the loop body running zero times and the test passing on nothing.
+	// The floor is deliberately far below the real count: it exists to catch a
+	// walk that found almost nothing, not to be re-tuned every time a file lands.
+	scanned := 0
 
 	for _, scanRoot := range scanRoots {
 		base := filepath.Join(root, scanRoot)
@@ -73,6 +88,7 @@ func TestDSNRedactionHasOneDefinition(t *testing.T) {
 				return nil
 			}
 
+			scanned++
 			fset := token.NewFileSet()
 			file, parseErr := parser.ParseFile(fset, path, nil, 0)
 			if parseErr != nil {
@@ -104,6 +120,16 @@ func TestDSNRedactionHasOneDefinition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("walk %s: %v", scanRoot, err)
 		}
+	}
+
+	// The floor. productionGoFiles in the compliance corpus does the same thing
+	// for the same reason: a gate that reports "no drift found" after reading
+	// nothing is indistinguishable from a gate that read everything and found
+	// nothing, and only one of those is evidence.
+	if scanned < minScannedForDSNDrift {
+		t.Fatalf("the drift scan read %d production Go files across %v, below the floor of %d. "+
+			"Either the walk stopped finding the tree or the packages moved; a corpus this small "+
+			"cannot prove no private redaction pattern exists.", scanned, scanRoots, minScannedForDSNDrift)
 	}
 
 	for _, f := range found {
