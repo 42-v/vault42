@@ -141,7 +141,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 		return ErrUserNotFound
 	}
 
-	// The cascade below spans nine stores and the repositories are pool-backed, so
+	// The cascade below spans ten stores and the repositories are pool-backed, so
 	// there is no transaction to roll back with: any step can fail with the ones
 	// before it already committed. What matters is which side of the failure the
 	// account is left on.

@@ -160,7 +160,7 @@ func TestDeleteAccount_MFADeleteFailureAborts(t *testing.T) {
 				t.Errorf("error did not wrap the cause: %v", err)
 			}
 			// The account MUST already be tombstoned when the cascade dies. There is
-			// no transaction spanning the nine stores, so a failure always leaves the
+			// no transaction spanning the ten stores, so a failure always leaves the
 			// erasure half-done — the only question is which half. Scrubbing first
 			// means the account has already stopped authenticating, and the remaining
 			// deletes are idempotent and can simply be re-run. Scrubbing last would

@@ -160,6 +160,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	webauthn := postgres.NewWebAuthnRepo(db)
 	backupCodes := postgres.NewBackupCodeRepo(db)
 	recovery := postgres.NewAccountRecoveryRepo(db)
+	loginCountries := postgres.NewLoginCountryRepo(db)
 	// flushEvery=0 selects immediate (unbuffered) mode, so every audit write has
 	// hit the table before the next assertion runs.
 	auditLog := audit.NewLogger(postgres.NewAuditRepo(db), 0)
@@ -169,6 +170,10 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		totp, webauthn, backupCodes,
 		recovery, auditLog, &recoveryKey.PublicKey, hmacSecret,
 	)
+	// The login-country store is attached by setter, not by constructor. Both
+	// production planes call this; a suite that skipped it would assert Art. 17
+	// against a cascade the product does not run.
+	svc.SetLoginCountries(loginCountries)
 
 	// --- Fixture: a user with data in every user-linked store ---
 
@@ -279,13 +284,22 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 			t.Fatalf("seed refresh token %d: %v", i, err)
 		}
 	}
+	// Two login countries. Location data about the person: migration 028 assumed
+	// its ON DELETE CASCADE cleared these on erasure, which a tombstoned parent row
+	// never triggers, so they survived every erasure until migration 030.
+	for _, cc := range []string{"DE", "FR"} {
+		if _, _, err := loginCountries.UpsertAndWasNew(ctx, userID, cc); err != nil {
+			t.Fatalf("seed login country %s: %v", cc, err)
+		}
+	}
+
 	// A pre-erasure audit entry. Art. 17(3)(b)/(e) exempts these; clause 5
 	// asserts it survives the erasure untouched.
 	if err := auditLog.Log(ctx, audit.LoginSuccess, userID, "", "203.0.113.7", "ua", fpHash, deviceID, nil, 0); err != nil {
 		t.Fatalf("seed audit entry: %v", err)
 	}
 
-	// The nine stores DeleteAccount cascades over, in the order it runs them.
+	// The ten stores DeleteAccount cascades over, in the order it runs them.
 	// The seeded counts double as the vacuous-pass guard: a store that never had
 	// rows would make its post-erasure zero meaningless.
 	erasableStores := []struct {
@@ -299,6 +313,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		{"auth.devices", `SELECT COUNT(*) FROM auth.devices WHERE user_id=$1`, userID, 1},
 		{"auth.social_accounts", `SELECT COUNT(*) FROM auth.social_accounts WHERE user_id=$1`, userID, 1},
 		{"auth.password_history", `SELECT COUNT(*) FROM auth.password_history WHERE user_id=$1`, userID, 2},
+		{"auth.login_countries", `SELECT COUNT(*) FROM auth.login_countries WHERE user_id=$1`, userID, 2},
 		{"auth.totp_secrets", `SELECT COUNT(*) FROM auth.totp_secrets WHERE user_id=$1`, userID, 1},
 		{"auth.webauthn_credentials", `SELECT COUNT(*) FROM auth.webauthn_credentials WHERE user_id=$1`, userID, 2},
 		{"auth.backup_codes", `SELECT COUNT(*) FROM auth.backup_codes WHERE user_id=$1`, userID, 3},
@@ -323,7 +338,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	tombstoneEmail := "deleted-" + userID + "@deleted.invalid"
 
 	// GDPR Art. 17(1): erasure of personal data means every user-linked store,
-	// not just the account row. Each of the nine cascade targets in
+	// not just the account row. Each of the ten cascade targets in
 	// ErasureService.DeleteAccount must be empty, by row count.
 	t.Run("art_17_1_every_user_linked_store_erased", func(t *testing.T) {
 		for _, s := range erasableStores {
