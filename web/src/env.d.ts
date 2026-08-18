@@ -7,5 +7,8 @@ declare module '*.vue' {
 }
 
 interface ImportMetaEnv {
-  readonly VITE_VAULT_URL: string
+  /** API origin override. Dev-only unless VITE_VAULT_URL_ALLOW_PRODUCTION is set. */
+  readonly VITE_VAULT_URL?: string
+  /** Opts a production build into honouring VITE_VAULT_URL. Must be the string 'true'. */
+  readonly VITE_VAULT_URL_ALLOW_PRODUCTION?: string
 }
