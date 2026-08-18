@@ -302,7 +302,7 @@ func TestEnsureFirstAdmin_CreatesWhenEmpty(t *testing.T) {
 	// put it.
 	t.Setenv("VAULT_FIRST_BOOT_CREDENTIAL_FILE", filepath.Join(t.TempDir(), "first-boot.env"))
 	admins := newMockAdminUserRepo()
-	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, ""); err != nil {
+	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, &mocks.MockAdminConfigRepo{}, ""); err != nil {
 		t.Fatalf("EnsureFirstAdmin: %v", err)
 	}
 	got, _ := admins.List(context.Background())
@@ -316,7 +316,7 @@ func TestEnsureFirstAdmin_NoOpWhenExists(t *testing.T) {
 	_ = admins.Create(context.Background(), &model.AdminUser{
 		ID: "00000000-0000-0000-0000-000000000001", Username: "existing",
 	})
-	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, ""); err != nil {
+	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, &mocks.MockAdminConfigRepo{}, ""); err != nil {
 		t.Fatalf("EnsureFirstAdmin: %v", err)
 	}
 	got, _ := admins.List(context.Background())

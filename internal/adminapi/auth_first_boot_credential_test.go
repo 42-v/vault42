@@ -26,7 +26,7 @@ func TestEnsureFirstAdmin_PasswordNeverReachesTheLog(t *testing.T) {
 	logged := captureLog(t)
 
 	repo := newFakeAdminRepo()
-	if err := EnsureFirstAdmin(context.Background(), repo, ""); err != nil {
+	if err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), ""); err != nil {
 		t.Fatalf("EnsureFirstAdmin: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestEnsureFirstAdmin_UndeliverableCredentialCreatesNoAdmin(t *testing.T) {
 	logged := captureLog(t)
 
 	repo := newFakeAdminRepo()
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err == nil {
 		t.Fatal("EnsureFirstAdmin reported success though the credential could not be delivered")
 	}

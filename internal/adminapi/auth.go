@@ -376,6 +376,12 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "totp_verified"})
 }
 
+// firstAdminMarkerKey records, in auth.admin_config, that this deployment has
+// been through bootstrap. It is the durable half of the once-only guard: an
+// empty auth.admin_users is not evidence of a first boot, because the table can
+// return to empty, and this row cannot.
+const firstAdminMarkerKey = "first_admin_bootstrapped_at"
+
 // EnsureFirstAdmin creates a super_admin account on first boot if no admins exist.
 // The password is generated randomly and handed to the operator through
 // firstboot.Deliver, which is never the process log.
@@ -387,12 +393,54 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 // the moment Create succeeds, so no later boot mints another, and the deployment
 // owns a super_admin whose password nobody holds and which no admin plane can
 // reset.
-func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository, pepper string) error {
+//
+// Bootstrap happens once per deployment, not once per empty table (F-16). The
+// old gate was admins.Count(ctx) == 0, and auth.admin_users can return to empty:
+// AdminUserRepo.Revoke is a hard DELETE rather than a disable, and RevokeAdmin
+// refuses only self-revocation, so two concurrent super_admin sessions revoking
+// each other empty it — as does anything reaching the database as vault_admin.
+// The next restart then minted a second bootstrap super_admin, with migration
+// 016's created_by-NULL carve-out reopening alongside it, which is precisely the
+// window migration 023 argues can never reopen.
+//
+// marker is auth.admin_config, which vault_admin may write and which survives the
+// admin table being emptied. The residual risk is honest and smaller than what it
+// replaces: reopening the window now requires both emptying auth.admin_users and
+// blanking this row, and vault_app can do neither on its own. Closing it outright
+// wants an INSERT ... WHERE NOT EXISTS in the repository and a refusal to revoke
+// the last super_admin in the handler.
+func EnsureFirstAdmin(
+	ctx context.Context,
+	admins repository.AdminUserRepository,
+	marker repository.AdminConfigRepository,
+	pepper string,
+) error {
+	bootstrapped, err := marker.Get(ctx, firstAdminMarkerKey)
+	if err != nil {
+		// Fails closed: unable to tell a genuine first boot from a re-entry,
+		// minting a super_admin is a guess, and it is the guess this guard exists
+		// to prevent.
+		return fmt.Errorf("read first-admin marker: %w", err)
+	}
+	if bootstrapped != "" {
+		if count, cerr := admins.Count(ctx); cerr == nil && count > 0 {
+			return nil
+		}
+		return fmt.Errorf("refusing to create a bootstrap super_admin: this deployment was already bootstrapped at %s "+
+			"and auth.admin_users is now empty; restore an admin rather than minting a second first admin", bootstrapped)
+	}
+
 	count, err := admins.Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count admins: %w", err)
 	}
 	if count > 0 {
+		// An upgrade into this code: admins exist, the marker does not. Record it
+		// now, so the window closes for deployments that predate the guard rather
+		// than staying one revocation away from re-entry.
+		if err := marker.Set(ctx, firstAdminMarkerKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("record first-admin marker: %w", err)
+		}
 		return nil
 	}
 
@@ -433,6 +481,13 @@ func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository
 
 	log.Printf("FIRST BOOT: super_admin %q created; its password was written to %s and is not in this log. "+
 		"Rotate it after the first login, at which point TOTP enrolment is also required.", admin.Username, dest)
+
+	// Written after the admin exists, so a failure here leaves a usable admin and
+	// a loud error rather than a marker for a bootstrap that did not happen. The
+	// next boot sees a non-empty table and records it on the upgrade path above.
+	if err := marker.Set(ctx, firstAdminMarkerKey, now.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("record first-admin marker: %w", err)
+	}
 
 	return nil
 }

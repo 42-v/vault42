@@ -469,8 +469,11 @@ func TestGatewayStartsAgainstUnmigratedDatabase(t *testing.T) {
 	if strings.Contains(out, "keystore not initialized") {
 		t.Errorf("the keystore was disabled despite a valid 32-byte master key:\n%s", out)
 	}
-	if !f.pg.sawStatementContaining("FROM auth.admin_users") {
-		t.Error("the first-admin bootstrap never queried the admin users table")
+	// The bootstrap's first act is reading the once-only marker out of
+	// auth.admin_config: an empty auth.admin_users is not evidence of a first
+	// boot, so the marker decides whether the table is even consulted.
+	if !f.pg.sawStatementContaining("FROM auth.admin_config") {
+		t.Error("the first-admin bootstrap never read the once-only marker")
 	}
 
 	c.signal(t, syscall.SIGTERM)

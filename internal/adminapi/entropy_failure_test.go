@@ -254,7 +254,7 @@ func TestEnsureFirstAdmin_EntropyFailureBootstrapsNothing(t *testing.T) {
 			repo := newFakeAdminRepo()
 
 			adminapiBreakEntropy(t, tt.okBytes)
-			err := EnsureFirstAdmin(context.Background(), repo, "")
+			err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 
 			if err == nil {
 				t.Fatal("EnsureFirstAdmin reported success while the CSPRNG was unavailable")
