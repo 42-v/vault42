@@ -24,6 +24,7 @@ Adding a document means adding a row here.
 | Document | What it covers |
 |---|---|
 | [Deployment Guide](deployment-guide.md) | Installing on Kubernetes (including Raspberry Pi 5 / MicroK8s), resource sizing, KMS root key provisioning, upgrades between versions, and backup. |
+| [Upgrading](UPGRADING.md) | What an upgrade changes outside the pod spec: the migrations it applies, what is and is not reversible, and the recovery procedure for a `helm upgrade` that fails on an immutable field. Read this before you need it. |
 | [Admin Gateway](admin-gateway.md) | The mTLS, loopback-only admin plane: the six enforcement layers, the RBAC model, every admin endpoint, certificate generation and first boot. |
 | [Bridge Deployment](bridge.md) | The honeypot bridge: a transparent reverse proxy that scores callers and silently reroutes attackers to a decoy instance. |
 
