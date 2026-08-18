@@ -35,11 +35,20 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Client credentials**: service-to-service auth grant
 - **Device tracking**: session management with fingerprint verification
 
-DPoP (RFC 9449) is present but **experimental and not a working control**: `VAULT_DPOP_ENABLED`
-mounts middleware that validates a presented proof's structure, method, URI, freshness and
-single-use JTI, but no issuance path emits the `cnf.jkt` claim that would bind a token to a key,
-so nothing is sender-constrained and a request with no proof passes through. Do not count it as
-replay protection. See [docs/security.md](docs/security.md) AR-10.
+DPoP (RFC 9449) is a working sender-constraint. With `VAULT_DPOP_ENABLED`, a request that
+presents a valid proof gets back a token stamped with that key's JWK thumbprint in `cnf.jkt`,
+and every authenticated route then refuses that token unless the request carries a fresh
+single-use proof over the matching key, presented under the `DPoP` authorization scheme rather
+than `Bearer`. A token issued without a proof carries no `cnf.jkt` and stays an ordinary bearer
+token, which is what keeps non-DPoP clients working with the flag on. The binding is what makes
+the proof checking worth anything: a proof never compared against a key the token committed to
+only demonstrates that the caller can sign something.
+
+Two limits are real. Refresh tokens are not sender-bound: only the access token and the 2FA
+challenge token carry `cnf.jkt`, so a stolen refresh token can still be redeemed on its own, and
+the constraint on the pair it returns is whatever key that redemption presents. And there is no
+`DPoP-Nonce`, so a proof's freshness rests on its own `iat` inside a five-minute window plus the
+single-use JTI cache; the server cannot require a proof minted after a value it chose.
 
 ## Architecture
 

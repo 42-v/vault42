@@ -140,9 +140,16 @@ claim a fully covered tree.
 | Client packages | `@vault42/vue`, `Vault42.AspNetCore`, `Vault42.Blazor`. |
 
 **Not covered, and explicitly not stable:** every Go package lives under `internal/`, so there is
-no importable Go API and none is promised. `VAULT_DPOP_ENABLED` is experimental (see
-[docs/security.md](docs/security.md) AR-10) and may change or be removed in a minor release. The
-honeypot bridge's scoring heuristics are tuning, not contract.
+no importable Go API and none is promised. The honeypot bridge's scoring heuristics are tuning,
+not contract.
+
+`VAULT_DPOP_ENABLED` is covered by the environment-variable row above rather than carved out of
+it: issuance stamps `cnf.jkt` and every authenticated route enforces it, so a deployment can
+depend on the flag meaning what it says. What it does not reach is worth knowing before you
+report it. Refresh tokens are not sender-bound, so redeeming a stolen one is not a DPoP bypass;
+and there is no `DPoP-Nonce`, so proof freshness comes from the proof's own `iat` and the
+single-use JTI cache, not from a value the server chose. Both are stated in
+[README.md](README.md).
 
 **Client package versions.** The release workflow packs both NuGet packages with the release
 version, so `Vault42.AspNetCore` and `Vault42.Blazor` on nuget.org always match the server
