@@ -155,14 +155,14 @@ trap credential being used, a run of key releases, personal data leaving in
 bulk. It does not open an outbound connection to do it. Each alert is one line
 on the pod's stdout with a fixed prefix, and one increment of a counter:
 
-```
+```text
 SECURITY ALERT: rule=credential-stuffing event_type=login_failure source=203.0.113.0 count=25 window=5m0s severity=25 breach=false
 ```
 
 **Wire one of these two before going live, or nothing is watching.** Either is
 enough on its own.
 
-- **Log pipeline.** Route records matching `SECURITY ALERT: ` out of the vault42
+- **Log pipeline.** Route records matching `SECURITY ALERT:` out of the vault42
   container log. `breach=true` marks the classes whose alert starts a GDPR
   Art. 33 assessment (`docs/PRIVACY.md` section 7.1); route those separately if
   you process personal data. `SECURITY WARNING` on the same stream is a
