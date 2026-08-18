@@ -159,6 +159,46 @@ passwordMinLength: 15
 # -- Enable HIBP breach check on password set
 hibpCheck: true
 
+# ---- Authentication controls ----
+# Every switch below gates a control the binary reads from the environment. A
+# switch the chart cannot set is a control that is off in every install whatever
+# the compliance register says about it, which is exactly what happened to DPoP.
+# The chart control-switch gate in tests/spec now fails on any boolean the config
+# package reads that goes unexposed here without a stated reason.
+
+# -- Require every user to enrol a second factor (VAULT_MFA_REQUIRED). On by
+# default, matching the binary. Turning it off downgrades every account to
+# password-only authentication.
+mfaRequired: true
+
+# -- Allow public self-service registration (VAULT_REGISTRATION_ENABLED). On by
+# default, matching the binary. Set false for a deployment where accounts are
+# created by an administrator or provisioned from an identity provider.
+registrationEnabled: true
+
+# -- Sender-constrain access tokens issued with a DPoP proof, RFC 9449
+# (VAULT_DPOP_ENABLED). Off by default, matching the binary. A token issued
+# without a proof stays an ordinary bearer token, so turning this on does not
+# break a client that cannot send one; a client that has been issued a bound
+# token must then send a matching proof on every later request. Refresh tokens
+# are not sender-bound and no DPoP-Nonce is issued -- see docs/config.md.
+dpop:
+  enabled: false
+
+# -- Refuse a login when the session-count query fails, instead of allowing it
+# (VAULT_STRICT_SESSION_LIMIT). Off by default, matching the binary: the session
+# cap then fails open on a database error rather than locking everybody out
+# during one. Set true where holding the cap matters more than availability.
+strictSessionLimit: false
+
+# -- Permit outbound connections to private address ranges
+# (VAULT_OUTBOUND_ALLOW_PRIVATE). False renders nothing and lets the profile
+# decide, which is false in production and true in dev. Set true only when an
+# identity provider genuinely lives inside this network: it lets a provider's
+# discovery document point vault42 at an address inside the deployment. The
+# link-local range cloud instance metadata answers on stays refused either way.
+outboundAllowPrivate: false
+
 # -- Email sender address
 emailFrom: "noreply@example.com"
 
