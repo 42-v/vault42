@@ -11,6 +11,13 @@ import { useT } from '@vault42/vue'
  *
  * Anything not listed here renders error.fallback. The code string is
  * server-controlled and must never reach the rendered message.
+ *
+ * The service-document and mint codes are here even though the SPA does not
+ * call those endpoints: the table is what stands between a wire code and the
+ * user, and "the SPA does not call it today" is a routing fact, not a property
+ * of this module. Sixteen of them rendered the generic fallback until the test
+ * below started deriving its corpus from the Go source instead of mirroring it
+ * by hand.
  */
 const errorKeys: Record<string, string> = {
   invalid_credentials: 'error.invalid_credentials',
@@ -32,6 +39,7 @@ const errorKeys: Record<string, string> = {
   account_unavailable: 'error.account_disabled',
   too_many_attempts: 'error.too_many_attempts',
   too_many_sessions: 'error.too_many_sessions',
+  session_limit_reached: 'error.too_many_sessions',
   server_busy: 'error.server_busy',
   rate_limiter_unavailable: 'error.server_busy',
   dpop_replay_check_unavailable: 'error.server_busy',
@@ -81,9 +89,11 @@ const errorKeys: Record<string, string> = {
   no_pending_verification: 'error.request_expired',
   dpop_proof_reused: 'error.request_expired',
   blob_too_large: 'error.blob_too_large',
+  document_too_large: 'error.blob_too_large',
   blob_too_small: 'error.blob_too_small',
   quota_exceeded: 'error.quota_exceeded',
   blob_not_found: 'error.blob_not_found',
+  document_not_found: 'error.not_found',
   empty_blob: 'error.empty_blob',
   missing_name: 'error.missing_name',
   name_too_long: 'error.name_too_long',
@@ -95,6 +105,10 @@ const errorKeys: Record<string, string> = {
   forbidden: 'error.forbidden',
   access_denied: 'error.forbidden',
   insufficient_scope: 'error.forbidden',
+  scope_not_permitted: 'error.forbidden',
+  role_not_permitted: 'error.forbidden',
+  client_credentials_required: 'error.forbidden',
+  shared_visibility_disabled: 'error.forbidden',
   rate_limited: 'error.rate_limited',
   rate_limit_exceeded: 'error.rate_limited',
   invalid_request: 'error.invalid_request',
@@ -107,6 +121,15 @@ const errorKeys: Record<string, string> = {
   invalid_date_of_birth: 'error.invalid_request',
   name_required: 'error.invalid_request',
   name_invalid_chars: 'error.invalid_request',
+  invalid_name: 'error.invalid_request',
+  invalid_document: 'error.invalid_request',
+  ambiguous_document: 'error.invalid_request',
+  invalid_visibility: 'error.invalid_request',
+  invalid_key: 'error.invalid_request',
+  missing_key: 'error.invalid_request',
+  invalid_subject: 'error.invalid_request',
+  missing_subject: 'error.invalid_request',
+  invalid_ttl: 'error.invalid_request',
   password_required: 'error.invalid_request',
   code_required: 'error.invalid_request',
   missing_code: 'error.invalid_request',
