@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestIssueTokenPairEntropyFailureIssuesNothing(t *testing.T) {
 			svc, _ := newTestTokenService(t)
 			serviceAuthStarveEntropy(t, tc.budget)
 
-			pair, err := svc.IssueTokenPair("user-1", []string{"user"}, []string{"read"},
+			pair, err := svc.IssueTokenPair(context.Background(), "user-1", []string{"user"}, []string{"read"},
 				"client-1", "fp-hash", tc.familyID, false)
 
 			if !errors.Is(err, errServiceAuthEntropy) {
@@ -53,7 +54,7 @@ func TestIssueChallengeTokenEntropyFailureIssuesNothing(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 	serviceAuthStarveEntropy(t, 0)
 
-	token, err := svc.IssueChallengeToken("user-1", "fp-hash")
+	token, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp-hash")
 
 	if !errors.Is(err, errServiceAuthEntropy) {
 		t.Fatalf("err = %v, want the entropy failure to surface", err)

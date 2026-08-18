@@ -23,6 +23,9 @@ data:
   DB_PORT: {{ .Values.database.port | quote }}
   DB_NAME: {{ .Values.honeypotInstance.database.name | quote }}
   DB_SSLMODE: "disable"
+  # The honeypot Postgres is a sibling pod on a private link, so the
+  # unencrypted mode above is deliberate and says so.
+  VAULT_ALLOW_PLAINTEXT_DB: "true"
   DB_MAX_CONNS: "10"
   VAULT_RATE_LIMIT_ENABLED: "true"
   CACHE_BACKEND: "memory"

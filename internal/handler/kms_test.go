@@ -216,7 +216,7 @@ func TestKMSUnwrap_AuthzChain(t *testing.T) {
 	body := base64.StdEncoding.EncodeToString(env)
 
 	issue := func(scopes []string) string {
-		pair, err := ts.IssueTokenPair("life42-gateway", []string{"service"}, scopes, "life42-gateway", "", "", false)
+		pair, err := ts.IssueTokenPair(context.Background(), "life42-gateway", []string{"service"}, scopes, "life42-gateway", "", "", false)
 		if err != nil {
 			t.Fatalf("issue token: %v", err)
 		}

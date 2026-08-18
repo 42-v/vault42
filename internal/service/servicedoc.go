@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"io"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -202,12 +203,39 @@ func (s *DocumentService) MaxDocumentBytes() int { return s.cfg.MaxDocumentBytes
 // SharedEnabled reports whether the shared visibility tier is available.
 func (s *DocumentService) SharedEnabled() bool { return s.cfg.SharedEnabled }
 
+// CanonicalSubject folds a subject to the single spelling every pseudonym is
+// taken over.
+//
+// The accepted charset admits mixed case and '@', so an email and a
+// differently-cased identifier are both legal subjects, and the pseudonym used to
+// be an HMAC over the caller's raw string. "Alice@example.com" and
+// "alice@example.com" were therefore two disjoint namespaces for one human, each
+// with its own quota, its own documents and its own erasure outcome — and the
+// erasure cascade, which derives its pseudonym from the account's user id, missed
+// every document filed under any other spelling of it while reporting success.
+//
+// Case folding is the whole canonicalisation, and it is sufficient only because
+// svcDocSubjectCharset is ASCII: a Unicode subject would need NFC normalisation
+// first, since two byte sequences can spell one character.
+// TestSubjectCharsetIsASCIIOnly pins that premise, so widening the charset fails
+// there rather than silently reintroducing the split.
+//
+// The global sentinel is returned verbatim. It is already lowercase, and folding
+// it would be a no-op, but naming it here keeps the sentinel's identity a
+// decision rather than an accident of its spelling.
+func CanonicalSubject(subject string) string {
+	if subject == GlobalSubject {
+		return subject
+	}
+	return strings.ToLower(subject)
+}
+
 // SubjectPseudonym computes the deterministic pseudonym for a user ID. The
 // erasure cascade derives the same value to find every document written about
 // an erased account, so this derivation and the one in ErasureService must stay
-// identical.
+// identical — including the canonicalisation.
 func (s *DocumentService) SubjectPseudonym(userID string) string {
-	return vaultcrypto.HMACSign([]byte(userID+":svcdoc"), s.hmacSecret)
+	return vaultcrypto.HMACSign([]byte(CanonicalSubject(userID)+":svcdoc"), s.hmacSecret)
 }
 
 // subjectHash maps a path subject segment to its stored pseudonym, resolving
@@ -217,6 +245,24 @@ func (s *DocumentService) subjectHash(subject string) string {
 		return vaultcrypto.HMACSign([]byte(GlobalSubject+":svcdoc:global"), s.hmacSecret)
 	}
 	return s.SubjectPseudonym(subject)
+}
+
+// legacySubjectHash returns the pseudonym rows written before canonicalisation
+// are keyed on, or "" when the caller's spelling was already canonical and there
+// is nothing extra to look under.
+//
+// This exists because no migration can re-key those rows.
+// objects.service_documents stores subject_hash and never the subject, so the
+// plaintext the old HMAC was taken over is not in the database, and a hash cannot
+// be inverted to recompute it. The read, list and delete paths therefore cover
+// both forms, and a write replaces the legacy row rather than shadowing it, so
+// the store converts itself as it is used.
+func (s *DocumentService) legacySubjectHash(subject string) string {
+	canonical := CanonicalSubject(subject)
+	if canonical == subject {
+		return ""
+	}
+	return vaultcrypto.HMACSign([]byte(subject+":svcdoc"), s.hmacSecret)
 }
 
 // docAAD binds a ciphertext to its owning client, its subject and its key. It is
@@ -333,7 +379,18 @@ func (s *DocumentService) Put(
 	// count and the byte sum describe the state a moment ago, and a second writer
 	// that read the same state writes a DIFFERENT key, so the unique index has
 	// nothing to collide with and both rows land over the cap.
+	legacyHash := s.legacySubjectHash(subject)
 	err = s.serializeSubjectWrite(ctx, subjHash, func(ctx context.Context) error {
+		// A row this caller wrote at the same key before subjects were
+		// canonicalised is replaced, not shadowed. Put is a full replace, so leaving
+		// the old row behind would keep a second copy that no read resolves, no
+		// quota counts and no erasure reaches. Doing it before the quota check also
+		// stops the replacement being charged for both copies at once.
+		if legacyHash != "" {
+			if _, delErr := s.repo.Delete(ctx, clientID, legacyHash, docKey); delErr != nil {
+				return fmt.Errorf("svcdoc replace legacy row: %w", delErr)
+			}
+		}
 		// Quota is checked against the state the write would produce, so a
 		// replacement is not charged twice and does not consume a document slot it
 		// already holds.
@@ -341,7 +398,7 @@ func (s *DocumentService) Put(
 		if getErr != nil {
 			return fmt.Errorf("svcdoc load existing: %w", getErr)
 		}
-		if quotaErr := s.checkQuota(ctx, clientID, subjHash, existing, len(enc)); quotaErr != nil {
+		if quotaErr := s.checkQuota(ctx, clientID, subjHash, legacyHash, existing, len(enc)); quotaErr != nil {
 			return quotaErr
 		}
 
@@ -466,23 +523,26 @@ func svcDocLockStripe(subjectHash string) uint32 {
 // committed leaves a window in which the quota is over, and if the process dies
 // in that window the row stays; worse, deciding which of two winners to delete
 // means deleting a document a caller was already told was stored.
+// Documents still keyed on the pre-canonicalisation pseudonym count against both
+// budgets. A legacy row that was reachable, exportable and erasable but free of
+// charge would hand a caller a second budget for the price of a capital letter.
 func (s *DocumentService) checkQuota(
-	ctx context.Context, clientID, subjHash string,
+	ctx context.Context, clientID, subjHash, legacyHash string,
 	existing *repository.ServiceDocument, newStored int,
 ) error {
 	if existing == nil {
-		count, err := s.repo.CountForOwner(ctx, clientID, subjHash)
+		count, err := s.countForOwner(ctx, clientID, subjHash, legacyHash)
 		if err != nil {
-			return fmt.Errorf("svcdoc count: %w", err)
+			return err
 		}
 		if count >= s.cfg.MaxDocsPerSubject {
 			return ErrSvcDocQuotaExceeded
 		}
 	}
 
-	used, err := s.repo.SumBytesForSubjectAndClient(ctx, subjHash, clientID)
+	used, err := s.sumBytes(ctx, clientID, subjHash, legacyHash)
 	if err != nil {
-		return fmt.Errorf("svcdoc quota: %w", err)
+		return err
 	}
 	if existing != nil {
 		used -= existing.StoredBytes
@@ -491,6 +551,74 @@ func (s *DocumentService) checkQuota(
 		return ErrSvcDocQuotaExceeded
 	}
 	return nil
+}
+
+// listByOwner returns the caller's own documents for a subject across both
+// pseudonyms.
+func (s *DocumentService) listByOwner(ctx context.Context, clientID, subjHash, legacyHash string) ([]*repository.ServiceDocument, error) {
+	own, err := s.repo.ListByOwner(ctx, clientID, subjHash)
+	if err != nil {
+		return nil, fmt.Errorf("svcdoc list own: %w", err)
+	}
+	if legacyHash != "" {
+		legacy, legacyErr := s.repo.ListByOwner(ctx, clientID, legacyHash)
+		if legacyErr != nil {
+			return nil, fmt.Errorf("svcdoc list own legacy: %w", legacyErr)
+		}
+		own = append(own, legacy...)
+	}
+	return own, nil
+}
+
+// listSharedForSubject returns other clients' shared documents for a subject
+// across both pseudonyms.
+func (s *DocumentService) listSharedForSubject(ctx context.Context, clientID, subjHash, legacyHash string) ([]*repository.ServiceDocument, error) {
+	shared, err := s.repo.ListSharedForSubject(ctx, subjHash, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("svcdoc list shared: %w", err)
+	}
+	if legacyHash != "" {
+		legacy, legacyErr := s.repo.ListSharedForSubject(ctx, legacyHash, clientID)
+		if legacyErr != nil {
+			return nil, fmt.Errorf("svcdoc list shared legacy: %w", legacyErr)
+		}
+		shared = append(shared, legacy...)
+	}
+	return shared, nil
+}
+
+// countForOwner counts the caller's documents for a subject across both
+// pseudonyms.
+func (s *DocumentService) countForOwner(ctx context.Context, clientID, subjHash, legacyHash string) (int, error) {
+	count, err := s.repo.CountForOwner(ctx, clientID, subjHash)
+	if err != nil {
+		return 0, fmt.Errorf("svcdoc count: %w", err)
+	}
+	if legacyHash != "" {
+		legacy, legacyErr := s.repo.CountForOwner(ctx, clientID, legacyHash)
+		if legacyErr != nil {
+			return 0, fmt.Errorf("svcdoc count legacy: %w", legacyErr)
+		}
+		count += legacy
+	}
+	return count, nil
+}
+
+// sumBytes totals the caller's stored bytes for a subject across both
+// pseudonyms.
+func (s *DocumentService) sumBytes(ctx context.Context, clientID, subjHash, legacyHash string) (int, error) {
+	used, err := s.repo.SumBytesForSubjectAndClient(ctx, subjHash, clientID)
+	if err != nil {
+		return 0, fmt.Errorf("svcdoc quota: %w", err)
+	}
+	if legacyHash != "" {
+		legacy, legacyErr := s.repo.SumBytesForSubjectAndClient(ctx, legacyHash, clientID)
+		if legacyErr != nil {
+			return 0, fmt.Errorf("svcdoc quota legacy: %w", legacyErr)
+		}
+		used += legacy
+	}
+	return used, nil
 }
 
 // Get returns a readable document body.
@@ -514,6 +642,18 @@ func (s *DocumentService) Get(ctx context.Context, clientID, subject, docKey, ow
 	subjHash := s.subjectHash(subject)
 
 	doc, err := s.resolve(ctx, clientID, subjHash, docKey, owner)
+	// A miss under the canonical pseudonym is retried under the spelling the
+	// caller actually used, so a document written before subjects were
+	// canonicalised is still readable by the client that wrote it. The retry runs
+	// on ErrSvcDocNotFound only: an ambiguous shared key or a database failure is
+	// an answer, and asking a second time would change it into a different one.
+	// The AAD comes from the row (doc.SubjectHash), never from the lookup, so a
+	// legacy row decrypts under the pseudonym it was sealed with.
+	if errors.Is(err, ErrSvcDocNotFound) {
+		if legacy := s.legacySubjectHash(subject); legacy != "" {
+			doc, err = s.resolve(ctx, clientID, legacy, docKey, owner)
+		}
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -611,6 +751,17 @@ func (s *DocumentService) Delete(ctx context.Context, clientID, subject, docKey 
 	if err != nil {
 		return fmt.Errorf("svcdoc delete: %w", err)
 	}
+	// A document filed before subjects were canonicalised must still be
+	// deletable by the client that wrote it, or the only way to remove it would be
+	// the erasure of the whole account.
+	if !deleted {
+		if legacy := s.legacySubjectHash(subject); legacy != "" {
+			deleted, err = s.repo.Delete(ctx, clientID, legacy, docKey)
+			if err != nil {
+				return fmt.Errorf("svcdoc delete legacy: %w", err)
+			}
+		}
+	}
 	if !deleted {
 		return ErrSvcDocNotFound
 	}
@@ -637,21 +788,26 @@ func (s *DocumentService) List(ctx context.Context, clientID, subject string) ([
 		return nil, nil, err
 	}
 	subjHash := s.subjectHash(subject)
+	// Both pseudonyms, so a listing is the complete picture of what this caller
+	// holds for the subject. A legacy row omitted here would be a document the
+	// client can read at a key it cannot discover, and a quota it is charged for
+	// without being shown.
+	legacyHash := s.legacySubjectHash(subject)
 
-	own, err := s.repo.ListByOwner(ctx, clientID, subjHash)
+	own, err := s.listByOwner(ctx, clientID, subjHash, legacyHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("svcdoc list own: %w", err)
+		return nil, nil, err
 	}
 	var shared []*repository.ServiceDocument
 	if s.cfg.SharedEnabled {
-		shared, err = s.repo.ListSharedForSubject(ctx, subjHash, clientID)
+		shared, err = s.listSharedForSubject(ctx, clientID, subjHash, legacyHash)
 		if err != nil {
-			return nil, nil, fmt.Errorf("svcdoc list shared: %w", err)
+			return nil, nil, err
 		}
 	}
-	usedBytes, err := s.repo.SumBytesForSubjectAndClient(ctx, subjHash, clientID)
+	usedBytes, err := s.sumBytes(ctx, clientID, subjHash, legacyHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("svcdoc list quota: %w", err)
+		return nil, nil, err
 	}
 
 	metas := make([]*DocumentMeta, 0, len(own)+len(shared))

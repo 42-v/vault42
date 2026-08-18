@@ -20,6 +20,7 @@ import (
 	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/sanitize"
 	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
@@ -671,7 +672,17 @@ func TestSessionsList(t *testing.T) {
 		},
 	}
 
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
+	// One live family per device, because the listing is family-based: a device
+	// with no family is not a session (TestSessionsListsFamiliesNotDevices).
+	tokens := &mocks.MockRefreshTokenRepo{
+		ListActiveFamiliesFn: func(context.Context, string) ([]*repository.ActiveFamily, error) {
+			return []*repository.ActiveFamily{
+				{FamilyID: "family-1", DeviceID: "device-1", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+				{FamilyID: "family-2", DeviceID: "device-2", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+			}, nil
+		},
+	}
+	h := NewUserHandler(&mocks.MockUserRepo{}, devices, tokens, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/user/sessions", nil)
 	req = setAuthContext(req, "user-123")

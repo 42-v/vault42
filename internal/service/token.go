@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rsa"
 	"fmt"
 	"math/big"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/dpop"
 	vjwt "github.com/42-v/vault42/internal/jwt"
 )
 
@@ -118,14 +120,26 @@ func sessionDeadline(origin time.Time, maxLifetime time.Duration) time.Time {
 // expiry is clamped to the absolute session lifetime here. A non-empty familyID
 // is a rotation whose origin this function cannot know; rotations must go through
 // IssueRotatedPair, which supplies it.
-func (s *TokenService) IssueTokenPair(userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool) (*TokenPair, error) {
-	return s.IssueTokenPairWithAuth(userID, roles, scopes, clientID, fingerprint, familyID, rememberMe, AuthContext{})
+//
+// ctx is the REQUEST context, and it is read for exactly one thing: the
+// thumbprint of a DPoP proof the middleware already validated. When one is
+// present the access token carries cnf.jkt (RFC 9449 §6.1) and is
+// sender-constrained; when it is absent the token is an ordinary bearer token,
+// which every non-DPoP client depends on. This is the binding that did not exist:
+// with cnf.jkt assigned nowhere, the middleware's thumbprint comparison never ran
+// and a proof was checked against nothing.
+func (s *TokenService) IssueTokenPair(ctx context.Context, userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool) (*TokenPair, error) {
+	return s.IssueTokenPairWithAuth(ctx, userID, roles, scopes, clientID, fingerprint, familyID, rememberMe, AuthContext{})
 }
 
 // IssueTokenPairWithAuth is IssueTokenPair with the OIDC authentication-event
 // claims attached. Call it from a path that just authenticated a user; the
 // bare IssueTokenPair is for issuance that observed no such event.
-func (s *TokenService) IssueTokenPairWithAuth(userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool, auth AuthContext) (*TokenPair, error) {
+//
+// The two bindings are independent and both ride on this call: ctx sender-
+// constrains the token to a DPoP key, auth describes the authentication event
+// that produced it.
+func (s *TokenService) IssueTokenPairWithAuth(ctx context.Context, userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool, auth AuthContext) (*TokenPair, error) {
 	now := time.Now()
 	jti, err := vaultcrypto.RandomUUID()
 	if err != nil {
@@ -152,6 +166,9 @@ func (s *TokenService) IssueTokenPairWithAuth(userID string, roles, scopes []str
 		ACR:         auth.ACR,
 		AMR:         auth.AMR,
 		AuthTime:    authTimeSeconds(auth.AuthTime),
+	}
+	if jkt := dpop.Thumbprint(ctx); jkt != "" {
+		accessClaims.Confirmation = &vaultcrypto.Confirmation{JKT: jkt}
 	}
 
 	// Signing stays inside the read lock: UpdateSigningKey wipes the key it
@@ -208,11 +225,14 @@ func (s *TokenService) IssueTokenPairWithAuth(userID string, roles, scopes []str
 //
 // A zero familyOrigin means the age is unknown and no clamp is applied — callers
 // must reject rather than rotate in that case.
-func (s *TokenService) IssueRotatedPair(userID string, roles, scopes []string, clientID, fingerprint, familyID string, familyOrigin time.Time) (*TokenPair, error) {
+//
+// ctx sender-constrains the rotated access token exactly as it does a fresh one:
+// a refresh presented with a DPoP proof yields a token bound to that same key.
+func (s *TokenService) IssueRotatedPair(ctx context.Context, userID string, roles, scopes []string, clientID, fingerprint, familyID string, familyOrigin time.Time) (*TokenPair, error) {
 	// A rotation cannot re-run the authentication, so it carries auth_time from
 	// the family origin — which is the instant the user authenticated — and
 	// omits acr and amr rather than restating factors it did not observe.
-	pair, err := s.IssueTokenPairWithAuth(userID, roles, scopes, clientID, fingerprint, familyID, false,
+	pair, err := s.IssueTokenPairWithAuth(ctx, userID, roles, scopes, clientID, fingerprint, familyID, false,
 		AuthContext{AuthTime: familyOrigin})
 	if err != nil {
 		return nil, err
@@ -224,10 +244,16 @@ func (s *TokenService) IssueRotatedPair(userID string, roles, scopes []string, c
 }
 
 // IssueChallengeToken creates a short-lived JWT for 2FA challenge.
+//
+// It is bound to a presented DPoP key for the same reason the access token is:
+// the challenge token is what POST /auth/2fa/verify authenticates, so leaving it
+// bearer-equivalent would put an unconstrained credential in the middle of an
+// otherwise sender-constrained login.
+//
 // factors are the authenticator methods already completed when the challenge
 // was minted; they travel on the challenge so the second-factor verify can
 // state the full combination.
-func (s *TokenService) IssueChallengeToken(userID, fingerprint string, factors ...string) (string, error) {
+func (s *TokenService) IssueChallengeToken(ctx context.Context, userID, fingerprint string, factors ...string) (string, error) {
 	now := time.Now()
 	jti, err := vaultcrypto.RandomUUID()
 	if err != nil {
@@ -247,6 +273,9 @@ func (s *TokenService) IssueChallengeToken(userID, fingerprint string, factors .
 		Fingerprint: fingerprint,
 		TokenType:   "2fa_challenge",
 		Factors:     factors,
+	}
+	if jkt := dpop.Thumbprint(ctx); jkt != "" {
+		claims.Confirmation = &vaultcrypto.Confirmation{JKT: jkt}
 	}
 
 	s.mu.RLock()

@@ -68,6 +68,14 @@ spec:
               value: /run/tls/tls.key
             - name: ADMIN_GW_CLIENT_CA_FILE
               value: /run/tls/ca.crt
+            {{- if .Values.adminGateway.clientCNAllowlist }}
+            - name: ADMIN_GW_CLIENT_CN_ALLOWLIST
+              value: {{ .Values.adminGateway.clientCNAllowlist | quote }}
+            {{- end }}
+            {{- if .Values.adminGateway.clientCRLFile }}
+            - name: ADMIN_GW_CLIENT_CRL_FILE
+              value: {{ .Values.adminGateway.clientCRLFile | quote }}
+            {{- end }}
             - name: ADMIN_GW_SESSION_TTL
               value: {{ .Values.adminGateway.sessionTTL | quote }}
             - name: ADMIN_GW_MAX_FAILED_LOGINS

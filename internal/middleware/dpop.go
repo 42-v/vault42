@@ -8,19 +8,25 @@ import (
 
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/dpop"
 	"github.com/42-v/vault42/internal/httputil"
 )
 
 // DPoP validates DPoP proof-of-possession when a DPoP header is present.
 // The cache parameter is used for JTI replay prevention (RFC 9449 §11.1).
 //
-// It binds nothing today. Binding requires the access token to carry a
-// "cnf.jkt" confirmation claim (RFC 9449 §6.1), and no vault42 code path sets
-// one, so every request takes the unbound path: a request without a proof
-// passes through, and a request with a proof has that proof checked against the
-// method, URI and access-token hash but never compared against a thumbprint the
-// token committed to. VAULT_DPOP_ENABLED is therefore experimental and
-// unsupported until token issuance populates cnf.jkt.
+// It binds in both directions, which is what makes it a control rather than a
+// decoration:
+//
+//   - On a token endpoint the validated proof's thumbprint goes onto the request
+//     context (internal/dpop) and issuance writes it into the access token's
+//     "cnf.jkt" confirmation claim (RFC 9449 §6.1). Nothing did that before, so
+//     no token was sender-constrained and the comparison at the bottom of this
+//     function never ran: a well-formed proof for any key passed.
+//   - On a protected route a token carrying cnf.jkt is refused unless the request
+//     presents a proof over the matching key, under the DPoP authorization scheme
+//     (RFC 9449 §7.1). A token with no cnf.jkt stays an ordinary bearer token,
+//     which is what keeps every non-DPoP client working with the flag on.
 //
 //nolint:gocognit // RFC 9449 mandates a sequence of checks (typ, alg, jwk, htm, htu, iat, jti, ath); splitting them obscures the spec mapping
 func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
@@ -45,10 +51,11 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 			httpURI := origin + r.URL.Path
 
 			// Compute access token hash (ath) for DPoP binding validation
-			var ath string
+			var ath, scheme string
 			if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 				parts := strings.SplitN(authHeader, " ", 2)
 				if len(parts) == 2 {
+					scheme = parts[0]
 					ath = vaultcrypto.SHA256Base64URL(parts[1])
 				}
 			}
@@ -89,14 +96,28 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 			}
 
 			// If token has cnf.jkt, verify thumbprint matches
-			if claims != nil && claims.Confirmation != nil && claims.Confirmation.JKT != "" {
+			if tokenRequiresDPoP {
+				// RFC 9449 §7.1: a sender-constrained token is presented under the
+				// DPoP scheme, never Bearer. Accepting it under Bearer would let a
+				// resource server that only reads the scheme treat a bound token as
+				// an ordinary one, which is the confusion the separate scheme exists
+				// to prevent. Only bound tokens are held to it, so nothing that was
+				// issued without a proof changes.
+				if scheme != "DPoP" {
+					httputil.WriteError(w, http.StatusUnauthorized, "dpop_scheme_required")
+					return
+				}
 				if !vaultcrypto.SecureCompare(claims.Confirmation.JKT, thumbprint) {
 					httputil.WriteError(w, http.StatusUnauthorized, "dpop_thumbprint_mismatch")
 					return
 				}
 			}
 
-			next.ServeHTTP(w, r)
+			// The thumbprint travels on the context so an issuance path downstream
+			// can bind the token it mints to the key just proven. Every check above
+			// has already run, so what is carried is a key the caller demonstrated
+			// possession of for this method, this URI and this instant.
+			next.ServeHTTP(w, r.WithContext(dpop.WithThumbprint(r.Context(), thumbprint)))
 		})
 	}
 }
