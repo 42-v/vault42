@@ -8,7 +8,11 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
+<<<<<<< HEAD
 > **404 requirements in scope across 9 standards: 341 Met, 17 Accepted Risk,
+=======
+> **404 requirements in scope across 9 standards: 340 Met, 18 Accepted Risk,
+>>>>>>> hard/inactivity
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -128,8 +132,11 @@ than 24 hours at AAL2. The inactivity timeout SHOULD be no more than 1 hour."*
 Through 0.9.9 refresh rotation issued a fresh full TTL every time, so the 7-day
 window slid indefinitely and no definite timeout existed at all. That SHALL is
 now satisfied: migration 013 gives every rotation family a stored birth date and
-`VAULT_MAX_SESSION_LIFETIME` bounds its total age. The two SHOULDs are not, and
-that residual is CR-14.
+`VAULT_MAX_SESSION_LIFETIME` bounds its total age. One of the two SHOULDs is
+satisfied as well: `VAULT_INACTIVITY_TIMEOUT` defaults to 1 hour and
+`AuthService.enforceSessionInactivity` terminates a family that goes unused for
+longer, measured from the family's last rotation. The remaining deviation is the
+720-hour overall default, and that residual is CR-14.
 
 **OWASP ASVS 5.0.0.** The two new chapters, V9 (Self-contained Tokens) and V10
 (OAuth and OIDC), let vault42 claim *more*, not less. Through 0.9.9 the JWT
@@ -190,18 +197,30 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
+<<<<<<< HEAD
 | OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 212 | 9 | 42 | 263 |
 | NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
+=======
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 210 | 11 | 42 | 263 |
+| NIST SP 800-63B-4 | 28 | 1 | 2 | 31 |
+| NIST SP 800-53 Rev 5 (Release 5.2.0) | 31 | 2 | 1 | 34 |
+>>>>>>> hard/inactivity
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
+<<<<<<< HEAD
 | **Total** | **341** | **17** | **46** | **404** |
 
 The 17 Accepted Risk rows collapse to **9 distinct accepted risks**: several
+=======
+| **Total** | **340** | **18** | **46** | **404** |
+
+The 18 Accepted Risk rows collapse to **11 distinct accepted risks**: several
+>>>>>>> hard/inactivity
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -469,11 +488,24 @@ fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:46
 -- and no test of that name has ever existed. The tests that do exist are
 `TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented`, which asserts
 the mandatory SHALL is satisfied, and
-`TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue`,
-which fails the day the 720-hour default drops inside the AAL2 SHOULD.
+`TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot`,
+which fails the day the 720-hour default drops inside the AAL2 SHOULD and also
+the day the inactivity default rises above 1 hour.
 
-What remains open under CR-14 is only the two advisory halves: the 720-hour
-default and the absence of an inactivity timeout.
+**A second correction, and a retirement.** The tracker named above replaced
+`TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue`,
+which carried the same overall-timeout assertion plus a tripwire that walked
+every migration looking for a column named `last_activity_at`, `last_used_at` or
+`idle_expires_at` and failed the moment one appeared. The inactivity timeout
+shipped without any of them: the presented refresh token's own `created_at` is
+already the instant its family last rotated, and `repository.ActiveFamily`
+publishes that same value to the user as `LastUsedAt`. The tripwire was watching
+for one expected implementation rather than for the property, so it would have
+gone on passing while the gap it guarded was closed. It is retired and replaced
+with assertions that drive the refresh path.
+
+What remains open under CR-14 is one advisory figure: the 720-hour overall
+default against section 2.2.3's 24-hour SHOULD.
 
 A test named in a register row is checked by CI. A test named in prose was not,
 which is how a name that resolves to nothing survived a release.

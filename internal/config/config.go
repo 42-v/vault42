@@ -284,9 +284,22 @@ type Config struct {
 	// (VAULT_MAX_SESSION_LIFETIME). Without it, rotation grants a fresh full TTL
 	// every time and a continuously-refreshing client holds a session forever.
 	// Default 720h, matching RememberMeTTL so a session may live as long as the
-	// longest single token and never longer. NIST SP 800-63B-4 AAL2 wants 12h;
-	// that is a deployment decision, not the default. 0 disables the bound.
+	// longest single token and never longer. NIST SP 800-63B-4 §2.2.3 says the
+	// overall timeout SHOULD be no more than 24h at AAL2; that is a deployment
+	// decision, not the default. 0 disables the bound.
 	MaxSessionLifetime time.Duration
+
+	// InactivityTimeout bounds how long a refresh-token family may go unused
+	// before it must reauthenticate (VAULT_INACTIVITY_TIMEOUT). It is the other
+	// half of MaxSessionLifetime: that bound ends a session that is in constant
+	// use, this one ends a session that has stopped being used.
+	//
+	// Default 1h, the figure NIST SP 800-63B-4 §2.2.3 says the AAL2 inactivity
+	// timeout SHOULD not exceed. It is measured from the family's last rotation,
+	// so it has to stay comfortably above AccessTokenTTL: a client in normal use
+	// rotates about once per access-token lifetime, and a value at or below that
+	// would terminate sessions that never went idle. 0 disables the bound.
+	InactivityTimeout time.Duration
 
 	// MintEnabled mounts POST /mint (VAULT_MINT_ENABLED). Off by default: the endpoint
 	// signs assertions for subjects vault42 never authenticated, so enabling it by
@@ -480,6 +493,7 @@ func Load() (*Config, error) {
 		MetricsEnabled: envBool("VAULT_METRICS_ENABLED"),
 
 		MaxSessionLifetime: envDuration("VAULT_MAX_SESSION_LIFETIME", 720*time.Hour),
+		InactivityTimeout:  envDuration("VAULT_INACTIVITY_TIMEOUT", 1*time.Hour),
 
 		MintEnabled:  envBool("VAULT_MINT_ENABLED"),
 		MintAudience: strings.TrimSpace(os.Getenv("VAULT_MINT_AUDIENCE")),

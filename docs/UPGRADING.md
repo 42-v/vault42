@@ -40,6 +40,17 @@ listed five of them, was already broken before the upgrade.
 one go (033 is deliberately absent — the runner sorts filenames and skips what is applied, so gaps
 are harmless). Take the backup first.
 
+**Every idle session is logged out once.** This release adds an inactivity timeout,
+`VAULT_INACTIVITY_TIMEOUT`, defaulting to `1h` — the figure NIST SP 800-63B-4 §2.2.3 gives
+for AAL2. A refresh-token family that has gone longer than that without being rotated is
+terminated on its next refresh, and the user logs in again. Sessions in active use are
+unaffected: a client rotates about once per `VAULT_ACCESS_TOKEN_TTL`, which is 15 minutes by
+default. What is affected is anything left overnight, including a "remember me" session, so
+expect a burst of logins after the upgrade and one support question about it. Set a longer
+duration, or `0` to disable the bound, if that is not what you want. There is no schema
+change and nothing to migrate; the bound is measured from a column
+`auth.refresh_tokens.created_at` has always carried.
+
 **Migrating with more than one replica is now safe.** `migrate.Run` takes a session-level
 advisory lock (key 4245) around the whole run, so the chart's default `replicaCount: 3` with
 `autoMigrate: true` no longer means two of three pods die on `create schema_migrations:

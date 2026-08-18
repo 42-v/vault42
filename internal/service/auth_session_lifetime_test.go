@@ -236,3 +236,35 @@ func TestEnforceSessionLifetime_UnboundedWithoutATokenService(t *testing.T) {
 		t.Errorf("family origin = %v, want the zero time that means 'no deadline to clamp to'", origin)
 	}
 }
+
+// --- the inactivity bound ---
+
+// The inactivity bound lives on the same token service the absolute bound does,
+// so an AuthService built without one has no bound to enforce here either.
+// NewAuthService accepts a nil token service, and this guard is what turns that
+// into "unbounded" rather than a nil dereference on the first refresh.
+//
+// storedToken carries no CreatedAt, so if the guard were removed this call would
+// take the fail-closed branch and refuse — which is the right behavior when a
+// bound is configured and the wrong one when none is.
+func TestEnforceSessionInactivity_UnboundedWithoutATokenService(t *testing.T) {
+	svc, _ := newMockAuthService(t)
+	svc.tokenSvc = nil
+
+	if err := svc.enforceSessionInactivity(context.Background(), storedToken("raw-refresh-token"), "1.2.3.4", "UA"); err != nil {
+		t.Fatalf("an unconfigured token service must leave rotation unbounded, got %v", err)
+	}
+}
+
+// With a token service present but no inactivity timeout set, the same row must
+// still pass. This is the branch an existing deployment takes on upgrade before
+// anyone sets the variable, and it is the one that would log every user out if
+// a zero were read as "expire immediately".
+func TestEnforceSessionInactivity_UnboundedWhenNoTimeoutIsConfigured(t *testing.T) {
+	svc, _ := newMockAuthService(t)
+	svc.tokenSvc.SetInactivityTimeout(0)
+
+	if err := svc.enforceSessionInactivity(context.Background(), storedToken("raw-refresh-token"), "1.2.3.4", "UA"); err != nil {
+		t.Fatalf("no configured inactivity timeout must leave rotation unbounded, got %v", err)
+	}
+}

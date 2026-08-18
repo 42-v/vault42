@@ -394,6 +394,18 @@ func main() {
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
 	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
 	tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)
+	tokenSvc.SetInactivityTimeout(cfg.InactivityTimeout)
+
+	// The inactivity timeout is measured from the family's last rotation, and a
+	// client in normal use rotates about once per access-token lifetime. Set at
+	// or below that TTL it stops being an idle bound and becomes a hard cap on
+	// every session, idle or not, so the misconfiguration has to be visible
+	// before users start being logged out mid-use.
+	if cfg.InactivityTimeout > 0 && cfg.InactivityTimeout <= cfg.AccessTokenTTL {
+		log.Printf("WARNING: VAULT_INACTIVITY_TIMEOUT (%s) is not longer than the access token TTL (%s); "+
+			"sessions in active use will be terminated as if they were idle",
+			cfg.InactivityTimeout, cfg.AccessTokenTTL)
+	}
 
 	// IP-intelligence: prefers VAULT_IPINTEL_DATA, else the embedded blob. Load
 	// is fail-open — a corrupt embedded blob (a build-time defect) must not stop
