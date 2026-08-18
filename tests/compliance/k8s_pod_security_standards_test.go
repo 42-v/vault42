@@ -55,6 +55,13 @@ var pssRestrictedWorkloads = []pssWorkload{
 	{"frontend.yaml", false, "nginx-unprivileged, declares its own context because it runs as uid 101"},
 	{"redis.yaml", false, "declares its own context because it runs as uid 999"},
 	{"cloudflared.yaml", false, "declares its own context"},
+	// Hardened after the fact, and the reason they were once excluded. The
+	// bundled datastores and the mail catcher are still dev-only and still off
+	// by default; being off by default is not a security property, so they are
+	// held to the profile like everything else.
+	{"postgres.yaml", false, "bundled dev database, hardened; fsGroup 70 because postgres:17-alpine runs as uid 70, not 999"},
+	{"honeypot-postgres.yaml", false, "the honeypot's own database"},
+	{"mailpit.yaml", false, "dev mail catcher"},
 }
 
 // restrictedPodControls are the pod-level settings the profile requires.
@@ -226,10 +233,10 @@ func TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege(t *testing.T
 
 		// hostNetwork is the one deviation, and it belongs to exactly one
 		// workload. Anywhere else it is a regression.
-		if strings.Contains(src, "hostNetwork:") && entry.Name() != "admin-gateway.yaml" {
-			t.Errorf("PSS restricted: charts/vault/templates/%s takes the host network. The admin "+
-				"gateway's hostNetwork is a recorded deviation with an argument behind it; a "+
-				"second one is not.", entry.Name())
+		if strings.Contains(src, "hostNetwork: true") && entry.Name() != "admin-gateway.yaml" {
+			t.Errorf("PSS restricted: charts/vault/templates/%s takes the host network "+
+				"unconditionally. The admin gateway is the only workload permitted to offer it at "+
+				"all, and even there it is opt-in and off by default.", entry.Name())
 		}
 	}
 
@@ -240,88 +247,52 @@ func TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege(t *testing.T
 	t.Logf("PSS restricted: %d chart templates scanned for host namespaces and privilege", scanned)
 }
 
-// TestK8sPSS_Restricted_TheDeviationsAreExactlyTheOnesRecorded pins what the
-// register does *not* claim.
+// TestK8sPSS_Restricted_ThereAreNoDeviationsLeft is what the deviation and
+// exclusion tests became.
 //
-// Three workloads do not meet the profile, and the honest thing is to name them
-// and say why they are acceptable, rather than to scope them out and let a
-// reader infer the chart is uniformly restricted. If any of them is hardened,
-// this test fails and the register row moves with it; if a fourth appears, it
-// fails too.
-func TestK8sPSS_Restricted_TheDeviationsAreExactlyTheOnesRecorded(t *testing.T) {
-	// 1. The admin gateway takes the host network, deliberately: LocalOnly
-	//    refuses anything that is not the node's loopback, and hostNetwork is
-	//    what makes the pod's loopback the node's.
-	gw := readChartFile(t, "templates/admin-gateway.yaml")
-	if !strings.Contains(gw, "hostNetwork: true") {
-		t.Error("PSS restricted: the admin gateway no longer takes the host network. That was the " +
-			"one recorded deviation from the profile; if it is gone the register row should say " +
-			"the vault plane meets restricted outright.")
+// Two earlier versions of this file existed to keep an honest scope on a claim
+// that did not cover everything: one pinned the admin gateway's hostNetwork as
+// the single recorded deviation, and one failed the day postgres,
+// honeypot-postgres or mailpit was hardened, so the exclusion could not outlive
+// its reason. Both fired. hostNetwork now defaults to false and all three
+// workloads meet the profile, so the claim is unqualified and this asserts that
+// rather than asserting a carve-out.
+func TestK8sPSS_Restricted_ThereAreNoDeviationsLeft(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+
+	// The one setting that used to be the deviation. It may still be opted into
+	// -- LocalOnly genuinely wants the node's loopback -- but the default is
+	// what the register describes, and a default is what most deployments get.
+	if !strings.Contains(values, "hostNetwork: false") {
+		t.Error("PSS restricted: adminGateway.hostNetwork no longer defaults to false. Both the " +
+			"baseline and restricted profiles forbid host namespaces, so a default render would " +
+			"stop meeting the claim the register makes; if the default has moved, the row goes back " +
+			"to an accepted risk with the argument written down.")
 	}
-	if !strings.Contains(gw, "LocalOnly") && !strings.Contains(gw, "hostNetwork is false") {
-		t.Error("PSS restricted: the admin gateway template no longer explains why it takes the " +
-			"host network. A deviation without its argument written next to it becomes a defect " +
-			"at the next review.")
+	gw := readChartFile(t, "templates/admin-gateway.yaml")
+	if !strings.Contains(gw, "{{- if .Values.adminGateway.hostNetwork }}") {
+		t.Error("PSS restricted: the admin gateway no longer gates hostNetwork on the value, so it " +
+			"is emitted unconditionally regardless of what values.yaml says")
 	}
 
-	// 2 and 3. The bundled datastore and mail catcher are development
-	//    conveniences. They are excluded from the claim, and what makes that
-	//    honest is that they are off by default and labelled as such.
-	values := readChartFile(t, "values.yaml")
+	// The three formerly-excluded workloads are covered by
+	// pssRestrictedWorkloads above. What is asserted here is that they are
+	// still labelled for what they are: a hardened dev database is still a dev
+	// database, and the deployment guide tells operators not to run it.
 	for _, dev := range []struct{ marker, label string }{
 		{"# ---- PostgreSQL (dev/embedded only) ----", "postgres"},
 		{"# ---- Mailpit (dev only) ----", "mailpit"},
 	} {
 		if !strings.Contains(values, dev.marker) {
 			t.Errorf("PSS restricted: charts/vault/values.yaml no longer labels the bundled %s as "+
-				"development-only. The register excludes it from the PSS claim on exactly that "+
-				"basis; if it becomes a supported production workload it has to meet the profile.",
-				dev.label)
+				"development-only. It meets the profile now, which is not the same as it being a "+
+				"supported production datastore.", dev.label)
 		}
 	}
-
-	// Off by default is the other half of that argument.
 	for _, template := range []string{"postgres.yaml", "mailpit.yaml"} {
-		src := readChartFile(t, "templates/"+template)
-		if !strings.Contains(src, ".enabled }}") {
+		if !strings.Contains(readChartFile(t, "templates/"+template), ".enabled }}") {
 			t.Errorf("PSS restricted: charts/vault/templates/%s is no longer gated on an enabled "+
 				"flag, so it may render in a default install", template)
-		}
-	}
-}
-
-// TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded is the closure
-// tripwire on the scope of the claim.
-//
-// postgres, honeypot-postgres and mailpit are excluded from the PSS claim
-// because they do not meet the profile and are dev-only and off by default.
-// That is an honest exclusion only while it is true. The day one of them is
-// hardened, the register should stop excluding it rather than keep a permanent
-// carve-out that quietly understates the chart.
-func TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded(t *testing.T) {
-	values := readChartFile(t, "values.yaml")
-
-	for _, template := range []string{"postgres.yaml", "honeypot-postgres.yaml", "mailpit.yaml"} {
-		src := readChartFile(t, "templates/"+template)
-		pod, ctr := resolveSecurityContext(t, src, values)
-
-		hardened := true
-		for control := range restrictedPodControls {
-			if !strings.Contains(pod, control) {
-				hardened = false
-			}
-		}
-		for control := range restrictedContainerControls {
-			if !strings.Contains(ctr, control) {
-				hardened = false
-			}
-		}
-		if hardened {
-			t.Errorf("PSS restricted: charts/vault/templates/%s now satisfies the profile. The "+
-				"register excludes it by name from the Kubernetes PSS claim on the basis that it "+
-				"does not. Drop the exclusion from the PSS rows and from meta.scope.out_of_scope, "+
-				"and delete this entry -- an exclusion kept past its reason understates the chart "+
-				"and reads, to anyone who checks, like a claim nobody maintains.", template)
 		}
 	}
 }

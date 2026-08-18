@@ -20,8 +20,7 @@
         "web/ — the Vue single-page frontend, assessed separately",
         "packages/ — the C# and TypeScript client SDKs, assessed separately",
         "Operator deployment configuration beyond the shipped Helm chart",
-        "cmd/bridge and the honeypot profile, which are non-default deployment modes",
-        "The chart's bundled PostgreSQL and Mailpit workloads — labelled dev-only in values.yaml and disabled by default — are excluded from the Kubernetes Pod Security Standards claim. They do not meet the restricted profile, and the claim names the workloads it covers rather than implying the whole chart."
+        "cmd/bridge and the honeypot profile, which are non-default deployment modes"
       ],
       "asvs_level": "L2",
       "asvs_level_note": "Every ASVS 5.0.0 requirement at L1 and L2 is classified. L3 requirements are outside the declared level; where one is nevertheless satisfied or deliberately not satisfied it is recorded anyway rather than omitted."
@@ -204,18 +203,6 @@
       "revisit_when": "1.1, together with an off-system mirror. A chain designed without one would be worse than none because it would imply a guarantee it does not provide.",
       "cost_of_closing": "A prev-hash column, a signing key held outside the process, read-time verification, and a checkpoint scheme that survives retention pruning. The batch insert path at internal/repository/postgres/audit.go:50 breaks a naive prev-hash chain and is the hard part."
     },
-    "CR-25": {
-      "title": "DPoP proofs are validated but no token is sender-constrained, and the decrypted blob plaintext and label are not zeroed",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "Two related residuals in the same area. First, DPoP: internal/crypto/dpop.go validates a proof thoroughly, but no issuance path sets cnf.jkt, so claims.Confirmation is always nil and internal/middleware/dpop.go binds nothing. The code documents itself as experimental, VAULT_DPOP_ENABLED is off by default, and the discovery document does not advertise DPoP, so nothing is claimed to clients that is not delivered. Second, memory zeroing. This entry previously said the decrypted RSA private signing key PEM at internal/keystore/keystore.go:297 was not zeroed. That was wrong in two ways: :297 is a comment line, and the buffer is wiped on both paths, at internal/keystore/keystore.go:211 and :442. docs/security.md:307 already said so, so the two documents asserted opposite facts about one buffer. The decrypted identity plaintext is wiped too, at internal/service/identity.go:200. What is genuinely not wiped is narrower: the decrypted blob plaintext and the decrypted blob label in internal/service/blob.go, at :243 (the decrypted ciphertext), :267 (the decrypted label) and :307 (the label decrypted for a listing). Eleven configuration secrets are Go strings and cannot be zeroed at all, which is the platform limitation already accepted as docs/security.md AR-4, and the parsed RSA key itself cannot be zeroed for the reason docs/security.md AR-13 gives.",
-      "compensating_control": "The process is short-lived and containerised with no core dumps; the signing key is regenerated on rotation; ASVS 5.0.0 removed the memory-zeroing requirement that the previous report filed this under (v4.0.3-8.3.2 is marked DELETED, NOT IN SCOPE in the official mapping), and the only surviving related requirement, V11.7.1 full memory encryption, is L3.",
-      "residual_risk": "A heap dump taken while the process is live could yield a recently decrypted blob plaintext or label, and the parsed signing key that no wipe can reach. The decrypted signing-key PEM buffer is not part of this residual: it is wiped.",
-      "revisit_when": "Either capability is advertised to a customer, or a deployment requires memory-dump resistance. Retracting the DPoP surface is preferable to leaving it half-built past 1.0.0.",
-      "cost_of_closing": "For DPoP: set cnf.jkt at issuance when a proof was presented, or remove the middleware. For zeroing: two defer config.ZeroBytes calls on the blob plaintext and label buffers in internal/service/blob.go. Neither closes the Go string half."
-    },
     "CR-26": {
       "title": "Stored objects are served back without a Content-Disposition header",
       "severity": "Low",
@@ -234,7 +221,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/server/server.go:394 mounts GET /auth/verify-email, and internal/handler/auth.go:194 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation, and no Sec-Fetch-* header is read anywhere in the tree. The constraint is real rather than an oversight: the link is delivered by email and followed by a browser navigation, which is a GET, and turning it into a POST means an interstitial page the user must click through.",
+      "rationale": "internal/server/server.go:490 mounts GET /auth/verify-email, and internal/handler/auth.go:194 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation, and no Sec-Fetch-* header is read anywhere in the tree. The constraint is real rather than an oversight: the link is delivered by email and followed by a browser navigation, which is a GET, and turning it into a POST means an interstitial page the user must click through.",
       "compensating_control": "The token is single-use and consumed atomically by a compare-and-delete, so a replayed or prefetched link verifies at most once; the token is high-entropy and short-lived; the effect is bounded to marking an address the operator already sent mail to as verified, and confers no session; the route is rate limited. This is the emailed-link pattern docs/security.md AR-1 already covers.",
       "residual_risk": "A mail client, security scanner or link prefetcher that follows the link performs the verification without the user acting. Nothing else is reachable through the route.",
       "revisit_when": "Any additional state change is added behind a GET route, or the verification link starts conferring a session rather than only marking an address verified.",
@@ -246,7 +233,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:759 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:772 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -263,18 +250,6 @@
       "residual_risk": "A super_admin can put markup the denylist does not enumerate into an email body. The realistic outcome is a phishing-shaped mail, which the same principal could send by rewriting the copy.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
       "cost_of_closing": "Replace the denylist with an allowlist sanitiser such as bluemonday, configured for an email-safe element set. The change is small; the reason it has not been made is that the denylist and the super_admin gate together already bound the realistic outcome."
-    },
-    "CR-33": {
-      "title": "The admin gateway takes the host network, which the Pod Security Standards forbid at baseline",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-18",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "charts/vault/templates/admin-gateway.yaml sets hostNetwork: true, and both the baseline and restricted profiles disallow host namespaces. It is deliberate and load-bearing: the gateway's primary control is that it binds loopback and refuses anything that did not arrive on it, and inside a pod network namespace loopback is the pod's, not the node's. The chart refuses to render with hostNetwork false unless the operator also sets devMode explicitly, which is what turning the control off looks like when it is stated out loud rather than defaulted away.",
-      "compensating_control": "The gateway meets every other restricted control: runAsNonRoot at uid 65532, RuntimeDefault seccomp, allowPrivilegeEscalation false, capabilities drop ALL, read-only root filesystem, no service-account token. On top of the network namespace it requires mutual TLS with a client certificate signed by a configured CA, a bearer session token, and RBAC on every route. It is disabled by default.",
-      "residual_risk": "The admin gateway pod shares the node's network namespace, so it can see and bind the node's interfaces. A compromise of that container is a better network position than a compromise of any other pod in the chart.",
-      "revisit_when": "A deployment needs the whole chart to pass a restricted-profile admission controller, or the gateway gains an access path that does not depend on node loopback.",
-      "cost_of_closing": "Replace node loopback with a different trust anchor for LocalOnly, such as requiring the mutual-TLS client certificate to carry a specific identity, which docs/security.md AR-9 records as not currently validated. That is a change to the admin plane's trust model, not a chart edit."
     }
   },
   "requirements": [
@@ -741,12 +716,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:387"
+        "internal/adminapi/handler.go:392"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "Numeric request values are parsed with strconv and range-clamped before use."
+      "notes": "Numeric request values are parsed with strconv and range-clamped before use. Handler.DeleteUser (internal/adminapi/handler.go:392) is the admin-plane entry point, writing the escrow record before the cascade."
     },
     {
       "standard": "OWASP ASVS",
@@ -1025,13 +1000,13 @@
       "status": "Met",
       "evidence": [
         "internal/server/server.go:410",
-        "internal/middleware/ratelimit.go:172"
+        "internal/middleware/ratelimit.go:266"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:410), so a cache outage refuses rather than degrades to unlimited."
+      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:410); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
     },
     {
       "standard": "OWASP ASVS",
@@ -1334,7 +1309,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:394",
+        "internal/server/server.go:490",
         "internal/handler/auth.go:194"
       ],
       "tests": [],
@@ -1354,7 +1329,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:653",
+        "internal/server/server.go:772",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
@@ -2157,13 +2132,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:309",
+        "internal/server/server.go:490",
         "docs/api.md"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build."
+      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build. The unauthenticated entries are deliberate and few -- GET /auth/verify-email at internal/server/server.go:490 is one, reached from an emailed link and carrying its own rate limiter."
     },
     {
       "standard": "OWASP ASVS",
@@ -2717,12 +2692,12 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:131"
+        "internal/config/config.go:88"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "VAULT_MAX_SESSIONS_PER_USER and the 429 too_many_sessions behaviour are documented. Note that docs/config.md previously described eviction of the oldest session, which does not happen; correcting that is on the documentation stream."
+      "notes": "VAULT_MAX_SESSIONS_PER_USER and the 429 too_many_sessions behaviour are documented; AccessTokenTTL and RefreshTokenTTL carry their own documented defaults (internal/config/config.go:88). Note that docs/config.md previously described eviction of the oldest session, which does not happen; correcting that is on the documentation stream."
     },
     {
       "standard": "OWASP ASVS",
@@ -2936,7 +2911,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:376"
+        "internal/server/server.go:535"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -4267,13 +4242,12 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:395",
-        "internal/config/config.go:752"
+        "internal/config/config.go:403"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:395). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext (internal/config/config.go:752). Dev substitutes sslmode=disable deliberately, against a loopback database."
+      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:403). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
     },
     {
       "standard": "OWASP ASVS",
@@ -4394,12 +4368,12 @@
       "status": "Met",
       "evidence": [
         "charts/vault/templates/networkpolicy.yaml:7",
-        "charts/vault/values.yaml:287"
+        "charts/vault/values.yaml:380"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
       ],
-      "notes": "The chart ships a 259-line NetworkPolicy, enabled by default, restricting egress to Postgres, Redis, DNS and SMTP."
+      "notes": "The chart ships a 259-line NetworkPolicy, enabled by default (charts/vault/values.yaml:380, networkPolicy.enabled), restricting egress to Postgres, Redis, DNS and SMTP."
     },
     {
       "standard": "OWASP ASVS",
@@ -4691,13 +4665,13 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:286",
-        "internal/audit/retention.go:70"
+        "internal/audit/retention.go:84"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
         "TestGDPR_Art17_3_AuditExemptionIsBoundedByRetention"
       ],
-      "notes": "Scrubbing, retention and access control are implemented as documented for each class."
+      "notes": "Scrubbing, retention and access control are implemented as documented for each class. Retention.Sweep (internal/audit/retention.go:84) is the mechanised half, and migration 032 batches it so a long horizon does not lock the table."
     },
     {
       "standard": "OWASP ASVS",
@@ -4878,12 +4852,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:312"
+        "internal/server/server.go:772"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces (metrics, OAuth, registration, blobs, KMS) are each mounted only when configured."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:772), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",
@@ -5310,14 +5284,14 @@
       "requirement": "Verify that the application continues to operate securely when external resource access fails, for example, by using patterns such as circuit breakers or graceful degradation.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:189",
+        "internal/middleware/ratelimit.go:285",
         "internal/service/auth.go:1079"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Cache loss degrades to a database-backed lockout rather than removing the control, and the credential limiters fail closed."
+      "notes": "Cache loss degrades to a database-backed lockout rather than removing the control, and the credential limiters fail closed: RateLimit rejects with 503 when FailClosed is set and the distributed cache is unavailable (internal/middleware/ratelimit.go:285)."
     },
     {
       "standard": "OWASP ASVS",
@@ -6081,14 +6055,13 @@
       "requirement": "Audit Log Storage Capacity",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:232",
-        "internal/audit/retention.go:70"
+        "internal/audit/retention.go:84"
       ],
       "tests": [
         "TestASVS_V16_5_3_CriticalAuditEventsAreExemptFromBufferDrop",
         "TestNIST80053_AU_11_RetentionIsMechanisedAndOffByDefault"
       ],
-      "notes": "Buffer overflow is counted and exempts critical events; retention bounds growth when configured."
+      "notes": "Buffer overflow is counted and exempts critical events; retention bounds growth when configured. Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6147,13 +6120,13 @@
       "requirement": "Audit Record Retention",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:70"
+        "internal/audit/retention.go:84"
       ],
       "tests": [
         "TestNIST80053_AU_11_RetentionIsMechanisedAndOffByDefault",
         "TestGDPR_Art5_1_e_RetentionDisabledByDefault"
       ],
-      "notes": ""
+      "notes": ". Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6684,14 +6657,14 @@
       "requirement": "Storage limitation",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:70"
+        "internal/audit/retention.go:84"
       ],
       "tests": [
         "TestGDPR_Art5_1_e_RetentionDisabledByDefault",
         "TestGDPR_Art5_1_e_RecoveryEscrowRetentionDisabledByDefault",
         "TestGDPR_Art17_3_AuditExemptionIsBoundedByRetention"
       ],
-      "notes": ""
+      "notes": ". Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "GDPR",
@@ -6980,16 +6953,16 @@
       "revision_date": "",
       "requirement_id": "RFC 9449 / RFC 9700 — sender-constrained access tokens",
       "requirement": "DPoP: sender-constrained access tokens",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-25",
+      "status": "Met",
       "evidence": [
-        "internal/middleware/dpop.go:17",
-        "internal/service/token.go:62"
+        "internal/service/token.go:171",
+        "internal/service/token.go:278",
+        "internal/middleware/dpop.go:110"
       ],
       "tests": [
         "TestRFC9700_4_10_1_SenderConstrainedDPoP"
       ],
-      "notes": "Proof validation is complete and correct (typ, alg, jwk, htm, htu, iat freshness, one-time jti, ath, thumbprint), but no issuance path ever sets the cnf.jkt confirmation claim, so no token is actually sender-constrained and the middleware binds nothing. VAULT_DPOP_ENABLED is off by default and the code documents itself as experimental. The discovery document does not advertise DPoP, so the capability is not claimed to clients. Citation caveat: this row was filed as \"RFC 9449 s4.10.1\" while its own named test is TestRFC9700_4_10_1_SenderConstrainedDPoP, and RFC 9449 section 4 is \"DPoP Proof JWTs\" with no subsection 4.10.1. The row and the test disagreed about which document the requirement comes from. The identifier has been widened to name both documents rather than asserting a section number that was not verified against a primary source; pinning the exact clause is deferred to a revision that can check it."
+      "notes": "Met. Access tokens are sender-constrained: when the middleware has validated a DPoP proof, issuance stamps cnf.jkt with its thumbprint (internal/service/token.go:171 on the login and rotation paths, :278 on the challenge token), and the middleware then compares the presented proof's thumbprint against the claim in constant time and refuses a mismatch (internal/middleware/dpop.go:110). WithDPoPScheme has a production caller, so the DPoP authentication scheme is accepted rather than declared. This row was an accepted risk, CR-25, for as long as no issuance path assigned cnf.jkt and the middleware therefore compared a proof against nothing.\n\nTwo limits, stated rather than rounded up. Refresh tokens are NOT sender-constrained: the refresh token is an opaque value in a __Host- cookie with no jkt column to bind it to, so its protection remains single-use rotation with family revocation on replay, not proof-of-possession. And no DPoP-Nonce is issued, so a proof's replay window is bounded by its iat freshness check and the one-time jti cache rather than by a server-supplied nonce. Full sender-constraint across every credential is not claimed; the access token is bound and the two gaps are named."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -7559,10 +7532,9 @@
         "charts/vault/values.yaml:41"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no chart template sets privileged: true, asserted across every template rather than on the ones that exist today. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: no chart template sets privileged: true, asserted across every template rather than on the ones that exist today. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7570,15 +7542,16 @@
       "revision_date": "",
       "requirement_id": "PSS-host-namespaces",
       "requirement": "Host Namespaces: sharing the host namespaces must be disallowed",
-      "status": "Accepted Risk",
+      "status": "Met",
       "evidence": [
-        "charts/vault/templates/admin-gateway.yaml:24"
+        "charts/vault/values.yaml:591",
+        "charts/vault/templates/admin-gateway.yaml:22"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Accepted risk CR-33. Every workload except one leaves the host namespaces alone; the admin gateway sets hostNetwork: true so that binding loopback binds the node's loopback, which is what makes its LocalOnly guard meaningful. hostPID and hostIPC are set nowhere. The gate asserts hostNetwork appears in exactly one template, so a second one is a regression rather than a precedent. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason.",
-      "accepted_risk": "CR-33"
+      "notes": "Met: no workload takes a host namespace in a default render. hostPID and hostIPC are set nowhere, and adminGateway.hostNetwork now defaults to false (charts/vault/values.yaml:591); the admin-gateway template only emits hostNetwork when an operator opts in (charts/vault/templates/admin-gateway.yaml:22), and the chart makes that choice explicit rather than silent. This was accepted risk CR-33 while the default was true. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7591,10 +7564,9 @@
         "charts/vault/templates/deployment.yaml:103"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no template mounts a hostPath. The volume types in use are secret, configMap, emptyDir and persistentVolumeClaim, all of which the restricted profile permits. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: no template mounts a hostPath. The volume types in use are secret, configMap, emptyDir and persistentVolumeClaim, all of which the restricted profile permits. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7607,10 +7579,9 @@
         "charts/vault/templates/service.yaml:1"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no container declares a hostPort. Ports are exposed through Services. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: no container declares a hostPort. Ports are exposed through Services. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7624,10 +7595,9 @@
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: no template adds a capability back. The shared container security context drops ALL. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: no template adds a capability back. The shared container security context drops ALL. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7641,10 +7611,9 @@
         "charts/vault/templates/frontend.yaml:36"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: allowPrivilegeEscalation: false on the shared container security context, which four workloads inherit, and inline on the three that declare their own. Without it a setuid binary in the image regains what runAsUser dropped. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: allowPrivilegeEscalation: false on the shared container security context, which four workloads inherit, and inline on the three that declare their own. Without it a setuid binary in the image regains what runAsUser dropped. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7658,10 +7627,9 @@
         "charts/vault/templates/frontend.yaml:32"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: runAsNonRoot: true with an explicit non-root uid on every vault-plane workload — 65532 for the Go binaries, 101 for nginx-unprivileged, 999 for redis. The frontend image half of that is held separately by TestTheFrontendImageDoesNotRunAsRoot, because a securityContext can only refuse to start a container that was built to need root. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: runAsNonRoot: true with an explicit non-root uid on every vault-plane workload — 65532 for the Go binaries, 101 for nginx-unprivileged, 999 for redis. The frontend image half of that is held separately by TestTheFrontendImageDoesNotRunAsRoot, because a securityContext can only refuse to start a container that was built to need root. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7674,10 +7642,9 @@
         "charts/vault/values.yaml:38"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: seccompProfile type RuntimeDefault on every vault-plane pod spec. This is one of the two controls that separate restricted from baseline, and it is the one most often left at the default, which is unconfined. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: seccompProfile type RuntimeDefault on every vault-plane pod spec. This is one of the two controls that separate restricted from baseline, and it is the one most often left at the default, which is unconfined. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7692,10 +7659,9 @@
       ],
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
-        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: capabilities drop ALL, with nothing added back anywhere. The Go binaries bind ports above 1024, so even NET_BIND_SERVICE is unnecessary. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: capabilities drop ALL, with nothing added back anywhere. The Go binaries bind ports above 1024, so even NET_BIND_SERVICE is unnecessary. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7709,10 +7675,9 @@
         "charts/vault/templates/postgres.yaml:9"
       ],
       "tests": [
-        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
-        "TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded"
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence, and TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded fails the day any of them is hardened, so the exclusion cannot outlive its reason."
+      "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
     }
   ],
   "retired_risks": {
@@ -7720,6 +7685,8 @@
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
     "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:820) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
-    "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated."
+    "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
+    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
+    "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice."
   }
 }

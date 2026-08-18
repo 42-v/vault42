@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **404 requirements in scope across 9 standards: 332 Met, 26 Accepted Risk,
+> **404 requirements in scope across 9 standards: 334 Met, 24 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -181,7 +181,7 @@ until it describes a different requirement, and nothing catches it.
 For completeness, the ASVS 5.0.0 mapping marks `v4.0.3-8.3.2` as **DELETED, NOT
 IN SCOPE**. The memory-zeroing concern the old finding described has no L1 or L2
 successor in the current standard; the only related requirement, V11.7.1 (full
-memory encryption), is L3. The underlying gap is still recorded, as CR-25, rather
+memory encryption), is L3. The underlying gap was recorded as CR-25, since closed, rather
 than being retired on a technicality.
 
 ---
@@ -195,13 +195,13 @@ than being retired on a technicality.
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
-| RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
+| RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 9 | 1 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
-| Kubernetes Pod Security Standards, restricted | 9 | 1 | 0 | 10 |
-| **Total** | **332** | **26** | **46** | **404** |
+| Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
+| **Total** | **334** | **24** | **46** | **404** |
 
-The 26 Accepted Risk rows collapse to **14 distinct accepted risks**: several
+The 24 Accepted Risk rows collapse to **12 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -278,12 +278,10 @@ neither namespace.
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
 | **CR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
-| **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, the decrypted blob plaintext and label are not zeroed (`internal/service/blob.go:243,267,307`). The signing-key PEM **is** zeroed; this row used to say otherwise. | RFC 9449 / RFC 9700, sender-constrained access tokens |
 | **CR-26** | Low | Neither blob download path sets `Content-Disposition`, so nothing tells a browser that a blob navigated to directly is a download rather than a document. `nosniff` and owner-scoped reads bound it. | ASVS V3.2.1, V5.1.1, V5.4.1 |
 | **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
 | **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
 | **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
-| **CR-33** | Low | The admin gateway sets `hostNetwork: true`, which the Pod Security Standards forbid at baseline. It is load-bearing: `LocalOnly` means the node's loopback, and inside a pod namespace loopback is the pod's. Every other restricted control is met. | Kubernetes PSS host namespaces |
 
 ### The three standards added in 1.0.0
 
@@ -295,7 +293,7 @@ of the list:
 |---|---|
 | **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. Nine Met, one accepted risk (API7 is CR-17, the same SSRF residual ASVS V1.3.6 carries). API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
 | **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. PO.3.2 is an accepted risk, CR-32: there is no dependency-update automation, and a nightly scanner is not one. |
-| **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. Nine controls Met across the vault-plane workloads; host namespaces is CR-33. |
+| **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. All ten controls Met across every workload the chart deploys, with no exclusions and no deviations. |
 
 **Not added, and why.**
 
@@ -338,6 +336,8 @@ rather than a person remembering to.
 | ID | What closed it | The test that fired |
 |---|---|---|
 | **CR-27** | Both policies now declare `object-src 'none'` and `base-uri 'none'` (`internal/middleware/security_headers.go:18-19`). | `TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims` |
+| **CR-25** | DPoP finished. `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths and enforced by a constant-time thumbprint comparison; the decrypted blob buffers are now wiped too. Refresh tokens remain unbound and there is no `DPoP-Nonce`, both stated in the requirement row rather than carried as a risk. | `TestRFC9700_4_10_1_SenderConstrainedDPoP` |
+| **CR-33** | `adminGateway.hostNetwork` now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile with no exemption. It stays opt-in for operators who want the `LocalOnly` posture. | `TestK8sPSS_Restricted_ThereAreNoDeviationsLeft` |
 | **CR-31** | `passwordMinLengthFloor` is now **15**, not 8, and the dev profile no longer has *no* floor -- it has a lower one of 8, which is itself the figure §3.1.1.1 requires a verifier to accept. | `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` |
 | **CR-32** | `.github/dependabot.yml` exists and covers gomod, npm and github-actions. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
 
