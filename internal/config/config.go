@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -98,6 +99,12 @@ type Config struct {
 	SMTPUser string
 	// SMTPPass is the SMTP authentication password (SMTP_PASS_FILE).
 	SMTPPass string
+	// SMTPAllowPlaintext permits delivery to an SMTP server that does not
+	// advertise STARTTLS (VAULT_SMTP_ALLOW_PLAINTEXT). Default: false — every
+	// message carries a bearer secret, so a relay that cannot be upgraded is a
+	// failed send. Outside dev the opt-out is accepted only for a loopback
+	// SMTP_HOST, which is the one hop that never leaves the machine.
+	SMTPAllowPlaintext bool
 	// EmailFrom is the sender address for outgoing emails (VAULT_EMAIL_FROM).
 	EmailFrom string
 
@@ -396,6 +403,8 @@ func Load() (*Config, error) {
 		SMTPPort:      envOr("SMTP_PORT", "587"),
 		EmailFrom:     os.Getenv("VAULT_EMAIL_FROM"),
 
+		SMTPAllowPlaintext: envBool("VAULT_SMTP_ALLOW_PLAINTEXT"),
+
 		OAuthGoogleClientID:   os.Getenv("VAULT_OAUTH_GOOGLE_CLIENT_ID"),
 		OAuthGitHubClientID:   os.Getenv("VAULT_OAUTH_GITHUB_CLIENT_ID"),
 		OAuthFacebookClientID: os.Getenv("VAULT_OAUTH_FACEBOOK_CLIENT_ID"),
@@ -603,6 +612,13 @@ func Load() (*Config, error) {
 	// enumerates in seconds. Dev gets a lower floor, not an absent one; a local
 	// login is not a deployment, but a build that accepts a four-character
 	// password is not a password check either.
+	// The plaintext-SMTP opt-out is scoped to the relay it was meant for. An
+	// operator who sets it against a remote host is not accepting a local hop,
+	// they are mailing one-time codes across a network in cleartext.
+	if c.SMTPAllowPlaintext && c.Profile != ProfileDev && !isLoopbackSMTPHost(c.SMTPHost) {
+		return nil, fmt.Errorf("VAULT_SMTP_ALLOW_PLAINTEXT is accepted only for a loopback SMTP_HOST in %s profile (got %q)", c.Profile, c.SMTPHost)
+	}
+
 	if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor {
 		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", floor, c.Profile, c.PasswordMinLength)
 	}
@@ -765,6 +781,17 @@ func (c *Config) checkGeoFence() error {
 		return fmt.Errorf("TRUSTED_PROXIES required when GEO_IP_HEADER is set in %s profile; the country is believed only from a trusted hop, so with no trusted proxy the geo fence never fires", c.Profile)
 	}
 	return nil
+}
+
+// isLoopbackSMTPHost reports whether SMTP_HOST names a relay on this machine.
+// "localhost" is accepted by name because that is how a sidecar relay is
+// usually addressed; everything else has to resolve to a loopback literal.
+func isLoopbackSMTPHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted

@@ -314,7 +314,8 @@ func main() {
 		emailSender = email.NewSendGridSender(cfg.SendGridAPIKey, cfg.EmailFrom)
 		log.Println("Email: SendGrid provider configured")
 	case cfg.SMTPHost != "":
-		emailSender = email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom)
+		emailSender = email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom,
+			email.AllowPlaintext(cfg.SMTPAllowPlaintext))
 		log.Println("Email: SMTP provider configured")
 	case cfg.SendGridAPIKey != "":
 		// Fallback: SMTP not configured but SendGrid API key is available
