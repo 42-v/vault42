@@ -8,8 +8,8 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **367 requirements in scope across 6 standards: 286 Met, 18 Accepted Risk,
-> 63 Not Applicable. 0 unclassified.**
+> **367 requirements in scope across 6 standards: 295 Met, 26 Accepted Risk,
+> 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
 runs on every CI build. Every **Accepted Risk** carries a rationale, a
@@ -101,10 +101,22 @@ The per-AAL reauthentication timeouts live under section 2, beneath each
 assurance level, not under section 5. Anything citing §5.2.1, §5.2.2 or §5.2.3
 for those timeouts is citing sections that do not exist.
 
-One requirement got **stricter** and vault42 already met it: Rev 4 §3.1.1.2
-raises the single-factor password floor from 8 characters to 15, which is the
-minimum vault42 has enforced since 0.4. That row moves from "exceeds the
-standard" to "meets the current standard exactly", which is the stronger claim.
+One requirement got **stricter** and vault42 does **not** meet it. Rev 4
+§3.1.1.2 raises the single-factor password floor from 8 characters to 15.
+Through 1.0.0 this paragraph said 15 "is the minimum vault42 has enforced since
+0.4", and `README.md` said the same. It is not. 15 is the shipped **default**
+(`internal/config/config.go:403`); the enforced floor -- the value below which a
+non-dev deployment refuses to start -- is **8**
+(`passwordMinLengthFloor`, `internal/config/config.go:772`, checked at `:605`),
+and the dev profile is exempt from it entirely. A production deployment may
+legally set `VAULT_PASSWORD_MIN_LENGTH=8`.
+
+That row is now an accepted risk, **CR-31**, rather than Met. ASVS V6.2.1, whose
+text requires 8 and recommends 15, remains genuinely Met.
+`TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` reads both
+numbers out of `config.go` and fails if this document, `README.md` or the
+register state anything else -- and flips the row back to Met the day the floor
+reaches 15.
 
 One requirement got **harder**: Rev 4 §2.2.3 states that *"a definite
 reauthentication overall timeout SHALL be established, which SHOULD be no more
@@ -174,19 +186,47 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 195 | 9 | 59 | 263 |
-| NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 205 | 16 | 42 | 263 |
+| NIST SP 800-63B-4 | 26 | 3 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
-| **Total** | **286** | **18** | **63** | **367** |
+| **Total** | **295** | **26** | **46** | **367** |
 
-The 18 Accepted Risk rows collapse to **9 distinct accepted risks**: several
+The 26 Accepted Risk rows collapse to **15 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
 previously.
+
+### What moved, and why the N/A bucket shrank by seventeen
+
+Twenty-one Not Applicable rows rested on three sentences that were false on the
+facts. The V3 rationale said vault42 "ships no browser-facing application of its
+own"; `internal/frontend` embeds the SPA into the binary, `Dockerfile:32` and
+`.goreleaser.yaml:26-29` put a real Vue build there before compiling, and
+`internal/server/server.go:640` serves it. The V5 rationale said vault42
+"accepts no file uploads" and never "stores by client-supplied name";
+`internal/handler/blob.go:52` calls `r.FormFile("file")` and
+`PUT /user/blobs/named/{name}` stores under a caller-supplied name. The V1.3.7
+rationale said "no template is built from input"; `internal/email/mailer.go:202`
+parses an admin-supplied string on the live send path.
+
+| Movement | Count | Rows |
+|---|---:|---|
+| N/A → **Met** | 9 | V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.2.1, V5.2.3, V5.3.2, V5.4.2, plus V1.3.7 |
+| N/A → **Accepted Risk** | 6 | V3.2.1, V3.4.3, V3.5.3, V3.5.4, V5.1.1, V5.4.1, plus V1.3.1 |
+| **Met** → Accepted Risk | 1 | NIST SP 800-63B-4 §3.1.1.2 -- the password floor. See CR-31. |
+| N/A, reason rewritten and now tested | 12 | V3.2.2, V3.5.5, V5.2.2, V5.3.1, V5.4.3, V1.3.4, V6.2.6, V6.7.1, V7.4.4, V10.4.1, V14.3.1, V15.3.6 |
+
+Two of those rows -- **V3.4.3** and **V3.5.3** -- were real gaps hidden behind a
+false N/A: neither Met nor accepted, while the closing line of this document
+said there were no standing gaps. They are now CR-27 and CR-28.
+
+The Met bucket grew and one Met row was **lost**: §3.1.1.2, where the register,
+this document and `README.md` all said vault42 enforced a 15-character password
+minimum. It ships 15 as the default and enforces a floor of 8.
 
 ---
 
@@ -232,6 +272,12 @@ neither namespace.
 | **CR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
 | **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, the decrypted blob plaintext and label are not zeroed (`internal/service/blob.go:243,267,307`). The signing-key PEM **is** zeroed; this row used to say otherwise. | RFC 9449 / RFC 9700, sender-constrained access tokens |
+| **CR-26** | Low | Neither blob download path sets `Content-Disposition`, so nothing tells a browser that a blob navigated to directly is a download rather than a document. `nosniff` and owner-scoped reads bound it. | ASVS V3.2.1, V5.1.1, V5.4.1 |
+| **CR-27** | Low | Neither Content-Security-Policy declares `object-src 'none'` or `base-uri 'none'`, which V3.4.3 names as the minimum. `default-src` does not cover `base-uri`. A two-token fix, and the one item here that should not survive to 1.1. | ASVS V3.4.3 |
+| **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
+| **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
+| **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
+| **CR-31** | Medium | The 15-character password minimum is the shipped **default**; the enforced floor is 8 outside dev, and the dev profile has no floor. This document said "the minimum vault42 has enforced since 0.4". It was not. | 800-63B-4 §3.1.1.2 |
 
 ---
 
@@ -292,7 +338,25 @@ go test ./tests/compliance/ -run TestComplianceRegister
 
 ## Standing gaps not covered by an accepted risk
 
-None. Every requirement is Met or carries an accepted risk with a named owner.
+**None -- and the previous version of this sentence was false.** It said the
+same words, and they were true of the register rather than of the system. Two
+requirements were neither Met nor covered by any accepted risk, because both sat
+behind a Not Applicable filed on a premise that was wrong on the facts:
+
+- **ASVS V3.4.3** -- neither Content-Security-Policy declares `object-src 'none'`
+  or `base-uri 'none'`
+  (`internal/middleware/security_headers.go:12-13`). Now **CR-27**.
+- **ASVS V3.5.3** -- `GET /auth/verify-email` mutates state
+  (`internal/server/server.go:381`, `internal/handler/auth.go:194`) and no
+  `Sec-Fetch-*` validation exists anywhere in the tree. Now **CR-28**.
+
+The sentence is true again because those two rows were reclassified, not because
+the gaps were not there. What made a false universal claim survivable was that
+nothing checked the classification underneath it: a Met row has to name a test,
+an N/A row asserting non-existence did not.
+`TestComplianceRegister_NotApplicableNonExistenceClaimsNameAnExistingTest` now
+requires one, and would have caught all twenty-one of the misclassified rows on
+the day they were written.
 
 **Correction.** This section previously said CR-14's mandatory half was
 unwired and that `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` would fail
