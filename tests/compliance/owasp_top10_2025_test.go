@@ -823,7 +823,23 @@ func TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned(t *testing.T) {
 		t.Error("A08:2025: package.json no longer pins the package manager by hash")
 	}
 
-	if ci := workflowSource(t, "ci.yml"); ci != "" && !strings.Contains(ci, "--frozen-lockfile") {
+	// Read the workflow first and fail on an unreadable one, rather than folding
+	// `ci != ""` into the assertion below.
+	//
+	// As a conjunct, the missing-file case did not assert; it deleted the
+	// assertion. Renaming ci.yml left this test green while the only executable
+	// evidence that CI installs from the lockfile went away with the file, which
+	// is the failure mode a compliance gate exists to make impossible. The A03
+	// provenance test 100 lines above answers the identical condition with a
+	// Fatal, and for the identical reason: the register cites this row, and
+	// without the workflow there is nothing behind it.
+	ci := workflowSource(t, "ci.yml")
+	if ci == "" {
+		t.Fatalf("A08:2025: .github/workflows/ci.yml is unreadable, so the --frozen-lockfile " +
+			"assertion below would be skipped and this row would stay Met on the strength of the " +
+			"package.json and go.mod checks either side of it")
+	}
+	if !strings.Contains(ci, "--frozen-lockfile") {
 		t.Error("A08:2025: CI no longer installs with --frozen-lockfile; the lockfile would stop being binding")
 	}
 
