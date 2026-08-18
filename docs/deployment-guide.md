@@ -213,7 +213,32 @@ helm install vault42 charts/vault -f charts/vault/values-bridge.yaml \
   --set secrets.existingSecret=vault42-secrets
 ```
 
-The bridge deployment creates three components: a real Vault42 (production DB), a honeypot Vault42 (separate DB), and the bridge proxy. Network policies ensure complete isolation between real and honeypot environments.
+The bridge deployment creates three components: a real Vault42 (production DB), a honeypot Vault42 (separate DB), and the bridge proxy.
+
+**What "isolated" means here, concretely.** This document used to say network
+policies ensure complete isolation, which was a claim about intent rather than
+about the manifests. It was not true: the honeypot deployment mounted the
+*production* Secret -- master key, HMAC secret, pepper, signing key, admin token
+and both database passwords -- into the one component whose entire purpose is to
+be attacked. Code execution in the decoy reached the real estate's keys.
+
+The isolation the chart now provides is four specific things, each of which you
+can check in a rendered manifest rather than take on trust:
+
+1. The honeypot workload mounts its **own Secret**, not the production one. The
+   names are separate values, and neither defaults to the other.
+2. The chart **refuses to render** when the two Secret names resolve to the same
+   value, so the collision cannot be reintroduced by an operator copying a
+   values file.
+3. The honeypot runs against its **own PostgreSQL** (`honeypot-postgres`), with
+   NetworkPolicies that permit the decoy no egress to the production database or
+   Redis.
+4. Tests hold the boundary **in both directions**: that the honeypot cannot
+   reach production secrets, and that production is not accidentally pointed at
+   the honeypot's.
+
+Treat any deployment whose honeypot and production Secret names match as
+compromised in the direction that matters, and rotate before redeploying.
 
 ## Honeypot Deployment
 
@@ -313,6 +338,30 @@ full before upgrading; the notes below are the deployment-affecting parts.
 **What does not change.** Route paths, the JWT claim set and the error-code vocabulary are the
 1.0.0 stability contract, so a 0.9.x client keeps working. Root paths are v1; there is no
 `/v1` prefix and adding one would be a major bump.
+
+## The bundled PostgreSQL
+
+`charts/vault` ships an optional in-cluster PostgreSQL behind
+`postgres.enabled`, labelled "dev/embedded only" and **disabled by default**.
+Two things about it are worth knowing before you reach for it.
+
+**It has never started, on any released version.** The initialisation script's
+second here-document closed with an indented `EOSQL` against a `<<-` heredoc.
+`<<-` strips leading *tabs*, not spaces, so the delimiter was never recognised;
+bash parses the whole script before executing any of it, so the container exited
+2 having run nothing at all and the `vault_app` role was never created. It was
+reproduced against the base commit and fixed. If you tried `postgres.enabled` on
+1.0.0 or earlier and it failed in a way that looked like a database problem,
+that was the reason.
+
+**It is a development convenience, not a supported production path.** It runs a
+single replica against a `ReadWriteOnce` PVC with no backup, no failover and no
+connection pooler, and it is the one workload in the chart that does not meet
+the Kubernetes Pod Security Standards restricted profile -- it sets no
+`runAsNonRoot` and does not drop capabilities. The compliance register excludes
+it from that claim by name rather than by silence. For anything you care about,
+run PostgreSQL as a managed service or as its own operator-managed cluster and
+point `database.host` at it.
 
 ## Backup
 

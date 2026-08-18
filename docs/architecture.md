@@ -1119,7 +1119,7 @@ charts/vault/
     service.yaml           ClusterIP service
     ingress.yaml           Split routing: API paths -> vault42, / -> frontend
     configmap.yaml         Environment variables
-    postgres.yaml          Optional in-cluster PostgreSQL (dev only)
+    postgres.yaml          Optional in-cluster PostgreSQL (dev only, off by default)
     redis.yaml             Optional in-cluster Redis (dev only)
     frontend.yaml          Optional Vue frontend deployment
     mailpit.yaml           Optional dev email server

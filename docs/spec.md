@@ -1945,7 +1945,7 @@ Single deployment method for all environments. Templates:
 | `service.yaml` | ClusterIP service |
 | `ingress.yaml` | Split routing: API to vault42, `/` to frontend |
 | `configmap.yaml` | Non-secret configuration |
-| `postgres.yaml` | Optional in-cluster PostgreSQL (dev) |
+| `postgres.yaml` | Optional in-cluster PostgreSQL (dev only, off by default; not a supported production path) |
 | `redis.yaml` | Optional in-cluster Redis (dev) |
 | `frontend.yaml` | Optional Vue frontend |
 | `mailpit.yaml` | Optional dev email server |

@@ -727,6 +727,14 @@ When deployed via the Helm chart (`charts/vault/`), environment variables are se
 1. **ConfigMap** (non-sensitive values) -- generated from `values.yaml` fields like `profile`, `listenAddr`, `origin`, etc. These map directly to the env vars documented above.
 2. **Secret volume mounts** (sensitive values) -- a Kubernetes Secret is mounted at `secrets.mountPath` (default: `/run/secrets`), and `_FILE` env vars point to the individual files within it.
 
+**Seed data is a Secret, not a ConfigMap.** `seed.users[].password` is a
+credential, and a ConfigMap is stored unencrypted and is readable by anything
+holding `get configmaps` in the namespace -- a much wider set than the Secret
+readers an operator thinks about. The seed document renders into a Secret and is
+mounted read-only at `/etc/vault42/seed.json`. If a doc, a values comment or a
+runbook of yours still says the seed lives in a ConfigMap, it predates that
+change and the passwords it describes were in plaintext.
+
 Key Helm values and their corresponding env vars:
 
 | Helm Value | Env Var |

@@ -123,7 +123,7 @@ scripts/release-check.sh
 | Profile | Cache | Use Case |
 |---|---|---|
 | `production` | Redis | Full features, TLS 1.3, external PostgreSQL + Redis |
-| `embedded` | In-memory | RPi5 / edge (~60 MB RAM), in-cluster Postgres, 5 conns |
+| `embedded` | In-memory | RPi5 / edge (~60 MB RAM), 5 conns. Point it at a PostgreSQL you run; the chart's bundled one is a development convenience, off by default, and did not start on any released version -- see [deployment-guide](docs/deployment-guide.md#the-bundled-postgresql) |
 | `honeypot` | Memory | Trap user detection, webhook alerts, embedded frontend |
 | `dev` | Inherits production | Debug logging, auto-migrate, permissive CORS, 24h refresh TTL |
 
