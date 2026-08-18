@@ -33,10 +33,14 @@ on:
 env:
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
+# Read-only by default so a job inherits nothing it did not ask for. Eight jobs
+# used to inherit `contents: write` + `packages: write` from here, including
+# `coverage`, which runs the entire Go test suite, and `security`, which runs
+# the attack suite: arbitrary repository code executed holding a token that
+# could push to GHCR and write to the repo. Each job below grants exactly what
+# its own steps use.
 permissions:
-  contents: write
-  packages: write
-  id-token: write # cosign keyless signing and NuGet trusted publishing
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -46,6 +50,8 @@ jobs:
   detect:
     name: Resolve release version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.parse.outputs.version }}
       tag: ${{ steps.parse.outputs.tag }}
@@ -121,6 +127,8 @@ jobs:
   security:
     name: Security
     needs: detect
+    permissions:
+      contents: read
     uses: ./.github/workflows/nightly-security.yml
     with:
       full_scan: true
@@ -135,6 +143,8 @@ jobs:
     name: Coverage gate
     needs: detect
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -168,6 +178,11 @@ jobs:
     name: Build & push images (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
     outputs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
       admin_digest: ${{ steps.build_admin.outputs.digest }}
@@ -300,6 +315,10 @@ jobs:
     name: Binaries, checksums & SBOMs
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # cosign keyless blob signing
+      attestations: write # SLSA build provenance and SBOM attestation
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -353,7 +372,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -422,6 +442,9 @@ jobs:
     name: NuGet (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # NuGet trusted publishing
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -471,6 +494,9 @@ jobs:
     name: GitHub release
     needs: [detect, images, artifacts, chart]
     runs-on: ubuntu-latest
+    # The only job in this file that writes to the repository.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
