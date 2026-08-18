@@ -47,7 +47,7 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 | P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
 | P12 | **Service-scoped documents** -- opaque JSON a trusted service stores about a user on the platform's behalf, private to the writing service unless it marks a document shared | Encrypted document payload + HMAC pseudonym of the user id, owning client id, document key, size and visibility | Art. 6(1)(b) contract, on the same footing as P6: the Operator's service requests the storage. The contents are opaque to vault42, so the Operator remains responsible for what its services write |
 | P11 | **Account-deletion recovery escrow** -- keeping a recoverable record of an erased account so an accidental or malicious deletion can be reversed | Encrypted payload (email, creation date, roles, display name) + HMAC pseudonym of the user id, requester and reason tag | Art. 6(1)(f) legitimate interest in the integrity and availability of user accounts. Only when the Operator configures a recovery key; see §3.1, §4 and §5.3 |
-| P13 | **New-location login notice and VPN/anonymiser abuse scrutiny** -- warning a user when their account is accessed from a country it has not signed in from before, and raising rate-limit scrutiny on anonymising/hosting infrastructure. The client IP is resolved **locally** against an embedded IP-registration table (no third-party geo-IP lookup, no request leaves the service) to a coarse signal: the ISO 3166-1 alpha-2 registration country, and VPN/hosting/Tor flags. **Data minimisation: only the country code is derived and stored** -- never the IP, never a city or coordinates -- and the notice and its audit record carry the country code alone. The set of countries a user has logged in from (`auth.login_countries`) is user-id-owned and is removed on erasure by an explicit step. The table declares `ON DELETE CASCADE` on `user_id`, but erasure scrubs the account row with an `UPDATE` and never deletes it, so that cascade never fires; the removal is done by `auth.erase_login_countries()` (migration 030), called from the erasure cascade (§5.3). The VPN/hosting/Tor flags are used transiently to weight the login/register/reset rate limiters and are never stored; they only tighten a bucket, they never block a VPN. | Login country codes per user; transiently, VPN/hosting/Tor flags derived from the IP | Art. 6(1)(f) legitimate interest in account security and abuse prevention (notifying the user of an unusual location; resisting credential-stuffing from anonymising infrastructure) |
+| P13 | **New-location login notice and VPN/anonymiser abuse scrutiny** -- warning a user when their account is accessed from a country it has not signed in from before, and raising rate-limit scrutiny on anonymising/hosting infrastructure. The client IP is resolved **locally** against an embedded IP-registration table (no third-party geo-IP lookup, no request leaves the service) to a coarse signal: the ISO 3166-1 alpha-2 registration country, and VPN/hosting/Tor flags. **Data minimisation: only the country code is derived and stored** -- never the IP, never a city or coordinates -- and the notice and its audit record carry the country code alone. The set of countries a user has logged in from (`auth.login_countries`) is user-id-owned and cascade-deleted on erasure. The VPN/hosting/Tor flags are used transiently to weight the login/register/reset rate limiters and are never stored; they only tighten a bucket, they never block a VPN. | Login country codes per user; transiently, VPN/hosting/Tor flags derived from the IP | Art. 6(1)(f) legitimate interest in account security and abuse prevention (notifying the user of an unusual location; resisting credential-stuffing from anonymising infrastructure) |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
 consent does not affect the lawfulness of processing carried out before withdrawal. Marketing
@@ -152,7 +152,7 @@ recovery key).
 | user_agent | P3, P4 | Until device removed or account erased | 6(1)(f) |
 | trusted, trusted_until, first/last_seen_at | P3 | Until device removed or account erased | 6(1)(f) |
 | **auth.login_countries** | | | |
-| country_code (ISO alpha-2), first_seen_at | P13 | Until account erased (removed by the explicit erasure step, not by the declared cascade -- see §5.3) | 6(1)(f) |
+| country_code (ISO alpha-2), first_seen_at | P13 | Until account erased (cascade-deleted with the user) | 6(1)(f) |
 | **auth.totp_secrets** | | | |
 | secret_enc, verified | P2 | Until MFA removed or account erased | 6(1)(b)/6(1)(f) |
 | **auth.webauthn_credentials** | | | |
@@ -192,51 +192,23 @@ the end-user scope of this policy and are addressed in the operational documenta
 ### 3.3 Operational logs
 
 The five stores above are the only places vault42 keeps personal data deliberately, and each one
-carries a retention period. Every table created by `migrations/` that holds end-user personal
-data falls into one of them; the remaining tables hold administrator accounts (out of end-user
-scope, see §3.2), service-client and role configuration, email templates and branding, cache
-entries, or signing-key material (an operational secret, out of scope per §1).
+carries a retention period. The process log is not one of them: it is diagnostic output whose
+lifetime belongs to the Operator's log pipeline rather than to this service, so it is held to a
+stricter rule than the stores instead of a retention of its own.
 
-The process log is not one of the five: it is diagnostic output whose lifetime belongs to the
-Operator's log pipeline rather than to this service, so it is held to a rule of its own instead of
-a retention period. It does nonetheless carry personal data, and the paragraphs below say exactly
-which, because the Operator's pipeline is what retains it.
+**A client IP address is never written to the process log in full.** Every log line that names one
+renders it through `httputil.ObfuscatedIP`, which keeps the IPv4 /24 or the IPv6 /64 and discards
+the rest, so a reader can still tell which network a refusal, an auto-flag or a fingerprint
+mismatch came from without the log becoming a second copy of the audit store. The full address is
+held only where §3.2 inventories it -- the audit log (P4) and the device record (P3) -- and the
+request id printed beside the masked network is the link to that record. A value that does not
+parse as an address is rendered as the constant `invalid_ip` rather than echoed back.
 
-**On the vault request path and in the bridge, a client IP address is not written to the process
-log in full.** Log lines on those paths render it through `httputil.ObfuscatedIP`, which keeps the
-IPv4 /24 or the IPv6 /64 and discards the rest, so a reader can still tell which network a
-refusal, an auto-flag or a fingerprint mismatch came from without the log becoming a second copy
-of the audit store. A value that does not parse as an address is rendered as the constant
-`invalid_ip` rather than echoed back. `tests/compliance` asserts the masking helpers under ASVS
-V16.4.1, and `internal/middleware` and `cmd/bridge` each carry a test that fails if a full address
-reaches a log line.
-
-**Two components are outside that rule and write the full address, and an Operator must treat
-their process log accordingly.**
-
-- The **admin gateway** (`internal/adminapi`) logs the whole `RemoteAddr` and the whole
-  User-Agent when a connection reaches it from a non-loopback source, logs the whole host when
-  the admin login rate limit is exceeded, and — where the killswitch is enabled — puts the host
-  into the panic message the Go runtime prints to stderr as the pod crashes. All three are
-  escaped against log injection but not masked. The gateway is loopback-only by design, so an
-  address appearing in these lines is by definition an anomaly the Operator is meant to see; that
-  is why the lines exist, and it is also why they are disclosed here rather than described as
-  masked.
-- The **honeypot** (`internal/honeypot`), where the Operator enables it, logs the method, path,
-  full `RemoteAddr`, status and full User-Agent of **every** request it serves.
-
-Both are optional or anomaly-only paths, but neither is covered by the masking rule, and the
-Operator's log-retention and access controls are what bound them. Where §3.2 inventories the full
-address deliberately -- the audit log (P4) and the device record (P3) -- that record is the
-authoritative copy; note that audit entries carry no request id, so a masked process-log line
-cannot be joined to a specific audit row.
-
-The other identifiers that reach a log line are treated as follows: email addresses are masked
-before they are logged, and blob reference names and labels are scrubbed from audit metadata
-(§3.1). **User ids are not pseudonymized in the process log** -- a number of diagnostic lines in
-`internal/service` and `internal/handler` carry the raw `auth.users.id` UUID. It is an internal
-identifier and not a direct identifier of a person, but it is stable and it correlates a subject
-across log lines, so it is stated here rather than left to the reader to assume otherwise.
+The same rule covers the other identifiers that reach a log line: email addresses are masked
+before they are logged, blob reference names and labels are scrubbed from audit metadata (§3.1),
+and user ids appear only as the pseudonymous subject. `tests/compliance` asserts the masking
+helpers under ASVS V16.4.1, and `internal/middleware` and `cmd/bridge` each carry a test that
+fails if a full address reaches a log line.
 
 **The bridge (`cmd/bridge`), where deployed, holds whole addresses outside the log, and that is
 deliberate.** It is an optional deception proxy whose function is to decide that a client address
@@ -335,12 +307,7 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   carries `audit_events_total` (how many events are held), `audit_events_limit` (the cap) and
   `audit_events_truncated`. Where `audit_events_truncated` is `true`, the remaining events are
   part of the same right of access and the Operator supplies them on request through the contact
-  in §8. Every other category the export carries is complete and uncapped.
-- One inventoried category is **not** in the automated export: the login-country history
-  (`auth.login_countries`, P13). It is personal data under Art. 15 and Art. 20 like the rest, and
-  the Operator supplies it on request through the contact in §8 until the export carries it.
-  Stating it here rather than leaving the list to imply completeness is deliberate: a data
-  subject reading the export must be able to tell what it does not contain.
+  in §8. Every other category in the export is complete and uncapped.
 
 ### 5.2 Right to rectification (Art. 16)
 
@@ -359,24 +326,17 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 - Full account erasure removes or anonymizes the account record and deletes every account-linked
   auth record: password history, refresh tokens (deleted outright, not merely revoked — a revoked
   row still carries a fingerprint hash and a device reference), devices, TOTP secrets, WebAuthn
-  credentials, backup codes, social-account links, and login countries (P13), plus the
-  pseudonym-keyed identity profile, blobs and service-scoped documents. Documents written about
-  the user by a service are personal
+  credentials, backup codes, and social-account links, plus the pseudonym-keyed identity profile
+  blobs and service-scoped documents. Documents written about the user by a service are personal
   data under Art. 4(1) whichever service authored them, so the cascade reaches them on both the
-  self-service and the administrator paths. The MFA authenticators and the login-country history
-  are deleted explicitly rather
+  self-service and the administrator paths. The MFA authenticators are deleted explicitly rather
   than by database cascade: the
   account row is scrubbed in place (an `UPDATE`) so that foreign keys stay valid, which means the
-  `ON DELETE CASCADE` on those tables never fires. That is a deliberate correction rather than an
-  implementation detail — `auth.login_countries` (migration 028) declared the cascade and reasoned
-  that erasure would therefore clear it automatically, which it did not, and migration 030 added
-  the explicit `auth.erase_login_countries()` step that does. Backup codes are **purged**, not
-  merely marked
+  `ON DELETE CASCADE` on those tables never fires. Backup codes are **purged**, not merely marked
   used — invalidating a code leaves its hash and the user ID in the table, which is enough to end
   a session but not to erase a person. Account erasure is requested through the Operator (§8)
   where no self-service account-deletion endpoint is exposed in the deployment.
-- **Order of operations.** The cascade spans every account-linked store in §3.2, with no
-  transaction across them, so the
+- **Order of operations.** The cascade spans nine stores with no transaction across them, so the
   account is tombstoned **before** any personal data is destroyed, never after. A failure part-way
   therefore leaves an account that has already stopped authenticating and still holds some data
   pending deletion — not a live, loginable account whose second factors have already been
@@ -440,15 +400,6 @@ Operator enables. The set of processors depends on the Operator's configuration.
 | **Breach-password screening** (Have I Been Pwned range API) | Processor (k-anonymity) | A short prefix of the SHA-1 hash of a candidate password -- **never the password, email, or any account identifier** | Uses the k-anonymity range protocol: only a hash prefix leaves the server. Fail-open: if the service is unreachable the check is skipped and authentication is not blocked. |
 | **Primary datastore (PostgreSQL)** | Processor (storage) | All persisted records described in §3, with the encryption and hashing protections noted there | Hosting/region is the Operator's choice; encrypted blobs and the encrypted identity profile are held here under pseudonymous keys. |
 | **Cache backend** (in-memory, PostgreSQL, or Redis, per Operator choice) | Processor (transient) | Short-lived operational values (e.g. confirmation state, cache entries) | Transient; not a long-term store of personal data. |
-| **Honeypot alert endpoint** (`VAULT_HONEYPOT_WEBHOOK`) | Recipient chosen by the Operator; processor | Each alert POSTs the client **IP in full**, the User-Agent, the **submitted email address in plaintext**, the request headers and the request body | Off unless the Operator sets the variable. Redaction is partial by design and must not be relied on: headers are redacted only for `Authorization` and `Cookie`, and the body only for **top-level** `password`, `secret`, `token` and `code` keys, so a nested credential or any other field in the submitted body is transmitted as sent. A non-JSON body is replaced with a placeholder. Rate-limited by an alert budget. |
-| **Bridge alert endpoint** (`BRIDGE_WEBHOOK_URL`) | Recipient chosen by the Operator; processor | Each notification carries the client **IP in full**, plus the event type, score and reason; decoy-hit notifications additionally carry the request path, method and User-Agent | Off unless the Operator sets the variable, and only where the optional bridge is deployed (§3.3). |
-
-The two alert endpoints are named here because they are outbound transmissions of personal data to
-a third party the Operator selects, which makes them recipients under Art. 13(1)(e)/14(1)(e)
-regardless of the fact that they are security features and are off by default. vault42 applies no
-retention to what it sends them; the receiving system's retention and access controls are the
-Operator's responsibility, and the honeypot payload in particular can contain a credential the
-partial redaction above did not reach.
 
 The Operator must put a data-processing agreement (Art. 28) in place with each processor it
 engages, and, where a processor is located outside the EEA, ensure an appropriate transfer
