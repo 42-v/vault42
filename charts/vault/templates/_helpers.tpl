@@ -118,6 +118,11 @@ block and a prose list from one source -- so the drift is closed by a gate
 instead: tests/spec/chart_secret_key_notes_test.go renders this helper and the
 Deployment side by side across the value profiles that switch each condition,
 and fails when the two disagree.
+
+The tail of the list is the optional credentials: the KMS root key, the recovery
+escrow public key, SMTP and SendGrid credentials, and the OAuth2/OIDC client
+secrets. Each is empty in values.yaml and each renders nothing when empty, so a
+release that names none of them asks for exactly the eight keys it always did.
 */}}
 {{- define "vault.requiredSecretKeys" -}}
 {{- $keys := list .Values.secrets.keys.masterKey .Values.secrets.keys.dbMigPassword .Values.secrets.keys.dbAppPassword .Values.secrets.keys.hmacSecret -}}
@@ -132,6 +137,16 @@ and fails when the two disagree.
 {{- end -}}
 {{- if .Values.secrets.keys.pepper -}}
 {{- $keys = append $keys .Values.secrets.keys.pepper -}}
+{{- end -}}
+{{- range list .Values.secrets.keys.kmsRootKey .Values.secrets.keys.recoveryPublicKey .Values.secrets.keys.smtpUser .Values.secrets.keys.smtpPass .Values.secrets.keys.sendgridApiKey .Values.secrets.keys.oauthGoogleClientSecret .Values.secrets.keys.oauthGithubClientSecret .Values.secrets.keys.oauthFacebookClientSecret -}}
+{{- if . -}}
+{{- $keys = append $keys . -}}
+{{- end -}}
+{{- end -}}
+{{- range .Values.oidcProviders -}}
+{{- if .secretKey -}}
+{{- $keys = append $keys .secretKey -}}
+{{- end -}}
 {{- end -}}
 {{- join ", " $keys -}}
 {{- end }}

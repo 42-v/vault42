@@ -33,6 +33,18 @@ data:
   {{- if .Values.forceSecureCookies }}
   VAULT_FORCE_SECURE_COOKIES: {{ .Values.forceSecureCookies | quote }}
   {{- end }}
+  {{- if .Values.honeypotInstance.trapUsers }}
+  # The trap accounts, and where an alert about one goes. Both are read only in
+  # the honeypot profile, and this is the only workload the chart renders with
+  # that profile, so they live here rather than in the release ConfigMap.
+  # Without the webhook the alerter has nowhere to post: an attacker reaches a
+  # trap account and the deployment notices and tells nobody, which is the
+  # component not doing the one thing it exists for.
+  VAULT_HONEYPOT_TRAP_USERS: {{ join "," .Values.honeypotInstance.trapUsers | quote }}
+  {{- end }}
+  {{- if .Values.honeypotInstance.webhookURL }}
+  VAULT_HONEYPOT_WEBHOOK: {{ .Values.honeypotInstance.webhookURL | quote }}
+  {{- end }}
 ---
 # Honeypot Vault Deployment
 apiVersion: apps/v1

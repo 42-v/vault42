@@ -412,6 +412,14 @@ controls that bound it are in [`spec.md` section 6.5](spec.md#65-subject-asserti
 | `VAULT_MINT_ROLES` | list | *(empty)* | No | Comma-separated allow-list of roles a minted token may carry. Empty means no role may be minted. The admin-reserved names are refused at startup regardless of what is listed here. |
 | `VAULT_MINT_SCOPES` | list | *(empty)* | No | Comma-separated allow-list of scopes a minted token may carry. Empty means no scope may be minted. Capability scopes such as `kms:unwrap` and `mint:token` are refused regardless. |
 
+The Helm chart exposes all six as the `mint.*` block, each at the default above, so an install that
+does not opt in renders the same environment it did before the block existed. They are exposed
+together because none of them works alone: `mint.enabled` without `mint.audience` refuses to start,
+and `mint.enabled` with empty allow-lists mounts an endpoint that grants nothing. The chart fails the
+render, naming the setting, when `mint.enabled` is true and `mint.audience` is empty or equal to
+`origin` -- the same two refusals `Config.Validate` makes, moved to install time so the operator reads
+the reason instead of finding it one line deep in a `CrashLoopBackOff`.
+
 ### Service-Scoped JSON Documents
 
 Off by default. Lets a registered service store arbitrary JSON against a subject, encrypted at rest.
@@ -858,12 +866,54 @@ Key Helm values and their corresponding env vars:
 | `metrics.port` | `VAULT_METRICS_ADDR` (`:<port>`) |
 | `keyRotation.enabled` | `VAULT_KEY_ROTATION_DB` |
 | `adminGateway.clientCNAllowlist` | `ADMIN_GW_CLIENT_CN_ALLOWLIST` |
-| `adminGateway.clientCRLFile` | `ADMIN_GW_CLIENT_CRL_FILE` |
+| `adminGateway.clientCRL.secretName` / `.configMapName` | `ADMIN_GW_CLIENT_CRL_FILE` (derived from `.mountPath` and `.keys`; the old `adminGateway.clientCRLFile` fails the render) |
 | `mfaRequired` | `VAULT_MFA_REQUIRED` |
 | `registrationEnabled` | `VAULT_REGISTRATION_ENABLED` |
 | `dpop.enabled` | `VAULT_DPOP_ENABLED` |
 | `strictSessionLimit` | `VAULT_STRICT_SESSION_LIMIT` |
 | `outboundAllowPrivate` | `VAULT_OUTBOUND_ALLOW_PRIVATE` (rendered only when `true`) |
+| `mint.enabled` | `VAULT_MINT_ENABLED` |
+| `mint.audience` | `VAULT_MINT_AUDIENCE` |
+| `mint.tokenTTL` | `VAULT_MINT_TOKEN_TTL` |
+| `mint.maxTTL` | `VAULT_MINT_MAX_TTL` |
+| `mint.allowedRoles` | `VAULT_MINT_ROLES` (comma-joined) |
+| `mint.allowedScopes` | `VAULT_MINT_SCOPES` (comma-joined) |
+| `sessions.maxPerUser` | `VAULT_MAX_SESSIONS_PER_USER` |
+| `sessions.maxLifetime` | `VAULT_MAX_SESSION_LIFETIME` |
+| `sessions.inactivityTimeout` | `VAULT_INACTIVITY_TIMEOUT` |
+| `sessions.accessTokenTTL` | `VAULT_ACCESS_TOKEN_TTL` (rendered only when set; empty lets the profile decide) |
+| `sessions.refreshTokenTTL` | `VAULT_REFRESH_TOKEN_TTL` (rendered only when set) |
+| `sessions.rememberMeTTL` | `VAULT_REMEMBER_ME_TTL` (rendered only when set) |
+| `shutdownTimeout` | `VAULT_SHUTDOWN_TIMEOUT` (rendered only when set) |
+| `database.statementTimeout` | `DB_STATEMENT_TIMEOUT` |
+| `database.lockTimeout` | `DB_LOCK_TIMEOUT` |
+| `audit.bufferSize` | `VAULT_AUDIT_BUFFER_SIZE` |
+| `audit.retentionDays` | `VAULT_AUDIT_RETENTION_DAYS` |
+| `audit.flushInterval` | `VAULT_AUDIT_FLUSH_INTERVAL` (rendered only when set) |
+| `recoveryRetentionDays` | `VAULT_RECOVERY_RETENTION_DAYS` |
+| `svcdoc.enabled` | `VAULT_SVCDOC_ENABLED` |
+| `svcdoc.sharedEnabled` | `VAULT_SVCDOC_SHARED_ENABLED` |
+| `svcdoc.maxSize` | `VAULT_SVCDOC_MAX_SIZE` |
+| `svcdoc.maxPerSubject` | `VAULT_SVCDOC_MAX_PER_SUBJECT` |
+| `svcdoc.quotaBytes` | `VAULT_SVCDOC_QUOTA_BYTES` |
+| `keyRotation.rotationInterval` | `VAULT_KEY_ROTATION_INTERVAL` (with `keyRotation.enabled`) |
+| `email.provider` | `VAULT_EMAIL_PROVIDER` |
+| `email.maxTemplateSize` | `VAULT_MAX_EMAIL_TEMPLATE_SIZE` |
+| `email.fromName` | `VAULT_EMAIL_FROM_NAME` (rendered only when set) |
+| `email.fromAllowedDomains` | `VAULT_EMAIL_FROM_ALLOWED_DOMAINS` (comma-joined, rendered only when set) |
+| `branding.primaryColor` | `VAULT_PRIMARY_COLOR` |
+| `branding.logoURL` | `VAULT_LOGO_URL` (rendered only when set) |
+| `realIPHeader` | `REAL_IP_HEADER` (rendered only when set) |
+| `corsOrigins` | `CORS_ORIGINS` (comma-joined, rendered only when set) |
+| `ipAllowlist` / `ipBlocklist` | `IP_ALLOWLIST` / `IP_BLOCKLIST` (comma-joined, rendered only when set) |
+| `geoIPHeader` | `GEO_IP_HEADER` (rendered only when set) |
+| `geoAllowlist` / `geoBlocklist` | `GEO_ALLOWLIST` / `GEO_BLOCKLIST` (comma-joined, rendered only when set) |
+| `outboundAllowedHosts` | `VAULT_OUTBOUND_ALLOWED_HOSTS` (comma-joined, rendered only when set) |
+| `oauth.google.clientID` | `VAULT_OAUTH_GOOGLE_CLIENT_ID` (rendered only when set; likewise github and facebook) |
+| `oidcProviders[].name` | `VAULT_OIDC_PROVIDERS` (comma-joined) |
+| `oidcProviders[].issuer` / `.clientID` / `.scopes` | `VAULT_OIDC_<NAME>_ISSUER` / `_CLIENT_ID` / `_SCOPES` |
+| `honeypotInstance.trapUsers` | `VAULT_HONEYPOT_TRAP_USERS` (honeypot ConfigMap, comma-joined) |
+| `honeypotInstance.webhookURL` | `VAULT_HONEYPOT_WEBHOOK` (honeypot ConfigMap) |
 
 Secrets are mapped via `secrets.keys.*`:
 
@@ -875,6 +925,20 @@ Secrets are mapped via `secrets.keys.*`:
 | `secrets.keys.hmacSecret` | `HMAC_SECRET_FILE` |
 | `secrets.keys.adminToken` | `ADMIN_TOKEN_FILE` |
 | `secrets.keys.redisPassword` | `REDIS_PASS_FILE` |
+| `secrets.keys.signingKey` | `SIGNING_KEY_FILE` |
+| `secrets.keys.pepper` | `VAULT_PEPPER_FILE` |
+| `secrets.keys.kmsRootKey` | `KMS_ROOT_KEY_FILE` |
+| `secrets.keys.recoveryPublicKey` | `VAULT_RECOVERY_PUBLIC_KEY_FILE` |
+| `secrets.keys.smtpUser` / `smtpPass` | `SMTP_USER_FILE` / `SMTP_PASS_FILE` |
+| `secrets.keys.sendgridApiKey` | `SENDGRID_API_KEY_FILE` |
+| `secrets.keys.oauthGoogleClientSecret` | `VAULT_OAUTH_GOOGLE_CLIENT_SECRET_FILE` (likewise github and facebook) |
+| `oidcProviders[].secretKey` | `VAULT_OIDC_<NAME>_CLIENT_SECRET_FILE` |
+
+Everything from `kmsRootKey` down is empty by default and renders no env var at
+all, so the Secret an existing release already created is still the whole set
+its pod asks for. Naming a key is what puts its `_FILE` variable in the pod;
+there is no bare path setting, because a path with nothing behind it is a
+capability that reads as configured and does nothing.
 
 `forceSecureCookies` defaults to `true`, because `tls.enabled` defaults to `false`:
 the chart expects TLS to terminate at an ingress or a tunnel. Outside the `dev`
@@ -884,9 +948,9 @@ which a browser discards, and `Config.Validate` refuses to start on it, so the
 install would reach the operator as a `CrashLoopBackOff` rather than as a
 message. See [TLS and Cookies](#tls-and-cookies).
 
-### A switch the chart cannot set is a control that is off
+### A setting the chart cannot set is a control that is off
 
-The five rows above ending at `outboundAllowPrivate` were added because they were
+The rows from `mfaRequired` to `outboundAllowPrivate` were added because they were
 missing. Each is a boolean the binary reads from the environment, and the chart
 had no way to put a value in that environment, so on every Helm install the
 control held its compiled default however the deployment was configured. DPoP is
@@ -895,12 +959,34 @@ compliance register records the sender-constrained access token requirement as
 Met, and the chart -- the only way this project is deployed -- could not turn it
 on. The metrics listener had failed the same way one release earlier.
 
-`tests/spec/chart_control_switch_wiring_test.go` is the gate for that class. It
-reads the boolean list out of `internal/config/envcheck.go` rather than
-repeating it, so a switch added there and not here fails on the commit that adds
-it. A switch the chart deliberately does not offer goes in
-`chartUnexposedSwitches` with the reason, and that set is a ratchet: it may
-shrink and may not grow.
+Everything from `mint.enabled` down was added for the same reason and answers the
+other half of it. A boolean is not the only shape that fails silently: a duration,
+a limit, an allow-list and a credential path all come up healthy holding a figure
+nobody chose. `VAULT_MAX_SESSIONS_PER_USER` was unreachable while
+`strictSessionLimit` beside it was exposed, so a deployment could choose what
+happened when the session-count query failed and not how many sessions a user may
+hold. Both Art. 5(1)(e) retention horizons were unreachable, so every install kept
+audit rows and recovery escrows forever whatever [PRIVACY.md](PRIVACY.md) §4 said.
+Federated login was unreachable in full. So were the KMS root key, without which
+`POST /kms/unwrap` is never mounted, and the recovery escrow key, without which
+erasure leaves nothing recoverable.
+
+`tests/spec/chart_control_switch_wiring_test.go` is the gate. It parses the
+settings out of `internal/config` rather than repeating them, in three classes:
+every registry `checkEnvValues` validates, every plain string `Load` reads, and
+every secret `loadSecrets` reads -- for which the chart has to name the `_FILE`
+variable. A setting added there and not here fails on the commit that adds it. One
+the chart deliberately does not offer goes in `chartUnexposedSettings` with the
+reason, and that set is a ratchet held per class, so it may shrink, may not grow,
+and one class's exclusions cannot be traded for another's.
+
+`tests/spec/chart_binary_default_test.go` is the other half: reachability is worth
+nothing if reaching a setting changes what an install does. It parses each
+default out of `internal/config`'s own `envOr`/`envInt`/`envDuration`/
+`envBoolDefault` call sites and compares it with what `helm template` renders, so
+a chart value that is not the binary's own has to be listed in
+`chartDefaultDivergences` with the reason. Four are: `DB_HOST`, `DB_MAX_CONNS`,
+`VAULT_FORCE_SECURE_COOKIES` and `VAULT_BLOB_MIN_SIZE`.
 
 See `charts/vault/values.yaml` for production defaults and `charts/vault/values-dev.yaml` for the dev overlay.
 

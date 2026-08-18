@@ -92,7 +92,42 @@ Enabling the gateway with neither fails the render with a message saying so.
 mTLS still requires a client certificate signed by `adminGateway.tls`. Two extra pins are optional and fail closed once set:
 
 - `adminGateway.clientCNAllowlist` becomes `ADMIN_GW_CLIENT_CN_ALLOWLIST`. Empty accepts every certificate the client CA has signed and the gateway warns at startup (AR-9).
-- `adminGateway.clientCRLFile` becomes `ADMIN_GW_CLIENT_CRL_FILE`. An unreadable path is fatal at boot. Empty checks nothing.
+- `adminGateway.clientCRL.secretName` or `.configMapName` names the source of the revocation lists, and `.keys` names one key per CA in the client CA bundle that publishes one. Naming a source is what mounts it and what sets `ADMIN_GW_CLIENT_CRL_FILE`; naming none checks nothing. There is no bare path setting: `adminGateway.clientCRLFile` was one, it mounted nothing at the path it set, and `cmd/admin-gateway` exits 1 on a CRL it cannot read, so the only thing it could produce was an admin plane in `CrashLoopBackOff`. The chart now fails the render if it is set, and says this.
+
+## The settings this chart deliberately does not offer
+
+Everything `internal/config` reads is reachable from `values.yaml`, at the
+binary's own default, except the ten below. That is enforced by
+`tests/spec/chart_control_switch_wiring_test.go`, which parses the settings out
+of the Go source and fails on any it cannot find in the rendered ConfigMap or
+Deployment. The exception list is a ratchet held per class: it may shrink and may
+not grow, so the next setting added has to be wired rather than excused.
+
+| Setting | Why not |
+|---|---|
+| `VAULT_ALLOW_PLAINTEXT` | Overrides `Validate`'s refusal to run without TLS. The chart answers that case better: it fails the **render** on the `tls.enabled`/`forceSecureCookies` pair, so the reason reaches the operator at install rather than one line deep in a pod log. |
+| `VAULT_ALLOW_RATE_LIMIT_DISABLED` | Overrides `Validate`'s refusal to run with rate limiting off. `rateLimitEnabled` is the switch on offer; disabling a control the production profile refuses is a statement to make outside the values file on purpose. |
+| `CORS_ALLOW_ALL` | `applyProductionDefaults` sets it false without consulting the environment, so a chart value would render an env var the production profile discards. `corsOrigins` is the setting that works. |
+| `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | `Load` errors outside the embedded profile, and this chart deploys production. A value here is one the chart can set and the binary refuses to start on. |
+| `VAULT_SMTP_ALLOW_PLAINTEXT` | Accepted only for a loopback `SMTP_HOST`. The chart's SMTP host is a Service name, which never is. |
+| `LOG_LEVEL` | Not a setting. No vault42 binary has a log-verbosity control; `Load` reads it only to say at startup that it is ignored. |
+| `VAULT_SECRET_FILE_CONSUME` | Destroys each secret file on first read. The chart mounts the Secret read-only, where the wipe is a no-op that logs two warnings per secret per boot; the only outcomes a chart value could produce are noise or a destroyed mount. |
+| `VAULT_EMAIL_TEMPLATES_DIR` | Names a directory of template overrides that no volume here fills. A path with nothing behind it silently uses the embedded templates; exposing it means exposing the volume too, the way `adminGateway.clientCRL` does. |
+| `VAULT_HONEYPOT_WEBHOOK` | Read only in the honeypot profile. Set through `honeypotInstance.webhookURL` on the honeypot's own ConfigMap -- the only workload rendered with that profile. |
+| `VAULT_HONEYPOT_TRAP_USERS` | Same: `honeypotInstance.trapUsers`, on the honeypot ConfigMap. |
+
+There is no `extraEnv`, and there is a test that keeps it that way. A values key
+that spliced an arbitrary env list into the pod would satisfy every wiring
+assertion above at once, from a chart that reached no setting in particular, and
+would turn each reason in this table into a claim the chart does not keep.
+
+Four values deliberately differ from the binary's default: `database.host` and
+`database.maxConns`, which are topology rather than preference,
+`forceSecureCookies`, which is true because `tls.enabled` is false, and
+`blob.minSize`, which is a 512 KiB policy floor the binary does not have. Those
+four are listed with their reasons in `tests/spec/chart_binary_default_test.go`,
+which renders the chart and compares every other value against the default parsed
+out of `internal/config`.
 
 ## Upgrading
 
