@@ -65,14 +65,17 @@ welcome.
 
 ## Verifying releases
 
-Every release is signed with keyless cosign (Sigstore, OIDC identity, no long-lived key).
-Nothing is trustworthy that you have not checked, so check it. Four artifact classes ship:
+Every release is signed with keyless cosign (Sigstore, OIDC identity, no long-lived key), and
+every published artifact additionally carries a SLSA provenance attestation assembled and signed
+by GitHub's attestation service and logged to Rekor. Nothing is trustworthy that you have not
+checked, so check it. Five artifact classes ship:
 
 | Artifact | Where | Signature |
 |---|---|---|
-| `vault42`, `vault42-admin-gateway`, `vault42-bridge` images | `ghcr.io/42-v/…:<version>` | cosign keyless, plus buildx SLSA provenance and SBOM attestations |
-| Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest |
-| Binaries and per-archive SBOMs | GitHub release assets | covered by the checksum file |
+| `vault42`, `vault42-admin-gateway`, `vault42-bridge` images | `ghcr.io/42-v/…:<version>` | cosign keyless, plus a signed provenance attestation stored beside the image in GHCR |
+| Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest, plus a signed provenance attestation stored beside it |
+| Release archives | GitHub release assets | listed in the checksum file, plus a signed provenance attestation whose offline bundle ships as `vault42_<version>.intoto.jsonl` |
+| Per-archive SBOMs, SPDX and CycloneDX | GitHub release assets | each SPDX document carries its own attestation naming the archive it describes |
 | `vault42_<version>_SHA256SUMS` | GitHub release assets | detached cosign signature (`.sig`) plus its Fulcio certificate (`.pem`) |
 
 ```bash
@@ -98,14 +101,28 @@ cosign verify-blob "vault42_${VERSION}_SHA256SUMS" \
   --certificate-oidc-issuer "$ISSUER"
 sha256sum -c "vault42_${VERSION}_SHA256SUMS" --ignore-missing
 
-# SBOM and SLSA provenance for the images ride along as buildx attestations.
+# SLSA provenance: which workflow, at which commit, built this.
+gh attestation verify "oci://ghcr.io/42-v/vault42:$VERSION" --repo 42-v/vault42
+gh attestation verify "vault42_${VERSION}_linux_amd64.tar.gz" --repo 42-v/vault42
+
+# The same check offline, from the archive and the shipped bundle alone.
+gh attestation verify "vault42_${VERSION}_linux_amd64.tar.gz" \
+  --bundle "vault42_${VERSION}.intoto.jsonl" --repo 42-v/vault42
+
+# BuildKit also embeds its own provenance predicate and SBOM in each image index.
 docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .SBOM }}'
 docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .Provenance }}'
 ```
 
 Verify the checksum file's signature **before** trusting `sha256sum -c`: an attacker who can
-replace a binary can replace an unsigned checksum file alongside it. Each release archive also
-ships its own `.sbom.json` next to it.
+replace a binary can replace an unsigned checksum file alongside it. Each release archive ships
+two SBOMs next to it, `.spdx.sbom.json` and `.cdx.sbom.json`.
+
+Prefer `gh attestation verify` over the `docker buildx imagetools` output. What BuildKit embeds
+is an unsigned predicate produced by the same process that ran the build, with nothing
+countersigning it and no transparency-log entry, so it describes a build without establishing
+who performed it. The attestation `gh` reads is signed under the release workflow's OIDC
+identity and logged to Rekor, which is the difference between reading a claim and checking one.
 
 A `cosign verify` that fails, or a certificate identity that is not
 `.github/workflows/release.yml` in this repository at a `v*` tag, means the artifact did not
