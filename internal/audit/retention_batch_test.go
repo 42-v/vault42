@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/tests/mocks"
 )
 
@@ -18,7 +19,8 @@ import (
 
 func TestSweepLoopsUntilTheHorizonIsClear(t *testing.T) {
 	repo := &mocks.MockAuditRepo{}
-	batches := []int64{2000, 2000, 137, 0}
+	// A full batch means there is more; a short one means the horizon is clear.
+	batches := []int64{repository.AuditCleanupBatch, repository.AuditCleanupBatch, 137}
 	call := 0
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		n := batches[call]
@@ -31,8 +33,8 @@ func TestSweepLoopsUntilTheHorizonIsClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if got != 4137 {
-		t.Fatalf("Sweep purged %d rows, want 4137 across the batches", got)
+	if want := int64(2*repository.AuditCleanupBatch + 137); got != want {
+		t.Fatalf("Sweep purged %d rows, want %d across the batches", got, want)
 	}
 	if call != len(batches) {
 		t.Fatalf("made %d calls, want %d — the loop has to keep going while rows are still "+
@@ -48,7 +50,7 @@ func TestSweepStopsAtTheBatchCeiling(t *testing.T) {
 	calls := 0
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		calls++
-		return 2000, true, nil // never runs dry
+		return repository.AuditCleanupBatch, true, nil // never runs dry
 	}
 
 	r := NewRetention(repo, 30*24*time.Hour)
@@ -59,7 +61,7 @@ func TestSweepStopsAtTheBatchCeiling(t *testing.T) {
 	if calls != SweepMaxBatches {
 		t.Fatalf("made %d calls, want the %d ceiling", calls, SweepMaxBatches)
 	}
-	if want := int64(SweepMaxBatches) * 2000; got != want {
+	if want := int64(SweepMaxBatches) * repository.AuditCleanupBatch; got != want {
 		t.Fatalf("Sweep purged %d rows, want %d", got, want)
 	}
 }
@@ -73,7 +75,7 @@ func TestSweepYieldsToAnotherReplica(t *testing.T) {
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		calls++
 		if calls == 1 {
-			return 2000, true, nil
+			return repository.AuditCleanupBatch, true, nil
 		}
 		return 0, false, nil // another replica took the lock
 	}
@@ -83,8 +85,8 @@ func TestSweepYieldsToAnotherReplica(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if got != 2000 {
-		t.Fatalf("Sweep reported %d rows, want the 2000 that did go", got)
+	if got != repository.AuditCleanupBatch {
+		t.Fatalf("Sweep reported %d rows, want the %d that did go", got, repository.AuditCleanupBatch)
 	}
 	if calls != 2 {
 		t.Fatalf("made %d calls, want 2 — a lost lock ends the sweep", calls)
@@ -98,7 +100,7 @@ func TestSweepReportsAnErrorMidLoop(t *testing.T) {
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		calls++
 		if calls == 1 {
-			return 2000, true, nil
+			return repository.AuditCleanupBatch, true, nil
 		}
 		return 0, true, wantErr
 	}
@@ -108,8 +110,8 @@ func TestSweepReportsAnErrorMidLoop(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Sweep err = %v, want %v", err, wantErr)
 	}
-	if got != 2000 {
-		t.Fatalf("Sweep reported %d rows, want the 2000 that went before the failure", got)
+	if got != repository.AuditCleanupBatch {
+		t.Fatalf("Sweep reported %d rows, want the %d that went before the failure", got, repository.AuditCleanupBatch)
 	}
 }
 
@@ -123,7 +125,7 @@ func TestSweepHonoursCancellationBetweenBatches(t *testing.T) {
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		calls++
 		cancel()
-		return 2000, true, nil
+		return repository.AuditCleanupBatch, true, nil
 	}
 
 	r := NewRetention(repo, 30*24*time.Hour)
@@ -131,8 +133,8 @@ func TestSweepHonoursCancellationBetweenBatches(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Sweep err = %v, want context.Canceled", err)
 	}
-	if got != 2000 {
-		t.Fatalf("Sweep reported %d rows, want 2000", got)
+	if got != repository.AuditCleanupBatch {
+		t.Fatalf("Sweep reported %d rows, want %d", got, repository.AuditCleanupBatch)
 	}
 	if calls != 1 {
 		t.Fatalf("made %d calls after cancellation, want 1", calls)
@@ -147,14 +149,14 @@ func TestSweepStopsOnStop(t *testing.T) {
 	repo.CleanupLockedFn = func(context.Context, time.Time) (int64, bool, error) {
 		calls++
 		r.Stop()
-		return 2000, true, nil
+		return repository.AuditCleanupBatch, true, nil
 	}
 
 	got, err := r.Sweep(context.Background())
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if got != 2000 || calls != 1 {
-		t.Fatalf("Sweep = (%d rows, %d calls), want (2000, 1) — Stop has to end the batch loop", got, calls)
+	if got != repository.AuditCleanupBatch || calls != 1 {
+		t.Fatalf("Sweep = (%d rows, %d calls), want (%d, 1) — Stop has to end the batch loop", got, calls, repository.AuditCleanupBatch)
 	}
 }

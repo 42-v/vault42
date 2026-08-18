@@ -92,10 +92,9 @@ func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 			return total, nil
 		}
 		total += deleted
-		// Nothing left past the horizon. Looping on the batch size instead
-		// would couple this loop to a constant in the repository package, and
-		// this package cannot import that one.
-		if deleted == 0 {
+		// A short batch means the horizon is clear. Stop rather than spend
+		// another round trip and another ACCESS EXCLUSIVE lock proving it.
+		if deleted < repository.AuditCleanupBatch {
 			return total, nil
 		}
 		// Give the inserts waiting behind the exclusive lock a turn before
