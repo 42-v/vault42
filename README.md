@@ -22,12 +22,14 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 - **WebAuthn/FIDO2**: passkey registration and authentication
 - **TOTP 2FA**: RFC 6238, hand-rolled (~80 lines), backup codes for recovery
 - **OAuth2/OIDC login**: GitHub, Google, Facebook, plus generic OIDC (Okta, Auth0, Keycloak, Entra via `VAULT_OIDC_PROVIDERS`); PKCE S256 on every provider with no downgrade path, single-use verifier, and the outbound authorize URL checked to be absolute HTTPS before the browser is sent to it
+- **Delegated signing**: `POST /mint` signs an assertion about a subject vault42 never authenticated, for a service that already knows who its caller is. Off unless `VAULT_MINT_ENABLED` is set with a `VAULT_MINT_AUDIENCE` distinct from the origin, gated by the `mint:token` scope on a client credential, fail-closed rate limit, and every refusal audited. Read [docs/security.md](docs/security.md) AR-16 before enabling it
 - **Encrypted identity store**: AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
 - **DB-backed signing keys**: encrypted at rest (AES-256-GCM, kid as AAD), multi-pod refresh, zero-downtime rotation via the admin gateway
 - **Encrypted blob storage**: compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
 - **Account erasure + escrow**: GDPR right-to-be-forgotten with recoverable encrypted escrow (server holds only a recovery public key), bounded by `VAULT_RECOVERY_RETENTION_DAYS` + sweeper
 - **IP access control and geo-fencing**: allowlist/blocklist, dynamic runtime bans, proxy-agnostic
 - **Append-only audit log**: DB-level enforcement (app role has no DELETE/TRUNCATE/DDL)
+- **mTLS admin plane**: the admin gateway requires a client certificate, and beyond "signed by our CA" it pins the peer's CN and SANs against `ADMIN_GW_CLIENT_CN_ALLOWLIST` and checks `ADMIN_GW_CLIENT_CRL_FILE` on every handshake. Both are optional so an upgrade does not break, and an unset allowlist logs a warning naming what it costs: every certificate the CA ever signed reaches the admin plane, including a decommissioned operator's
 - **Integrated Vue frontend**: embedded in the Go binary via `go:embed`, served as an SPA.
   Built into the container images and the release archives; a `go install` build embeds a
   placeholder instead, because it cannot run a frontend build. Run `scripts/build-all.sh`
@@ -56,15 +58,20 @@ single-use JTI cache; the server cannot require a proof minted after a value it 
 
 ```text
 cmd/vault/              Entry point (also hosts the `vault ...` admin CLI)
-cmd/admin-gateway/      mTLS admin gateway (key rotation, erasure, RBAC)
+cmd/admin-gateway/      mTLS admin gateway (key rotation, erasure, RBAC), with the
+                        client-certificate CN/SAN allowlist and CRL check
 cmd/bridge/             Honeypot bridge proxy (standalone, stdlib only)
 cmd/recover/            Offline account-recovery tool (decrypts erasure escrow)
 internal/
-  handler/              HTTP handlers (auth, user, oauth, 2fa, password, identity, blobs, admin, kms)
-  service/              Business logic (token lifecycle, MFA, HIBP, identity, blobs, erasure)
+  handler/              HTTP handlers (auth, user, oauth, 2fa, password, identity, blobs,
+                        kms, mint, service documents). Admin HTTP is adminapi, not here
+  service/              Business logic (token lifecycle, MFA, HIBP, identity, blobs,
+                        erasure, mint, service documents, the retention sweepers)
   repository/           PostgreSQL via pgx
   adminapi/             Admin gateway HTTP layer (RBAC, sessions, email branding)
   middleware/           Auth, fingerprint, rate limiting, CORS, DPoP, security headers, IP access
+  dpop/                 Carries a validated proof's thumbprint from middleware to issuance,
+                        which is what lets a minted token commit to the key (cnf.jkt)
   jwt/                  Stdlib-only RS256 sign/verify, ES256 verify, parsing, claims
   crypto/               Argon2id, AES-256-GCM, HMAC, TOTP, JWKS, DPoP
   kms/                  KEK envelope-unwrap oracle (HKDF-derived per-kid KEKs)
@@ -75,11 +82,16 @@ internal/
   server/               HTTP server, TLS 1.3, middleware wiring
   migrate/              SQL migration runner
   model/                Domain types + WebAuthn adapter (there is no internal/webauthn
-                        package; WebAuthn lives in model, repository, service and handler)
+                        package; WebAuthn lives in model, repository, handler and server)
   rbac/                 Admin role/permission checks
   metrics/              Hand-rolled Prometheus text exposition
   audit/                Append-only audit logger
   email/                SMTP + SendGrid, go:embed HTML templates, per-app white-label
+  deferwork/            Bounded pool for work that outlives its request, drained on shutdown,
+                        so an unauthenticated caller cannot decide how many goroutines run
+  firstboot/            Hands a once-only generated credential to the operator without
+                        putting it in the process log
+  ipintel/              Embedded IP-intelligence table (VPN, hosting, Tor) and its lookup
   cli/                  Admin CLI (add-client, rotate-jwks, list-clients, seed, etc.)
   seed/                 Declarative JSON seeding for clients and users
   oauth2/               GitHub, Google, Facebook, and generic OIDC providers
@@ -91,16 +103,24 @@ internal/
 packages/vue/           @vault42/vue: composables + i18n (38 locales)
 packages/dotnet/        Vault42.AspNetCore + Vault42.Blazor (published to nuget.org)
 web/                    Vue 3 + Vite + Tailwind SPA
-charts/vault/           Helm chart (production, embedded, honeypot profiles)
+site/                   Static landing page for vault.42-v.com (no build step)
+charts/vault/           Helm chart (default, embedded, honeypot, bridge, dev, local values)
 migrations/             PostgreSQL DDL (auth, audit, identity, objects schemas)
 tests/
   unit/                 Table-driven unit tests
   attack/               Attack vector simulations (alg confusion, replay, injection, timing, DPoP)
   compliance/           NIST SP 800-63B + OWASP ASVS verification
+  spec/                 Executable assertions about the chart, the workflows and the wiring
   integration/          Testcontainers (real PostgreSQL + Redis)
-  fuzz/                 Go native fuzzing (JWT, TOTP, Argon2, ES256, email, identity, kid, DPoP)
+  e2e/                  End-to-end flows, including a multi-replica keystore setup
+  fuzz/                 Go native fuzzing (JWT, TOTP, Argon2, ES256, email, identity, kid,
+                        DPoP, PKCE, OAuth state, mint, service documents)
   browser/              Chromedp browser security tests (separate go.mod)
+  e2e-browser/          Playwright suite (separate toolchain)
+  admin/                Admin-gateway E2E over real mTLS
   honeypot/             Bridge + honeypot E2E tests (honeypot_e2e build tag)
+  stress/               Load suite (stress build tag)
+  mocks/, testutil/     Shared fakes and container-runtime detection
 ```
 
 ## Quick Start
