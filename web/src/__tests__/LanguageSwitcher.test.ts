@@ -122,6 +122,18 @@ describe('LanguageSwitcher', () => {
     expect(localStorage.getItem('vault42-locale')).toBe('zh-Hans')
   })
 
+  it('publishes the chosen locale on the document element', async () => {
+    // Without this the page stays lang="en" forever, so a screen reader
+    // pronounces every translation with English rules.
+    document.documentElement.lang = 'en'
+    const wrapper = mountSwitcher()
+    await trigger(wrapper).trigger('click')
+    await optionButtons(wrapper).find(b => b.text().includes('Nihongo'))!.trigger('click')
+
+    expect(document.documentElement.lang).toBe('ja')
+    expect(document.documentElement.dir).toBe('ltr')
+  })
+
   it('closes the list and relabels the trigger after a selection', async () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')

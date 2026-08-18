@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useT } from '@vault42/vue'
+import { applyDocumentLocale } from '../i18n'
 
 const { locale, setLocale, availableLocales } = useT()
 
@@ -62,6 +63,7 @@ const filtered = computed(() => {
 
 function select(loc: string) {
   setLocale(loc)
+  applyDocumentLocale(loc)
   localStorage.setItem('vault42-locale', loc)
   open.value = false
   search.value = ''

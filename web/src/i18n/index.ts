@@ -48,3 +48,4 @@ export const messages: Record<string, LocaleMessages> = {
 }
 
 export { detectLocale } from './detection'
+export { applyDocumentLocale, isRTL } from './documentLocale'
