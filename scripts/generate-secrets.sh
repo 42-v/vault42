@@ -3,6 +3,9 @@
 # Usage: ./generate-secrets.sh [output-dir]
 set -euo pipefail
 
+# shellcheck source=lib/credential-output.sh
+source "$(dirname "$0")/lib/credential-output.sh"
+
 SECRETS_DIR="${1:-./secrets}"
 mkdir -p "$SECRETS_DIR"
 
@@ -36,9 +39,7 @@ chmod 400 "$SECRETS_DIR"/*
 echo ""
 echo "Secrets generated in $SECRETS_DIR"
 echo ""
-echo "Admin token (save this — shown once):"
-cat "$SECRETS_DIR/admin-token"
-echo ""
+show_credential_file "Admin token (save this — shown once)" "$SECRETS_DIR/admin-token"
 echo ""
 echo "Next steps:"
 echo "  1. Create Kubernetes secret:"

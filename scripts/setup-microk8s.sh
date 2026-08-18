@@ -3,6 +3,9 @@
 # Usage: ./setup-microk8s.sh [vault-image-tag]
 set -euo pipefail
 
+# shellcheck source=lib/credential-output.sh
+source "$(dirname "$0")/lib/credential-output.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TAG="${1:-latest}"
 NAMESPACE="vault42"
@@ -78,9 +81,7 @@ echo "Namespace: $NAMESPACE"
 echo "Image:     ghcr.io/42-v/vault42:$TAG"
 echo "Profile:   embedded"
 echo ""
-echo "Admin token:"
-cat "$SECRETS_DIR/admin-token"
-echo ""
+show_credential_file "Admin token" "$SECRETS_DIR/admin-token"
 echo ""
 echo "Access (via ingress):"
 echo "  https://vault42.local"
