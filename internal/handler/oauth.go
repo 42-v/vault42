@@ -595,7 +595,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			requiresMFA = true
 		}
 		if requiresMFA {
-			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp)
+			challengeToken, err := h.tokenSvc.IssueChallengeToken(r.Context(), userID, fp)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, "internal_error")
 				return
@@ -620,7 +620,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Issue tokens
 	pair, err := h.tokenSvc.IssueTokenPair(
-		userID, []string{"user"}, []string{"read", "write"},
+		r.Context(), userID, []string{"user"}, []string{"read", "write"},
 		"", fp, "", false,
 	)
 	if err != nil {

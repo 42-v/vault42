@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"math/big"
@@ -21,7 +22,7 @@ func TestIssueTokenPair_ClampsANewFamilyToTheAbsoluteLifetime(t *testing.T) {
 	svc.SetMaxSessionLifetime(30 * time.Minute)
 
 	before := time.Now()
-	pair, err := svc.IssueTokenPair("u-1", []string{"user"}, []string{"read"}, "", "fp", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "u-1", []string{"user"}, []string{"read"}, "", "fp", "", false)
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestIssueTokenPair_ClampsRememberMeToTheAbsoluteLifetime(t *testing.T) {
 	svc.SetMaxSessionLifetime(24 * time.Hour)
 
 	before := time.Now()
-	pair, err := svc.IssueTokenPair("u-1", []string{"user"}, []string{"read"}, "", "fp", "", true)
+	pair, err := svc.IssueTokenPair(context.Background(), "u-1", []string{"user"}, []string{"read"}, "", "fp", "", true)
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestIssueTokenPair_LeavesTheRefreshTTLAloneWhenTheBoundIsLonger(t *testing.
 	svc.SetMaxSessionLifetime(90 * 24 * time.Hour)
 
 	before := time.Now()
-	pair, err := svc.IssueTokenPair("u-1", []string{"user"}, []string{"read"}, "", "fp", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "u-1", []string{"user"}, []string{"read"}, "", "fp", "", false)
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestIssueRotatedPair_ClampsToTheFamilyDeadline(t *testing.T) {
 	svc.SetMaxSessionLifetime(maxLifetime)
 
 	origin := time.Now().Add(-maxLifetime + 5*time.Minute)
-	pair, err := svc.IssueRotatedPair("u-1", []string{"user"}, []string{"read"}, "", "fp", "fam-1", origin)
+	pair, err := svc.IssueRotatedPair(context.Background(), "u-1", []string{"user"}, []string{"read"}, "", "fp", "fam-1", origin)
 	if err != nil {
 		t.Fatalf("IssueRotatedPair: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestIssueRotatedPair_AZeroOriginDoesNotClamp(t *testing.T) {
 	svc.SetMaxSessionLifetime(7 * 24 * time.Hour)
 
 	before := time.Now()
-	pair, err := svc.IssueRotatedPair("u-1", []string{"user"}, []string{"read"}, "", "fp", "fam-1", time.Time{})
+	pair, err := svc.IssueRotatedPair(context.Background(), "u-1", []string{"user"}, []string{"read"}, "", "fp", "fam-1", time.Time{})
 	if err != nil {
 		t.Fatalf("IssueRotatedPair: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestUpdateSigningKey_RotatingToTheSameKeyDoesNotWipeIt(t *testing.T) {
 	if key.D.Sign() == 0 {
 		t.Fatal("the live signing key was wiped; the service can no longer sign")
 	}
-	if _, err := svc.IssueChallengeToken("u-1", "fp"); err != nil {
+	if _, err := svc.IssueChallengeToken(context.Background(), "u-1", "fp"); err != nil {
 		t.Fatalf("signing after a no-op rotation failed: %v", err)
 	}
 }
@@ -179,7 +180,7 @@ func TestUpdateSigningKey_ConcurrentSigningStaysValid(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 8; j++ {
-				tok, err := svc.IssueChallengeToken("u-1", "fp")
+				tok, err := svc.IssueChallengeToken(context.Background(), "u-1", "fp")
 				if err != nil {
 					t.Errorf("IssueChallengeToken: %v", err)
 					return

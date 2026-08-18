@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -94,7 +95,7 @@ func TestUpdateSigningKey_ToleratesKeysWithNothingToWipe(t *testing.T) {
 
 		svc.UpdateSigningKey(key, testKID1)
 
-		if _, err := svc.IssueChallengeToken("user-1", "fp"); err != nil {
+		if _, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp"); err != nil {
 			t.Errorf("the first key handed to a signer did not take effect: %v", err)
 		}
 	})
@@ -107,7 +108,7 @@ func TestUpdateSigningKey_ToleratesKeysWithNothingToWipe(t *testing.T) {
 		if active.D.Sign() != 0 {
 			t.Error("dropping the active key left its private exponent in memory")
 		}
-		if _, err := svc.IssueChallengeToken("user-1", "fp"); err == nil {
+		if _, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp"); err == nil {
 			t.Error("a signer with no key issued a token; it must fail closed")
 		}
 	})
@@ -118,7 +119,7 @@ func TestUpdateSigningKey_ToleratesKeysWithNothingToWipe(t *testing.T) {
 
 		svc.UpdateSigningKey(key, testKID2)
 
-		if _, err := svc.IssueChallengeToken("user-1", "fp"); err != nil {
+		if _, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp"); err != nil {
 			t.Errorf("issuance broke after retiring a partially built key: %v", err)
 		}
 	})

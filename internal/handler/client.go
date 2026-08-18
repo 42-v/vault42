@@ -122,7 +122,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pair, err := h.tokenSvc.IssueTokenPair(
-		client.ID, []string{client.Role}, grantedScopes,
+		r.Context(), client.ID, []string{client.Role}, grantedScopes,
 		client.ID, "", "", false,
 	)
 	if err != nil {
