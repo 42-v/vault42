@@ -45,6 +45,7 @@ import (
 var boolEnvVars = []string{
 	"CORS_ALLOW_ALL",
 	"VAULT_ALLOW_PLAINTEXT",
+	"VAULT_ALLOW_PLAINTEXT_DB",
 	"VAULT_ALLOW_RATE_LIMIT_DISABLED",
 	"VAULT_AUTO_MIGRATE",
 	"VAULT_DPOP_ENABLED",
@@ -120,6 +121,17 @@ var enumEnvVars = map[string][]string{
 // encrypted. "prefer" is absent on purpose: it asks for TLS and falls back to
 // plaintext without an error when the server does not offer it.
 var encryptedSSLModes = []string{"require", "verify-ca", "verify-full"}
+
+// unencryptedSSLModes are the DB_SSLMODE values that positively do not
+// guarantee encryption, as opposed to merely not being on the encrypted list.
+// Validate refuses to start on one of these outside the dev profile unless
+// VAULT_ALLOW_PLAINTEXT_DB says the link is private.
+//
+// It is the complement of encryptedSSLModes over the DB_SSLMODE enum and not
+// derived from it, because the two lists answer different questions and the
+// derived form would sweep in a value that is neither — an empty string, which
+// means "the profile decides" everywhere else in this file.
+var unencryptedSSLModes = []string{"disable", "allow", "prefer"}
 
 // cidrEnvVars is every comma-separated list of addresses or ranges.
 // middleware.SetTrustedProxies and parseCIDRList drop an entry they cannot

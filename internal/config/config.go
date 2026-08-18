@@ -713,9 +713,25 @@ func (c *Config) Validate() error {
 	// row of every table after it, including the encrypted TOTP secrets and the
 	// password hashes. Three of the six legal modes do not guarantee it is
 	// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
-	// back to plaintext without telling anyone. Deployments that run Postgres in
-	// the same pod set "disable" on purpose (charts/vault/values-bridge.yaml,
-	// values-local.yaml), so this says so rather than refusing.
+	// back to plaintext without telling anyone.
+	//
+	// This refuses rather than warns, and it refuses for the same reason M5
+	// fourteen lines above refuses a disabled listener: an unencrypted link is a
+	// control that is absent, and a SECURITY WARNING that boots anyway is
+	// indistinguishable from no control at all once the log scrolls. Deployments
+	// that run Postgres in the same pod legitimately want "disable"
+	// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
+	// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
+	// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
+	// keeps the posture visible where an operator reviews it.
+	//
+	// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
+	// is unreachable through Load (envOr defaults it to "require" and the enum
+	// check rejects every other spelling) and keeps the warning, so a Config
+	// assembled in code is judged on what it says rather than on what it omits.
+	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
+		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
+	}
 	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
 		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
 	}

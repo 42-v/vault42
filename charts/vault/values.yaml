@@ -183,6 +183,10 @@ database:
   name: vault
   # -- SSL mode (require | verify-full | disable)
   sslmode: require
+  # -- Permit an unencrypted sslmode (disable | allow | prefer) outside the dev
+  # profile. Config.Validate refuses to start on one otherwise, so a same-pod or
+  # loopback Postgres has to opt in rather than boot on a warning.
+  allowPlaintext: false
   # -- Max connections
   maxConns: "25"
 

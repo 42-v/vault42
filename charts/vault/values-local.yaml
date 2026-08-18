@@ -30,6 +30,9 @@ trustedProxies: "10.0.0.0/8"
 database:
   host: vault-postgres
   sslmode: disable
+  # In-cluster Postgres on a private link: the connection is unencrypted on
+  # purpose, so the override says so where an operator reviews it.
+  allowPlaintext: true
   maxConns: "10"
 
 cache:
