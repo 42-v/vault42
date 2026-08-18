@@ -4539,7 +4539,7 @@
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:294-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
+      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:297-336), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
     },
     {
       "standard": "OWASP ASVS",
