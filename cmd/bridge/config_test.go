@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +30,7 @@ var bridgeEnvKeys = []string{
 	"BRIDGE_TRUSTED_PROXIES",
 	"BRIDGE_REAL_IP_HEADER",
 	"BRIDGE_LOG_LEVEL",
+	"BRIDGE_STRIP_HEADERS",
 }
 
 // clearBridgeEnv blanks every BRIDGE_* variable for the duration of the test.
@@ -456,5 +459,77 @@ func TestEnvDuration(t *testing.T) {
 				t.Errorf("envDuration(%q) = %v, want %v", tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+// BRIDGE_STRIP_HEADERS is the operator's half of the F-18 fix: the bridge
+// deletes a fixed list of headers the upstream trusts by peer, and this variable
+// names the ones a particular deployment has renamed. It is written by hand into
+// a Helm values file or a systemd unit, so it arrives with human spacing —
+// entries separated by ", ", a trailing comma, an empty slot left behind after
+// an edit.
+//
+// Every one of those has to be reduced to the bare header name, because
+// http.Header.Del canonicalises what it is given and " X-Custom-Fingerprint "
+// canonicalises to nothing that matches. An untrimmed entry is not a noisy
+// config, it is a header the operator believes is stripped and that arrives at
+// the upstream carrying whatever the client put in it.
+func TestLoadConfigTrimsStripHeadersAndDropsEmptyEntries(t *testing.T) {
+	clearBridgeEnv(t)
+	setRequiredUpstreams(t)
+	t.Setenv("BRIDGE_STRIP_HEADERS", " X-Custom-Fingerprint ,, X-Edge-Trust,\t,")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	want := []string{"X-Custom-Fingerprint", "X-Edge-Trust"}
+	if len(cfg.StripHeaders) != len(want) {
+		t.Fatalf("StripHeaders = %q, want %q; empty entries between commas are not header names", cfg.StripHeaders, want)
+	}
+	for i := range want {
+		if cfg.StripHeaders[i] != want[i] {
+			t.Fatalf("StripHeaders = %q, want %q", cfg.StripHeaders, want)
+		}
+	}
+
+	// The parse is only worth anything if the parsed name reaches Header.Del, so
+	// the list LoadConfig produced is handed to a real bridge and the forged
+	// header has to be gone from what the upstream sees. With the entry
+	// untrimmed this assertion is what fails.
+	b, headers := testBridge(t, func(c *Config) { c.StripHeaders = cfg.StripHeaders })
+	req := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
+	req.RemoteAddr = "203.0.113.5:1234"
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("X-Custom-Fingerprint", "forged-by-the-client")
+	req.Header.Set("X-Edge-Trust", "forged-by-the-client")
+	b.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := headers()
+	if got == nil {
+		t.Fatal("the upstream never saw the request")
+	}
+	for _, h := range want {
+		if v := got.Get(h); v != "" {
+			t.Errorf("the upstream received %s: %q; an operator-renamed header the client forged reached it", h, v)
+		}
+	}
+}
+
+// An unset BRIDGE_STRIP_HEADERS must leave the list empty rather than holding
+// one empty string. A "" in the list is a Del("") on every proxied request, and
+// it is also what makes the list look configured to anything that only checks
+// its length.
+func TestLoadConfigLeavesStripHeadersEmptyWhenUnset(t *testing.T) {
+	clearBridgeEnv(t)
+	setRequiredUpstreams(t)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.StripHeaders) != 0 {
+		t.Fatalf("StripHeaders = %q with the variable unset, want none", cfg.StripHeaders)
 	}
 }

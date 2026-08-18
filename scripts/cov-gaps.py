@@ -131,7 +131,14 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # DPoP binding package, the first-boot provisioner, the config cross-plane and
 # env checks, and the per-family session revocation work. The package set in
 # cov_run did not change. A full cov_run reports 11917.
-BASELINE_TOTAL_STATEMENTS = 11917
+# Raised from 11917 to 11918. Not new work: 11917 was measured in the covrecon
+# worktree, whose tree predates two changes that reached hard/integration
+# afterwards — cmd/admin-gateway/main.go extracting verifyPlaneAgreement and
+# gaining the service-document call the erasure cascade was missing. Diffing the
+# two profiles block by block shows the whole difference inside that one file,
+# 22 blocks reshaped for a net +1 statement, and nothing else moved. A full
+# cov_run against hard/integration reports 11918.
+BASELINE_TOTAL_STATEMENTS = 11918
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an

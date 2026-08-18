@@ -1373,3 +1373,62 @@ func TestMintSignsWithTheBootSigningKey(t *testing.T) {
 		t.Fatalf("minted subject = %q, want %q", claims.Subject, "user-42")
 	}
 }
+
+// TestAnIncompleteDeferredEmailDrainIsReportedAtShutdown is the last thing the
+// process does and the only report anyone gets that it did not finish.
+//
+// Signup verification, password reset, the import-claim link, the account-locked
+// notice, the email OTP fallback and the new-country notices are all sent off the
+// request path on a bounded pool. Shutdown drains that pool before the cache and
+// the database pool are closed, because a send that is still running writes its
+// token to the cache and then mails the link — closing the cache first hands the
+// user a verification link that can never work.
+//
+// The drain is bounded by VAULT_SHUTDOWN_TIMEOUT so a wedged relay cannot hold
+// the process open past its termination grace period. When that bound is what
+// ends the drain, some number of users have a mail nobody sent and a token
+// nobody can redeem, and this line is the only place that is recorded: the
+// process still exits 0, because refusing to exit is the failure mode the
+// deadline exists to prevent.
+//
+// The control matters as much as the warning. An ordinary shutdown, with the
+// same binary and the same short deadline, must not print it — a drain warning
+// on every rollout is one an operator stops reading.
+func TestAnIncompleteDeferredEmailDrainIsReportedAtShutdown(t *testing.T) {
+	const warning = "WARNING: deferred email drain incomplete"
+
+	boot := func(t *testing.T, stall bool) vaultResult {
+		t.Helper()
+		stub := startPGStub(t, adminTokenRule("$argon2id$already-provisioned"))
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		// Short enough that the test does not wait out a production grace
+		// period, long enough that an idle server drains its listener well
+		// inside it.
+		env["VAULT_SHUTDOWN_TIMEOUT"] = "250ms"
+		if stall {
+			env[vaultChildStallDeferwork] = "1"
+		}
+		return bootAndShutdown(t, vaultRun{env: env}, addr, syscall.SIGTERM, nil)
+	}
+
+	t.Run("a send still running at the deadline is reported", func(t *testing.T) {
+		res := boot(t, true)
+		requireExit(t, res, 0, warning)
+		// The process still has to come down. A drain that waited for the
+		// wedged relay would be killed by the orchestrator instead, taking
+		// every other live connection with it.
+		if !strings.Contains(res.stderr, "deferwork: drain deadline expired") {
+			t.Errorf("the pool did not report the expired deadline\nstderr:\n%s", res.stderr)
+		}
+	})
+
+	t.Run("an ordinary shutdown reports nothing", func(t *testing.T) {
+		res := boot(t, false)
+		requireExit(t, res, 0, "")
+		if strings.Contains(res.stderr, warning) {
+			t.Errorf("a shutdown with nothing deferred warned about an incomplete drain; the warning "+
+				"is only useful if it means something\nstderr:\n%s", res.stderr)
+		}
+	})
+}

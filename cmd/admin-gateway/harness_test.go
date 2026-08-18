@@ -13,6 +13,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -254,6 +255,34 @@ func (p *pki) issueClient(t *testing.T, cn string) tls.Certificate {
 	c := issueCert(t, p.ca, &x509.Certificate{
 		SerialNumber: big.NewInt(100 + p.nextSerial),
 		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	return tls.Certificate{Certificate: [][]byte{c.der}, PrivateKey: c.key}
+}
+
+// issueClientWithURI mints a client certificate whose identity lives in a URI
+// SAN rather than in the common name.
+//
+// This is what SPIFFE-issued and mesh-issued operator certificates look like:
+// the CN is decorative or absent and spiffe://... is the name anything
+// downstream is expected to pin on. A gateway that only reads the CN and the DNS
+// names cannot pin such a deployment at all, so its allowlist would have to be
+// left empty and the CA would go back to being the only boundary.
+func (p *pki) issueClientWithURI(t *testing.T, cn string, uri string) tls.Certificate {
+	t.Helper()
+
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("parse SAN URI %q: %v", uri, err)
+	}
+	p.nextSerial++
+	c := issueCert(t, p.ca, &x509.Certificate{
+		SerialNumber: big.NewInt(100 + p.nextSerial),
+		Subject:      pkix.Name{CommonName: cn},
+		URIs:         []*url.URL{u},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

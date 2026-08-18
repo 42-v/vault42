@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"net"
@@ -34,6 +35,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/42-v/vault42/internal/deferwork"
 )
 
 const (
@@ -46,7 +49,28 @@ const (
 	// vaultChildStarveEntropy runs the child over a CSPRNG that has stopped
 	// answering. See starvedReader.
 	vaultChildStarveEntropy = "VAULT42_TEST_STARVE_ENTROPY"
+	// vaultChildStallDeferwork leaves one deferred job running past the drain
+	// deadline. See stallDeferredWork.
+	vaultChildStallDeferwork = "VAULT42_TEST_STALL_DEFERWORK"
 )
+
+// stallDeferredWork occupies one worker of the process-wide deferred pool for
+// as long as the pool is open.
+//
+// It stands in for the job the drain exists for: a verification mail whose relay
+// has stopped answering, still in a worker when SIGTERM arrives. Blocking on the
+// job's own context is what a well-behaved job does — the context is documented
+// as "canceled when the dispatcher is closing" — and it is what makes the
+// deadline the thing that decides, rather than a sleep racing it.
+//
+// Installed here rather than driven through a request for the same reason
+// starvedReader is: the pool is process-wide state with no seam, so the only
+// place to occupy it is in the child before main() takes over. Everything after
+// that is production code — the real dispatcher, the real Close, the real
+// deadline built from VAULT_SHUTDOWN_TIMEOUT, and the real warning.
+func stallDeferredWork() {
+	deferwork.Go(func(ctx context.Context) { <-ctx.Done() })
+}
 
 // starvedReader is a CSPRNG that has run out. Several checks in this package sit
 // behind a crypto/rand.Reader read that a healthy Linux host never fails: the
@@ -67,6 +91,9 @@ func TestMain(m *testing.M) {
 		// starve it is before control is handed over.
 		if os.Getenv(vaultChildStarveEntropy) == "1" {
 			rand.Reader = starvedReader{}
+		}
+		if os.Getenv(vaultChildStallDeferwork) == "1" {
+			stallDeferredWork()
 		}
 		os.Args = append([]string{"vault"}, childArgs()...)
 		main()
