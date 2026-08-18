@@ -8,8 +8,8 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 | | | |
 |---|---|---|
 | ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-4647-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1207-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-5854_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-42587_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6675_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Go_Tests-5037-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1249-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6286_tests-155724?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Go-47657_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6701_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
 <!-- /badges -->
 

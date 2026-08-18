@@ -344,6 +344,23 @@ else
   (cd web && npx vitest run 2>&1) > "$FE_OUT" || true
   (cd packages/vue && npx vitest run 2>&1) >> "$FE_OUT" || true
   FE_TESTS=$({ grep -oP '\d+(?= passed)' "$FE_OUT" || true; } | awk '{s+=$1}END{print s+0}')
+  # Both runs above are `|| true`, and awk turns "no matches" into 0, so a
+  # frontend suite that cannot run at all -- no node_modules, no registry, a
+  # renamed reporter -- used to publish a Vue_Tests badge reading 0 and a Total
+  # counting only Go. That is the failure this repository spent a release
+  # removing: a suite that cannot run reporting a number instead of saying so.
+  # The Go side already refuses through cov_check_failures; this is the same
+  # rule for the half that runs under node.
+  if [ "$FE_TESTS" -eq 0 ]; then
+    echo "ERROR: the frontend suites reported no passing tests." >&2
+    echo "  Neither web nor packages/vue produced a '<n> passed' line, so there is no measurement" >&2
+    echo "  to publish. Install the workspace (pnpm install --frozen-lockfile) and re-run, or pass" >&2
+    echo "  VUE_TESTS=<n> from a run that did measure. Publishing 0 here would put a false count in" >&2
+    echo "  the README badge and understate the total." >&2
+    sed -n '1,20p' "$FE_OUT" >&2
+    rm -f "$FE_OUT"
+    exit 1
+  fi
   rm -f "$FE_OUT"
 fi
 

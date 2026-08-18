@@ -43,6 +43,7 @@
 | `internal/sanitize` | 100.00% |
 | `internal/redis` | 100.00% |
 | `internal/rbac` | 100.00% |
+| `internal/outbound` | 100.00% |
 | `internal/model` | 100.00% |
 | `internal/migrate` | 100.00% |
 | `internal/middleware` | 100.00% |
@@ -52,26 +53,27 @@
 | `internal/httputil` | 100.00% |
 | `internal/honeypot` | 100.00% |
 | `internal/frontend` | 100.00% |
-| `internal/firstboot` | 100.00% |
 | `internal/dpop` | 100.00% |
 | `internal/deferwork` | 100.00% |
 | `internal/config` | 100.00% |
 | `internal/cli` | 100.00% |
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
+| `internal/alert` | 100.00% |
 | `internal/repository/postgres` | 99.91% |
-| `internal/adminapi` | 99.82% |
-| `internal/oauth2` | 99.73% |
-| `internal/handler` | 99.68% |
+| `internal/adminapi` | 99.83% |
+| `internal/oauth2` | 99.74% |
+| `cmd/admin-gateway` | 99.72% |
+| `internal/handler` | 99.69% |
 | `internal/keystore` | 99.62% |
-| `cmd/admin-gateway` | 99.60% |
-| `cmd/bridge` | 99.54% |
-| `internal/service` | 99.24% |
+| `internal/email` | 99.56% |
+| `cmd/bridge` | 99.55% |
+| `internal/service` | 99.28% |
 | `internal/jwt` | 99.22% |
-| `internal/email` | 99.08% |
-| `cmd/vault` | 98.36% |
-| `internal/crypto` | 98.18% |
+| `cmd/vault` | 98.39% |
+| `internal/crypto` | 98.36% |
 | `cmd/recover` | 98.15% |
+| `internal/firstboot` | 96.88% |
 
 ## Maintainers
 
@@ -84,11 +86,10 @@
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
 | [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2892 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2893 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
 | [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 190 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
 | [philhofer](https://github.com/philhofer) | User | fwd | 47 | ![followers](https://img.shields.io/github/followers/philhofer?style=flat&label=) | 2012-12-01 |
 | [tinylib](https://github.com/tinylib) | Org | msgp | 3 | ![followers](https://img.shields.io/github/followers/tinylib?style=flat&label=) | 2015-01-12 |
 | [x448](https://github.com/x448) | User | float16 | 54 | ![followers](https://img.shields.io/github/followers/x448?style=flat&label=) | 2019-10-27 |
-
