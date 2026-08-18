@@ -169,7 +169,10 @@ var erasureRegister = map[string]erasureEntry{
 		proof:    "auth.erase_user_identity",
 		note: "the account row itself. Scrubbed in place rather than deleted — the row stays " +
 			"so every foreign key above stays valid, and the account-state gate refuses " +
-			"deleted rows at login. auth.erase_user_identity() is the only writer",
+			"deleted rows at login. auth.erase_user_identity() is the only writer, and " +
+			"migration 031 widened it to the columns 003, 004 and 006 added after 015 " +
+			"fixed its list: password_hash, roles, ban_reason, last_login_at, " +
+			"imported_from, legacy_id",
 	},
 
 	// --- deliberately retained --------------------------------------------
