@@ -19,7 +19,7 @@ onMounted(() => fetchProfile())
           <div class="vault42-spinner vault42-spinner-lg"></div>
         </div>
 
-        <div v-else-if="error" class="vault42-alert-error">
+        <div v-else-if="error" class="vault42-alert-error" role="alert">
           {{ friendlyError(error.code) }}
         </div>
 

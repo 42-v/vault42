@@ -224,7 +224,7 @@ async function handleWebAuthnVerify() {
       <h2>{{ t('common.signIn', 'Sign In') }}</h2>
     </slot>
 
-    <div v-if="error" class="vault42-login-form__error">
+    <div v-if="error" id="vault42-login-form-error" class="vault42-login-form__error" role="alert">
       <slot name="error" :error="error">
         <p>{{ error.code ? friendlyError(error.code) : t('login.failed', 'Login failed') }}</p>
       </slot>
@@ -257,7 +257,7 @@ async function handleWebAuthnVerify() {
 
       <!-- WebAuthn primary (when user has security keys) -->
       <div v-else-if="hasWebAuthn && !showTOTPFallback" class="vault42-login-form__2fa-section">
-        <p v-if="webauthnError" class="vault42-login-form__error">{{ friendlyError(webauthnError) }}</p>
+        <p v-if="webauthnError" class="vault42-login-form__error" role="alert">{{ friendlyError(webauthnError) }}</p>
         <button
           type="button"
           :disabled="webauthnLoading"
@@ -347,6 +347,8 @@ async function handleWebAuthnVerify() {
           v-model="email"
           type="email"
           autocomplete="email"
+          :aria-invalid="error ? 'true' : undefined"
+          :aria-describedby="error ? 'vault42-login-form-error' : undefined"
           required
         />
       </div>
@@ -357,6 +359,8 @@ async function handleWebAuthnVerify() {
           v-model="password"
           type="password"
           autocomplete="current-password"
+          :aria-invalid="error ? 'true' : undefined"
+          :aria-describedby="error ? 'vault42-login-form-error' : undefined"
           required
         />
       </div>

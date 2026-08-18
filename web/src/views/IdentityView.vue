@@ -95,8 +95,8 @@ async function handleDelete() {
         </div>
 
         <template v-else>
-          <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
-          <div v-if="saveSuccess" class="vault42-alert-success mb-4">{{ t('identity.savedSuccess') }}</div>
+          <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
+          <div v-if="saveSuccess" class="vault42-alert-success mb-4" role="status">{{ t('identity.savedSuccess') }}</div>
 
           <form class="space-y-6" @submit.prevent="handleSave">
             <div class="vault42-card space-y-4">

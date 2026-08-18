@@ -145,7 +145,7 @@ function copyBackupCodes() {
           <p class="text-sm text-vault42-muted mt-1">{{ t('twoFactor.subtitle') }}</p>
         </div>
 
-        <div v-if="error" class="vault42-alert-error">{{ friendlyError(error.code) }}</div>
+        <div v-if="error" class="vault42-alert-error" role="alert">{{ friendlyError(error.code) }}</div>
 
         <!-- Confirmation Dialog -->
         <Teleport to="body">
@@ -155,7 +155,7 @@ function copyBackupCodes() {
               <p class="text-sm text-vault42-muted">
                 {{ t('twoFactor.confirmPasswordDesc') }}
               </p>
-              <div v-if="confirmError" class="vault42-alert-error text-sm">
+              <div v-if="confirmError" class="vault42-alert-error text-sm" role="alert">
                 {{ friendlyError(confirmError.code) }}
               </div>
               <input
@@ -218,7 +218,7 @@ function copyBackupCodes() {
                   </div>
                 </div>
 
-                <div v-if="webauthnError" class="vault42-alert-error text-xs mb-3">{{ friendlyError(webauthnError.code) }}</div>
+                <div v-if="webauthnError" class="vault42-alert-error text-xs mb-3" role="alert">{{ friendlyError(webauthnError.code) }}</div>
                 <button
                   :disabled="webauthnLoading"
                   :class="credentials.length > 0 ? 'vault42-btn-outline vault42-btn-sm' : 'vault42-btn vault42-btn-sm'"

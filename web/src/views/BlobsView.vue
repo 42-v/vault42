@@ -74,7 +74,7 @@ async function handleDelete(id: string) {
         </div>
 
         <div v-else class="space-y-6">
-          <div v-if="error" class="vault42-alert-error">{{ friendlyError(error.code) }}</div>
+          <div v-if="error" class="vault42-alert-error" role="alert">{{ friendlyError(error.code) }}</div>
 
           <!-- Quota bar -->
           <div v-if="quota" class="vault42-card">

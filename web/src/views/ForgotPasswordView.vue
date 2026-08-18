@@ -39,7 +39,7 @@ async function handleSubmit() {
       </div>
 
       <div v-else class="vault42-card">
-        <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
+        <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
 
         <form class="space-y-5" @submit.prevent="handleSubmit">
           <div>

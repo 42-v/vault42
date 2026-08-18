@@ -56,7 +56,7 @@ onMounted(async () => {
 <template>
   <div class="min-h-[80vh] flex items-center justify-center px-4">
     <div class="w-full max-w-sm text-center">
-      <div v-if="error" class="vault42-card">
+      <div v-if="error" class="vault42-card" role="alert">
         <div class="text-4xl mb-4">&#x26a0;&#xfe0f;</div>
         <h1 class="text-xl font-bold mb-2">{{ t('oauth.failed') }}</h1>
         <p class="text-sm text-vault42-muted mb-6">{{ error }}</p>

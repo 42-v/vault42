@@ -61,7 +61,7 @@ onMounted(() => {
             </button>
           </div>
 
-          <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
+          <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
 
           <div v-if="isLoading" class="flex justify-center py-8">
             <div class="vault42-spinner"></div>
