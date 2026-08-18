@@ -600,10 +600,11 @@ func Load() (*Config, error) {
 	// AuthService.Register and PasswordHandler both compare the rune count
 	// against this number and nothing downstream enforces a minimum of its own,
 	// so a deployment that sets it to 4 accepts a password an offline attacker
-	// enumerates in seconds. Dev keeps the escape hatch; a local login is not a
-	// deployment.
-	if c.Profile != ProfileDev && c.PasswordMinLength < passwordMinLengthFloor {
-		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", passwordMinLengthFloor, c.Profile, c.PasswordMinLength)
+	// enumerates in seconds. Dev gets a lower floor, not an absent one; a local
+	// login is not a deployment, but a build that accepts a four-character
+	// password is not a password check either.
+	if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor {
+		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", floor, c.Profile, c.PasswordMinLength)
 	}
 
 	// Enforce HMAC secret minimum length in non-dev profiles
@@ -767,9 +768,30 @@ func (c *Config) checkGeoFence() error {
 }
 
 // passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
-// outside dev. NIST SP 800-63B sets 8 characters as the minimum length of a
-// memorized secret the subscriber chooses; the package default is 15.
-const passwordMinLengthFloor = 8
+// outside dev, and it is the figure docs/COMPLIANCE.md and README.md publish.
+// NIST SP 800-63B-4 §3.1.1.2 raised the floor for a password used as the only
+// authenticator from 8 to 15 characters, and vault42 permits single-factor
+// login (MFA is configurable), so 15 is the number an operator may not go
+// under. It equals the package default deliberately: a claim that the product
+// enforces 15 is false the moment the enforced floor is lower than the figure.
+const passwordMinLengthFloor = 15
+
+// devPasswordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
+// in the dev profile. Dev deliberately sits below the published floor so a
+// seeded local account does not need a 15-character secret, but it is still a
+// floor: NIST SP 800-63B-4 §3.1.1.1 requires a verifier to accept memorized
+// secrets of at least 8 characters, and a build that accepts fewer is not
+// exercising the password path the deployment profiles run.
+const devPasswordMinLengthFloor = 8
+
+// passwordFloorFor returns the shortest VAULT_PASSWORD_MIN_LENGTH the profile
+// accepts. Every profile has one; dev's is merely lower.
+func passwordFloorFor(p Profile) int {
+	if p == ProfileDev {
+		return devPasswordMinLengthFloor
+	}
+	return passwordMinLengthFloor
+}
 
 // argon2idPrefix marks the PHC-encoded form of an Argon2id hash. Its presence
 // is what tells ADMIN_TOKEN_FILE's two accepted forms apart: a hash, which is

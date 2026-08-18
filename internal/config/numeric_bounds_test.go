@@ -88,10 +88,12 @@ func TestLoadRefusesANegativeRetentionHorizon(t *testing.T) {
 // paths: AuthService.Register and PasswordHandler compare the rune count
 // against this number and nothing else enforces a minimum.
 // VAULT_PASSWORD_MIN_LENGTH=0 accepts an empty password, and any value under
-// the NIST SP 800-63B floor of 8 accepts one an offline attacker enumerates. The dev profile keeps the escape hatch,
-// because a local login is not a deployment.
+// the NIST SP 800-63B-4 §3.1.1.2 floor of 15 accepts one an offline attacker
+// enumerates. The dev profile keeps a lower floor — the §3.1.1.1 verifier
+// minimum of 8 — because a local login is not a deployment, but it no longer
+// bypasses the check entirely.
 func TestLoadRefusesAPasswordFloorBelowTheNISTMinimumOutsideDev(t *testing.T) {
-	for _, value := range []string{"0", "4", "-1"} {
+	for _, value := range []string{"0", "4", "-1", "8", "14"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("VAULT_PROFILE", "embedded")
 			t.Setenv("VAULT_PASSWORD_MIN_LENGTH", value)
@@ -106,16 +108,38 @@ func TestLoadRefusesAPasswordFloorBelowTheNISTMinimumOutsideDev(t *testing.T) {
 		})
 	}
 
-	t.Run("dev may still relax it", func(t *testing.T) {
-		t.Setenv("VAULT_PROFILE", "dev")
-		t.Setenv("VAULT_PASSWORD_MIN_LENGTH", "4")
+	t.Run("15 is accepted outside dev", func(t *testing.T) {
+		t.Setenv("VAULT_PROFILE", "embedded")
+		t.Setenv("VAULT_PASSWORD_MIN_LENGTH", "15")
 
 		c, err := Load()
 		if err != nil {
-			t.Fatalf("dev profile rejected a short password floor: %v", err)
+			t.Fatalf("Load rejected the documented 15-character minimum: %v", err)
 		}
-		if c.PasswordMinLength != 4 {
-			t.Fatalf("PasswordMinLength = %d, want 4", c.PasswordMinLength)
+		if c.PasswordMinLength != 15 {
+			t.Fatalf("PasswordMinLength = %d, want 15", c.PasswordMinLength)
+		}
+	})
+
+	t.Run("dev may relax it only to the verifier minimum", func(t *testing.T) {
+		t.Setenv("VAULT_PROFILE", "dev")
+		t.Setenv("VAULT_PASSWORD_MIN_LENGTH", "8")
+
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("dev profile rejected the verifier minimum: %v", err)
+		}
+		if c.PasswordMinLength != 8 {
+			t.Fatalf("PasswordMinLength = %d, want 8", c.PasswordMinLength)
+		}
+	})
+
+	t.Run("dev does not bypass the floor", func(t *testing.T) {
+		t.Setenv("VAULT_PROFILE", "dev")
+		t.Setenv("VAULT_PASSWORD_MIN_LENGTH", "4")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("dev profile accepted VAULT_PASSWORD_MIN_LENGTH=4; the dev escape hatch must still have a floor")
 		}
 	})
 }
