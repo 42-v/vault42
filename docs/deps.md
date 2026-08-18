@@ -57,21 +57,21 @@
 | `internal/deferwork` | 100.00% |
 | `internal/config` | 100.00% |
 | `internal/cli` | 100.00% |
+| `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
+| `internal/repository/postgres` | 99.91% |
 | `internal/adminapi` | 99.82% |
-| `internal/repository/postgres` | 99.81% |
 | `internal/oauth2` | 99.73% |
-| `internal/handler` | 99.63% |
-| `internal/cache` | 99.47% |
-| `cmd/bridge` | 99.24% |
+| `internal/handler` | 99.68% |
+| `internal/keystore` | 99.62% |
+| `cmd/admin-gateway` | 99.60% |
+| `cmd/bridge` | 99.54% |
+| `internal/service` | 99.24% |
 | `internal/jwt` | 99.22% |
 | `internal/email` | 99.08% |
-| `internal/keystore` | 98.86% |
-| `internal/service` | 98.83% |
+| `cmd/vault` | 98.36% |
 | `internal/crypto` | 98.18% |
 | `cmd/recover` | 98.15% |
-| `cmd/vault` | 97.70% |
-| `cmd/admin-gateway` | 97.18% |
 ## Maintainers
 
 12 maintainers behind Vault's dependency tree.
