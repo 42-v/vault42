@@ -139,6 +139,12 @@ func blobLabelAAD(id, pseudo string) ([]byte, error) {
 	return []byte("label:" + id + ":" + pseudo), nil
 }
 
+// Pseudonym derives the key a user's blobs are stored under. It is the only
+// link between a user id and their objects, and it is one-way: the blobs table
+// holds the pseudonym rather than the id, so a reader of that table alone
+// cannot enumerate which users hold objects. The ":objects" suffix keeps this
+// value distinct from the same user's identity pseudonym, so a leak of one
+// table's keys does not join it to the other's.
 func (s *BlobService) Pseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":objects"), s.hmacSecret)
 }

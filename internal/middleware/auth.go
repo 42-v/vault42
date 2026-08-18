@@ -168,10 +168,6 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireScope rejects authenticated requests whose token does not carry the
-// given OAuth2 scope. It must be chained AFTER an Auth middleware so the
-// validated claims are already in context. Used to gate the KMS unwrap oracle
-// to client-credential tokens explicitly granted "kms:unwrap".
 // ScopeOption configures RequireScope.
 type ScopeOption func(*scopeOptions)
 
@@ -204,6 +200,10 @@ func WithScopeRefusalAudit(logger *audit.Logger, eventType string, riskScore int
 	}
 }
 
+// RequireScope rejects authenticated requests whose token does not carry the
+// given OAuth2 scope. It must be chained AFTER an Auth middleware so the
+// validated claims are already in context. Used to gate the KMS unwrap oracle
+// to client-credential tokens explicitly granted "kms:unwrap".
 func RequireScope(scope string, opts ...ScopeOption) func(http.Handler) http.Handler {
 	var o scopeOptions
 	for _, opt := range opts {
