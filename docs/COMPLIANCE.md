@@ -112,11 +112,11 @@ Through 1.0.0 this paragraph said 15 "is the minimum vault42 has enforced since
 any floor at all. The row was downgraded to an accepted risk, CR-31, rather than
 the claim being softened.
 
-The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:804`),
-a non-dev profile refuses to start below it (`:622`), and dev carries a lower
-floor of 8 (`:812`) rather than none -- 8 being the figure §3.1.1.1 requires a
-verifier to accept, so no profile now takes a four-character password. The row
-is Met and CR-31 is closed.
+The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:831`),
+a non-dev profile refuses to start below it (`:580`), and dev carries a lower
+floor of 8 (`:839`, selected by `passwordFloorFor` at `:843`) rather than none
+-- 8 being the figure §3.1.1.1 requires a verifier to accept, so no profile now
+takes a four-character password. The row is Met and CR-31 is closed.
 `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` reads both
 numbers out of `config.go` and asserts this document, `README.md` and the
 register state them, so the prose cannot outlive the constant in either
@@ -157,10 +157,10 @@ versions should be able to see what changed and why.
 | Previous finding | Reality |
 |---|---|
 | **V6.2.2 Partial** -- "document the RFC 6238 SHA-1 constraint in the TOTP module" | The comment already existed, at `internal/crypto/totp.go:5`. The finding requested a remediation that had shipped. Now Met. |
-| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1173` precedes `Create` at `:1260`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
-| **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 259 lines and `charts/vault/values.yaml:283` enables it **by default**. Now Met. |
-| **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **11** string-typed configuration secrets, not 2. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. Scope corrected in `docs/security.md` AR-4 and in CR-25. |
-| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. This row used to add that the decrypted **RSA private signing key PEM** was the buffer left unwiped, citing `internal/keystore/keystore.go:297`. That was itself wrong: `:297` is a comment line, and the PEM is wiped on both paths, at `:211` and `:442`, exactly as [`security.md`](security.md) already said. The buffers genuinely not wiped are the decrypted blob plaintext and label (`internal/service/blob.go:243,267,307`). CR-25 now says so. |
+| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1257` precedes `Create` at `:1344`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
+| **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 340 lines and `charts/vault/values.yaml:382` enables it **by default**. Now Met. |
+| **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **eight** string-typed configuration secrets, not 2: `DBMigPassword`, `DBAppPassword`, `Pepper`, `SendGridAPIKey` and the three OAuth client secrets on `config.Config`, plus a `ClientSecret` per configured OIDC provider. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. `docs/security.md` AR-4 still lists the pepper among the `[]byte` values it zeroes, while `internal/config/config.go:71` declares it a `string`; that correction has not been made and is owed. |
+| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. This row used to add that the decrypted **RSA private signing key PEM** was the buffer left unwiped, citing `internal/keystore/keystore.go:297`. That was itself wrong: `:297` is a comment line, and the PEM is wiped on both paths, at `:211` and `:442`, exactly as [`security.md`](security.md) already said. The decrypted blob plaintext and label were the buffers genuinely left unwiped; both are wiped now, at `internal/service/blob.go:378`, `:405` and `:447`, which is what closed CR-25. |
 | **AU-9 and GDPR-14** | The same finding, filed twice. The GDPR row even said "Tracked as AU-9 above" while being counted separately. Now one accepted risk, CR-24, referenced from both rows. |
 
 There is also a class of error the register makes impossible to repeat: **four of
@@ -213,17 +213,18 @@ Twenty-one Not Applicable rows rested on three sentences that were false on the
 facts. The V3 rationale said vault42 "ships no browser-facing application of its
 own"; `internal/frontend` embeds the SPA into the binary, `Dockerfile:32` and
 `.goreleaser.yaml:26-29` put a real Vue build there before compiling, and
-`internal/server/server.go:640` serves it. The V5 rationale said vault42
+`internal/server/server.go:820` serves it. The V5 rationale said vault42
 "accepts no file uploads" and never "stores by client-supplied name";
 `internal/handler/blob.go:52` calls `r.FormFile("file")` and
 `PUT /user/blobs/named/{name}` stores under a caller-supplied name. The V1.3.7
-rationale said "no template is built from input"; `internal/email/mailer.go:202`
-parses an admin-supplied string on the live send path.
+rationale said "no template is built from input";
+`internal/email/branding.go:76` and `:80` parse an admin-supplied subject and
+HTML body into `html/template`.
 
 | Movement | Count | Rows |
 |---|---:|---|
-| N/A → **Met** | 9 | V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.2.1, V5.2.3, V5.3.2, V5.4.2, plus V1.3.7 |
-| N/A → **Accepted Risk** | 6 | V3.2.1, V3.4.3, V3.5.3, V3.5.4, V5.1.1, V5.4.1, plus V1.3.1 |
+| N/A → **Met** | 10 | V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.2.1, V5.2.3, V5.3.2, V5.4.2, plus V1.3.7 |
+| N/A → **Accepted Risk** | 7 | V3.2.1, V3.4.3, V3.5.3, V3.5.4, V5.1.1, V5.4.1, plus V1.3.1 |
 | **Met** → Accepted Risk | 1 | NIST SP 800-63B-4 §3.1.1.2 -- the password floor. See CR-31. |
 | N/A, reason rewritten and now tested | 12 | V3.2.2, V3.5.5, V5.2.2, V5.3.1, V5.4.3, V1.3.4, V6.2.6, V6.7.1, V7.4.4, V10.4.1, V14.3.1, V15.3.6 |
 
@@ -271,12 +272,12 @@ neither namespace.
 | ID | Severity | What is accepted | Requirements affected |
 |---|---|---|---|
 | **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
-| **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a hardcoded severity tag that no code reads, and the only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
+| **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
 | **CR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
 | **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
-| **CR-21** | Low | Tokens carry no `acr`, `amr` or `aal` claim, so a resource server cannot require a specific authentication strength. The AAL constants exist and are tested but have no non-test caller. | ASVS V6.8.4, V10.3.4 |
+| **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
-| **CR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
+| **CR-23** | Low | **Closed in the code, still open in the register.** The row says outbound SMTP negotiates STARTTLS opportunistically with no minimum version. `internal/email/smtp.go:112` sets `MinVersion: tls.VersionTLS12`, and `:115-117` refuses to send in the clear unless `VAULT_SMTP_ALLOW_PLAINTEXT` is set, which itself is refused outside dev and loopback. What remains is that a server advertising no STARTTLS is detected by its own EHLO response, so a downgrade needs an active attacker on the path. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
 | **CR-26** | Low | Neither blob download path sets `Content-Disposition`, so nothing tells a browser that a blob navigated to directly is a download rather than a document. `nosniff` and owner-scoped reads bound it. | ASVS V3.2.1, V5.1.1, V5.4.1 |
 | **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
@@ -364,17 +365,17 @@ rather than deleted.
 
 ### Closed since this document was first written
 
-Three accepted risks closed on the merge that integrated the code work, and in
+Five accepted risks closed on the merge that integrated the code work, and in
 each case the test written to fail *on closure* is what forced the row to move
 rather than a person remembering to.
 
 | ID | What closed it | The test that fired |
 |---|---|---|
-| **CR-27** | Both policies now declare `object-src 'none'` and `base-uri 'none'` (`internal/middleware/security_headers.go:18-19`). | `TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims` |
-| **CR-25** | DPoP finished. `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths and enforced by a constant-time thumbprint comparison; the decrypted blob buffers are now wiped too. Refresh tokens remain unbound and there is no `DPoP-Nonce`, both stated in the requirement row rather than carried as a risk. | `TestRFC9700_4_10_1_SenderConstrainedDPoP` |
+| **CR-27** | Both policies now declare `object-src 'none'` and `base-uri 'none'` (`internal/middleware/security_headers.go:30-31`). | `TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims` |
+| **CR-25** | DPoP finished. `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths and enforced by a constant-time thumbprint comparison; the decrypted blob buffers are now wiped too. Refresh tokens remain unbound and there is no `DPoP-Nonce`, both stated in the requirement row rather than carried as a risk. | `TestAnAccessTokenIssuedUnderAValidatedProofCarriesCnfJkt` and `TestABoundTokenIsRefusedOnAnOrdinaryAuthenticatedRouteWithoutAProof`. `TestRFC9700_4_10_1_SenderConstrainedDPoP` exercises proof validation only and does not reach the binding, so it is not the test that fired. |
 | **CR-33** | `adminGateway.hostNetwork` now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile with no exemption. It stays opt-in for operators who want the `LocalOnly` posture. | `TestK8sPSS_Restricted_ThereAreNoDeviationsLeft` |
 | **CR-31** | `passwordMinLengthFloor` is now **15**, not 8, and the dev profile no longer has *no* floor -- it has a lower one of 8, which is itself the figure §3.1.1.1 requires a verifier to accept. | `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` |
-| **CR-32** | `.github/dependabot.yml` exists and covers gomod, npm and github-actions. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
+| **CR-32** | `.github/dependabot.yml` exists and covers github-actions, gomod for both modules, npm, nuget and docker. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
 
 Full text for each, including what was accepted while it was open, is in
 `retired_risks` in the register.
@@ -443,12 +444,15 @@ same words, and they were true of the register rather than of the system. Two
 requirements were neither Met nor covered by any accepted risk, because both sat
 behind a Not Applicable filed on a premise that was wrong on the facts:
 
-- **ASVS V3.4.3** -- neither Content-Security-Policy declares `object-src 'none'`
-  or `base-uri 'none'`
-  (`internal/middleware/security_headers.go:12-13`). Now **CR-27**.
+- **ASVS V3.4.3** -- neither Content-Security-Policy declared `object-src 'none'`
+  or `base-uri 'none'`. Filed as **CR-27**, and since closed: both policies
+  declare both directives at `internal/middleware/security_headers.go:30-31`.
 - **ASVS V3.5.3** -- `GET /auth/verify-email` mutates state
-  (`internal/server/server.go:381`, `internal/handler/auth.go:194`) and no
-  `Sec-Fetch-*` validation exists anywhere in the tree. Now **CR-28**.
+  (`internal/server/server.go:537`, `internal/handler/auth.go:194`) and the auth
+  server performs no `Sec-Fetch-*` validation. Now **CR-28**. The bridge does
+  validate those headers (`cmd/bridge/proxy.go:373-379`), which is outside this
+  assessment's scope; the earlier wording said no such validation existed
+  anywhere in the tree, and that was wrong.
 
 The sentence is true again because those two rows were reclassified, not because
 the gaps were not there. What made a false universal claim survivable was that
@@ -461,8 +465,8 @@ the day they were written.
 **Correction.** This section previously said CR-14's mandatory half was
 unwired and that `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` would fail
 when the wiring landed. Both halves were wrong. The wiring is present, at
-`cmd/vault/main.go:353` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
-fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:445`
+`cmd/vault/main.go:402` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
+fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:468`
 -- and no test of that name has ever existed. The tests that do exist are
 `TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented`, which asserts
 the mandatory SHALL is satisfied, and
