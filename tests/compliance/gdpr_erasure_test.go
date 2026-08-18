@@ -295,7 +295,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 
 	// A pre-erasure audit entry. Art. 17(3)(b)/(e) exempts these; clause 5
 	// asserts it survives the erasure untouched.
-	if err := auditLog.Log(ctx, audit.LoginSuccess, userID, "", "203.0.113.7", "ua", fpHash, deviceID, nil, 0); err != nil {
+	if err := auditLog.Log(ctx, audit.LoginSuccess, userID, "", "203.0.113.7", "ua", fpHash, deviceID, nil); err != nil {
 		t.Fatalf("seed audit entry: %v", err)
 	}
 

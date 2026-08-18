@@ -101,7 +101,7 @@ func TestOneUnwritableRowDoesNotWedgeTheAuditPipeline(t *testing.T) {
 	l := NewLoggerWithBufferSize(repo, time.Hour, 100)
 
 	// The crafted request lands first, so it sits at the head of every batch.
-	if err := l.Log(context.Background(), SvcDocPut, poisonSubject, "svc-evil", "10.0.0.9", "ua", "", "", nil, 0); err != nil {
+	if err := l.Log(context.Background(), SvcDocPut, poisonSubject, "svc-evil", "10.0.0.9", "ua", "", "", nil); err != nil {
 		t.Fatalf("Log poison: %v", err)
 	}
 	// Ordinary traffic behind it.
@@ -161,7 +161,7 @@ func TestAQuarantinedRowIsLoud(t *testing.T) {
 	}
 	l := NewLoggerWithBufferSize(repo, time.Hour, 100)
 
-	if err := l.Log(context.Background(), TokenMinted, "not-a-uuid", "svc-evil", "10.0.0.9", "ua", "", "", nil, 0); err != nil {
+	if err := l.Log(context.Background(), TokenMinted, "not-a-uuid", "svc-evil", "10.0.0.9", "ua", "", "", nil); err != nil {
 		t.Fatalf("Log poison: %v", err)
 	}
 	logSeries(t, l, "good", 1)

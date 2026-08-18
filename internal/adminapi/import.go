@@ -154,7 +154,7 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 				"source": source, "submitted": len(req.Users), "imported": imported,
 				"consent_failed": consentFailed, "must_reset_password": forcedReset,
 				"reason": "admin_import",
-			}, 0)
+			})
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"source": source, "submitted": len(req.Users), "imported": imported,

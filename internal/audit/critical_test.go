@@ -79,18 +79,18 @@ func TestKMSUnwrapSynchronousWhenBufferFull(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill the buffer with one non-critical event (stays buffered, not persisted).
-	if err := l.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil, 0); err != nil {
+	if err := l.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil); err != nil {
 		t.Fatalf("buffer-fill Log: %v", err)
 	}
 
 	// A non-critical event now hits the full buffer and is dropped (not persisted).
-	if err := l.Log(ctx, LoginSuccess, "u2", "", "1.1.1.1", "", "", "", nil, 0); err != nil {
+	if err := l.Log(ctx, LoginSuccess, "u2", "", "1.1.1.1", "", "", "", nil); err != nil {
 		t.Fatalf("noncritical Log: %v", err)
 	}
 
 	// KMSUnwrap on the full buffer must be persisted synchronously.
 	if err := l.Log(ctx, KMSUnwrap, "life42-gateway", "life42-gateway", "1.1.1.1", "", "", "",
-		map[string]interface{}{"kid": "life42-root-kek", "success": true}, 0); err != nil {
+		map[string]interface{}{"kid": "life42-root-kek", "success": true}); err != nil {
 		t.Fatalf("KMSUnwrap Log: %v", err)
 	}
 
@@ -133,14 +133,14 @@ func TestMintAndSvcDocSurviveBufferPressure(t *testing.T) {
 			l := NewLoggerWithBufferSize(repo, time.Hour, 1)
 			ctx := context.Background()
 
-			if err := l.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil, 0); err != nil {
+			if err := l.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil); err != nil {
 				t.Fatalf("buffer-fill Log: %v", err)
 			}
-			if err := l.Log(ctx, LoginSuccess, "u2", "", "1.1.1.1", "", "", "", nil, 0); err != nil {
+			if err := l.Log(ctx, LoginSuccess, "u2", "", "1.1.1.1", "", "", "", nil); err != nil {
 				t.Fatalf("noncritical Log: %v", err)
 			}
 			if err := l.Log(ctx, ev, "subject-or-owner", "svc-client", "1.1.1.1", "", "", "",
-				map[string]interface{}{"reason": "test"}, 0); err != nil {
+				map[string]interface{}{"reason": "test"}); err != nil {
 				t.Fatalf("%s Log: %v", ev, err)
 			}
 

@@ -55,7 +55,7 @@ func (h *TOTPHandler) logEvent(r *http.Request, event, userID string, meta map[s
 		return
 	}
 	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-		r.Header.Get("User-Agent"), "", "", meta, 0)
+		r.Header.Get("User-Agent"), "", "", meta)
 }
 
 // Setup handles POST /auth/2fa/totp/setup.

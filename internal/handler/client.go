@@ -63,7 +63,7 @@ func auditClientAuthFailure(auditLog *audit.Logger, r *http.Request, clientID, r
 		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 			"result": "failure",
 			"reason": reason,
-		}, 30)
+		})
 }
 
 // Token handles POST /client/token (client credentials grant).
@@ -145,7 +145,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"client_name": client.Name,
 				"scopes":      strings.Join(grantedScopes, " "),
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusOK, ClientTokenResponse{

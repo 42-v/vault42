@@ -61,7 +61,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if verifyErr != nil || !valid {
 		if h.auditLog != nil {
 			h.auditLog.Log(r.Context(), audit.LoginFailure, claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
-				r.Header.Get("User-Agent"), "", "", map[string]interface{}{"reason": "account_delete_wrong_password"}, 20)
+				r.Header.Get("User-Agent"), "", "", map[string]interface{}{"reason": "account_delete_wrong_password"})
 		}
 		WriteError(w, http.StatusUnauthorized, "invalid_password")
 		return

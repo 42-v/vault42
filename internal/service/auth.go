@@ -338,7 +338,7 @@ func (s *AuthService) notifyNewCountry(userID, emailAddr, ip, app string) {
 	// Audit the new-country event with the country only — never the IP.
 	if s.auditLog != nil {
 		s.auditLog.Log(ctx, audit.LoginNewCountry, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"country": cc}, 0)
+			map[string]interface{}{"country": cc})
 	}
 
 	// Throttle: one notice per user per country per window. Reuses the
@@ -399,7 +399,7 @@ func (s *AuthService) ChallengeFingerprintMatches(ctx context.Context, userID, c
 		return true
 	}
 	s.auditLog.Log(ctx, audit.FingerprintAnomaly, userID, "", ip, ua, requestFP, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"}, 70)
+		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"})
 	return false
 }
 
@@ -502,7 +502,7 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput, ip stri
 	}
 
 	s.auditLog.Log(ctx, audit.Registration, userID, "", ip, "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"email": maskEmail(email)}, 0)
+		map[string]interface{}{"email": maskEmail(email)})
 
 	s.SendSignupVerification(ctx, email, userID, sanitize.RedirectPath(input.RedirectTo))
 
@@ -577,7 +577,7 @@ func (s *AuthService) auditVerificationNotSent(ctx context.Context, userID, to, 
 			"action": "verification_email_not_sent",
 			"reason": reason,
 			"email":  maskEmail(to),
-		}, 0)
+		})
 }
 
 // importClaimTTL is how long a login-triggered reset link stays valid, and
@@ -809,7 +809,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Check IP-wide lockout (prevents credential stuffing from a single IP)
 	if s.isIPLocked(ctx, ip) {
 		s.auditLog.Log(ctx, audit.LoginFailure, "", "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "ip_locked"}, 50)
+			map[string]interface{}{"reason": "ip_locked"})
 		return nil, ErrAccountLocked
 	}
 
@@ -834,7 +834,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			s.metrics.RecordLoginFailed()
 		}
 		s.auditLog.Log(ctx, audit.LoginFailure, "", "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "user_not_found"}, 10)
+			map[string]interface{}{"reason": "user_not_found"})
 		return nil, ErrInvalidCredentials
 	}
 
@@ -866,7 +866,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		}
 		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_locked", "source": "admin"}, 30)
+			map[string]interface{}{"reason": "account_locked", "source": "admin"})
 		return nil, ErrInvalidCredentials
 	}
 	if s.isAccountLocked(ctx, user.ID, ip) {
@@ -875,7 +875,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		}
 		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_locked", "source": "auto"}, 30)
+			map[string]interface{}{"reason": "account_locked", "source": "auto"})
 		return nil, ErrInvalidCredentials
 	}
 
@@ -897,7 +897,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			return nil, err
 		}
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_deleted"}, 20)
+			map[string]interface{}{"reason": "account_deleted"})
 		return nil, ErrInvalidCredentials
 	}
 	// Imported account, first login: no credential was ever imported, so there is
@@ -974,12 +974,12 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// policy, it is not a credential failure.
 	if user.Banned {
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_banned"}, 30)
+			map[string]interface{}{"reason": "account_banned"})
 		return nil, ErrAccountBanned
 	}
 	if user.Disabled {
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_disabled"}, 30)
+			map[string]interface{}{"reason": "account_disabled"})
 		return nil, ErrAccountDisabled
 	}
 
@@ -1040,7 +1040,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
 			s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"mfa_required": true}, 0)
+				map[string]interface{}{"mfa_required": true})
 			return &LoginResult{
 				Requires2FA:      true,
 				ChallengeToken:   challengePair,
@@ -1054,7 +1054,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
 			s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"mfa_required": true, "fallback": "email_otp"}, 0)
+				map[string]interface{}{"mfa_required": true, "fallback": "email_otp"})
 			return &LoginResult{
 				Requires2FA:      true,
 				ChallengeToken:   challengePair,
@@ -1105,7 +1105,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		s.metrics.RecordLoginSuccess()
 		s.metrics.RecordTokenIssued()
 	}
-	s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, deviceID, nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+	s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, deviceID, nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
 
 	// New-location notice (AR-18): out of band, country granularity only, so it
 	// never blocks or fails the login.
@@ -1200,7 +1200,7 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
 			s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"mfa_required": true}, 0)
+				map[string]interface{}{"mfa_required": true})
 			return &LoginResult{
 				Requires2FA:      true,
 				ChallengeToken:   challengePair,
@@ -1239,7 +1239,7 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 		s.metrics.RecordLoginSuccess()
 		s.metrics.RecordTokenIssued()
 	}
-	s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+	s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
 
 	return &LoginResult{
 		AccessToken:  fakeJWT,
@@ -1279,17 +1279,17 @@ func (s *AuthService) trapCookieMaxAge(rememberMe bool) int {
 // drift apart into distinguishable side effects — lockout advances at the same
 // rate and trips at the same threshold whatever the reason was. Only the audit
 // reason differs, and the audit log is not visible to the caller.
-// loginFailureRiskScore is the score every login failure carries into the audit
-// log.
 //
-// It was a parameter, and every one of the four call sites passed 20 -- the
-// parameter offered a choice nobody made. It is a constant until something reads
-// the field: an adversarial review established that risk_score is written and no
-// code anywhere consumes it, so a varying number would have been a varying
-// number nothing acts on. When alerting lands (register rows AU-6 and A09:2025,
-// both open), this is where a real score belongs, and making it a parameter
-// again is the smaller half of that change.
-const loginFailureRiskScore = 20
+// The risk score used to differ too. loginFailureRiskScore lived here as a
+// constant, beside four other literals on the other login-failure paths -- 50
+// for a locked source address, 30 for a locked account, 20 for a wrong password,
+// 10 for an address that is not registered -- and its comment said a real score
+// belonged wherever alerting landed. Alerting has landed, and the answer turned
+// out to be that the reason must NOT reach the score: those five numbers were
+// the enumeration this function exists to prevent, re-encoded in a column an
+// operator can select ranges on. The reason stays in the metadata. The score is
+// audit.Severity(audit.LoginFailure), identical on every branch, and what the
+// alerting reads is the rate rather than the number.
 
 func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, ip, ua, app, reason string) {
 	// Failed-login counter is best-effort; lockout is enforced by isAccountLocked.
@@ -1300,7 +1300,7 @@ func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, 
 		s.metrics.RecordLoginFailed()
 	}
 	s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"reason": reason}, loginFailureRiskScore)
+		map[string]interface{}{"reason": reason})
 
 	// Send lock notification email once per lockout window
 	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {
@@ -1346,7 +1346,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	if stored.Used {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID}, 90)
+			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID})
 		return nil, ErrReplayDetected
 	}
 
@@ -1369,7 +1369,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	if stored.FingerprintHash != "" && !vaultcrypto.CompareFingerprints(stored.FingerprintHash, fp) {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                                   // #nosec G104 -- best-effort revocation; returning ErrTokenInvalid regardless
 		s.auditLog.Log(ctx, audit.FingerprintAnomaly, stored.UserID, stored.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"expected": stored.FingerprintHash}, 70)
+			map[string]interface{}{"expected": stored.FingerprintHash})
 		return nil, ErrTokenInvalid
 	}
 
@@ -1387,7 +1387,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		// Concurrent request already consumed this token — treat as replay
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "concurrent_replay_detected", "family_id": stored.FamilyID}, 90)
+			map[string]interface{}{"reason": "concurrent_replay_detected", "family_id": stored.FamilyID})
 		return nil, ErrReplayDetected
 	}
 
@@ -1407,7 +1407,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	if s.metrics != nil {
 		s.metrics.RecordTokenRefreshed()
 	}
-	s.auditLog.Log(ctx, audit.TokenRefresh, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+	s.auditLog.Log(ctx, audit.TokenRefresh, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
 
 	return &RefreshResult{
 		AccessToken:  pair.AccessToken,
@@ -1526,7 +1526,7 @@ func (s *AuthService) enforceDPoPBinding(ctx context.Context, stored *model.Refr
 			"expected":        stored.DPoPJKT,
 			"proof_presented": presented != "",
 			"family_id":       stored.FamilyID,
-		}, 85)
+		})
 	return ErrTokenInvalid
 }
 
@@ -1579,7 +1579,7 @@ func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.Refres
 		if errors.Is(err, repository.ErrFamilyRevoked) {
 			s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 			s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"reason": "family_revoked_during_rotation", "family_id": stored.FamilyID}, 90)
+				map[string]interface{}{"reason": "family_revoked_during_rotation", "family_id": stored.FamilyID})
 			return nil, ErrReplayDetected
 		}
 		return nil, err
@@ -1593,7 +1593,7 @@ func (s *AuthService) Logout(ctx context.Context, userID, ip, ua string) error {
 		return err
 	}
 	s.auditLog.Log(ctx, audit.TokenRevoke, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"reason": "logout"}, 0)
+		map[string]interface{}{"reason": "logout"})
 	return nil
 }
 
@@ -1711,7 +1711,7 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 		s.metrics.RecordTokenIssued()
 	}
 	s.auditLog.Log(ctx, audit.LoginSuccess, userID, "", ip, ua, fingerprint, deviceID, // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"mfa_completed": true}, 0)
+		map[string]interface{}{"mfa_completed": true})
 
 	// New-location notice (AR-18) also fires on the MFA-completion path, so a
 	// login that finishes via a second factor gets the same country signal as a
@@ -2206,7 +2206,7 @@ func (s *AuthService) RecordMFAFailure(ctx context.Context, userID, ip, ua strin
 	s.recordFailedAttempt(ctx, userID, ip)
 	if s.auditLog != nil {
 		s.auditLog.Log(ctx, audit.LoginFailure, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort
-			map[string]interface{}{"reason": "mfa_failed"}, 30)
+			map[string]interface{}{"reason": "mfa_failed"})
 	}
 }
 
@@ -2318,7 +2318,7 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 		// Refusing is the only outcome that is not a silent no-op.
 		log.Printf("auth: refresh token store cannot report family origin; absolute session lifetime unenforceable")
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "session_age_unavailable", "cause": "store_unsupported"}, 80)
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "store_unsupported"})
 		return time.Time{}, ErrSessionAgeUnknown
 	}
 
@@ -2329,7 +2329,7 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 		}
 		log.Printf("auth: family origin lookup failed for family %s: %v", stored.FamilyID, err)
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "session_age_unavailable", "cause": "lookup_failed"}, 80)
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "lookup_failed"})
 		return time.Time{}, ErrSessionAgeUnknown
 	}
 
@@ -2340,7 +2340,7 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 				"reason":    "session_lifetime_exceeded",
 				"family_id": stored.FamilyID,
 				"age":       time.Since(origin).String(),
-			}, 40)
+			})
 		return time.Time{}, ErrSessionExpired
 	}
 
@@ -2371,7 +2371,7 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 		if s.strictSessionLimit {
 			// Fail closed (audit L1): a count error must not silently disable the cap.
 			s.auditLog.Log(ctx, audit.RateLimit, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"reason": "session_limit_count_failed"}, 80)
+				map[string]interface{}{"reason": "session_limit_count_failed"})
 			return ErrTooManySessions
 		}
 		return nil // fail open (default) — don't block login if the count query fails

@@ -55,7 +55,7 @@ func (h *UserHandler) logSessionRevoke(r *http.Request, userID, deviceID, scope 
 		return
 	}
 	h.auditLog.Log(r.Context(), audit.SessionRevoke, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks the response
-		r.Header.Get("User-Agent"), "", deviceID, map[string]interface{}{"scope": scope}, 0)
+		r.Header.Get("User-Agent"), "", deviceID, map[string]interface{}{"scope": scope})
 }
 
 // Profile handles GET /user/profile.

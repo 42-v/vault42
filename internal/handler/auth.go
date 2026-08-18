@@ -320,7 +320,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.Registration, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "",
-			map[string]interface{}{"action": "email_verified"}, 0)
+			map[string]interface{}{"action": "email_verified"})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "email_verified"})
@@ -378,7 +378,7 @@ func (h *AuthHandler) ConfirmPassword(w http.ResponseWriter, r *http.Request) {
 		if h.auditLog != nil {
 			h.auditLog.Log(r.Context(), audit.LoginFailure, claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 				r.Header.Get("User-Agent"), "", "",
-				map[string]interface{}{"reason": "confirm_wrong_password"}, 20)
+				map[string]interface{}{"reason": "confirm_wrong_password"})
 		}
 		WriteError(w, http.StatusUnauthorized, "invalid_password")
 		return
@@ -400,7 +400,7 @@ func (h *AuthHandler) ConfirmPassword(w http.ResponseWriter, r *http.Request) {
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.LoginSuccess, claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "",
-			map[string]interface{}{"action": "password_confirmed"}, 0)
+			map[string]interface{}{"action": "password_confirmed"})
 	}
 
 	WriteJSON(w, http.StatusOK, ConfirmPasswordResponse{

@@ -39,7 +39,7 @@ func (h *IdentityHandler) logConsent(r *http.Request, userID string, granted boo
 		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 			"purpose": "marketing_email",
 			"source":  source,
-		}, 0)
+		})
 }
 
 var (
@@ -126,7 +126,7 @@ func (h *IdentityHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "identity_read", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	resp := IdentityResponse{
@@ -229,7 +229,7 @@ func (h *IdentityHandler) Put(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "identity_write", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "updated"})
@@ -250,7 +250,7 @@ func (h *IdentityHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "identity_delete", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})

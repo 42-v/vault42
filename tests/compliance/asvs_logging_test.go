@@ -84,7 +84,7 @@ func logOne(t *testing.T, eventType string, metadata map[string]interface{}) *mo
 	repo := &captureRepo{}
 	logger := audit.NewLogger(repo, 0)
 	if err := logger.Log(context.Background(), eventType,
-		"user-1", "client-1", "203.0.113.7", "curl/8", "fp-hash", "device-1", metadata, 50); err != nil {
+		"user-1", "client-1", "203.0.113.7", "curl/8", "fp-hash", "device-1", metadata); err != nil {
 		t.Fatalf("audit log: %v", err)
 	}
 	return repo.last(t)

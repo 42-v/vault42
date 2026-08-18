@@ -37,11 +37,11 @@ func TestLogBufferFullDropsNonCritical(t *testing.T) {
 	l := NewLoggerWithBufferSize(repo, time.Hour, 1)
 
 	// First entry fills the single-slot buffer.
-	if err := l.Log(context.Background(), "noncritical:event", "u1", "", "", "", "", "", nil, 0); err != nil {
+	if err := l.Log(context.Background(), "noncritical:event", "u1", "", "", "", "", "", nil); err != nil {
 		t.Fatalf("first buffered log: %v", err)
 	}
 	// Second entry overflows: non-critical → dropped.
-	if err := l.Log(context.Background(), "noncritical:event", "u2", "", "", "", "", "", nil, 0); err != nil {
+	if err := l.Log(context.Background(), "noncritical:event", "u2", "", "", "", "", "", nil); err != nil {
 		t.Fatalf("overflow log should not error: %v", err)
 	}
 
@@ -63,8 +63,8 @@ func TestLogBufferFullSyncWritesCritical(t *testing.T) {
 	repo := &hookAuditRepo{}
 	l := NewLoggerWithBufferSize(repo, time.Hour, 1)
 
-	_ = l.Log(context.Background(), LoginFailure, "u1", "", "", "", "", "", nil, 0) // fills buffer
-	if err := l.Log(context.Background(), LoginFailure, "u2", "", "", "", "", "", nil, 50); err != nil {
+	_ = l.Log(context.Background(), LoginFailure, "u1", "", "", "", "", "", nil) // fills buffer
+	if err := l.Log(context.Background(), LoginFailure, "u2", "", "", "", "", "", nil); err != nil {
 		t.Fatalf("critical overflow log should not error: %v", err)
 	}
 
@@ -81,8 +81,8 @@ func TestLogBufferFullSyncCriticalInsertError(t *testing.T) {
 	repo := &hookAuditRepo{insertFn: func(*model.AuditEntry) error { return errors.New("db down") }}
 	l := NewLoggerWithBufferSize(repo, time.Hour, 1)
 
-	_ = l.Log(context.Background(), PasswordChange, "u1", "", "", "", "", "", nil, 0)
-	if err := l.Log(context.Background(), PasswordChange, "u2", "", "", "", "", "", nil, 0); err != nil {
+	_ = l.Log(context.Background(), PasswordChange, "u1", "", "", "", "", "", nil)
+	if err := l.Log(context.Background(), PasswordChange, "u2", "", "", "", "", "", nil); err != nil {
 		t.Fatalf("insert failure on critical overflow must not propagate, got %v", err)
 	}
 }

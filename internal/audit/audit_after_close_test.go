@@ -48,7 +48,7 @@ func TestAnEntryLoggedAfterCloseStillReachesTheStore(t *testing.T) {
 	if err := l.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := l.Log(ctx, LoginNewCountry, "u-1", "", "1.2.3.4", "UA", "", "", nil, 20); err != nil {
+	if err := l.Log(ctx, LoginNewCountry, "u-1", "", "1.2.3.4", "UA", "", "", nil); err != nil {
 		t.Fatalf("Log after Close: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestAnEntryLoggedAfterCloseReportsAFailedStore(t *testing.T) {
 	if err := l.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	err := l.Log(ctx, LoginNewCountry, "u-1", "", "1.2.3.4", "UA", "", "", nil, 20)
+	err := l.Log(ctx, LoginNewCountry, "u-1", "", "1.2.3.4", "UA", "", "", nil)
 	if err == nil {
 		t.Fatal("Log after Close returned nil while the store refused the row; a lost audit " +
 			"entry must be loud")
@@ -88,7 +88,7 @@ func TestAnOpenLoggerStillBuffers(t *testing.T) {
 	l := NewLoggerWithBufferSize(repo, time.Hour, 100)
 	t.Cleanup(func() { _ = l.Close(context.Background()) })
 
-	if err := l.Log(ctx, LoginSuccess, "u-1", "", "1.2.3.4", "UA", "", "", nil, 0); err != nil {
+	if err := l.Log(ctx, LoginSuccess, "u-1", "", "1.2.3.4", "UA", "", "", nil); err != nil {
 		t.Fatalf("Log: %v", err)
 	}
 	if got := rows(repo); got != 0 {

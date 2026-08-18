@@ -168,7 +168,7 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	// Audit log
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", ip, // #nosec G104 -- audit is best-effort, never blocks auth flow
-			ua, "", "", map[string]any{"action": "requested"}, 0)
+			ua, "", "", map[string]any{"action": "requested"})
 	}
 }
 
@@ -279,7 +279,7 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 				r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 					"action": "forced_reset_completed",
 					"reason": "password_reset_confirmed",
-				}, 0)
+				})
 		}
 	}
 
@@ -290,7 +290,7 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 			action = "import_claimed"
 		}
 		h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": action}, 0)
+			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": action})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "password_reset_complete"})
@@ -359,7 +359,7 @@ func (h *PasswordHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 	// Audit log
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.PasswordChange, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "password_changed"})

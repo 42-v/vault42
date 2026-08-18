@@ -52,7 +52,7 @@ func (h *BackupCodeHandler) logEvent(r *http.Request, event, userID string, meta
 		return
 	}
 	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-		r.Header.Get("User-Agent"), "", "", meta, 0)
+		r.Header.Get("User-Agent"), "", "", meta)
 }
 
 // Generate handles POST /auth/2fa/backup-codes.

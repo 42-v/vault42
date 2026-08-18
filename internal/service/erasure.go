@@ -292,7 +292,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 			meta["retry"] = true
 			meta["note"] = "cascade completed on re-run; address was recorded by the original attempt"
 		}
-		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", meta, 50) // #nosec G104 -- audit is best-effort
+		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", meta) // #nosec G104 -- audit is best-effort
 	}
 
 	return nil

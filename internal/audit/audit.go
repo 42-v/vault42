@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/42-v/vault42/internal/alert"
 	"github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
@@ -231,6 +232,11 @@ type Logger struct {
 	afterCloseTotal atomic.Int64
 
 	quarantinedTotal atomic.Int64
+
+	// detector raises operator-facing alerts from the events this logger
+	// records. Held atomically because Log reads it from every request
+	// goroutine while startup writes it once; nil is inert. See alerting.go.
+	detector atomic.Pointer[alert.Detector]
 }
 
 // QuarantinedTotal returns the number of entries the store refused individually
@@ -342,7 +348,12 @@ func NewLoggerWithBufferSize(repo repository.AuditRepository, flushEvery time.Du
 // deferwork pool, and however carefully shutdown is ordered the ordering is a
 // property of one caller's defer stack, which is not the thing that should
 // decide whether an audit row survives.
-func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip, ua, fpHash, deviceID string, metadata map[string]interface{}, riskScore int) error {
+// The risk score is not a parameter. It was one, and every production call site
+// passed an integer literal, so the parameter offered a choice nobody made and
+// the same event class ended up carrying four different numbers. Deriving it
+// from the class is what turns risk_score >= N into a predicate; severity.go
+// argues why leaving an override in would have left it a curiosity.
+func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip, ua, fpHash, deviceID string, metadata map[string]interface{}) error {
 	id, err := crypto.RandomUUID()
 	if err != nil {
 		return fmt.Errorf("audit: generate ID: %w", err)
@@ -359,8 +370,14 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		FingerprintHash: fpHash,
 		DeviceID:        deviceID,
 		Metadata:        scrubEventMetadata(eventType, metadata),
-		RiskScore:       riskScore,
+		RiskScore:       Severity(eventType),
 	}
+
+	// Detection runs on the way out of whichever branch below handles the entry,
+	// never before one and never instead of one. See observe in alerting.go: an
+	// alert that could fail the audit write would turn a notification problem
+	// into an authentication problem.
+	defer l.observe(ctx, entry)
 
 	if l.flushEvery > 0 && !l.isClosed() {
 		l.mu.Lock()

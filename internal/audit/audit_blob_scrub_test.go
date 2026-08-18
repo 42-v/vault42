@@ -89,7 +89,7 @@ func TestLoggerDropsBlobNameOnInsert(t *testing.T) {
 	l := NewLogger(repo, 0)
 
 	if err := l.Log(context.Background(), "blob_upload_named", "u-1", "", "", "", "", "",
-		map[string]interface{}{"name": "private-ref", "blob_id": "b-1"}, 0); err != nil {
+		map[string]interface{}{"name": "private-ref", "blob_id": "b-1"}); err != nil {
 		t.Fatalf("log: %v", err)
 	}
 

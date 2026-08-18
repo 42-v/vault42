@@ -18,7 +18,7 @@ func TestScrubMetadataNestedMaps(t *testing.T) {
 				"token":    "also-scrubbed",
 				"safe_key": "preserved",
 			},
-		}, 0)
+		})
 
 	e := repo.entries[0]
 

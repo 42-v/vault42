@@ -70,10 +70,10 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 				// Best-effort audit entry
 				if auditRepo != nil {
 					entry := &model.AuditEntry{
-						EventType: "admin:killswitch_triggered",
+						EventType: audit.AdminKillswitchTriggered,
 						IP:        r.RemoteAddr,
 						UserAgent: r.UserAgent(),
-						RiskScore: 100,
+						RiskScore: audit.Severity(audit.AdminKillswitchTriggered),
 						Metadata: map[string]interface{}{
 							"method": r.Method,
 							"path":   r.URL.Path,
@@ -145,7 +145,7 @@ func SessionAuth(sessions repository.AdminSessionRepository, admins repository.A
 						"reason": reason,
 						"method": r.Method,
 						"path":   r.URL.Path,
-					}, 5)
+					})
 				}
 				httputil.WriteError(w, http.StatusUnauthorized, reason)
 			}
@@ -243,7 +243,7 @@ func RBACCheck(perm rbac.Permission, auditLog *audit.Logger) func(http.Handler) 
 						"permission": string(perm),
 						"method":     r.Method,
 						"path":       r.URL.Path,
-					}, 5)
+					})
 				}
 				httputil.WriteError(w, http.StatusForbidden, "insufficient_permissions")
 				return

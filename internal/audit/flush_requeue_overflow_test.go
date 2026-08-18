@@ -101,7 +101,7 @@ func logSeries(t *testing.T, l *Logger, prefix string, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
 		user := fmt.Sprintf("%s-%d", prefix, i)
-		if err := l.Log(context.Background(), LoginSuccess, user, "", "10.0.0.1", "ua", "", "", nil, 0); err != nil {
+		if err := l.Log(context.Background(), LoginSuccess, user, "", "10.0.0.1", "ua", "", "", nil); err != nil {
 			t.Fatalf("Log %s: %v", user, err)
 		}
 	}
