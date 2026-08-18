@@ -277,7 +277,20 @@ func TestBatchLoopReportsAFlushItCouldNotComplete(t *testing.T) {
 
 	waitFor(t, func() bool { return repo.attemptCount() > 0 }, "the batch loop to attempt a flush")
 
-	if logged := out.String(); !strings.Contains(logged, "audit: flush failed") {
+	// Poll for the report rather than reading the buffer once. The attempt is
+	// counted inside the store's insert, so it becomes observable before Flush
+	// returns and therefore before the report is written -- waiting on the
+	// attempt and asserting on the log is a race, and the test loses it reliably
+	// enough on a loaded machine to read as a missing control rather than a
+	// timing bug. The deadline is what fails; the assertion below keeps the
+	// message that says why it matters.
+	logged := out.String()
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(logged, "audit: flush failed") &&
+		time.Now().Before(deadline); logged = out.String() {
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	if !strings.Contains(logged, "audit: flush failed") {
 		t.Errorf("the batch loop flushed into a store that rejected the batch and reported "+
 			"nothing. An outage that never reaches a log is an outage nobody responds to. "+
 			"Captured output: %q", logged)
