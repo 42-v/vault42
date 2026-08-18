@@ -175,4 +175,4 @@ MIT. See the repository root `LICENSE`.
 
 ## Security
 
-Report vulnerabilities to **vault@42-v.com** (Tuta, end-to-end encrypted). Do not open a public GitHub issue. Full policy: [`SECURITY.md`](https://github.com/42-v/vault42/blob/main/SECURITY.md).
+Report vulnerabilities to **<vault@42-v.com>** (Tuta, end-to-end encrypted). Do not open a public GitHub issue. Full policy: [`SECURITY.md`](https://github.com/42-v/vault42/blob/main/SECURITY.md).
