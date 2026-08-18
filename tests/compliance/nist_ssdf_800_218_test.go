@@ -35,28 +35,50 @@ type workflowJob struct {
 }
 
 var ssdfJobs = []workflowJob{
-	{"ci.yml", "modules", "PW.4.1 / PW.4.4",
-		"reuses well-secured software: go mod verify checks every dependency against its recorded hash, and go mod tidy -diff fails if the manifest and the imports disagree"},
-	{"ci.yml", "golangci", "PW.7.2",
-		"automated review: the linters run on every pull request rather than being a habit"},
-	{"ci.yml", "test", "PW.8.2",
-		"tests the executable code: the compliance, spec, unit and attack suites"},
-	{"ci.yml", "fuzz", "PW.8.2",
-		"tests the executable code: fuzz targets over the parsers"},
-	{"ci.yml", "chart", "PW.9.1",
-		"secure-by-default configuration: every values file is rendered so a default that stops parsing stops the build"},
-	{"nightly-security.yml", "govulncheck", "RV.1.1",
-		"identifies vulnerabilities on an ongoing basis: govulncheck against the Go vulnerability database"},
-	{"nightly-security.yml", "gosec", "RV.1.2",
-		"reviews the code for residual vulnerabilities: static analysis"},
-	{"nightly-security.yml", "trivy-source", "RV.1.1",
-		"identifies vulnerabilities in dependencies"},
-	{"nightly-security.yml", "trivy-image", "RV.1.1",
-		"identifies vulnerabilities in the shipped image, not only in the source"},
-	{"release.yml", "images", "PS.2.1 / PS.3.1",
-		"provides a verification mechanism and archives the release: BuildKit provenance, SBOM and keyless cosign signatures over each image digest"},
-	{"release.yml", "artifacts", "PS.1.1 / PS.2.1",
-		"protects and verifies the released code: SHA256SUMS, syft SBOMs and a cosign signature over the checksum file"},
+	{
+		"ci.yml", "modules", "PW.4.1 / PW.4.4",
+		"reuses well-secured software: go mod verify checks every dependency against its recorded hash, and go mod tidy -diff fails if the manifest and the imports disagree",
+	},
+	{
+		"ci.yml", "golangci", "PW.7.2",
+		"automated review: the linters run on every pull request rather than being a habit",
+	},
+	{
+		"ci.yml", "test", "PW.8.2",
+		"tests the executable code: the compliance, spec, unit and attack suites",
+	},
+	{
+		"ci.yml", "fuzz", "PW.8.2",
+		"tests the executable code: fuzz targets over the parsers",
+	},
+	{
+		"ci.yml", "chart", "PW.9.1",
+		"secure-by-default configuration: every values file is rendered so a default that stops parsing stops the build",
+	},
+	{
+		"nightly-security.yml", "govulncheck", "RV.1.1",
+		"identifies vulnerabilities on an ongoing basis: govulncheck against the Go vulnerability database",
+	},
+	{
+		"nightly-security.yml", "gosec", "RV.1.2",
+		"reviews the code for residual vulnerabilities: static analysis",
+	},
+	{
+		"nightly-security.yml", "trivy-source", "RV.1.1",
+		"identifies vulnerabilities in dependencies",
+	},
+	{
+		"nightly-security.yml", "trivy-image", "RV.1.1",
+		"identifies vulnerabilities in the shipped image, not only in the source",
+	},
+	{
+		"release.yml", "images", "PS.2.1 / PS.3.1",
+		"provides a verification mechanism and archives the release: BuildKit provenance, SBOM and keyless cosign signatures over each image digest",
+	},
+	{
+		"release.yml", "artifacts", "PS.1.1 / PS.2.1",
+		"protects and verifies the released code: SHA256SUMS, syft SBOMs and a cosign signature over the checksum file",
+	},
 }
 
 // TestSSDF_800_218_EveryCitedPracticeIsAutomated asserts that each job the
