@@ -11,6 +11,32 @@ wherever a process genuinely writes.
 asserts all of that, so a workload added without it fails CI rather than
 shipping.
 
+## The Secrets you have to create first
+
+**This chart creates no credential Secret.** It mounts them; something else has to
+put them there. A `helm install` with none of them present passes `helm lint`,
+`helm template` and `--dry-run`, and then sits in `ContainerCreating` forever with
+the reason only visible in `kubectl describe pod`. Create them before installing.
+
+| Secret | Default name | Mounted by | Required |
+|---|---|---|---|
+| Release credentials | `<release>-vault-auth`, or `secrets.existingSecret` | vault, bridge, admin gateway, postgres, redis | always |
+| Honeypot credentials | `<release>-vault-auth-honeypot`, or `honeypotInstance.secrets.existingSecret` | honeypot vault, honeypot postgres | `bridge.enabled` only |
+| Admin gateway mTLS | `adminGateway.tls.secretName` | admin gateway | `adminGateway.enabled` only |
+
+Keys in the two credential Secrets are named by `secrets.keys`:
+
+```
+master-key  db-mig-password  db-app-password  hmac-secret
+admin-token  redis-password  signing-key  pepper
+```
+
+The honeypot Secret carries **the same key names and different values**. That is
+the whole point of it: the honeypot is the component this deployment invites
+attackers into, so whatever it holds is what breaking the decoy yields. It used to
+mount the release Secret, which meant the decoy held the production master key.
+The chart now refuses to render if the two names resolve to the same Secret.
+
 ## Where the security context comes from
 
 There are two places, and only two:
@@ -88,6 +114,12 @@ upgrading; Helm will not, because the object changed kind. Set
 indented `EOSQL` against a `<<-` that strips tabs and not spaces, so it was never
 terminated, and bash parses the whole file before running any of it. The container
 exited 2 under the entrypoint's `set -e`. `vault_app` was therefore never created.
+
+**The honeypot needs its own Secret.** Bridge-mode releases upgrading to this
+version must create `<release>-vault-auth-honeypot`, or point
+`honeypotInstance.secrets.existingSecret` at one, before upgrading. The honeypot
+pods will not start without it, which is the intended outcome: the alternative was
+them starting with the production master key.
 
 **`postgres.appPassword` is gone.** No template ever read it.
 

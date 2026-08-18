@@ -85,7 +85,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "vault.secretName" . }}
+                  name: {{ include "vault.honeypotSecretName" . }}
                   key: {{ .Values.secrets.keys.dbMigPassword }}
             - name: POSTGRES_INITDB_ARGS
               value: "--auth-host=scram-sha-256"
@@ -136,9 +136,11 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        # The honeypot database's own credentials. This mounted the production
+        # Secret, so the decoy's database held the password to the real one.
         - name: secrets
           secret:
-            secretName: {{ include "vault.secretName" . }}
+            secretName: {{ include "vault.honeypotSecretName" . }}
             items:
               - key: {{ .Values.secrets.keys.dbAppPassword }}
                 path: db-app-password

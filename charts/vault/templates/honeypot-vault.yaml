@@ -115,9 +115,11 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
+        # The honeypot's own credentials, never the production Secret. See
+        # vault.honeypotSecretName.
         - name: secrets
           secret:
-            secretName: {{ include "vault.secretName" . }}
+            secretName: {{ include "vault.honeypotSecretName" . }}
 ---
 # Honeypot Vault Service
 apiVersion: v1

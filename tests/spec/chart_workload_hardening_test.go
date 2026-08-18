@@ -287,6 +287,90 @@ func TestNoRenderedImageFloats(t *testing.T) {
 	}
 }
 
+// TestTheHoneypotHoldsNoProductionCredential is the boundary the honeypot exists
+// to create.
+//
+// The honeypot mounted the release Secret -- the production master key, HMAC
+// secret, pepper, signing key, admin token and database passwords -- into the one
+// component of this deployment that is advertised to attackers and meant to be
+// broken into. Reaching the decoy was reaching the vault, while the docs called
+// the honeypot isolated.
+//
+// The check is on the rendered manifest rather than the template, because the
+// name is assembled from a helper and an override and it is the resolved value
+// that decides what the kubelet mounts.
+func TestTheHoneypotHoldsNoProductionCredential(t *testing.T) {
+	for _, w := range renderedWorkloads(t) {
+		if !strings.Contains(w.name, "honeypot") {
+			continue
+		}
+		for _, name := range secretsReferencedBy(w) {
+			if !strings.Contains(name, "honeypot") {
+				t.Errorf("%s mounts Secret %q, which is not a honeypot Secret. The "+
+					"honeypot is the component this deployment invites attackers into: "+
+					"whatever it holds is what breaking the decoy yields. Give it its own "+
+					"credentials via honeypotInstance.secrets.existingSecret.", w, name)
+			}
+		}
+	}
+}
+
+// TestTheProductionWorkloadsHoldNoHoneypotCredential is the same boundary from
+// the other side: a honeypot credential reaching production would mean the
+// honeypot's keys unlock something real.
+func TestTheProductionWorkloadsHoldNoHoneypotCredential(t *testing.T) {
+	for _, w := range renderedWorkloads(t) {
+		if strings.Contains(w.name, "honeypot") {
+			continue
+		}
+		for _, name := range secretsReferencedBy(w) {
+			if strings.Contains(name, "honeypot") {
+				t.Errorf("%s mounts the honeypot Secret %q.", w, name)
+			}
+		}
+	}
+}
+
+// secretsReferencedBy collects every Secret a workload reads, through a volume or
+// through a secretKeyRef.
+func secretsReferencedBy(w workload) []string {
+	seen := map[string]bool{}
+	volumes, _ := w.spec["volumes"].([]any)
+	for _, entry := range volumes {
+		volume, _ := entry.(map[string]any)
+		if name, ok := mapAt(volume, "secret")["secretName"].(string); ok {
+			seen[name] = true
+		}
+	}
+	for _, key := range []string{"initContainers", "containers"} {
+		list, _ := w.spec[key].([]any)
+		for _, entry := range list {
+			c, _ := entry.(map[string]any)
+			env, _ := c["env"].([]any)
+			for _, e := range env {
+				item, _ := e.(map[string]any)
+				ref := mapAt(mapAt(item, "valueFrom"), "secretKeyRef")
+				if name, ok := ref["name"].(string); ok {
+					seen[name] = true
+				}
+			}
+			froms, _ := c["envFrom"].([]any)
+			for _, f := range froms {
+				item, _ := f.(map[string]any)
+				if name, ok := mapAt(item, "secretRef")["name"].(string); ok {
+					seen[name] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // The template half: no helm binary required
 // ---------------------------------------------------------------------------

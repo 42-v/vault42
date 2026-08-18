@@ -478,6 +478,19 @@ bridge:
 
 # ---- Honeypot Instance (bridge mode only) ----
 honeypotInstance:
+  secrets:
+    # -- Name of the Secret holding the honeypot's credentials. Empty resolves to
+    # <release>-honeypot, and the chart refuses to render if it resolves to the
+    # production Secret.
+    #
+    # The honeypot used to mount the production one, which handed the component
+    # this deployment invites attackers into the production master key, HMAC
+    # secret, pepper, signing key, admin token and database passwords. Breaking
+    # the decoy was breaking the vault. This Secret carries the same key names as
+    # `secrets.keys` and must carry different values: a honeypot holding a copy
+    # of the real master key is not a honeypot, it is a second copy of the vault
+    # with the door open.
+    existingSecret: ""
   database:
     # -- Honeypot database name (separate from real)
     name: vault_honeypot

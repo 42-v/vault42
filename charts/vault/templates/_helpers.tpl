@@ -71,6 +71,28 @@ Secret name to use
 {{- end }}
 
 {{/*
+Secret name for the honeypot instance.
+
+Deliberately not the release Secret. The honeypot mounted the production one, so
+the decoy whose whole purpose is to be broken into held the production master
+key, HMAC secret, pepper, signing key, admin token and database passwords -- the
+keys to the thing it exists to protect, on the one host in the deployment that is
+advertised to attackers. docs/ describes the honeypot as isolated; this is what
+makes that true.
+
+The key names are the same as production's, because only the values have to
+differ. Give it its own credentials: a honeypot holding a copy of the real master
+key is not a honeypot, it is a second copy of the vault with the door open.
+*/}}
+{{- define "vault.honeypotSecretName" -}}
+{{- $name := .Values.honeypotInstance.secrets.existingSecret | default (printf "%s-honeypot" (include "vault.fullname" .)) -}}
+{{- if eq $name (include "vault.secretName" .) -}}
+{{- fail (printf "honeypotInstance.secrets.existingSecret resolves to %q, which is the Secret the production vault mounts. The honeypot is the component this deployment invites attackers into; giving it the production master key, HMAC secret, pepper, signing key, admin token and database passwords means breaking the decoy is breaking the vault. Point it at a Secret holding the honeypot's own credentials, with the same keys and different values." $name) -}}
+{{- end -}}
+{{- $name -}}
+{{- end }}
+
+{{/*
 Seed Secret name to use
 */}}
 {{- define "vault.seedSecretName" -}}

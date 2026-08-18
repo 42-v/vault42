@@ -1,5 +1,17 @@
 The Vault has been deployed.
 
+{{ if not .Values.secrets.existingSecret -}}
+0. This chart mounts credentials, it does not create them. If the Secret
+   {{ include "vault.secretName" . }} does not exist in {{ .Release.Namespace }}, the pods stay in
+   ContainerCreating with the reason only in `kubectl describe pod`. It needs the
+   keys: {{ .Values.secrets.keys.masterKey }}, {{ .Values.secrets.keys.dbMigPassword }}, {{ .Values.secrets.keys.dbAppPassword }}, {{ .Values.secrets.keys.hmacSecret }}{{ if .Values.secrets.keys.adminToken }}, {{ .Values.secrets.keys.adminToken }}{{ end }}.
+{{- if .Values.bridge.enabled }}
+   The honeypot needs its own, {{ include "vault.honeypotSecretName" . }}, with the same key
+   names and different values. It is the component attackers are routed into, so
+   what it holds is what breaking the decoy yields.
+{{- end }}
+
+{{ end -}}
 1. Get the application URL:
 {{- if .Values.ingress.enabled }}
 {{- range $host := .Values.ingress.hosts }}
