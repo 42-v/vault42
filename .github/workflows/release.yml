@@ -109,11 +109,17 @@ jobs:
           TAG: ${{ steps.parse.outputs.tag }}
         run: |
           set -eu
-          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" \
-            || { echo "::error::$TAG does not exist on origin; a release publishes a tag that was already pushed"; exit 1; }
+          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" || {
+            echo "::error::$TAG does not exist on origin; a release publishes" \
+                 "a tag that was already pushed"
+            exit 1
+          }
           tagged=$(git rev-list -n 1 "$TAG")
-          [ "$tagged" = "$GITHUB_SHA" ] \
-            || { echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA; re-run the workflow with $TAG as the selected ref"; exit 1; }
+          [ "$tagged" = "$GITHUB_SHA" ] || {
+            echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA;" \
+                 "re-run the workflow with $TAG as the selected ref"
+            exit 1
+          }
 
       # A tag on a branch that never merged would publish code main does not
       # have, under a version number main will later reuse.
@@ -641,10 +647,10 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name:    ${{ needs.detect.outputs.tag }}
-          name:        Vault42 ${{ needs.detect.outputs.version }}
-          prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
-          make_latest:  ${{ !contains(needs.detect.outputs.version, '-') }}
+          tag_name: ${{ needs.detect.outputs.tag }}
+          name: Vault42 ${{ needs.detect.outputs.version }}
+          prerelease: ${{ contains(needs.detect.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.detect.outputs.version, '-') }}
           generate_release_notes: true
           files: dist/*
           body: |
