@@ -155,18 +155,6 @@
       "revisit_when": "vault42 gains an identity-proofing step at enrollment.",
       "cost_of_closing": "Not applicable without an identity-proofing capability."
     },
-    "CR-21": {
-      "title": "Tokens carry no acr, amr or aal claim",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "AuthenticatorAssuranceLevel constants and AALForMethods exist at internal/service/mfa.go:11-79 and are unit-tested, but AALForMethods has no non-test caller and VaultClaims carries no acr, amr or aal field, so a resource server cannot ask which factors were used or how recently.",
-      "compensating_control": "A resource server can require a scope that vault42 only issues after MFA, which gives a coarser version of the same guarantee.",
-      "residual_risk": "A downstream service cannot distinguish a single-factor session from a multi-factor one from the token alone.",
-      "revisit_when": "A relying party needs step-up authentication, or vault42 claims AAL2 conformance to a third party rather than self-assessing it.",
-      "cost_of_closing": "Record the factor used at CompleteMFALogin, add the claim at issuance, and surface aal_level on the MFA status response. Note the trap: MFAStatus.Methods holds enrolled methods and never contains the password, so passing it to AALForMethods naively returns AAL1 for a password-plus-TOTP user."
-    },
     "CR-22": {
       "title": "Identity provider session lifetime is not tracked",
       "severity": "Low",
@@ -2651,16 +2639,16 @@
       "chapter": "V6 Authentication",
       "level": "L2",
       "requirement": "Verify that, if an application uses a separate Identity Provider (IdP) and expects specific authentication strength, methods, or recentness for specific functions, the application verifies this using the information returned by the IdP. For example, if OIDC is used, this might be achieved by validating ID Token claims such as 'acr', 'amr', and 'auth_time' (if present). If the IdP does not provide this information, the application must have a documented fallback approach that assumes that the minimum strength authentication mechanism was used (for example, single-factor authentication using username and password).",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-21",
+      "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:28",
-        "internal/service/mfa.go:16"
+        "internal/service/mfa.go:104",
+        "internal/handler/oauth.go:601",
+        "internal/handler/oauth.go:631"
       ],
       "tests": [
-        "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
+        "TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength"
       ],
-      "notes": "AAL constants and AALForMethods exist but are not surfaced: no acr, amr or aal claim is issued and AALForMethods has no non-test caller, so a downstream resource server cannot check authentication strength or recentness from the token."
+      "notes": "Met on the fallback clause, which is the operative one here. vault42 consumes an upstream identity provider and asks it nothing about how the user was authenticated: no acr, amr or auth_time is read from any ID token. The requirement's final sentence prescribes exactly that case, and internal/handler/oauth.go:631 applies it -- the callback issues through NewAuthContext with MethodFederated as the only method and the user-verification flag clear. AALForMethods treats a provider assertion as a first factor and never as the possession factor that completes AAL2 (internal/service/mfa.go:104), so a federated-only session is stamped at the floor, urn:vault42:aal:1, and emits no amr value because RFC 8176 registers none for an assertion from another issuer. Strength above the floor has to be earned by a factor vault42 verified itself: an MFA-enrolled user still goes through IssueChallengeToken (internal/handler/oauth.go:601), which carries the federated first factor across rather than claiming a password. Previously an accepted risk, CR-21, on the sentence \"no acr, amr or aal claim is issued and AALForMethods has no non-test caller\"; both halves stopped being true in af780d7 and the row was not moved. What remains true and bounds the claim: vault42 does not verify an upstream acr even when the provider supplies one, which is safe only because the value it substitutes is always the minimum."
     },
     {
       "standard": "OWASP ASVS",
@@ -3417,15 +3405,16 @@
       "chapter": "V10 OAuth and OIDC",
       "level": "L2",
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-21",
+      "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:28"
+        "internal/middleware/auth.go:280",
+        "internal/server/server.go:672",
+        "internal/crypto/jwt.go:47"
       ],
       "tests": [
-        "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
+        "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
       ],
-      "notes": "No acr, amr or aal claim is issued, so a resource server cannot require a specific authentication strength or recentness. Same root cause as V6.8.4."
+      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:280 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:672) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
     },
     {
       "standard": "OWASP ASVS",
@@ -7690,6 +7679,7 @@
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
     "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
-    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34."
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
+    "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second."
   }
 }
