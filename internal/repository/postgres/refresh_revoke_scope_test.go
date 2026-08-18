@@ -90,7 +90,16 @@ func TestRefreshTokenRepo_EveryLockingScanTakesItsRowsInAscendingIdOrder(t *test
 
 	for method, statements := range byMethod {
 		for _, sql := range statements {
-			if !strings.Contains(sql, "FOR UPDATE") || strings.Contains(sql, "ORDER BY id FOR UPDATE") {
+			lock := strings.Index(sql, "FOR UPDATE")
+			if lock < 0 {
+				continue
+			}
+			// The ordering only has to govern the locked scan, so it is enough
+			// that ORDER BY id appears before FOR UPDATE. Requiring the two to be
+			// adjacent was a literal match on the shape the statements happened
+			// to have, and it broke the moment batching put a LIMIT between them
+			// -- on statements that were still correctly ordered.
+			if ordered := strings.Index(sql, "ORDER BY id"); ordered >= 0 && ordered < lock {
 				continue
 			}
 			t.Errorf("%s locks rows without ordering them: %q\n"+

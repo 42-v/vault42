@@ -26,7 +26,7 @@ func FuzzServiceDocumentJSON(f *testing.F) {
 	f.Add([]byte(`{"a":1}{"b":2}`))
 	f.Add([]byte("\xff\xfe"))
 	f.Add([]byte(`{"` + strings.Repeat("k", 200) + `":1}`))
-	deep := bytes.Repeat([]byte(`{"x":`), 40) 
+	deep := bytes.Repeat([]byte(`{"x":`), 40)
 	deep = append(deep, '1')
 	deep = append(deep, bytes.Repeat([]byte(`}`), 40)...)
 	f.Add(deep)
