@@ -70,15 +70,16 @@ var boolEnvVars = []string{
 // what an operator meant, and every consumer here reads a negative as "already
 // in the past": a negative token TTL signs tokens that are expired on issue.
 var durationEnvVars = map[string]time.Duration{
-	"VAULT_ACCESS_TOKEN_TTL":     0,
-	"VAULT_AUDIT_FLUSH_INTERVAL": 0,
-	"VAULT_KEY_RETENTION_PERIOD": 0,
-	"VAULT_MAX_SESSION_LIFETIME": 0,
-	"VAULT_MINT_MAX_TTL":         0,
-	"VAULT_MINT_TOKEN_TTL":       0,
-	"VAULT_REFRESH_TOKEN_TTL":    0,
-	"VAULT_REMEMBER_ME_TTL":      0,
-	"VAULT_SHUTDOWN_TIMEOUT":     0,
+	"VAULT_ACCESS_TOKEN_TTL":      0,
+	"VAULT_AUDIT_FLUSH_INTERVAL":  0,
+	"VAULT_KEY_RETENTION_PERIOD":  0,
+	"VAULT_KEY_ROTATION_INTERVAL": 0,
+	"VAULT_MAX_SESSION_LIFETIME":  0,
+	"VAULT_MINT_MAX_TTL":          0,
+	"VAULT_MINT_TOKEN_TTL":        0,
+	"VAULT_REFRESH_TOKEN_TTL":     0,
+	"VAULT_REMEMBER_ME_TTL":       0,
+	"VAULT_SHUTDOWN_TIMEOUT":      0,
 
 	// keystore.StartRefreshLoop hands this to time.NewTicker, which panics on a
 	// non-positive interval, in a goroutine started after the listener is up.
