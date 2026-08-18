@@ -149,10 +149,14 @@
   <!-- 4. AUDIT -->
   <section class="section container" id="audit" aria-labelledby="audit-head">
     <h2 id="audit-head">AUDIT</h2>
-    <p style="margin-bottom:14px">Append-only. Hash-chained. Sealed. Mirrors the production audit log: DB triggers + role enforcement prevent mutation. Every entry references its predecessor; the final root is the chain seal.</p>
+    <p style="margin-bottom:14px">Append-only, enforced at the database. A trigger raises on UPDATE and DELETE,
+      and both are revoked from the application role, so the service that writes the log cannot rewrite it.
+      The ledger below is an illustration of what chaining looks like, computed in your browser. It is not a
+      vault42 feature: the production log is not hash-chained, and the reasoning is published as an accepted
+      risk (CR-24) rather than implied away.</p>
 
     <div class="v-panel" data-title="LEDGER" style="padding-bottom:4px">
-      <div class="ledger" id="audit-ledger" role="table" aria-label="append-only hash-chained audit ledger">
+      <div class="ledger" id="audit-ledger" role="table" aria-label="simulated hash-chained audit ledger">
         <div class="ledger-head">
           <div>TIMESTAMP</div>
           <div>EVENT</div>
@@ -169,7 +173,8 @@
       <button class="v-btn" id="audit-append" type="button">APPEND EVENT</button>
       <button class="v-btn v-btn--ghost" id="audit-reset" type="button" style="margin-left:8px">RESET CHAIN</button>
     </div>
-    <p class="small">Client-side simulation using real SHA-256. Production log is immutable at the database.</p>
+    <p class="small">Client-side simulation using real SHA-256. The chaining shown here is the simulation's own;
+      production rows carry no predecessor hash. What production does hold is immutability at the database.</p>
   </section>
 
   <!-- 5. SELF-HOST QUICKSTART -->

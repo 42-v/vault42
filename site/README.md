@@ -6,7 +6,7 @@ Static marketing landing page for `vault.42-v.com`.
 
 - `index.html` — self-contained landing (plain HTML)
 - `styles.css` — design tokens + components + CRT atmosphere
-- `app.js` — vanilla JS for live trust chain demo, hash-chained audit, copy buttons, reduced-motion guards
+- `app.js` — vanilla JS for live trust chain demo, simulated hash-chained audit ledger (a client-side illustration, not a production property), copy buttons, reduced-motion guards
 
 ## Preview (local)
 
