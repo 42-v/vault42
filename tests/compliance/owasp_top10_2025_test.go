@@ -111,6 +111,29 @@ var publicRoutePrefixes = []string{
 // that confirmation executable rather than trusting this list.
 var authGuards = []string{"authed(", "authMw(", "authedChallenge(", "confirmed(", "docRead(", "docWrite("}
 
+// guardComposes names, per guard, the authentication middleware that guard is
+// entitled to compose — and only that one.
+//
+// This map replaces a check that accepted "authMw(" or "challengeMw("
+// interchangeably. The two are not interchangeable. challengeMw additionally
+// accepts the 2fa_challenge token, minted after the password succeeds and before
+// the second factor, so repointing authed at it hands twenty-one routes to a
+// caller holding the victim's password alone — including decrypted identity and
+// the full GDPR export. That mutation is one identifier wide and it passed here,
+// because a check that accepts either is not a check.
+//
+// The deployed guard sets are pinned route by route in
+// tests/spec/chain_wiring_test.go and driven with real tokens in
+// internal/server/chain_probe_test.go. This gate is the register's own copy: the
+// A01 row cites it, so it has to be able to fail.
+var guardComposes = map[string]string{
+	"authed":          "authMw(",
+	"confirmed":       "authMw(",
+	"authedChallenge": "challengeMw(",
+	"docRead":         "authMw(",
+	"docWrite":        "authMw(",
+}
+
 func isDeclaredPublic(path string) bool {
 	for _, prefix := range publicRoutePrefixes {
 		if prefix == "/" {
@@ -185,8 +208,26 @@ func TestOWASP_A01_2025_GuardClosuresReallyAuthenticate(t *testing.T) {
 		if end := strings.Index(body, "\n\t}"); end > 0 {
 			body = body[:end]
 		}
-		if !strings.Contains(body, "authMw(") && !strings.Contains(body, "challengeMw(") {
-			t.Errorf("A01:2025: guard %q does not compose an authentication middleware; it is defined as %s", name, body)
+		want, declared := guardComposes[name]
+		if !declared {
+			t.Errorf("A01:2025: guard %q is in authGuards but guardComposes does not say which "+
+				"authentication middleware it is entitled to compose. Name it, so the reviewer "+
+				"decides which credential this guard accepts rather than inheriting whichever one "+
+				"the closure happens to reach.", name)
+			continue
+		}
+		if !strings.Contains(body, want) {
+			t.Errorf("A01:2025: guard %q no longer composes %s; it is defined as %s", name, want, body)
+		}
+		for _, mw := range []string{"authMw(", "challengeMw("} {
+			if mw == want || !strings.Contains(body, mw) {
+				continue
+			}
+			t.Errorf("A01:2025: guard %q composes %s where the register entitles it to %s. The two "+
+				"authentication middleware accept different credentials — challengeMw also accepts "+
+				"the 2fa_challenge token minted between the first and second factor — so a guard "+
+				"reaching the wrong one hands every route it wraps to the wrong credential. It is "+
+				"defined as %s", name, mw, want, body)
 		}
 	}
 }

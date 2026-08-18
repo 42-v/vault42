@@ -146,6 +146,33 @@ func TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken(t *test
 	// mounts rather than naming one route keeps this from passing on a single
 	// survivor after the others are unwired.
 	routes := readCodeOnly(t, "internal/server/server.go")
+
+	// The confirmed(...) route builder carries the gate for six second-factor
+	// management routes on its own, and the count below cannot see it go: the
+	// clean tree has four confirmMw call sites, so deleting the one inside that
+	// closure lands exactly on the floor of three and the count stays green
+	// while TOTP setup and disable, both WebAuthn registration steps, credential
+	// deletion and backup-code generation all lose their only password re-entry.
+	// Resolve the closure rather than counting the text.
+	//
+	// The behavioral half is
+	// TestSecondFactorManagementRefusesATokenThatHasNotConfirmedItsPassword in
+	// package server, which drives all six with a valid but unconfirmed token.
+	if idx := strings.Index(routes, "confirmed := func("); idx < 0 {
+		t.Error("V10.3.4: internal/server no longer defines a confirmed(...) route builder; the " +
+			"six second-factor management routes take their recentness gate from it")
+	} else {
+		body := routes[idx:]
+		if end := strings.Index(body, "\n\t}"); end > 0 {
+			body = body[:end]
+		}
+		if !strings.Contains(body, "confirmMw(") {
+			t.Errorf("V10.3.4: the confirmed(...) route builder no longer applies confirmMw, so "+
+				"second-factor enrollment and removal are reachable with a stolen access token and "+
+				"no password. It is defined as %s", body)
+		}
+	}
+
 	const confirmedRouteFloor = 3
 	if n := strings.Count(routes, "confirmMw("); n < confirmedRouteFloor {
 		t.Errorf("V10.3.4: confirmMw guards %d call sites, below the floor of %d. The register "+
