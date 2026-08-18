@@ -1974,19 +1974,31 @@ func (s *AuthService) CheckSessionLimit(ctx context.Context, userID string) erro
 // TTL is a sliding window and a continuously-refreshing client is never asked to
 // reauthenticate.
 //
-// Every branch that cannot prove the family is inside the bound fails closed. The
-// bound is off (zero origin, no error) only when it is not configured at all.
+// Every branch that cannot prove the family is inside the bound fails closed.
+//
+// The origin is looked up whether or not a bound is configured, because it is
+// two things at once: the instant the bound is measured from, and the
+// authentication instant a rotation puts in auth_time (see IssueRotatedPair).
+// Only the REFUSALS are gated on maxLifetime. Short-circuiting the whole
+// function when the bound was off meant a documented, supported setting
+// (VAULT_MAX_SESSION_LIFETIME=0) silently dropped auth_time from every token
+// after the login one — two independent features coupled by one early return.
+//
+// So with no bound configured, a store that cannot date a family costs that
+// deployment its auth_time claim and nothing else. Refusing there would turn an
+// unconfigured feature into a total rejection of refresh.
 func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.RefreshToken, ip, ua string) (time.Time, error) {
 	if s.tokenSvc == nil {
 		return time.Time{}, nil
 	}
 	maxLifetime := s.tokenSvc.MaxSessionLifetime()
-	if maxLifetime <= 0 {
-		return time.Time{}, nil
-	}
+	bounded := maxLifetime > 0
 
 	reader, ok := s.tokens.(familyOriginReader)
 	if !ok {
+		if !bounded {
+			return time.Time{}, nil
+		}
 		// A bound was configured against a store that cannot date a family.
 		// Refusing is the only outcome that is not a silent no-op.
 		log.Printf("auth: refresh token store cannot report family origin; absolute session lifetime unenforceable")
@@ -1997,13 +2009,16 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 
 	origin, err := reader.FamilyOrigin(ctx, stored.FamilyID)
 	if err != nil || origin.IsZero() {
+		if !bounded {
+			return time.Time{}, nil
+		}
 		log.Printf("auth: family origin lookup failed for family %s: %v", stored.FamilyID, err)
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "session_age_unavailable", "cause": "lookup_failed"}, 80)
 		return time.Time{}, ErrSessionAgeUnknown
 	}
 
-	if !time.Now().Before(origin.Add(maxLifetime)) {
+	if bounded && !time.Now().Before(origin.Add(maxLifetime)) {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; rejecting regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{

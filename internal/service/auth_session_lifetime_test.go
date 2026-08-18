@@ -198,11 +198,17 @@ func TestRefresh_FailsClosedWhenTheStoreCannotDateFamilies(t *testing.T) {
 	}
 }
 
-// Zero means no bound, and no bound must mean no lookup: a deployment that has
-// not configured one must not start failing refreshes because its store is old.
+// Zero means no bound, and no bound must mean no refusal: a deployment that has
+// not configured one must not start failing refreshes because its store cannot
+// date a family.
+//
+// The lookup itself does now happen — the origin is also the authentication
+// instant a rotation states in auth_time, which is a claim a deployment gets
+// whether or not it caps session age. What the absent bound removes is every
+// branch that rejects, not the read.
 func TestRefresh_UnboundedWhenNoLifetimeIsConfigured(t *testing.T) {
 	svc, repo := refreshFixture(t, 0, time.Time{})
-	repo.originErr = errors.New("this must never be called")
+	repo.originErr = errors.New("family origin unavailable")
 
 	if _, err := svc.Refresh(context.Background(), "raw-refresh-token", "1.2.3.4", "UA", vaultcrypto.FingerprintInput{}); err != nil {
 		t.Fatalf("with no bound configured, rotation must behave exactly as before: %v", err)
