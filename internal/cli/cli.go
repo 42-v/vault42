@@ -498,7 +498,10 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	// Delivered before the hash is stored. InitAdminToken returns early once
 	// admin_token_hash is set, so storing the hash of a token the operator never
 	// received locks every administrative subcommand out with no way back.
-	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", token)
+	// MustDeliver, not Deliver: this runs on the server boot path, where
+	// cmd/vault logs this function's error and serves anyway. A pod that came up
+	// Ready with no admin token in force was the result.
+	dest, err := firstboot.MustDeliver("VAULT_ADMIN_TOKEN", token)
 	if err != nil {
 		return fmt.Errorf("deliver admin token: %w", err)
 	}

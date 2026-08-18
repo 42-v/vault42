@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -253,3 +254,71 @@ func TestStdoutIsTerminal_IsFalseWhenStdoutCannotBeStatted(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no") }
+
+// A boot path that gets its credential to the operator is a boot path that
+// carries on, so MustDeliver must not exit on the way through.
+func TestMustDeliver_ReturnsTheSinkAndDoesNotExit(t *testing.T) {
+	nonTerminal(t)
+	path := filepath.Join(t.TempDir(), "first-boot.env")
+	t.Setenv(CredentialFileEnv, path)
+
+	var exits []int
+	defer SetExitForTest(func(code int) { exits = append(exits, code) })()
+
+	dest, err := MustDeliver("VAULT_ADMIN_TOKEN", "s3cr3t")
+	if err != nil {
+		t.Fatalf("MustDeliver: %v", err)
+	}
+	if dest != path {
+		t.Errorf("dest = %q, want %q", dest, path)
+	}
+	if len(exits) != 0 {
+		t.Errorf("MustDeliver exited %v on a delivery that succeeded", exits)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	if !strings.Contains(string(body), "s3cr3t") {
+		t.Errorf("the credential is not in the sink: %q", body)
+	}
+}
+
+// The refusal itself. Without it the boot path logs the error and serves, which
+// on the admin-token path meant a pod that reported Ready with no admin token in
+// force, and no trace of it but one line.
+func TestMustDeliver_ExitsWhenThereIsNowhereToPutTheCredential(t *testing.T) {
+	nonTerminal(t)
+	t.Setenv(CredentialFileEnv, "")
+
+	var exits []int
+	defer SetExitForTest(func(code int) { exits = append(exits, code) })()
+
+	dest, err := MustDeliver("VAULT_ADMIN_TOKEN", "s3cr3t")
+	if !errors.Is(err, ErrNoSink) {
+		t.Fatalf("err = %v, want ErrNoSink", err)
+	}
+	if dest != "" {
+		t.Errorf("dest = %q, want empty: nothing was delivered", dest)
+	}
+	if len(exits) != 1 || exits[0] != 1 {
+		t.Errorf("exits = %v, want exactly one exit(1)", exits)
+	}
+}
+
+// The seam has to go back, or the first test to use it disarms the refusal for
+// every test that runs after it in the same binary.
+func TestSetExitForTest_RestoresThePreviousExit(t *testing.T) {
+	sentinel := func(int) {}
+	restoreOuter := SetExitForTest(sentinel)
+	defer restoreOuter()
+
+	restoreInner := SetExitForTest(func(int) {})
+	restoreInner()
+
+	if reflect.ValueOf(exitProcess).Pointer() != reflect.ValueOf(sentinel).Pointer() {
+		t.Error("the inner restore did not put the outer exit back, so a later test would run " +
+			"against whichever exit an earlier one happened to leave behind")
+	}
+}

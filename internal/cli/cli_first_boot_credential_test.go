@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 )
 
 // InitAdminToken runs from cmd/vault's boot path before the server starts, so
@@ -55,6 +56,12 @@ func TestInitAdminToken_GeneratedTokenNeverReachesTheProcessOutput(t *testing.T)
 func TestInitAdminToken_UndeliverableTokenIsNotInstalled(t *testing.T) {
 	t.Setenv("VAULT_FIRST_BOOT_CREDENTIAL_FILE", filepath.Join(t.TempDir(), "no-such-dir", "first-boot.env"))
 
+	// The real exit would take this binary with it, which is the point: in a pod
+	// the process is gone by the assertions below. Recording the code proves the
+	// refusal happened; the assertions then prove what it left behind.
+	var exits []int
+	defer firstboot.SetExitForTest(func(code int) { exits = append(exits, code) })()
+
 	store := newStoringAdminConfig()
 	c := New(nil, nil, nil, store, nil, "")
 
@@ -62,6 +69,10 @@ func TestInitAdminToken_UndeliverableTokenIsNotInstalled(t *testing.T) {
 	captureStdout(t, func() { err = c.InitAdminToken(context.Background()) })
 	if err == nil {
 		t.Fatal("InitAdminToken reported success though the token could not be delivered")
+	}
+	if len(exits) != 1 || exits[0] != 1 {
+		t.Errorf("the process exited %v, want exactly one exit(1). Without it cmd/vault logs "+
+			"this error and serves: Ready, healthy, and no admin token in force.", exits)
 	}
 	if store.values["admin_token_hash"] != "" {
 		t.Error("a token hash was installed for a token the operator never received")

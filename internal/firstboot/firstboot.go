@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,69 @@ func Deliver(label, value string) (string, error) {
 		return "", fmt.Errorf("deliver a first-boot credential to %s: %w", dest, werr)
 	}
 	return dest, nil
+}
+
+// exitProcess ends the process when a boot path has minted a credential it
+// cannot hand over. It is a variable so a test can observe the refusal without
+// killing the test binary; production never reassigns it, and a replacement must
+// not return.
+var exitProcess = os.Exit
+
+// SetExitForTest replaces the exit MustDeliver uses and returns a function that
+// puts the previous one back.
+//
+// Exported deliberately, and only for that. The boot paths that call MustDeliver
+// live in internal/cli and internal/adminapi, so the tests that have to prove
+// the refusal cannot reach an unexported seam in this package, and a test that
+// left the real os.Exit in place would take the whole test binary with it.
+// Nothing in cmd/ calls this.
+func SetExitForTest(fn func(int)) func() {
+	previous := exitProcess
+	exitProcess = fn
+	return func() { exitProcess = previous }
+}
+
+// MustDeliver is Deliver for the paths that mint a credential while a server is
+// starting up. In production it either returns where the credential went, or it
+// does not return: there is no third outcome in which the process carries on
+// having minted a credential nobody received.
+//
+// The distinction from Deliver is not stylistic. An error is the right shape for
+// an interactive command, whose operator reads it on the terminal and runs the
+// command again. A boot path has no such reader, and the error was handled the
+// way an error with no reader always is:
+//
+//	Admin token init error: deliver admin token: VAULT_FIRST_BOOT_CREDENTIAL_FILE:
+//	  open /nonexistent-dir/credentials: no such file or directory
+//	metrics listening on 127.0.0.1:19091
+//	The Vault listening on :18081 (profile=production)
+//
+// One log line, and then a pod that passes /healthz, reports Ready and has no
+// admin token in force. A broken install is indistinguishable from a healthy one
+// unless somebody reads that line, and NOTES.txt sends the operator to read a
+// file that was never written. That is why the refusal lives here and not at the
+// call site: a caller can log an error and carry on, and this one did.
+//
+// Refusing is safe because delivery precedes persistence everywhere this is
+// used. The admin token's hash, the first admin's row and a seeded client's row
+// are all written after the credential is in the operator's hands, so nothing is
+// stored and the next boot with a working sink mints again. The state with no
+// way back is the other one: an Argon2id hash of a credential nobody holds, in a
+// table whose presence makes the mint path skip itself forever.
+//
+// The error return is reached only when a test has replaced the exit. Callers
+// keep handling it as they did, so the shape a test observes is the shape the
+// process would have had at that point.
+func MustDeliver(label, value string) (string, error) {
+	dest, err := Deliver(label, value)
+	if err == nil {
+		return dest, nil
+	}
+	log.Printf("REFUSING TO START: a first-boot credential was generated and could not be "+
+		"delivered: %v. Nothing was stored, so fixing the sink and starting again mints a "+
+		"fresh one; starting anyway would serve with no credential in force.", err)
+	exitProcess(1)
+	return "", err
 }
 
 // openSink resolves where this process is allowed to put a credential. The
