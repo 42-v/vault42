@@ -559,8 +559,8 @@ func TestLoadConfigLeavesStripHeadersEmptyWhenUnset(t *testing.T) {
 // opens. Both used to be accepted silently, on the process whose whole job is to
 // stand in front of the vault, and no test covered the negative path at all.
 //
-// TestLoadConfigIgnoresUnparseableNumbers pins the neighbouring silent-fallback
-// behaviour, which is what made this look covered: a malformed value there is
+// TestLoadConfigIgnoresUnparseableNumbers pins the neighboring silent-fallback
+// behavior, which is what made this look covered: a malformed value there is
 // documented as reverting to the default. A negative value is different, because
 // the value parses and is then used.
 func TestLoadConfigRejectsNegativeCaps(t *testing.T) {

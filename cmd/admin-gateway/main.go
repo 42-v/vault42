@@ -51,7 +51,7 @@ var (
 // is exactly the drift RedactDSN's doc comment says the helper exists to
 // prevent: an improvement to the shared pattern reached cmd/recover and left
 // both copies behind, silently, with the whole suite green. The name stays
-// because it is what this binary's call sites and tests use; the behaviour now
+// because it is what this binary's call sites and tests use; the behavior now
 // has one definition. tests/spec/dsn_redaction_drift_test.go fails the build if
 // a private copy reappears.
 func sanitizeDBError(err error) error {

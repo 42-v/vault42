@@ -14,7 +14,7 @@ package main
 // tests Linux only, so a !linux build tag puts this body out of reach of every
 // test that could be written for it; and there is nothing here to test - the
 // function is a permanent no-op whose entire content is the decision above,
-// which is a decision about the build and not about behaviour. Said out loud
+// which is a decision about the build and not about behavior. Said out loud
 // because a body with no test and no note reads the same as a gap.
 //
 // If a non-Linux build ever becomes something the project ships, this stops
