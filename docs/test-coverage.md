@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-14 | Tests: 4266 | Total: 99.55% statement coverage
+Generated: 2026-08-18 | Tests: 4635 | Total: 99.40% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -24,32 +24,37 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/httputil` | 100.00% |
 | `internal/honeypot` | 100.00% |
 | `internal/frontend` | 100.00% |
+| `internal/firstboot` | 100.00% |
+| `internal/dpop` | 100.00% |
+| `internal/deferwork` | 100.00% |
 | `internal/config` | 100.00% |
 | `internal/cli` | 100.00% |
-| `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
-| `internal/repository/postgres` | 99.90% |
 | `internal/adminapi` | 99.82% |
+| `internal/repository/postgres` | 99.81% |
 | `internal/oauth2` | 99.73% |
-| `internal/handler` | 99.67% |
-| `internal/keystore` | 99.53% |
-| `cmd/bridge` | 99.49% |
-| `cmd/admin-gateway` | 99.42% |
+| `internal/handler` | 99.63% |
+| `internal/cache` | 99.47% |
+| `cmd/bridge` | 99.24% |
 | `internal/jwt` | 99.22% |
-| `internal/service` | 99.12% |
-| `internal/email` | 99.01% |
-| `cmd/vault` | 98.25% |
-| `internal/crypto` | 98.17% |
+| `internal/email` | 99.08% |
+| `internal/keystore` | 98.86% |
+| `internal/service` | 98.83% |
+| `internal/crypto` | 98.18% |
 | `cmd/recover` | 98.15% |
+| `cmd/vault` | 97.70% |
+| `cmd/admin-gateway` | 97.18% |
 
 ## Uncovered Functions
 
 | Function | File |
 |----------|------|
-| `main` | cmd/recover/main.go:133 |
+| `main` | cmd/recover/main.go:134 |
+| `Error` | internal/cache/cache.go:51 |
 
 ## Low Coverage (1-74%)
 
 | Function | File | Coverage |
 |----------|------|----------|
+| `firstCertificate` | cmd/admin-gateway/clientauth.go:183 | 70.0% |
 | `hardenProcess` | cmd/recover/harden_linux.go:23 | 66.7% |
