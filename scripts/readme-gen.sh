@@ -140,7 +140,12 @@ while IFS= read -r line; do
     dario.cat/mergo*|gopkg.in/yaml.v3*) continue ;;
   esac
 
-  DISPLAY_VER=$(echo "$VER" | sed 's/v0\.0\.0-[0-9]*-/v0.0.0-/')
+  # Shorten a Go pseudo-version by dropping its timestamp segment:
+  # v0.0.0-20240101120000-abcdef123456 -> v0.0.0-abcdef123456.
+  DISPLAY_VER="$VER"
+  if [[ "$VER" =~ ^v0\.0\.0-[0-9]*-(.*)$ ]]; then
+    DISPLAY_VER="v0.0.0-${BASH_REMATCH[1]}"
+  fi
   NOTE=$(dep_note "$MOD")
   REPO=$(gh_repo "$MOD")
 
@@ -200,7 +205,6 @@ while IFS= read -r owner; do
   if [ -n "$gh_json" ]; then
     gh_type=$(echo "$gh_json" | grep -oP '"type"\s*:\s*"[^"]*"' | grep -oP '"[^"]*"$' | tr -d '"')
     gh_repos=$(echo "$gh_json" | grep -oP '"public_repos"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
-    gh_followers=$(echo "$gh_json" | grep -oP '"followers"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
     gh_created=$(echo "$gh_json" | grep -oP '"created_at"\s*:\s*"[^"]*"' | grep -oP '\d{4}-\d{2}-\d{2}')
 
     if [ "$gh_type" = "Organization" ]; then
@@ -326,7 +330,7 @@ else
 fi
 
 FE_LINES="${VUE_LINES:-$(find web/src packages/vue/src \( -name '*.vue' -o -name '*.ts' \) -not -path '*__tests__*' -not -name '*.test.*' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')}"
-FE_LOCALES="${VUE_LOCALES:-$(ls web/src/locales/*.json 2>/dev/null | wc -l | tr -d ' ')}"
+FE_LOCALES="${VUE_LOCALES:-$(find web/src/locales -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')}"
 FE_DEPS=$(python3 -c "
 import json
 web = json.load(open('web/package.json'))
@@ -361,7 +365,6 @@ if [ -f README.md ]; then
   if [ -z "$GO_VER" ]; then
     GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
   fi
-  NODE_VER=$(node --version 2>/dev/null | tr -d 'v' | cut -d. -f1)
   VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
   TOTAL_TESTS=$((PASSED + FE_TESTS))
 

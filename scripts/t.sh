@@ -49,5 +49,8 @@ if [[ "${1:-}" == "e2e-browser" ]]; then
   exit $?
 fi
 
-ARGS="${@:-./...}"
-go test -count=1 $ARGS 2>&1
+args=("$@")
+if [ ${#args[@]} -eq 0 ]; then
+  args=(./...)
+fi
+go test -count=1 "${args[@]}" 2>&1
