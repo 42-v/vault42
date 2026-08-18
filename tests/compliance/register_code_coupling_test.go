@@ -105,9 +105,19 @@ func TestASVS_V3_5_3_StateChangingGETMatchesWhatTheRegisterClaims(t *testing.T) 
 	routes := readCodeOnly(t, "internal/server/server.go")
 	mutatingGET := strings.Contains(routes, `"GET /auth/verify-email"`)
 
-	// The alternative the requirement offers.
+	// The alternative the requirement offers, looked for only where it would
+	// count. cmd/bridge validates Sec-Fetch-* and is declared out of scope in
+	// the register: it is a separate binary, a non-default deployment mode, and
+	// nothing it does protects a route on the vault server. Scanning the whole
+	// tree found it and concluded the remedy had landed, which would have moved
+	// this row to Met on the strength of a control that is not in front of the
+	// endpoint. A gate that reads the right token in the wrong binary is a
+	// false pass, and a false pass on a coupling gate retires a real risk.
 	var secFetch bool
 	for _, pf := range productionGoFiles(t) {
+		if strings.HasPrefix(pf.path, "cmd/bridge/") {
+			continue
+		}
 		if strings.Contains(readCodeOnly(t, pf.path), "Sec-Fetch-") {
 			secFetch = true
 			break
