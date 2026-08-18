@@ -1026,26 +1026,8 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("routes to cleanup-audit", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		cleanupCalled := false
-		c.audit.(*mockAuditRepo).CleanupFn = func(_ context.Context, _ time.Time) (int64, error) {
-			cleanupCalled = true
-			return 0, nil
-		}
-
-		args := []string{"vault", "cleanup-audit", "--admin-token", token, "--retention-days", "30"}
-		captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if !cleanupCalled {
-			t.Error("expected cleanup-audit to be routed")
-		}
-	})
+	// cleanup-audit is retired (it no longer deletes via vault_app); its routing
+	// and inertness are pinned in cli_cleanup_audit_retired_test.go.
 
 	t.Run("routes to export-audit", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)

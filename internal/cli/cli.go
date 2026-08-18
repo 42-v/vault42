@@ -1,10 +1,10 @@
 // Package cli implements administrative CLI commands for The Vault.
 // All commands require authentication via --admin-token. Available commands:
 // add-client, list-clients, revoke-all-sessions, rotate-admin-token,
-// rotate-jwks, seed, cleanup-audit, cleanup-recovery, and export-audit.
-// The revoke-client, rotate-client-secret, lock-user and unlock-user
-// subcommands are retired stubs that print an error and redirect to the admin
-// gateway; they issue no database write.
+// rotate-jwks, seed, cleanup-recovery, and export-audit.
+// The revoke-client, rotate-client-secret, lock-user, unlock-user and
+// cleanup-audit subcommands are retired stubs that print an error and redirect
+// to the plane that owns the capability; they issue no database write.
 package cli
 
 import (
@@ -484,28 +484,35 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 	return true
 }
 
-func (c *CLI) cleanupAudit(ctx context.Context, args []string) bool {
-	daysStr := getFlag(args, "--retention-days")
-	if daysStr == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault cleanup-audit --admin-token <token> --retention-days <N>")
-		return true
-	}
-	days, err := strconv.Atoi(daysStr)
-	if err != nil || days < 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: --retention-days must be a positive integer")
-		return true
-	}
-	if c.audit == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: audit repository not available")
-		return true
-	}
-	olderThan := time.Now().AddDate(0, 0, -days)
-	deleted, err := c.audit.Cleanup(ctx, olderThan)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	fmt.Printf("Deleted %d audit entries older than %d days.\n", deleted, days)
+// cleanupAudit is retired (F-17). It reached a capability the RBAC model grants
+// no admin, behind a gate the role running it can rewrite.
+//
+// internal/rbac/rbac.go says audit access "is read-only by design: there is no
+// corresponding write or delete permission, because an admin who can edit the
+// audit trail can erase their own actions", and no admin tier holds an
+// audit-delete permission. Migration 018 grants EXECUTE on
+// audit.cleanup_old_entries to vault_app and deliberately not to vault_admin, so
+// the admin plane cannot run this at all — while cmd/vault, running as vault_app,
+// could, gated only by admin_token_hash in auth.admin_config, a table migration
+// 001 grants vault_app SELECT, INSERT and UPDATE on. The caller could overwrite
+// its own gate, which makes the token operator convenience and not an
+// authorization boundary.
+//
+// Retiring rather than promoting it to the admin gateway is the honest
+// resolution. Promoting would mean granting vault_admin EXECUTE on the purge
+// function and minting the audit-delete permission rbac refuses on purpose —
+// a migration, and a reversal of a decision the codebase argues for.
+//
+// Nothing is lost. Audit retention is VAULT_AUDIT_RETENTION_DAYS, swept in
+// process by internal/audit.Retention through the same SECURITY DEFINER
+// function: declarative, part of the deployment rather than of whoever holds the
+// CLI token, and not aimable at an arbitrary cutoff.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: cleanup-audit is retired. Audit retention is set with VAULT_AUDIT_RETENTION_DAYS, which the server sweeps at startup and every 6h. No admin tier holds an audit-delete permission, and the vault CLI no longer deletes audit entries on demand.")
 	return true
 }
 

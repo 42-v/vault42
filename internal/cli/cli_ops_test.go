@@ -19,45 +19,9 @@ func cliWith(audit repository.AuditRepository) *CLI {
 	return New(&mockClientRepo{}, &mockUserRepo{}, nil, nil, audit, "")
 }
 
-func TestCLI_CleanupAudit(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("missing retention-days prints usage", func(t *testing.T) {
-		if !cliWith(&mockAuditRepo{}).cleanupAudit(ctx, nil) {
-			t.Error("expected handled=true")
-		}
-	})
-
-	t.Run("invalid retention-days rejected", func(t *testing.T) {
-		cli := cliWith(&mockAuditRepo{})
-		for _, arg := range []string{"0", "-3", "notanumber"} {
-			cli.cleanupAudit(ctx, []string{"--retention-days", arg})
-		}
-	})
-
-	t.Run("nil audit repo reports unavailable", func(t *testing.T) {
-		cliWith(nil).cleanupAudit(ctx, []string{"--retention-days", "30"})
-	})
-
-	t.Run("success reports deleted count", func(t *testing.T) {
-		called := false
-		cli := cliWith(&mockAuditRepo{CleanupFn: func(context.Context, time.Time) (int64, error) {
-			called = true
-			return 7, nil
-		}})
-		cli.cleanupAudit(ctx, []string{"--retention-days", "30"})
-		if !called {
-			t.Error("Cleanup was not invoked")
-		}
-	})
-
-	t.Run("repo error is handled", func(t *testing.T) {
-		cli := cliWith(&mockAuditRepo{CleanupFn: func(context.Context, time.Time) (int64, error) {
-			return 0, errors.New("db down")
-		}})
-		cli.cleanupAudit(ctx, []string{"--retention-days", "30"})
-	})
-}
+// TestCLI_CleanupAudit is retired along with the command: the argument-parsing
+// and repository paths it drove no longer exist. cli_cleanup_audit_retired_test.go
+// holds the contract that replaced them.
 
 func TestCLI_ExportAudit(t *testing.T) {
 	ctx := context.Background()
