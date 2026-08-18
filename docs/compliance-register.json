@@ -2679,7 +2679,7 @@
       "tests": [
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
       ],
-      "notes": "The absolute maximum session lifetime is now documented and configurable (VAULT_MAX_SESSION_LIFETIME, default 720h). There is still no inactivity timeout to document, and the 720h default deviates from the SP 800-63B-4 AAL2 recommendation of no more than 24 hours overall and 1 hour inactivity, so the justification this requirement asks for is not yet complete."
+      "notes": "Accepted risk CR-14, and two of the three clauses now hold. The absolute maximum session lifetime is documented and configurable (VAULT_MAX_SESSION_LIFETIME, default 720h, internal/config/config.go:438), and docs/config.md now carries the justification this requirement asks for: it states the SP 800-63B-4 section 2.2.3 figures the deployment deviates from and why. That entry previously cited 12 hours as the AAL2 reauthentication figure, which is the withdrawn Rev 3 number; section 2.2.3 of the current revision says the overall timeout SHOULD be no more than 24 hours and the inactivity timeout no more than 1 hour. The clause still unmet is the first one: there is no inactivity timeout to document, so no documentation of one can exist."
     },
     {
       "standard": "OWASP ASVS",
