@@ -412,6 +412,14 @@ controls that bound it are in [`spec.md` section 6.5](spec.md#65-subject-asserti
 | `VAULT_MINT_ROLES` | list | *(empty)* | No | Comma-separated allow-list of roles a minted token may carry. Empty means no role may be minted. The admin-reserved names are refused at startup regardless of what is listed here. |
 | `VAULT_MINT_SCOPES` | list | *(empty)* | No | Comma-separated allow-list of scopes a minted token may carry. Empty means no scope may be minted. Capability scopes such as `kms:unwrap` and `mint:token` are refused regardless. |
 
+The Helm chart exposes all six as the `mint.*` block, each at the default above, so an install that
+does not opt in renders the same environment it did before the block existed. They are exposed
+together because none of them works alone: `mint.enabled` without `mint.audience` refuses to start,
+and `mint.enabled` with empty allow-lists mounts an endpoint that grants nothing. The chart fails the
+render, naming the setting, when `mint.enabled` is true and `mint.audience` is empty or equal to
+`origin` -- the same two refusals `Config.Validate` makes, moved to install time so the operator reads
+the reason instead of finding it one line deep in a `CrashLoopBackOff`.
+
 ### Service-Scoped JSON Documents
 
 Off by default. Lets a registered service store arbitrary JSON against a subject, encrypted at rest.
@@ -864,6 +872,12 @@ Key Helm values and their corresponding env vars:
 | `dpop.enabled` | `VAULT_DPOP_ENABLED` |
 | `strictSessionLimit` | `VAULT_STRICT_SESSION_LIMIT` |
 | `outboundAllowPrivate` | `VAULT_OUTBOUND_ALLOW_PRIVATE` (rendered only when `true`) |
+| `mint.enabled` | `VAULT_MINT_ENABLED` |
+| `mint.audience` | `VAULT_MINT_AUDIENCE` |
+| `mint.tokenTTL` | `VAULT_MINT_TOKEN_TTL` |
+| `mint.maxTTL` | `VAULT_MINT_MAX_TTL` |
+| `mint.allowedRoles` | `VAULT_MINT_ROLES` (comma-joined) |
+| `mint.allowedScopes` | `VAULT_MINT_SCOPES` (comma-joined) |
 
 Secrets are mapped via `secrets.keys.*`:
 

@@ -37,6 +37,26 @@ data:
   # so pinning a value would quietly change what a dev release does.
   VAULT_OUTBOUND_ALLOW_PRIVATE: {{ .Values.outboundAllowPrivate | quote }}
   {{- end }}
+  {{- if .Values.mint.enabled }}
+  {{- if not .Values.mint.audience }}
+  {{- fail "mint.enabled is true and mint.audience is empty. POST /mint signs a token for a subject vault42 never authenticated, and the aud claim is what stops that token being replayed against something else; Config.Validate refuses to start without it, in every profile including dev. Set mint.audience to the identifier of the service that will accept minted tokens." }}
+  {{- end }}
+  {{- if eq .Values.mint.audience .Values.origin }}
+  {{- fail "mint.audience equals origin. A minted token would then carry vault42's own audience, which makes it valid against vault42 itself and turns the signing endpoint into account takeover for every subject a caller cares to name. Config.Validate refuses to start on this pair; the render fails here so the reason reaches the operator at install instead of one line deep in a CrashLoopBackOff." }}
+  {{- end }}
+  {{- end }}
+  # Delegated signing. Rendered unconditionally at the binary's own defaults --
+  # off, no audience, five minutes, and allow-lists that permit no role and no
+  # scope -- so a release that does not opt in is byte-for-byte the deployment it
+  # was before this block existed. All six are rendered together because none of
+  # them works alone: the switch without the audience refuses to boot, and the
+  # switch without the allow-lists mounts a signing oracle that grants nothing.
+  VAULT_MINT_ENABLED: {{ .Values.mint.enabled | quote }}
+  VAULT_MINT_AUDIENCE: {{ .Values.mint.audience | quote }}
+  VAULT_MINT_TOKEN_TTL: {{ .Values.mint.tokenTTL | quote }}
+  VAULT_MINT_MAX_TTL: {{ .Values.mint.maxTTL | quote }}
+  VAULT_MINT_ROLES: {{ join "," .Values.mint.allowedRoles | quote }}
+  VAULT_MINT_SCOPES: {{ join "," .Values.mint.allowedScopes | quote }}
   VAULT_EMAIL_FROM: {{ .Values.emailFrom | quote }}
   DB_HOST: {{ .Values.database.host | quote }}
   DB_PORT: {{ .Values.database.port | quote }}

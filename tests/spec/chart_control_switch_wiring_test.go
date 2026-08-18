@@ -28,6 +28,7 @@
 package spec_test
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -43,10 +44,16 @@ import (
 // nobody has got to it. Five of these are overrides whose entire purpose is to
 // countermand a refusal the deployment should not be hitting, and the config
 // package already refuses them outside the profile they belong to; putting them
-// in values.yaml would advertise them as ordinary settings. The other three are
+// in values.yaml would advertise them as ordinary settings. The other two are
 // switches that cannot be turned on alone, and shipping the switch without its
 // companions would render a chart that refuses to boot -- a new instance of this
 // same defect rather than a fix for it.
+//
+// VAULT_MINT_ENABLED was excused on exactly that "cannot be turned on alone"
+// ground, and the entry ended "exposing /mint from the chart means exposing all
+// four". It now does: mint.enabled, mint.audience, mint.tokenTTL, mint.maxTTL
+// and the two allow-lists render together, so the reason no longer describes
+// anything and the entry is gone rather than restated.
 //
 // TestTheUnexposedSetOnlyShrinks holds the size as a ratchet, so an entry may be
 // removed but never added. That is the same commitment .coverage-exclusions.json
@@ -70,11 +77,6 @@ var chartUnexposedSwitches = map[string]string{
 	"VAULT_SMTP_ALLOW_PLAINTEXT": "Load accepts it only for a loopback SMTP_HOST. The chart's " +
 		"SMTP host is a Service name, which is never loopback, so the rendered pod could not " +
 		"use the value the chart set.",
-	"VAULT_MINT_ENABLED": "cannot be turned on alone: Validate requires VAULT_MINT_AUDIENCE with " +
-		"it, and the allow-lists VAULT_MINT_ROLES and VAULT_MINT_SCOPES deny every role and " +
-		"scope when unset, so a chart exposing the switch and not the three settings beside it " +
-		"would render a deployment that either refuses to boot or mounts a signing oracle that " +
-		"grants nothing. Exposing /mint from the chart means exposing all four.",
 	"VAULT_SVCDOC_ENABLED": "the document store's quota, size and per-subject limits are read " +
 		"from four further env vars the chart does not set, so the switch alone would mount a " +
 		"store running on defaults an operator never chose.",
@@ -82,9 +84,11 @@ var chartUnexposedSwitches = map[string]string{
 		"is unexposed for the reason above.",
 }
 
-// unexposedBaseline is the size of the set on the commit that introduced this
-// gate. It stood at nine before VAULT_DPOP_ENABLED was wired.
-const unexposedBaseline = 8
+// unexposedBaseline is the high-water mark the set may not exceed. It stood at
+// nine before VAULT_DPOP_ENABLED was wired and at eight before VAULT_MINT_ENABLED
+// was; each wiring lowers it, which is what makes it a ratchet rather than a
+// budget somebody can spend back.
+const unexposedBaseline = 7
 
 // boolEnvVars parses the switch list out of internal/config/envcheck.go.
 //
@@ -187,6 +191,185 @@ func TestTheChartRendersTheDPoPSwitch(t *testing.T) {
 			"the rendered env, so sender-constrained access tokens stay off however the "+
 			"operator configures the release.", env, on)
 	}
+}
+
+// mintValues is the smallest set of values that turns /mint on and renders.
+// Reused by the tests below so each one states only the thing it varies.
+var mintValues = []string{
+	"--set", "mint.enabled=true",
+	"--set", "mint.audience=https://beon3.example",
+	"--set", "mint.allowedRoles={service,beon3:coach}",
+	"--set", "mint.allowedScopes={profile:read}",
+}
+
+// /mint end to end. The endpoint signs a token for a subject vault42 never
+// authenticated, so the default has to be the binary's own -- off, no audience,
+// and allow-lists that permit nothing -- and turning it on has to be expressible
+// in values.yaml alone, because the alternative for the deployment that needs it
+// is an out-of-band env var nothing in this repository can see.
+func TestTheChartRendersTheMintEndpointAtTheBinarysDefaults(t *testing.T) {
+	data := renderedConfigMap(t)
+
+	for _, env := range []string{
+		"VAULT_MINT_ENABLED", "VAULT_MINT_AUDIENCE", "VAULT_MINT_TOKEN_TTL",
+		"VAULT_MINT_MAX_TTL", "VAULT_MINT_ROLES", "VAULT_MINT_SCOPES",
+	} {
+		got, rendered := data[env]
+		if !rendered {
+			t.Errorf("the default render sets no %s. /mint needs all six together: the switch "+
+				"without the audience refuses to boot, and the switch without the allow-lists "+
+				"mounts a signing oracle that grants nothing.", env)
+			continue
+		}
+		// VAULT_MINT_AUDIENCE is the one of the six internal/config reads
+		// through a bare os.Getenv, so binaryDefault states nothing about it.
+		// Unset is still its default, and it has to stay unset: an audience the
+		// chart invented would be one the operator never agreed to mint for.
+		if env == "VAULT_MINT_AUDIENCE" {
+			if got != "" {
+				t.Errorf("the default render sets %s to %q. /mint is off by default, so the "+
+					"chart is naming an audience for an endpoint nobody enabled.", env, got)
+			}
+			continue
+		}
+		want, known := binaryDefault(t, env)
+		if !known {
+			t.Errorf("internal/config no longer reads %s in a form this gate can take a default "+
+				"from, so the claim that the chart ships the binary's own default is unchecked", env)
+			continue
+		}
+		if !sameSetting(t, want, got) {
+			t.Errorf("the default render sets %s to %q; the binary's own default is %q. A chart "+
+				"default that is not the binary's default changes what an existing release does "+
+				"on upgrade, for an endpoint nobody asked to turn on.", env, got, want.text)
+		}
+	}
+}
+
+// The other half: a deployment that does want /mint can say so in values.yaml
+// and nowhere else.
+func TestTheChartCanTurnTheMintEndpointOn(t *testing.T) {
+	data := renderedConfigMap(t, mintValues...)
+
+	for env, want := range map[string]string{
+		"VAULT_MINT_ENABLED":  "true",
+		"VAULT_MINT_AUDIENCE": "https://beon3.example",
+		"VAULT_MINT_ROLES":    "service,beon3:coach",
+		"VAULT_MINT_SCOPES":   "profile:read",
+	} {
+		if got := data[env]; got != want {
+			t.Errorf("with /mint enabled through values the ConfigMap sets %s to %q, want %q. "+
+				"The value does not reach the rendered environment, so the endpoint stays "+
+				"unreachable however the operator configures the release.", env, got, want)
+		}
+	}
+}
+
+// Both refusals Config.Validate makes about the mint audience, moved to render
+// time. A chart that can render either of these ships an install whose failure
+// mode is a CrashLoopBackOff with the reason one line deep in the pod log.
+func TestTheChartRefusesAMintAudienceThatWillNotBoot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sets []string
+		want string
+	}{
+		{
+			name: "no audience",
+			sets: []string{"--set", "mint.enabled=true"},
+			want: "mint.audience",
+		},
+		{
+			name: "audience equal to origin",
+			sets: []string{"--set", "mint.enabled=true", "--set", "mint.audience=https://auth.example.com"},
+			want: "mint.audience equals origin",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stderr, err := helmTemplate(t, tc.sets...)
+			if err == nil {
+				t.Fatal("helm rendered a release whose vault42 refuses to start. Config.Validate " +
+					"checks the mint audience ahead of the dev short-circuit, so this is a " +
+					"CrashLoopBackOff in every profile, not a production-only one.")
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("the render failure does not name %q, so the operator is told the "+
+					"install failed and not which value to change:\n%s", tc.want, stderr)
+			}
+		})
+	}
+}
+
+// A gate an escape hatch can satisfy certifies nothing.
+//
+// Every assertion in this file is "the chart puts this name in the pod's
+// environment". A values key that splices an arbitrary env list into the
+// workload would satisfy all of them at once, from a chart that reaches no
+// setting in particular -- and it would also make the reasons in
+// chartUnexposedSwitches false, because a switch the chart declines to offer
+// would be one --set away.
+func TestTheChartOffersNoRawEnvironmentPassthrough(t *testing.T) {
+	root := repoRoot(t)
+	hatches := regexp.MustCompile(`(?i)\bextra_?env|\benv_?vars\b|\badditional_?env`)
+
+	for _, dir := range []string{filepath.Join(root, chartDir), filepath.Join(root, chartDir, "templates")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			if _, known := commentSyntaxFor(path); !known {
+				continue
+			}
+			if match := hatches.FindString(commentFreeSource(t, path)); match != "" {
+				t.Errorf("%s offers %q. An operator can then put any name in the pod's "+
+					"environment from values.yaml, which satisfies every wiring assertion in "+
+					"this file without the chart reaching a single setting, and turns each "+
+					"reason in chartUnexposedSwitches into a claim the chart does not keep.",
+					filepath.Join(chartDir, entry.Name()), match)
+			}
+		}
+	}
+}
+
+// renderedConfigMap renders the chart and returns the data of the vault's own
+// ConfigMap. An absent key and a key set to the empty string are different
+// answers -- the first is a setting the chart cannot reach -- so this returns
+// the map rather than a lookup.
+func renderedConfigMap(t *testing.T, extra ...string) map[string]string {
+	t.Helper()
+
+	stdout, stderr, err := helmTemplate(t, extra...)
+	if err != nil {
+		t.Fatalf("helm template %v failed: %v\n%s", extra, err, stderr)
+	}
+
+	decoder := yaml.NewDecoder(strings.NewReader(stdout))
+	for {
+		var doc map[string]any
+		if err := decoder.Decode(&doc); err != nil {
+			break
+		}
+		if kind, _ := doc["kind"].(string); kind != "ConfigMap" {
+			continue
+		}
+		if name, _ := mapAt(doc, "metadata")["name"].(string); strings.HasSuffix(name, "-honeypot") {
+			continue
+		}
+		data := make(map[string]string)
+		for key, value := range mapAt(doc, "data") {
+			if s, ok := value.(string); ok {
+				data[key] = s
+			}
+		}
+		return data
+	}
+	t.Fatal("the render produced no ConfigMap for the vault itself")
+	return nil
 }
 
 // renderedConfigMapValue renders the chart and returns one key from the vault's

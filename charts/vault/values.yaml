@@ -199,6 +199,44 @@ strictSessionLimit: false
 # link-local range cloud instance metadata answers on stays refused either way.
 outboundAllowPrivate: false
 
+# ---- Delegated signing (POST /mint) ----
+# The endpoint signs a token for a subject vault42 never authenticated, on the
+# word of the calling service. Anyone holding the mint credential can therefore
+# speak as any subject to everything that trusts the JWKS, and a verifier cannot
+# tell a minted token from a real one by its signature. Enabling it is a trust
+# decision about the caller, not a feature toggle -- see docs/security.md.
+#
+# Every value below is the binary's own default, so a release that does not set
+# mint.enabled is unchanged by this block existing. The four settings beside the
+# switch are rendered with it because none of them works alone: without an
+# audience the process refuses to start, and with empty allow-lists the endpoint
+# mounts and grants nothing.
+mint:
+  # -- Mount POST /mint (VAULT_MINT_ENABLED). Off by default, matching the
+  # binary. When false the route is not registered at all.
+  enabled: false
+  # -- The aud claim stamped on minted tokens (VAULT_MINT_AUDIENCE). Required
+  # once enabled, and it MUST differ from origin: a minted token carrying
+  # vault42's own audience authenticates against vault42. The chart refuses to
+  # render on either mistake rather than letting the pod crash-loop over it.
+  audience: ""
+  # -- Lifetime of a minted token when the caller names none
+  # (VAULT_MINT_TOKEN_TTL). Minted tokens cannot be revoked, so the lifetime is
+  # the only bound on a leaked one.
+  tokenTTL: "5m"
+  # -- Ceiling on a caller-requested lifetime (VAULT_MINT_MAX_TTL), itself
+  # capped at 15m in code. A request above the ceiling is refused, not clamped,
+  # so a misconfigured caller is visible rather than silently downgraded.
+  maxTTL: "5m"
+  # -- Roles a minted token may carry (VAULT_MINT_ROLES), rendered comma-joined.
+  # Empty means no role may be minted, which is the safe failure and the
+  # default. Admin-reserved names are refused at startup regardless.
+  allowedRoles: []
+  # -- Scopes a minted token may carry (VAULT_MINT_SCOPES), rendered
+  # comma-joined. Empty means no scope may be minted. Capability scopes such as
+  # kms:unwrap and mint:token are refused regardless of what is listed here.
+  allowedScopes: []
+
 # -- Email sender address
 emailFrom: "noreply@example.com"
 
