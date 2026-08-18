@@ -66,7 +66,12 @@ func RedirectPath(path string) string {
 	// off the origin. The rest of C0, DEL, C1 and the Unicode line separators go
 	// with them rather than trusting every downstream parser to agree about which
 	// of them are stripped, which are rejected, and which pass through.
-	if strings.ContainsFunc(path, isURLControl) {
+	//
+	// Invalid UTF-8 is the other way a C1 byte arrives. A lone 0x85 is NEL in
+	// Latin-1, but strings.ContainsFunc walks runes and turns that byte into
+	// U+FFFD, so isURLControl would miss it. Downstream URL consumers do not
+	// agree on that byte any more than they agree on \n.
+	if !utf8.ValidString(path) || strings.ContainsFunc(path, isURLControl) {
 		return ""
 	}
 	// A dot segment means one thing to a consumer that normalizes ("/..//evil.com"
