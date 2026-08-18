@@ -1,7 +1,6 @@
 package compliance
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/base64"
@@ -10,11 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
-	"github.com/42-v/vault42/internal/middleware"
 )
 
 // =============================================================================
@@ -594,45 +591,64 @@ func TestNIST_PasswordMinLengthDefault(t *testing.T) {
 
 // --- Section 3.2.2: Rate Limiting / Account Lockout ---
 
+// TestNIST_AccountLockoutFunction measures the §3.2.2 bound on the login path
+// rather than on a helper.
+//
+// NIST SP 800-63B-4 §3.2.2: "Verifiers SHALL limit consecutive failed
+// authentication attempts on a single account to no more than 100."
+//
+// The number that has to stay under 100 is the AGGREGATE across every source an
+// attacker can use, not the number one address gets. Vault runs two counters: a
+// single address is cut off at a low limit, and the account itself at a higher
+// one no single address can reach. This test measures both and states the trade
+// between them, because that trade is the security-relevant change of this
+// release and it was asserted nowhere: the aggregate budget against one account
+// rose tenfold, in exchange for removing a denial of service that cost a handful
+// of requests and no credential at all.
+//
+// Until this rewrite the assertion handed middleware.CheckAccountLockout a
+// threshold of 5, incremented that helper's own counter six times, and observed
+// that six exceeds five. Nothing in the deployment called the helper, and after
+// the lockout was rekeyed on the source address it no longer described the same
+// scheme. Neither number below is supplied by the test.
 func TestNIST_AccountLockoutFunction(t *testing.T) {
-	// NIST SP 800-63B-4 §3.2.2: "Verifiers SHALL limit consecutive failed authentication
-	// attempts on a single account to no more than 100."
-	// Vault uses CheckAccountLockout with a configurable threshold.
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
+	perSource := perSourceAttemptLimit(t, perSourceSearchCeiling)
+	account := accountWideAttemptLimit(t, nistConsecutiveFailureCeiling)
 
-	ctx := context.Background()
-	threshold := 5 // test with low threshold
-	lockDuration := time.Minute
-
-	// Attempts below threshold should not trigger lockout
-	for i := 0; i < threshold; i++ {
-		locked, err := middleware.CheckAccountLockout(ctx, mc, "user-test", threshold, lockDuration)
-		if err != nil {
-			t.Fatalf("CheckAccountLockout failed: %v", err)
-		}
-		if locked {
-			t.Fatalf("Account should not be locked after %d attempts (threshold %d)", i+1, threshold)
-		}
+	// §3.2.2 proper. The ceiling applies to the aggregate budget, not to the
+	// per-address one.
+	if account > nistConsecutiveFailureCeiling {
+		t.Errorf("NIST 800-63B-4 3.2.2: an account absorbs %d consecutive failures across rotating "+
+			"source addresses before locking; the limit is %d", account, nistConsecutiveFailureCeiling)
 	}
 
-	// Next attempt should trigger lockout
-	locked, err := middleware.CheckAccountLockout(ctx, mc, "user-test", threshold, lockDuration)
-	if err != nil {
-		t.Fatalf("CheckAccountLockout failed: %v", err)
-	}
-	if !locked {
-		t.Fatal("Account should be locked after exceeding threshold")
+	// A limit is only a limit if it can be reached. Zero would lock an account
+	// on a single mistyped password.
+	if perSource < 1 {
+		t.Errorf("NIST 800-63B-4 3.2.2: one source gets %d attempts; below one, a typo locks an account",
+			perSource)
 	}
 
-	// Different user should not be affected
-	locked, err = middleware.CheckAccountLockout(ctx, mc, "other-user", threshold, lockDuration)
-	if err != nil {
-		t.Fatalf("CheckAccountLockout failed: %v", err)
+	// The two-counter shape itself. If the per-source limit ever meets the
+	// account-wide one, the second counter has stopped doing anything and a
+	// handful of requests from one address again denies an account to its owner
+	// — the exact denial of service the split was made to remove.
+	if perSource >= account {
+		t.Errorf("NIST 800-63B-4 3.2.2: the per-source limit (%d) is not below the account-wide limit "+
+			"(%d), so the account-wide counter has no effect and one address can lock an account outright",
+			perSource, account)
 	}
-	if locked {
-		t.Fatal("Different user should not be locked")
+
+	// The ratio is the published trade, and it is worth failing on if it moves
+	// quietly: an attacker needs at least account/perSource distinct addresses
+	// to spend the whole budget.
+	if account/perSource < 2 {
+		t.Errorf("NIST 800-63B-4 3.2.2: %d/%d means fewer than two distinct source addresses are needed "+
+			"to exhaust an account's entire failure budget", account, perSource)
 	}
+	t.Logf("measured: %d consecutive failures per source address, %d per account across all sources "+
+		"(NIST ceiling %d); at least %d distinct addresses are needed to spend the account budget",
+		perSource, account, nistConsecutiveFailureCeiling, account/perSource)
 }
 
 // --- Section 3.1.1.2: Master Key Requirements ---
