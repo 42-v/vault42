@@ -254,10 +254,10 @@ ingress:
   enabled: false
   # -- Ingress class name
   className: ""
-  # -- Ingress annotations
+  # -- Ingress annotations. Examples:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/ssl-redirect: "true"
   annotations: {}
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   # -- Ingress hosts
   hosts:
     - host: auth.example.com
