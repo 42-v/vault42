@@ -95,7 +95,13 @@ func TestASVS_V14_3_2_ResponsesCarryNoStore(t *testing.T) {
 func TestASVS_V14_3_2_OnlyPublicMetadataIsCacheable(t *testing.T) {
 	src := readProductionSource(t, "internal/handler/wellknown.go")
 	if !strings.Contains(src, "public, max-age=") {
-		t.Skip("V14.3.2: the well-known handler no longer sets a public cache policy")
+		// Skipping here would retire the exception and the rule with it: the
+		// loop below is what keeps the public cache policy confined to the
+		// metadata handler, and it would never run.
+		t.Fatalf("V14.3.2: internal/handler/wellknown.go no longer sets a public cache policy, so " +
+			"the premise of the confinement check below is gone and the check would pass without " +
+			"running. Re-derive this test against wherever the cacheable metadata now lives, or " +
+			"delete it if nothing is cacheable any more.")
 	}
 	// The exception must stay confined to the metadata handler.
 	for _, handler := range []string{"internal/handler/user.go", "internal/handler/identity.go", "internal/handler/data_export.go"} {

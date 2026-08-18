@@ -251,11 +251,8 @@ func metricsIngressRule(t *testing.T, docs []map[string]any) map[string]any {
 // which is the configuration this whole chain exists for.
 func renderWithMetrics(t *testing.T, extra ...string) []map[string]any {
 	t.Helper()
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm is not on PATH, so the rendered manifests cannot be produced. " +
-			"Install helm, or add azure/setup-helm to the job, to run this gate.")
-	}
+	helm := requireTool(t, "helm",
+		"the rendered manifests cannot be produced and the metrics-listener fencing goes unasserted")
 
 	cmd := exec.Command(helm, // #nosec G204 -- fixed args over paths inside this repo
 		"template", "release", chartDir,

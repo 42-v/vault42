@@ -930,3 +930,238 @@ func migrationReads(fn *ast.FuncDecl, strConsts map[string]string) ([]string, bo
 	sort.Strings(out)
 	return out, wholeDir
 }
+
+// --- 6. A skipped test reports success --------------------------------------
+//
+// A skip and a pass print the same color. `go test` reports `ok` for a package
+// whose every assertion skipped, so a gate that retires itself at runtime is
+// strictly worse than one that was deleted: the deleted one is missing from the
+// report and this one is not.
+//
+// This is not hypothetical here. Seven chart assertions in tests/spec skipped
+// for an entire release because no CI job installed helm, and it was found by
+// somebody counting [no tests to run] lines rather than by anything going red.
+// The two shapes that produce it:
+//
+//   - a precondition the environment may not meet (a tool, a container runtime,
+//     a fetched tag), which is legitimate locally and must never be legitimate
+//     on a runner; and
+//   - a structural gate that skips when its needle moves, which retires the
+//     control at exactly the moment the code it guards was restructured.
+//
+// The second shape has no legitimate instance: if a gate can no longer find
+// what it watches, the claim it evidences is unevidenced, and that is a
+// failure. The rule below is therefore that every skip is registered with an
+// argument, and the registry is a ratchet in both directions.
+
+// skipCalls are the ways a Go test retires itself at runtime.
+var skipCalls = map[string]struct{}{"Skip": {}, "Skipf": {}, "SkipNow": {}}
+
+// skipRule is one registered skip.
+type skipRule struct {
+	// reason is why this skip is not the silent-retirement defect. An entry
+	// without one is indistinguishable from an oversight and fails.
+	reason string
+	// ciStrictPredicate, when set, names the function whose result decides that
+	// the same condition is fatal rather than skippable on a CI runner. The
+	// entry then has to prove it: the enclosing function must call that
+	// predicate and must contain a failure call, so "impossible in CI" is a
+	// property of the code and not of this comment.
+	ciStrictPredicate string
+}
+
+// skipsByDesign registers every skip in the gate corpora, keyed by
+// "<repo-relative file>:<enclosing function>".
+//
+// Keyed by function rather than by line so that editing the file above a skip
+// does not turn an argument stale, and by file as well as name because the
+// three suites are separate packages that may reuse a helper name.
+//
+// Every entry is a hole in the check below, exactly as with failOpenByDesign in
+// tests/spec/ratelimit_failclosed_test.go and assertionFreeByDesign above, and
+// TestGateLiveness_NoStaleSkipExemption removes an entry the moment its skip
+// stops existing. The list may only shrink.
+var skipsByDesign = map[string]skipRule{
+	"tests/spec/citool_test.go:requireTool": {
+		reason: "the one place this suite resolves an external renderer. Locally a missing helm " +
+			"skips, so `go test ./...` stays runnable without a Kubernetes toolchain; on a runner " +
+			"it is fatal, because the job exists to run the gate and a skip there is the defect " +
+			"this whole check is about",
+		ciStrictPredicate: "runningInCI",
+	},
+	"tests/spec/chart_immutable_selector_test.go:lastReleaseTag": {
+		reason: "the previously released chart is rendered from the last reachable tag, and a " +
+			"clone with no tags cannot produce one. NOT ci-strict, and that is a known gap rather " +
+			"than an argument: ci.yml's Tests job checks out at the default depth, which fetches " +
+			"no tags, so this gate does not run on a pull request. Making it fatal would turn a " +
+			"silent skip into a red CI on work that did not cause it; the fix is fetch-depth: 0 " +
+			"on that checkout, which is a workflow change with its own owner",
+	},
+	"tests/attack/atk_crypto_argon2_pressure_test.go:TestArgon2Attack_MeasureQueueingUnderFlood": {
+		reason: "a latency measurement. Under -race every duration is instrumentation, and -short " +
+			"exists to skip exactly this; both conditions are the runner's own declaration that " +
+			"wall-clock numbers are meaningless in it",
+	},
+	"tests/attack/atk_crypto_argon2_pressure_test.go:TestArgon2Attack_MeasureUserExistsTimingGap": {
+		reason: "a timing measurement, skipped under -race and -short for the same reason. It " +
+			"carries a 5% threshold that has been observed to flake at 6.29% on a loaded runner, " +
+			"which is why it may not run where the timings are not trustworthy",
+	},
+	"tests/attack/atk_crypto_dpop_totp_test.go:TestTOTPAttack_MeasureValidationTimingGap": {
+		reason: "a timing measurement, meaningless under -race and skipped in -short",
+	},
+	"tests/attack/atk_crypto_dpop_totp_test.go:TestTOTPAttack_MeasureLengthMismatchTiming": {
+		reason: "a timing measurement, meaningless under -race and skipped in -short. Also in " +
+			"assertionFreeByDesign, with the argument for why it asserts nothing",
+	},
+	"tests/attack/totp_replay_test.go:TestTOTPWrongCode": {
+		reason: "the wrong-code path is driven with random six-digit codes, and roughly one in a " +
+			"million is the right one. Skipping the coincidence is correct: asserting a rejection " +
+			"on a code that is genuinely valid would be asserting the wrong behavior",
+	},
+}
+
+// skipSite is one Skip call found in the gate corpora.
+type skipSite struct {
+	key      string // "<repo-relative file>:<enclosing function>"
+	file     string
+	fn       string
+	line     int
+	fails    bool                // the enclosing function can also fail
+	idents   map[string]struct{} // every identifier the enclosing function names
+	inCorpus string
+}
+
+// TestGateLiveness_NoGateRetiresItselfWithAnUnregisteredSkip is the check the
+// helm outage would have failed. A skip with no entry here is a control that
+// switched itself off, and `go test` said `ok`.
+func TestGateLiveness_NoGateRetiresItselfWithAnUnregisteredSkip(t *testing.T) {
+	for _, site := range skipSites(t) {
+		rule, registered := skipsByDesign[site.key]
+		if !registered {
+			t.Errorf("%s:%d in %s skips, and no entry in skipsByDesign says why. A skipped test "+
+				"prints the same `ok` as one that ran, so this control is off and the report says "+
+				"it is on. Either fail instead of skipping — which is the right answer whenever a "+
+				"structural gate can no longer find what it watches — or add %q to skipsByDesign "+
+				"with the argument for why the skip is not a silent retirement.",
+				site.file, site.line, site.fn, site.key)
+			continue
+		}
+		if strings.TrimSpace(rule.reason) == "" {
+			t.Errorf("skipsByDesign[%q] carries no reason. An exemption without one is "+
+				"indistinguishable from an oversight.", site.key)
+		}
+		if rule.ciStrictPredicate == "" {
+			continue
+		}
+		// "Impossible in CI" is a claim about the code, so the code has to
+		// carry it: the same function must consult the predicate and must have
+		// a way to fail. Deleting either half is what turns a CI-mandatory
+		// tool back into a silent local convenience everywhere.
+		if _, consults := site.idents[rule.ciStrictPredicate]; !consults {
+			t.Errorf("skipsByDesign[%q] claims the skip is impossible in CI via %s, but %s never "+
+				"calls it. The exemption rests on a predicate the code does not consult.",
+				site.key, rule.ciStrictPredicate, site.fn)
+		}
+		if !site.fails {
+			t.Errorf("skipsByDesign[%q] claims the skip is impossible in CI, but %s contains no "+
+				"t.Fatal, t.Error or t.Fail of any kind, so there is no branch in which the "+
+				"missing precondition is a failure. On a runner it would skip exactly as it does "+
+				"locally.", site.key, site.fn)
+		}
+	}
+}
+
+// TestGateLiveness_NoStaleSkipExemption deletes an entry whose skip is gone, so
+// an argument written for one skip cannot be inherited by the next one to take
+// the name. It is also this file's floor: a scan that walked nothing reports
+// every entry as stale rather than reporting nothing at all.
+func TestGateLiveness_NoStaleSkipExemption(t *testing.T) {
+	present := map[string]struct{}{}
+	for _, site := range skipSites(t) {
+		present[site.key] = struct{}{}
+	}
+	for key, rule := range skipsByDesign {
+		if _, ok := present[key]; !ok {
+			t.Errorf("skipsByDesign names %q, which no longer skips. Remove the entry: the list "+
+				"may only shrink, and an argument left behind is one a future skip inherits "+
+				"without making it. (Reason on file: %s)", key, rule.reason)
+		}
+	}
+}
+
+// skipSites walks the gate corpora and returns every Skip call in them, with
+// the enclosing top-level function rather than the closure, so a skip inside a
+// t.Run body is attributed to the test that owns it.
+func skipSites(t *testing.T) []skipSite {
+	t.Helper()
+	root := repoRoot(t)
+
+	var out []skipSite
+	var files int
+	for _, corpus := range gateCorpora {
+		dir := filepath.Join(root, corpus)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", corpus, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			files++
+			path := filepath.Join(dir, entry.Name())
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", entry.Name(), err)
+			}
+			rel := filepath.ToSlash(filepath.Join(corpus, entry.Name()))
+
+			for _, decl := range parsed.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				var skips []int
+				fails := false
+				idents := map[string]struct{}{}
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					switch node := n.(type) {
+					case *ast.Ident:
+						idents[node.Name] = struct{}{}
+					case *ast.CallExpr:
+						name := callName(node)
+						if _, isSkip := skipCalls[name]; isSkip {
+							skips = append(skips, fset.Position(node.Pos()).Line)
+						}
+						if _, isFailure := failureCalls[name]; isFailure {
+							fails = true
+						}
+					}
+					return true
+				})
+				for _, line := range skips {
+					out = append(out, skipSite{
+						key:      rel + ":" + fn.Name.Name,
+						file:     rel,
+						fn:       fn.Name.Name,
+						line:     line,
+						fails:    fails,
+						idents:   idents,
+						inCorpus: corpus,
+					})
+				}
+			}
+		}
+	}
+
+	// The corpora are three whole suites. A walk that came back with a handful
+	// of files did not find them, and every check above would then be vacuous
+	// in precisely the way this file exists to detect.
+	if files < 100 {
+		t.Fatalf("only %d test files walked across %v; this gate's own corpus is broken, so every "+
+			"skip in the tree would read as absent", files, gateCorpora)
+	}
+	return out
+}

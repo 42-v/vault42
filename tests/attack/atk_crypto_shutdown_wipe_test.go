@@ -182,7 +182,13 @@ func TestShutdownAttack_StartNeverWaitsForTheDrain(t *testing.T) {
 	})
 
 	if !shutdownInGoroutine {
-		t.Skip("Start no longer calls Shutdown from a goroutine; this finding may be fixed differently")
+		// The join assertion below is the whole test. Skipping when the shape
+		// changes retires it silently at the one moment somebody was editing
+		// the shutdown path, which is when it is worth running.
+		t.Fatalf("(*Server).Start no longer calls httpSrv.Shutdown from a goroutine, so the " +
+			"unjoined-drain finding this test watches for cannot be expressed in its current " +
+			"terms. Re-derive it against the new shutdown path, or delete it and the register " +
+			"row that cites it.")
 	}
 	if len(joins) == 0 {
 		t.Errorf("(*Server).Start calls httpSrv.Shutdown in a goroutine and never joins it: " +

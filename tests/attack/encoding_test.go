@@ -197,7 +197,7 @@ func TestEncoding_TruncatedToken(t *testing.T) {
 		return &key.PublicKey, nil
 	}
 
-	tokenStr, _ := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
+	tokenStr, err := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
 		RegisteredClaims: vjwt.RegisteredClaims{
 			Subject:   "user-123",
 			Issuer:    "test",
@@ -206,6 +206,9 @@ func TestEncoding_TruncatedToken(t *testing.T) {
 			IssuedAt:  vjwt.NewNumericDate(time.Now()),
 		},
 	}, key, kid)
+	if err != nil {
+		t.Fatalf("sign the token this test truncates: %v", err)
+	}
 
 	// Truncate at various points
 	truncations := []struct {
@@ -220,8 +223,12 @@ func TestEncoding_TruncatedToken(t *testing.T) {
 
 	for _, tt := range truncations {
 		t.Run(tt.name, func(t *testing.T) {
+			// A truncation point outside the token means the token is not the
+			// length this table assumed. Skipping would retire every case at
+			// once: an unsigned, empty tokenStr skips all four and prints ok.
 			if tt.at <= 0 || tt.at >= len(tokenStr) {
-				t.Skip("Invalid truncation point")
+				t.Fatalf("truncation point %d is outside a %d-byte token, so nothing was "+
+					"truncated and the rejection below would not be exercised", tt.at, len(tokenStr))
 			}
 			truncated := tokenStr[:tt.at]
 			_, err := vaultcrypto.ParseAndValidate(truncated, keyFunc, "test", "test")

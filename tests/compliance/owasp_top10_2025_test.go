@@ -529,11 +529,12 @@ func functionStringParams(pkg []parsedFile) map[string][]stringParam {
 // because the result is a placeholder; building "WHERE x = %s" is the bug. The
 // distinction is the verb, so the verb is what gets checked.
 func TestOWASP_A05_2025_SprintfIntoSQLEmitsPlaceholdersOnly(t *testing.T) {
-	inspected := 0
+	inspected, scanned := 0, 0
 	for _, pf := range productionGoFiles(t) {
 		if !strings.Contains(pf.path, "repository") {
 			continue
 		}
+		scanned++
 		ast.Inspect(pf.file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) == 0 || callName(call) != "Sprintf" {
@@ -551,10 +552,15 @@ func TestOWASP_A05_2025_SprintfIntoSQLEmitsPlaceholdersOnly(t *testing.T) {
 		})
 	}
 
-	if inspected == 0 {
-		t.Skip("A05:2025: no Sprintf-built SQL fragment remains in the repository layer")
+	// Zero Sprintf-built fragments is a legitimate and better state, so it is
+	// not a failure. Zero *files* is not: it means the path filter stopped
+	// matching the repository layer, and then the scan above asserted nothing
+	// while reporting the same green.
+	if scanned == 0 {
+		t.Fatalf("A05:2025: no production file matched the repository layer, so this scan " +
+			"inspected nothing and would report success whatever the queries do")
 	}
-	t.Logf("A05:2025: %d Sprintf-built SQL fragments inspected, all placeholder-only", inspected)
+	t.Logf("A05:2025: %d repository files scanned, %d Sprintf-built SQL fragments inspected, all placeholder-only", scanned, inspected)
 }
 
 // packageStringConsts returns the names of package-level constants declared in
@@ -665,7 +671,12 @@ func TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse(t *testing.T) {
 func TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance(t *testing.T) {
 	release := workflowSource(t, "release.yml")
 	if release == "" {
-		t.Skip("A03:2025: .github/workflows/release.yml is not present in this checkout")
+		// The register cites this test as the evidence that the release
+		// pipeline signs what it publishes. Without the workflow there is no
+		// evidence, and a skip would leave the row green anyway.
+		t.Fatalf("A03:2025: .github/workflows/release.yml is unreadable, so every provenance and " +
+			"signing assertion below would be skipped and the register row would stay Met with " +
+			"nothing behind it")
 	}
 
 	for _, c := range []struct{ needle, artifact string }{
@@ -688,7 +699,8 @@ func TestOWASP_A03_2025_WorkflowActionsArePinnedToCommitSHAs(t *testing.T) {
 	dir := filepath.Join(repoRoot(t), ".github", "workflows")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Skipf("A03:2025: no workflow directory in this checkout: %v", err)
+		t.Fatalf("A03:2025: .github/workflows is unreadable (%v), so no action reference is "+
+			"checked for SHA pinning and this gate would report the same green as a clean scan", err)
 	}
 
 	uses := regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*([^\s#]+)`)
@@ -718,8 +730,12 @@ func TestOWASP_A03_2025_WorkflowActionsArePinnedToCommitSHAs(t *testing.T) {
 		}
 	}
 
+	// Every workflow in this repository uses third-party actions. Zero means
+	// the `uses:` pattern stopped matching, not that the supply chain shrank,
+	// and a skip would hide an unpinned action rather than report one.
 	if checked == 0 {
-		t.Skip("A03:2025: no third-party action references found")
+		t.Fatalf("A03:2025: no third-party action reference matched in %d workflow files, so "+
+			"nothing was checked for SHA pinning", len(entries))
 	}
 	t.Logf("A03:2025: %d third-party action references inspected, all SHA-pinned", checked)
 }
@@ -786,7 +802,12 @@ func TestOWASP_A09_2025_RiskScoreIsStillWriteOnly(t *testing.T) {
 	filterSrc := readProductionSource(t, "internal/repository/repository.go")
 	idx := strings.Index(filterSrc, "type AuditFilter struct")
 	if idx < 0 {
-		t.Skip("A09:2025: AuditFilter has moved; re-derive CR-15 against the new query surface")
+		// CR-15 is an accepted risk with a named revisit condition, and this
+		// test is the thing that watches for it. Skipping on a moved type
+		// retires the watch and leaves the accepted risk unreviewed.
+		t.Fatalf("A09:2025: AuditFilter is no longer declared in internal/repository/repository.go, " +
+			"so the CR-15 revisit condition is watched by nothing. Re-derive this test against the " +
+			"new query surface.")
 	}
 	filter := filterSrc[idx:]
 	if end := strings.Index(filter, "\n}"); end > 0 {

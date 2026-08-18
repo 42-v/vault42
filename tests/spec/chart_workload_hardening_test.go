@@ -525,13 +525,9 @@ func renderedWorkloads(t *testing.T) []workload {
 	if renderedCache != nil {
 		return renderedCache
 	}
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm is not on PATH, so the rendered manifests cannot be produced. " +
-			"TestEveryPodTemplateTakesItsSecurityContextFromOneOfTwoPlaces covers the " +
-			"same ground from the templates; install helm, or add azure/setup-helm to " +
-			"the job, to run the full gate.")
-	}
+	helm := requireTool(t, "helm",
+		"the rendered manifests cannot be produced and only the template-level half of the "+
+			"workload-hardening gate runs (TestEveryPodTemplateTakesItsSecurityContextFromOneOfTwoPlaces)")
 
 	root := repoRoot(t)
 	var all []workload

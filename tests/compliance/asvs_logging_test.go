@@ -965,7 +965,12 @@ func TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse(t *testing.T) {
 func TestASVS_V16_5_3_CriticalAuditEventsAreExemptFromBufferDrop(t *testing.T) {
 	src := readProductionSource(t, "internal/audit/audit.go")
 	if !strings.Contains(src, "audit buffer full") {
-		t.Skip("V16.5.3: the buffered audit path has been restructured; re-derive this assertion")
+		// The two assertions below are the control. A skip on a moved needle
+		// retires them at the exact moment the audit buffer was restructured,
+		// which is when they are most worth running.
+		t.Fatalf("V16.5.3: internal/audit/audit.go no longer contains the buffer-full drop path " +
+			"this requirement is evidenced against, so the critical-event exemption and the drop " +
+			"counter below would go unasserted. Re-derive both against the restructured path.")
 	}
 	if !strings.Contains(src, "isCriticalEvent") {
 		t.Fatal("V16.5.3: the audit buffer drops events with no critical-event exemption; security records become losable under load")
