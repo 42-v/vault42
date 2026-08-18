@@ -489,6 +489,63 @@ is skipped at startup.
 | `VAULT_OIDC_<NAME>_CLIENT_SECRET_FILE` | string | *(none)* | Conditional | Path to file containing the client secret. There is no inline `VAULT_OIDC_<NAME>_CLIENT_SECRET` variable; only the `_FILE` form is read. |
 | `VAULT_OIDC_<NAME>_SCOPES` | string | `openid email profile` | No | Space-separated scopes to request. |
 
+### Outbound destinations
+
+Almost every outbound call vault42 makes has a destination settled before the
+process starts. SendGrid, the HIBP range API and the Google, GitHub and Facebook
+endpoints are literals compiled into the binary; the SMTP relay and each OIDC
+issuer are operator configuration. None of those can be pointed anywhere by a
+request.
+
+Four can. `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` and
+`jwks_uri` come out of the issuer's discovery document, which is data fetched
+over the network. A provider that is compromised, or a self-hosted one behind a
+misconfigured proxy, names the host vault42 then posts its client secret to, and
+the host whose keys every `id_token` signature is checked against.
+
+The rule that applies to those four needs no configuration and has no off
+switch: **an endpoint must be under the issuer's own domain**, be a loopback
+destination, or be a host the operator named below. That is the boundary an
+operator actually drew when they configured the issuer -- they chose the
+provider, not the provider's opinion about where its keys live.
+
+A refused endpoint fails the login attempt that needed it, and the refusal names
+both the host and the variable that permits it. Failing open would mean the
+check is not a check.
+
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `VAULT_OUTBOUND_ALLOWED_HOSTS` | string | *(none)* | No | Comma-separated hosts a discovery document may name in addition to the issuer's own domain. Compared case-insensitively and exactly: a listed host admits that host and not its subdomains. Each entry logs a `SECURITY WARNING` at startup. |
+| `VAULT_OUTBOUND_ALLOW_PRIVATE` | bool | `true` in `dev`, `false` elsewhere | No | Permit outbound calls that resolve to loopback, RFC 1918, IPv6 unique-local or RFC 6598 (carrier-grade NAT) addresses. Needed when an identity provider runs inside the deployment: a Keycloak pod on a cluster service address is a private address. Logs a `SECURITY WARNING` outside the dev profile. |
+
+Addresses are judged at dial time, against what the name resolved to, so a
+provider hostname that resolves into the deployment is refused whether that
+resolution was a mistake or a rebinding answer, and a redirect is judged on the
+same terms as the endpoint it came from.
+
+The link-local range (`169.254.0.0/16`, `fe80::/10`), where every major cloud
+answers instance metadata, is refused regardless of either setting. No identity
+provider runs there.
+
+**When a provider legitimately spans domains.** Google's OIDC issuer is
+`accounts.google.com` while it serves its keys from `www.googleapis.com`, which
+is not even the same registrable domain. Registering it as a generic OIDC
+provider therefore needs:
+
+```bash
+export VAULT_OUTBOUND_ALLOWED_HOSTS=www.googleapis.com,oauth2.googleapis.com
+```
+
+The built-in `google` provider is unaffected: its endpoints are literals in the
+binary, not values read out of a document.
+
+**Upgrade note.** A deployment whose OIDC issuer is inside its own network --
+a Keycloak or Authentik pod reached on a cluster address -- needs
+`VAULT_OUTBOUND_ALLOW_PRIVATE=true` from this release forward. Without it the
+first discovery fetch is refused, the refusal names the address and the
+variable, and social login through that provider stops. Nothing else changes:
+the process still starts and every other route is unaffected.
+
 ### WebAuthn
 
 WebAuthn/FIDO2 passkey configuration is derived from other settings rather than having its own env vars:

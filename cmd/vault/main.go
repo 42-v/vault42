@@ -29,6 +29,7 @@ import (
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/oauth2"
+	"github.com/42-v/vault42/internal/outbound"
 	"github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/seed"
 	"github.com/42-v/vault42/internal/server"
@@ -556,11 +557,21 @@ func main() {
 		)
 	}
 	// Generic OpenID Connect providers (Okta, Auth0, Keycloak, Entra, …).
+	//
+	// These are the only providers that take a destination from data: the four
+	// endpoints their discovery document names. The others reach compiled-in
+	// literals. outbound.Policy holds those four to the issuer's own domain
+	// with no configuration at all; what the deployment supplies here is the
+	// operator's widenings of it, and the dial-time address check that a
+	// transport is the only place to put.
+	outboundPolicy := outbound.New(cfg.OutboundAllowedHosts, cfg.OutboundAllowPrivate)
 	for _, op := range cfg.OIDCProviders {
-		oauthProviders[op.Name] = oauth2.NewOIDCProvider(
+		provider := oauth2.NewOIDCProvider(
 			op.Name, op.Issuer, op.ClientID, op.ClientSecret,
 			cfg.Origin+"/auth/oauth2/callback/"+op.Name, op.Scopes,
 		)
+		provider.SetGuard(outboundPolicy)
+		oauthProviders[op.Name] = provider
 		log.Printf("oauth: registered OIDC provider %q (issuer=%s)", op.Name, op.Issuer)
 	}
 

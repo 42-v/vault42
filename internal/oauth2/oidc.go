@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/42-v/vault42/internal/outbound"
 )
 
 // OIDCProvider implements [Provider] for any standards-compliant OpenID Connect
@@ -25,6 +27,13 @@ type OIDCProvider struct {
 	redirectURI  string
 	scopes       string // space-delimited; defaults to "openid email profile"
 	client       *http.Client
+	// guard widens the destination rule applied to the endpoints this
+	// provider's discovery document names, and installs the dial-time address
+	// check. A nil guard is the strict case rather than the absent one:
+	// outbound.Policy's nil behavior still holds the endpoints to the issuer's
+	// own domain, so the rule is in force with no wiring at all and SetGuard
+	// only ever permits more.
+	guard *outbound.Policy
 
 	mu         sync.RWMutex
 	discovered *oidcDiscovery
@@ -84,6 +93,18 @@ func fetchableEndpoint(raw string) bool {
 	}
 }
 
+// SetGuard installs the deployment's outbound destination policy on this
+// provider: the operator's additions to the set of hosts its discovery document
+// may name, and the dial-time check on the addresses those hosts resolve to.
+//
+// It replaces the provider's client, because the dial-time half is a property
+// of the transport and cannot be applied any other way. The end-to-end timeout
+// is unchanged.
+func (p *OIDCProvider) SetGuard(g *outbound.Policy) {
+	p.guard = g
+	p.client = g.Client(providerTimeout)
+}
+
 func (p *OIDCProvider) httpClient() *http.Client {
 	if p.client != nil {
 		return p.client
@@ -141,14 +162,27 @@ func (p *OIDCProvider) discover(ctx context.Context) (*oidcDiscovery, error) {
 	// with the wrong X-Forwarded-Proto is enough) hands anyone on that path the
 	// ability to serve their own key set and mint a token for any subject. The
 	// token endpoint carries the client secret over the same wire.
+	//
+	// Scheme is one axis and destination is another. These four are the only
+	// URLs vault42 fetches that came out of a response rather than out of
+	// configuration or a literal, so they are also the only ones where "https"
+	// leaves the question of *whose* https host unanswered. outbound.Policy
+	// answers it: the issuer's own domain, a loopback destination, or a host
+	// the operator named.
 	for field, endpoint := range map[string]string{
 		"authorization_endpoint": doc.AuthEndpoint,
 		"token_endpoint":         doc.TokenEndpoint,
 		"userinfo_endpoint":      doc.UserInfoEndp,
 		"jwks_uri":               doc.JWKSURI,
 	} {
-		if endpoint != "" && !fetchableEndpoint(endpoint) {
+		if endpoint == "" {
+			continue
+		}
+		if !fetchableEndpoint(endpoint) {
 			return nil, fmt.Errorf("oidc discover: %s %q is not https", field, endpoint)
+		}
+		if err := p.guard.CheckDerived(p.issuer, field, endpoint); err != nil {
+			return nil, fmt.Errorf("oidc discover: %w", err)
 		}
 	}
 

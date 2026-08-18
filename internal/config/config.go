@@ -133,6 +133,20 @@ type Config struct {
 	// Entra, …) registered via VAULT_OIDC_PROVIDERS + per-name env vars.
 	OIDCProviders []OIDCProviderConfig
 
+	// OutboundAllowedHosts extends the set of hosts an issuer's discovery
+	// document may name beyond the issuer's own domain
+	// (VAULT_OUTBOUND_ALLOWED_HOSTS). Empty is the common case; the list exists
+	// for a provider whose endpoints legitimately span domains, such as an
+	// accounts.google.com issuer serving its keys from www.googleapis.com.
+	OutboundAllowedHosts []string
+	// OutboundAllowPrivate permits outbound calls that resolve inside the
+	// deployment -- loopback, RFC 1918, IPv6 unique-local, RFC 6598
+	// (VAULT_OUTBOUND_ALLOW_PRIVATE). Defaults to true in the dev profile,
+	// where the issuer runs on the local host, and false everywhere else. A
+	// deployment whose identity provider is a pod in the same cluster needs it
+	// on, and warnOnDegradedControls says so at startup.
+	OutboundAllowPrivate bool
+
 	// PasswordMinLength is the minimum password length (VAULT_PASSWORD_MIN_LENGTH). Default: 15 (NIST SP 800-63B).
 	PasswordMinLength int
 	// HIBPCheck enables Have I Been Pwned breach checking for passwords (VAULT_HIBP_CHECK). Default: true.
@@ -521,6 +535,14 @@ func Load() (*Config, error) {
 	// Apply profile defaults for any unset values
 	applyProfileDefaults(c)
 
+	// Outbound destination policy. Read after the profile is resolved, because
+	// the default for the private-address rule is the one thing here that
+	// depends on it: a dev deployment's issuer is on the local host, and a
+	// production deployment's provider that is also inside the network is a
+	// deliberate topology its operator can state.
+	c.OutboundAllowedHosts = envListFold("VAULT_OUTBOUND_ALLOWED_HOSTS", strings.ToLower)
+	c.OutboundAllowPrivate = envBoolDefault("VAULT_OUTBOUND_ALLOW_PRIVATE", c.Profile == ProfileDev)
+
 	// Embedded-trust shortcut: when an operator sets
 	// VAULT_EMBEDDED_TRUSTED_UPSTREAM=true, vault42 is running behind a
 	// sibling proxy on the same private network (typical Hermod/k8s pod
@@ -753,6 +775,17 @@ func (c *Config) warnOnDegradedControls() {
 	// operators can opt out deliberately.
 	if len(c.RecoveryPublicKeyPEM) == 0 {
 		log.Printf("SECURITY WARNING: VAULT_RECOVERY_PUBLIC_KEY_FILE not set — account erasures will not be recoverable")
+	}
+	// The outbound destination policy warns on the widenings, not on the strict
+	// case, because the strict case is the default and needs no configuration.
+	// Neither refuses to boot: both are legitimate topologies, and a deployment
+	// already running one must not stop starting on upgrade. What is not
+	// acceptable is running one without it appearing anywhere an operator looks.
+	if c.OutboundAllowPrivate && c.Profile != ProfileDev {
+		log.Printf("SECURITY WARNING: VAULT_OUTBOUND_ALLOW_PRIVATE is set in %s profile, so an identity provider's discovery document can point vault42 at an address inside this deployment; the link-local range cloud instance metadata answers on stays refused either way", c.Profile)
+	}
+	for _, h := range c.OutboundAllowedHosts {
+		log.Printf("SECURITY WARNING: VAULT_OUTBOUND_ALLOWED_HOSTS names %q, so a provider's discovery document may direct vault42 there even though it is outside the issuer's own domain", h)
 	}
 }
 
