@@ -549,8 +549,26 @@ type AccountRecoveryPruner interface {
 	// PruneLocked is Prune serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
+	//
+	// It deletes at most RecoveryCleanupBatch rows per call, so a caller with a
+	// backlog loops. A full batch means there is more; anything less means the
+	// horizon is clear.
 	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
+
+// RecoveryCleanupBatch is how many rows one PruneLocked call may delete, and
+// therefore how long one call holds ACCESS EXCLUSIVE on auth.account_recovery.
+//
+// Same reasoning as AuditCleanupBatch, against a different writer. The purge
+// disables the append-only trigger to delete anything, which is ALTER TABLE, and
+// what waits behind that lock is the erasure path: every Art. 17 deletion with a
+// recovery key configured appends its escrow record before the account goes. An
+// unbounded DELETE stalls erasures for the length of the whole purge.
+//
+// It lives on the interface because the implementation and the sweeper that
+// loops over it have to agree on it, and internal/service cannot import
+// internal/repository/postgres.
+const RecoveryCleanupBatch = 2000
 
 // AdminUserRepository manages admin gateway user persistence.
 type AdminUserRepository interface {

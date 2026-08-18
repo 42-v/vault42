@@ -13,6 +13,10 @@ import (
 // sweeps touch different tables and must not block each other.
 const recoveryRetentionLockKey int64 = 4243
 
+// recoveryCleanupBatch is the shared bound, declared on the repository interface
+// so the sweeper that loops over this call agrees with it.
+const recoveryCleanupBatch = repository.RecoveryCleanupBatch
+
 // PruneLocked runs Prune under a transaction-scoped advisory lock, and reports
 // acquired=false when another replica is already sweeping.
 //
@@ -22,6 +26,11 @@ const recoveryRetentionLockKey int64 = 4243
 // on the lock and widen the window in which escrow rows can be deleted. One
 // sweeper at a time is enough: the work is idempotent, so a replica that loses
 // the lock simply skips this round.
+//
+// The two-argument form, which deletes at most recoveryCleanupBatch rows: the
+// advisory lock keeps replicas from queueing on the exclusive lock, and the
+// batch bounds how long the one replica that gets it holds that lock. Erasures
+// append to this table on the request path and wait behind it.
 func (r *AccountRecoveryRepo) PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error) {
 	tx, err := r.db.Pool.Begin(ctx)
 	if err != nil {
@@ -37,8 +46,8 @@ func (r *AccountRecoveryRepo) PruneLocked(ctx context.Context, olderThan time.Ti
 	}
 
 	if err := tx.QueryRow(ctx,
-		"SELECT auth.cleanup_old_recovery($1::interval)",
-		recoveryInterval(olderThan),
+		"SELECT auth.cleanup_old_recovery($1::interval, $2)",
+		recoveryInterval(olderThan), recoveryCleanupBatch,
 	).Scan(&deleted); err != nil {
 		return 0, true, fmt.Errorf("prune account recovery: %w", err)
 	}
