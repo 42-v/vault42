@@ -9,8 +9,17 @@ import (
 )
 
 // FuzzSanitizeEmail is the tests/fuzz entry the CI "Fuzz Tests" job will run.
-// It exercises the real sanitiser (internal/sanitize.Email), not the dummy
-// isValidEmail in fuzz_email_test.go.
+// It exercises the real sanitiser, internal/sanitize.Email, which is what
+// internal/service/auth.go:413 calls.
+//
+// It replaced fuzz_email_test.go rather than sitting beside it. That file
+// fuzzed a local isValidEmail defined in the same file, under a comment reading
+// "same logic as service/auth.go" -- an equivalence nothing enforced and which
+// was not even true, because auth.go has never had an isValidEmail and has
+// always delegated to sanitize.Email. Its only assertion was that the local copy
+// did not panic, so it added a green tick to the fuzz suite while exercising no
+// shipped code. TestEveryFuzzTargetReachesShippedCode in tests/spec holds the
+// property now, for every target rather than this one.
 func FuzzSanitizeEmail(f *testing.F) {
 	f.Add("user@example.com")
 	f.Add("")
