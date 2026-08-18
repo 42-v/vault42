@@ -56,7 +56,9 @@ func TestClientKeyedLimitersSitInsideAuth(t *testing.T) {
 
 	// Collect the limiter variables built with the client-keyed function. Each is
 	// `name := middleware.RateLimit(..., KeyFunc: handler.ClientRateLimitKey, ...)`.
-	src := readFileString(t, path)
+	// Blanked rather than stripped: the offsets below come from the go/ast
+	// parse of the same file, so the two views have to stay byte-aligned.
+	src := commentFreeSource(t, path)
 	clientKeyed := map[string]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
 		as, ok := n.(*ast.AssignStmt)

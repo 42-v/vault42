@@ -68,7 +68,7 @@ func hadolintMatrix(t *testing.T, path string) map[string]bool {
 
 	out := map[string]bool{}
 	var inList bool
-	for _, line := range strings.Split(readFileString(t, path), "\n") {
+	for _, line := range strings.Split(commentFreeSource(t, path), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "dockerfile:" {
 			inList = true

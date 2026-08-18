@@ -198,6 +198,17 @@ type userSummary struct {
 	MFARequired   bool       `json:"mfa_required"`
 	LockedUntil   *time.Time `json:"locked_until,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// MustResetPassword is the state POST /admin/users/{id}/require-password-reset
+	// imposes and .../clear-password-reset withdraws. It is on the record because
+	// an operator must not be able to impose a state they cannot read back: both
+	// routes are audited, so it was recoverable from the trail, but recovering an
+	// account's current state by replaying an audit log is not reading a record.
+	//
+	// No omitempty, deliberately, and for the same reason as mfa_required: on a
+	// bool it would erase the cleared state, leaving "not required" and "this
+	// build does not report it" indistinguishable -- which is the gap this closes,
+	// not a smaller version of it.
+	MustResetPassword bool `json:"must_reset_password"`
 }
 
 // ListUsers handles GET /admin/users.
@@ -225,13 +236,14 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if user != nil {
 			users = append(users, userSummary{
-				ID:            user.ID,
-				Email:         user.Email,
-				EmailVerified: user.EmailVerified,
-				DisplayName:   user.DisplayName,
-				MFARequired:   user.MFARequired,
-				LockedUntil:   user.LockedUntil,
-				CreatedAt:     user.CreatedAt,
+				ID:                user.ID,
+				Email:             user.Email,
+				EmailVerified:     user.EmailVerified,
+				DisplayName:       user.DisplayName,
+				MFARequired:       user.MFARequired,
+				LockedUntil:       user.LockedUntil,
+				CreatedAt:         user.CreatedAt,
+				MustResetPassword: user.MustResetPassword,
 			})
 		}
 	} else if strings.Contains(q, "@") {
@@ -242,13 +254,14 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if user != nil {
 			users = append(users, userSummary{
-				ID:            user.ID,
-				Email:         user.Email,
-				EmailVerified: user.EmailVerified,
-				DisplayName:   user.DisplayName,
-				MFARequired:   user.MFARequired,
-				LockedUntil:   user.LockedUntil,
-				CreatedAt:     user.CreatedAt,
+				ID:                user.ID,
+				Email:             user.Email,
+				EmailVerified:     user.EmailVerified,
+				DisplayName:       user.DisplayName,
+				MFARequired:       user.MFARequired,
+				LockedUntil:       user.LockedUntil,
+				CreatedAt:         user.CreatedAt,
+				MustResetPassword: user.MustResetPassword,
 			})
 		}
 	}
@@ -285,13 +298,14 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, userSummary{
-		ID:            user.ID,
-		Email:         user.Email,
-		EmailVerified: user.EmailVerified,
-		DisplayName:   user.DisplayName,
-		MFARequired:   user.MFARequired,
-		LockedUntil:   user.LockedUntil,
-		CreatedAt:     user.CreatedAt,
+		ID:                user.ID,
+		Email:             user.Email,
+		EmailVerified:     user.EmailVerified,
+		DisplayName:       user.DisplayName,
+		MFARequired:       user.MFARequired,
+		LockedUntil:       user.LockedUntil,
+		CreatedAt:         user.CreatedAt,
+		MustResetPassword: user.MustResetPassword,
 	})
 }
 

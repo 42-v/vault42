@@ -106,11 +106,8 @@ func TestTheChartRefusesTwoCRLSources(t *testing.T) {
 // so a test can assert on a render that is meant to fail.
 func helmTemplate(t *testing.T, extra ...string) (string, string, error) {
 	t.Helper()
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm is not on PATH, so the rendered manifests cannot be produced. " +
-			"Install helm, or add azure/setup-helm to the job, to run this gate.")
-	}
+	helm := requireTool(t, "helm",
+		"the rendered manifests cannot be produced and the admin-gateway CRL wiring goes unasserted")
 
 	cmd := exec.Command(helm, "template", "release", chartDir, "--namespace", "vault") // #nosec G204 -- fixed args over paths inside this repo
 	cmd.Args = append(cmd.Args, extra...)

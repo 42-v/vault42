@@ -239,12 +239,8 @@ func exportChartAtTag(t *testing.T, root, tag, dest string) {
 // gates: without it the manifests cannot be produced at all.
 func helmOrSkip(t *testing.T) string {
 	t.Helper()
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm is not on PATH, so the rendered manifests cannot be produced. " +
-			"Install helm, or add azure/setup-helm to the job, to run this gate.")
-	}
-	return helm
+	return requireTool(t, "helm",
+		"the rendered manifests cannot be produced and the immutable-selector gate goes unasserted")
 }
 
 func renderDocs(t *testing.T, helm, root string, args []string) []map[string]any {

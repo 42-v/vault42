@@ -502,6 +502,11 @@ var commentTestName = regexp.MustCompile(`\b((?:Test|Fuzz|Benchmark)[A-Z][A-Za-z
 // tests/spec/ratelimit_failclosed_test.go uses for failOpenByDesign: an
 // exemption with no written reason is indistinguishable from an oversight.
 var commentTestNameExemptions = map[string]string{
+	"FuzzEmailValidation": "the target this repository deleted, named by the comment on " +
+		"tests/spec/fuzz_targets_test.go's workflow gate and by the one on tests/fuzz/" +
+		"fuzz_sanitize_email_test.go that replaced it. Both sentences exist to say the name is " +
+		"gone: it fuzzed an isValidEmail defined in the same file, and ci.yml went on naming it " +
+		"in a -fuzz= flag that then matched nothing and exited 0",
 	"TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded": "the historical dead " +
 		"gate this file was written about, named in the header so a reader can look it up. It was " +
 		"rewritten under a different name; naming the old one is the point",
@@ -934,4 +939,455 @@ func migrationReads(fn *ast.FuncDecl, strConsts map[string]string) ([]string, bo
 	}
 	sort.Strings(out)
 	return out, wholeDir
+}
+
+// --- 6. A skipped test reports success --------------------------------------
+//
+// A skip and a pass print the same color. `go test` reports `ok` for a package
+// whose every assertion skipped, so a gate that retires itself at runtime is
+// strictly worse than one that was deleted: the deleted one is missing from the
+// report and this one is not.
+//
+// This is not hypothetical here. Seven chart assertions in tests/spec skipped
+// for an entire release because no CI job installed helm, and it was found by
+// somebody counting [no tests to run] lines rather than by anything going red.
+// The two shapes that produce it:
+//
+//   - a precondition the environment may not meet (a tool, a container runtime,
+//     a fetched tag), which is legitimate locally and must never be legitimate
+//     on a runner; and
+//   - a structural gate that skips when its needle moves, which retires the
+//     control at exactly the moment the code it guards was restructured.
+//
+// The second shape has no legitimate instance: if a gate can no longer find
+// what it watches, the claim it evidences is unevidenced, and that is a
+// failure. The rule below is therefore that every skip is registered with an
+// argument, and the registry is a ratchet in both directions.
+
+// skipCalls are the ways a Go test retires itself at runtime.
+var skipCalls = map[string]struct{}{"Skip": {}, "Skipf": {}, "SkipNow": {}}
+
+// skipRule is one registered skip.
+type skipRule struct {
+	// reason is why this skip is not the silent-retirement defect. An entry
+	// without one is indistinguishable from an oversight and fails.
+	reason string
+	// ciStrictPredicate, when set, names the function whose result decides that
+	// the same condition is fatal rather than skippable on a CI runner. The
+	// entry then has to prove it: the enclosing function must call that
+	// predicate and must contain a failure call, so "impossible in CI" is a
+	// property of the code and not of this comment.
+	ciStrictPredicate string
+}
+
+// skipsByDesign registers every skip in the gate corpora, keyed by
+// "<repo-relative file>:<enclosing function>".
+//
+// Keyed by function rather than by line so that editing the file above a skip
+// does not turn an argument stale, and by file as well as name because the
+// three suites are separate packages that may reuse a helper name.
+//
+// Every entry is a hole in the check below, exactly as with failOpenByDesign in
+// tests/spec/ratelimit_failclosed_test.go and assertionFreeByDesign above, and
+// TestGateLiveness_NoStaleSkipExemption removes an entry the moment its skip
+// stops existing. The list may only shrink.
+var skipsByDesign = map[string]skipRule{
+	"tests/spec/citool_test.go:requireTool": {
+		reason: "the one place this suite resolves an external renderer. Locally a missing helm " +
+			"skips, so `go test ./...` stays runnable without a Kubernetes toolchain; on a runner " +
+			"it is fatal, because the job exists to run the gate and a skip there is the defect " +
+			"this whole check is about",
+		ciStrictPredicate: "runningInCI",
+	},
+	"tests/spec/chart_immutable_selector_test.go:lastReleaseTag": {
+		reason: "the previously released chart is rendered from the last reachable tag, and a " +
+			"clone with no tags cannot produce one. NOT ci-strict, and that is a known gap rather " +
+			"than an argument: ci.yml's Tests job checks out at the default depth, which fetches " +
+			"no tags, so this gate does not run on a pull request. Making it fatal would turn a " +
+			"silent skip into a red CI on work that did not cause it; the fix is fetch-depth: 0 " +
+			"on that checkout, which is a workflow change with its own owner",
+	},
+	"tests/attack/atk_crypto_argon2_pressure_test.go:TestArgon2Attack_MeasureQueueingUnderFlood": {
+		reason: "a latency measurement. Under -race every duration is instrumentation, and -short " +
+			"exists to skip exactly this; both conditions are the runner's own declaration that " +
+			"wall-clock numbers are meaningless in it",
+	},
+	"tests/attack/atk_crypto_argon2_pressure_test.go:TestArgon2Attack_MeasureUserExistsTimingGap": {
+		reason: "a timing measurement, skipped under -race and -short for the same reason. It " +
+			"carries a 5% threshold that has been observed to flake at 6.29% on a loaded runner, " +
+			"which is why it may not run where the timings are not trustworthy",
+	},
+	"tests/attack/atk_crypto_dpop_totp_test.go:TestTOTPAttack_MeasureValidationTimingGap": {
+		reason: "a timing measurement, meaningless under -race and skipped in -short",
+	},
+	"tests/attack/atk_crypto_dpop_totp_test.go:TestTOTPAttack_MeasureLengthMismatchTiming": {
+		reason: "a timing measurement, meaningless under -race and skipped in -short. Also in " +
+			"assertionFreeByDesign, with the argument for why it asserts nothing",
+	},
+	"tests/attack/totp_replay_test.go:TestTOTPWrongCode": {
+		reason: "the wrong-code path is driven with random six-digit codes, and roughly one in a " +
+			"million is the right one. Skipping the coincidence is correct: asserting a rejection " +
+			"on a code that is genuinely valid would be asserting the wrong behavior",
+	},
+}
+
+// skipSite is one Skip call found in the gate corpora.
+type skipSite struct {
+	key      string // "<repo-relative file>:<enclosing function>"
+	file     string
+	fn       string
+	line     int
+	fails    bool                // the enclosing function can also fail
+	idents   map[string]struct{} // every identifier the enclosing function names
+	inCorpus string
+}
+
+// TestGateLiveness_NoGateRetiresItselfWithAnUnregisteredSkip is the check the
+// helm outage would have failed. A skip with no entry here is a control that
+// switched itself off, and `go test` said `ok`.
+func TestGateLiveness_NoGateRetiresItselfWithAnUnregisteredSkip(t *testing.T) {
+	for _, site := range skipSites(t) {
+		rule, registered := skipsByDesign[site.key]
+		if !registered {
+			t.Errorf("%s:%d in %s skips, and no entry in skipsByDesign says why. A skipped test "+
+				"prints the same `ok` as one that ran, so this control is off and the report says "+
+				"it is on. Either fail instead of skipping — which is the right answer whenever a "+
+				"structural gate can no longer find what it watches — or add %q to skipsByDesign "+
+				"with the argument for why the skip is not a silent retirement.",
+				site.file, site.line, site.fn, site.key)
+			continue
+		}
+		if strings.TrimSpace(rule.reason) == "" {
+			t.Errorf("skipsByDesign[%q] carries no reason. An exemption without one is "+
+				"indistinguishable from an oversight.", site.key)
+		}
+		if rule.ciStrictPredicate == "" {
+			continue
+		}
+		// "Impossible in CI" is a claim about the code, so the code has to
+		// carry it: the same function must consult the predicate and must have
+		// a way to fail. Deleting either half is what turns a CI-mandatory
+		// tool back into a silent local convenience everywhere.
+		if _, consults := site.idents[rule.ciStrictPredicate]; !consults {
+			t.Errorf("skipsByDesign[%q] claims the skip is impossible in CI via %s, but %s never "+
+				"calls it. The exemption rests on a predicate the code does not consult.",
+				site.key, rule.ciStrictPredicate, site.fn)
+		}
+		if !site.fails {
+			t.Errorf("skipsByDesign[%q] claims the skip is impossible in CI, but %s contains no "+
+				"t.Fatal, t.Error or t.Fail of any kind, so there is no branch in which the "+
+				"missing precondition is a failure. On a runner it would skip exactly as it does "+
+				"locally.", site.key, site.fn)
+		}
+	}
+}
+
+// TestGateLiveness_NoStaleSkipExemption deletes an entry whose skip is gone, so
+// an argument written for one skip cannot be inherited by the next one to take
+// the name. It is also this file's floor: a scan that walked nothing reports
+// every entry as stale rather than reporting nothing at all.
+func TestGateLiveness_NoStaleSkipExemption(t *testing.T) {
+	present := map[string]struct{}{}
+	for _, site := range skipSites(t) {
+		present[site.key] = struct{}{}
+	}
+	for key, rule := range skipsByDesign {
+		if _, ok := present[key]; !ok {
+			t.Errorf("skipsByDesign names %q, which no longer skips. Remove the entry: the list "+
+				"may only shrink, and an argument left behind is one a future skip inherits "+
+				"without making it. (Reason on file: %s)", key, rule.reason)
+		}
+	}
+}
+
+// skipSites walks the gate corpora and returns every Skip call in them, with
+// the enclosing top-level function rather than the closure, so a skip inside a
+// t.Run body is attributed to the test that owns it.
+func skipSites(t *testing.T) []skipSite {
+	t.Helper()
+	root := repoRoot(t)
+
+	var out []skipSite
+	var files int
+	for _, corpus := range gateCorpora {
+		dir := filepath.Join(root, corpus)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", corpus, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			files++
+			path := filepath.Join(dir, entry.Name())
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", entry.Name(), err)
+			}
+			rel := filepath.ToSlash(filepath.Join(corpus, entry.Name()))
+
+			for _, decl := range parsed.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				var skips []int
+				fails := false
+				idents := map[string]struct{}{}
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					switch node := n.(type) {
+					case *ast.Ident:
+						idents[node.Name] = struct{}{}
+					case *ast.CallExpr:
+						name := callName(node)
+						if _, isSkip := skipCalls[name]; isSkip {
+							skips = append(skips, fset.Position(node.Pos()).Line)
+						}
+						if _, isFailure := failureCalls[name]; isFailure {
+							fails = true
+						}
+					}
+					return true
+				})
+				for _, line := range skips {
+					out = append(out, skipSite{
+						key:      rel + ":" + fn.Name.Name,
+						file:     rel,
+						fn:       fn.Name.Name,
+						line:     line,
+						fails:    fails,
+						idents:   idents,
+						inCorpus: corpus,
+					})
+				}
+			}
+		}
+	}
+
+	// The corpora are three whole suites. A walk that came back with a handful
+	// of files did not find them, and every check above would then be vacuous
+	// in precisely the way this file exists to detect.
+	if files < 100 {
+		t.Fatalf("only %d test files walked across %v; this gate's own corpus is broken, so every "+
+			"skip in the tree would read as absent", files, gateCorpora)
+	}
+	return out
+}
+
+// --- 7. A comment satisfies a substring assertion ---------------------------
+//
+// tests/spec asserts most of its properties by reading a production file and
+// asking whether a construct is in it. Read raw, "is it in the file" is answered
+// yes by a sentence describing the construct, by a commented-out draft of it,
+// and by the note explaining why it was taken out. The gate then certifies a
+// claim the code does not make.
+//
+// The canonical instance is one level up from here: a comment on namespace() in
+// internal/middleware/ratelimit.go argued the fallback was safe because
+// TestRateLimitersAreNamespaced asserted it, and for weeks the only occurrence
+// of that name in the tree was the sentence making the claim. Check 5 above
+// catches that one. This catches the same shape in a chart template, a
+// Dockerfile, a migration and a Go file: the line in the template that explains
+// what the template no longer does still contains the words the gate looks for.
+//
+// tests/spec resolves it with commentFreeSource, which blanks comments and
+// preserves byte offsets. The rule here is that a text scan may not run on a
+// read that did not go through it.
+//
+// Scope: tests/spec only, and deliberately so rather than by oversight.
+// tests/compliance reads production source through readProductionSource in over
+// a hundred places and has the same exposure; converting it is its own piece of
+// work with its own findings, and is recorded as such rather than half-done
+// here.
+
+// textScanners are the calls that answer "does this text contain that" — the
+// question a comment answers wrongly.
+var textScanners = map[string]struct{}{
+	"Contains": {}, "Index": {}, "LastIndex": {}, "Count": {}, "Split": {}, "SplitN": {},
+	"containsIdentifier": {},
+}
+
+// rawSourceReaders return production source with its comments intact.
+var rawSourceReaders = map[string]struct{}{"readFileString": {}, "ReadFile": {}}
+
+// sourceSanitizers return source a text scan may be run on.
+var sourceSanitizers = map[string]struct{}{
+	"commentFreeSource": {}, "blankComments": {}, "withoutComments": {}, "stripSQLComments": {},
+}
+
+// rawSourceScanByDesign are the text scans allowed to run on an unsanitized
+// read, keyed by "<repo-relative file>:<enclosing function>", each with why.
+//
+// Empty on purpose: every one of the 22 found when this check was written was
+// fixed rather than exempted. The map and its ratchet exist so that the next one
+// has to be argued for in writing instead of merged in silence.
+var rawSourceScanByDesign = map[string]string{}
+
+func TestGateLiveness_NoSpecGateScansProductionSourceWithItsCommentsIntact(t *testing.T) {
+	scans, sanitized := rawSourceScans(t)
+
+	// If commentFreeSource stopped being used, this check would find nothing to
+	// complain about and report the same green as a clean suite. The number of
+	// sanitized reads is therefore the floor: it can rise, and it cannot fall
+	// to nothing without somebody noticing.
+	const sanitizedReadFloor = 15
+	if sanitized < sanitizedReadFloor {
+		t.Fatalf("only %d sanitized production reads in tests/spec, below the floor of %d. Either "+
+			"the suite stopped stripping comments before scanning, or this scan has stopped "+
+			"recognizing that it does; both make every assertion below vacuous",
+			sanitized, sanitizedReadFloor)
+	}
+
+	for _, s := range scans {
+		if reason, exempt := rawSourceScanByDesign[s.key]; exempt {
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("rawSourceScanByDesign[%q] carries no reason. An exemption without one "+
+					"is indistinguishable from an oversight.", s.key)
+			}
+			continue
+		}
+		t.Errorf("%s:%d in %s runs %s over %s, which was read with its comments intact. A "+
+			"construct that appears only in a comment satisfies the assertion, so the gate "+
+			"certifies a claim the file does not make. Read it through commentFreeSource, or add "+
+			"%q to rawSourceScanByDesign with the argument for why the comments have to be there.",
+			s.file, s.line, s.fn, s.scanner, s.target, s.key)
+	}
+}
+
+// TestGateLiveness_NoStaleRawSourceScanExemption deletes an entry whose scan is
+// gone, so an argument written for one read cannot be inherited by the next.
+func TestGateLiveness_NoStaleRawSourceScanExemption(t *testing.T) {
+	scans, _ := rawSourceScans(t)
+	present := map[string]struct{}{}
+	for _, s := range scans {
+		present[s.key] = struct{}{}
+	}
+	for key, reason := range rawSourceScanByDesign {
+		if _, ok := present[key]; !ok {
+			t.Errorf("rawSourceScanByDesign names %q, which no longer scans an unsanitized read. "+
+				"Remove the entry: the list may only shrink. (Reason on file: %s)", key, reason)
+		}
+	}
+}
+
+// rawSourceScan is one text scan over source that still carries its comments.
+type rawSourceScan struct {
+	key     string
+	file    string
+	fn      string
+	line    int
+	scanner string
+	target  string
+}
+
+// rawSourceScans walks tests/spec and returns every text scan over an
+// unsanitized read, together with the number of sanitized reads it saw.
+//
+// Scoped per function rather than per file: a variable holding raw source in one
+// test says nothing about a same-named variable in the next, and treating the
+// file as one scope would report the second as an offender because the first
+// read raw.
+func rawSourceScans(t *testing.T) ([]rawSourceScan, int) {
+	t.Helper()
+
+	corpus := filepath.Join("tests", "spec")
+	dir := filepath.Join(repoRoot(t), corpus)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", corpus, err)
+	}
+
+	var out []rawSourceScan
+	sanitized := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", entry.Name(), err)
+		}
+		rel := filepath.ToSlash(filepath.Join(corpus, entry.Name()))
+
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			raw := map[string]struct{}{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				assign, ok := n.(*ast.AssignStmt)
+				if !ok || len(assign.Rhs) == 0 || len(assign.Lhs) == 0 {
+					return true
+				}
+				call, ok := assign.Rhs[0].(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := callName(call)
+				if _, isSanitizer := sourceSanitizers[name]; isSanitizer {
+					sanitized++
+					return true
+				}
+				if _, isRaw := rawSourceReaders[name]; !isRaw {
+					return true
+				}
+				if ident, ok := assign.Lhs[0].(*ast.Ident); ok && ident.Name != "_" {
+					raw[ident.Name] = struct{}{}
+				}
+				return true
+			})
+
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				name := callName(call)
+				if _, isScan := textScanners[name]; !isScan {
+					return true
+				}
+				// A bare Contains is this package's own helper; a qualified one
+				// has to be strings', because bytes.Contains over source has the
+				// same exposure and a different first argument.
+				if q := selectorName(call.Fun); q != "" && !strings.HasPrefix(q, "strings.") {
+					return true
+				}
+				target := call.Args[0]
+				if slice, ok := target.(*ast.SliceExpr); ok {
+					target = slice.X
+				}
+				scanner := name
+				if q := selectorName(call.Fun); q != "" {
+					scanner = q
+				}
+				record := func(desc string) {
+					out = append(out, rawSourceScan{
+						key:     rel + ":" + fn.Name.Name,
+						file:    rel,
+						fn:      fn.Name.Name,
+						line:    fset.Position(call.Pos()).Line,
+						scanner: scanner,
+						target:  desc,
+					})
+				}
+				switch v := target.(type) {
+				case *ast.Ident:
+					if _, isRaw := raw[v.Name]; isRaw {
+						record(v.Name)
+					}
+				case *ast.CallExpr:
+					if _, isRaw := rawSourceReaders[callName(v)]; isRaw {
+						record(callName(v) + "(...)")
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out, sanitized
 }

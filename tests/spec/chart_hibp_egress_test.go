@@ -59,10 +59,8 @@ type netPolicy struct {
 // manifest stream.
 func renderChart(t *testing.T, sets ...string) []byte {
 	t.Helper()
-	helm, err := exec.LookPath("helm")
-	if err != nil {
-		t.Skip("helm is not on PATH, so the rendered NetworkPolicy cannot be produced")
-	}
+	helm := requireTool(t, "helm",
+		"the rendered NetworkPolicy cannot be produced and the breach-check egress rule goes unasserted")
 	args := []string{
 		"template", "release", chartDir, "--namespace", "vault",
 		"--set", "adminGateway.tls.secretName=admin-tls",

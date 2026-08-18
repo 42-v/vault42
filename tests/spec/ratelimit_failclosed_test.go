@@ -115,10 +115,10 @@ func TestEveryCredentialLimiterFailsClosed(t *testing.T) {
 // would inherit an exemption written for something else.
 func TestFailOpenRegisterHasNoStaleEntries(t *testing.T) {
 	root := repoRoot(t)
-	src := readFileString(t, filepath.Join(root, "internal", "server", "server.go"))
+	src := commentFreeSource(t, filepath.Join(root, "internal", "server", "server.go"))
 
 	for name := range failOpenByDesign {
-		if !strings.Contains(src, name+" := middleware.RateLimit") {
+		if !containsIdentifier(src, name+" := middleware.RateLimit") {
 			t.Errorf("failOpenByDesign names %q, which server.go no longer builds. Remove the "+
 				"entry, so a future limiter reusing the name cannot inherit an exemption written "+
 				"for a different route.", name)

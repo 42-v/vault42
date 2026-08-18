@@ -41,7 +41,7 @@ var workloadsThatMintCredentials = map[string]string{
 // instead of at somebody's first install.
 func TestEveryMintingWorkloadNamesACredentialSink(t *testing.T) {
 	root := repoRoot(t)
-	src := readFileString(t, filepath.Join(root, "internal", "firstboot", "firstboot.go"))
+	src := commentFreeSource(t, filepath.Join(root, "internal", "firstboot", "firstboot.go"))
 
 	match := regexp.MustCompile(`CredentialFileEnv\s*=\s*"([^"]+)"`).FindStringSubmatch(src)
 	if match == nil {
@@ -52,7 +52,7 @@ func TestEveryMintingWorkloadNamesACredentialSink(t *testing.T) {
 	env := match[1]
 
 	for template, path := range workloadsThatMintCredentials {
-		body := readFileString(t, filepath.Join(root, chartDir, "templates", template))
+		body := commentFreeSource(t, filepath.Join(root, chartDir, "templates", template))
 		if !strings.Contains(body, env) {
 			t.Errorf("charts/vault/templates/%s does not name %s. Without it %s has nowhere to "+
 				"put the credential, and because the delivery is deliberately fail-closed that "+
@@ -70,7 +70,7 @@ func TestEveryMintingWorkloadNamesACredentialSink(t *testing.T) {
 // least recoverable moment and the one nobody tests.
 func TestTheCredentialSinkIsWritable(t *testing.T) {
 	root := repoRoot(t)
-	values := readFileString(t, filepath.Join(root, chartDir, "values.yaml"))
+	values := commentFreeSource(t, filepath.Join(root, chartDir, "values.yaml"))
 
 	match := regexp.MustCompile(`(?m)^\s+path:\s*(\S+)`).FindStringSubmatch(
 		sectionOf(values, "firstBootCredential:"))
@@ -80,7 +80,7 @@ func TestTheCredentialSinkIsWritable(t *testing.T) {
 	sinkDir := filepath.Dir(match[1])
 
 	for _, template := range []string{"deployment.yaml", "admin-gateway.yaml"} {
-		body := readFileString(t, filepath.Join(root, chartDir, "templates", template))
+		body := commentFreeSource(t, filepath.Join(root, chartDir, "templates", template))
 
 		if !strings.Contains(body, `include "vault.firstBootCredentialMount"`) {
 			t.Errorf("charts/vault/templates/%s does not mount the first-boot credential "+
@@ -96,7 +96,7 @@ func TestTheCredentialSinkIsWritable(t *testing.T) {
 	// The writer refuses a path that exists and is not a regular file. Mounting
 	// the volume on the file rather than on its directory makes the path a
 	// directory, and every mint then fails on a message about regular files.
-	helpers := readFileString(t, filepath.Join(root, chartDir, "templates", "_helpers.tpl"))
+	helpers := commentFreeSource(t, filepath.Join(root, chartDir, "templates", "_helpers.tpl"))
 	if !strings.Contains(helpers, "dir .Values.firstBootCredential.path") {
 		t.Errorf("vault.firstBootCredentialMount no longer mounts at the directory holding "+
 			"the credential file (%s). Mounting on the file itself makes the path a directory, "+
@@ -111,7 +111,7 @@ func TestTheCredentialSinkIsWritable(t *testing.T) {
 // into the log for a leak onto a disk, which is the same finding wearing a
 // different hat.
 func TestTheCredentialSinkNeverLandsOnANodeDisk(t *testing.T) {
-	helpers := readFileString(t, filepath.Join(repoRoot(t), chartDir, "templates", "_helpers.tpl"))
+	helpers := commentFreeSource(t, filepath.Join(repoRoot(t), chartDir, "templates", "_helpers.tpl"))
 	volume := sectionOf(helpers, `define "vault.firstBootCredentialVolume"`)
 
 	if !strings.Contains(volume, "medium: Memory") {
