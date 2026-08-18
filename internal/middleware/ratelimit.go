@@ -314,8 +314,22 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 			}
 			weighted := count * int64(weight)
 
-			remaining := int64(cfg.Limit) - weighted
-			if remaining < 0 {
+			// The advertised remaining is computed from the unweighted count, and
+			// deliberately over-reports for a weighted caller.
+			//
+			// Reported from `weighted`, the header is a read-back of vault42's own
+			// ipintel classification: one unauthenticated request with garbage
+			// credentials returns Limit-heavy from a flagged address and Limit-1
+			// from an unflagged one, so a proxy pool can be sorted one request per
+			// address and the stuffing run entirely through addresses the weighting
+			// would not have touched. The weighting still bites — 429 arrives
+			// heavy times sooner — but it is no longer announced in advance, and
+			// learning it costs burning the bucket rather than a single probe.
+			//
+			// An exhausted bucket advertises 0 either way, so the 429 itself does
+			// not carry the same bit back out in a non-zero remaining.
+			remaining := int64(cfg.Limit) - count
+			if remaining < 0 || weighted > int64(cfg.Limit) {
 				remaining = 0
 			}
 
