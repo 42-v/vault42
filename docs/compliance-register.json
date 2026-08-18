@@ -26,7 +26,16 @@
       "asvs_level_note": "Every ASVS 5.0.0 requirement at L1 and L2 is classified. L3 requirements are outside the declared level; where one is nevertheless satisfied or deliberately not satisfied it is recorded anyway rather than omitted."
     },
     "claim": "Every requirement in scope is classified Met, Accepted Risk, or Not Applicable. There are no unclassified requirements and no open Gap findings. Every Met requirement names at least one test in tests/compliance/ that runs on every CI build. Every Accepted Risk carries a rationale, a compensating control, a residual-risk statement, a revisit condition and a named accepting party. Every Not Applicable requirement carries the reason it does not apply.",
-    "no_percentages": "This register deliberately publishes no coverage percentage. A percentage requires a weighting model and a denominator; publishing the register instead lets a reader compute whatever figure they consider meaningful, and check it."
+    "no_percentages": "This register deliberately publishes no coverage percentage. A percentage requires a weighting model and a denominator; publishing the register instead lets a reader compute whatever figure they consider meaningful, and check it.",
+    "identifier_namespaces": {
+      "AR-nn": "docs/security.md. The engineering accepted-risk log, AR-1 through AR-18.",
+      "CR-nn": "this register, the accepted_risks map below. Compliance-scoped.",
+      "why": "Both documents once numbered their risks AR-nn from the same sequence, and four numbers meant different things in the two files: AR-14, AR-15, AR-17 and AR-18. A reader who followed a cross-reference landed on an unrelated risk, and docs/COMPLIANCE.md asserted the closure of AR-16 while docs/security.md AR-16 was open. The register's identifiers were renumbered to CR-nn so the namespaces cannot collide again. Go source and tests/attack cite AR-nn and always mean docs/security.md."
+    },
+    "retired_risks": {
+      "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
+      "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration."
+    }
   },
   "standards": [
     {
@@ -81,108 +90,108 @@
     }
   ],
   "accepted_risks": {
-    "AR-14": {
+    "CR-14": {
       "title": "No inactivity timeout, and the absolute session lifetime defaults well above the AAL2 recommendation",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "The mandatory half of SP 800-63B-4 section 2.2.3 is satisfied as of 1.0.0: migration 013 gives every rotation family a stored birth date that rotation cannot advance and pruning cannot reset, TokenService clamps a rotated pair to that origin plus the bound, AuthService.enforceSessionLifetime refuses a family past it and fails closed when the age cannot be determined, and cmd/vault/main.go:317 configures it from VAULT_MAX_SESSION_LIFETIME. Two advisory halves remain open. The default overall timeout is 720 hours where section 2.2.3 says it SHOULD be no more than 24 at AAL2, because a 24-hour default would force a daily re-login on a general-purpose authentication server whose deployments are not all AAL2. And there is no inactivity timeout at all: no column records last activity and no auth decision consults one.",
       "compensating_control": "Access tokens live 15 minutes; every refresh re-checks account state, re-verifies the device fingerprint, and rotates the token single-use with family revocation on replay; the absolute family bound is enforced and fails closed; users and administrators can revoke all sessions; the per-user session cap bounds how many can exist. An operator who needs the AAL2 figure can set VAULT_MAX_SESSION_LIFETIME=24h today.",
       "residual_risk": "A session left idle is not terminated for inactivity, and the shipped default permits a continuously-refreshing client to hold one session for 30 days.",
       "revisit_when": "Any deployment claims AAL2 conformance to a third party rather than self-assessing, in which case the default must move to 24 hours and an inactivity timeout must ship. Also revisit if a customer contract specifies an idle policy.",
       "cost_of_closing": "For the default: one constant, plus a documented migration note because shortening it logs every existing session out. For inactivity: a last_activity_at column on auth.refresh_tokens, a write on every refresh, and a check before rotation."
     },
-    "AR-15": {
+    "CR-15": {
       "title": "Security events are logged but nothing alerts on them",
       "severity": "Medium",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:503-505. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:140-141 installs it only in the honeypot profile, so in production it is never wired at all.",
       "compensating_control": "Every security-relevant event is recorded in an append-only store with the metadata needed to investigate, and the admin gateway exposes a filtered review interface. Detection is operator-driven rather than automated.",
       "residual_risk": "A slow credential-stuffing campaign or a data-access anomaly is visible in the audit trail but raises nothing, so time-to-detection depends on an operator looking.",
       "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
       "cost_of_closing": "A risk-score predicate on AuditFilter, a threshold constant, an extracted Dispatcher interface from the honeypot alerter, and removal of the profile gate on the risk path."
     },
-    "AR-17": {
+    "CR-17": {
       "title": "No allowlist is enforced at the outbound HTTP client layer",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "Every outbound destination is operator-configured rather than caller-supplied: the OIDC issuer, the SMTP relay, the HIBP range API and the honeypot webhook. There is no request path that lets a caller influence a destination, so the server-side request forgery precondition is absent. What is missing is defence in depth: no code-level allowlist would stop an operator misconfiguration from pointing the server somewhere unintended.",
       "compensating_control": "The OIDC issuer is pinned against its own discovery document; the chart's NetworkPolicy restricts egress to Postgres, Redis, DNS and a configured SMTP CIDR, which enforces the allowlist at the network layer instead.",
       "residual_risk": "An operator who misconfigures an issuer or webhook URL gets no code-level warning.",
       "revisit_when": "Any feature accepts a URL from a request.",
       "cost_of_closing": "A shared http.Client with a dial-time destination check."
     },
-    "AR-20": {
+    "CR-20": {
       "title": "Authenticator loss is handled by operator escrow, not by repeated identity proofing",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "ASVS 5.0.0 V6.4.4 requires evidence of identity proofing at the same level as enrollment when a factor is lost. vault42 performs no identity proofing at enrollment, so there is no level to match; the requirement presumes an identity-proofing CSP that vault42 is not.",
       "compensating_control": "Backup codes are issued at enrollment; beyond those, recovery requires the operator-held escrow, which needs a private key held offline and outside the system.",
       "residual_risk": "Account recovery ultimately rests on operator process rather than on a technical proof of identity.",
       "revisit_when": "vault42 gains an identity-proofing step at enrollment.",
       "cost_of_closing": "Not applicable without an identity-proofing capability."
     },
-    "AR-21": {
+    "CR-21": {
       "title": "Tokens carry no acr, amr or aal claim",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "AuthenticatorAssuranceLevel constants and AALForMethods exist at internal/service/mfa.go:16-79 and are unit-tested, but AALForMethods has no non-test caller and VaultClaims carries no acr, amr or aal field, so a resource server cannot ask which factors were used or how recently.",
       "compensating_control": "A resource server can require a scope that vault42 only issues after MFA, which gives a coarser version of the same guarantee.",
       "residual_risk": "A downstream service cannot distinguish a single-factor session from a multi-factor one from the token alone.",
       "revisit_when": "A relying party needs step-up authentication, or vault42 claims AAL2 conformance to a third party rather than self-assessing it.",
       "cost_of_closing": "Record the factor used at CompleteMFALogin, add the claim at issuance, and surface aal_level on the MFA status response. Note the trap: MFAStatus.Methods holds enrolled methods and never contains the password, so passing it to AALForMethods naively returns AAL1 for a password-plus-TOTP user."
     },
-    "AR-22": {
+    "CR-22": {
       "title": "Identity provider session lifetime is not tracked",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "A federated session is bound to vault42's own lifetime. vault42 does not record the IdP's auth_time or force reauthentication when the maximum interval since the IdP authentication event elapses.",
       "compensating_control": "The vault42 session is independently bounded by its own refresh TTL, is revocable by the user and by an administrator, and re-checks account state on every rotation.",
       "residual_risk": "A user whose IdP session was terminated upstream keeps their vault42 session until it expires or is revoked.",
       "revisit_when": "A deployment federates to an IdP whose session policy is the authoritative one, such as a corporate SSO with mandatory reauthentication.",
       "cost_of_closing": "Record auth_time from the ID token and compare it on refresh."
     },
-    "AR-23": {
+    "CR-23": {
       "title": "Outbound SMTP negotiates STARTTLS opportunistically with no minimum version",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "internal/email/smtp.go calls net/smtp.SendMail. Two behaviours have to be separated. When the relay advertises STARTTLS, SendMail negotiates it and RETURNS the error rather than continuing in the clear, so there is no silent downgrade on a failed handshake. When the relay does not advertise STARTTLS at all, the whole block is skipped and the message is sent in plaintext, and there is no setting that makes TLS mandatory. That is the exposure: an on-path attacker who strips the STARTTLS capability from the EHLO response reads the message. SendMail does pass a tls.Config (ServerName only); MinVersion is unset but Go clients default to TLS 1.2, so the negotiated version is not the weakness. The SendGrid path is HTTPS with the Go default TLS configuration.",
       "compensating_control": "Mail carries no credential: only single-use, short-lived links and codes. The chart's NetworkPolicy restricts SMTP egress to a configured CIDR, so the relay is not an arbitrary host, and docs flag smtpCIDR as needing production restriction.",
       "residual_risk": "Against a relay that does not offer STARTTLS, or an on-path attacker stripping the capability from EHLO, a verification link or OTP traverses the network in the clear. Credentials are not exposed when SMTP AUTH is configured: smtp.PlainAuth refuses to send over an unencrypted connection. A deployment with no SMTP AUTH has no such protection.",
       "revisit_when": "Any credential-bearing content is added to an email, or a deployment cannot restrict SMTP egress by CIDR.",
       "cost_of_closing": "Replace SendMail with an explicit smtp.Client, require STARTTLS unless an operator opts out, and keep the Go default MinVersion. Small change, but it alters the outbound mail path and cannot be verified here without a real MTA."
     },
-    "AR-24": {
+    "CR-24": {
       "title": "The audit log is not cryptographically chained and is not mirrored off-system",
       "severity": "Medium",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "Hash chaining defends against an adversary who already holds database write access. Against that adversary a chain whose signing key lives in the same process is theatre: the adversary rewrites the rows and re-signs them. The honest version needs an off-box key and an off-system mirror, which is a deployment-topology commitment rather than a code change. Meanwhile the trigger and grant model already defeats the realistic adversary, a compromised vault_app role.",
       "compensating_control": "audit.deny_modify() raises on UPDATE and DELETE; UPDATE and DELETE are revoked from vault_app; the one sanctioned deletion path is SECURITY DEFINER with a pinned search_path, EXECUTE revoked from PUBLIC, and the trigger re-enabled before it returns.",
       "residual_risk": "An adversary holding database superuser access can rewrite history without leaving evidence in the log itself.",
       "revisit_when": "1.1, together with an off-system mirror. A chain designed without one would be worse than none because it would imply a guarantee it does not provide.",
       "cost_of_closing": "A prev-hash column, a signing key held outside the process, read-time verification, and a checkpoint scheme that survives retention pruning. The batch insert path at internal/repository/postgres/audit.go:50 breaks a naive prev-hash chain and is the hard part."
     },
-    "AR-25": {
+    "CR-25": {
       "title": "DPoP proofs are validated but no token is sender-constrained, and some decrypted buffers are not zeroed",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
-      "security_md": "pending",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "Two related residuals in the same area. First, DPoP: internal/crypto/dpop.go validates a proof thoroughly, but no issuance path sets cnf.jkt, so claims.Confirmation is always nil and internal/middleware/dpop.go binds nothing. The code documents itself as experimental, VAULT_DPOP_ENABLED is off by default, and the discovery document does not advertise DPoP, so nothing is claimed to clients that is not delivered. Second, memory zeroing: the master key, KMS root key and HMAC secret are []byte and are zeroed, but the decrypted RSA private signing key PEM at internal/keystore/keystore.go:297 is not, nor are decrypted blob plaintexts and labels, the identity JSON before encryption, or the user and admin TOTP secrets. Eleven configuration secrets are Go strings and cannot be zeroed at all, which is the platform limitation already accepted as AR-4.",
       "compensating_control": "The process is short-lived and containerised with no core dumps; the signing key is regenerated on rotation; ASVS 5.0.0 removed the memory-zeroing requirement that the previous report filed this under (v4.0.3-8.3.2 is marked DELETED, NOT IN SCOPE in the official mapping), and the only surviving related requirement, V11.7.1 full memory encryption, is L3.",
       "residual_risk": "A heap dump taken while the process is live could yield the JWT signing key or recently decrypted personal data.",
@@ -496,7 +505,7 @@
         "v4.0.3-5.2.6"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-17",
+      "accepted_risk": "CR-17",
       "evidence": [
         "internal/oauth2/oidc.go:97",
         "internal/email/smtp.go:57"
@@ -2080,7 +2089,7 @@
         "v4.0.3-2.5.7"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-20",
+      "accepted_risk": "CR-20",
       "evidence": [
         "internal/service/recovery_retention.go"
       ],
@@ -2416,7 +2425,7 @@
       "level": "L2",
       "requirement": "Verify that, if an application uses a separate Identity Provider (IdP) and expects specific authentication strength, methods, or recentness for specific functions, the application verifies this using the information returned by the IdP. For example, if OIDC is used, this might be achieved by validating ID Token claims such as 'acr', 'amr', and 'auth_time' (if present). If the IdP does not provide this information, the application must have a documented fallback approach that assumes that the minimum strength authentication mechanism was used (for example, single-factor authentication using username and password).",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-21",
+      "accepted_risk": "CR-21",
       "evidence": [
         "internal/crypto/jwt.go:28",
         "internal/service/mfa.go:16"
@@ -2435,7 +2444,7 @@
       "level": "L2",
       "requirement": "Verify that the user's session inactivity timeout and absolute maximum session lifetime are documented, are appropriate in combination with other controls, and that the documentation includes justification for any deviations from NIST SP 800-63B re-authentication requirements.",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-14",
+      "accepted_risk": "CR-14",
       "evidence": [
         "docs/config.md",
         "internal/config/config.go:437"
@@ -2573,7 +2582,7 @@
         "v4.0.3-3.3.2"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-14",
+      "accepted_risk": "CR-14",
       "evidence": [
         "internal/service/auth.go:680"
       ],
@@ -2603,7 +2612,7 @@
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
       ],
-      "notes": "An absolute maximum session lifetime is enforced from the family's stored creation instant, configured by VAULT_MAX_SESSION_LIFETIME (default 720h) and clamped into every rotated pair. Every branch that cannot date a family refuses rather than passing. The 7-day refresh TTL is no longer a sliding window without a bound. Whether 720h is the right value against the SP 800-63B-4 AAL2 recommendation of 24h is AR-14."
+      "notes": "An absolute maximum session lifetime is enforced from the family's stored creation instant, configured by VAULT_MAX_SESSION_LIFETIME (default 720h) and clamped into every rotated pair. Every branch that cannot date a family refuses rather than passing. The 7-day refresh TTL is no longer a sliding window without a bound. Whether 720h is the right value against the SP 800-63B-4 AAL2 recommendation of 24h is CR-14."
     },
     {
       "standard": "OWASP ASVS",
@@ -2750,7 +2759,7 @@
         "v4.0.3-3.6.2"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-22",
+      "accepted_risk": "CR-22",
       "evidence": [
         "internal/handler/oauth.go:450"
       ],
@@ -3179,7 +3188,7 @@
       "level": "L2",
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-21",
+      "accepted_risk": "CR-21",
       "evidence": [
         "internal/crypto/jwt.go:28"
       ],
@@ -3937,7 +3946,7 @@
         "v4.0.3-9.2.2"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-23",
+      "accepted_risk": "CR-23",
       "evidence": [
         "internal/email/smtp.go:57"
       ],
@@ -4870,7 +4879,7 @@
         "TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged",
         "TestASVS_V16_3_2_RBACDenialsAreAudited"
       ],
-      "notes": "Both halves of the requirement are logged. Failed admin authentication, lockout and the killswitch trip were already recorded; RBACCheck now writes an admin_authz_denied event on a permission denial, so a failed authorization decision reaches the append-only audit log with the admin, the role and the permission it was refused. This closes what was tracked as AR-16. The admin plane is loopback-only behind mutual TLS, so the population of principals a denial can name is small and already identified."
+      "notes": "Both halves of the requirement are logged. Failed admin authentication, lockout and the killswitch trip were already recorded; RBACCheck now writes an admin_authz_denied event on a permission denial, so a failed authorization decision reaches the append-only audit log with the admin, the role and the permission it was refused. This closes what was tracked as CR-16. The admin plane is loopback-only behind mutual TLS, so the population of principals a denial can name is small and already identified."
     },
     {
       "standard": "OWASP ASVS",
@@ -4970,7 +4979,7 @@
         "v4.0.3-1.7.2"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "AR-24",
+      "accepted_risk": "CR-24",
       "evidence": [
         "internal/repository/postgres/audit.go:26"
       ],
@@ -5170,7 +5179,7 @@
       "requirement_id": "2.2.3",
       "requirement": "AAL2: Reauthentication",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-14",
+      "accepted_risk": "CR-14",
       "evidence": [
         "internal/service/token.go:173",
         "migrations/013_session_lifetime.sql"
@@ -5581,7 +5590,7 @@
       "requirement_id": "5.2",
       "requirement": "Reauthentication",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-14",
+      "accepted_risk": "CR-14",
       "evidence": [
         "internal/service/auth.go:680"
       ],
@@ -5701,7 +5710,7 @@
       "requirement_id": "AC-12",
       "requirement": "Session Termination",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-14",
+      "accepted_risk": "CR-14",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:91"
       ],
@@ -5765,7 +5774,7 @@
       "requirement_id": "AU-6",
       "requirement": "Audit Record Review, Analysis, and Reporting",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-15",
+      "accepted_risk": "CR-15",
       "evidence": [
         "internal/adminapi/handler.go:486"
       ],
@@ -5796,7 +5805,7 @@
       "requirement_id": "AU-9",
       "requirement": "Protection of Audit Information",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-24",
+      "accepted_risk": "CR-24",
       "evidence": [
         "migrations/001_initial_schema.sql:167"
       ],
@@ -5897,7 +5906,7 @@
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
         "TestNIST_DummyHashTimingProtection"
       ],
-      "notes": "Credential failure is generic and constant-time. The four account-state outcomes that once differed by status code (locked, import-claim, banned, disabled) now all answer 401 invalid_credentials without a valid password, closing what was tracked as AR-19 under ASVS V6.3.8."
+      "notes": "Credential failure is generic and constant-time. The four account-state outcomes that once differed by status code (locked, import-claim, banned, disabled) now all answer 401 invalid_credentials without a valid password, closing what was tracked as CR-19 under ASVS V6.3.8."
     },
     {
       "standard": "NIST SP 800-53",
@@ -5928,7 +5937,7 @@
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
       ],
-      "notes": "Re-authentication is required before changes to authentication factors. The separate question of periodic session reauthentication is AC-12 and AR-14."
+      "notes": "Re-authentication is required before changes to authentication factors. The separate question of periodic session reauthentication is AC-12 and CR-14."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6285,7 +6294,7 @@
       "requirement_id": "A09:2025",
       "requirement": "Security Logging and Alerting Failures",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-15",
+      "accepted_risk": "CR-15",
       "evidence": [
         "internal/audit/audit.go:199"
       ],
@@ -6368,7 +6377,7 @@
       "requirement_id": "Art. 5(2)",
       "requirement": "Accountability",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-24",
+      "accepted_risk": "CR-24",
       "evidence": [
         "migrations/001_initial_schema.sql:167"
       ],
@@ -6525,7 +6534,7 @@
       "requirement_id": "Arts. 33, 34",
       "requirement": "Notification of a personal data breach",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-15",
+      "accepted_risk": "CR-15",
       "evidence": [
         "internal/honeypot/honeypot.go:75"
       ],
@@ -6646,7 +6655,7 @@
       "requirement_id": "RFC 9449 s4.10.1",
       "requirement": "DPoP: sender-constrained access tokens",
       "status": "Accepted Risk",
-      "accepted_risk": "AR-25",
+      "accepted_risk": "CR-25",
       "evidence": [
         "internal/middleware/dpop.go:17",
         "internal/service/token.go:60"

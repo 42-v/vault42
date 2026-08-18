@@ -137,7 +137,7 @@ func TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent(t *testing.
 //     zero in every deployment and the bound is inert.
 //
 // A control that cannot be switched on is not established, so the register
-// carries 2.2.3 as an accepted risk (AR-14) rather than Met. This test asserts
+// carries 2.2.3 as an accepted risk (CR-14) rather than Met. This test asserts
 // the half that exists and fails the moment the wiring lands, which is the
 // signal to promote the row.
 func TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented(t *testing.T) {
@@ -171,7 +171,7 @@ func TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented(t *testing.T)
 
 // The mandatory half of 2.2.3 is now satisfied: cmd/vault/main.go configures the
 // bound from VAULT_MAX_SESSION_LIFETIME, so a definite overall reauthentication
-// timeout is established. What remains is advisory and is carried as AR-14:
+// timeout is established. What remains is advisory and is carried as CR-14:
 //
 //   - The default is 720 hours. Section 2.2.3 says the overall timeout SHOULD be
 //     no more than 24 hours at AAL2.
@@ -180,7 +180,7 @@ func TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented(t *testing.T)
 //
 // This test pins the distinction. It fails if the bound stops being configured,
 // which would reopen the SHALL, and it fails if an inactivity timeout appears,
-// which is the signal to narrow AR-14 again.
+// which is the signal to narrow CR-14 again.
 func TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue(t *testing.T) {
 	main := readCodeOnly(t, "cmd/vault/main.go")
 	if !strings.Contains(main, "SetMaxSessionLifetime") {
@@ -197,16 +197,16 @@ func TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValu
 		t.Fatalf("2.2.3: the absolute session lifetime defaults to %q, which establishes no bound", m[1])
 	}
 	if hours <= 24 {
-		t.Fatalf("2.2.3: the default is now %d hours, inside the 24-hour SHOULD. AR-14 narrows further: update the register and this assertion.", hours)
+		t.Fatalf("2.2.3: the default is now %d hours, inside the 24-hour SHOULD. CR-14 narrows further: update the register and this assertion.", hours)
 	}
-	t.Logf("2.2.3: overall reauthentication timeout established at %d hours; the AAL2 SHOULD is 24 (AR-14)", hours)
+	t.Logf("2.2.3: overall reauthentication timeout established at %d hours; the AAL2 SHOULD is 24 (CR-14)", hours)
 
 	// The inactivity half has no mechanism at all: no column records last
 	// activity and no decision consults one.
 	schema := readProductionSource(t, "migrations/001_initial_schema.sql")
 	for _, column := range []string{"last_activity_at", "last_used_at", "idle_expires_at"} {
 		if strings.Contains(schema, column) {
-			t.Fatalf("2.2.3: %s now exists, so an inactivity timeout is possible. Narrow AR-14 and replace this assertion.", column)
+			t.Fatalf("2.2.3: %s now exists, so an inactivity timeout is possible. Narrow CR-14 and replace this assertion.", column)
 		}
 	}
 }

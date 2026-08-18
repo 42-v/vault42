@@ -113,7 +113,7 @@ Through 0.9.9 refresh rotation issued a fresh full TTL every time, so the 7-day
 window slid indefinitely and no definite timeout existed at all. That SHALL is
 now satisfied: migration 013 gives every rotation family a stored birth date and
 `VAULT_MAX_SESSION_LIFETIME` bounds its total age. The two SHOULDs are not, and
-that residual is AR-14.
+that residual is CR-14.
 
 **OWASP ASVS 5.0.0.** The two new chapters, V9 (Self-contained Tokens) and V10
 (OAuth and OIDC), let vault42 claim *more*, not less. Through 0.9.9 the JWT
@@ -128,7 +128,7 @@ Supply Chain Failures** is new, and it is the category vault42 was best placed t
 evidence all along: SBOM, SLSA build provenance and keyless cosign signatures
 have shipped since 0.8 and were cited nowhere. **A09** was renamed to
 *Security Logging and **Alerting** Failures*, and that single word moves vault42
-off Met, because nothing in the tree raises an alert. See AR-15.
+off Met, because nothing in the tree raises an alert. See CR-15.
 
 ---
 
@@ -143,9 +143,9 @@ versions should be able to see what changed and why.
 | **V6.2.2 Partial** -- "document the RFC 6238 SHA-1 constraint in the TOTP module" | The comment already existed, at `internal/crypto/totp.go:5`. The finding requested a remediation that had shipped. Now Met. |
 | **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:721` precedes `Create` at `:766`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
 | **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 259 lines and `charts/vault/values.yaml:283` enables it **by default**. Now Met. |
-| **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **11** string-typed configuration secrets, not 2. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. Scope corrected in AR-4 and AR-25. |
-| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. The buffer that is not wiped, and which the finding never mentioned, is the decrypted **RSA private signing key PEM** at `internal/keystore/keystore.go:297`. Recorded in AR-25 at the severity it deserves. |
-| **AU-9 and GDPR-14** | The same finding, filed twice. The GDPR row even said "Tracked as AU-9 above" while being counted separately. Now one accepted risk, AR-24, referenced from both rows. |
+| **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **11** string-typed configuration secrets, not 2. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. Scope corrected in `docs/security.md` AR-4 and in CR-25. |
+| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. The buffer that is not wiped, and which the finding never mentioned, is the decrypted **RSA private signing key PEM** at `internal/keystore/keystore.go:297`. Recorded in CR-25 at the severity it deserves. |
+| **AU-9 and GDPR-14** | The same finding, filed twice. The GDPR row even said "Tracked as AU-9 above" while being counted separately. Now one accepted risk, CR-24, referenced from both rows. |
 
 There is also a class of error the register makes impossible to repeat: **four of
 the five ASVS partials were filed under identifiers whose actual requirement text
@@ -165,7 +165,7 @@ until it describes a different requirement, and nothing catches it.
 For completeness, the ASVS 5.0.0 mapping marks `v4.0.3-8.3.2` as **DELETED, NOT
 IN SCOPE**. The memory-zeroing concern the old finding described has no L1 or L2
 successor in the current standard; the only related requirement, V11.7.1 (full
-memory encryption), is L3. The underlying gap is still recorded, as AR-25, rather
+memory encryption), is L3. The underlying gap is still recorded, as CR-25, rather
 than being retired on a technicality.
 
 ---
@@ -194,20 +194,44 @@ previously.
 
 Full text for each, including the compensating control, the residual risk and the
 revisit condition, is in the `accepted_risks` section of
-[`docs/compliance-register.json`](compliance-register.json). AR-1 through AR-12
-are the pre-existing entries in [`docs/security.md`](security.md).
+[`docs/compliance-register.json`](compliance-register.json).
+
+### Two namespaces, deliberately disjoint
+
+**`AR-nn` belongs to [`docs/security.md`](security.md)**, which defines AR-1
+through AR-18. **`CR-nn` belongs to this register.** Go source comments and the
+tests under `tests/attack/` cite `AR-nn` and always mean `docs/security.md`.
+
+Through 1.0.0 both documents numbered from one sequence, and four numbers meant
+different things in the two files:
+
+| ID | `docs/security.md` | this register, before the rename |
+|---|---|---|
+| AR-14 | the admin role-escalation triggers are not a boundary against SQL that reaches the database | session timeouts |
+| AR-15 | what keeps a forged signing key out of JWKS is the master key, not the grant | no alerting |
+| AR-17 | what stops `vault_app` issuing itself a capability credential is a trigger, not the grant | no outbound egress allowlist |
+| AR-18 | `vault_app` can still release an account lock, and owns every password hash | *(undefined)* |
+
+A reader following a cross-reference landed on an unrelated risk, and the
+sentence that used to close this document asserted that "AR-16 has since closed"
+while `docs/security.md` AR-16 -- *a `mint:token` holder can assert any subject
+the estate honors* -- was open, and remains open. The register's identifiers
+were renumbered to `CR-nn` so the collision cannot recur.
+`TestComplianceRegister_RiskIdentifierNamespacesDoNotCollide` fails on a new
+collision, and on any `AR-nn` or `CR-nn` reference in `docs/` that resolves to
+neither namespace.
 
 | ID | Severity | What is accepted | Requirements affected |
 |---|---|---|---|
-| **AR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
-| **AR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a hardcoded severity tag that no code reads, and the only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
-| **AR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
-| **AR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
-| **AR-21** | Low | Tokens carry no `acr`, `amr` or `aal` claim, so a resource server cannot require a specific authentication strength. The AAL constants exist and are tested but have no non-test caller. | ASVS V6.8.4, V10.3.4 |
-| **AR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
-| **AR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
-| **AR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
-| **AR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, some decrypted buffers are not zeroed, including the RSA private signing key PEM. | RFC 9449 §4.10.1 |
+| **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
+| **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a hardcoded severity tag that no code reads, and the only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
+| **CR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
+| **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
+| **CR-21** | Low | Tokens carry no `acr`, `amr` or `aal` claim, so a resource server cannot require a specific authentication strength. The AAL constants exist and are tested but have no non-test caller. | ASVS V6.8.4, V10.3.4 |
+| **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
+| **CR-23** | Low | Outbound SMTP negotiates STARTTLS opportunistically with no minimum version. Mail carries no credential, only single-use short-lived links and codes. | ASVS V12.3.1 |
+| **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
+| **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, some decrypted buffers are not zeroed, including the RSA private signing key PEM. | RFC 9449 §4.10.1 |
 
 ---
 
@@ -273,16 +297,16 @@ None. Every requirement is Met or carries an accepted risk with a named owner.
 One item is recorded here because it is scheduled to close inside 1.0.0 on
 another work stream and the register will be updated when it lands:
 
-1. **AR-14** closes when `SetMaxSessionLifetime` is called from
+1. **CR-14** closes when `SetMaxSessionLifetime` is called from
    `cmd/vault/main.go` with a configured default. The mechanism, the schema
    column and the fail-closed enforcement are already in place; only the wiring
    is missing. `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` fails when it
    lands.
 
 It is tracked by a test that fails on closure rather than on regression, so a
-fix cannot land without the register being updated in the same change. AR-19,
+fix cannot land without the register being updated in the same change. CR-19,
 the login-outcome enumeration oracle, has since closed: account_locked, the
 import-claim path, banned and disabled now all answer 401 invalid_credentials
-without a valid password. AR-16 has since closed too: `RBACCheck` now writes an
+without a valid password. CR-16 has since closed too: `RBACCheck` now writes an
 `admin_authz_denied` record on a permission denial, so a failed authorization
 decision reaches the audit log instead of leaving no trail.

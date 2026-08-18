@@ -327,7 +327,7 @@ func localCallsAfter(body string, offset int) []string {
 // This is the requirement the sliding-window issue lands on. Rotation currently
 // stamps a fresh full TTL on every refresh and no column records when the
 // family was created, so a continuously refreshing client holds a session
-// indefinitely. The register carries it as an accepted risk (AR-14) until the
+// indefinitely. The register carries it as an accepted risk (CR-14) until the
 // family-age column lands.
 //
 // This test asserts the half that holds, an expiry on each individual token,
@@ -349,7 +349,7 @@ func TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded(t *testi
 
 	for _, column := range []string{"family_created_at", "family_expires_at", "absolute_expires_at"} {
 		if strings.Contains(schema, column) {
-			t.Fatalf("V10.4.8: %s now exists. AR-14 is closed: move the register row to Met and replace this test with an assertion that a family older than the cap is refused.", column)
+			t.Fatalf("V10.4.8: %s now exists. CR-14 is closed: move the register row to Met and replace this test with an assertion that a family older than the cap is refused.", column)
 		}
 	}
 }
