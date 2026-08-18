@@ -28,13 +28,15 @@ func NewRefreshTokenRepo(db *DB) *RefreshTokenRepo {
 const refreshFamilyLockClass int32 = 0x52544b46 // "RTKF"
 
 // insertRefreshRowSQL inserts one refresh-token row and carries the family's
-// birth date and both anti-race guards. It is shared verbatim by Create and
-// CreateWithinCap so the two insert paths cannot drift: see Create for what each
-// clause defends.
+// birth date, the family's DPoP binding and both anti-race guards. It is shared
+// verbatim by Create and CreateWithinCap so the two insert paths cannot drift:
+// see Create for what each clause defends.
 const insertRefreshRowSQL = `
-	INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at)
+	INSERT INTO auth.refresh_tokens (id, user_id, client_id, token_hash, family_id, device_id, fingerprint_hash, expires_at, created_at, family_created_at, dpop_jkt)
 	SELECT $1::uuid, $2::uuid, $3::uuid, $4::varchar, $5::uuid, $6::uuid, $7::varchar, $8::timestamptz, $9::timestamptz,
-	       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)
+	       COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9),
+	       (SELECT CASE WHEN COUNT(*) = 0 THEN $10::varchar ELSE MIN(dpop_jkt) END
+	          FROM auth.refresh_tokens WHERE family_id = $5)
 	WHERE COALESCE((SELECT bool_or(family.revoked)
 	                FROM (SELECT revoked FROM auth.refresh_tokens WHERE family_id = $5 ORDER BY id FOR UPDATE) AS family), FALSE) = FALSE
 	  AND EXISTS (SELECT 1 FROM auth.users WHERE id = $2 AND deleted = FALSE)`
@@ -51,7 +53,7 @@ func refreshTokenInsertArgs(token *model.RefreshToken) []any {
 	return []any{
 		token.ID, token.UserID, nullStr(token.ClientID), token.TokenHash,
 		token.FamilyID, nullStr(token.DeviceID), nullStr(token.FingerprintHash),
-		token.ExpiresAt, token.CreatedAt,
+		token.ExpiresAt, token.CreatedAt, nullStr(token.DPoPJKT),
 	}
 }
 
@@ -63,6 +65,20 @@ func refreshTokenInsertArgs(token *model.RefreshToken) []any {
 // inside the same statement, and only a family with no rows yet (a genuine new
 // session) falls back to this token's own created_at. A caller cannot extend a
 // session by lying about it, because it never supplies the value.
+//
+// SECURITY INVARIANT (DPoP rotation binding, RFC 9449 §5, migration 038):
+// dpop_jkt is the family's sender constraint and a rotation must never be able
+// to move it, in either direction. It is therefore taken from the caller on
+// exactly one insert — the first of a family, where a login's validated proof
+// establishes it — and read back from the family on every other. That is the
+// same argument family_created_at above makes, and it is stronger here because
+// the caller is the thing under attack: whoever holds the opaque refresh cookie
+// reaches this path, and if the value came from them, they would re-bind the
+// session to a key they generated and can export. The CASE distinguishes an
+// empty family from an unbound one, which COALESCE cannot: NULL is a meaningful
+// value in this column (an ordinary bearer family), so a family that exists and
+// is unbound inherits its own NULL rather than falling through to the argument,
+// and a presented proof cannot upgrade it.
 //
 // SECURITY INVARIANT (reuse detection): the insert is conditional on the family
 // carrying no revoked row, and returns repository.ErrFamilyRevoked instead of
@@ -199,14 +215,14 @@ func (r *RefreshTokenRepo) FamilyOrigin(ctx context.Context, familyID string) (t
 // GetByTokenHash retrieves a refresh token by its SHA-256 hash. Returns nil, nil if not found.
 func (r *RefreshTokenRepo) GetByTokenHash(ctx context.Context, hash string) (*model.RefreshToken, error) {
 	var t model.RefreshToken
-	var clientID, deviceID, fpHash *string
+	var clientID, deviceID, fpHash, jkt *string
 	err := r.db.Pool.QueryRow(ctx, `
 		SELECT id, user_id, COALESCE(client_id::text, ''), token_hash, family_id,
 		       COALESCE(device_id::text, ''), COALESCE(fingerprint_hash, ''),
-		       expires_at, used, revoked, created_at
+		       COALESCE(dpop_jkt, ''), expires_at, used, revoked, created_at
 		FROM auth.refresh_tokens WHERE token_hash = $1`, hash).Scan(
 		&t.ID, &t.UserID, &clientID, &t.TokenHash, &t.FamilyID,
-		&deviceID, &fpHash, &t.ExpiresAt, &t.Used, &t.Revoked, &t.CreatedAt,
+		&deviceID, &fpHash, &jkt, &t.ExpiresAt, &t.Used, &t.Revoked, &t.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -217,6 +233,11 @@ func (r *RefreshTokenRepo) GetByTokenHash(ctx context.Context, hash string) (*mo
 	t.ClientID = deref(clientID)
 	t.DeviceID = deref(deviceID)
 	t.FingerprintHash = deref(fpHash)
+	// The rotation path reads this to decide whether a proof is required and to
+	// mint the successor's cnf.jkt. It is the only reason the column is on the
+	// read path at all, so a store that stops returning it silently unbinds
+	// every family rather than failing.
+	t.DPoPJKT = deref(jkt)
 	return &t, nil
 }
 

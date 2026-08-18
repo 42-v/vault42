@@ -118,6 +118,7 @@ const errorKeys: Record<string, string> = {
   dpop_proof_required: 'error.invalid_request',
   invalid_dpop_proof: 'error.invalid_request',
   dpop_thumbprint_mismatch: 'error.invalid_request',
+  dpop_scheme_required: 'error.invalid_request',
   internal_error: 'error.internal_error',
   internal_server_error: 'error.internal_error',
   import_claim_failed: 'error.internal_error',

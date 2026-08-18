@@ -74,10 +74,17 @@ func TestRefreshTokenRepo_FamilyOriginOfAVanishedFamilyIsZero(t *testing.T) {
 }
 
 // The invariant is structural, so the test is too: a rotation must not be able to
-// hand the database a new family origin. Create takes nine parameters and derives
-// the tenth column from the family itself, and no future edit may quietly turn
-// that into a bound parameter — a $10 here is a session that renews its own
-// deadline, which is exactly the finding migration 013 closes.
+// hand the database a new family origin. family_created_at is derived from the
+// family itself, and no future edit may quietly turn it into a bound parameter —
+// a caller-supplied origin is a session that renews its own deadline, which is
+// exactly the finding migration 013 closes.
+//
+// This used to be spelled "Create binds nine parameters", counting the derived
+// column as the tenth. That proxy expired when migration 038 added dpop_jkt,
+// which is a real tenth parameter: supplied, but consumed only on a family's
+// first row. Counting was the weaker statement in any case — it says how many
+// parameters exist, never which column each one reaches — so the assertion is
+// now written against the expression that actually produces the origin.
 func TestRefreshTokenRepo_CreateNeverTakesTheFamilyOriginFromItsCaller(t *testing.T) {
 	sql := createStatementSQL(t)
 
@@ -87,8 +94,42 @@ func TestRefreshTokenRepo_CreateNeverTakesTheFamilyOriginFromItsCaller(t *testin
 	if !strings.Contains(sql, "SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5") {
 		t.Error("Create does not read the family's existing origin back; each rotation would stamp a new one")
 	}
-	if highestPlaceholder(sql) != 9 {
-		t.Errorf("Create binds %d parameters, want 9: family_created_at must be derived, never supplied", highestPlaceholder(sql))
+	// The only parameter the origin expression may fall back to is $9, the row's
+	// own created_at, which migration 013 permits for a family with no rows yet.
+	// Any other placeholder in that slot is a caller-supplied origin.
+	if !strings.Contains(sql,
+		"COALESCE((SELECT MIN(family_created_at) FROM auth.refresh_tokens WHERE family_id = $5), $9)") {
+		t.Error("the family_created_at expression is no longer COALESCE(<the family's own MIN>, $9); " +
+			"a rotation can hand the database an origin of its choosing and renew its own deadline")
+	}
+}
+
+// The same shape of invariant for the DPoP sender constraint (migration 038).
+//
+// dpop_jkt IS a bound parameter, unlike family_created_at, because a login has to
+// be able to establish a binding. So the guard cannot be "it is never supplied";
+// it is "it is consumed only when the family has no rows".
+//
+// The CASE is load-bearing and a COALESCE is not equivalent. NULL is a meaningful
+// value in this column — it is an ordinary bearer family — so COALESCE would let
+// a rotation of an UNBOUND family fall through to the caller's argument and bind
+// the session to a key the caller chose. That is the same laundering
+// AuthService.enforceDPoPBinding refuses, reached through the store instead.
+func TestRefreshTokenRepo_CreateOnlyTakesADPoPBindingForAFamilysFirstRow(t *testing.T) {
+	sql := createStatementSQL(t)
+
+	if !strings.Contains(sql, "dpop_jkt") {
+		t.Fatal("Create does not write dpop_jkt; a rotation then has no stored binding to be held " +
+			"to, and mints cnf.jkt from whoever presented the cookie")
+	}
+	if !strings.Contains(sql, "CASE WHEN COUNT(*) = 0 THEN $10::varchar ELSE MIN(dpop_jkt) END") {
+		t.Error("the dpop_jkt expression no longer distinguishes an empty family from an unbound " +
+			"one; a COALESCE here lets a presented proof bind a family that never had a binding, " +
+			"and lets a rotation re-bind one that did")
+	}
+	if highestPlaceholder(sql) != 10 {
+		t.Errorf("Create binds %d parameters, want 10: the row's nine columns plus the binding a "+
+			"login establishes on the family's first row", highestPlaceholder(sql))
 	}
 }
 
@@ -107,9 +148,12 @@ func TestRefreshTokenRepo_CreateRefusesARotationIntoAnErasedAccount(t *testing.T
 			"rather than marking them, so the revoked-row guard has nothing left to see and a rotation " +
 			"in flight repopulates the family it just emptied")
 	}
-	if highestPlaceholder(sql) != 9 {
-		t.Errorf("Create binds %d parameters, want 9: the account gate must reuse the user id the row "+
-			"already carries, not take one of its own", highestPlaceholder(sql))
+	// The gate must reuse the user id the row already carries rather than take one
+	// of its own; a second user-id parameter is a gate that can be pointed at a
+	// different account than the row is written for. Asserted as the expression
+	// rather than as a parameter count, for the reason given above.
+	if strings.Contains(sql, "FROM auth.users WHERE id = $11") {
+		t.Error("the account gate binds a user id of its own instead of reusing $2")
 	}
 }
 

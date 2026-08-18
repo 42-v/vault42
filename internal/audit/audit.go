@@ -80,6 +80,17 @@ const (
 	RateLimit = "rate_limit"
 	// FingerprintAnomaly records a fingerprint mismatch on token refresh.
 	FingerprintAnomaly = "fingerprint_anomaly"
+	// DPoPBindingMismatch records a refused rotation of a DPoP-bound refresh
+	// family: the caller presented the refresh cookie but did not prove
+	// possession of the key the family was bound to (RFC 9449 §5). Metadata
+	// carries the family's expected thumbprint and whether any proof arrived,
+	// never the thumbprint the caller chose. It is the signal that a refresh
+	// cookie is in use by something other than the browser it was issued to,
+	// and it is deliberately NOT in isCriticalEvent: the caller decides how
+	// many of these to generate, and a synchronous write per attempt would be
+	// a lever on the audit path. FingerprintAnomaly, the control it sits
+	// beside, is buffered for the same reason.
+	DPoPBindingMismatch = "dpop_binding_mismatch"
 	// OAuth2Authorize records an OAuth2 authorization redirect initiation.
 	OAuth2Authorize = "oauth2_authorize"
 	// OAuth2Callback records an OAuth2 callback processing result.
