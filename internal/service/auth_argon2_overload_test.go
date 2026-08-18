@@ -287,6 +287,36 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 			notWant: nil,
 		},
 		{
+			name: "login as an account under a forced password reset",
+			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{
+							ID: "user-5", Email: "forced@example.com", PasswordHash: hash,
+							EmailVerified: true, MustResetPassword: true,
+						}, nil
+					}
+					o.userRepo.IncrementFailedLoginFn = func(context.Context, string) error {
+						rec.failureCounted.Store(true)
+						return nil
+					}
+					o.emailSender.SendFn = func(context.Context, string, string, string, string) error {
+						rec.emailSent.Store(true)
+						return nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{
+					Email: "forced@example.com", Password: password, DiscloseStatus: true,
+				}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrPasswordResetRequired,
+		},
+		{
 			name: "login with the correct password",
 			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
 				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {

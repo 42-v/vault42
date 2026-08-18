@@ -356,5 +356,6 @@
   "error.forbidden": "Du har inte behörighet att göra det.",
   "error.code_already_used": "Den här koden har redan använts. Använd en ny.",
   "error.password_recently_used": "Du har använt det här lösenordet nyligen. Välj ett annat.",
-  "error.no_webauthn_credentials": "Inga säkerhetsnycklar är registrerade på det här kontot."
+  "error.no_webauthn_credentials": "Inga säkerhetsnycklar är registrerade på det här kontot.",
+  "error.password_reset_required": "Det här kontot måste återställa sitt lösenord. Vi har mejlat dig en återställningslänk."
 }

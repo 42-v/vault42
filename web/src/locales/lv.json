@@ -356,5 +356,6 @@
   "error.forbidden": "Jums nav atļaujas to darīt.",
   "error.code_already_used": "Šis kods jau ir izmantots. Lūdzu, izmantojiet jaunu.",
   "error.password_recently_used": "Jūs nesen izmantojāt šo paroli. Lūdzu, izvēlieties citu.",
-  "error.no_webauthn_credentials": "Šim kontam nav reģistrēta neviena drošības atslēga."
+  "error.no_webauthn_credentials": "Šim kontam nav reģistrēta neviena drošības atslēga.",
+  "error.password_reset_required": "Šim kontam ir jāatiestata parole. Nosūtījām jums atiestatīšanas saiti pa e-pastu."
 }

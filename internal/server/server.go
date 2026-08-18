@@ -367,7 +367,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Create handlers
 	secureCookies := cfg.TLSEnabled || cfg.ForceSecureCookies
-	authHandler := handler.NewAuthHandler(d.AuthSvc, d.Users, d.Cache, d.AuditLog, d.Pepper, secureCookies)
+	authHandler := handler.NewAuthHandler(d.AuthSvc, d.Users, d.Cache, d.AuditLog, d.Pepper, secureCookies, d.Clients)
 	userHandler := handler.NewUserHandler(d.Users, d.Devices, d.Tokens, d.MFASvc)
 	passwordHandler := handler.NewPasswordHandler(d.Users, d.PwHistory, d.Tokens, d.EmailSender, d.AuditLog, d.Cache, cfg.Origin, cfg.AppName, d.Pepper, cfg.PasswordMinLength, d.HIBP, d.HIBPEnabled)
 	passwordHandler.SetMailer(d.Mailer) // share the white-label mailer (nil is ignored)

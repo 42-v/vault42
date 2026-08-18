@@ -631,7 +631,7 @@ func TestLoginTooManySessions(t *testing.T) {
 	)
 	authSvc.SetMaxSessionsPerUser(1)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	body := jsonBody(t, map[string]string{
 		"email":    "capped@example.com",

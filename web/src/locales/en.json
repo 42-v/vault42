@@ -356,5 +356,6 @@
   "error.forbidden": "You do not have permission to do that.",
   "error.code_already_used": "That code has already been used. Please use a new one.",
   "error.password_recently_used": "You have used this password recently. Please choose a different one.",
-  "error.no_webauthn_credentials": "No security keys are registered on this account."
+  "error.no_webauthn_credentials": "No security keys are registered on this account.",
+  "error.password_reset_required": "This account must reset its password. We have emailed you a reset link."
 }

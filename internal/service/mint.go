@@ -123,6 +123,7 @@ var mintDeniedScopes = map[string]bool{
 	"kms:unwrap":   true,
 	"svcdoc:read":  true,
 	"svcdoc:write": true,
+	"login:status": true,
 	"admin":        true,
 	"admin:read":   true,
 	"admin:write":  true,

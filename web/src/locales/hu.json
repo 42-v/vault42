@@ -356,5 +356,6 @@
   "error.forbidden": "Nincs jogosultsága ehhez.",
   "error.code_already_used": "Ezt a kódot már felhasználták. Használjon újat.",
   "error.password_recently_used": "Ezt a jelszót nemrég használta. Válasszon másikat.",
-  "error.no_webauthn_credentials": "Ehhez a fiókhoz nincs biztonsági kulcs regisztrálva."
+  "error.no_webauthn_credentials": "Ehhez a fiókhoz nincs biztonsági kulcs regisztrálva.",
+  "error.password_reset_required": "Ennek a fióknak jelszót kell visszaállítania. E-mailben elküldtük a visszaállítási hivatkozást."
 }

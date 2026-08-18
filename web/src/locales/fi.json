@@ -356,5 +356,6 @@
   "error.forbidden": "Sinulla ei ole oikeutta tehdä tätä.",
   "error.code_already_used": "Tämä koodi on jo käytetty. Käytä uutta.",
   "error.password_recently_used": "Olet käyttänyt tätä salasanaa hiljattain. Valitse jokin muu.",
-  "error.no_webauthn_credentials": "Tälle tilille ei ole rekisteröity suojausavaimia."
+  "error.no_webauthn_credentials": "Tälle tilille ei ole rekisteröity suojausavaimia.",
+  "error.password_reset_required": "Tämän tilin salasana on vaihdettava. Lähetimme sinulle palautuslinkin sähköpostitse."
 }

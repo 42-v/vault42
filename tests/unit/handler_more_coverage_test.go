@@ -23,7 +23,7 @@ func TestConfirmPassword_EmptyBody_BadRequest(t *testing.T) {
 		},
 	}
 	c := &mocks.MockCache{}
-	h := handler.NewAuthHandler(nil, users, c, nil, "pepper", false)
+	h := handler.NewAuthHandler(nil, users, c, nil, "pepper", false, nil)
 
 	req, w, keys := authedRequest(t, http.MethodPost, "/auth/confirm-password", nil)
 	req.Body = &readCloserImpl{Reader: strings.NewReader(`{}`)}
@@ -37,7 +37,7 @@ func TestConfirmPassword_UserNotFound_Unauthorized(t *testing.T) {
 	users := &mocks.MockUserRepo{
 		GetByIDFn: func(_ context.Context, _ string) (*model.User, error) { return nil, nil },
 	}
-	h := handler.NewAuthHandler(nil, users, &mocks.MockCache{}, nil, "pepper", false)
+	h := handler.NewAuthHandler(nil, users, &mocks.MockCache{}, nil, "pepper", false, nil)
 
 	req, w, keys := authedRequest(t, http.MethodPost, "/auth/confirm-password", nil)
 	req.Body = &readCloserImpl{Reader: strings.NewReader(`{"password":"hunter2"}`)}

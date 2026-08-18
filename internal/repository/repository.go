@@ -84,6 +84,10 @@ type UserRepository interface {
 	CreateImported(ctx context.Context, user *model.User) error
 	// ClearImportPending marks an imported account as claimed after reset.
 	ClearImportPending(ctx context.Context, id string) error
+	// ClearMustResetPassword lifts a forced password reset once the account has
+	// set a new password. Setting the flag is an admin-plane write (migration
+	// 039), so this interface carries only the direction the web server takes.
+	ClearMustResetPassword(ctx context.Context, id string) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential

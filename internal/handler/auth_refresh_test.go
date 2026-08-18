@@ -116,7 +116,7 @@ func TestRefresh_FingerprintMismatch(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "fp-bound-token"})
@@ -196,7 +196,7 @@ func TestRefresh_MarkUsedFails(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "concurrent-token"})
@@ -252,7 +252,7 @@ func TestRefresh_MarkUsedFails(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "cas-error-token"})
@@ -296,7 +296,7 @@ func TestRefresh_GetByTokenHashError(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "db-error-token"})
@@ -353,7 +353,7 @@ func TestRefresh_SuccessfulRotation_FullResponseValidation(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "full-validation-token"})
@@ -441,7 +441,7 @@ func TestRefresh_EmptyFingerprintHash(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "no-fp-token"})
@@ -484,7 +484,7 @@ func TestRefresh_ReplayDetectedClearsCookie(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "replay-token"})
@@ -538,7 +538,7 @@ func TestRefresh_ExpiredTokenClearsCookie(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "expired-cookie-token"})
@@ -597,7 +597,7 @@ func TestRefresh_RevokedTokenClearsCookie(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "revoked-cookie-token"})
@@ -667,7 +667,7 @@ func TestRefresh_SuccessSecureCookies(t *testing.T) {
 		)
 
 		// Enable secure cookies
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", true)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", true, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "secure-token"})
@@ -731,7 +731,7 @@ func TestRefresh_WithAcceptLanguageHeader(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "lang-token"})
@@ -789,7 +789,7 @@ func TestRefresh_NewTokenStoreFailure(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "store-fail-token"})
@@ -874,7 +874,7 @@ func TestVerifyEmail_CacheGetAndDeleteError(t *testing.T) {
 			"https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token=some-token", nil)
 		rec := httptest.NewRecorder()
@@ -1230,7 +1230,7 @@ func TestRefresh_PreservesClientIDAndFamilyID(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "client-token"})
@@ -1286,7 +1286,7 @@ func TestRefresh_JustExpiredToken(t *testing.T) {
 			nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 		)
 
-		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+		h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 		req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "boundary-token"})

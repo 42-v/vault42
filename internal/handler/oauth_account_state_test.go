@@ -19,9 +19,10 @@ import (
 // so a case can assert on the refusal AND on the side effects a refusal must
 // suppress (import claim, 2FA challenge).
 type oauthGateOutcome struct {
-	rec      *httptest.ResponseRecorder
-	cleared  bool
-	location string
+	rec           *httptest.ResponseRecorder
+	cleared       bool
+	clearedForced bool
+	location      string
 }
 
 // oauthGateCase drives one account state through the callback. mfaSvc and the
@@ -52,6 +53,7 @@ func runOAuthGate(t *testing.T, c oauthGateCase) oauthGateOutcome {
 	users := &mocks.MockUserRepo{
 		GetByIDFn:            func(context.Context, string) (*model.User, error) { return c.user, nil },
 		ClearImportPendingFn: func(context.Context, string) error { out.cleared = true; return nil },
+		ClearMustResetPwFn:   func(context.Context, string) error { out.clearedForced = true; return nil },
 	}
 	cache := &mocks.MockCache{
 		GetAndDeleteFn: func(context.Context, string) (string, error) { return "verifier", nil },
@@ -206,4 +208,35 @@ func TestOAuth_Callback_AccountStateGate(t *testing.T) {
 				"supposed to stop the claim, not merely the session")
 		}
 	})
+}
+
+// A social login proves the person controls the linked provider account. It does
+// not produce a new password, and it does not make the old one safe, so it must
+// not lift a forced password reset.
+//
+// The asymmetry with import_pending directly above is deliberate and is the
+// whole point. import_pending means there is no credential on the account at
+// all, so claiming it through a provider costs nothing: nothing unsafe is left
+// live afterwards. must_reset_password means there IS a stored password and it
+// must not be used -- an unverifiable legacy hash, or one an operator has reason
+// to distrust. Clearing it here would re-open the password path on the strength
+// of a factor that says nothing about the password, which is the one thing the
+// flag exists to prevent.
+//
+// The social login itself is not refused. The flag gates the password
+// credential, not the account: a user with a working provider identity keeps it,
+// and still has to complete a reset before password login works again.
+func TestOAuth_Callback_DoesNotLiftAForcedPasswordReset(t *testing.T) {
+	out := runOAuthGate(t, oauthGateCase{
+		user: &model.User{ID: "u-forced", EmailVerified: true, MustResetPassword: true},
+	})
+
+	if out.rec.Code == http.StatusForbidden {
+		t.Fatalf("the social login was refused (%d): the flag gates the password, not the "+
+			"account: %s", out.rec.Code, out.rec.Body.String())
+	}
+	if out.clearedForced {
+		t.Error("a social login lifted the forced password reset, so a hash vault42 was told not " +
+			"to trust is live again without anyone setting a new password")
+	}
 }

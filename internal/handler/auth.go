@@ -19,6 +19,17 @@ import (
 
 const refreshTokenCookie = "__Host-refresh_token" // #nosec G101 -- cookie name constant, not a credential
 
+// LoginStatusScope is the scope a client credential must carry before
+// POST /auth/login will tell it why a login was refused rather than answering the
+// ordinary 401.
+//
+// It is its own scope, on the reasoning MintScope records: reusing an existing
+// one would mean a client granted the service-document store or the KMS oracle
+// silently acquired the ability to read account state as well. Migration 039
+// lists it among auth.capability_scopes(), so it reaches a client row through the
+// admin plane and never through a seed file.
+const LoginStatusScope = "login:status"
+
 // AuthHandler handles authentication endpoints.
 type AuthHandler struct {
 	auth          *service.AuthService
@@ -27,11 +38,89 @@ type AuthHandler struct {
 	auditLog      *audit.Logger
 	pepper        string
 	secureCookies bool
+	// clients backs the optional client-credential authentication on
+	// POST /auth/login. Nil is a working deployment: nothing can then hold
+	// LoginStatusScope, so every caller gets the public answer.
+	clients repository.ClientRepository
 }
 
 // NewAuthHandler creates a new auth handler.
-func NewAuthHandler(auth *service.AuthService, users repository.UserRepository, c cache.Cache, auditLog *audit.Logger, pepper string, secureCookies bool) *AuthHandler {
-	return &AuthHandler{auth: auth, users: users, cache: c, auditLog: auditLog, pepper: pepper, secureCookies: secureCookies}
+func NewAuthHandler(auth *service.AuthService, users repository.UserRepository, c cache.Cache, auditLog *audit.Logger, pepper string, secureCookies bool, clients repository.ClientRepository) *AuthHandler {
+	return &AuthHandler{auth: auth, users: users, cache: c, auditLog: auditLog, pepper: pepper, secureCookies: secureCookies, clients: clients}
+}
+
+// clientMayLearnLoginStatus authenticates the OPTIONAL client credentials on a
+// login request and reports whether the caller may be told the distinct refusal
+// (service.ErrPasswordResetRequired) instead of the ordinary invalid_credentials.
+//
+// Optional is the whole of the difference from POST /client/token, and it is a
+// property this function has to preserve: it returns a boolean and never an
+// error, so no outcome of client authentication can decide a user's login. A
+// request with no credentials, an unknown client, a deactivated one, a wrong
+// secret and a client without the scope all mean the same thing here -- answer
+// as if no client had asked -- and a correct password still logs the user in.
+//
+// The credential checks themselves follow ClientHandler.Token exactly, because
+// the credential is the same credential: HTTP Basic or body parameters through
+// parseClientCredentials, an Argon2 burn on the unknown-client and inactive-client
+// paths so those do not answer faster than a wrong secret, and an audit row for
+// every rejection so a brute force through this endpoint leaves the same trail it
+// leaves through the token endpoint.
+//
+// Two deliberate departures:
+//
+//   - An overloaded Argon2 semaphore is not a 503 here. It means only that the
+//     caller could not be authenticated in time, so the login continues, unchanged,
+//     towards its own verification (which will answer 503 itself if the pressure
+//     lasts). Turning a user's login into a 503 because a client credential could
+//     not be checked would be exactly the coupling this function refuses.
+//   - No burn happens when the request carries no credentials at all. A public
+//     login costs what it always cost; only a caller that chose to present a
+//     credential pays for verifying it.
+func (h *AuthHandler) clientMayLearnLoginStatus(r *http.Request) bool {
+	if h.clients == nil {
+		return false
+	}
+	clientID, clientSecret, ok := parseClientCredentials(r)
+	if !ok {
+		return false
+	}
+
+	client, err := h.clients.GetByID(r.Context(), clientID)
+	if err != nil || client == nil {
+		if _, dummyErr := vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash); errors.Is(dummyErr, vaultcrypto.ErrArgon2Overloaded) {
+			return false
+		}
+		auditClientAuthFailure(h.auditLog, r, clientID, "unknown_client")
+		return false
+	}
+	if !client.Active {
+		if _, dummyErr := vaultcrypto.VerifyPassword(clientSecret, client.SecretHash); errors.Is(dummyErr, vaultcrypto.ErrArgon2Overloaded) {
+			return false
+		}
+		auditClientAuthFailure(h.auditLog, r, client.ID, "inactive_client")
+		return false
+	}
+	valid, verifyErr := vaultcrypto.VerifyPassword(clientSecret, client.SecretHash)
+	if errors.Is(verifyErr, vaultcrypto.ErrArgon2Overloaded) {
+		return false
+	}
+	if verifyErr != nil || !valid {
+		auditClientAuthFailure(h.auditLog, r, client.ID, "wrong_secret")
+		return false
+	}
+
+	for _, s := range client.Scopes {
+		if s == LoginStatusScope {
+			return true
+		}
+	}
+	// Authenticated but not authorized. Audited under its own reason: a
+	// first-party client that started asking for a status it was never granted
+	// is either misconfigured or not the client it claims to be, and neither is
+	// visible in the response, which is identical to the public one.
+	auditClientAuthFailure(h.auditLog, r, client.ID, "scope_not_granted")
+	return false
 }
 
 // Register handles POST /auth/register.
@@ -87,11 +176,26 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		TLSFingerprint: middleware.TLSFingerprint(r),
 	}
 
+	// Optional client-credential authentication. It decides one thing only: does
+	// this caller get to be told WHY a login was refused. It cannot decide
+	// whether the login succeeds, and the body cannot assert it -- DiscloseStatus
+	// is json:"-" and the decoder above rejects unknown fields, so the only way
+	// in is a verified client secret carrying LoginStatusScope.
+	input.DiscloseStatus = h.clientMayLearnLoginStatus(r)
+
 	result, err := h.auth.Login(r.Context(), input, ip, ua)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidCredentials):
 			WriteError(w, http.StatusUnauthorized, "invalid_credentials")
+		// 403 rather than 401: the account exists, this is a refusal by policy,
+		// and it is not a credential the caller can correct by retrying -- the
+		// same shape as account_banned, account_disabled and account_locked. The
+		// code says a reset was required and mailed and nothing else: not the
+		// address, not the account id, and not whether the password was right,
+		// which this branch never checked.
+		case errors.Is(err, service.ErrPasswordResetRequired):
+			WriteError(w, http.StatusForbidden, "password_reset_required")
 		case errors.Is(err, service.ErrAccountLocked):
 			WriteError(w, http.StatusForbidden, "account_locked")
 		case errors.Is(err, service.ErrAccountBanned):

@@ -356,5 +356,6 @@
   "error.forbidden": "Não tem permissão para fazer isso.",
   "error.code_already_used": "Este código já foi utilizado. Utilize um novo.",
   "error.password_recently_used": "Utilizou esta palavra-passe recentemente. Escolha outra.",
-  "error.no_webauthn_credentials": "Não existem chaves de segurança registadas nesta conta."
+  "error.no_webauthn_credentials": "Não existem chaves de segurança registadas nesta conta.",
+  "error.password_reset_required": "Esta conta tem de redefinir a palavra-passe. Enviámos-lhe um link por email."
 }

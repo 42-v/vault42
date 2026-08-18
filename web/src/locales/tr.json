@@ -356,5 +356,6 @@
   "error.forbidden": "Bunu yapmak için izniniz yok.",
   "error.code_already_used": "Bu kod zaten kullanıldı. Lütfen yeni bir kod kullanın.",
   "error.password_recently_used": "Bu parolayı yakın zamanda kullandınız. Lütfen farklı bir parola seçin.",
-  "error.no_webauthn_credentials": "Bu hesapta kayıtlı güvenlik anahtarı yok."
+  "error.no_webauthn_credentials": "Bu hesapta kayıtlı güvenlik anahtarı yok.",
+  "error.password_reset_required": "Bu hesabın parolasını sıfırlaması gerekiyor. Size e-postayla bir sıfırlama bağlantısı gönderdik."
 }

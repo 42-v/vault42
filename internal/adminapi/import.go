@@ -25,6 +25,20 @@ type importUser struct {
 	LegacyID  string   `json:"legacy_id"`
 	Locale    string   `json:"locale"`
 
+	// MustResetPassword puts the account under a forced password reset the
+	// moment it is created (migration 039). Its first login then verifies
+	// nothing, mails a reset link and refuses, and the account is ordinary
+	// again once that reset completes.
+	//
+	// This is the answer to a source system whose password hashes vault42
+	// cannot verify -- a bcrypt, an MD5, anything that is not Argon2id. Without
+	// it those accounts answer every correct password with invalid_credentials
+	// and no explanation, because there is nothing here that can check them.
+	// Absent or false imports the account with no such demand, which is right
+	// for a migration that carries no credentials at all: import_pending
+	// already covers that case and mails its own claim link.
+	MustResetPassword bool `json:"must_reset_password,omitempty"`
+
 	// MarketingEmails carries the source system's marketing preference. It is
 	// stored with source=import, which is deliberately NOT treated as affirmative
 	// consent: a migrated flag may be a default the user was never shown (this is
@@ -67,7 +81,7 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := make([]importResult, 0, len(req.Users))
-	var imported, consentFailed int
+	var imported, consentFailed, forcedReset int
 	for _, u := range req.Users {
 		email := strings.ToLower(strings.TrimSpace(u.Email))
 		if !sanitize.Email(email) {
@@ -99,10 +113,15 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 			LegacyID:     u.LegacyID,
 			CreatedAt:    now,
 			UpdatedAt:    now,
+
+			MustResetPassword: u.MustResetPassword,
 		}
 		if err := h.users.CreateImported(r.Context(), user); err != nil {
 			results = append(results, importResult{Email: email, Status: "error", Error: "create_failed"})
 			continue
+		}
+		if u.MustResetPassword {
+			forcedReset++
 		}
 		if u.MarketingEmails != nil {
 			if h.identity == nil {
@@ -133,11 +152,13 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "admin:users_import", actor.ID, "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{
 				"source": source, "submitted": len(req.Users), "imported": imported,
-				"consent_failed": consentFailed,
+				"consent_failed": consentFailed, "must_reset_password": forcedReset,
+				"reason": "admin_import",
 			}, 0)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"source": source, "submitted": len(req.Users), "imported": imported,
-		"consent_failed": consentFailed, "results": results,
+		"consent_failed": consentFailed, "must_reset_password": forcedReset,
+		"results": results,
 	})
 }

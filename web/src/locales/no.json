@@ -356,5 +356,6 @@
   "error.forbidden": "Du har ikke tillatelse til å gjøre det.",
   "error.code_already_used": "Denne koden er allerede brukt. Bruk en ny.",
   "error.password_recently_used": "Du har brukt dette passordet nylig. Velg et annet.",
-  "error.no_webauthn_credentials": "Det er ikke registrert noen sikkerhetsnøkler på denne kontoen."
+  "error.no_webauthn_credentials": "Det er ikke registrert noen sikkerhetsnøkler på denne kontoen.",
+  "error.password_reset_required": "Denne kontoen må tilbakestille passordet. Vi har sendt deg en lenke på e-post."
 }

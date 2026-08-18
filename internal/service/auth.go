@@ -77,8 +77,19 @@ var (
 	// fallback for accounts with no second factor when MFA is required.
 	ErrEmailOTPNotAllowed = errors.New("email OTP not permitted for this account")
 	ErrMFARequired        = errors.New("MFA verification required")
-	ErrChallengeConsumed  = errors.New("challenge token already consumed")
-	ErrTooManySessions    = errors.New("maximum concurrent sessions reached")
+	// ErrPasswordResetRequired is returned when the account carries
+	// must_reset_password: its stored password may not be used to sign in, a
+	// reset link has been mailed out of band, and no session was issued.
+	//
+	// It reaches a caller only when LoginInput.DiscloseStatus is set, which the
+	// transport sets only for a client that authenticated with client
+	// credentials carrying the login:status scope. Every other caller is
+	// answered with ErrInvalidCredentials from the same branch, after the same
+	// work, because a distinct outcome on an unauthenticated login says the
+	// address is registered (ASVS V2.1.1).
+	ErrPasswordResetRequired = errors.New("password reset required")
+	ErrChallengeConsumed     = errors.New("challenge token already consumed")
+	ErrTooManySessions       = errors.New("maximum concurrent sessions reached")
 	// ErrSessionExpired is returned when a refresh-token family has reached the
 	// absolute session lifetime and must reauthenticate regardless of activity
 	// (NIST SP 800-63B-4 §2.2.3). It wraps ErrTokenExpired so every transport that
@@ -562,54 +573,91 @@ func (s *AuthService) auditVerificationNotSent(ctx context.Context, userID, to, 
 		}, 0)
 }
 
-// importClaimTTL is how long an import claim link stays valid, and therefore also
-// how often a new one may be minted for the same account.
+// importClaimTTL is how long a login-triggered reset link stays valid, and
+// therefore also how often a new one may be minted for the same account.
 const importClaimTTL = time.Hour
 
-// sendImportClaimLink mints a one-time reset token (compatible with the
-// password reset-confirm flow) for an imported account and emails the magic
-// link. Fire-and-forget; failures are logged, not surfaced (anti-enumeration).
-//
-// SECURITY INVARIANT: at most one claim link per account per importClaimTTL. The
-// caller is an unauthenticated login attempt, so without the throttle anyone who
-// knows an imported address holds two primitives: mail the account holder at will,
-// and invalidate whatever claim link they are in the middle of using, because each
-// mint revokes the previous one. The reservation is taken before any work so the
-// invalidation below cannot run more often than the send.
+// resetLinkKind is the difference between the two account states that mail a
+// reset link from the login path. Everything else about the two sends is
+// identical, which is why they share one implementation: they mint the same
+// token into the same keys, and a second copy of that would be a second place
+// for the throttle or the invalidation to be got wrong.
+type resetLinkKind struct {
+	// reserveKey prefixes the throttle reservation. The two states hold
+	// SEPARATE reservations on purpose. Sharing one would let whichever state
+	// mailed first suppress the other's mail for the rest of the window, and an
+	// account can be in both: an import is claimed through the claim link and
+	// can still be carrying a forced reset afterwards, which would then never be
+	// mailed and never be escapable.
+	reserveKey string
+	// urlSuffix is appended to the reset URL. The import claim carries import=1,
+	// which is what tells the frontend to word the page as claiming a migrated
+	// account rather than as an ordinary reset.
+	urlSuffix string
+	// label names the state in log lines.
+	label string
+}
+
+var (
+	importClaimLink = resetLinkKind{reserveKey: "import_claim_sent:", urlSuffix: "&import=1", label: "import claim"}
+	forcedResetLink = resetLinkKind{reserveKey: "forced_reset_sent:", urlSuffix: "", label: "forced password reset"}
+)
+
+// sendImportClaimLink mails the claim link for an unclaimed imported account.
 func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
+	s.sendResetLink(userID, emailAddr, app, importClaimLink)
+}
+
+// sendForcedResetLink mails the reset link for an account whose stored password
+// may no longer be used (model.User.MustResetPassword).
+func (s *AuthService) sendForcedResetLink(userID, emailAddr, app string) {
+	s.sendResetLink(userID, emailAddr, app, forcedResetLink)
+}
+
+// sendResetLink mints a one-time reset token (compatible with the password
+// reset-confirm flow) and emails the magic link. Fire-and-forget; failures are
+// logged, not surfaced (anti-enumeration).
+//
+// SECURITY INVARIANT: at most one link per account per state per importClaimTTL.
+// The caller is an unauthenticated login attempt, so without the throttle anyone
+// who knows the address holds two primitives: mail the account holder at will,
+// and invalidate whatever link they are in the middle of using, because each mint
+// revokes the previous one. The reservation is taken before any work so the
+// invalidation below cannot run more often than the send.
+func (s *AuthService) sendResetLink(userID, emailAddr, app string, kind resetLinkKind) {
 	if s.cache == nil || s.emailSender == nil {
 		return
 	}
 	deferwork.Go(func(ctx context.Context) {
-		// Fail closed on a cache error: an unthrottled send is worse than a claim
-		// link the user re-requests, and the claim token needs this same cache to
-		// be stored at all.
-		reserved, err := s.cache.SetIfNotExists(ctx, "import_claim_sent:"+userID, "1", importClaimTTL)
+		// Fail closed on a cache error: an unthrottled send is worse than a link
+		// the user re-requests, and the token needs this same cache to be stored
+		// at all.
+		reserved, err := s.cache.SetIfNotExists(ctx, kind.reserveKey+userID, "1", importClaimTTL)
 		if err != nil || !reserved {
 			return
 		}
-		// Invalidate any prior outstanding claim link so only the latest is valid.
+		// Invalidate any prior outstanding link so only the latest is valid.
 		if oldHash, err := s.cache.GetAndDelete(ctx, "pwreset_user:"+userID); err == nil && oldHash != "" {
 			s.cache.Delete(ctx, "reset:"+oldHash) // #nosec G104 -- best-effort invalidation
 		}
 		token, err := vaultcrypto.RandomHex(32)
 		if err != nil {
-			log.Printf("auth: import claim token gen failed: %v", err)
+			log.Printf("auth: %s token gen failed: %v", kind.label, err)
 			return
 		}
 		tokenHash := vaultcrypto.SHA256Hex(token)
 		// Same keys the password ResetConfirm handler consumes.
 		if err := s.cache.Set(ctx, "reset:"+tokenHash, userID, importClaimTTL); err != nil {
-			log.Printf("auth: import claim token store failed: %v", err)
+			log.Printf("auth: %s token store failed: %v", kind.label, err)
 			return
 		}
 		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, importClaimTTL) // #nosec G104 -- reverse map for invalidation, best-effort
 
-		claimURL := s.origin + "/reset-password?token=" + token + "&import=1"
+		resetURL := s.origin + "/reset-password?token=" + token + kind.urlSuffix
 		if err := s.emailMailer().Send(ctx, app, vaultemail.TemplatePasswordReset, emailAddr, vaultemail.TemplateData{
-			URL: claimURL,
+			URL: resetURL,
 		}); err != nil {
-			log.Printf("auth: failed to send import claim email to %s: %v", maskEmail(emailAddr), err)
+			log.Printf("auth: failed to send %s email to %s: %v", kind.label, maskEmail(emailAddr), err)
 		}
 	})
 }
@@ -621,6 +669,17 @@ type LoginInput struct {
 	RememberMe  bool   `json:"remember_me"`
 	ClientID    string `json:"client_id"`
 	Fingerprint vaultcrypto.FingerprintInput
+	// DiscloseStatus permits the one refusal that is allowed to say why:
+	// ErrPasswordResetRequired instead of ErrInvalidCredentials on an account
+	// carrying must_reset_password. Nothing else about the login changes with
+	// it, and no other outcome consults it.
+	//
+	// It is json:"-" and set by the transport after it has verified client
+	// credentials against auth.clients and found the login:status scope on that
+	// row. ClientID above is self-asserted body text and proves nothing, so it
+	// must never be what decides this. The login handler rejects unknown JSON
+	// fields, so a body naming this one is a 400 rather than a way in.
+	DiscloseStatus bool `json:"-"`
 }
 
 // LoginResult is the login response.
@@ -853,6 +912,40 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		}
 		s.sendImportClaimLink(user.ID, user.Email, app)
 		s.recordLoginFailure(ctx, user, ip, ua, app, "import_claim_required", 20)
+		return nil, ErrInvalidCredentials
+	}
+
+	// Forced password reset (migration 039): the stored password may not be used
+	// to sign in, so there is nothing to verify and no session to issue. An
+	// account imported with a hash vault42 cannot parse is the motivating case;
+	// an operator may set the flag on any account.
+	//
+	// It is decided AFTER the import branch, deliberately, because an account can
+	// be in both states and they are not the same state. An unclaimed import has
+	// no credential at all and its mail has to carry import=1 so the page words
+	// itself as claiming a migrated account; a forced reset is about a credential
+	// that exists and must not be used. Taking the import first means this branch
+	// changes no outcome an imported account already had, and the reset-confirm
+	// handler clears both flags on the one round trip, so an account in both
+	// states leaves both at once.
+	//
+	// SECURITY INVARIANT (anti-enumeration, ASVS V2.1.1): every side effect here
+	// is the side effect of a wrong password, and the returned error is the same
+	// one unless the caller has proven it is a first-party client authorized for
+	// the status. The same dummy Argon2id burn (honoring overload, mutating
+	// nothing when it fires), the same recordLoginFailure bookkeeping so lockout
+	// progresses at the same rate, the same throttled out-of-band mail. Only the
+	// last line differs, and only for a caller that authenticated with client
+	// credentials carrying login:status.
+	if user.MustResetPassword {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.sendForcedResetLink(user.ID, user.Email, app)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "password_reset_required", 20)
+		if input.DiscloseStatus {
+			return nil, ErrPasswordResetRequired
+		}
 		return nil, ErrInvalidCredentials
 	}
 

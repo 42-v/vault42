@@ -55,6 +55,7 @@ func (m *mockUserRepo) VerifyEmail(context.Context, string) error               
 func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
 func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
 func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
+func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error     { return nil }
 func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 
 type mockClientRepo struct {

@@ -25,6 +25,7 @@ const errorKeys: Record<string, string> = {
   invalid_token_type: 'error.session_expired',
   missing_refresh_token: 'error.session_expired',
   challenge_consumed: 'error.session_expired',
+  password_reset_required: 'error.password_reset_required',
   account_locked: 'error.account_locked',
   account_banned: 'error.account_banned',
   account_disabled: 'error.account_disabled',
@@ -121,6 +122,7 @@ const errorKeys: Record<string, string> = {
   internal_error: 'error.internal_error',
   internal_server_error: 'error.internal_error',
   import_claim_failed: 'error.internal_error',
+  forced_reset_clear_failed: 'error.internal_error',
   verification_failed: 'error.verification_failed',
   missing_token: 'error.missing_token',
 }

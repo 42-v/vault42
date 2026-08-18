@@ -356,5 +356,6 @@
   "error.forbidden": "이 작업을 수행할 권한이 없습니다.",
   "error.code_already_used": "이 코드는 이미 사용되었습니다. 새 코드를 사용하세요.",
   "error.password_recently_used": "최근에 사용한 비밀번호입니다. 다른 비밀번호를 선택하세요.",
-  "error.no_webauthn_credentials": "이 계정에 등록된 보안 키가 없습니다."
+  "error.no_webauthn_credentials": "이 계정에 등록된 보안 키가 없습니다.",
+  "error.password_reset_required": "이 계정은 비밀번호를 재설정해야 합니다. 재설정 링크를 이메일로 보냈습니다."
 }

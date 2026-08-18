@@ -356,5 +356,6 @@
   "error.forbidden": "Non ha il permesso di eseguire questa azione.",
   "error.code_already_used": "Questo codice è già stato usato. Ne usi uno nuovo.",
   "error.password_recently_used": "Ha usato questa password di recente. Ne scelga una diversa.",
-  "error.no_webauthn_credentials": "Non ci sono chiavi di sicurezza registrate su questo account."
+  "error.no_webauthn_credentials": "Non ci sono chiavi di sicurezza registrate su questo account.",
+  "error.password_reset_required": "Questo account deve reimpostare la password. Ti abbiamo inviato un link via email."
 }

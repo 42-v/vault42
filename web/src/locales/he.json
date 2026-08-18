@@ -356,5 +356,6 @@
   "error.forbidden": "אין לכם הרשאה לבצע פעולה זו.",
   "error.code_already_used": "הקוד הזה כבר נוצל. אנא השתמשו בקוד חדש.",
   "error.password_recently_used": "השתמשתם בסיסמה זו לאחרונה. אנא בחרו סיסמה אחרת.",
-  "error.no_webauthn_credentials": "לא רשומים מפתחות אבטחה בחשבון הזה."
+  "error.no_webauthn_credentials": "לא רשומים מפתחות אבטחה בחשבון הזה.",
+  "error.password_reset_required": "חשבון זה חייב לאפס את הסיסמה. שלחנו לך קישור לאיפוס בדוא\"ל."
 }
