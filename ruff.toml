@@ -1,0 +1,77 @@
+# ruff configuration for the Python utilities under scripts/.
+#
+# The repository has two Python files, both developer tools: scripts/cov-gaps.py
+# (coverage-gap reporter used by the coverage gate) and scripts/gen-ipintel.py
+# (regenerates internal/ipintel/data/ipintel.bin). Nothing here ships in a
+# release artifact, but both are load-bearing for CI, so they are linted.
+#
+# The rule set below is deliberately much wider than ruff's default (F + a
+# subset of E). It is held at zero. `--select ALL` is not the target: it reports
+# 296 findings on these two files, dominated by families that would require
+# rewriting the scripts rather than fixing a defect (see the tail of this file).
+
+line-length = 100
+
+# Python 3.9 reached end of life in October 2025, so parenthesized context
+# managers and the 3.10 syntax the UP rules rewrite towards are always available.
+target-version = "py310"
+
+extend-exclude = ["tmp", "web", "packages", "site", ".fleet"]
+
+[lint]
+select = [
+  "F",     # pyflakes
+  "E",     # pycodestyle errors
+  "W",     # pycodestyle warnings
+  "I",     # isort -- import ordering
+  "N",     # pep8-naming
+  "UP",    # pyupgrade
+  "B",     # flake8-bugbear
+  "A",     # flake8-builtins -- shadowing builtins
+  "C4",    # flake8-comprehensions
+  "SIM",   # flake8-simplify
+  "RET",   # flake8-return
+  "PIE",   # flake8-pie
+  "PERF",  # perflint
+  "FURB",  # refurb
+  "RUF",   # ruff-specific, incl. RUF100 unused-noqa
+  "S",     # flake8-bandit -- this is a security product; keep it on
+  "BLE",   # flake8-blind-except
+  "ARG",   # flake8-unused-arguments
+  "DTZ",   # flake8-datetimez -- naive datetimes
+  "G",     # flake8-logging-format
+  "ISC",   # flake8-implicit-str-concat
+  "Q",     # flake8-quotes
+  "PT",    # flake8-pytest-style
+  "TID",   # flake8-tidy-imports
+  "SLF",   # flake8-self -- private member access
+  "PGH",   # pygrep-hooks -- blanket noqa / bare type: ignore
+  "ERA",   # eradicate -- commented-out code
+  "EXE",   # flake8-executable -- shebang vs exec bit
+  "T10",   # flake8-debugger -- stray breakpoint()/pdb
+  "YTT",   # flake8-2020 -- sys.version misuse
+  "RSE",   # flake8-raise
+  "INT",   # flake8-gettext
+  "LOG",   # flake8-logging
+  "FLY",   # flynt -- static join -> f-string
+  "SLOT",  # flake8-slots
+  "PYI",   # flake8-pyi
+]
+
+# Families deliberately not selected, with the reason. Each was measured; the
+# count is what enabling it would add today.
+#
+#   T20  (63)  both files are CLIs whose entire output contract is print().
+#   ANN  (93)  full annotation coverage on two untyped utility scripts is a
+#              rewrite, not a defect fix.
+#   D    (13)  same, for docstring style; both files already have module and
+#              function docstrings where they matter.
+#   PTH  (12)  os.path -> pathlib is a refactor with no behavioral payoff here.
+#   PL   (18)  pylint thresholds (magic values, branch/statement counts) on
+#              report generators with long argparse and dispatch bodies. The Go
+#              side declined the equivalent gocyclo findings for the same reason.
+#   C90   (5)  mccabe complexity, same argument as PL.
+#   COM    (3) trailing-comma placement is the formatter's job; ruff itself warns
+#              that COM conflicts with `ruff format`.
+#   EM     (1) / TRY (1)  exception-message style; the one site is a clear
+#              TimeoutError with an f-string that reads better inline.

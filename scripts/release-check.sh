@@ -300,7 +300,7 @@ section "golangci-lint"
 # measured nothing. That is the same shape as the coverage gate accepting no
 # profile, which this release closed.
 #
-# RELEASE_CHECK_ALLOW_MISSING_TOOLS=1 restores the old behaviour for someone
+# RELEASE_CHECK_ALLOW_MISSING_TOOLS=1 restores the old behavior for someone
 # deliberately running a partial check, and says so in the output.
 if ! command -v golangci-lint >/dev/null; then
   if [ "${RELEASE_CHECK_ALLOW_MISSING_TOOLS:-}" != "1" ]; then

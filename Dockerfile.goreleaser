@@ -3,6 +3,9 @@ COPY vault /app/vault
 COPY migrations /app/migrations
 COPY internal/email/templates /app/templates
 COPY internal/frontend/dist /app/frontend/dist
-USER nonroot:nonroot
+# 65532:65532 is `nonroot` in the distroless base. Numeric so that a
+# runtime with no /etc/passwd lookup -- and Kubernetes runAsNonRoot --
+# can resolve it; charts/vault/values.yaml pins the same numbers.
+USER 65532:65532
 WORKDIR /app
 ENTRYPOINT ["/app/vault"]

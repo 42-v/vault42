@@ -7,37 +7,37 @@
 set -eo pipefail
 cd "$(dirname "$0")/.."
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BOLD='\033[1m'
-DIM='\033[2m'
-RESET='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
 
-section() { printf "\n${BOLD}--- %s ---${RESET}\n" "$1"; }
+section() { printf '\n%s--- %s ---%s\n' "$BOLD" "$1" "$RESET"; }
 
 echo ""
-printf "${BOLD}=== PRE-COMMIT CHECK ===${RESET}\n"
+printf '%s=== PRE-COMMIT CHECK ===%s\n' "$BOLD" "$RESET"
 
 # 1. Build + vet (gate — fail fast)
 section "Build & Vet"
 if bash scripts/precommit/01-build.sh; then
-  printf "${GREEN}PASS${RESET}\n"
+  printf '%sPASS%s\n' "$GREEN" "$RESET"
 else
-  printf "${RED}FAIL${RESET} — fix build/vet errors before committing\n"
+  printf '%sFAIL%s — fix build/vet errors before committing\n' "$RED" "$RESET"
   exit 1
 fi
 
 # 2. Security (gosec)
 section "Security (gosec)"
 GOSEC_RESULT=$(bash scripts/precommit/02-gosec.sh 2>&1) || {
-  printf "${RED}FAIL${RESET} — gosec found issues\n"
+  printf '%sFAIL%s — gosec found issues\n' "$RED" "$RESET"
   echo "$GOSEC_RESULT"
   exit 1
 }
 if [ "$GOSEC_RESULT" = "SKIP" ]; then
-  printf "${DIM}SKIP (gosec not installed)${RESET}\n"
+  printf '%sSKIP (gosec not installed)%s\n' "$DIM" "$RESET"
 else
-  printf "${GREEN}PASS${RESET}\n"
+  printf '%sPASS%s\n' "$GREEN" "$RESET"
 fi
 
 # 3. Go tests (verbose + coverage)
@@ -49,7 +49,7 @@ COVER_FILE=$(echo "$GO_TEST_RESULT" | tail -2 | head -1)
 read -r PASS FAIL PKGS <<< "$(echo "$GO_TEST_RESULT" | tail -3 | head -1)"
 printf "%d passed, %d failed, %d packages\n" "$PASS" "$FAIL" "$PKGS"
 if [ "$FAIL" -gt 0 ]; then
-  printf "${RED}FAILURES detected — see above${RESET}\n"
+  printf '%sFAILURES detected — see above%s\n' "$RED" "$RESET"
 fi
 
 # 4. Frontend tests
@@ -58,7 +58,7 @@ VUE_RESULT=$(bash scripts/precommit/04-vue-tests.sh)
 read -r VUE_PASS VUE_FAIL <<< "$VUE_RESULT"
 printf "%d passed, %d failed\n" "$VUE_PASS" "$VUE_FAIL"
 if [ "$VUE_FAIL" -gt 0 ]; then
-  printf "${RED}FAIL${RESET} — frontend tests have failures\n"
+  printf '%sFAIL%s — frontend tests have failures\n' "$RED" "$RESET"
   FAIL=$((FAIL + VUE_FAIL))
 fi
 
@@ -71,7 +71,7 @@ printf "Vue: %s source files, %s lines, %d tests, %s locales\n" "$VUE_FILES" "$V
 # 6. Update README badges, deps, and coverage
 section "Docs"
 bash scripts/precommit/06-docs.sh "$TEST_FILE" "$COVER_FILE" "$VUE_PASS" "$VUE_LINES" "$LOCALE_COUNT"
-printf "${GREEN}PASS${RESET} — badges, deps, and coverage updated\n"
+printf '%sPASS%s — badges, deps, and coverage updated\n' "$GREEN" "$RESET"
 
 # Cleanup temp files from step 3
 rm -f "$COVER_FILE" "$TEST_FILE"
@@ -80,7 +80,7 @@ rm -f "$COVER_FILE" "$TEST_FILE"
 section "Git Status"
 STATUS=$(git status --short 2>/dev/null)
 if [ -z "$STATUS" ]; then
-  printf "${DIM}clean — nothing to commit${RESET}\n"
+  printf '%sclean — nothing to commit%s\n' "$DIM" "$RESET"
 else
   echo "$STATUS"
 fi
@@ -106,9 +106,9 @@ git log --oneline -5 2>/dev/null
 # Verdict
 echo ""
 if [ "$FAIL" -gt 0 ]; then
-  printf "${RED}${BOLD}=== VERDICT: FAIL (%d test failures) ===${RESET}\n" "$FAIL"
+  printf '%s%s=== VERDICT: FAIL (%d test failures) ===%s\n' "$RED" "$BOLD" "$FAIL" "$RESET"
   exit 1
 else
   TOTAL=$((PASS + VUE_PASS))
-  printf "${GREEN}${BOLD}=== VERDICT: OK (%d Go + %d Vue = %d tests, build clean) ===${RESET}\n" "$PASS" "$VUE_PASS" "$TOTAL"
+  printf '%s%s=== VERDICT: OK (%d Go + %d Vue = %d tests, build clean) ===%s\n' "$GREEN" "$BOLD" "$PASS" "$VUE_PASS" "$TOTAL" "$RESET"
 fi

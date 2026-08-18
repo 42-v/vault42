@@ -34,6 +34,9 @@ WORKDIR /app
 COPY --from=builder /vault-admin-gateway /app/vault-admin-gateway
 COPY --from=builder /src/migrations /app/migrations
 
-USER nonroot:nonroot
+# 65532:65532 is `nonroot` in the distroless base. Numeric so that a
+# runtime with no /etc/passwd lookup -- and Kubernetes runAsNonRoot --
+# can resolve it; charts/vault/values.yaml pins the same numbers.
+USER 65532:65532
 
 ENTRYPOINT ["/app/vault-admin-gateway"]

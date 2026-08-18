@@ -87,14 +87,12 @@ fi
 
 section "Hadolint (Dockerfile linter)"
 if command -v hadolint &>/dev/null; then
-  HADOLINT_OK=true
   for DF in Dockerfile Dockerfile.bridge Dockerfile.admin-gateway Dockerfile.goreleaser Dockerfile.goreleaser.bridge Dockerfile.goreleaser.admin-gateway; do
     if [ -f "$DF" ]; then
       if hadolint "$DF" 2>&1; then
         pass "hadolint: $DF clean"
       else
         fail "hadolint: $DF issues found"
-        HADOLINT_OK=false
       fi
     fi
   done

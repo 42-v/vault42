@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for ci-build-image.sh. Uses a stub docker that reads its scripted
-# behaviour from a file, so no daemon or network is involved.
+# behavior from a file, so no daemon or network is involved.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

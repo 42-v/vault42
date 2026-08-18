@@ -1,0 +1,68 @@
+// markdownlint configuration for vault42.
+//
+// Before this file existed markdownlint had no config, so its effective
+// standard was "every default rule at its default setting": 4 991 findings over
+// 22 tracked files. Two rules produced 4 832 of them and neither describes a
+// defect; everything else stays on at its default.
+{
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "tmp/**",
+    ".fleet/**",
+    "coverage/**",
+    "web/dist/**",
+    "internal/frontend/dist/**",
+    // Kept on disk, never published -- the same set .gitignore lists under
+    // "Internal-only". A CI checkout does not have these; a working tree does,
+    // and without this a local run and a CI run disagree.
+    "CLAUDE.md",
+    "GROK_OUTPUT.md",
+    ".review.md",
+    ".task.md",
+    "docs/TODO.md",
+    "docs/spec-draft.md",
+    "docs/security-audit-*.md",
+    "docs/security-review.md",
+    "docs/localhost-profile.md"
+  ],
+  "config": {
+    "default": true,
+
+    // MD013 line-length (3 275 findings). This is a hard-wrap policy, and the
+    // documentation in this repository is deliberately not hard-wrapped: docs
+    // are authored one paragraph or one step per line so that a sentence edit
+    // produces a one-line diff. Turning the rule on at any limit -- 483 lines
+    // still exceed 120 -- would mean reflowing docs/api.md and docs/spec.md,
+    // which is a rewrite of the prose rather than a fix to it. Line width is
+    // therefore not a rule this project holds itself to; every other
+    // whitespace and structure rule is.
+    "MD013": false,
+
+    // MD060 table-column-style (1 557 findings). A cell-padding rule. It
+    // recognizes exactly three styles: aligned, compact and tight. Every table
+    // here uses compact content rows with a tight delimiter row --
+    // `| a | b |` over `|---|---|` -- which is a fourth combination the rule
+    // has no name for, so it reports each delimiter pipe as the nearest miss.
+    // Committing to any of the three would rewrite every table in the repo and
+    // change nothing a reader sees. Pipe padding is not a standard worth
+    // holding.
+    "MD060": false,
+
+    // Repeated section headings are correct in a changelog: every release
+    // block has its own Added / Fixed / Security. siblings_only still catches
+    // a genuine duplicate inside one section.
+    "MD024": {
+      "siblings_only": true
+    },
+
+    // Bare URLs are fine inside code spans and fenced blocks; MD034 already
+    // skips those. Kept at default.
+
+    // Emphasis-as-heading. Kept at default; the two hits are real.
+    "MD036": true
+  }
+}

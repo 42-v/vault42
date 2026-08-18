@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in Vault42, **please report it responsibly**. Do not open a public GitHub issue.
 
-**Email:** vault@42-v.com
+**Email:** <vault@42-v.com>
 
 Hosted on Tuta (end-to-end encrypted). If you prefer, you can encrypt your report — reach out for a public key.
 
