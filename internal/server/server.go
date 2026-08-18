@@ -403,8 +403,22 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		authorizeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
+		// The callback used to share loginRL with POST /auth/login. That bucket
+		// exists to slow credential guessing, and the callback is not a guessing
+		// surface: reaching its body already takes an HMAC-valid state, a matching
+		// __Host-oauth_state cookie, an unconsumed server-side PKCE verifier and a
+		// code the provider will honour. Sharing it meant a caller on a VPN got one
+		// login-or-callback per quarter hour across both endpoints (5 per 15
+		// minutes, counted at triple weight for a flagged address), and that anyone
+		// on the same egress — office, CGNAT pool, VPN exit — could spend the
+		// bucket with five garbage login bodies and take social login down for
+		// everyone behind it. It is limited like its two siblings instead, which is
+		// the budget the rest of the social-login flow already draws on.
+		oauthCallbackRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		}, rlEnabled)
 		mux.Handle("GET /auth/oauth2/authorize", authorizeRL(http.HandlerFunc(oauthHandler.Authorize)))
-		mux.Handle("GET /auth/oauth2/callback/{provider}", loginRL(http.HandlerFunc(oauthHandler.Callback)))
+		mux.Handle("GET /auth/oauth2/callback/{provider}", oauthCallbackRL(http.HandlerFunc(oauthHandler.Callback)))
 		mux.Handle("POST /auth/oauth2/exchange", oauthExchangeRL(http.HandlerFunc(oauthHandler.Exchange)))
 	}
 
