@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth, useOAuth, useProfile, useT } from '@vault42/vue'
+import { friendlyError } from '../errorMessages'
 
 const router = useRouter()
 const { accessToken: authAccessToken, requires2FA, challengeToken } = useAuth()
@@ -22,7 +23,13 @@ onMounted(async () => {
   }
 
   if (result.error) {
-    error.value = result.error as string
+    // Through friendlyError like every other view. `result.error` is parsed
+    // straight out of window.location.hash, so it is attacker-controlled text:
+    // rendering it verbatim inside the app's own error card, under the app's own
+    // heading, is a phishing surface on an authentication product even though
+    // Vue escapes it. friendlyError maps known codes to translated copy and
+    // sends everything else to error.fallback.
+    error.value = friendlyError(result.error as string)
     return
   }
 
