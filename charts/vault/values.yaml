@@ -445,6 +445,15 @@ adminGateway:
   devMode: false
   # -- Listen address (127.0.0.1 for prod, 0.0.0.0 for dev behind ingress)
   listenAddr: "127.0.0.1:9443"
+  # -- Comma-separated client certificate identities allowed to complete the mTLS
+  # handshake, matched exactly against the leaf's CN and its DNS/email/URI SANs.
+  # Empty accepts every certificate the client CA has ever signed (AR-9), which
+  # the gateway warns about at startup.
+  clientCNAllowlist: ""
+  # -- Path to a PEM or DER certificate revocation list signed by the client CA.
+  # Checked on every handshake; an unreadable, unparseable, foreign-signed or
+  # expired list refuses the handshake. Empty checks nothing.
+  clientCRLFile: ""
   # -- Session token TTL
   sessionTTL: "1h"
   # -- Max failed login attempts before lockout

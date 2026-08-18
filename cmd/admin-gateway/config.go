@@ -21,6 +21,19 @@ type Config struct {
 	TLSKeyFile   string // ADMIN_GW_TLS_KEY_FILE — server private key
 	ClientCAFile string // ADMIN_GW_CLIENT_CA_FILE — CA for mTLS client verification
 
+	// ClientCNAllowlist pins which client identities may complete the handshake
+	// (ADMIN_GW_CLIENT_CN_ALLOWLIST, comma-separated). Each entry is matched
+	// exactly against the leaf certificate's subject common name and its DNS,
+	// email and URI SANs. Empty pins nothing, which is the pre-existing behavior:
+	// any certificate the client CA ever signed is accepted. See AR-9.
+	ClientCNAllowlist []string
+
+	// ClientCRLFile is an optional PEM or DER revocation list
+	// (ADMIN_GW_CLIENT_CRL_FILE) signed by the client CA. Every handshake is
+	// checked against it, and every failure to read, parse or authenticate it
+	// refuses the handshake. Empty checks nothing.
+	ClientCRLFile string
+
 	// Session configuration
 	SessionTTL time.Duration // ADMIN_GW_SESSION_TTL — default: 1h
 	MaxFailed  int           // ADMIN_GW_MAX_FAILED_LOGINS — default: 5
@@ -87,6 +100,9 @@ func LoadConfig() (*Config, error) {
 		TLSCertFile:  os.Getenv("ADMIN_GW_TLS_CERT_FILE"),
 		TLSKeyFile:   os.Getenv("ADMIN_GW_TLS_KEY_FILE"),
 		ClientCAFile: os.Getenv("ADMIN_GW_CLIENT_CA_FILE"),
+
+		ClientCNAllowlist: splitList(os.Getenv("ADMIN_GW_CLIENT_CN_ALLOWLIST")),
+		ClientCRLFile:     os.Getenv("ADMIN_GW_CLIENT_CRL_FILE"),
 
 		SessionTTL: envDuration("ADMIN_GW_SESSION_TTL", time.Hour),
 		MaxFailed:  envInt("ADMIN_GW_MAX_FAILED_LOGINS", 5),
@@ -205,6 +221,20 @@ func parseKillswitch(v string) (bool, error) {
 	default:
 		return false, fmt.Errorf("ADMIN_GW_KILLSWITCH must be true, 1, yes, false, 0 or no (got %q)", v)
 	}
+}
+
+// splitList parses a comma-separated setting into its non-empty, trimmed
+// entries. An entry that is only whitespace is dropped rather than kept as an
+// identity that matches a certificate with an empty common name — which is every
+// certificate that carries only SANs.
+func splitList(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func envOr(key, fallback string) string {

@@ -266,6 +266,34 @@ func main() {
 		ClientCAs:  clientCAPool,
 	}
 
+	// Peer identity pinning and revocation (AR-9). ClientCAs above answers only
+	// "did our CA sign this"; without the policy below, every certificate that CA
+	// ever issued reaches POST /admin/login.
+	policy := clientIdentityPolicy{
+		allowed: cfg.ClientCNAllowlist,
+		crlFile: cfg.ClientCRLFile,
+		issuer:  firstCertificate(clientCA),
+	}
+	if policy.crlFile != "" {
+		// Validated at startup as well as per handshake. A CRL path that is wrong
+		// must be a boot failure the operator sees immediately, not a gateway that
+		// comes up reporting revocation checking as configured and then refuses
+		// every operator at the first handshake.
+		if _, err := loadCRL(policy.crlFile, policy.issuer); err != nil {
+			fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to load client CRL: %v", err)
+		}
+		log.Printf("admin-gateway: client certificates checked against the revocation list at %s on every handshake", policy.crlFile)
+	}
+	if len(policy.allowed) > 0 {
+		log.Printf("admin-gateway: client certificate identity pinned to %d allowed subject(s)", len(policy.allowed))
+	} else {
+		log.Printf("SECURITY WARNING: ADMIN_GW_CLIENT_CN_ALLOWLIST is unset — every certificate this CA has ever " +
+			"signed reaches the admin plane, including one issued for a decommissioned operator or another component (AR-9)")
+	}
+	if policy.enabled() {
+		tlsCfg.VerifyConnection = policy.verifyConnection
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           router,

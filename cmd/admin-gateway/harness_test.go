@@ -234,6 +234,63 @@ type pki struct {
 
 	roots      *x509.CertPool
 	clientCert tls.Certificate
+
+	// ca is retained so a test can issue a second client certificate from the
+	// same authority, which is the whole shape of the CN-pinning defect: a
+	// certificate that verifies against ClientCAs and still must not be let in.
+	ca issued
+	// nextSerial hands out unique serial numbers for certificates issued after
+	// newPKI. A CRL names a serial, so two certificates sharing one would make a
+	// revocation test pass for the wrong reason.
+	nextSerial int64
+}
+
+// issueClient mints another client certificate from the same CA, with cn as its
+// subject common name.
+func (p *pki) issueClient(t *testing.T, cn string) tls.Certificate {
+	t.Helper()
+
+	p.nextSerial++
+	c := issueCert(t, p.ca, &x509.Certificate{
+		SerialNumber: big.NewInt(100 + p.nextSerial),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	return tls.Certificate{Certificate: [][]byte{c.der}, PrivateKey: c.key}
+}
+
+// writeCRL signs a current revocation list naming serials and returns its path.
+func (p *pki) writeCRL(t *testing.T, serials ...*big.Int) string {
+	t.Helper()
+	return p.writeCRLAt(t, time.Now().Add(24*time.Hour), serials...)
+}
+
+// writeCRLAt is writeCRL with an explicit nextUpdate, so a test can produce a
+// list that is already stale.
+func (p *pki) writeCRLAt(t *testing.T, nextUpdate time.Time, serials ...*big.Int) string {
+	t.Helper()
+
+	entries := make([]x509.RevocationListEntry, 0, len(serials))
+	for _, s := range serials {
+		entries = append(entries, x509.RevocationListEntry{
+			SerialNumber:   s,
+			RevocationTime: time.Now().Add(-time.Hour),
+		})
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:                    big.NewInt(1),
+		ThisUpdate:                nextUpdate.Add(-time.Hour),
+		NextUpdate:                nextUpdate,
+		RevokedCertificateEntries: entries,
+	}, p.ca.cert, p.ca.key)
+	if err != nil {
+		t.Fatalf("create CRL: %v", err)
+	}
+	return writeFile(t, filepath.Join(p.dir, "client.crl"),
+		pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}))
 }
 
 // issued is a certificate together with the key that signed for it.
@@ -255,7 +312,7 @@ func newPKI(t *testing.T) *pki {
 		Subject:               pkix.Name{CommonName: "vault42 admin gateway test CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	})
@@ -286,6 +343,7 @@ func newPKI(t *testing.T) *pki {
 		serverKeyFile:  filepath.Join(dir, "server.key"),
 		clientCAFile:   filepath.Join(dir, "client-ca.crt"),
 		roots:          x509.NewCertPool(),
+		ca:             ca,
 	}
 	p.roots.AddCert(ca.cert)
 
