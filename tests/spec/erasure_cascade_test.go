@@ -38,7 +38,12 @@ const cascadeConstructor = "NewErasureService"
 // store to the erasure cascade means adding its setter here, which is the point:
 // the list is the specification, and forgetting to extend it is a review-visible
 // omission rather than a silent data-retention bug.
-var cascadeSetters = []string{"SetServiceDocs"}
+//
+// SetLoginCountries joined the list when migration 030 gave the cascade a way to
+// reach auth.login_countries. That store has no "disabled" deployment — the table
+// is unconditional — so an ErasureService built without it retains a user's
+// login-country history on every path that construction serves.
+var cascadeSetters = []string{"SetServiceDocs", "SetLoginCountries"}
 
 // goFilesUnder returns every non-test .go file beneath root, skipping the
 // directories that are not ours to assert on.
