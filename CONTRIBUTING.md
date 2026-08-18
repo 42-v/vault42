@@ -56,6 +56,11 @@ feat  fix  docs  style  refactor  perf  test  build  ci  chore  revert  security
 
 Subject case is unrestricted. A malformed message fails CI before any test runs.
 
+Two inherited rules are worth knowing because neither is written in
+`commitlint.config.js`. Body lines are capped at 100 characters and a longer one is an error, not
+a warning, so wrap the body. `footer-leading-blank` is switched off on purpose: this repository
+writes prose bodies, and the parser reads any line starting `word: value` as a malformed footer.
+
 ## Releases are tag-driven, and not yours to cut
 
 `.github/workflows/release.yml` fires on a pushed `vX.Y.Z` tag (or `workflow_dispatch` to re-run
@@ -71,30 +76,44 @@ a version-prefixed commit subject as a release mechanism.
 
 ## What CI runs on your pull request
 
-`.github/workflows/ci.yml` (job names as they appear in the checks list):
+`.github/workflows/ci.yml`, which also runs on every push to `main`. All fifteen jobs, named as
+they appear in the checks list:
 
 | Job | What it does |
 |---|---|
-| Tests | `go vet`, `go test ./internal/... -race` with a coverage profile, plus the attack, compliance and e2e suites |
-| Go coverage gate | a canonical coverage run checked by `scripts/release-check.sh --coverage-only` |
-| Frontend | builds `packages/vue` and `web`, then `test:coverage` for both, enforcing the thresholds in each `vite.config.ts`, then eslint |
-| golangci-lint | `.golangci.yml` on changed files as a gate, whole tree as a report |
-| Security | the scanner pass |
+| Detect Go changes | computes the flags six jobs below are conditional on; when no Go file changed, those six skip |
+| Tests | `go vet`, then `go test ./internal/... -race` with a coverage profile, then `./tests/attack/... ./tests/unit/... ./tests/fuzz/... ./tests/spec/...` under the race detector, then integration and compliance |
+| Go coverage gate | a canonical coverage run checked by `scripts/release-check.sh --coverage-only`. Conditional |
+| Go coverage gate (required) | watches the job above and fails when it was skipped. **Require this one in branch protection**, not the job it watches: a skipped job reports green |
+| Frontend | builds `packages/vue` and `web`, then `test:coverage` for both, enforcing the thresholds in each `vite.config.ts`, then `eslint .` over the whole repository, `site/` included, at `--max-warnings 0` |
+| golangci-lint | `.golangci.yml` on the diff as a gate, and a whole-tree run held against `.golangci-baseline.json`. Both fail the job; the whole-tree run is a ratchet, not a report |
+| Security | calls `.github/workflows/nightly-security.yml`: govulncheck, gosec, trivy over source, image and frontend base, and the attack suite |
 | Helm chart | `helm lint` plus a render of every values file, and a check that a default install resolves a published image tag |
-| Version consistency | `scripts/version-bump.sh --check`: every manifest must agree |
-| Go module hygiene | `go mod verify` and `go mod tidy -diff` |
-| Fuzz Tests | JWT, Argon2, TOTP, email and DPoP for one minute each, only when Go files changed |
-| Build All Binaries | `vault`, `bridge`, `admin-gateway` |
-| GoReleaser config | validates `.goreleaser.yaml` |
-| Hadolint | all six Dockerfiles |
+| Version consistency | `scripts/version-bump.sh --check`: every manifest must agree, including the two version markers in `site/index.html` |
+| Go module hygiene | `go mod verify` and `go mod tidy -diff`. Conditional |
+| Fuzz Tests | JWT, Argon2, TOTP, email and DPoP for one minute each. Conditional |
+| Build All Binaries | `vault`, `bridge`, `admin-gateway`. Conditional |
+| GoReleaser config | validates `.goreleaser.yaml`. Conditional |
+| Suites CI cannot run | compiles `tests/admin`, `tests/honeypot`, `tests/stress` and `tests/browser` under their build tags and collects the Playwright suite, then fails if any of them neither ran nor printed its skip notice |
+| Hadolint | the six root Dockerfiles and `web/Dockerfile` |
 
 `.github/workflows/commitlint.yml` lints the commits and the pull request title.
+
+Four linter configurations in the root are tuned and committed but invoked by nothing:
+`.markdownlint-cli2.jsonc`, `.shellcheckrc`, `.yamllint.yml` and `ruff.toml`. Run them by hand if
+you touch what they cover. Do not assume a green PR means they passed.
 
 The .NET packages under `packages/dotnet` are **not** built on a pull request; they are compiled
 and tested only in the release workflow. Build them locally if you touch them.
 
-Before a release, `scripts/release-check.sh` runs the full security pass (govulncheck, gosec,
-trivy fs, attack suite, coverage). `scripts/security-scan.sh` is the standalone equivalent.
+Before a release, `scripts/release-check.sh` runs twelve gates, of which the security pass
+(govulncheck, gosec, trivy fs, attack suite, coverage) is the first five. The other seven are
+version consistency, module hygiene, the golangci ratchet, helm lint and template, documented
+chart paths, a changelog section for the version being cut, and a clean working tree, so a
+release can go red on a missing changelog entry alone.
+
+`scripts/security-scan.sh` is a different tool, not a standalone equivalent: it adds `go vet`,
+staticcheck, `pnpm audit` and hadolint, and it runs no trivy, no attack suite and no coverage.
 
 ## Documentation is part of the change
 
@@ -124,8 +143,11 @@ Keep the docs in step with the code in the same commit. In particular:
   construction, what the failure branch does, and what the caller must do. The `internal/kms`
   package doc and `RateLimitConfig.FailClosed` in `internal/middleware/ratelimit.go` are the
   reference.
-- New dependencies are close to unacceptable. Vault42 has three direct Go dependencies and the
-  minimal-dependency rule is a security control, not an aesthetic. Bring a strong argument.
+- New dependencies are close to unacceptable. Three of `go.mod`'s six direct requires ship in the
+  binary (`pgx/v5`, `go-webauthn`, `x/crypto`); the other three, testcontainers and `yaml.v3`, are
+  imported by test files only, which is why the badge says three. The minimal-dependency rule is a
+  security control, not an aesthetic. Bring a strong argument, and a test-only dependency is still
+  a dependency.
 
 ## Security issues do not go here
 
