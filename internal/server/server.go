@@ -58,6 +58,11 @@ type Deps struct {
 	PwHistory   repository.PasswordHistoryRepository
 	Social      repository.SocialAccountRepository
 
+	// LoginCountries backs the new-location notice and, because that data is
+	// location data about a person, the erasure cascade. The auth service takes it
+	// directly from main; erasure needs it here.
+	LoginCountries repository.LoginCountryRepository
+
 	// ServiceDocs backs the service-scoped JSON document store. Nil unless
 	// VAULT_SVCDOC_ENABLED, in which case the routes are not mounted at all.
 	ServiceDocs repository.ServiceDocumentRepository
@@ -525,6 +530,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 			d.Recovery, d.AuditLog, d.RecoveryPublicKey, d.HMACSecret,
 		)
 		erasureSvc.SetServiceDocs(d.ServiceDocs)
+		erasureSvc.SetLoginCountries(d.LoginCountries)
 		accountHandler := handler.NewAccountHandler(erasureSvc, d.Users, d.AuditLog, d.Pepper)
 		mux.Handle("DELETE /user/account", authMw(fingerprintMw(accountDeleteRL(http.HandlerFunc(accountHandler.Delete)))))
 	}

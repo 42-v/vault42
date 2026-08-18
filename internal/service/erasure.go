@@ -47,6 +47,24 @@ type ErasureService struct {
 	// which already carries fourteen positional repositories. Nil when the service
 	// document store is disabled, in which case the cascade skips it.
 	svcDocs repository.ServiceDocumentRepository
+
+	// loginCountries is attached the same way and for the same reason. Unlike
+	// svcDocs there is no deployment in which it is legitimately absent — the
+	// table is unconditional — so tests/spec/erasure_cascade_test.go is what holds
+	// every production call site to setting it.
+	loginCountries repository.LoginCountryRepository
+}
+
+// SetLoginCountries attaches the login-country store to the erasure cascade.
+//
+// The countries an account has signed in from are location-revealing personal
+// data and must go with it. migrations/028 declared ON DELETE CASCADE and
+// concluded erasure removed them "automatically with no bespoke cascade step",
+// which is not true of a system that tombstones the user row instead of deleting
+// it: the referential action never fires. Without this call the store retains
+// that data across an erasure that reports success.
+func (s *ErasureService) SetLoginCountries(repo repository.LoginCountryRepository) {
+	s.loginCountries = repo
 }
 
 // SetServiceDocs attaches the service-scoped document store to the erasure
@@ -123,7 +141,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 		return ErrUserNotFound
 	}
 
-	// The cascade below spans nine stores and the repositories are pool-backed, so
+	// The cascade below spans ten stores and the repositories are pool-backed, so
 	// there is no transaction to roll back with: any step can fail with the ones
 	// before it already committed. What matters is which side of the failure the
 	// account is left on.
@@ -217,6 +235,23 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	}
 	if err := s.pwHistory.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete password history: %w", err)
+	}
+
+	// Login countries. Same trap as the MFA tables below, and migration 028 walked
+	// straight into it: the table declares ON DELETE CASCADE on user_id and its
+	// header concludes erasure therefore clears it "automatically with no bespoke
+	// cascade step". The user row is never deleted, so it does not. The set of
+	// countries an account signed in from is location data about a person, and it
+	// survived every erasure between 028 and this line.
+	//
+	// Guarded like svcDocs so the cascade degrades to its previous behaviour
+	// rather than panicking if a call site forgets the setter; what actually
+	// prevents that is tests/spec/erasure_cascade_test.go, which fails the build
+	// when a production ErasureService is built without it.
+	if s.loginCountries != nil {
+		if err := s.loginCountries.DeleteAllForUser(ctx, userID); err != nil {
+			return fmt.Errorf("erasure: delete login countries: %w", err)
+		}
 	}
 
 	// MFA authenticators. These hang off user_id with ON DELETE CASCADE, but the

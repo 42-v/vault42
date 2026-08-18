@@ -636,6 +636,7 @@ func main() {
 		RecoveryPublicKey: recoveryPub,
 		AuditEvents:       auditRepo,
 		ServiceDocs:       serviceDocRepo,
+		LoginCountries:    loginCountryRepo,
 		Mint:              mintSvc,
 	}
 

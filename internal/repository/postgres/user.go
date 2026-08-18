@@ -121,10 +121,17 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 }
 
 // SoftDeleteScrub erases a user's PII in place: it overwrites the email with a
-// tombstone, clears display_name and avatar_url, and marks the row deleted. The
-// real email survives only in the encrypted account-recovery log. The row is
-// kept (not removed) so foreign keys stay valid; the account-state gate rejects
-// deleted=true users at login and refresh.
+// tombstone, clears every other personal column on the row — display_name,
+// avatar_url, password_hash, roles, ban_reason, last_login_at, imported_from,
+// legacy_id — and marks the row deleted. The real email survives only in the
+// encrypted account-recovery log. The row is kept (not removed) so foreign keys
+// stay valid; the account-state gate rejects deleted=true users at login and
+// refresh.
+//
+// The column list is migration 031's, not 015's. 015 scrubbed the six columns
+// that were the whole of the personal data on auth.users when it was written;
+// migrations 003, 004 and 006 had already added six more, and the password hash
+// among them outlived every erasure until 031 widened the function.
 //
 // The write goes through auth.erase_user_identity() rather than an UPDATE of its
 // own. Running it inline needed column-level UPDATE on email, display_name and

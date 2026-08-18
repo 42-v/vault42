@@ -28,6 +28,84 @@ func TestLoginCountryRepo_SurfacesDatabaseFailures(t *testing.T) {
 	}
 }
 
+// TestLoginCountryRepo_DeleteSurfacesDatabaseFailures pins the erasure branch. A
+// swallowed failure here is worse than a swallowed read: DeleteAccount would
+// carry on and report a completed Art. 17 erasure with the country history still
+// on disk.
+func TestLoginCountryRepo_DeleteSurfacesDatabaseFailures(t *testing.T) {
+	repo := NewLoginCountryRepo(deadPool(t))
+	if err := repo.DeleteAllForUser(context.Background(),
+		"11111111-0000-4000-8000-000000000001"); err == nil {
+		t.Fatal("DeleteAllForUser reported success against an unreachable database")
+	}
+}
+
+// TestLoginCountryRepo_ErasureAgainstPostgres exercises the erasure step against
+// the real function migration 030 installs. Two properties matter and neither can
+// be shown without a database: a tombstoned account's countries actually go, and
+// a LIVE account's countries cannot be cleared through the same call. The second
+// is what keeps the fix from handing out a way to silence the new-location notice
+// by wiping an account's baseline just before signing in from somewhere new.
+func TestLoginCountryRepo_ErasureAgainstPostgres(t *testing.T) {
+	db := svcDocPostgres(t)
+	repo := NewLoginCountryRepo(db)
+	ctx := context.Background()
+
+	const userID = "cccccccc-0000-4000-8000-00000000c003"
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO auth.users (id, email) VALUES ($1, $2)`,
+		userID, "erase-login-country@example.com"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	for _, cc := range []string{"DE", "FR"} {
+		if _, _, err := repo.UpsertAndWasNew(ctx, userID, cc); err != nil {
+			t.Fatalf("seed country %s: %v", cc, err)
+		}
+	}
+
+	// A live account is refused. The cascade never asks for this, so an error here
+	// is the guard working rather than a broken erasure.
+	if err := repo.DeleteAllForUser(ctx, userID); err == nil {
+		t.Fatal("cleared a live account's login countries: the tombstone guard in " +
+			"auth.erase_login_countries() is not holding, and clearing the baseline " +
+			"suppresses the new-location notice for the next sign-in")
+	}
+	if n := countCountries(t, ctx, db, userID); n != 2 {
+		t.Fatalf("the refused call still removed rows: %d left, want 2", n)
+	}
+
+	// Tombstone the row exactly as SoftDeleteScrub does, then erase.
+	if _, err := db.Pool.Exec(ctx, `SELECT auth.erase_user_identity($1, $2)`,
+		userID, "deleted-"+userID+"@deleted.invalid"); err != nil {
+		t.Fatalf("tombstone user: %v", err)
+	}
+	if err := repo.DeleteAllForUser(ctx, userID); err != nil {
+		t.Fatalf("DeleteAllForUser after tombstone: %v", err)
+	}
+	if n := countCountries(t, ctx, db, userID); n != 0 {
+		t.Errorf("%d login-country row(s) survived erasure, want 0", n)
+	}
+
+	// Idempotent: an interrupted erasure is re-run from the top, and a user who
+	// never had a country recorded must not fail the cascade.
+	if err := repo.DeleteAllForUser(ctx, userID); err != nil {
+		t.Errorf("re-running the erasure step failed: %v", err)
+	}
+	if err := repo.DeleteAllForUser(ctx, "dddddddd-0000-4000-8000-00000000c004"); err != nil {
+		t.Errorf("erasing a user with no rows (and no user row) failed: %v", err)
+	}
+}
+
+func countCountries(t *testing.T, ctx context.Context, db *DB, userID string) int {
+	t.Helper()
+	var n int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM auth.login_countries WHERE user_id = $1`, userID).Scan(&n); err != nil {
+		t.Fatalf("count login countries: %v", err)
+	}
+	return n
+}
+
 func TestLoginCountryRepo_AgainstPostgres(t *testing.T) {
 	db := svcDocPostgres(t) // brings up PostgreSQL and applies every migration, incl. 028
 	repo := NewLoginCountryRepo(db)

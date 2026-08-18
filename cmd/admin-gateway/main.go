@@ -232,6 +232,12 @@ func main() {
 		// DELETE /admin/users/{id} is how an Art. 17 request is normally actioned,
 		// which made this the path that mattered most.
 		erasureSvc.SetServiceDocs(postgres.NewServiceDocumentRepo(db))
+		// The countries an account has signed in from are location data about a
+		// person. migrations/028 assumed its ON DELETE CASCADE erased them; the
+		// user row is tombstoned rather than deleted, so nothing did. The cascade
+		// reaches the table through auth.erase_login_countries() (migration 030),
+		// which both planes may execute.
+		erasureSvc.SetLoginCountries(postgres.NewLoginCountryRepo(db))
 		apiHandler.SetErasureService(erasureSvc)
 		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
 		// the profile ciphertext an import writes are readable by the main server.
