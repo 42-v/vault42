@@ -14,7 +14,7 @@ import (
 // variables that startup wiring publishes exactly once, and every fake token
 // ever minted reads them. The write is wrapped in a sync.Once, which looks like
 // it settles the question and does not: a Once orders the goroutine inside Do
-// against other goroutines that also call Do. GenerateFakeJWT never calls Do,
+// against other goroutines that also call Do. The mint never calls Do,
 // so it inherits nothing from the Once and its read of the two variables races
 // with the publication.
 //
@@ -27,7 +27,7 @@ import (
 // a stale value.
 //
 // This test puts a publication and a stream of token mints on top of each other
-// so -race adjudicates it. It fails if GenerateFakeJWT ever goes back to reading
+// so -race adjudicates it. It fails if the mint ever goes back to reading
 // the configuration variables directly instead of through an atomic load.
 
 const honeypotPublicationMints = 1500
@@ -70,9 +70,9 @@ func TestConfigureFakeJWT_PublicationIsSafeForReadersThatNeverCallOnce(t *testin
 			defer wg.Done()
 			<-start
 			for n := 0; n < honeypotPublicationMints; n++ {
-				token, err := GenerateFakeJWT()
+				token, err := GenerateFakeJWTForIdentity(TrapCaller{})
 				if err != nil {
-					t.Errorf("GenerateFakeJWT during publication: %v", err)
+					t.Errorf("trap mint during publication: %v", err)
 					return
 				}
 				iss, aud, err := honeypotDecodeClaims(token)

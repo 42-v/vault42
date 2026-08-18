@@ -9,7 +9,7 @@ import (
 )
 
 func TestRenderVerification(t *testing.T) {
-	subject, html, text := RenderTemplate(TemplateVerification, TemplateData{
+	subject, html, text := currentRenderer().Render(TemplateVerification, TemplateData{
 		AppName:      "TestApp",
 		URL:          "https://example.com/verify?token=abc",
 		PrimaryColor: "#1a1a2e",
@@ -30,7 +30,7 @@ func TestRenderVerification(t *testing.T) {
 }
 
 func TestRenderPasswordReset(t *testing.T) {
-	subject, html, text := RenderTemplate(TemplatePasswordReset, TemplateData{
+	subject, html, text := currentRenderer().Render(TemplatePasswordReset, TemplateData{
 		AppName:      "TestApp",
 		URL:          "https://example.com/reset?token=xyz",
 		PrimaryColor: "#1a1a2e",
@@ -48,7 +48,7 @@ func TestRenderPasswordReset(t *testing.T) {
 }
 
 func TestRenderNewDevice(t *testing.T) {
-	_, html, text := RenderTemplate(TemplateNewDevice, TemplateData{
+	_, html, text := currentRenderer().Render(TemplateNewDevice, TemplateData{
 		AppName:      "TestApp",
 		IP:           "1.2.3.4",
 		Device:       "Chrome on Windows",
@@ -64,7 +64,7 @@ func TestRenderNewDevice(t *testing.T) {
 }
 
 func TestRenderAccountLocked(t *testing.T) {
-	_, html, _ := RenderTemplate(TemplateAccountLocked, TemplateData{
+	_, html, _ := currentRenderer().Render(TemplateAccountLocked, TemplateData{
 		AppName:      "TestApp",
 		IP:           "5.6.7.8",
 		PrimaryColor: "#1a1a2e",
@@ -82,7 +82,7 @@ func TestAllTemplatesNonEmpty(t *testing.T) {
 	}
 
 	for _, tmpl := range templates {
-		subject, html, text := RenderTemplate(tmpl, TemplateData{AppName: "Test", PrimaryColor: "#1a1a2e"})
+		subject, html, text := currentRenderer().Render(tmpl, TemplateData{AppName: "Test", PrimaryColor: "#1a1a2e"})
 		if subject == "" {
 			t.Errorf("template %s: empty subject", tmpl)
 		}
@@ -117,7 +117,7 @@ func TestNewTemplateRendererDefault(t *testing.T) {
 }
 
 func TestTemplateRendererWithLogoURL(t *testing.T) {
-	_, html, _ := RenderTemplate(TemplateVerification, TemplateData{
+	_, html, _ := currentRenderer().Render(TemplateVerification, TemplateData{
 		AppName:      "Vault",
 		URL:          "https://vault.test/verify",
 		LogoURL:      "https://vault.test/logo.png",
@@ -132,7 +132,7 @@ func TestTemplateRendererWithLogoURL(t *testing.T) {
 }
 
 func TestTemplateRendererUnknownTemplate(t *testing.T) {
-	subject, html, text := RenderTemplate("nonexistent", TemplateData{AppName: "TestApp"})
+	subject, html, text := currentRenderer().Render("nonexistent", TemplateData{AppName: "TestApp"})
 	if subject != "Notification" {
 		t.Errorf("unknown template subject = %q, want Notification", subject)
 	}
@@ -331,7 +331,7 @@ func TestAllTemplatesProduceValidHTML(t *testing.T) {
 	}
 	for _, name := range templates {
 		t.Run(name, func(t *testing.T) {
-			_, html, _ := RenderTemplate(name, TemplateData{
+			_, html, _ := currentRenderer().Render(name, TemplateData{
 				AppName:      "Vault",
 				URL:          "https://vault.test/action",
 				IP:           "1.2.3.4",
@@ -482,7 +482,7 @@ func TestSetRenderer_Table(t *testing.T) {
 			r2, _ := NewTemplateRenderer("")
 			SetRenderer(r2)
 
-			subj, _, _ := RenderTemplate(TemplateVerification, TemplateData{AppName: "SRTest"})
+			subj, _, _ := currentRenderer().Render(TemplateVerification, TemplateData{AppName: "SRTest"})
 			if subj == "" {
 				t.Error("expected subject after SetRenderer")
 			}

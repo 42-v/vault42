@@ -13,6 +13,10 @@ import (
 // starved individually. The returned function reports how many reads were
 // attempted, which is what lets a case prove it starved the read it names rather
 // than some earlier one.
+// anonymousTrapToken mints with an empty caller, which is the shape the entropy
+// table needs: one mint, no identity to vary the read count.
+func anonymousTrapToken() (string, error) { return GenerateFakeJWTForIdentity(TrapCaller{}) }
+
 func apStarveEntropyAfter(t *testing.T, n int) func() int {
 	t.Helper()
 	orig := randRead
@@ -75,9 +79,9 @@ func TestFakeCredentials_StarvedEntropyEmitsNoToken(t *testing.T) {
 		reads     int
 		gen       func() (string, error)
 	}{
-		{"the trap identity salt", false, 0, GenerateFakeJWT},
-		{"the JWT token id, on a mint that had to draw the salt first", false, 1, GenerateFakeJWT},
-		{"the JWT token id", true, 0, GenerateFakeJWT},
+		{"the trap identity salt", false, 0, anonymousTrapToken},
+		{"the JWT token id, on a mint that had to draw the salt first", false, 1, anonymousTrapToken},
+		{"the JWT token id", true, 0, anonymousTrapToken},
 		{"the refresh token", true, 0, GenerateFakeRefresh},
 		{"a fake UUID", true, 0, fakeUUID},
 		{"the trap subject's salt", false, 0, func() (string, error) { return TrapSubject("admin@trap.example") }},
@@ -131,7 +135,7 @@ func TestFakeToken_AFailedTrapKeyGenerationEmitsNoToken(t *testing.T) {
 		trapKeyMu.Unlock()
 	})
 
-	got, err := GenerateFakeJWT()
+	got, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err == nil {
 		t.Fatalf("a trap token was signed by a key that was never generated: %q", got)
 	}
@@ -151,20 +155,25 @@ func TestFakeToken_AFailedTrapKeyGenerationEmitsNoToken(t *testing.T) {
 	}
 }
 
-// The fake login response is what an attacker actually receives. If the token it
-// wraps could not be built, the handler must be told so it can fall through to a
-// normal-looking failure rather than serve a body with an empty access_token,
-// which no real login ever returns.
-func TestFakeLoginResponse_StarvedEntropyReturnsNoBody(t *testing.T) {
+// The refresh token is the other half of what the trap login hands over, and it
+// is drawn from the same entropy source. Starved, it must return nothing rather
+// than a short or empty value: a login answering with a refresh cookie a real
+// one could not have produced is a tell in the response itself.
+//
+// This assertion used to be made through FakeLoginResponse, which had no caller
+// outside these tests. The live trap login builds its body in service.Login from
+// GenerateFakeJWTForIdentity and GenerateFakeRefresh; the first is starved by
+// the table above, and this is the second.
+func TestFakeRefresh_StarvedEntropyReturnsNoToken(t *testing.T) {
 	apPrimeTrapKey(t)
-	apSetSaltDrawn(t, false)
+	apSetSaltDrawn(t, true)
 	apStarveEntropyAfter(t, 0)
 
-	resp, err := FakeLoginResponse()
+	got, err := GenerateFakeRefresh()
 	if err == nil {
-		t.Fatal("FakeLoginResponse built a session out of entropy that was never produced")
+		t.Fatalf("a trap refresh token was drawn from entropy that was never produced: %q", got)
 	}
-	if resp != nil {
-		t.Errorf("a response body was returned alongside the error: %v", resp)
+	if got != "" {
+		t.Errorf("a partial refresh token was returned alongside the error: %q", got)
 	}
 }

@@ -590,7 +590,7 @@ func TestSendInvalidHost(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRenderTemplateUnknownTemplate(t *testing.T) {
-	subject, html, text := RenderTemplate("nonexistent_template", TemplateData{AppName: "TestApp"})
+	subject, html, text := currentRenderer().Render("nonexistent_template", TemplateData{AppName: "TestApp"})
 	if subject != "Notification" {
 		t.Errorf("unknown template subject = %q, want Notification", subject)
 	}
@@ -603,7 +603,7 @@ func TestRenderTemplateUnknownTemplate(t *testing.T) {
 }
 
 func TestRenderTemplate2FASetup(t *testing.T) {
-	subject, html, text := RenderTemplate(Template2FASetup, TemplateData{
+	subject, html, text := currentRenderer().Render(Template2FASetup, TemplateData{
 		AppName: "VaultTest",
 		Code:    "ABC-DEF-GHI",
 	})
@@ -619,7 +619,7 @@ func TestRenderTemplate2FASetup(t *testing.T) {
 }
 
 func TestRenderTemplateSuspiciousActivity(t *testing.T) {
-	subject, html, text := RenderTemplate(TemplateSuspiciousActivity, TemplateData{
+	subject, html, text := currentRenderer().Render(TemplateSuspiciousActivity, TemplateData{
 		AppName: "VaultTest",
 		IP:      "192.168.1.100",
 	})
@@ -635,7 +635,7 @@ func TestRenderTemplateSuspiciousActivity(t *testing.T) {
 }
 
 func TestRenderTemplatePasswordResetURL(t *testing.T) {
-	_, html, text := RenderTemplate(TemplatePasswordReset, TemplateData{
+	_, html, text := currentRenderer().Render(TemplatePasswordReset, TemplateData{
 		AppName: "VaultTest",
 		URL:     "https://vault.test/reset?token=abc123",
 	})
@@ -648,7 +648,7 @@ func TestRenderTemplatePasswordResetURL(t *testing.T) {
 }
 
 func TestRenderTemplateNewDeviceDetails(t *testing.T) {
-	_, html, text := RenderTemplate(TemplateNewDevice, TemplateData{
+	_, html, text := currentRenderer().Render(TemplateNewDevice, TemplateData{
 		AppName: "VaultTest",
 		IP:      "10.0.0.1",
 		Device:  "Firefox on Linux",

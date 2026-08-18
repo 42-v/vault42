@@ -206,9 +206,12 @@ func SessionAuth(sessions repository.AdminSessionRepository, admins repository.A
 				}
 			}
 
-			ctx := context.WithValue(r.Context(), adminSessionKey, session)
-			ctx = context.WithValue(ctx, adminUserKey, admin)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// Through the exported setters rather than context.WithValue here.
+			// They were the only writers a test could reach, so every fixture in
+			// the tree built its admin context with WithAdmin while the
+			// middleware built its own beside them; a change to either key would
+			// have left RBACCheck reading nil in production and every test green.
+			next.ServeHTTP(w, r.WithContext(WithAdmin(WithSession(r.Context(), session), admin)))
 		})
 	}
 }
@@ -263,9 +266,10 @@ func GetAdmin(ctx context.Context) *model.AdminUser {
 	return u
 }
 
-// WithAdmin attaches an admin user to the context. Used by middleware after
-// session verification, and by tests that drive handlers directly with a
-// pre-authenticated admin.
+// WithAdmin attaches an admin user to the context. [SessionAuth] calls it once a
+// session resolves, and tests that drive handlers directly with a
+// pre-authenticated admin call the same function, so the fixture and the
+// deployment write the same key.
 func WithAdmin(ctx context.Context, admin *model.AdminUser) context.Context {
 	return context.WithValue(ctx, adminUserKey, admin)
 }

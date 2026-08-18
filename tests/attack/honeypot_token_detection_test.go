@@ -83,10 +83,7 @@ func TestHoneypotToken_StructureMatchesRealJWT(t *testing.T) {
 		t.Fatalf("SignToken failed: %v", err)
 	}
 
-	fakeToken, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT failed: %v", err)
-	}
+	fakeToken := hpTrapAccessToken(t, hpService(t, false))
 
 	// Both should have 3 dot-separated parts
 	realParts := strings.Split(realToken, ".")
@@ -119,10 +116,7 @@ func TestHoneypotToken_StructureMatchesRealJWT(t *testing.T) {
 // first segment of the first token it hands over, and vault42 is public source
 // so the attacker knows the shape to look for.
 func TestHoneypotToken_HeaderMatchesRealFormat(t *testing.T) {
-	fakeToken, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT failed: %v", err)
-	}
+	fakeToken := hpTrapAccessToken(t, hpService(t, false))
 
 	// A real header, produced by signing with a real key under a real kid.
 	realKey, err := vaultcrypto.GenerateRSAKeyPair()
@@ -199,10 +193,7 @@ func honeypotDecodeHeader(t *testing.T, token string) map[string]interface{} {
 // TestHoneypotToken_ClaimsLookRealistic verifies that fake JWT claims contain
 // the standard fields that a real vault JWT would have.
 func TestHoneypotToken_ClaimsLookRealistic(t *testing.T) {
-	fakeToken, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT failed: %v", err)
-	}
+	fakeToken := hpTrapAccessToken(t, hpService(t, false))
 
 	parts := strings.Split(fakeToken, ".")
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -251,6 +242,14 @@ func TestHoneypotToken_ClaimsLookRealistic(t *testing.T) {
 		t.Fatalf("Fake JWT iat too far from now: %v", iatTime)
 	}
 
+	// The client id the caller presented. GenerateFakeJWT, the orphan this test
+	// used to mint through, passed an empty TrapCaller, so client_id was absent
+	// from every token the suite ever inspected while the deployment's trap
+	// always carries the attacker's own client id back to them.
+	if got, _ := claims["client_id"].(string); got != "acme-web" {
+		t.Errorf("trap token carries client_id %q, want the one the caller presented", got)
+	}
+
 	// Should have roles (to look like a real vault token)
 	roles, ok := claims["roles"]
 	if !ok {
@@ -266,35 +265,16 @@ func TestHoneypotToken_ClaimsLookRealistic(t *testing.T) {
 // fails verification against a real RSA key pair.
 func TestHoneypotToken_SignatureDoesNotVerify(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
 
-	fakeToken, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT failed: %v", err)
-	}
+	fakeToken := hpTrapAccessToken(t, hpService(t, false))
 
-	// Extract the fake kid from the token header
-	parts := strings.Split(fakeToken, ".")
-	headerJSON, _ := base64.RawURLEncoding.DecodeString(parts[0])
-	var header map[string]interface{}
-	json.Unmarshal(headerJSON, &header)
-	fakeKID, _ := header["kid"].(string)
+	// Hand the parser a real deployment key for whatever kid the trap named.
+	// A trap token that verified under it would be a token the production vault
+	// accepts, which is the one outcome the trap must never produce.
+	keyFunc := func(*vjwt.Token) (any, error) { return &key.PublicKey, nil }
 
-	// Try to validate with any key — should fail
-	keys := map[string]*vaultcrypto.VaultClaims{}
-	_ = keys
-
-	keyFunc := func(t *vjwt.Token) (any, error) {
-		return &key.PublicKey, nil
-	}
-
-	// Use a key map that includes both the real kid and the fake kid
-	_ = kid
-	_ = fakeKID
-
-	_, err = vaultcrypto.ParseAndValidate(fakeToken, keyFunc, "vault", "vault")
-	if err == nil {
-		t.Fatal("Fake honeypot JWT should NEVER validate against a real key")
+	if _, err := vaultcrypto.ParseAndValidate(fakeToken, keyFunc, "vault", "vault"); err == nil {
+		t.Fatal("a trap token validated against a real signing key")
 	}
 }
 
@@ -377,10 +357,7 @@ func honeypotDecodeClaims(t *testing.T, token string) map[string]interface{} {
 // TestHoneypotToken_SignatureLengthRealistic verifies that the fake signature
 // has a realistic length for an RS256 signature (256 bytes = 342-344 base64url chars).
 func TestHoneypotToken_SignatureLengthRealistic(t *testing.T) {
-	fakeToken, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT failed: %v", err)
-	}
+	fakeToken := hpTrapAccessToken(t, hpService(t, false))
 
 	parts := strings.Split(fakeToken, ".")
 	sigB64 := parts[2]
@@ -397,60 +374,12 @@ func TestHoneypotToken_SignatureLengthRealistic(t *testing.T) {
 	}
 }
 
-// TestHoneypotToken_FakeLoginResponse verifies that the full fake login
-// response has the expected structure.
-func TestHoneypotToken_FakeLoginResponse(t *testing.T) {
-	resp, err := honeypot.FakeLoginResponse()
-	if err != nil {
-		t.Fatalf("FakeLoginResponse failed: %v", err)
-	}
-
-	// Must have access_token, token_type, expires_in
-	accessToken, ok := resp["access_token"].(string)
-	if !ok || accessToken == "" {
-		t.Fatal("Missing or empty access_token in fake login response")
-	}
-
-	tokenType, ok := resp["token_type"].(string)
-	if !ok || tokenType != "Bearer" {
-		t.Fatalf("Expected token_type=Bearer, got %v", resp["token_type"])
-	}
-
-	expiresIn, ok := resp["expires_in"]
-	if !ok {
-		t.Fatal("Missing expires_in in fake login response")
-	}
-	// Verify it's a reasonable value (typically 900 seconds = 15 minutes)
-	if ei, ok := expiresIn.(int); ok && (ei < 60 || ei > 3600) {
-		t.Fatalf("Unexpected expires_in value: %d", ei)
-	}
-
-	// The access_token should be a valid-looking JWT
-	parts := strings.Split(accessToken, ".")
-	if len(parts) != 3 {
-		t.Fatalf("access_token should be JWT format (3 parts), got %d parts", len(parts))
-	}
-}
-
-// TestHoneypotToken_FakeRefreshTokenFormat verifies fake refresh tokens
-// have the correct format (64 hex characters).
-func TestHoneypotToken_FakeRefreshTokenFormat(t *testing.T) {
-	rt, err := honeypot.FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie failed: %v", err)
-	}
-
-	if len(rt) != 64 {
-		t.Fatalf("Expected 64-char hex refresh token, got %d chars", len(rt))
-	}
-
-	// Verify it is valid hex
-	for _, c := range rt {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			t.Fatalf("Refresh token contains non-hex character: %c", c)
-		}
-	}
-}
+// The trap login's response shape used to be certified against
+// honeypot.FakeLoginResponse and honeypot.FakeLoginCookie, neither of which has
+// a non-test caller. The live trap path builds its own LoginResult in
+// service.Login (internal/service/auth.go), from GenerateFakeJWTForIdentity and
+// GenerateFakeRefresh, so the two assertions below moved on to it. They live
+// beside the rest of the trap-login suite, after the harness that builds it.
 
 // ---------------------------------------------------------------------------
 // The trap login path
@@ -467,7 +396,24 @@ const (
 	hpRealEmail  = "nobody@trap.example"
 	hpAttackerIP = "203.0.113.9"
 	hpUserAgent  = "curl/8.6.0"
+
+	// hpAccessTTL is deliberately not honeypot's built-in default of 15 minutes.
+	// The trap token's exp comes from the honeypot's published config and the
+	// login body's expires_in comes from the token service, and at the default
+	// the two agree whether or not anything wired them together — which is a
+	// fixture that cannot fail. A distinct value makes the agreement mean
+	// something.
+	hpAccessTTL = 23 * time.Minute
 )
+
+// cmd/vault calls honeypot.ConfigureFakeJWT with the same
+// cfg.AccessTokenTTL it hands service.NewTokenService. ConfigureFakeJWT is a
+// sync.Once, so this fixture has to publish before any test mints, and an init
+// is the only place in a test binary that reliably is. The issuer and audience
+// stay at the values the rest of this suite parses against.
+func init() {
+	honeypot.ConfigureFakeJWT("vault", "vault", hpAccessTTL)
+}
 
 // hpCounts records the repository round trips one login made, which is the
 // closest a unit test gets to the wall-clock cost an attacker measures.
@@ -550,7 +496,7 @@ func hpService(t *testing.T, mfaRequired bool) *hpDeps {
 	}
 	tokenSvc := service.NewTokenService(
 		key, vaultcrypto.KIDFromPublicKey(&key.PublicKey), "https://vault.test", "https://vault.test",
-		15*time.Minute, 7*24*time.Hour, 30*24*time.Hour,
+		hpAccessTTL, 7*24*time.Hour, 30*24*time.Hour,
 	)
 	auditLog := audit.NewLogger(&mocks.MockAuditRepo{}, 0)
 	mfaSvc := service.NewMFAService(totp, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{}, mfaRequired)
@@ -589,6 +535,26 @@ func hpScrape(t *testing.T, c *metrics.Collector, name string) string {
 	}
 	t.Fatalf("the scrape carries no %s line:\n%s", name, rec.Body.String())
 	return ""
+}
+
+// hpTrapAccessToken performs one trap login and returns the access token the
+// caller is handed. Every indistinguishability assertion below reads this
+// token rather than honeypot.GenerateFakeJWT, which had no caller outside these
+// tests and minted for an empty TrapCaller: no client id, and a fingerprint
+// derived from the salt instead of computed from the request. Those are two of
+// the claims an attacker compares, and the deployment never produces that shape.
+func hpTrapAccessToken(t *testing.T, d *hpDeps) string {
+	t.Helper()
+	res, err := d.svc.Login(context.Background(), service.LoginInput{
+		Email: hpTrapEmail, Password: "whatever", ClientID: "acme-web",
+	}, hpAttackerIP, hpUserAgent)
+	if err != nil {
+		t.Fatalf("trap login: %v", err)
+	}
+	if res.AccessToken == "" {
+		t.Fatal("the trap login answered with no access token")
+	}
+	return res.AccessToken
 }
 
 // /metrics is served unauthenticated. An attacker who scrapes it before and
@@ -845,5 +811,94 @@ func TestATrapRefreshCookieIsClampedToTheAbsoluteSessionLifetime(t *testing.T) {
 
 	if got := time.Duration(res.CookieMaxAge) * time.Second; got != bound {
 		t.Errorf("the trap answered with a %s cookie where the deployment bounds every session at %s", got, bound)
+	}
+}
+
+// The response's stated lifetime has to agree with the lifetime inside the
+// token it wraps. They come from two different places — expires_in from the
+// token service's access TTL, exp from the honeypot's own published config — and
+// a deployment that sets VAULT_ACCESS_TOKEN_TTL without reaching
+// honeypot.ConfigureFakeJWT makes them disagree. That is a tell read off one
+// response with no second request and no reference host.
+//
+// The orphan this replaces, honeypot.FakeLoginResponse, computed expires_in from
+// the honeypot config, so it agreed with the token by construction and could not
+// have caught the disagreement on the path that ships.
+func TestATrapLoginQuotesTheLifetimeItsOwnTokenCarries(t *testing.T) {
+	d := hpService(t, false)
+
+	res, err := d.svc.Login(context.Background(), service.LoginInput{
+		Email: hpTrapEmail, Password: "whatever",
+	}, hpAttackerIP, hpUserAgent)
+	if err != nil {
+		t.Fatalf("trap login: %v", err)
+	}
+
+	if res.TokenType != "Bearer" {
+		t.Errorf("trap login answered token_type %q, want Bearer", res.TokenType)
+	}
+	parts := strings.Split(res.AccessToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("trap access_token has %d dot-separated parts, want 3", len(parts))
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode trap token payload: %v", err)
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+		Iat int64 `json:"iat"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("unmarshal trap token payload: %v", err)
+	}
+	if claims.Exp == 0 || claims.Iat == 0 {
+		t.Fatalf("trap token carries exp=%d iat=%d; a real access token carries both", claims.Exp, claims.Iat)
+	}
+
+	if tokenLifetime := claims.Exp - claims.Iat; tokenLifetime != int64(res.ExpiresIn) {
+		t.Errorf("the trap login said expires_in=%d and handed over a token that lives %ds; "+
+			"a response whose stated lifetime disagrees with the token inside it is read off one request",
+			res.ExpiresIn, tokenLifetime)
+	}
+}
+
+// The refresh token the trap sets as a cookie has to be indistinguishable from
+// the real one, which is crypto.RandomToken(32) — 64 lowercase hex characters.
+// Anything else is a tell in a value the attacker is handed on every login.
+func TestATrapRefreshTokenIsTheShapeARealOneIs(t *testing.T) {
+	d := hpService(t, false)
+
+	res, err := d.svc.Login(context.Background(), service.LoginInput{
+		Email: hpTrapEmail, Password: "whatever",
+	}, hpAttackerIP, hpUserAgent)
+	if err != nil {
+		t.Fatalf("trap login: %v", err)
+	}
+
+	genuine, err := vaultcrypto.RandomToken(32)
+	if err != nil {
+		t.Fatalf("mint a real refresh token to compare against: %v", err)
+	}
+	if len(res.RefreshToken) != len(genuine) {
+		t.Fatalf("the trap refresh token is %d characters against a real one's %d",
+			len(res.RefreshToken), len(genuine))
+	}
+	for _, c := range res.RefreshToken {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Fatalf("the trap refresh token contains %q, which lowercase hex does not: %s",
+				c, res.RefreshToken)
+		}
+	}
+
+	second, err := d.svc.Login(context.Background(), service.LoginInput{
+		Email: hpTrapEmail, Password: "whatever",
+	}, hpAttackerIP, hpUserAgent)
+	if err != nil {
+		t.Fatalf("second trap login: %v", err)
+	}
+	if second.RefreshToken == res.RefreshToken {
+		t.Error("two trap logins handed over the same refresh token")
 	}
 }

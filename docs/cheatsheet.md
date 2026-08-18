@@ -262,9 +262,15 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** If secret comparisons use `==` (short-circuit), measure response time to determine how many bytes matched.
 
-**Defense:** All secret comparisons use `crypto/subtle.ConstantTimeCompare` or equivalent.
+**Defense:** All secret comparisons use `crypto/subtle.ConstantTimeCompare` or
+`crypto.SecureCompare`, which wraps it. The set of production files reaching for
+the primitive directly is a reviewed inventory, and a file joining or leaving it
+fails the gate.
 
-**Tests:** `tests/attack/constant_time_test.go` -- TestSecureCompare, TestSecureCompareBytes
+**Tests:** `tests/attack/constant_time_test.go` -- TestSecureCompare,
+TestForgedHMACSignatureIsRefusedAtFullLength, TestNearMissPasswordHashIsRefused;
+`tests/compliance/asvs_crypto_test.go` --
+TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 ---
 

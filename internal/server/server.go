@@ -169,22 +169,19 @@ func New(deps *Deps) *Server {
 	return &Server{deps: deps}
 }
 
-// Start configures the middleware chain, registers all routes, and starts the
-// HTTP(S) server. It blocks until a SIGTERM or SIGINT signal triggers graceful
-// shutdown. The middleware chain is: recovery, request ID, logger, security
-// headers, CORS, max body (8KB), then the route handler.
-func (s *Server) Start() error {
-	mux := s.setupRoutes()
+// Chain wraps inner in the middleware every request to the API passes through,
+// in the order the listener applies it: recovery, request ID, logger, security
+// headers, IP access, CORS, app context, client IP, the body cap, and the
+// honeypot logger on a honeypot deployment.
+//
+// Start serves Chain(setupRoutes()), and this is the only place the chain is
+// assembled. That matters more than the tidiness: the body cap and its exemption
+// list were certified by a suite that built its own middleware.MaxBody with its
+// own limit, so exempting every path here left the certification green. Evidence
+// that drives this method reads the arguments the deployment actually installs.
+func (s *Server) Chain(inner http.Handler) http.Handler {
 	cfg := s.deps.Config
-
-	// Configure trusted proxies, real IP header, and TLS fingerprint header
-	middleware.SetTrustedProxies(cfg.TrustedProxies)
-	middleware.SetRealIPHeader(cfg.RealIPHeader)
-	middleware.SetTLSFingerprintHeader(cfg.TLSFingerprintHeader)
-	middleware.SetIPAccessLists(cfg.IPAllowlist, cfg.IPBlocklist, cfg.GeoAllowlist, cfg.GeoBlocklist, cfg.GeoIPHeader)
-
-	// Build middleware chain: recovery -> requestid -> logger -> security_headers -> ipaccess -> cors -> maxbody -> [honeypot] -> handler
-	var h http.Handler = mux
+	h := inner
 	if cfg.Profile == config.ProfileHoneypot && s.deps.HoneypotAlerter != nil {
 		h = honeypot.LoggingMiddleware(s.deps.HoneypotAlerter)(h)
 	}
@@ -197,6 +194,23 @@ func (s *Server) Start() error {
 	h = middleware.Logger(h)
 	h = middleware.RequestID(h)
 	h = middleware.Recovery(h)
+	return h
+}
+
+// Start applies the process-wide middleware configuration, registers all
+// routes, wraps them in [Server.Chain], and starts the HTTP(S) server. It blocks
+// until a SIGTERM or SIGINT signal triggers graceful shutdown.
+func (s *Server) Start() error {
+	mux := s.setupRoutes()
+	cfg := s.deps.Config
+
+	// Configure trusted proxies, real IP header, and TLS fingerprint header
+	middleware.SetTrustedProxies(cfg.TrustedProxies)
+	middleware.SetRealIPHeader(cfg.RealIPHeader)
+	middleware.SetTLSFingerprintHeader(cfg.TLSFingerprintHeader)
+	middleware.SetIPAccessLists(cfg.IPAllowlist, cfg.IPBlocklist, cfg.GeoAllowlist, cfg.GeoBlocklist, cfg.GeoIPHeader)
+
+	h := s.Chain(mux)
 
 	s.httpSrv = &http.Server{
 		Addr:    cfg.ListenAddr,

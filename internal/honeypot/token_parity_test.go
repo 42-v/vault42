@@ -159,9 +159,9 @@ func decodeHeaderMap(t *testing.T, token string) map[string]any {
 func TestTheFakeAccessTokenCarriesTheSameClaimsInTheSameOrderAsARealOne(t *testing.T) {
 	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience, 15*time.Minute)
 
-	fake, err := honeypot.GenerateFakeJWT()
+	fake, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
 
 	want := claimOrder(t, realAccessToken(t))
@@ -179,9 +179,9 @@ func TestTheFakeAccessTokenCarriesTheSameClaimsInTheSameOrderAsARealOne(t *testi
 func TestTheFakeAccessTokenEncodesAudienceAsAnArrayLikeARealOne(t *testing.T) {
 	honeypot.ConfigureFakeJWT(parityIssuer, parityAudience, 15*time.Minute)
 
-	fake, err := honeypot.GenerateFakeJWT()
+	fake, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
 
 	realAud := decodeClaimMap(t, realAccessToken(t))["aud"]
@@ -206,13 +206,13 @@ func TestTheFakeAccessTokenEncodesAudienceAsAnArrayLikeARealOne(t *testing.T) {
 // real deployment does. Two requests with the same trap credential is the
 // cheapest probe an attacker has.
 func TestTwoFakeAccessTokensNameTheSameSigningKey(t *testing.T) {
-	first, err := honeypot.GenerateFakeJWT()
+	first, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
-	second, err := honeypot.GenerateFakeJWT()
+	second, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
 
 	firstKID, _ := decodeHeaderMap(t, first)["kid"].(string)

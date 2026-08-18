@@ -275,14 +275,6 @@ func GenerateFakeJWTForIdentity(caller TrapCaller) (string, error) {
 	}, key, kid)
 }
 
-// GenerateFakeJWT mints a trap token for a caller nothing is known about. The
-// trap login path knows who it is answering and calls
-// GenerateFakeJWTForIdentity; this is for the endpoints that only need a
-// well-formed token.
-func GenerateFakeJWT() (string, error) {
-	return GenerateFakeJWTForIdentity(TrapCaller{})
-}
-
 // GenerateFakeRefresh creates a random hex string that looks like a real
 // refresh token. The real one is crypto.RandomToken(32), which is the same 32
 // bytes of hex.

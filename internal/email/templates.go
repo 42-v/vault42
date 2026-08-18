@@ -248,20 +248,16 @@ func stripHTML(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// RenderTemplate is the backward-compatible package-level function.
-// It uses a default renderer with embedded templates.
-func RenderTemplate(templateName string, data TemplateData) (string, string, string) {
-	return currentRenderer().Render(templateName, data)
-}
-
 // defaultRenderer is initialized at package load time with embedded templates only.
-// Call [SetRenderer] to replace it with a custom-configured renderer.
+// Call [SetRenderer] to replace it with a custom-configured renderer; [NewMailer]
+// falls back to it whenever it is handed a nil one, which is how
+// internal/service and internal/handler build their mailers.
 //
 // It is an atomic pointer rather than a plain one because the sync.Once below
 // does not make the publication safe on its own. A Once orders the goroutine
 // inside Do against other goroutines that call Do, and against nothing else;
-// RenderTemplate and NewMailer only read the variable and never call Do, so
-// they inherit no ordering from it. Startup wiring publishes the configured
+// NewMailer only reads the variable and never calls Do, so it inherits no
+// ordering from it. Startup wiring publishes the configured
 // renderer while request-escaping goroutines are already sending mail
 // (internal/service finishes verification and reset mail asynchronously), which
 // made the plain pointer a genuine data race rather than a theoretical one.
@@ -284,7 +280,7 @@ func currentRenderer() *TemplateRenderer {
 	return defaultRenderer.Load()
 }
 
-// SetRenderer replaces the package-level default renderer used by [RenderTemplate].
+// SetRenderer replaces the package-level default renderer [NewMailer] falls back to.
 // Call this once at startup after loading config to enable template overrides and branding.
 // Subsequent calls are no-ops so the renderer a running process reads never changes twice.
 func SetRenderer(r *TemplateRenderer) {

@@ -600,12 +600,17 @@ func TestASVS_V2_1_12_ConstantTimeComparisons(t *testing.T) {
 		t.Fatal("V2.1.12: SecureCompare should return false for different lengths")
 	}
 
-	// Byte comparison
-	if !vaultcrypto.SecureCompareBytes([]byte("test"), []byte("test")) {
-		t.Fatal("V2.1.12: SecureCompareBytes should return true for equal bytes")
+	// The comparison as a shipped caller reaches it. SecureCompare is what
+	// HMACVerify, the DPoP thumbprint check, the OAuth CSRF cookie check and TOTP
+	// verification all call; the byte-slice sibling this used to exercise had no
+	// caller outside tests.
+	key, message := []byte("k"), []byte("m")
+	sig := vaultcrypto.HMACSign(message, key)
+	if !vaultcrypto.HMACVerify(message, key, sig) {
+		t.Fatal("V2.1.12: a valid signature was refused")
 	}
-	if vaultcrypto.SecureCompareBytes([]byte("test"), []byte("fail")) {
-		t.Fatal("V2.1.12: SecureCompareBytes should return false for different bytes")
+	if vaultcrypto.HMACVerify(message, key, strings.Repeat("0", len(sig))) {
+		t.Fatal("V2.1.12: a forged signature of the right length was accepted")
 	}
 }
 

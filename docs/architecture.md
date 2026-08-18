@@ -242,7 +242,18 @@ functions:
 | `authed(h)` | Auth -> Fingerprint -> h | Standard authenticated endpoints |
 | `authedChallenge(h)` | AuthChallenge -> Fingerprint -> h | 2FA verify endpoints (accept `2fa_challenge` tokens) |
 | `confirmed(h)` | Auth -> Fingerprint -> Confirmed -> h | Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup codes) |
-| `admin(h)` | AdminAuth -> h | Admin endpoints (key rotation, revocation). Bearer token verified with a constant-time comparison against the credential handed to the middleware. `ADMIN_TOKEN_FILE` is not consulted per request: it seeds `admin_config.admin_token_hash` on first boot, and that hash is what the admin CLI verifies against. See [config.md](config.md#admin-token-provisioning). |
+
+There is no admin wrapper in `setupRoutes()`. Admin endpoints (key rotation,
+revocation, user and client management) are not served by this mux at all: they
+live on the separate admin gateway binary, whose router is built by
+`adminapi.NewRouter` and whose authentication is `adminapi.SessionAuth` -- a
+session-token gate backed by the `admin_sessions` table, not a static bearer
+token. This table used to name an `admin(h)` wrapper over
+`middleware.AdminAuth`; neither has been in a served request path.
+`ADMIN_TOKEN_FILE` is not consulted per request: it seeds
+`admin_config.admin_token_hash` on first boot, and that hash is what the admin
+CLI verifies against. See [config.md](config.md#admin-token-provisioning) and
+[admin-gateway.md](admin-gateway.md).
 
 When `VAULT_KEY_ROTATION_DB` is enabled, `authed` and `authedChallenge` use
 `AuthDynamic` / `AuthChallengeDynamic` variants that resolve signing keys from

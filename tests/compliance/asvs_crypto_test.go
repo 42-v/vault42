@@ -1,9 +1,12 @@
 package compliance
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -253,7 +256,7 @@ func TestASVS_V6_3_2_NoSeededPRNG(t *testing.T) {
 	}
 
 	for i := 0; i < len(results)-1; i++ {
-		if vaultcrypto.SecureCompareBytes(results[i], results[i+1]) {
+		if bytes.Equal(results[i], results[i+1]) {
 			t.Fatalf("V6.3.2: Consecutive RandomBytes calls produced identical output at index %d", i)
 		}
 	}
@@ -372,20 +375,103 @@ func TestASVS_V6_5_1_ConstantTimeStringComparison(t *testing.T) {
 	}
 }
 
-func TestASVS_V6_5_1_ConstantTimeBytesComparison(t *testing.T) {
-	// V6.5.1: Byte-level constant-time comparison.
-	a := []byte{0x01, 0x02, 0x03, 0x04}
-	b := []byte{0x01, 0x02, 0x03, 0x04}
-	c := []byte{0xFF, 0x02, 0x03, 0x04}
+// V6.5.1, the byte-slice half. It used to exercise crypto.SecureCompareBytes,
+// which had no caller outside tests: every production site that compares byte
+// slices constant-time calls crypto/subtle directly. So the claim rested on a
+// helper none of them used, and deleting any one of those three call sites left
+// this row green.
+//
+// The gate is an inventory instead. Each entry names a file that reaches for
+// crypto/subtle itself and why it is allowed to; a file that drops the primitive
+// fails, and a file that picks it up without an entry fails too, which is the
+// direction that matters — a new hand-rolled secret comparison is what this
+// requirement exists to catch.
+func TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive(t *testing.T) {
+	allowed := map[string]string{
+		"internal/crypto/constant.go": "SecureCompare itself, the string-form helper the rest of the tree calls",
+		"internal/crypto/argon2.go":   "VerifyPassword compares the derived key against the stored hash",
+		"internal/service/hibp.go":    "the k-anonymity suffix match against the breach corpus response",
+		"cmd/bridge/admin.go":         "the bridge admin token",
+	}
 
-	if !vaultcrypto.SecureCompareBytes(a, b) {
-		t.Fatal("V6.5.1: Equal byte slices should compare true")
+	found := map[string]bool{}
+	root := repoRoot(t)
+	for _, dir := range []string{"internal", "cmd"} {
+		err := filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			rel = filepath.ToSlash(rel)
+			if strings.Contains(readCodeOnly(t, rel), "subtle.ConstantTimeCompare(") {
+				found[rel] = true
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("V6.5.1: walking %s: %v", dir, err)
+		}
 	}
-	if vaultcrypto.SecureCompareBytes(a, c) {
-		t.Fatal("V6.5.1: Different byte slices should compare false")
+
+	if len(found) == 0 {
+		t.Fatal("V6.5.1: no production file calls subtle.ConstantTimeCompare; the scan is broken " +
+			"and every assertion below it is vacuous")
 	}
-	if vaultcrypto.SecureCompareBytes(a, nil) {
-		t.Fatal("V6.5.1: Non-nil vs nil should compare false")
+	for rel := range found {
+		if _, ok := allowed[rel]; !ok {
+			t.Errorf("V6.5.1: %s compares byte slices with crypto/subtle and is not in the reviewed "+
+				"inventory. Route it through crypto.SecureCompare, or add it here with the secret it "+
+				"compares.", rel)
+		}
+	}
+	for rel, why := range allowed {
+		if !found[rel] {
+			t.Errorf("V6.5.1: %s no longer calls subtle.ConstantTimeCompare. It is on the inventory for "+
+				"%s; if that comparison moved, move the entry, and if it became a plain == this "+
+				"requirement is no longer met.", rel, why)
+		}
+	}
+}
+
+// The behavioral half, on the byte comparison that ships. VerifyPassword ends in
+// subtle.ConstantTimeCompare over the derived key, and a hash differing only in
+// its final byte is the case a prefix comparison would accept.
+func TestASVS_V6_5_1_PasswordVerificationRefusesANearMissHash(t *testing.T) {
+	encoded, err := vaultcrypto.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("V6.5.1: HashPassword: %v", err)
+	}
+
+	ok, err := vaultcrypto.VerifyPassword("correct horse battery staple", encoded)
+	if err != nil || !ok {
+		t.Fatalf("V6.5.1: the right password was refused (ok=%v err=%v)", ok, err)
+	}
+
+	// Flip the last base64 character of the stored hash. The candidate the verify
+	// derives is unchanged, so only the comparison decides.
+	idx := strings.LastIndex(encoded, "$")
+	if idx < 0 || idx+1 >= len(encoded) {
+		t.Fatalf("V6.5.1: stored hash has no final segment: %q", encoded)
+	}
+	last := encoded[len(encoded)-1]
+	replacement := byte('A')
+	if last == 'A' {
+		replacement = 'B'
+	}
+	nearMiss := encoded[:len(encoded)-1] + string(replacement)
+
+	ok, err = vaultcrypto.VerifyPassword("correct horse battery staple", nearMiss)
+	if err != nil {
+		t.Fatalf("V6.5.1: verifying against a near-miss hash errored: %v", err)
+	}
+	if ok {
+		t.Fatal("V6.5.1: a stored hash differing in its final byte was accepted")
 	}
 }
 
