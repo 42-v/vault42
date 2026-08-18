@@ -179,18 +179,6 @@
       "revisit_when": "A deployment federates to an IdP whose session policy is the authoritative one, such as a corporate SSO with mandatory reauthentication.",
       "cost_of_closing": "Record auth_time from the ID token and compare it on refresh."
     },
-    "CR-23": {
-      "title": "Outbound SMTP negotiates STARTTLS opportunistically with no minimum version",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/email/smtp.go calls net/smtp.SendMail. Two behaviours have to be separated. When the relay advertises STARTTLS, SendMail negotiates it and RETURNS the error rather than continuing in the clear, so there is no silent downgrade on a failed handshake. When the relay does not advertise STARTTLS at all, the whole block is skipped and the message is sent in plaintext, and there is no setting that makes TLS mandatory. That is the exposure: an on-path attacker who strips the STARTTLS capability from the EHLO response reads the message. SendMail does pass a tls.Config (ServerName only); MinVersion is unset but Go clients default to TLS 1.2, so the negotiated version is not the weakness. The SendGrid path is HTTPS with the Go default TLS configuration.",
-      "compensating_control": "Mail carries no credential: only single-use, short-lived links and codes. The chart's NetworkPolicy restricts SMTP egress to a configured CIDR, so the relay is not an arbitrary host, and docs flag smtpCIDR as needing production restriction.",
-      "residual_risk": "Against a relay that does not offer STARTTLS, or an on-path attacker stripping the capability from EHLO, a verification link or OTP traverses the network in the clear. Credentials are not exposed when SMTP AUTH is configured: smtp.PlainAuth refuses to send over an unencrypted connection. A deployment with no SMTP AUTH has no such protection.",
-      "revisit_when": "Any credential-bearing content is added to an email, or a deployment cannot restrict SMTP egress by CIDR.",
-      "cost_of_closing": "Replace SendMail with an explicit smtp.Client, require STARTTLS unless an operator opts out, and keep the Go default MinVersion. Small change, but it alters the outbound mail path and cannot be verified here without a real MTA."
-    },
     "CR-24": {
       "title": "The audit log is not cryptographically chained and is not mirrored off-system",
       "severity": "Medium",
@@ -250,6 +238,18 @@
       "residual_risk": "A super_admin can put markup the denylist does not enumerate into an email body. The realistic outcome is a phishing-shaped mail, which the same principal could send by rewriting the copy.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
       "cost_of_closing": "Replace the denylist with an allowlist sanitiser such as bluemonday, configured for an email-safe element set. The change is small; the reason it has not been made is that the denylist and the super_admin gate together already bound the realistic outcome."
+    },
+    "CR-34": {
+      "title": "The Redis cache link has no TLS option",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-18",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
+      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1554).",
+      "compensating_control": "The chart deploys Redis as a workload beside vault and its NetworkPolicy admits port 6379 only from the vault pods, so the link is pod-to-pod inside one namespace rather than across a network the operator does not own; the same policy admits no egress to 443 at all. The AUTH secret is read from REDIS_PASS_FILE rather than the environment. Nothing durable transits the link: the cache holds short-TTL rate-limit counters, lockout markers, single-use challenge markers and an HMAC of the email one-time code, and every value that authorises anything is re-checked against the database or against a signed token before it is honoured.",
+      "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
+      "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
+      "cost_of_closing": "A REDIS_TLS boolean and an optional server-name override on Config, threaded through cache.NewCache into the Options literal at internal/cache/redis.go:19. The dial path already exists at internal/redis/pool.go:184 and already pins tls.VersionTLS12, so internal/redis does not change. The chart then needs a Redis that terminates TLS, which is the part that is not a code change and is why this is scheduled rather than done."
     }
   },
   "requirements": [
@@ -4204,14 +4204,16 @@
         "v4.0.3-9.2.2"
       ],
       "status": "Accepted Risk",
-      "accepted_risk": "CR-23",
+      "accepted_risk": "CR-34",
       "evidence": [
-        "internal/email/smtp.go:57"
+        "internal/cache/redis.go:19",
+        "internal/redis/pool.go:184",
+        "internal/email/smtp.go:111"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Outbound SMTP uses net/smtp.SendMail, which negotiates STARTTLS opportunistically with default settings and sets no MinVersion, so it can in principle fall back to plaintext against a hostile or misconfigured relay. The SendGrid path is HTTPS. Compensating controls: mail carries no credential, only single-use links and codes with short expiries; and the NetworkPolicy shipped with the chart restricts SMTP egress to a configured CIDR."
+      "notes": "Accepted risk CR-34. The outbound-mail half closed: internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation that upgrades when the relay advertises STARTTLS, returns ErrSMTPNoSTARTTLS when it does not, and pins tls.VersionTLS12; the opt-out is accepted outside dev only for a loopback SMTP host. Every other outbound destination is encrypted by construction: SendGrid, the HIBP range API and the three social providers are hardcoded https, and fetchableEndpoint refuses an OIDC issuer or any endpoint its discovery document names unless it is https or loopback http. Inbound listeners pin TLS 1.3 and Postgres defaults to sslmode=require, refusing disable, allow and prefer without an explicit override. What is left is the Redis link. The dial path can negotiate TLS (internal/redis/pool.go:184), but internal/cache/redis.go:19 builds the Options without it and no configuration key sets it, so the cache connection is cleartext and an operator has no way to change that. It carries the Redis AUTH password, rate-limit and lockout keys bearing client IP addresses and user identifiers, and the jti that binds a password-confirmation window; the email one-time code is not exposed, because it is stored as an HMAC. The previous reason on this row described opportunistic STARTTLS, which has not been the behaviour since d530d6c."
     },
     {
       "standard": "OWASP ASVS",
@@ -7687,6 +7689,7 @@
     "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:820) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
     "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
-    "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice."
+    "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34."
   }
 }
