@@ -665,37 +665,28 @@ func (c *Config) Validate() error {
 	if c.Profile == ProfileProduction && c.CacheBackend == "redis" && c.RedisAddr == "" {
 		return fmt.Errorf("REDIS_ADDR required when CACHE_BACKEND=redis in %s profile; without it the cache falls back to per-process memory and every shared-state control degrades by the replica count", c.Profile)
 	}
-	if err := c.checkTLSTermination(); err != nil {
-		return err
+	// M5 and M4 stay inline rather than moving to a checkTLSTermination helper
+	// like the guards above and below them. Two compliance gates read the text of
+	// Validate itself and fail if the TLS refusals are not in it:
+	// TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults reads only as far
+	// as the next func, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride
+	// wants VAULT_ALLOW_PLAINTEXT under this signature. Extracting them passes the
+	// linter and silently converts a checked claim into an unchecked one.
+	//
+	// M5: refuse to silently disable TLS.
+	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
+		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
+	}
+	// M4: TLS enabled but no cert/key silently falls back to plaintext while the
+	// Secure cookie flag is set. Require certs unless proxy-termination is opted in.
+	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
+		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
 	}
 	if err := c.checkGeoFence(); err != nil {
 		return err
 	}
-	// The connection carries the role password in the startup packet and every
-	// row of every table after it, including the encrypted TOTP secrets and the
-	// password hashes. Three of the six legal modes do not guarantee it is
-	// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
-	// back to plaintext without telling anyone.
-	//
-	// This refuses rather than warns, and it refuses for the same reason
-	// checkTLSTermination refuses a disabled listener (M5): an unencrypted link is a
-	// control that is absent, and a SECURITY WARNING that boots anyway is
-	// indistinguishable from no control at all once the log scrolls. Deployments
-	// that run Postgres in the same pod legitimately want "disable"
-	// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
-	// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
-	// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
-	// keeps the posture visible where an operator reviews it.
-	//
-	// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
-	// is unreachable through Load (envOr defaults it to "require" and the enum
-	// check rejects every other spelling) and keeps the warning, so a Config
-	// assembled in code is judged on what it says rather than on what it omits.
-	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
-		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
-	}
-	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
-		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
+	if err := c.checkDatabaseLink(); err != nil {
+		return err
 	}
 	c.warnOnDegradedControls()
 	return nil
@@ -718,24 +709,6 @@ func (c *Config) checkMintAudience() error {
 	}
 	if c.MintAudience == c.Origin {
 		return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
-	}
-	return nil
-}
-
-// checkTLSTermination refuses a non-dev listener that is not actually
-// encrypted, whether by this process or by a proxy the operator has named.
-//
-// Both findings it covers are the same failure: the Secure cookie flag and the
-// deployment's own documentation say TLS while the socket carries cleartext.
-func (c *Config) checkTLSTermination() error {
-	// M5: refuse to silently disable TLS.
-	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
-		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
-	}
-	// M4: TLS enabled but no cert/key silently falls back to plaintext while the
-	// Secure cookie flag is set. Require certs unless proxy-termination is opted in.
-	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
-		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
 	}
 	return nil
 }
@@ -767,6 +740,39 @@ func (c *Config) warnOnDegradedControls() {
 	if len(c.RecoveryPublicKeyPEM) == 0 {
 		log.Printf("SECURITY WARNING: VAULT_RECOVERY_PUBLIC_KEY_FILE not set — account erasures will not be recoverable")
 	}
+}
+
+// checkDatabaseLink refuses a non-dev database connection that is not
+// encrypted.
+//
+// The connection carries the role password in the startup packet and every
+// row of every table after it, including the encrypted TOTP secrets and the
+// password hashes. Three of the six legal modes do not guarantee it is
+// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
+// back to plaintext without telling anyone.
+//
+// This refuses rather than warns, and it refuses for the same reason Validate's
+// M5 guard refuses a disabled listener: an unencrypted link is a control that
+// is absent, and a SECURITY WARNING that boots anyway is indistinguishable from
+// no control at all once the log scrolls. Deployments that run Postgres in the
+// same pod legitimately want "disable"
+// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
+// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
+// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
+// keeps the posture visible where an operator reviews it.
+//
+// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
+// is unreachable through Load (envOr defaults it to "require" and the enum
+// check rejects every other spelling) and keeps the warning, so a Config
+// assembled in code is judged on what it says rather than on what it omits.
+func (c *Config) checkDatabaseLink() error {
+	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
+		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
+	}
+	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
+		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
+	}
+	return nil
 }
 
 // checkGeoFence refuses a geo-fence that cannot fire.
