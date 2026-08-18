@@ -4472,13 +4472,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:512",
+        "internal/config/profiles.go:31",
         "internal/config/profiles.go:95"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
       ],
-      "notes": "The default profile is production and an unrecognised profile falls through to production; the dev relaxations are reachable only by naming the dev profile explicitly."
+      "notes": "The default profile is production and an unrecognised profile falls through to production; the dev relaxations are reachable only by naming the dev profile explicitly. applyProfileDefaults is where the profile decides the defaults: the dev relaxations are reachable only by naming the dev profile, and anything unrecognised falls through to the production settings."
     },
     {
       "standard": "OWASP ASVS",
@@ -6151,12 +6151,12 @@
       "requirement": "Configuration Settings",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:512"
+        "internal/config/profiles.go:31"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
       ],
-      "notes": ""
+      "notes": "applyProfileDefaults is where the profile decides the defaults: the dev relaxations are reachable only by naming the dev profile, and anything unrecognised falls through to the production settings."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6477,13 +6477,13 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:512"
+        "internal/config/profiles.go:31"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults",
         "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
       ],
-      "notes": ""
+      "notes": "applyProfileDefaults is where the profile decides the defaults: the dev relaxations are reachable only by naming the dev profile, and anything unrecognised falls through to the production settings."
     },
     {
       "standard": "OWASP Top 10",
