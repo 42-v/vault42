@@ -962,13 +962,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1125",
+        "internal/service/auth.go:1718",
         "internal/handler/data_export.go:18"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "Session cap, export cap and blob quotas implement the documented limits."
+      "notes": "Met: CheckSessionLimit applies the documented concurrent-session-family cap, and the hard bound is CreateWithinCap on the insert, which takes an advisory lock so simultaneous logins cannot overshoot it. The OAuth callback used only the soft pre-check until this release; it now goes through CreateWithinCap too. The export cap and blob quotas implement the other documented limits."
     },
     {
       "standard": "OWASP ASVS",

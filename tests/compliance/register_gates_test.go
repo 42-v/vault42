@@ -221,7 +221,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP ASVS|V16.5.2|internal/service/auth.go":                                      {},
 	"OWASP ASVS|V2.2.1|internal/sanitize/sanitize.go":                                  {},
 	"OWASP ASVS|V2.3.2|internal/handler/data_export.go":                                {},
-	"OWASP ASVS|V2.3.2|internal/service/auth.go":                                       {},
 	"OWASP ASVS|V4.1.3|internal/middleware/ratelimit.go":                               {},
 	"OWASP ASVS|V6.2.11|internal/service/hibp.go":                                      {},
 	"OWASP ASVS|V6.2.12|internal/service/hibp.go":                                      {},
