@@ -138,6 +138,13 @@ router.beforeEach(async (to) => {
       return { path: '/login' }
     }
   }
+
+  // Explicit, not implicit. vue-router reads `undefined` as "allow this
+  // navigation", which is the same thing falling off the end of the guard meant,
+  // but only one of the two says so — and only one of them satisfies
+  // noImplicitReturns, which is what stops the next branch added above from
+  // forgetting its own return.
+  return undefined
 })
 
 // Second line of defence for the registration toggle.
