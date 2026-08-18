@@ -1131,20 +1131,19 @@ func TestSanitizeDBError(t *testing.T) {
 	}
 }
 
-// TestSanitizeDBErrorMissesPasswordsContainingWhitespace documents a real hole
-// in the redaction.
+// TestSanitizeDBErrorRedactsTheShapesItUsedToMiss covers the two DSN shapes the
+// redaction pattern used to walk straight past.
 //
-// The pattern matches postgres://[^\s]+@, so a password containing a space
-// breaks the match and the whole connection string, password included, is
+// The old pattern was postgres://[^\s]+@, so a password containing a space
+// broke the match and the whole connection string, password included, was
 // logged verbatim. loadSecret only trims the ends of a secret file, so an
 // interior space in a password file survives to the connection string. The
-// pattern also only knows the postgres:// scheme, while pgx accepts
+// pattern also only knew the postgres:// scheme, while pgx accepts
 // postgresql:// as well.
 //
 // Neither case is reachable through the shipped generator, which emits hex
-// passwords, but docs/config.md invites operators to supply their own. The test
-// asserts the broken behavior so a fix shows up here as a failure rather than
-// going unnoticed.
+// passwords, but docs/config.md invites operators to supply their own. Both are
+// now asserted in the direction a regression reddens.
 func TestSanitizeDBErrorRedactsTheShapesItUsedToMiss(t *testing.T) {
 	// This test was named ...MissesPasswordsContainingWhitespace and asserted
 	// that the password LEAKED. It documented the defect as expected behavior,

@@ -356,6 +356,278 @@ func complianceTestFunctions(t *testing.T) []complianceTestFn {
 	return out
 }
 
+// --- 5. A comment naming a test is a claim about the tree -------------------
+
+// commentTestName matches a Go test, fuzz or benchmark identifier where it
+// appears inside a comment. Fuzz and Benchmark are included because the
+// fuzz-a-local-dummy defect was found by reading a comment that named a target,
+// and a target is as easy to rename out from under a sentence as a test is.
+var commentTestName = regexp.MustCompile(`\b((?:Test|Fuzz|Benchmark)[A-Z][A-Za-z0-9_]*)\b`)
+
+// commentTestNameExemptions are the Test-shaped identifiers in Go comments that
+// are deliberately not the name of a function that exists, each with the reason.
+//
+// Every entry is a hole in the gate below, so each has to earn its place, and
+// TestGateLiveness_NoStaleCommentTestNameExemption deletes it again as soon as
+// the name it names comes into existence. The shape is the one
+// tests/spec/ratelimit_failclosed_test.go uses for failOpenByDesign: an
+// exemption with no written reason is indistinguishable from an oversight.
+var commentTestNameExemptions = map[string]string{
+	"TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded": "the historical dead " +
+		"gate this file was written about, named in the header so a reader can look it up. It was " +
+		"rewritten under a different name; naming the old one is the point",
+	"TestCLI_CleanupAudit": "retired along with the CLI subcommand it drove. " +
+		"cli_ops_test.go names it to say where the contract went",
+	"TestComplianceRegister": "a `go test -run` regular expression, not a function: it matches " +
+		"every TestComplianceRegister_* gate in tests/compliance",
+	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "a name that has never existed, quoted " +
+		"in register_gates_test.go as the example of the defect that gate closes",
+	"TestNIST80053_IA_11_": "an elided reference — the comment writes " +
+		"`TestNIST80053_IA_11_...` because the point is the family, not one member of it",
+	"TestParseJWKHeaderValidECP384": "deleted, because it pinned as a contract a branch that " +
+		"cannot produce an accepted proof. Its replacement's doc comment names it to say what was " +
+		"removed and why",
+	"TestWithPerm": "removed during review, and adminapi_v076_test.go records the removal and " +
+		"the reason. A note saying a test was deleted is the one comment that must name a test " +
+		"which does not exist",
+}
+
+// TestGateLiveness_EveryTestNamedInAGoCommentExists fails when a comment names
+// a test function that is nowhere in the tree.
+//
+// internal/middleware/ratelimit.go argued that its namespace() fallback was safe
+// because "the production limiters are named and TestRateLimitersAreNamespaced
+// asserts it". No such test had ever been written. A whole-tree grep returned
+// one hit: the sentence making the claim.
+//
+// That is worse than an absent gate, because it is an absent gate with a
+// citation. The next reader sees "asserts it" and stops looking, which is the
+// same mechanism that let a CI job pipe go test into tee without pipefail for
+// eleven months — the control was documented, so nobody checked it.
+//
+// docs/COMPLIANCE.md already gets this check, from
+// TestComplianceDocs_EveryTestNamedInProseExists. This is its Go-source half:
+// the same claim, in the place a maintainer is most likely to believe it.
+func TestGateLiveness_EveryTestNamedInAGoCommentExists(t *testing.T) {
+	defined, mentions := goCommentTestNames(t)
+
+	for _, mention := range mentions {
+		m := mention.resolve(defined)
+		if _, exists := defined[m]; exists {
+			continue
+		}
+		if _, exempt := commentTestNameExemptions[m]; exempt {
+			continue
+		}
+		t.Errorf("%s:%d names %s, and no func %s( exists anywhere in the tree. A comment that "+
+			"says a test asserts something is a claim, and this repository has shipped one that "+
+			"was false: internal/middleware/ratelimit.go cited TestRateLimitersAreNamespaced as "+
+			"the reason its key fallback was safe, and the only hit for that name was the comment "+
+			"itself. Either write the test, rename the reference, or add %q to "+
+			"commentTestNameExemptions with the reason it names something that does not exist.",
+			mention.file, mention.line, m, m, m)
+	}
+}
+
+// TestGateLiveness_NoStaleCommentTestNameExemption keeps the list above from
+// outliving the holes it describes.
+//
+// An exemption naming a test that now exists is a standing permission nobody
+// has to justify any more, and it hides the next one: a real test renamed onto
+// an exempt name would inherit an amnesty written for a deleted one. The list
+// is a ratchet, so it may only shrink.
+func TestGateLiveness_NoStaleCommentTestNameExemption(t *testing.T) {
+	defined, mentions := goCommentTestNames(t)
+
+	mentioned := map[string]struct{}{}
+	for _, m := range mentions {
+		mentioned[m.resolve(defined)] = struct{}{}
+	}
+
+	for name, reason := range commentTestNameExemptions {
+		if reason == "" {
+			t.Errorf("commentTestNameExemptions[%q] carries no reason. An exemption without one "+
+				"is indistinguishable from an oversight.", name)
+		}
+		if _, exists := defined[name]; exists {
+			t.Errorf("commentTestNameExemptions names %q, which now exists as a function. Delete "+
+				"the entry: the exemption was written for a name that was absent, and leaving it "+
+				"would let a future rename onto that name inherit it.", name)
+		}
+		if _, still := mentioned[name]; !still {
+			t.Errorf("commentTestNameExemptions names %q, which no Go comment mentions any more. "+
+				"Delete the entry: the list may only shrink.", name)
+		}
+	}
+}
+
+// commentMention is one Test-shaped identifier read out of a Go comment.
+//
+// joined is the same identifier with the first word of the following comment
+// line appended, set only when the match ended a line and so may have been
+// split by a wrap. Which of the two the comment meant is decided against the
+// set of declared functions, not by guessing from the text.
+type commentMention struct {
+	name   string
+	joined string
+	file   string // repo-relative, slash-separated
+	line   int
+}
+
+// resolve returns the identifier the comment meant: the rejoined one when a
+// wrap split it and the join names a real function, and the bare match
+// otherwise.
+func (m commentMention) resolve(defined map[string]struct{}) string {
+	if m.joined != "" {
+		if _, ok := defined[m.joined]; ok {
+			return m.joined
+		}
+	}
+	return m.name
+}
+
+// goCommentTestNames returns every function declared anywhere in the tree and
+// every Test-shaped identifier named in a Go comment.
+//
+// It reads production files as well as test files, because the claim this gate
+// exists for was made in production source: the comment on namespace() in
+// internal/middleware/ratelimit.go.
+func goCommentTestNames(t *testing.T) (map[string]struct{}, []commentMention) {
+	t.Helper()
+	root := repoRoot(t)
+
+	defined := map[string]struct{}{}
+	var mentions []commentMention
+	var files int
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "testdata", "tmp", "dist", "build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			// A file that does not compile is a different gate's problem, so it
+			// contributes nothing rather than failing the walk.
+			return nil
+		}
+		files++
+
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				defined[fn.Name.Name] = struct{}{}
+			}
+		}
+
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		for _, group := range parsed.Comments {
+			for _, m := range mentionsInCommentGroup(group, fset) {
+				m.file = rel
+				mentions = append(mentions, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+
+	// Both floors are the gate's own anti-vacuity check. A walk that finds no
+	// files, or a comment reader that extracts no names, would make every
+	// assertion above pass without looking at anything.
+	if files < 500 {
+		t.Fatalf("only %d Go files parsed under %s; the walk is broken and both gates above would "+
+			"pass vacuously", files, root)
+	}
+	if len(defined) < 200 {
+		t.Fatalf("only %d functions found across %d Go files; the declaration scan is broken",
+			len(defined), files)
+	}
+	if len(mentions) < 50 {
+		t.Fatalf("only %d Test-shaped identifiers found in Go comments across %d files; the "+
+			"comment reader is broken, which is how this gate would come to pass over a false "+
+			"claim", len(mentions), files)
+	}
+	return defined, mentions
+}
+
+// mentionsInCommentGroup reads the Test-shaped identifiers out of one comment
+// group, rejoining the ones a line wrap split in two.
+//
+// A long test name is exactly the thing a fill-paragraph breaks across lines,
+// leaving one line ending in "...HorizonMatchesThe" and the next beginning
+// "Oracle below asks Postgres instead". Reading those halves separately reports
+// a name nobody wrote. So a match that ends a line is re-tried with the first
+// word of the next line appended, and the join wins when it names a real
+// function.
+func mentionsInCommentGroup(group *ast.CommentGroup, fset *token.FileSet) []commentMention {
+	type commentLine struct {
+		text string
+		line int
+	}
+	var lines []commentLine
+	for _, c := range group.List {
+		start := fset.Position(c.Pos()).Line
+		if strings.HasPrefix(c.Text, "//") {
+			lines = append(lines, commentLine{text: c.Text[2:], line: start})
+			continue
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(c.Text, "/*"), "*/")
+		for i, raw := range strings.Split(body, "\n") {
+			lines = append(lines, commentLine{
+				text: strings.TrimPrefix(strings.TrimSpace(raw), "*"),
+				line: start + i,
+			})
+		}
+	}
+
+	var out []commentMention
+	for i, cl := range lines {
+		for _, loc := range commentTestName.FindAllStringIndex(cl.text, -1) {
+			name := cl.text[loc[0]:loc[1]]
+			m := commentMention{name: name, line: cl.line}
+			if loc[1] == len(cl.text) && i+1 < len(lines) {
+				if head := leadingWord(lines[i+1].text); head != "" {
+					m.joined = name + head
+				}
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// leadingWord returns the identifier characters a comment line starts with,
+// after the single space that follows the marker, and "" when the line does not
+// start with one. It is how a wrapped identifier is put back together.
+func leadingWord(text string) string {
+	text = strings.TrimPrefix(text, " ")
+	end := 0
+	for end < len(text) {
+		c := text[end]
+		if c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			end++
+			continue
+		}
+		break
+	}
+	return text[:end]
+}
+
 // hasCorpusFloor reports whether a function compares a len() against a numeric
 // literal, which is the shape of "the scan found nothing and that is a bug".
 func hasCorpusFloor(fn *ast.FuncDecl) bool {

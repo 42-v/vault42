@@ -208,8 +208,8 @@ func TestASVS_AbsentEndpointsAreActuallyAbsent(t *testing.T) {
 	}
 }
 
-// TestASVS_V1_3_4_SVGIsRejectedRatherThanAbsent replaces an absence claim with
-// the control that actually holds.
+// TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates replaces an
+// absence claim with the control that actually holds.
 //
 // The old reason was "No SVG is accepted or rendered". The stronger and truer
 // statement is that the one place SVG could arrive — an admin-authored email
