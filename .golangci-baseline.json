@@ -1,24 +1,14 @@
 {
   "_comment": [
     "golangci-lint findings per linter across ./..., as of the 1.0.0 hardening",
-    "pass. CI fails if any linter exceeds its number here, so this can only be",
-    "lowered. It is not a suppression list and it disables nothing: every finding",
-    "is still reported in the run summary, and new code is separately gated by",
-    "--new-from-merge-base, which requires a clean diff regardless of this file.",
-    "Lower a number whenever you fix a finding. The CI step prints the exact",
-    "replacement block when a count drops.",
-    "When every number reaches zero, delete this file and make the full run a",
-    "plain blocking gate."
+    "pass. The full run is clean, so there is nothing left to ratchet: every",
+    "linter's allowance is zero and the CI step reads a missing key as zero,",
+    "which makes any finding at all a regression that fails the build.",
+    "It is not a suppression list and it disables nothing. New code is also",
+    "gated separately by --new-from-merge-base.",
+    "This file can be deleted once the CI step it feeds is rewritten as a plain",
+    "`golangci-lint run ./...`; while it exists it must stay empty."
   ],
-  "findings_by_linter": {
-    "bodyclose": 19,
-    "errorlint": 3,
-    "gocyclo": 3,
-    "gofumpt": 1,
-    "misspell": 65,
-    "revive": 12,
-    "staticcheck": 3,
-    "unused": 3
-  },
-  "total": 109
+  "findings_by_linter": {},
+  "total": 0
 }
