@@ -142,6 +142,21 @@ curl -X DELETE https://bridge/bridge/flag \
 | `BRIDGE_TRUSTED_PROXIES` | -- | CIDR list for proxy IP detection |
 | `BRIDGE_REAL_IP_HEADER` | -- | Header from proxy (e.g. `CF-Connecting-IP`) |
 | `BRIDGE_LOG_LEVEL` | `info` | Log level (`info`, `debug`) |
+| `BRIDGE_MAX_BODY_BYTES` | `16777216` | Cap on a proxied request body |
+| `BRIDGE_MAX_INFLIGHT` | `512` | Cap on concurrently proxied requests (`0` disables) |
+
+Every number above is range-checked at startup and the bridge refuses to start
+outside the range. The thresholds, the windows and `BRIDGE_MAX_BODY_BYTES` must
+be positive; `BRIDGE_MAX_INFLIGHT` may be `0`, which its own documentation
+defines as "no cap". The reason for refusing rather than clamping is that the
+code applying each cap guards on a positive value, so a negative one does not
+lower the limit, it removes it -- and after startup nothing distinguishes an
+operator who asked for that from one who typed a minus sign.
+
+A value that does not parse is treated differently: it falls back to the
+default, because a bridge that will not start over one mistyped threshold takes
+the whole edge down with it. It now logs a `WARNING` naming the variable and the
+value in force, so "the setting did not take" is something an operator can find.
 
 ## State Persistence
 

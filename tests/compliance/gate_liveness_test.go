@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,27 @@ var failureCalls = map[string]struct{}{
 	"Error": {}, "Errorf": {}, "Fatal": {}, "Fatalf": {}, "FailNow": {}, "Fail": {},
 }
 
+// assertionFreeByDesign are the tests that deliberately assert nothing, with the
+// reason each is a measurement or a runtime-checked exercise rather than a gate.
+//
+// Every entry is a hole in the check below, so it is a ratchet in both
+// directions: a test that grows an assertion loses its entry, and a new name may
+// not be added without an argument that the runtime, not testing.T, is what
+// fails it. None of these is cited as evidence by the compliance register.
+var assertionFreeByDesign = map[string]string{
+	"TestTOTPAttack_MeasureLengthMismatchTiming": "a measurement. It logs median compare times " +
+		"per input length to show the time tracks the attacker's input rather than the secret. " +
+		"A threshold here would be a timing flake on shared CI, which is a worse gate than none: " +
+		"the timing property itself is asserted by SecureCompare's own tests",
+	"TestKMSAttack_CloseRacesWrapOnRootSecret": "fails through the runtime, not through " +
+		"testing.T: 64 goroutines wrap while Close runs, so the failure it hunts is a panic on a " +
+		"released root secret or a -race report, and both fail the test without an assertion",
+	"TestKeystoreAttack_RaceDetectorIsBlindToAESKeyReads": "asserts nothing on purpose, and its " +
+		"own comment says why: it demonstrates that -race does not report an assembly-implemented " +
+		"AES read racing a key wipe. A toolchain that started reporting it would be an " +
+		"improvement, so failing on the current silence would fail on the fix",
+}
+
 func TestGateLiveness_NoComplianceTestIsIncapableOfFailing(t *testing.T) {
 	for _, fn := range complianceTestFunctions(t) {
 		if fn.hasSubtests {
@@ -51,10 +73,40 @@ func TestGateLiveness_NoComplianceTestIsIncapableOfFailing(t *testing.T) {
 			// so the message can say so if one is ever empty.
 			continue
 		}
+		if reason, exempt := assertionFreeByDesign[fn.name]; exempt {
+			if reason == "" {
+				t.Errorf("assertionFreeByDesign[%q] carries no reason. An exemption without one is "+
+					"indistinguishable from an oversight.", fn.name)
+			}
+			if fn.failureCalls > 0 {
+				t.Errorf("%s is in assertionFreeByDesign and now contains %d failure call(s). "+
+					"Delete the entry: the list may only shrink.", fn.name, fn.failureCalls)
+			}
+			continue
+		}
 		if fn.failureCalls == 0 {
 			t.Errorf("%s (%s) contains no t.Error, t.Fatal or t.Fail of any kind. It runs, it "+
 				"returns, and it reports success whatever the code does. A register row naming it "+
-				"as evidence has a green tick and no assertion behind it.", fn.name, fn.file)
+				"as evidence has a green tick and no assertion behind it. If it is a measurement "+
+				"or an exercise the runtime fails, add %q to assertionFreeByDesign with that "+
+				"reason.", fn.name, fn.file, fn.name)
+		}
+	}
+}
+
+// TestGateLiveness_NoStaleAssertionFreeExemption deletes an entry whose test has
+// been deleted or renamed, so a future test reusing the name cannot inherit an
+// argument written for a different one.
+func TestGateLiveness_NoStaleAssertionFreeExemption(t *testing.T) {
+	present := map[string]struct{}{}
+	for _, fn := range complianceTestFunctions(t) {
+		present[fn.name] = struct{}{}
+	}
+	for name := range assertionFreeByDesign {
+		if _, ok := present[name]; !ok {
+			t.Errorf("assertionFreeByDesign names %q, which no longer exists in %v. Remove the "+
+				"entry, so a future test reusing the name cannot inherit an exemption written for "+
+				"a different one.", name, gateCorpora)
 		}
 	}
 }
@@ -118,8 +170,22 @@ var corpusFloorExemptions = map[string]struct{}{
 // --- 3. A tripwire over one file of a numbered family cannot see the rest ---
 
 var (
-	migrationRead   = regexp.MustCompile(`readProductionSource\(t,\s*"(migrations/[^"]+)"\)`)
+	// migrationFile matches a migration named as a whole string, in either of
+	// the two shapes the suites use: "migrations/013_session_lifetime.sql" for a
+	// repo-relative read, and "013_session_lifetime.sql" for the last argument of
+	// a filepath.Join. Matching the value rather than the call means a tripwire
+	// is seen however it opens the file — the previous form pinned the literal
+	// call shape readProductionSource(t, "migrations/…"), so a gate that read a
+	// migration any other way was invisible, which is the same class of defect
+	// this file exists for.
+	migrationFile   = regexp.MustCompile(`^(?:migrations/)?(\d{3}_[A-Za-z0-9_]+\.sql)$`)
 	tripwirePhrases = []string{"now exists", "now has", "has since", "no longer absent", "is closed"}
+	// migrationDirReaders are the calls that take a whole directory. A test that
+	// makes one against migrations/ already sees every file, so naming one of
+	// them as well is a detail of the message, not a narrowed corpus.
+	migrationDirReaders = map[string]struct{}{
+		"ReadDir": {}, "WalkDir": {}, "Walk": {}, "Glob": {},
+	}
 )
 
 // TestGateLiveness_NoTripwireWatchesOnlyOneMigration is the shape of the bug
@@ -148,8 +214,7 @@ func TestGateLiveness_NoTripwireWatchesOnlyOneMigration(t *testing.T) {
 	}
 
 	for _, fn := range complianceTestFunctions(t) {
-		reads := migrationRead.FindAllStringSubmatch(fn.source, -1)
-		if len(reads) == 0 {
+		if len(fn.namedMigrations) == 0 || fn.readsMigrationDir {
 			continue
 		}
 
@@ -166,8 +231,8 @@ func TestGateLiveness_NoTripwireWatchesOnlyOneMigration(t *testing.T) {
 		}
 
 		named := map[string]struct{}{}
-		for _, m := range reads {
-			named[m[1]] = struct{}{}
+		for _, m := range fn.namedMigrations {
+			named[m] = struct{}{}
 		}
 		if len(named) < sqlFiles {
 			missing := sqlFiles - len(named)
@@ -183,6 +248,12 @@ func TestGateLiveness_NoTripwireWatchesOnlyOneMigration(t *testing.T) {
 }
 
 // --- 4. One test cannot be the sole evidence for a dozen requirements -------
+//
+// This check does not read gateCorpora, and cannot: its corpus is the register's
+// Met rows, and it counts how many of them name one test. A test in tests/spec
+// or tests/attack that no row cites is not evidence for anything, so there is no
+// number to compare. The widening that applies to checks 1 to 3 does not apply
+// here — the corpus is the document, not the suite.
 
 // umbrellaTestCeiling is the number of Met rows one test may be the *only*
 // named evidence for before the register is asked to say more.
@@ -270,95 +341,442 @@ var umbrellaTestBaseline = map[string]int{
 // --- shared: parse the package's own test functions -------------------------
 
 type complianceTestFn struct {
-	name           string
-	file           string
-	source         string
-	failureCalls   int
-	corpusBuilders []string
-	hasCorpusFloor bool
-	hasSubtests    bool
+	name              string
+	file              string // repo-relative, slash-separated
+	corpus            string // the gateCorpora entry it came from
+	source            string
+	failureCalls      int
+	corpusBuilders    []string
+	hasCorpusFloor    bool
+	hasSubtests       bool
+	namedMigrations   []string
+	readsMigrationDir bool
+}
+
+// gateCorpora are the suites the three structural checks above read.
+//
+// This file started at tests/compliance and nothing else, which is why it saw
+// none of the eleven dead gates a later mutation sweep found in tests/spec: the
+// corpus was the one directory already known to be clean. A gate that reads only
+// where it was written is the same defect one level up.
+//
+// tests/spec and tests/attack are the other two suites written as structural
+// property gates — they read the source tree, build a corpus out of it and
+// assert over it, which is the shape all three checks are about.
+//
+// internal/ and cmd/ are deliberately excluded. Their tests exercise behavior by
+// calling the code, so "builds a corpus from a directory walk and never asserts
+// it found anything" is not a shape they take, and check 1 would report every
+// test whose assertions live in a helper it calls. The claim those packages
+// need is a different one, and internal/middleware/log_privacy_test.go is where
+// it is made.
+var gateCorpora = []string{
+	filepath.Join("tests", "compliance"),
+	filepath.Join("tests", "spec"),
+	filepath.Join("tests", "attack"),
 }
 
 func complianceTestFunctions(t *testing.T) []complianceTestFn {
 	t.Helper()
-	dir := filepath.Join(repoRoot(t), "tests", "compliance")
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read tests/compliance: %v", err)
-	}
+	root := repoRoot(t)
 
 	var out []complianceTestFn
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		raw, err := os.ReadFile(path)
+	for _, corpus := range gateCorpora {
+		dir := filepath.Join(root, corpus)
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
-		}
-		fset := token.NewFileSet()
-		parsed, err := parser.ParseFile(fset, path, raw, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", entry.Name(), err)
+			t.Fatalf("read %s: %v", corpus, err)
 		}
 
-		lines := strings.Split(string(raw), "\n")
-		for _, decl := range parsed.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
+		// Two passes: the suite's own integer constants first, because a floor
+		// written against one is only recognisable as a floor once they are known.
+		type parsedTestFile struct {
+			name   string
+			fset   *token.FileSet
+			file   *ast.File
+			source []byte
+		}
+		var suite []parsedTestFile
+		var asts []*ast.File
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
 				continue
 			}
-			start := fset.Position(fn.Pos()).Line
-			end := fset.Position(fn.End()).Line
-			body := strings.Join(lines[start-1:min(end, len(lines))], "\n")
-
-			info := complianceTestFn{name: fn.Name.Name, file: entry.Name(), source: body}
-			builders := map[string]struct{}{}
-
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := callName(call)
-				if _, isFailure := failureCalls[name]; isFailure {
-					info.failureCalls++
-				}
-				if name == "Run" {
-					info.hasSubtests = true
-				}
-				if _, isBuilder := corpusBuilders[name]; isBuilder {
-					builders[name] = struct{}{}
-				}
-				if q := selectorName(call.Fun); q != "" {
-					if _, isBuilder := corpusBuilders[q]; isBuilder {
-						builders[q] = struct{}{}
-					}
-				}
-				return true
-			})
-
-			for b := range builders {
-				info.corpusBuilders = append(info.corpusBuilders, b)
+			path := filepath.Join(dir, entry.Name())
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", entry.Name(), err)
 			}
-			info.hasCorpusFloor = hasCorpusFloor(fn)
-			out = append(out, info)
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, path, raw, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", entry.Name(), err)
+			}
+			suite = append(suite, parsedTestFile{name: entry.Name(), fset: fset, file: parsed, source: raw})
+			asts = append(asts, parsed)
+		}
+		intConsts, strConsts := suiteConsts(asts)
+
+		before := len(out)
+		for _, pf := range suite {
+			fset, parsed, raw := pf.fset, pf.file, pf.source
+			rel := filepath.ToSlash(filepath.Join(corpus, pf.name))
+			lines := strings.Split(string(raw), "\n")
+			for _, decl := range parsed.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
+					continue
+				}
+				start := fset.Position(fn.Pos()).Line
+				end := fset.Position(fn.End()).Line
+				body := strings.Join(lines[start-1:min(end, len(lines))], "\n")
+
+				info := complianceTestFn{name: fn.Name.Name, file: rel, corpus: corpus, source: body}
+				builders := map[string]struct{}{}
+
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					name := callName(call)
+					if _, isFailure := failureCalls[name]; isFailure {
+						info.failureCalls++
+					}
+					if name == "Run" {
+						info.hasSubtests = true
+					}
+					if _, isBuilder := corpusBuilders[name]; isBuilder {
+						builders[name] = struct{}{}
+					}
+					if q := selectorName(call.Fun); q != "" {
+						if _, isBuilder := corpusBuilders[q]; isBuilder {
+							builders[q] = struct{}{}
+						}
+					}
+					return true
+				})
+
+				for b := range builders {
+					info.corpusBuilders = append(info.corpusBuilders, b)
+				}
+				info.hasCorpusFloor = hasCorpusFloor(fn, intConsts)
+				info.namedMigrations, info.readsMigrationDir = migrationReads(fn, strConsts)
+				out = append(out, info)
+			}
+		}
+
+		// Per corpus, not only in total. A suite that silently contributes
+		// nothing — a renamed directory, a changed suffix — would leave the
+		// other two holding the floor up while this one goes unchecked, which is
+		// the vacuous-corpus failure this file exists to detect.
+		if got := len(out) - before; got < 20 {
+			t.Fatalf("only %d test functions parsed from %s; this gate's own corpus is broken over "+
+				"that suite, which would make every assertion in this file vacuous for it — "+
+				"precisely the failure it exists to detect", got, corpus)
 		}
 	}
 
-	if len(out) < 50 {
-		t.Fatalf("only %d compliance test functions parsed; this gate's own corpus is broken, which "+
+	if len(out) < 250 {
+		t.Fatalf("only %d test functions parsed across %v; this gate's own corpus is broken, which "+
 			"would make every assertion in this file vacuous — precisely the failure it exists to "+
-			"detect", len(out))
+			"detect", len(out), gateCorpora)
 	}
 	return out
 }
 
+// --- 5. A comment naming a test is a claim about the tree -------------------
+
+// commentTestName matches a Go test, fuzz or benchmark identifier where it
+// appears inside a comment. Fuzz and Benchmark are included because the
+// fuzz-a-local-dummy defect was found by reading a comment that named a target,
+// and a target is as easy to rename out from under a sentence as a test is.
+var commentTestName = regexp.MustCompile(`\b((?:Test|Fuzz|Benchmark)[A-Z][A-Za-z0-9_]*)\b`)
+
+// commentTestNameExemptions are the Test-shaped identifiers in Go comments that
+// are deliberately not the name of a function that exists, each with the reason.
+//
+// Every entry is a hole in the gate below, so each has to earn its place, and
+// TestGateLiveness_NoStaleCommentTestNameExemption deletes it again as soon as
+// the name it names comes into existence. The shape is the one
+// tests/spec/ratelimit_failclosed_test.go uses for failOpenByDesign: an
+// exemption with no written reason is indistinguishable from an oversight.
+var commentTestNameExemptions = map[string]string{
+	"TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded": "the historical dead " +
+		"gate this file was written about, named in the header so a reader can look it up. It was " +
+		"rewritten under a different name; naming the old one is the point",
+	"TestCLI_CleanupAudit": "retired along with the CLI subcommand it drove. " +
+		"cli_ops_test.go names it to say where the contract went",
+	"TestComplianceRegister": "a `go test -run` regular expression, not a function: it matches " +
+		"every TestComplianceRegister_* gate in tests/compliance",
+	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "a name that has never existed, quoted " +
+		"in register_gates_test.go as the example of the defect that gate closes",
+	"TestNIST80053_IA_11_": "an elided reference — the comment writes " +
+		"`TestNIST80053_IA_11_...` because the point is the family, not one member of it",
+	"TestParseJWKHeaderValidECP384": "deleted, because it pinned as a contract a branch that " +
+		"cannot produce an accepted proof. Its replacement's doc comment names it to say what was " +
+		"removed and why",
+	"TestWithPerm": "removed during review, and adminapi_v076_test.go records the removal and " +
+		"the reason. A note saying a test was deleted is the one comment that must name a test " +
+		"which does not exist",
+}
+
+// TestGateLiveness_EveryTestNamedInAGoCommentExists fails when a comment names
+// a test function that is nowhere in the tree.
+//
+// internal/middleware/ratelimit.go argued that its namespace() fallback was safe
+// because "the production limiters are named and TestRateLimitersAreNamespaced
+// asserts it". No such test had ever been written. A whole-tree grep returned
+// one hit: the sentence making the claim.
+//
+// That is worse than an absent gate, because it is an absent gate with a
+// citation. The next reader sees "asserts it" and stops looking, which is the
+// same mechanism that let a CI job pipe go test into tee without pipefail for
+// eleven months — the control was documented, so nobody checked it.
+//
+// docs/COMPLIANCE.md already gets this check, from
+// TestComplianceDocs_EveryTestNamedInProseExists. This is its Go-source half:
+// the same claim, in the place a maintainer is most likely to believe it.
+func TestGateLiveness_EveryTestNamedInAGoCommentExists(t *testing.T) {
+	defined, mentions := goCommentTestNames(t)
+
+	for _, mention := range mentions {
+		m := mention.resolve(defined)
+		if _, exists := defined[m]; exists {
+			continue
+		}
+		if _, exempt := commentTestNameExemptions[m]; exempt {
+			continue
+		}
+		t.Errorf("%s:%d names %s, and no func %s( exists anywhere in the tree. A comment that "+
+			"says a test asserts something is a claim, and this repository has shipped one that "+
+			"was false: internal/middleware/ratelimit.go cited TestRateLimitersAreNamespaced as "+
+			"the reason its key fallback was safe, and the only hit for that name was the comment "+
+			"itself. Either write the test, rename the reference, or add %q to "+
+			"commentTestNameExemptions with the reason it names something that does not exist.",
+			mention.file, mention.line, m, m, m)
+	}
+}
+
+// TestGateLiveness_NoStaleCommentTestNameExemption keeps the list above from
+// outliving the holes it describes.
+//
+// An exemption naming a test that now exists is a standing permission nobody
+// has to justify any more, and it hides the next one: a real test renamed onto
+// an exempt name would inherit an amnesty written for a deleted one. The list
+// is a ratchet, so it may only shrink.
+func TestGateLiveness_NoStaleCommentTestNameExemption(t *testing.T) {
+	defined, mentions := goCommentTestNames(t)
+
+	mentioned := map[string]struct{}{}
+	for _, m := range mentions {
+		mentioned[m.resolve(defined)] = struct{}{}
+	}
+
+	for name, reason := range commentTestNameExemptions {
+		if reason == "" {
+			t.Errorf("commentTestNameExemptions[%q] carries no reason. An exemption without one "+
+				"is indistinguishable from an oversight.", name)
+		}
+		if _, exists := defined[name]; exists {
+			t.Errorf("commentTestNameExemptions names %q, which now exists as a function. Delete "+
+				"the entry: the exemption was written for a name that was absent, and leaving it "+
+				"would let a future rename onto that name inherit it.", name)
+		}
+		if _, still := mentioned[name]; !still {
+			t.Errorf("commentTestNameExemptions names %q, which no Go comment mentions any more. "+
+				"Delete the entry: the list may only shrink.", name)
+		}
+	}
+}
+
+// commentMention is one Test-shaped identifier read out of a Go comment.
+//
+// joined is the same identifier with the first word of the following comment
+// line appended, set only when the match ended a line and so may have been
+// split by a wrap. Which of the two the comment meant is decided against the
+// set of declared functions, not by guessing from the text.
+type commentMention struct {
+	name   string
+	joined string
+	file   string // repo-relative, slash-separated
+	line   int
+}
+
+// resolve returns the identifier the comment meant: the rejoined one when a
+// wrap split it and the join names a real function, and the bare match
+// otherwise.
+func (m commentMention) resolve(defined map[string]struct{}) string {
+	if m.joined != "" {
+		if _, ok := defined[m.joined]; ok {
+			return m.joined
+		}
+	}
+	return m.name
+}
+
+// goCommentTestNames returns every function declared anywhere in the tree and
+// every Test-shaped identifier named in a Go comment.
+//
+// It reads production files as well as test files, because the claim this gate
+// exists for was made in production source: the comment on namespace() in
+// internal/middleware/ratelimit.go.
+func goCommentTestNames(t *testing.T) (map[string]struct{}, []commentMention) {
+	t.Helper()
+	root := repoRoot(t)
+
+	defined := map[string]struct{}{}
+	var mentions []commentMention
+	var files int
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "testdata", "tmp", "dist", "build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			// A file that does not compile is a different gate's problem, so it
+			// contributes nothing rather than failing the walk.
+			return nil
+		}
+		files++
+
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				defined[fn.Name.Name] = struct{}{}
+			}
+		}
+
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		for _, group := range parsed.Comments {
+			for _, m := range mentionsInCommentGroup(group, fset) {
+				m.file = rel
+				mentions = append(mentions, m)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+
+	// Both floors are the gate's own anti-vacuity check. A walk that finds no
+	// files, or a comment reader that extracts no names, would make every
+	// assertion above pass without looking at anything.
+	if files < 500 {
+		t.Fatalf("only %d Go files parsed under %s; the walk is broken and both gates above would "+
+			"pass vacuously", files, root)
+	}
+	if len(defined) < 200 {
+		t.Fatalf("only %d functions found across %d Go files; the declaration scan is broken",
+			len(defined), files)
+	}
+	if len(mentions) < 50 {
+		t.Fatalf("only %d Test-shaped identifiers found in Go comments across %d files; the "+
+			"comment reader is broken, which is how this gate would come to pass over a false "+
+			"claim", len(mentions), files)
+	}
+	return defined, mentions
+}
+
+// mentionsInCommentGroup reads the Test-shaped identifiers out of one comment
+// group, rejoining the ones a line wrap split in two.
+//
+// A long test name is exactly the thing a fill-paragraph breaks across lines,
+// leaving one line ending in "...HorizonMatchesThe" and the next beginning
+// "Oracle below asks Postgres instead". Reading those halves separately reports
+// a name nobody wrote. So a match that ends a line is re-tried with the first
+// word of the next line appended, and the join wins when it names a real
+// function.
+func mentionsInCommentGroup(group *ast.CommentGroup, fset *token.FileSet) []commentMention {
+	type commentLine struct {
+		text string
+		line int
+	}
+	var lines []commentLine
+	for _, c := range group.List {
+		start := fset.Position(c.Pos()).Line
+		if strings.HasPrefix(c.Text, "//") {
+			lines = append(lines, commentLine{text: c.Text[2:], line: start})
+			continue
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(c.Text, "/*"), "*/")
+		for i, raw := range strings.Split(body, "\n") {
+			lines = append(lines, commentLine{
+				text: strings.TrimPrefix(strings.TrimSpace(raw), "*"),
+				line: start + i,
+			})
+		}
+	}
+
+	var out []commentMention
+	for i, cl := range lines {
+		for _, loc := range commentTestName.FindAllStringIndex(cl.text, -1) {
+			name := cl.text[loc[0]:loc[1]]
+			m := commentMention{name: name, line: cl.line}
+			if loc[1] == len(cl.text) && i+1 < len(lines) {
+				if head := leadingWord(lines[i+1].text); head != "" {
+					m.joined = name + head
+				}
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// leadingWord returns the identifier characters a comment line starts with,
+// after the single space that follows the marker, and "" when the line does not
+// start with one. It is how a wrapped identifier is put back together.
+func leadingWord(text string) string {
+	text = strings.TrimPrefix(text, " ")
+	end := 0
+	for end < len(text) {
+		c := text[end]
+		if c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			end++
+			continue
+		}
+		break
+	}
+	return text[:end]
+}
+
 // hasCorpusFloor reports whether a function compares a len() against a numeric
 // literal, which is the shape of "the scan found nothing and that is a bug".
-func hasCorpusFloor(fn *ast.FuncDecl) bool {
+//
+// intConsts are the package-level integer constants of the suite the function
+// came from. A floor written against a named constant — `if checked <
+// chartWorkloadTemplates` — is the same guard as one written against 8, and is
+// the better version of it, because the number then has a name and a doc
+// comment. Reading only literals reported that shape as an absent floor.
+func hasCorpusFloor(fn *ast.FuncDecl, intConsts map[string]struct{}) bool {
+	isNumber := func(e ast.Expr) bool {
+		if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.INT {
+			return true
+		}
+		if ident, ok := e.(*ast.Ident); ok {
+			_, named := intConsts[ident.Name]
+			return named
+		}
+		return false
+	}
+
 	found := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		bin, ok := n.(*ast.BinaryExpr)
@@ -378,8 +796,7 @@ func hasCorpusFloor(fn *ast.FuncDecl) bool {
 			return ok && ident.Name == "len"
 		}
 		numSide := func(e ast.Expr) bool {
-			lit, ok := e.(*ast.BasicLit)
-			if ok && lit.Kind == token.INT {
+			if isNumber(e) {
 				return true
 			}
 			ident, isIdent := e.(*ast.Ident)
@@ -388,10 +805,10 @@ func hasCorpusFloor(fn *ast.FuncDecl) bool {
 		if (lenSide(bin.X) && numSide(bin.Y)) || (numSide(bin.X) && lenSide(bin.Y)) {
 			found = true
 		}
-		// A counter compared against a literal is the same guard written the
+		// A counter compared against a number is the same guard written the
 		// other way: `if scanned < 10 { t.Fatalf(...) }`.
 		if id, ok := bin.X.(*ast.Ident); ok {
-			if _, isNum := bin.Y.(*ast.BasicLit); isNum &&
+			if isNumber(bin.Y) &&
 				(strings.Contains(strings.ToLower(id.Name), "count") ||
 					strings.Contains(strings.ToLower(id.Name), "scanned") ||
 					strings.Contains(strings.ToLower(id.Name), "checked") ||
@@ -406,4 +823,100 @@ func hasCorpusFloor(fn *ast.FuncDecl) bool {
 		return true
 	})
 	return found
+}
+
+// suiteConsts collects the package-level constants a suite declares with a
+// literal value: the integers, so a floor written against one is recognised as a
+// floor, and the strings, so a migration opened through a named constant is
+// recognised as a migration.
+func suiteConsts(files []*ast.File) (ints map[string]struct{}, strs map[string]string) {
+	ints, strs = map[string]struct{}{}, map[string]string{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					switch lit.Kind {
+					case token.INT:
+						ints[name.Name] = struct{}{}
+					case token.STRING:
+						if v, err := strconv.Unquote(lit.Value); err == nil {
+							strs[name.Name] = v
+						}
+					}
+				}
+			}
+		}
+	}
+	return ints, strs
+}
+
+// migrationReads reports which migration files a test names, and whether it
+// reads the whole migrations directory instead.
+//
+// It matches the value, not the call: a migration is recognised whether it
+// arrives as "migrations/013_session_lifetime.sql", as the last argument of a
+// filepath.Join, or through a package-level string constant. A directory read
+// short-circuits the whole question, because a test that walks migrations/
+// already sees every file that could introduce what it is watching for.
+func migrationReads(fn *ast.FuncDecl, strConsts map[string]string) ([]string, bool) {
+	named := map[string]struct{}{}
+	wholeDir := false
+
+	add := func(v string) {
+		if m := migrationFile.FindStringSubmatch(v); m != nil {
+			named[m[1]] = struct{}{}
+		}
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.BasicLit:
+			if node.Kind == token.STRING {
+				if v, err := strconv.Unquote(node.Value); err == nil {
+					add(v)
+				}
+			}
+		case *ast.Ident:
+			if v, ok := strConsts[node.Name]; ok {
+				add(v)
+			}
+		case *ast.CallExpr:
+			if _, isDirRead := migrationDirReaders[callName(node)]; !isDirRead {
+				return true
+			}
+			ast.Inspect(node, func(inner ast.Node) bool {
+				lit, ok := inner.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				if v, err := strconv.Unquote(lit.Value); err == nil && strings.Contains(v, "migrations") {
+					wholeDir = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+
+	out := make([]string, 0, len(named))
+	for m := range named {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out, wholeDir
 }

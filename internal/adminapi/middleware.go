@@ -59,8 +59,13 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 
 			ip := net.ParseIP(host)
 			if ip == nil || !ip.IsLoopback() {
-				log.Printf("CRITICAL admin-gateway: non-loopback connection from %s (UA: %s)", // #nosec G706 — sanitized
-					httputil.SafeLogValue(r.RemoteAddr), httputil.SafeLogValue(r.UserAgent()))
+				// The masked network, not the address: the audit entry written
+				// immediately below carries the whole one, and docs/PRIVACY.md
+				// inventories the audit store as the place that holds it. The
+				// same split the proxy-header line at the bottom of this file
+				// already makes.
+				log.Printf("CRITICAL admin-gateway: non-loopback connection from %s (UA: %s)", // #nosec G706 — masked network, and the user agent is encoded
+					httputil.ObfuscatedIP(r.RemoteAddr), httputil.SafeLogValue(r.UserAgent()))
 
 				// Best-effort audit entry
 				if auditRepo != nil {

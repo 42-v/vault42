@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -132,22 +133,17 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("BRIDGE_HONEYPOT_UPSTREAM is required")
 	}
 
-	// Both caps are applied behind a `> 0` guard at the point of use, so a
-	// negative value does not lower them, it removes them. BRIDGE_MAX_INFLIGHT=-1
-	// leaves nothing counting goroutines or upstream sockets, and
-	// BRIDGE_MAX_BODY_BYTES=-1 leaves the proxy streaming whatever a client sends
-	// for as long as ReadTimeout allows. An operator typing a negative number is
-	// asking for a smaller limit and would get no limit at all, silently, on the
-	// process whose whole job is to stand in front of the vault. Zero stays
-	// accepted: it is the documented way to turn the concurrency cap off on
-	// purpose.
-	if cfg.MaxBodyBytes < 0 {
-		return nil, fmt.Errorf("BRIDGE_MAX_BODY_BYTES is %d: a negative value disables the request "+
-			"body cap rather than lowering it", cfg.MaxBodyBytes)
-	}
-	if cfg.MaxInflight < 0 {
-		return nil, fmt.Errorf("BRIDGE_MAX_INFLIGHT is %d: a negative value disables the concurrency "+
-			"cap rather than lowering it; use 0 to disable it deliberately", cfg.MaxInflight)
+	// Every one of these caps is applied behind a `> 0` guard at the point of
+	// use, so a negative value does not lower a limit, it removes it.
+	// BRIDGE_MAX_INFLIGHT=-1 leaves nothing counting goroutines or upstream
+	// sockets, and BRIDGE_MAX_BODY_BYTES=-1 leaves the proxy streaming whatever a
+	// client sends for as long as ReadTimeout allows. An operator typing a
+	// negative number is asking for a smaller limit and would get no limit at
+	// all, silently, on the process whose whole job is to stand in front of the
+	// vault. Zero stays accepted for the concurrency cap alone: that is the
+	// documented way to turn it off on purpose.
+	if err := cfg.validateBounds(); err != nil {
+		return nil, err
 	}
 
 	// Load admin token from file (_FILE convention)
@@ -181,6 +177,64 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
+// validateBounds refuses a configuration whose numbers are outside the range the
+// code that reads them assumes.
+//
+// Every cap in this file is applied by a `> 0` guard — the inflight semaphore at
+// proxy.go, the body limit at proxy.go, the scoring thresholds. A negative value
+// passes strconv.Atoi, survives LoadConfig, and then turns that guard off:
+// BRIDGE_MAX_INFLIGHT=-1 leaves the bridge with no bound on concurrent upstream
+// sockets, and BRIDGE_MAX_BODY_BYTES=-1 removes the request-body cap, both while
+// the operator is reading a configuration that says the opposite. A typed minus
+// sign is not a request to disable a DoS control, and the two ways to ask for
+// that deliberately — 0 for the inflight cap, per its own doc — stay available.
+//
+// Refusing at startup is the only place this can be said. After LoadConfig
+// returns there is nothing left to distinguish "the cap is off because the
+// operator asked" from "the cap is off because a value was mistyped".
+func (c *Config) validateBounds() error {
+	for _, f := range []struct {
+		env      string
+		value    int64
+		minimum  int64
+		zeroMean string
+	}{
+		{"BRIDGE_RATE_THRESHOLD", int64(c.RateThreshold), 1, ""},
+		{"BRIDGE_LOGIN_FAIL_THRESHOLD", int64(c.LoginFailThreshold), 1, ""},
+		{"BRIDGE_FLAG_THRESHOLD", int64(c.FlagThreshold), 1, ""},
+		{"BRIDGE_MAX_BODY_BYTES", c.MaxBodyBytes, 1, ""},
+		{"BRIDGE_MAX_INFLIGHT", int64(c.MaxInflight), 0, "0 disables the cap"},
+	} {
+		if f.value >= f.minimum {
+			continue
+		}
+		hint := ""
+		if f.zeroMean != "" {
+			hint = " (" + f.zeroMean + ")"
+		}
+		return fmt.Errorf("%s is %d, which is below the minimum of %d%s: the code that reads it "+
+			"guards on a positive value, so this silently disables the limit rather than lowering it",
+			f.env, f.value, f.minimum, hint)
+	}
+
+	for _, f := range []struct {
+		env   string
+		value time.Duration
+	}{
+		{"BRIDGE_RATE_WINDOW", c.RateWindow},
+		{"BRIDGE_LOGIN_FAIL_WINDOW", c.LoginFailWindow},
+		{"BRIDGE_FLAG_TTL", c.FlagTTL},
+	} {
+		if f.value > 0 {
+			continue
+		}
+		return fmt.Errorf("%s is %v; a window that is not positive makes the counter it bounds "+
+			"either always empty or never expiring", f.env, f.value)
+	}
+
+	return nil
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -188,6 +242,14 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// envInt reads an integer, falling back to the default when the value does not
+// parse — and saying so.
+//
+// The fallback itself is deliberate: a bridge that refuses to start because one
+// threshold is mistyped takes the whole edge down. The silence was not. An
+// operator who writes BRIDGE_FLAG_THRESHOLD=1O0 with a letter O gets 100 and no
+// indication anywhere that the value they set is not the value in force, which
+// is how a configuration and a running process come to disagree for months.
 func envInt(key string, fallback int) int {
 	v := os.Getenv(key)
 	if v == "" {
@@ -195,11 +257,16 @@ func envInt(key string, fallback int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		log.Printf("WARNING: %s=%q is not an integer; falling back to %d. The value you set is "+
+			"not the value in force.", key, v, fallback) // #nosec G706 -- the key is a fixed literal and the value is quoted
 		return fallback
 	}
 	return n
 }
 
+// envDuration reads a duration, falling back with the same warning as envInt.
+// A value with no unit is the common case: BRIDGE_RATE_WINDOW=60 does not parse,
+// and the operator who wrote it meant sixty seconds.
 func envDuration(key string, fallback time.Duration) time.Duration {
 	v := os.Getenv(key)
 	if v == "" {
@@ -207,6 +274,8 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
+		log.Printf("WARNING: %s=%q is not a duration; falling back to %v. A duration needs a unit, "+
+			"so 60 is not a minute, 60s is.", key, v, fallback) // #nosec G706 -- the key is a fixed literal and the value is quoted
 		return fallback
 	}
 	return d

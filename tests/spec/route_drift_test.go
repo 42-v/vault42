@@ -186,6 +186,194 @@ func TestNonAPIRoutesStayOutsideTheAPISurface(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// DPoP wiring
+// ---------------------------------------------------------------------------
+
+// serverSource is the mux that mounts the authenticated API surface. The admin
+// gateway is a separate binary behind mutual TLS on loopback and issues no
+// sender-constrained tokens, so it is not in scope for the check below.
+var serverSource = filepath.Join("internal", "server", "server.go")
+
+// TestEveryAuthenticatedRouteCarriesTheDPoPWrapper is the ratchet that keeps
+// sender-constraining from decaying back into decoration.
+//
+// DPoP binds an access token to a key the client proves possession of. The
+// middleware can only enforce that on a route it is mounted on, and it was
+// mounted on five: the two token endpoints, the 2FA verify wrapper, POST
+// /kms/unwrap and POST /mint. Every other authenticated route — the whole of
+// /user — took a bound token as an ordinary bearer token, so a stolen token was
+// replayed there instead and the constraint bought nothing. One unwrapped route
+// is enough to make the whole control decorative.
+//
+// internal/server/dpop_routes_test.go drives six routes and proves the
+// enforcement works on them. It cannot see the seventh. That is the failure mode
+// this fix was written to end, recurring in the fix's own test.
+//
+// The check derives its vocabulary from the source instead of hardcoding
+// identifier names. It finds the variables built from middleware.Auth* and from
+// middleware.DPoP, then closes over the wrappers that use them, so renaming
+// authMw or dpopWrap moves the gate with the code rather than blinding it. A
+// route registered through a new wrapper is classified by what that wrapper is
+// made of.
+func TestEveryAuthenticatedRouteCarriesTheDPoPWrapper(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, serverSource)
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", serverSource, err)
+	}
+
+	authIdents := identsBuiltFrom(file, "middleware", func(name string) bool {
+		return strings.HasPrefix(name, "Auth")
+	})
+	dpopIdents := identsBuiltFrom(file, "middleware", func(name string) bool {
+		return name == "DPoP"
+	})
+
+	if len(authIdents) == 0 {
+		t.Fatal("no authentication middleware is built from middleware.Auth* in server.go; the " +
+			"construction style changed and this gate has stopped seeing what it guards")
+	}
+	if len(dpopIdents) == 0 {
+		t.Fatal("no DPoP middleware is built from middleware.DPoP in server.go; the construction " +
+			"style changed and this gate has stopped seeing what it guards")
+	}
+
+	// Close over the local wrappers. authed := func(h) { return authMw(...) }
+	// makes authed an authentication wrapper, and it carries DPoP only if its
+	// own body reaches something that does.
+	closeOverAssignments(file, authIdents)
+	closeOverAssignments(file, dpopIdents)
+
+	var authenticated, wrapped int
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		pattern, _, ok := muxRegistration(call)
+		if !ok {
+			return true
+		}
+		handler := call.Args[1]
+		if !mentionsAnyIdent(handler, authIdents) {
+			return true
+		}
+		authenticated++
+		if mentionsAnyIdent(handler, dpopIdents) {
+			wrapped++
+			return true
+		}
+		t.Errorf("%s:%d mounts %q behind authentication with no DPoP wrapper on it. A "+
+			"sender-constrained token presented here is accepted as an ordinary bearer token, so a "+
+			"stolen one is simply replayed at this route instead — and one such route makes the "+
+			"binding decorative everywhere. Wrap the handler the way the authenticated routes "+
+			"around it are wrapped, or, if this route must be reachable without a proof, say so "+
+			"here in a way the next reader can weigh.",
+			serverSource, fset.Position(call.Lparen).Line, pattern)
+		return true
+	})
+
+	// The floor. A classifier that recognises nothing reports no violations,
+	// which is the same "ok" as a correctly wired mux.
+	if authenticated < 20 {
+		t.Fatalf("only %d authenticated route registrations were classified in %s; the vault mounts "+
+			"far more than that, so the classifier has stopped seeing them and this gate would pass "+
+			"over an unwrapped route", authenticated, serverSource)
+	}
+	t.Logf("%d authenticated route registrations, %d carrying a DPoP wrapper", authenticated, wrapped)
+}
+
+// identsBuiltFrom returns the variable names assigned, anywhere in the file,
+// from a call to pkg.<Name> where match reports on the name.
+//
+// Both branches of an if/else count: server.go picks middleware.AuthDynamic or
+// middleware.Auth depending on whether a keystore is wired, and a gate that saw
+// only one of them would classify half the routes.
+func identsBuiltFrom(file *ast.File, pkg string, match func(string) bool) map[string]struct{} {
+	out := map[string]struct{}{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			ident, ok := lhs.(*ast.Ident)
+			if !ok || i >= len(as.Rhs) {
+				continue
+			}
+			ast.Inspect(as.Rhs[i], func(inner ast.Node) bool {
+				call, ok := inner.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				base, ok := sel.X.(*ast.Ident)
+				if !ok || base.Name != pkg || !match(sel.Sel.Name) {
+					return true
+				}
+				out[ident.Name] = struct{}{}
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// closeOverAssignments grows a set of identifiers to a fixpoint: a variable
+// assigned an expression that mentions a member of the set joins the set.
+//
+// This is what makes the check survive a refactor. authed, authedChallenge,
+// confirmed, docWrite and docRead are all local closures over authMw, and a new
+// one added tomorrow is classified by what it is built from rather than by
+// somebody remembering to list its name here.
+func closeOverAssignments(file *ast.File, set map[string]struct{}) {
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(file, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, lhs := range as.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok || i >= len(as.Rhs) {
+					continue
+				}
+				if _, already := set[ident.Name]; already {
+					continue
+				}
+				if mentionsAnyIdent(as.Rhs[i], set) {
+					set[ident.Name] = struct{}{}
+					changed = true
+				}
+			}
+			return true
+		})
+	}
+}
+
+// mentionsAnyIdent reports whether expr contains any of the named identifiers.
+func mentionsAnyIdent(expr ast.Expr, names map[string]struct{}) bool {
+	var found bool
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if _, hit := names[id.Name]; hit {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// ---------------------------------------------------------------------------
 // Source side: go/ast
 // ---------------------------------------------------------------------------
 

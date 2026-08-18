@@ -64,8 +64,8 @@ func TestSemaphore_AntiEnumeration(t *testing.T) {
 	t.Logf("both paths returned same overloaded state: %v (anti-enumeration verified)", existingOverloaded)
 }
 
-// TestSemaphore_DummyHashPathPropagatesToErrArgon2 verifies that the dummy hash
-// path used for non-existing users propagates ErrArgon2Overloaded (not discarded),
+// TestSemaphore_DummyHashPathReturnsError verifies that the dummy hash path
+// used for non-existing users propagates ErrArgon2Overloaded (not discarded),
 // preventing status-code-based user enumeration.
 func TestSemaphore_DummyHashPathReturnsError(t *testing.T) {
 	// This test verifies the code path, not semaphore saturation.

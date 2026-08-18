@@ -120,6 +120,73 @@ func TestDoS_ScoreMapCapsDistinctIPs(t *testing.T) {
 	}
 }
 
+// minTrackedIPs is the floor maxTrackedIPs may not fall below.
+//
+// The four cap tests above all drive their loops with maxTrackedIPs and then
+// assert against maxTrackedIPs, so each is true for any value of it. Set the
+// constant to 10 and every one of them still passes: the bridge would stop
+// tracking the eleventh distinct source it ever sees, the detector would go
+// blind to everything after it, and the only thing that noticed was an
+// unrelated concurrency test that happens to use four addresses.
+//
+// maxSamplesPerIP already had this guard — `if maxSamplesPerIP <= 60` — and
+// maxTrackedIPs did not, which is what makes the omission worth a name rather
+// than a line: the same file knew the shape and applied it once.
+//
+// The number: the cap is a refusal rather than an eviction, so a cap below the
+// legitimate source population converts a memory bound into a functional one —
+// every source past it is permanently first-seen and can never accumulate a
+// score. A bridge in front of a public vault sees far more than ten thousand
+// distinct sources inside a flag TTL. 10k is an order of magnitude below the
+// shipped 50k, so ordinary tuning does not trip this and gutting it does.
+const minTrackedIPs = 10_000
+
+// TestTheDistinctSourceCapIsADoSBoundNotAFunctionalOne is the anti-vacuity floor
+// under all four cap tests.
+//
+// It drives its loops from the floor rather than from the constant, so it is a
+// statement about the constant instead of a statement about itself.
+func TestTheDistinctSourceCapIsADoSBoundNotAFunctionalOne(t *testing.T) {
+	if maxTrackedIPs < minTrackedIPs {
+		t.Fatalf("maxTrackedIPs = %d, below the floor of %d. Every cap test in this file drives "+
+			"its loop with this constant and asserts against it, so all of them pass at any value. "+
+			"Below the floor the cap stops being a memory bound and becomes a functional one: a "+
+			"source past it is treated as first-seen forever and can never accumulate a score.",
+			maxTrackedIPs, minTrackedIPs)
+	}
+
+	// The floor asserted behaviourally, not only as arithmetic: minTrackedIPs
+	// distinct sources are each tracked, and the first one keeps counting.
+	rt := NewRateTracker(time.Minute)
+	for i := 0; i < minTrackedIPs; i++ {
+		if got := rt.Record(slash96(i)); got != 1 {
+			t.Fatalf("first Record of source %d of %d = %d, want 1; the tracker stopped taking "+
+				"new sources below the floor", i, minTrackedIPs, got)
+		}
+	}
+	if got := len(rt.buckets); got != minTrackedIPs {
+		t.Fatalf("buckets = %d after %d distinct sources; the tracker is refusing sources it has "+
+			"to be able to hold", got, minTrackedIPs)
+	}
+	if got := rt.Record(slash96(0)); got != 2 {
+		t.Fatalf("the first source stopped counting at %d once %d were tracked", got, minTrackedIPs)
+	}
+
+	// The score map shares the constant, so it shares the floor, and scoring is
+	// the half that matters: a source the map will not hold can never reach
+	// FlagThreshold whatever it does.
+	sm := NewScoreMap()
+	for i := 0; i < minTrackedIPs; i++ {
+		if got := sm.Add(slash96(i), 1); got != 1 {
+			t.Fatalf("Add for source %d of %d = %d, want 1; the score map refused a source below "+
+				"the floor, so it can never reach FlagThreshold", i, minTrackedIPs, got)
+		}
+	}
+	if got := sm.Get(slash96(minTrackedIPs - 1)); got != 1 {
+		t.Fatalf("the last source below the floor scores %d, want 1", got)
+	}
+}
+
 // TestDoS_TrimmingReclaimsSampleSlots shows the cap does not wedge: samples
 // that fall out of the window free space for new ones.
 func TestDoS_TrimmingReclaimsSampleSlots(t *testing.T) {
