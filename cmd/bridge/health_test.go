@@ -121,7 +121,7 @@ func TestReadyzReportsEachUpstreamSeparately(t *testing.T) {
 			hh := NewHealthHandler(realUp.srv.URL, honeypot.srv.URL)
 
 			w := httptest.NewRecorder()
-			hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil))
+			hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil), true)
 
 			if w.Code != tt.wantCode {
 				t.Errorf("status = %d, want %d", w.Code, tt.wantCode)
@@ -165,7 +165,7 @@ func TestReadyzTreatsUnreachableUpstreamAsDown(t *testing.T) {
 	hh := NewHealthHandler("http://"+deadAddr(t), honeypot.srv.URL)
 
 	w := httptest.NewRecorder()
-	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil))
+	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil), true)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
@@ -187,7 +187,7 @@ func TestReadyzTreatsUnparseableUpstreamAsDown(t *testing.T) {
 	hh := NewHealthHandler("://not-a-url", "http:// spaces in host")
 
 	w := httptest.NewRecorder()
-	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil))
+	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil), true)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
@@ -219,7 +219,7 @@ func TestReadyzBoundsHowLongAHangingUpstreamCanStallIt(t *testing.T) {
 
 	start := time.Now()
 	w := httptest.NewRecorder()
-	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil))
+	hh.Readyz(w, httptest.NewRequest(http.MethodGet, "/bridge/readyz", nil), true)
 	elapsed := time.Since(start)
 
 	if w.Code != http.StatusServiceUnavailable {

@@ -28,6 +28,9 @@ type Bridge struct {
 	admin         *AdminHandler
 	health        *HealthHandler
 	webhook       *WebhookSender
+	// inflight caps concurrently proxied requests. nil when the operator has
+	// disabled the cap.
+	inflight chan struct{}
 }
 
 // ScoreMap tracks cumulative scores per IP.
@@ -47,10 +50,19 @@ func NewScoreMap() *ScoreMap {
 }
 
 // Add adds a score delta and returns the new total.
+//
+// At maxTrackedIPs a previously unseen address is scored but not stored: live
+// totals do not decay, so entries survive for FlagTTL (24h by default) and an
+// address-varying flood otherwise chooses the map size. Refusing the insert
+// costs nothing an attacker did not already have — one score of `delta` is what
+// a fresh address gets either way — and the reaper drains the map on its tick.
 func (sm *ScoreMap) Add(ip string, delta int) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	ent := sm.scores[ip]
+	ent, tracked := sm.scores[ip]
+	if !tracked && len(sm.scores) >= maxTrackedIPs {
+		return delta
+	}
 	ent.n += delta
 	ent.seen = time.Now()
 	sm.scores[ip] = ent
@@ -93,13 +105,17 @@ func NewBridge(cfg *Config) (*Bridge, error) {
 
 	b := &Bridge{
 		cfg:           cfg,
-		realProxy:     httputil.NewSingleHostReverseProxy(realURL),
-		honeypotProxy: httputil.NewSingleHostReverseProxy(honeypotURL),
+		realProxy:     newBoundedProxy(realURL),
+		honeypotProxy: newBoundedProxy(honeypotURL),
 		flags:         NewFlagStore(cfg.FlagTTL, cfg.RedisAddr),
 		rateTracker:   NewRateTracker(cfg.RateWindow),
 		loginFails:    NewLoginFailTracker(cfg.LoginFailWindow),
 		scores:        NewScoreMap(),
 		webhook:       webhook,
+	}
+
+	if cfg.MaxInflight > 0 {
+		b.inflight = make(chan struct{}, cfg.MaxInflight)
 	}
 
 	b.decoys = NewDecoyHandler(b.flags, webhook)
@@ -114,6 +130,44 @@ func NewBridge(cfg *Config) (*Bridge, error) {
 	b.realProxy.ModifyResponse = b.inspectLoginResponse
 
 	return b, nil
+}
+
+// Upstream transport bounds. http.DefaultTransport sets neither
+// MaxConnsPerHost nor ResponseHeaderTimeout, so an upstream that accepts a
+// connection and then goes quiet — a wedged honeypot, a vault whose pool is
+// exhausted — held one bridge goroutine and one socket per in-flight request
+// until the 30s write timeout, with nothing capping how many of those there
+// could be.
+const (
+	upstreamMaxConnsPerHost     = 256
+	upstreamMaxIdleConnsPerHost = 32
+	upstreamResponseHeaderTO    = 10 * time.Second
+	upstreamIdleConnTimeout     = 90 * time.Second
+	upstreamTLSHandshakeTO      = 5 * time.Second
+	upstreamExpectContinueTO    = 1 * time.Second
+	upstreamDialTimeout         = 5 * time.Second
+	upstreamKeepAlive           = 30 * time.Second
+)
+
+// newBoundedProxy builds a reverse proxy whose transport has explicit limits.
+func newBoundedProxy(target *url.URL) *httputil.ReverseProxy {
+	p := httputil.NewSingleHostReverseProxy(target)
+	p.Transport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   upstreamDialTimeout,
+			KeepAlive: upstreamKeepAlive,
+		}).DialContext,
+		MaxConnsPerHost:       upstreamMaxConnsPerHost,
+		MaxIdleConns:          upstreamMaxConnsPerHost,
+		MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
+		IdleConnTimeout:       upstreamIdleConnTimeout,
+		ResponseHeaderTimeout: upstreamResponseHeaderTO,
+		TLSHandshakeTimeout:   upstreamTLSHandshakeTO,
+		ExpectContinueTimeout: upstreamExpectContinueTO,
+		ForceAttemptHTTP2:     true,
+	}
+	return p
 }
 
 // inboundPathKey is the request-context slot for the path the client sent,
@@ -144,16 +198,35 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One request body, one goroutine and one upstream socket per caller, all
+	// bounded here rather than by whatever the client and the upstream agree
+	// to between them.
+	if b.cfg.MaxBodyBytes > 0 && r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, b.cfg.MaxBodyBytes)
+	}
+	if b.inflight != nil {
+		select {
+		case b.inflight <- struct{}{}:
+			defer func() { <-b.inflight }()
+		default:
+			// Shed rather than queue: a queued request still holds a goroutine
+			// and a connection, which is the resource the cap exists to protect.
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	// Decoy paths — flag + serve fake page
 	if tmpl, ok := IsDecoyPath(r.URL.Path); ok {
-		b.decoys.ServeDecoy(w, r, ip, tmpl)
+		b.decoys.ServeDecoy(w, r, ip, tmpl, coercedSubresource(r))
 		return
 	}
 
 	// Already flagged — route to honeypot
 	if b.flags.IsFlagged(ip) {
 		if b.cfg.LogLevel == "debug" {
-			log.Printf("bridge: routing flagged %s to honeypot", ip) // #nosec G706 -- IP is from RemoteAddr/trusted header
+			log.Printf("bridge: routing flagged %s to honeypot", safeLogValue(ip)) // #nosec G706 -- sanitised
 		}
 		b.setProxyHeaders(r, ip)
 		b.honeypotProxy.ServeHTTP(w, r)
@@ -178,7 +251,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Accumulate score
 	if score > 0 {
 		total := b.scores.Add(ip, score)
-		if total >= b.cfg.FlagThreshold {
+		if total >= b.cfg.FlagThreshold && !coercedSubresource(r) {
 			// score is only nonzero via the UA or rate branches. Rate
 			// wins when both fire. The old auto:score default was
 			// unreachable and is gone.
@@ -187,7 +260,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reason = "auto:rate_exceeded"
 			}
 			b.flags.Flag(ip, reason, total)
-			log.Printf("bridge: auto-flagged %s score=%d reason=%s", ip, total, reason) // #nosec G706 -- IP and reason are controlled values
+			log.Printf("bridge: auto-flagged %s score=%d reason=%s", safeLogValue(ip), total, reason) // #nosec G706 -- IP sanitised, reason is a constant
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -214,7 +287,14 @@ func (b *Bridge) handleBridgePath(w http.ResponseWriter, r *http.Request) {
 	case "/bridge/healthz":
 		b.health.Healthz(w, r)
 	case "/bridge/readyz":
-		b.health.Readyz(w, r)
+		// An unauthenticated caller gets a status code and nothing else.
+		//
+		// The body named the honeypot ("honeypot":"up"), which is the one thing
+		// the design promises the client cannot learn — and the probe fanned
+		// out to BOTH upstreams on every call, unscored and unlimited, so it
+		// doubled as a free amplifier. The kubelet reads the code; an operator
+		// who wants the per-upstream detail presents the admin token.
+		b.health.Readyz(w, r, b.admin.authenticate(r))
 	case "/bridge/flag":
 		b.admin.ServeFlag(w, r)
 	case "/bridge/flags":
@@ -247,7 +327,7 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 		total := b.scores.Add(ip, failScore)
 		if total >= b.cfg.FlagThreshold {
 			b.flags.Flag(ip, "auto:login_failures", total)
-			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", ip, count, total)
+			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", safeLogValue(ip), count, total) // #nosec G706 -- IP sanitised
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -264,6 +344,74 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 	return nil
 }
 
+// coercedSubresource reports whether the browser itself is telling us this
+// request was made by a page the visitor did not choose to talk to us.
+//
+// A flag costs the caller 24 hours of being served fabricated key, user and
+// audit data, and the flagged identity is the client address — so a NAT egress
+// takes a whole office with it. An attacker only had to put
+// <img src="https://auth.example.com/wp-admin/x.png"> on any page they control:
+// the browser sends it, we flag the visitor. Sixty-one such tags cross the
+// default rate threshold with no decoy path at all.
+//
+// Sec-Fetch-Site: cross-site with Sec-Fetch-Mode: no-cors is a combination a
+// page cannot forge and a scanner does not send: fetch metadata is set by the
+// browser, and no ordinary client sends it at all. A scanner walking /wp-admin
+// still flags; a coerced browser does not.
+func coercedSubresource(r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+		return false
+	}
+	return strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "no-cors")
+}
+
+// safeLogValue neutralises a value before it reaches a log record.
+//
+// cmd/bridge is deliberately stdlib-only and cannot import the vault's
+// httputil.SafeLogValue, so it carries its own. Client addresses reach
+// log.Printf from headers the operator has declared trusted, and a U+0085 or a
+// newline in one of those forges a whole log record.
+func safeLogValue(v string) string {
+	const maxLoggedLen = 128
+	if len(v) > maxLoggedLen {
+		v = v[:maxLoggedLen] + "..."
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return '_'
+		}
+		return r
+	}, v)
+}
+
+// defaultStrippedHeaders are the request headers the vault trusts because of
+// who its peer is, and which the bridge therefore has to author or delete.
+//
+// internal/middleware/appcontext.go believes X-Vault-App from a trusted peer
+// and picks the tenant branding for unauthenticated auth emails from it.
+// internal/middleware/ratelimit.go believes the TLS-fingerprint header from a
+// trusted peer and uses it to bind a bearer token to a device — its own comment
+// describes an attacker replaying a stolen token with the victim's fingerprint
+// as the attack the trust gate closed, and that gate is satisfied by the
+// bridge. internal/middleware/ipaccess.go believes the geo header, and
+// ClientIP believes the real-IP header. Every one of them was forwarded
+// verbatim from the client.
+//
+// The invariant: the bridge must be the sole author of anything the upstream
+// trusts by peer identity. Operator-renamed headers go in BRIDGE_STRIP_HEADERS.
+var defaultStrippedHeaders = []string{
+	"X-Vault-App",
+	"X-TLS-Fingerprint",
+	"X-Real-IP",
+	"X-Forwarded-Host",
+	"CF-Connecting-IP",
+	"CF-IPCountry",
+	"True-Client-IP",
+	"X-Client-IP",
+	"X-Country-Code",
+	"X-GeoIP-Country",
+}
+
 func (b *Bridge) setProxyHeaders(r *http.Request, ip string) {
 	// A Connection header is hop-by-hop: net/http's reverse proxy deletes every
 	// header the client lists there before forwarding. It runs that deletion
@@ -272,6 +420,20 @@ func (b *Bridge) setProxyHeaders(r *http.Request, ip string) {
 	// client address. Drop our own header names from the client's Connection
 	// token list first; unrelated tokens (close, upgrade) are left in place.
 	stripConnectionTokens(r.Header, "X-Real-IP", "X-Forwarded-Proto", "X-Forwarded-For")
+
+	// Delete before stamping. Everything the upstream trusts because the bridge
+	// sent it must come from the bridge; a value the client supplied for one of
+	// these names is a value the upstream's own check would have been handed by
+	// the attacker it was checking.
+	for _, h := range defaultStrippedHeaders {
+		r.Header.Del(h)
+	}
+	if b.cfg.RealIPHeader != "" {
+		r.Header.Del(b.cfg.RealIPHeader)
+	}
+	for _, h := range b.cfg.StripHeaders {
+		r.Header.Del(h)
+	}
 
 	r.Header.Set("X-Real-IP", ip)
 	r.Header.Set("X-Forwarded-Proto", "https")
@@ -320,14 +482,74 @@ func stripConnectionTokens(h http.Header, protected ...string) {
 	}
 }
 
+// maxXFFHops caps the right-to-left walk over X-Forwarded-For.
+//
+// MaxHeaderBytes is 1 MiB, so a header of "203.0.113.1, " repeated is ~70k
+// hops, each one a ParseIP and a walk of the trusted-proxy list, plus the 1 MiB
+// allocation — per request, before anything else happens. No real deployment
+// has more than a handful of hops.
+const maxXFFHops = 32
+
+// joinHeader concatenates every field line of a header.
+//
+// Header.Get returns only the FIRST line. A peer that appends X-Forwarded-For
+// as a separate field line rather than comma-joining it (nginx, ALB and
+// Cloudflare all comma-join; not every proxy does) left the rightmost walk
+// reading the client's own line and dropping the real appended hop, which is
+// leftmost trust reopened.
+func joinHeader(r *http.Request, name string) string {
+	values := r.Header.Values(name)
+	switch len(values) {
+	case 0:
+		return ""
+	case 1:
+		return values[0]
+	default:
+		return strings.Join(values, ",")
+	}
+}
+
+// rightmostUntrusted walks a comma-separated forwarded-for list right to left
+// and returns the first address that parses and is not a declared proxy.
+//
+// The walk is capped at maxXFFHops and every candidate goes through ParseIP,
+// because the result becomes a score bucket key, a rate bucket key, a flag
+// identity and a log field: an unvalidated value mints a fresh identity per
+// request, which is scoring fully evaded.
+func (b *Bridge) rightmostUntrusted(value string) string {
+	parts := strings.Split(value, ",")
+	if len(parts) > maxXFFHops {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidate := strings.TrimSpace(parts[i])
+		if b.isTrustedProxy(candidate) {
+			continue
+		}
+		if net.ParseIP(candidate) != nil {
+			return candidate
+		}
+		break
+	}
+	return ""
+}
+
 func (b *Bridge) clientIP(r *http.Request) string {
 	// Check real IP header from trusted proxy
 	if b.cfg.RealIPHeader != "" {
-		if ip := r.Header.Get(b.cfg.RealIPHeader); ip != "" {
-			// Validate it came from a trusted proxy
+		if value := joinHeader(r, b.cfg.RealIPHeader); value != "" {
+			// Validate it came from a trusted proxy, then validate the value
+			// itself exactly as the X-Forwarded-For branch below does. This
+			// branch used to return the raw string: junk minted one fresh
+			// identity per request (40 sqlmap-UA requests rotating a junk
+			// header produced 0 flags and 40 score buckets), and pointing
+			// BRIDGE_REAL_IP_HEADER at X-Forwarded-For returned the client's
+			// own leftmost entry and bypassed the walk entirely.
 			remoteIP := extractIP(r.RemoteAddr)
 			if b.isTrustedProxy(remoteIP) {
-				return strings.TrimSpace(ip)
+				if ip := b.rightmostUntrusted(value); ip != "" {
+					return ip
+				}
 			}
 		}
 	}
@@ -340,19 +562,11 @@ func (b *Bridge) clientIP(r *http.Request) string {
 	// proxies, and return the first address that parses. Taking the leftmost
 	// entry would return whatever the client wrote, letting an unauthenticated
 	// caller both evade its own scoring and frame another address.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	if xff := joinHeader(r, "X-Forwarded-For"); xff != "" {
 		remoteIP := extractIP(r.RemoteAddr)
 		if b.isTrustedProxy(remoteIP) {
-			parts := strings.Split(xff, ",")
-			for i := len(parts) - 1; i >= 0; i-- {
-				candidate := strings.TrimSpace(parts[i])
-				if b.isTrustedProxy(candidate) {
-					continue
-				}
-				if net.ParseIP(candidate) != nil {
-					return candidate
-				}
-				break
+			if ip := b.rightmostUntrusted(xff); ip != "" {
+				return ip
 			}
 		}
 	}

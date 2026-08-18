@@ -77,24 +77,51 @@ func IsDecoyPath(path string) (string, bool) {
 	return "", false
 }
 
+// maxReasonPathLen caps how much of a caller-chosen path is kept.
+//
+// IsDecoyPath matches by prefix, so everything after it is the caller's. The
+// full path went into the flag reason, which is held in memory AND in Redis for
+// FlagTTL (24h), and into the webhook body. MaxHeaderBytes is 1 MiB, so one
+// request produced a ~1 MB reason held for a day and a ~1 MB webhook POST; the
+// bridge's memory limit is 64Mi, so about sixty-four addresses pinned it, and
+// with a briefly slow webhook receiver the 1024-deep queue did it from one.
+const maxReasonPathLen = 256
+
+// truncatePath bounds a caller-chosen path before it is stored or forwarded.
+func truncatePath(path string) string {
+	if len(path) <= maxReasonPathLen {
+		return path
+	}
+	return path[:maxReasonPathLen] + "..."
+}
+
 // ServeDecoy serves a fake login page and flags the IP.
-func (dh *DecoyHandler) ServeDecoy(w http.ResponseWriter, r *http.Request, ip string, tmplName string) {
+//
+// coerced is true when fetch metadata says the browser was made to issue this
+// request by a page the visitor did not choose to talk to us. The decoy is
+// still served — an attacker learns nothing from the response either way — but
+// no flag is raised, because the flagged party would be the victim whose
+// browser was borrowed, and their whole NAT egress with them.
+func (dh *DecoyHandler) ServeDecoy(w http.ResponseWriter, r *http.Request, ip string, tmplName string, coerced bool) {
 	// Flag IP immediately — decoy hit = instant flag
-	reason := "decoy:" + r.URL.Path
-	dh.flags.Flag(ip, reason, 100)
+	path := truncatePath(r.URL.Path)
+	reason := "decoy:" + path
+	if !coerced {
+		dh.flags.Flag(ip, reason, 100)
+	}
 	// Quoted, not interpolated. IsDecoyPath matches by prefix, so everything
 	// after the prefix is chosen by the caller: /wp-admin/<anything> is a hit.
 	// %q escapes control bytes, which stops an escape sequence clearing the
 	// terminal of whoever is reading these logs during the scan that wrote them,
 	// and stops a newline forging a whole record.
-	log.Printf("bridge: decoy hit from %s path=%q", ip, r.URL.Path) // #nosec G706 -- IP from RemoteAddr, path quoted
+	log.Printf("bridge: decoy hit from %s path=%q coerced=%t", safeLogValue(ip), path, coerced) // #nosec G706 -- IP sanitised, path quoted and truncated
 
-	if dh.webhook != nil {
+	if dh.webhook != nil && !coerced {
 		dh.webhook.Send(map[string]interface{}{
 			"event":      "decoy_hit",
 			"ip":         ip,
-			"path":       r.URL.Path,
-			"user_agent": r.UserAgent(),
+			"path":       path,
+			"user_agent": truncatePath(r.UserAgent()),
 			"method":     r.Method,
 		})
 	}

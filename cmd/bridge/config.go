@@ -72,6 +72,31 @@ type Config struct {
 	// LogLevel controls log verbosity (BRIDGE_LOG_LEVEL). Default: "info".
 	// "debug" additionally logs every routing decision for a flagged IP.
 	LogLevel string
+	// MaxBodyBytes caps a proxied request body (BRIDGE_MAX_BODY_BYTES).
+	//
+	// The proxy used to stream whatever the client sent, for as long as
+	// ReadTimeout allowed, into an upstream connection it opened concurrently.
+	// The default is above the vault's own 10 MiB blob ceiling so this cap
+	// never becomes the thing that rejects a legitimate upload; the vault
+	// re-applies its own, smaller, limit per route.
+	MaxBodyBytes int64
+	// MaxInflight caps concurrently proxied requests
+	// (BRIDGE_MAX_INFLIGHT). One goroutine and one upstream socket per request
+	// with nothing counting them is how a slow upstream turns a request flood
+	// into an unbounded connection table. Zero disables the cap.
+	MaxInflight int
+	// StripHeaders are additional request headers deleted before the request
+	// reaches an upstream (BRIDGE_STRIP_HEADERS, comma separated).
+	//
+	// The bridge is the gateway the vault's trust model assumes: several
+	// upstream controls believe a header purely because the peer that sent it
+	// is a trusted proxy — the tenant slug, the TLS fingerprint that binds a
+	// bearer token to a device, the real-IP header and the geo header. The
+	// bridge forwarded all of them verbatim, so a client could supply the
+	// values those controls were checking. defaultStrippedHeaders covers the
+	// names the vault ships with; this list is for operators who renamed one
+	// via VAULT_TLS_FINGERPRINT_HEADER, REAL_IP_HEADER or GEOIP_HEADER.
+	StripHeaders []string
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -90,6 +115,14 @@ func LoadConfig() (*Config, error) {
 		RedisAddr:          os.Getenv("BRIDGE_REDIS_ADDR"),
 		RealIPHeader:       os.Getenv("BRIDGE_REAL_IP_HEADER"),
 		LogLevel:           envOr("BRIDGE_LOG_LEVEL", "info"),
+		MaxBodyBytes:       int64(envInt("BRIDGE_MAX_BODY_BYTES", 16<<20)),
+		MaxInflight:        envInt("BRIDGE_MAX_INFLIGHT", 512),
+	}
+
+	for _, h := range strings.Split(os.Getenv("BRIDGE_STRIP_HEADERS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			cfg.StripHeaders = append(cfg.StripHeaders, h)
+		}
 	}
 
 	if cfg.RealUpstream == "" {

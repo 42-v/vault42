@@ -228,7 +228,11 @@ func TestMainStartsServesAndShutsDown(t *testing.T) {
 		t.Fatalf("the bridge never started listening on %s", listenAddr)
 	}
 
-	t.Run("readiness reports both upstreams", func(t *testing.T) {
+	t.Run("readiness answers a code and names nothing", func(t *testing.T) {
+		// The kubelet reads the status code. The per-upstream breakdown used to
+		// be served to anyone: it said "honeypot":"up", which is the one thing
+		// the deception design promises a client cannot learn, on the same
+		// public listener the tunnel points at.
 		resp, err := client.Get(base + "/bridge/readyz")
 		if err != nil {
 			t.Fatalf("GET readyz: %v", err)
@@ -238,12 +242,12 @@ func TestMainStartsServesAndShutsDown(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 		}
-		var doc map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-			t.Fatalf("decode: %v", err)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
 		}
-		if doc["status"] != "ready" || doc["real"] != "up" || doc["honeypot"] != "up" {
-			t.Errorf("readyz = %v, want ready with both upstreams up", doc)
+		if len(body) != 0 {
+			t.Errorf("anonymous readyz body = %q, want empty; it must not name the honeypot", body)
 		}
 	})
 
@@ -516,17 +520,24 @@ func TestMainStopsWaitingOnARequestTheUpstreamNeverAnswers(t *testing.T) {
 	}
 	waited := time.Since(start)
 
-	// Anything much shorter means the drain was not attempted at all and live
+	// The upstream never answers, so the drain is bounded by the transport's
+	// ResponseHeaderTimeout rather than by the shutdown deadline. Before the
+	// transport had one, an upstream that accepted the connection and then went
+	// quiet held a bridge goroutine and a socket until the shutdown deadline
+	// expired, and while the process was running it held them with no bound at
+	// all — which is the resource an unauthenticated flood consumes.
+	if waited >= 15*time.Second {
+		t.Errorf("main returned %s after SIGTERM; the transport should have abandoned the silent "+
+			"upstream at %s, well inside the 15s grace period", waited, upstreamResponseHeaderTO)
+	}
+	// Anything near-instant means the drain was not attempted at all and live
 	// requests are being cut off on every rolling update.
-	if waited < 10*time.Second {
-		t.Errorf("main returned %s after SIGTERM, want it to spend the grace period draining", waited)
+	if waited < time.Second {
+		t.Errorf("main returned %s after SIGTERM, want it to wait for the in-flight request", waited)
 	}
 
 	got := logs.String()
-	if !strings.Contains(got, "bridge: shutdown error") {
-		t.Errorf("the expired drain was not reported; log was:\n%s", got)
-	}
 	if !strings.Contains(got, "bridge: stopped") {
-		t.Errorf("main did not run to the end after the drain expired; log was:\n%s", got)
+		t.Errorf("main did not run to the end after the drain; log was:\n%s", got)
 	}
 }
