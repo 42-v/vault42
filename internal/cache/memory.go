@@ -63,9 +63,18 @@ func newMemoryCacheWithCap(maxEntries int) *MemoryCache {
 // At the cap a new key is refused and an existing one still updates. Evicting
 // instead would be worse than refusing: the entries worth keeping are the
 // lockout, login-limiter and OTP keys, and an eviction policy driven by the
-// flood is a policy the attacker writes. A refusal surfaces as ErrCacheFull,
-// which the fail-closed limiters already answer with a 503 and the lockout
-// already answers from the durable count.
+// flood is a policy the attacker writes.
+//
+// A refusal surfaces as ErrCacheFull, and every caller that guards something has
+// to answer it, because the refusal is the ONLY signal it produces. This comment
+// used to say the lockout "already answers from the durable count", which was
+// false: the durable fallback fired on a read error, and the cap produces a
+// refused WRITE followed by a perfectly clean read miss, so a saturated cache
+// read as an account that had never failed and the lockout switched off. The
+// fail-closed limiters were correct (they check the error and answer 503); the
+// lockout now latches the refusal (AuthService.noteLockoutCounterRefused) and
+// consults the durable count while it stands. A new guard built on this cache
+// owes ErrCacheFull the same treatment: a refused write is not a zero.
 func (m *MemoryCache) admit(key string) bool {
 	if m.maxEntries <= 0 || len(m.data) < m.maxEntries {
 		return true

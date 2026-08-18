@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -182,6 +183,13 @@ type AuthService struct {
 	hibpEnabled        bool
 	hmacSecret         []byte
 	strictSessionLimit bool
+
+	// lockoutCounterRefusedAt is the last instant a lockout counter could not be
+	// written, in Unix nanoseconds. Zero means never.
+	//
+	// It is what lets isAccountLocked tell a counter that says "no failures" from
+	// one that was never allowed to exist. See noteLockoutCounterRefused.
+	lockoutCounterRefusedAt atomic.Int64
 }
 
 // SetStrictSessionLimit controls checkSessionLimit's behavior on a count-query
@@ -1713,29 +1721,70 @@ func (s *AuthService) isAccountLocked(ctx context.Context, userID, ip string) bo
 	if s.cache == nil {
 		return s.lockedByStoredCount(ctx, userID)
 	}
+	unwritable := s.lockoutCountersUnwritable()
 	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip))
-	if !ok {
+	if !ok || (perSource == 0 && unwritable) {
 		return s.lockedByStoredCount(ctx, userID)
 	}
 	if perSource >= lockoutThreshold {
 		return true
 	}
 	account, ok := s.cachedCount(ctx, accountLockoutKey(userID))
-	if !ok {
+	if !ok || (account == 0 && unwritable) {
 		return s.lockedByStoredCount(ctx, userID)
 	}
 	return account >= distributedLockoutThreshold
 }
 
+// noteLockoutCounterRefused records that a lockout counter could not be written.
+//
+// The entry cap is the case this exists for. At memoryMaxEntries the cache
+// refuses a new key, Increment returns ErrCacheFull and creates nothing, and the
+// read that follows is an ordinary miss — a clean answer of zero, not an error.
+// Nothing in that sequence looks like a failure, so before this the durable
+// fallback was never reached and a saturated cache switched account lockout off
+// entirely, on the profile where memory is the only backend and in production
+// during exactly the Redis outage that makes the cache the fallback.
+//
+// A timestamp rather than a boolean, because the condition heals. A counter
+// refused at T is missing only for the window it would have lived, so the
+// fallback stays on until lockoutDuration past the last refusal and then stops
+// on its own, with no reset path to forget to call.
+func (s *AuthService) noteLockoutCounterRefused() {
+	s.lockoutCounterRefusedAt.Store(time.Now().UnixNano())
+}
+
+// lockoutCountersUnwritable reports whether a counter reading zero might be a
+// counter that was never written.
+//
+// Gated on an actual refusal rather than applied to every zero on purpose. A
+// zero is what an account with no recent failures looks like, which is nearly
+// every login; treating all of them as unanswered would put a GetByID in front
+// of the whole login path to learn what the cache just answered correctly, which
+// is the cost cachedCount's contract is written to avoid.
+func (s *AuthService) lockoutCountersUnwritable() bool {
+	at := s.lockoutCounterRefusedAt.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) < lockoutDuration
+}
+
 // recordFailedAttempt advances both lockout counters for the user: the one for
 // the source that failed, and the account-wide one the distributed threshold
 // reads.
+//
+// The advance is best-effort, but a failure to advance is not. A counter that
+// could not be written is a counter whose later zero means nothing, so the
+// refusal is latched for isAccountLocked to read; discarding it is what let the
+// entry cap disable the lockout silently.
 func (s *AuthService) recordFailedAttempt(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration) // #nosec G104 -- best-effort lockout counter
-	s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration)    // #nosec G104 -- best-effort lockout counter
+	if _, err := s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
+	if _, err := s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
 }
 
 // clearLockout resets this source's lockout counter on successful login.
