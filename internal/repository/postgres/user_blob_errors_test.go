@@ -33,6 +33,10 @@ func TestUserRepo_SurfacesDatabaseFailures(t *testing.T) {
 	if err := repo.ClearImportPending(ctx, "u-1"); err == nil {
 		t.Error("ClearImportPending reported success — the account would stay stuck in import-claim forever")
 	}
+	if err := repo.ClearMustResetPassword(ctx, "u-1"); err == nil {
+		t.Error("ClearMustResetPassword reported success — the reset handler would report the account " +
+			"unblocked while the next login still refuses it and mails another link")
+	}
 	if _, err := repo.GetByID(ctx, "u-1"); err == nil {
 		t.Error("GetByID returned no error against an unreachable database")
 	}

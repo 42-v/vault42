@@ -600,3 +600,50 @@ func TestLogin_ForcedReset_TheAccountWorksAgainAfterTheReset(t *testing.T) {
 		t.Errorf("after the reset: no session was issued: %s", after.Body.String())
 	}
 }
+
+// Under argon2 backpressure the client credential cannot be checked at all. That
+// must not become a way to reach the distinct status (fail closed), and it must
+// not become a second way for a client credential to decide a user's login: the
+// request carries on to the user's own verification, which is the thing entitled
+// to answer 503.
+func TestLogin_ForcedReset_Argon2OverloadNeverDiscloses(t *testing.T) {
+	cases := []struct {
+		name     string
+		clientID string
+		active   bool
+	}{
+		{name: "unknown client", clientID: "client-404", active: true},
+		{name: "deactivated client", clientID: "client-1", active: false},
+		{name: "valid scoped client", clientID: "client-1", active: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clients := scopedClient(t, "s3cret", []string{LoginStatusScope}, tc.active)
+			f := newForcedResetFixture(t, flaggedUser(t), clients)
+
+			// Built before saturation: hashing the fixtures needs a slot too.
+			acctSaturateArgon2(t)
+
+			rec := f.login(t, tc.clientID, "s3cret")
+
+			if strings.Contains(rec.Body.String(), "password_reset_required") {
+				t.Fatalf("the account status was disclosed to a caller whose credential was never "+
+					"verified: %s", rec.Body.String())
+			}
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503: the login answered on its own while argon2 was "+
+					"refusing work (%s)", rec.Code, rec.Body.String())
+			}
+			// And the trail stays honest. An overload is not a verdict on the
+			// credential -- nothing was verified -- so it must not be written down
+			// as a rejected client credential. Anyone who can saturate the
+			// semaphore would otherwise be able to fabricate client_auth failure
+			// rows against any client id they can name.
+			if reasons := f.auditReasons("client_auth"); len(reasons) != 0 {
+				t.Errorf("client_auth audit reasons = %v, want none: an unverifiable credential "+
+					"was recorded as a rejected one", reasons)
+			}
+			assertNoSession(t, f, rec)
+		})
+	}
+}
