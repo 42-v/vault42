@@ -987,14 +987,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:410",
+        "internal/server/server.go:424",
         "internal/middleware/ratelimit.go:266"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:410); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
+      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:424); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
     },
     {
       "standard": "OWASP ASVS",
@@ -1297,7 +1297,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:490",
+        "internal/server/server.go:504",
         "internal/handler/auth.go:298"
       ],
       "tests": [],
@@ -1317,11 +1317,11 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:875",
+        "internal/server/server.go:889",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
-      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:653 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
+      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:667 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
       "accepted_risk": "CR-29"
     },
     {
@@ -1753,12 +1753,12 @@
       "status": "Met",
       "evidence": [
         "docs/spec.md",
-        "internal/server/server.go:410"
+        "internal/server/server.go:424"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:410)."
+      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:424)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2054,13 +2054,13 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:118",
-        "internal/server/server.go:410"
+        "internal/server/server.go:424"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling"
       ],
-      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:410 constructs loginRL at Limit 5 over a 15-minute window)."
+      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:424 constructs loginRL at Limit 5 over a 15-minute window)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2120,13 +2120,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:490",
+        "internal/server/server.go:504",
         "docs/api.md"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build. The unauthenticated entries are deliberate and few -- GET /auth/verify-email at internal/server/server.go:490 is one, reached from an emailed link and carrying its own rate limiter."
+      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build. The unauthenticated entries are deliberate and few -- GET /auth/verify-email at internal/server/server.go:504 is one, reached from an emailed link and carrying its own rate limiter."
     },
     {
       "standard": "OWASP ASVS",
@@ -2513,13 +2513,13 @@
       "requirement": "Verify that a code based out-of-band authentication mechanism is protected against brute force attacks by using rate limiting. Consider also using a code with at least 64 bits of entropy.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:422",
-        "internal/server/server.go:559"
+        "internal/server/server.go:436",
+        "internal/server/server.go:573"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "The email-OTP and TOTP endpoints carry fail-closed rate limiters: totpRL is 5 in 5 minutes keyed by IP with FailClosed set (internal/server/server.go:422) and is mounted on the TOTP verify route (:546)."
+      "notes": "The email-OTP and TOTP endpoints carry fail-closed rate limiters: totpRL is 5 in 5 minutes keyed by IP with FailClosed set (internal/server/server.go:436) and is mounted on the TOTP verify route (:546)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2899,7 +2899,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:582"
+        "internal/server/server.go:596"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -2936,7 +2936,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:373"
+        "internal/server/server.go:387"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -3408,13 +3408,13 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/auth.go:280",
-        "internal/server/server.go:672",
+        "internal/server/server.go:686",
         "internal/crypto/jwt.go:47"
       ],
       "tests": [
         "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
       ],
-      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:280 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:672) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
+      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:280 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
     },
     {
       "standard": "OWASP ASVS",
@@ -4095,7 +4095,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:210",
+        "internal/server/server.go:224",
         "cmd/admin-gateway/main.go:230",
         "internal/redis/pool.go:191"
       ],
@@ -4103,7 +4103,7 @@
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion",
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
       ],
-      "notes": "Inbound listeners are TLS 1.3: the HTTP server sets MinVersion: tls.VersionTLS13 (internal/server/server.go:210). The Redis client floor is TLS 1.2, which this requirement permits; it is lower because the peer’s capability is the operator’s, not vault42’s."
+      "notes": "Inbound listeners are TLS 1.3: the HTTP server sets MinVersion: tls.VersionTLS13 (internal/server/server.go:224). The Redis client floor is TLS 1.2, which this requirement permits; it is lower because the peer’s capability is the operator’s, not vault42’s."
     },
     {
       "standard": "OWASP ASVS",
@@ -4484,7 +4484,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:522"
+        "internal/server/server.go:536"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4504,7 +4504,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:309"
+        "internal/server/server.go:323"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4524,13 +4524,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:294",
-        "internal/server/server.go:295"
+        "internal/server/server.go:308",
+        "internal/server/server.go:309"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:294-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
+      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:308-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
     },
     {
       "standard": "OWASP ASVS",
@@ -4593,7 +4593,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:309"
+        "internal/server/server.go:323"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
@@ -4843,12 +4843,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:875"
+        "internal/server/server.go:889"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:875), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:889), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",
@@ -5700,13 +5700,13 @@
       "status": "Met",
       "evidence": [
         "internal/oauth2/oidc.go:97",
-        "internal/server/server.go:210"
+        "internal/server/server.go:224"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned",
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
       ],
-      "notes": "Authenticated protected channels: inbound TLS 1.3 via MinVersion: tls.VersionTLS13 (internal/server/server.go:210), pinned issuer and verified JWKS outbound."
+      "notes": "Authenticated protected channels: inbound TLS 1.3 via MinVersion: tls.VersionTLS13 (internal/server/server.go:224), pinned issuer and verified JWKS outbound."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -6219,7 +6219,7 @@
       "requirement": "Re-authentication",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:373"
+        "internal/server/server.go:387"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -7122,7 +7122,7 @@
       "requirement": "Unrestricted Resource Consumption",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:190",
+        "internal/server/server.go:188",
         "internal/service/blob.go:280",
         "internal/service/blob.go:283"
       ],
@@ -7159,9 +7159,9 @@
       "requirement": "Unrestricted Access to Sensitive Business Flows",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:318",
-        "internal/server/server.go:321",
-        "internal/server/server.go:327"
+        "internal/server/server.go:332",
+        "internal/server/server.go:335",
+        "internal/server/server.go:341"
       ],
       "tests": [
         "TestAPITop10_API6_2023_BulkAbusableFlowsAreThrottledAndSwitchable",

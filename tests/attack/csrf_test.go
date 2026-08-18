@@ -174,30 +174,10 @@ func TestCSRF_PreflightMethodValidation(t *testing.T) {
 	}
 }
 
-// TestCSRF_MaxBodyEnforcement verifies that MaxBody middleware prevents
-// oversized request bodies (which could be part of CSRF amplification attacks).
-func TestCSRF_MaxBodyEnforcement(t *testing.T) {
-	maxBytes := int64(1024) // 1KB max
-
-	handler := middleware.MaxBody(maxBytes)(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}),
-	)
-
-	// Small body should be accepted
-	req := httptest.NewRequest("POST", "/auth/login", nil)
-	req.ContentLength = 100
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	// MaxBody wraps the body reader but doesn't check ContentLength upfront
-	// The handler should still work for normal requests
-
-	// This test verifies the middleware exists and wraps properly
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Small body should be accepted, got %d", rec.Code)
-	}
-}
+// The body cap that used to be asserted here built a middleware.MaxBody(1024)
+// of its own, sent it an empty body, and checked for 200 — it could not fail.
+// The deployed cap and its exemption list are certified in
+// maxbody_bypass_test.go, against the chain internal/server installs.
 
 // TestCSRF_NoCacheOnAuthEndpoints verifies that security headers include
 // cache control to prevent CSRF via cached responses.
