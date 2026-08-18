@@ -60,6 +60,14 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("POST /admin/users/import", withPerm(sessionAuth, rbac.UsersImport, api.ImportUsers))
 	mux.Handle("POST /admin/users/{id}/lock", withPerm(sessionAuth, rbac.UsersLock, api.LockUser))
 	mux.Handle("POST /admin/users/{id}/unlock", withPerm(sessionAuth, rbac.UsersUnlock, api.UnlockUser))
+	// The forced-password-reset pair (migration 039). Two routes rather than one
+	// carrying a boolean, because that is the shape lock and unlock already give
+	// a reversible account-state flag here, and because the two directions are
+	// not mirror images: imposing the state terminates the account's live
+	// sessions and lifting it deliberately does not. One permission covers both;
+	// rbac.UsersReset says why.
+	mux.Handle("POST /admin/users/{id}/require-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.RequirePasswordReset))
+	mux.Handle("POST /admin/users/{id}/clear-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.ClearPasswordReset))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
 	// Session management.

@@ -92,6 +92,34 @@ func (r *UserRepo) ClearMustResetPassword(ctx context.Context, id string) error 
 	return nil
 }
 
+// SetMustResetPassword moves a forced password reset in either direction on an
+// existing account. It is the admin plane's writer, and the operator routes
+// POST /admin/users/{id}/require-password-reset and .../clear-password-reset are
+// its only callers.
+//
+// The statement names must_reset_password and nothing else, which is what makes
+// it usable at all. vault_admin holds exactly three columns on auth.users --
+// locked_until and failed_login_count from 001, must_reset_password from 039 --
+// because 015 revoked in full the six that 009 had lent it, updated_at among
+// them. PostgreSQL checks the column privilege against every target an UPDATE
+// names, whether or not the value differs, so stamping updated_at here (the way
+// ClearMustResetPassword does, correctly, under vault_app's wider grant) fails
+// the whole statement with 42501 and the operator's forced reset never lands.
+// LockUntil and Unlock, the other two admin-plane writes on this table, are
+// written the same way and for the same reason.
+//
+// Which direction the caller may take is not this method's business: migration
+// 039's users_forced_password_reset_scope trigger refuses the FALSE->TRUE
+// transition from any role outside the admin plane, so a web-server call site
+// compiles, runs, and is refused by the database naming the role.
+func (r *UserRepo) SetMustResetPassword(ctx context.Context, id string, required bool) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET must_reset_password=$2 WHERE id=$1`, id, required)
+	if err != nil {
+		return fmt.Errorf("set must_reset_password: %w", err)
+	}
+	return nil
+}
+
 // GetByID retrieves a user by primary key. Returns nil, nil if not found.
 func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `

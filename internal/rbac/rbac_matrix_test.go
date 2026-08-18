@@ -18,7 +18,7 @@ var (
 		"sessions:list", "config:read", "metrics:read", "roles:list", "email:read",
 	}
 	operatorAdds = []string{
-		"keys:rotate", "users:lock", "users:unlock", "sessions:revoke",
+		"keys:rotate", "users:lock", "users:unlock", "users:reset", "sessions:revoke",
 		"clients:list", "clients:read",
 	}
 	superAdminAdds = []string{
@@ -260,7 +260,8 @@ func TestEveryPermissionConstantCarriesItsDocumentedValue(t *testing.T) {
 		KeysList: "keys:list", KeysRotate: "keys:rotate", KeysRevoke: "keys:revoke",
 		AuditRead: "audit:read",
 		UsersList: "users:list", UsersRead: "users:read", UsersLock: "users:lock",
-		UsersUnlock: "users:unlock", UsersDelete: "users:delete", UsersImport: "users:import",
+		UsersUnlock: "users:unlock", UsersReset: "users:reset",
+		UsersDelete: "users:delete", UsersImport: "users:import",
 		SessionsList: "sessions:list", SessionsRevoke: "sessions:revoke",
 		ClientsList: "clients:list", ClientsRead: "clients:read", ClientsCreate: "clients:create",
 		ClientsRevoke: "clients:revoke", ClientsRotate: "clients:rotate",

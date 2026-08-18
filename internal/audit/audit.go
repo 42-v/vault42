@@ -118,6 +118,15 @@ const (
 	AdminUserUnlock = "admin_user_unlock"
 	// AdminUserDelete records an admin deleting a user account.
 	AdminUserDelete = "admin_user_delete"
+	// AdminUserResetRequired records an admin imposing a forced password reset
+	// on a user account: the stored password stops signing that account in and
+	// the account holder is mailed a reset link on the next attempt.
+	AdminUserResetRequired = "admin_user_reset_required"
+	// AdminUserResetCleared records an admin lifting a forced password reset,
+	// returning the account to the ordinary password gate. It shares the
+	// admin_user_reset_ prefix with the event above so one filter reads the
+	// whole lifecycle of the flag.
+	AdminUserResetCleared = "admin_user_reset_cleared"
 	// AdminKeyRotate records an admin rotating a signing key.
 	AdminKeyRotate = "admin_key_rotate"
 	// AdminKeyRevoke records an admin revoking a signing key.

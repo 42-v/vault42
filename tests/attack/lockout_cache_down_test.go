@@ -96,7 +96,10 @@ func (r *stubUserRepo) SetLastLogin(_ context.Context, _ string) error          
 func (r *stubUserRepo) CreateImported(_ context.Context, _ *model.User) error    { return nil }
 func (r *stubUserRepo) ClearImportPending(_ context.Context, _ string) error     { return nil }
 func (r *stubUserRepo) ClearMustResetPassword(_ context.Context, _ string) error { return nil }
-func (r *stubUserRepo) SoftDeleteScrub(_ context.Context, _, _ string) error     { return nil }
+func (r *stubUserRepo) SetMustResetPassword(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+func (r *stubUserRepo) SoftDeleteScrub(_ context.Context, _, _ string) error { return nil }
 
 // Verify interface compliance at compile time.
 var _ repository.UserRepository = (*stubUserRepo)(nil)
