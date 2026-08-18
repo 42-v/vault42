@@ -101,7 +101,7 @@ func RejectProxyHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, h := range proxyHeaders {
 			if r.Header.Get(h) != "" {
-				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, httputil.SafeLogValue(r.RemoteAddr)) // #nosec G706 — sanitized
+				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, httputil.ObfuscatedIP(r.RemoteAddr)) // #nosec G706 -- masked network, never a full address
 				httputil.WriteError(w, http.StatusForbidden, "proxy_not_allowed")
 				return
 			}
