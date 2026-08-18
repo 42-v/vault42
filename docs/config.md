@@ -948,9 +948,9 @@ which a browser discards, and `Config.Validate` refuses to start on it, so the
 install would reach the operator as a `CrashLoopBackOff` rather than as a
 message. See [TLS and Cookies](#tls-and-cookies).
 
-### A switch the chart cannot set is a control that is off
+### A setting the chart cannot set is a control that is off
 
-The five rows above ending at `outboundAllowPrivate` were added because they were
+The rows from `mfaRequired` to `outboundAllowPrivate` were added because they were
 missing. Each is a boolean the binary reads from the environment, and the chart
 had no way to put a value in that environment, so on every Helm install the
 control held its compiled default however the deployment was configured. DPoP is
@@ -959,12 +959,34 @@ compliance register records the sender-constrained access token requirement as
 Met, and the chart -- the only way this project is deployed -- could not turn it
 on. The metrics listener had failed the same way one release earlier.
 
-`tests/spec/chart_control_switch_wiring_test.go` is the gate for that class. It
-reads the boolean list out of `internal/config/envcheck.go` rather than
-repeating it, so a switch added there and not here fails on the commit that adds
-it. A switch the chart deliberately does not offer goes in
-`chartUnexposedSwitches` with the reason, and that set is a ratchet: it may
-shrink and may not grow.
+Everything from `mint.enabled` down was added for the same reason and answers the
+other half of it. A boolean is not the only shape that fails silently: a duration,
+a limit, an allow-list and a credential path all come up healthy holding a figure
+nobody chose. `VAULT_MAX_SESSIONS_PER_USER` was unreachable while
+`strictSessionLimit` beside it was exposed, so a deployment could choose what
+happened when the session-count query failed and not how many sessions a user may
+hold. Both Art. 5(1)(e) retention horizons were unreachable, so every install kept
+audit rows and recovery escrows forever whatever [PRIVACY.md](PRIVACY.md) §4 said.
+Federated login was unreachable in full. So were the KMS root key, without which
+`POST /kms/unwrap` is never mounted, and the recovery escrow key, without which
+erasure leaves nothing recoverable.
+
+`tests/spec/chart_control_switch_wiring_test.go` is the gate. It parses the
+settings out of `internal/config` rather than repeating them, in three classes:
+every registry `checkEnvValues` validates, every plain string `Load` reads, and
+every secret `loadSecrets` reads -- for which the chart has to name the `_FILE`
+variable. A setting added there and not here fails on the commit that adds it. One
+the chart deliberately does not offer goes in `chartUnexposedSettings` with the
+reason, and that set is a ratchet held per class, so it may shrink, may not grow,
+and one class's exclusions cannot be traded for another's.
+
+`tests/spec/chart_binary_default_test.go` is the other half: reachability is worth
+nothing if reaching a setting changes what an install does. It parses each
+default out of `internal/config`'s own `envOr`/`envInt`/`envDuration`/
+`envBoolDefault` call sites and compares it with what `helm template` renders, so
+a chart value that is not the binary's own has to be listed in
+`chartDefaultDivergences` with the reason. Four are: `DB_HOST`, `DB_MAX_CONNS`,
+`VAULT_FORCE_SECURE_COOKIES` and `VAULT_BLOB_MIN_SIZE`.
 
 See `charts/vault/values.yaml` for production defaults and `charts/vault/values-dev.yaml` for the dev overlay.
 

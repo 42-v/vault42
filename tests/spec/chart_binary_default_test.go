@@ -237,6 +237,74 @@ func configPackageSources(t *testing.T) []string {
 	return out
 }
 
+// chartDefaultDivergences is every setting the chart's own default render sets
+// to something other than the binary's default, with the reason.
+//
+// Each one is a decision, and each one is the kind of decision that gets made
+// once and then read as an accident. The list exists so that the next value
+// added at a figure nobody chose fails here instead of joining them.
+var chartDefaultDivergences = map[string]string{
+	"DB_HOST": "envOr's localhost is the right default for a binary run by hand and the wrong " +
+		"one for a pod, where nothing is on loopback. The chart's Service name is the topology " +
+		"it renders, not a preference.",
+	"DB_MAX_CONNS": "envInt's 0 means the profile decides, and applyProfileDefaults reads it as " +
+		"25 in production and 5 in embedded. The chart pins the production figure and " +
+		"values-embedded.yaml overrides it; rendering 0 would be a chart that means nothing " +
+		"by the value it sets.",
+	"VAULT_FORCE_SECURE_COOKIES": "deliberately true against the binary's false, because " +
+		"tls.enabled is deliberately false: this chart expects TLS to terminate at an ingress " +
+		"or a tunnel. A browser discards a __Host- cookie that arrives without Secure, so with " +
+		"both false the refresh cookie could never work, and configmap.yaml fails the render on " +
+		"that pair rather than shipping it.",
+	"VAULT_BLOB_MIN_SIZE": "the chart ships a 512 KiB policy floor the binary does not have; " +
+		"envInt's 0 disables the minimum and the handler rejects empty blobs on its own. This " +
+		"is the one entry here that is a chart opinion rather than a topology fact, and it " +
+		"stays only because lowering it now would start accepting uploads that every running " +
+		"install currently rejects.",
+}
+
+// The chart's own default has to be the binary's own default, everywhere the
+// binary states one.
+//
+// Reachability is half of what a chart install owes. The other half is that
+// reaching a setting changes nothing until somebody asks: a chart that exposes
+// VAULT_MFA_REQUIRED and renders it false has closed a wiring gap by turning MFA
+// off in every install that upgrades to it, and every one of those pods comes up
+// healthy.
+func TestTheChartRendersTheBinarysDefaults(t *testing.T) {
+	data := renderedConfigMap(t)
+
+	for env, rendered := range data {
+		want, known := binaryDefault(t, env)
+		if !known {
+			// Either internal/config does not read it, or it reads it through a
+			// bare os.Getenv and the profile decides. Neither is something to
+			// compare a chart value against.
+			continue
+		}
+		diverges := !sameSetting(t, want, rendered)
+		reason, excused := chartDefaultDivergences[env]
+
+		switch {
+		case diverges && !excused:
+			t.Errorf("the chart's default render sets %s to %q; internal/config's own default is "+
+				"%q. An install that asked for nothing gets a deployment that is not the one the "+
+				"binary describes, and on upgrade an existing release silently moves to the "+
+				"chart's figure. Render the binary's default, or add %s to "+
+				"chartDefaultDivergences with the reason the chart deliberately differs.",
+				env, rendered, want.text, env)
+		case diverges && strings.TrimSpace(reason) == "":
+			t.Errorf("%s is listed as a deliberate divergence with no reason, which reads as a "+
+				"considered decision nobody made", env)
+		case !diverges && excused:
+			t.Errorf("chartDefaultDivergences claims the chart deliberately differs from the "+
+				"binary on %s, and it no longer does: both are %q. An argument about a "+
+				"divergence that is gone is how an exclusion list starts describing code that "+
+				"moved.", env, rendered)
+		}
+	}
+}
+
 // The evaluator only has to handle the shapes internal/config actually writes,
 // and it has to refuse everything else rather than return a plausible number.
 func TestTheDefaultEvaluatorRefusesWhatItCannotRead(t *testing.T) {
