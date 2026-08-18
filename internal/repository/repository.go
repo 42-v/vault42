@@ -173,8 +173,12 @@ type DeviceRepository interface {
 
 // LoginCountryRepository records the set of ISO alpha-2 countries a user has
 // successfully logged in from, backing the new-location (AR-18) notice. It
-// stores country granularity only — never an IP — and the table is
-// user_id-cascaded so account erasure removes it automatically.
+// stores country granularity only — never an IP.
+//
+// auth.login_countries carries ON DELETE CASCADE on user_id and that does NOT
+// erase it: vault42 tombstones the user row instead of deleting it, so the
+// referential action never fires. Erasure has to call DeleteAllForUser
+// explicitly, the same way it does for the MFA tables.
 type LoginCountryRepository interface {
 	// UpsertAndWasNew records that userID logged in from country cc and reports,
 	// in one round trip evaluated against a single snapshot:
@@ -188,6 +192,12 @@ type LoginCountryRepository interface {
 	// set silently. cc must be a two-character country code; the caller passes
 	// the value from ipintel and never an empty string.
 	UpsertAndWasNew(ctx context.Context, userID, cc string) (wasNew bool, hadAny bool, err error)
+
+	// DeleteAllForUser removes every recorded country for a user. It is the
+	// Art. 17 step for this table and, like the rest of the erasure cascade, it
+	// is idempotent: erasing a user who never had a country recorded succeeds and
+	// removes nothing, so an interrupted erasure can simply be re-run.
+	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
 // ClientRepository manages service client persistence.

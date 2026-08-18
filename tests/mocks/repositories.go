@@ -344,7 +344,8 @@ func (m *MockDeviceRepo) DeleteAllForUser(ctx context.Context, userID string) er
 // like a real store: it remembers the countries seen per user, so wasNew and
 // hadAny follow the first-seen semantics without a database.
 type MockLoginCountryRepo struct {
-	UpsertAndWasNewFn func(ctx context.Context, userID, cc string) (bool, bool, error)
+	UpsertAndWasNewFn  func(ctx context.Context, userID, cc string) (bool, bool, error)
+	DeleteAllForUserFn func(ctx context.Context, userID string) error
 
 	mu   sync.Mutex
 	seen map[string]map[string]bool
@@ -370,6 +371,19 @@ func (m *MockLoginCountryRepo) UpsertAndWasNew(ctx context.Context, userID, cc s
 	wasNew := !countries[cc]
 	countries[cc] = true
 	return wasNew, hadAny, nil
+}
+
+// DeleteAllForUser drops a user's countries from the default in-memory store, so
+// a test that seeds through UpsertAndWasNew and then erases observes the same
+// before/after the database shows.
+func (m *MockLoginCountryRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, userID)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

@@ -47,3 +47,24 @@ func (r *LoginCountryRepo) UpsertAndWasNew(ctx context.Context, userID, cc strin
 	}
 	return wasNew, hadAny, nil
 }
+
+// DeleteAllForUser clears a tombstoned account's recorded countries as part of
+// the erasure cascade. Migration 028's ON DELETE CASCADE does not do this:
+// erasure scrubs the auth.users row with an UPDATE and never deletes it, so the
+// referential action never fires.
+//
+// The delete goes through auth.erase_login_countries() rather than a DELETE of
+// its own, because 028 gives vault_app SELECT and INSERT only and withholding
+// DELETE is deliberate: this table is the baseline the new-location notice
+// compares against, so anything able to clear it can silence that notice for any
+// account by wiping its history first. The function is SECURITY DEFINER, owned by
+// the migration role (migration 030), and refuses a user that is not already
+// tombstoned — so both roles keep erasure and neither gains a way to erase a
+// live account's history. Same shape as SoftDeleteScrub and migration 015.
+func (r *LoginCountryRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	_, err := r.db.Pool.Exec(ctx, `SELECT auth.erase_login_countries($1)`, userID)
+	if err != nil {
+		return fmt.Errorf("delete all login countries: %w", err)
+	}
+	return nil
+}

@@ -136,6 +136,7 @@ func atkDBNewErasureLikeSelfService(db *postgres.DB) *service.ErasureService {
 		atkDBHMACSecret,
 	)
 	svc.SetServiceDocs(postgres.NewServiceDocumentRepo(db))
+	svc.SetLoginCountries(postgres.NewLoginCountryRepo(db))
 	return svc
 }
 
