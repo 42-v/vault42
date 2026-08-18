@@ -137,11 +137,11 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "Every outbound destination is operator-configured rather than caller-supplied: the OIDC issuer, the SMTP relay, the HIBP range API and the honeypot webhook. There is no request path that lets a caller influence a destination, so the server-side request forgery precondition is absent. What is missing is defence in depth: no code-level allowlist would stop an operator misconfiguration from pointing the server somewhere unintended.",
-      "compensating_control": "The OIDC issuer is pinned against its own discovery document; the chart's NetworkPolicy restricts egress to Postgres, Redis, DNS and a configured SMTP CIDR, which enforces the allowlist at the network layer instead.",
-      "residual_risk": "An operator who misconfigures an issuer or webhook URL gets no code-level warning.",
+      "rationale": "No request path lets a caller influence an outbound destination, so the server-side request forgery precondition is absent. The destinations divide three ways. Four are compiled-in https literals and cannot be pointed anywhere: SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints. Two are operator-configured: the SMTP relay and the OIDC issuer. Four are supplied by the issuer's discovery document rather than by the operator -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- and those are what make this a residual rather than nothing, because a provider that is compromised or misconfigured names the host vault42 then posts the client secret to. What exists against that is a protocol allowlist: fetchableEndpoint (internal/oauth2/oidc.go:67) admits https, or http only for loopback, and internal/oauth2/oidc.go:150 applies it to all four before the document is cached, on top of the OIDC section 3.1.3.7 issuer match. What does not exist is the domain, path and port half of the allowlist this requirement names.",
+      "compensating_control": "The OIDC issuer is pinned against its own discovery document and every endpoint that document names must be https or loopback. The chart's NetworkPolicy restricts egress to Postgres, Redis, DNS and a configured SMTP CIDR, which is a stricter allowlist than the requirement asks for: it admits no egress to 443 at all, so under the shipped policy every HTTPS destination in this inventory is unreachable until an operator widens it.",
+      "residual_risk": "An operator who misconfigures an issuer or a webhook URL gets no code-level warning beyond the https check, and a provider serving a hostile discovery document can direct the token-endpoint request, which carries the client secret, at any https host it names.",
       "revisit_when": "Any feature accepts a URL from a request.",
-      "cost_of_closing": "A shared http.Client with a dial-time destination check."
+      "cost_of_closing": "A shared http.Client with a dial-time destination check, plus a constraint that the endpoints a discovery document names share a registrable domain with the issuer."
     },
     "CR-20": {
       "title": "Authenticator loss is handled by operator escrow, not by repeated identity proofing",
@@ -233,7 +233,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitization library or framework feature. internal/email/templates.go:88 is a regex denylist: it blocks script, iframe, object, embed, meta, base, link, style, svg and form tags, javascript: and data: URIs, css url() and on* event handlers. A denylist is the pattern the requirement exists to discourage, because it enumerates the badness it knows about. Filing this Not Applicable on 'no WYSIWYG editor and no untrusted HTML input' skipped the fact that an HTML body does arrive in an HTTP request body and is stored and later compiled.",
+      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitization library or framework feature. internal/email/templates.go:88 is a regex denylist. It blocks script, iframe, object, embed, base, link, svg and form tags, a meta only when that meta carries http-equiv, javascript: and data: URIs, css url(), on* event handlers, and the {{call and {{js template constructs. A denylist is the pattern the requirement exists to discourage, because it enumerates the badness it knows about. Filing this Not Applicable on \"no WYSIWYG editor and no untrusted HTML input\" skipped the fact that an HTML body does arrive in an HTTP request body and is stored and later compiled. An earlier version of this rationale also listed style among the blocked tags: it never was, and the pattern's own comment says a style block of inline CSS is allowed deliberately.",
       "compensating_control": "The route requires rbac.EmailWrite, which is a super_admin-tier permission, so the population that can reach it is the population that could rewrite the mail wholesale anyway; the template is compiled with html/template, whose contextual auto-escaping means interpolated data cannot become markup; the output is an email body rendered by a mail client, not a page on vault42's origin, so there is no same-origin context to reach; every write is audited.",
       "residual_risk": "A super_admin can put markup the denylist does not enumerate into an email body. The realistic outcome is a phishing-shaped mail, which the same principal could send by rewriting the copy.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
@@ -581,13 +581,13 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-17",
       "evidence": [
-        "internal/oauth2/oidc.go:97",
-        "internal/email/smtp.go:57"
+        "internal/oauth2/oidc.go:67",
+        "internal/oauth2/oidc.go:150"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
       ],
-      "notes": "Outbound destinations are operator-configured (OIDC issuer, SMTP host, webhook), not caller-supplied, and the OIDC issuer is pinned against its own discovery document. There is no allowlist enforced at the HTTP client layer, so an operator misconfiguration is not caught in code."
+      "notes": "Accepted risk CR-17. No request path lets a caller influence an outbound destination, so the forgery precondition is absent, and a protocol allowlist does exist: fetchableEndpoint (internal/oauth2/oidc.go:67) admits https, or http only for loopback, and internal/oauth2/oidc.go:150 applies it to the authorization, token, userinfo and jwks endpoints the issuer's discovery document names, before any of them is cached or used. Those four are the only destinations vault42 takes from data rather than from configuration or a compiled-in literal, and they are what makes this a residual rather than nothing. What is missing is the rest of the allowlist the requirement names -- domains, paths and ports -- at the HTTP client layer or anywhere else. The previous reason said there was no allowlist at all, which understated the protocol check, and enumerated four destinations without the four the discovery document supplies."
     },
     {
       "standard": "OWASP ASVS",
@@ -7188,11 +7188,11 @@
       "requirement": "Server Side Request Forgery",
       "status": "Accepted Risk",
       "evidence": [
-        "internal/email/smtp.go:57",
+        "internal/oauth2/oidc.go:150",
         "charts/vault/templates/networkpolicy.yaml:1"
       ],
       "tests": [],
-      "notes": "Accepted risk CR-17, the same residual the ASVS V1.3.6 row carries. All four outbound destinations are operator-configured rather than caller-supplied: the OIDC issuer, the SMTP relay reached through smtp.SendMail, the HIBP range API and the honeypot webhook. No request path lets a caller influence a destination, so the precondition for server-side request forgery is absent; what is missing is defence in depth, a code-level allowlist that would catch an operator misconfiguration. The chart's NetworkPolicy enforces the allowlist at the network layer instead.",
+      "notes": "Accepted risk CR-17, the same residual ASVS V1.3.6 carries. No request path lets a caller influence a destination, so the precondition for server-side request forgery is absent. The inventory divides three ways: four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. That last group is checked against a protocol allowlist (internal/oauth2/oidc.go:150) and against no domain, path or port allowlist. The chart's NetworkPolicy enforces the network-layer half and is stricter than the requirement asks: it admits egress to Postgres, Redis, DNS and a configured SMTP CIDR and to nothing else, so no HTTPS destination in this inventory is reachable at all until an operator widens it.",
       "accepted_risk": "CR-17"
     },
     {
