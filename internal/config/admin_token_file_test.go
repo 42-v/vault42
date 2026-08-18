@@ -172,3 +172,60 @@ func TestLoadRejectsAnArgon2idHashWithAnEmptySegment(t *testing.T) {
 		})
 	}
 }
+
+// The second boot of a deployment that consumes its secret files.
+//
+// internal/cli reads ADMIN_TOKEN_FILE for real, and under
+// VAULT_SECRET_FILE_CONSUME that read zeroes and removes the file. This check
+// re-reads the same path on every boot and treated its absence as a broken
+// mount, so boot 1 destroyed the file and boot 2 refused to start:
+//
+//	boot 1 removed .../admin-token
+//	boot 2: read ADMIN_TOKEN_FILE "...": no such file or directory
+//
+// The chart is not affected -- its secrets volume is readOnly and it never sets
+// the flag -- so this is compose, systemd and bare metal with a writable
+// keyfile. The token itself is not lost: its hash went into auth.admin_config on
+// boot 1 and is what authenticates from then on.
+//
+// An absent file is only forgivable under the flag. Without it, nothing in this
+// process removes the file, so absence still means the mount is broken and that
+// is still a startup failure.
+func TestConsumedAdminTokenFileDoesNotBlockTheNextBoot(t *testing.T) {
+	path := writeAdminTokenFile(t, "3c9909afec25354d551dae21590bb26e38d53f2173b8d3dc3eee4c047e7ab1c1\n")
+	t.Setenv("VAULT_PROFILE", "production")
+	t.Setenv("ADMIN_TOKEN_FILE", path)
+	t.Setenv("VAULT_SECRET_FILE_CONSUME", "true")
+
+	// What internal/cli does to it on the first boot.
+	if _, err := LoadSecret("ADMIN_TOKEN"); err != nil {
+		t.Fatalf("first boot could not read the admin token: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the consuming read did not remove the file, so this test is not describing "+
+			"the second boot at all (stat err = %v)", err)
+	}
+
+	if err := loadAndValidate(t); err != nil && strings.Contains(err.Error(), "ADMIN_TOKEN") {
+		t.Fatalf("the second boot refused to start over a file the first boot was told to "+
+			"destroy: %v", err)
+	}
+}
+
+// The other direction, which has to keep failing: without the consume flag
+// nothing in this process removes the file, so an absent one is a mount that
+// never arrived, and a server that starts anyway rejects the operator's token
+// with "Admin authentication required."
+func TestAbsentAdminTokenFileWithoutConsumeIsStillFatal(t *testing.T) {
+	path := writeAdminTokenFile(t, "3c9909afec25354d551dae21590bb26e38d53f2173b8d3dc3eee4c047e7ab1c1\n")
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	t.Setenv("VAULT_PROFILE", "production")
+	t.Setenv("ADMIN_TOKEN_FILE", path)
+
+	err := loadAndValidate(t)
+	if err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN_FILE") {
+		t.Fatalf("an absent ADMIN_TOKEN_FILE was accepted: %v", err)
+	}
+}

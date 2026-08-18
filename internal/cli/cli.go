@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"strconv"
@@ -439,7 +440,18 @@ func loadProvisionedAdminToken() (string, error) {
 	if os.Getenv("ADMIN_TOKEN_FILE") == "" {
 		return "", nil
 	}
-	return config.LoadSecret("ADMIN_TOKEN")
+	token, err := config.LoadSecret("ADMIN_TOKEN")
+	// This read is the one that destroys the file, so a boot that finds it gone
+	// under VAULT_SECRET_FILE_CONSUME is looking at its own earlier work, not at
+	// a mount that never arrived. Nothing is lost with the file: the hash went
+	// into auth.admin_config on the boot that consumed it and is what
+	// authenticates from then on. Without this arm every later boot reported
+	// "Admin token init error: read ADMIN_TOKEN_FILE ..." on a healthy
+	// deployment, and config.checkAdminTokenFile refused to start at all.
+	if err != nil && errors.Is(err, fs.ErrNotExist) && config.SecretFilesAreConsumed() {
+		return "", nil
+	}
+	return token, err
 }
 
 // InitAdminToken installs the initial admin token on first boot.
