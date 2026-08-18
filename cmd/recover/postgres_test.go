@@ -109,10 +109,29 @@ func startFakePG(t *testing.T, srv *fakePG) string {
 	return fmt.Sprintf("postgres://recover:secret@%s/vault?sslmode=disable", ln.Addr().String())
 }
 
+// fakePGIdleTimeout bounds how long the fake backend waits for the next message
+// from the driver before giving up on the connection.
+//
+// It is what stops a regression looking like a hung job. When the tool fails to
+// release the connection, nothing closes the socket: the leaked pgx conn becomes
+// garbage and is closed only when the net package's finalizer runs, which the
+// runtime's forced collection reaches two minutes later (runtime forcegcperiod).
+// settle and the t.Cleanup below both wait on that, so dropping `defer release()`
+// cost 120s per test - 240s across the two tests that call settle - before either
+// reported anything. With this, the backend gives up in seconds and the run fails
+// on the assertion that says the connection was never terminated.
+//
+// Generous relative to what these tests do between messages, which is a couple of
+// RSA-2048 decrypts, so a loaded CI box cannot trip it.
+const fakePGIdleTimeout = 5 * time.Second
+
 // settle stops the listener and waits for the connection goroutines to drain.
 // The tool's release function sends Terminate and closes the socket on its way
 // out, which the backend observes some time later; without this, an assertion
 // about what the backend saw would be racing the driver's own shutdown.
+//
+// Bounded by fakePGIdleTimeout on the backend side, so a connection the tool
+// never released delays this by seconds rather than by two minutes.
 func (s *fakePG) settle(t *testing.T) {
 	t.Helper()
 	_ = s.ln.Close()
@@ -308,6 +327,9 @@ func (w *wire) msg(typ byte, body []byte) {
 
 func (w *wire) readStartup() ([]byte, error) {
 	var size [4]byte
+	if err := w.awaitPeer(); err != nil {
+		return nil, err
+	}
 	if _, err := io.ReadFull(w.conn, size[:]); err != nil {
 		return nil, err
 	}
@@ -322,8 +344,19 @@ func (w *wire) readStartup() ([]byte, error) {
 	return body, nil
 }
 
+// awaitPeer arms the idle timeout ahead of every read, so a driver that has
+// stopped talking - because the tool leaked the connection instead of releasing
+// it - unblocks the backend goroutine rather than parking it until the runtime
+// finalizes the socket.
+func (w *wire) awaitPeer() error {
+	return w.conn.SetReadDeadline(time.Now().Add(fakePGIdleTimeout))
+}
+
 func (w *wire) readFrontend() (byte, []byte, error) {
 	var head [5]byte
+	if err := w.awaitPeer(); err != nil {
+		return 0, nil, err
+	}
 	if _, err := io.ReadFull(w.conn, head[:]); err != nil {
 		return 0, nil, err
 	}
