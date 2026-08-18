@@ -36,7 +36,7 @@ const allTargetsAreLocal = [VAULT_URL, ADMIN_URL, MAILPIT_URL].every(isLocalTarg
 if (allTargetsAreLocal) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 } else {
-  console.log('[e2e-browser] a configured target is not a local host; TLS verification stays on.');
+  console.warn('[e2e-browser] a configured target is not a local host; TLS verification stays on.');
 }
 
 export default defineConfig({
