@@ -123,6 +123,13 @@ them starting with the production master key.
 
 **`postgres.appPassword` is gone.** No template ever read it.
 
+**`values-bridge.yaml` now sets the vault's own `trustedProxies`.** It only set
+`bridge.trustedProxies`, which the bridge reads and the vault does not, so every
+request in a bridge deployment resolved to the bridge pod's single address. Do not
+take this line alone: it is only safe against a bridge that strips the client's
+own upstream-trust headers, and it is worse than the misattribution it fixes
+against a bridge that does not.
+
 **mailpit and cloudflared are pinned by digest.** `mailpit.image.digest` and
 `cloudflared.image.digest` win over their tags. Clear the digest to follow a tag
 again; raise both deliberately rather than floating.
