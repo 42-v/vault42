@@ -130,6 +130,7 @@ func TestRedirectPathRejectsWhatABrowserWouldResolveOffOrigin(t *testing.T) {
 		{"escape sequence", "/\x1b[2J"},
 		{"unicode line separator", "/\u2028//evil.com"},
 		{"c1 next line", "/\u0085//evil.com"},
+		{"invalid utf-8 lone c1 nel byte", "/\x85//evil.com"},
 		{"parent dot segment collapsing to an authority", "/..//evil.com"},
 		{"current dot segment", "/.//evil.com"},
 		{"parent segment mid-path", "/app/../../evil.com"},
