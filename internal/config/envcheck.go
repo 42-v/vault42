@@ -69,6 +69,8 @@ var boolEnvVars = []string{
 // what an operator meant, and every consumer here reads a negative as "already
 // in the past": a negative token TTL signs tokens that are expired on issue.
 var durationEnvVars = map[string]time.Duration{
+	"DB_LOCK_TIMEOUT":            0,
+	"DB_STATEMENT_TIMEOUT":       0,
 	"VAULT_ACCESS_TOKEN_TTL":     0,
 	"VAULT_AUDIT_FLUSH_INTERVAL": 0,
 	"VAULT_KEY_RETENTION_PERIOD": 0,

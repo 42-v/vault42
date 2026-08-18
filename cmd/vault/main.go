@@ -25,6 +25,7 @@ import (
 	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/kms"
+	"github.com/42-v/vault42/internal/mailqueue"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/oauth2"
@@ -120,7 +121,11 @@ func main() {
 	hmacSecret := append([]byte(nil), cfg.HMACSecret...)
 
 	// Connect to PostgreSQL (vault_app role)
-	db, err := postgres.New(ctx, cfg.DatabaseURL("app"), cfg.DBMaxConns)
+	db, err := postgres.NewWithOptions(ctx, cfg.DatabaseURL("app"), postgres.Options{
+		MaxConns:         cfg.DBMaxConns,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
+	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", sanitizeDBError(err))
 	}
@@ -148,6 +153,19 @@ func main() {
 		cacheDegraded = true
 	}
 	defer func() { _ = appCache.Close() }()
+
+	// Registered AFTER the cache close, so LIFO runs it BEFORE: a deferred send
+	// still in flight writes its verification token to the cache and then mails
+	// the link, and a cache that has already been closed turns that into a link
+	// the user can never use. Bounded by the configured shutdown timeout, so a
+	// wedged relay cannot hold the process open.
+	defer func() {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer drainCancel()
+		if err := mailqueue.Close(drainCtx); err != nil {
+			log.Printf("WARNING: deferred email drain incomplete: %v", err)
+		}
+	}()
 
 	// Initialize repositories
 	userRepo := postgres.NewUserRepo(db)
@@ -217,6 +235,13 @@ func main() {
 		defer auditRetention.Stop()
 		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
 	}
+
+	// Refresh-token reaping. Nothing on the server path ran it before: the only
+	// caller of DeleteExpired was the CLI, so the table grew until an operator
+	// remembered a subcommand.
+	refreshRetention := service.NewRefreshTokenRetention(refreshTokenRepo)
+	refreshRetention.Start(ctx)
+	defer refreshRetention.Stop()
 
 	// Account-recovery escrow retention (Art. 5(1)(e)). No-op unless
 	// VAULT_RECOVERY_RETENTION_DAYS is set. Started here for the same reason as

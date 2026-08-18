@@ -100,7 +100,11 @@ func main() {
 	}
 
 	// Connect to PostgreSQL (vault_admin role)
-	db, err := postgres.New(ctx, cfg.DatabaseURL(), cfg.DBMaxConns)
+	db, err := postgres.NewWithOptions(ctx, cfg.DatabaseURL(), postgres.Options{
+		MaxConns:         cfg.DBMaxConns,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
+	})
 	if err != nil {
 		log.Fatalf("admin-gateway: database error: %v", sanitizeDBError(err))
 	}

@@ -45,6 +45,14 @@ type Config struct {
 	DBSSLMode string
 	// DBMaxConns is the maximum number of database connections (DB_MAX_CONNS). Default: 25 (production), 5 (embedded).
 	DBMaxConns int
+	// DBStatementTimeout is the server-side ceiling on a single statement
+	// (DB_STATEMENT_TIMEOUT). Default 10s; zero disables it. Without it,
+	// DBMaxConns pathological queries pin the whole pool and the service stops
+	// serving with no error anywhere.
+	DBStatementTimeout time.Duration
+	// DBLockTimeout is the server-side ceiling on waiting for a lock
+	// (DB_LOCK_TIMEOUT). Default 3s; zero disables it.
+	DBLockTimeout time.Duration
 
 	// DBMigPassword is the password for the vault_mig migration role (DB_MIG_PASSWORD_FILE).
 	DBMigPassword string
@@ -387,6 +395,9 @@ func Load() (*Config, error) {
 		DBName:     envOr("DB_NAME", "vault"),
 		DBSSLMode:  envOr("DB_SSLMODE", "require"),
 		DBMaxConns: envInt("DB_MAX_CONNS", 0),
+
+		DBStatementTimeout: envDuration("DB_STATEMENT_TIMEOUT", 10*time.Second),
+		DBLockTimeout:      envDuration("DB_LOCK_TIMEOUT", 3*time.Second),
 
 		CacheBackend: os.Getenv("CACHE_BACKEND"),
 		RedisAddr:    os.Getenv("REDIS_ADDR"),
