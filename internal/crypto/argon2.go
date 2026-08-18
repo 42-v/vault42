@@ -43,6 +43,33 @@ const (
 	// argon2AcquireTimeout is how long to wait for the semaphore before rejecting.
 	argon2AcquireTimeout = 5 * time.Second
 
+	// argon2MaxQueueDepth is how many callers may be waiting for a slot before
+	// a new arrival is shed immediately instead of queued.
+	//
+	// The semaphore bounds MEMORY — four slots, ~184 MiB of issued-parameter
+	// working set, and that part was never the problem. What it did not bound
+	// was TIME: acquireArgon2 waited the whole acquire timeout before giving
+	// up, so the queue was however many callers could drain in five seconds.
+	// Measured on a 2026 laptop core: a single issuing hash takes 47.7ms, so
+	// four slots retire ~84 hashes a second and five seconds of queue is ~420
+	// waiters. On a 150ms production core it is ~130. Either way the caller at
+	// the back waits the full five seconds and is then rejected anyway, having
+	// held a connection, a goroutine and a request the whole time.
+	//
+	// So this is not "shed earlier to keep a latency number down". Below the
+	// threshold nothing changes: a legitimate login under moderate contention
+	// still queues and still gets served, which is the right trade and the
+	// reason the semaphore queues at all. Above it, the wait was already
+	// futile, and an immediate 503 is strictly better for the caller than the
+	// same 503 five seconds later.
+	//
+	// 64 is that boundary expressed as a queue: ~0.8s of drain at 47.7ms per
+	// hash, ~2.4s at 150ms — both inside the server's write timeout, so a
+	// caller that queues can still be answered. It also makes
+	// Argon2RejectedCount move at a depth an operator can alert on, instead of
+	// staying at zero until roughly 420 concurrent operations.
+	argon2MaxQueueDepth = 64
+
 	// argon2MaxVerifyMemory caps the memory a stored hash may request, in KiB.
 	//
 	// It used to be 128 MiB, which made the semaphore's sizing argument false:
@@ -88,14 +115,32 @@ var ErrArgon2Overloaded = errors.New("argon2: too many concurrent hashing operat
 // early warning. The semaphore queues rather than sheds, so under load a
 // legitimate login simply gets slower: measured here, victim latency grows about
 // 9 ms per concurrent password operation, and at 128 concurrent a login already
-// waits over a second while the rejection counter is still zero. Nothing is
-// rejected until the queue is deep enough to burn the whole 5 s acquire timeout,
-// roughly 558 concurrent operations, so the only overload signal the package
-// exported fired long after users had noticed. These two are the signal that
-// moves while the service is merely degrading.
+// waits over a second. These two are the signal that moves while the service is
+// merely degrading, before anything is refused.
+//
+// argon2MaxQueueDepth now caps how far that degradation can run. It used to run
+// until the acquire timeout was burned — roughly 420 concurrent operations on a
+// 47.7ms hash — so the rejection counter stayed at zero long after every user
+// had noticed, and the caller at the back of the queue paid five seconds for a
+// 503 it was going to get anyway.
 func acquireArgon2() error {
 	ctx, cancel := context.WithTimeout(context.Background(), argon2AcquireTimeout)
 	defer cancel()
+
+	// Shed before queueing when the queue is already past the depth that can
+	// drain inside a useful wait. Checked before the counter is incremented, so
+	// a shed caller is not itself counted as a waiter.
+	//
+	// Racy by construction: two arrivals can both read a depth one under the
+	// threshold and both queue. That is fine — the threshold is a drain-time
+	// budget, not a hard capacity, and the memory ceiling is the semaphore's
+	// job, not this check's.
+	if argon2Waiting.Load() >= int64(argon2MaxQueueDepth) {
+		rejected := argon2Rejected.Add(1)
+		log.Printf("argon2: shedding — %d callers already queued for %d slots (total rejected: %d)",
+			argon2MaxQueueDepth, argon2MaxConcurrent, rejected)
+		return ErrArgon2Overloaded
+	}
 
 	start := time.Now()
 	argon2Waiting.Add(1)
