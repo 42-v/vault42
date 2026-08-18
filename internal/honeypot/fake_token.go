@@ -104,6 +104,22 @@ func trapSigningKey() (*rsa.PrivateKey, string, error) {
 	return trapKey, trapKID, nil
 }
 
+// mintedTrapKID returns the key id trap tokens are signed under, or "" when this
+// process has not minted one.
+//
+// It deliberately does not generate the key the way trapSigningKey does. Its
+// caller is the HTTP middleware, running on the attacker's own request, and
+// generating a 2048-bit RSA key there would put several hundred milliseconds on
+// whichever request happened to arrive first -- the timing tell TrapSigningKey's
+// startup call exists to pay off early. It is also unnecessary: no key means no
+// trap token has ever been minted, and a token that does not exist cannot be
+// replayed.
+func mintedTrapKID() string {
+	trapKeyMu.Lock()
+	defer trapKeyMu.Unlock()
+	return trapKID
+}
+
 // TrapSigningKey returns the key id and public half of the honeypot-only signing
 // key so startup wiring can publish it in the JWKS the trap serves.
 //
