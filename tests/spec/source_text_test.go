@@ -63,15 +63,23 @@ func blankComments(t *testing.T, path, src string) string {
 		return blankLineComments(t, path, src, "--", anywhere)
 	case syntaxYAML:
 		return blankYAMLComments(src)
+	case syntaxHelmYAML:
+		// Helm templates that emit YAML (configmap.yaml, deployment.yaml, …)
+		// carry both comment grammars: {{/* … */}} is invisible to helm
+		// template and never reaches the rendered manifest, while # is a YAML
+		// comment in the emitted document. Blanking only # left a Helm
+		// comment containing `VAULT_DPOP_ENABLED:` able to satisfy the chart
+		// wiring gate for a switch the rendered ConfigMap never set.
+		return blankYAMLComments(blankHelmTemplateComments(src))
 	case syntaxHelmPartial:
 		// Helm partials: {{/* ... */}} is the template comment, and a # at the
 		// start of a line is a YAML comment in the fragment being emitted.
-		return blankLineComments(t, path, blankBlockComments(src, "{{/*", "*/}}"), "#", lineStart)
+		return blankLineComments(t, path, blankHelmTemplateComments(src), "#", lineStart)
 	case syntaxHelmNotes:
 		// NOTES.txt is a Helm template whose plain text is printed verbatim, so
 		// only the template comment is a comment; a # is a character an
 		// operator reads.
-		return blankBlockComments(src, "{{/*", "*/}}")
+		return blankHelmTemplateComments(src)
 	case syntaxMarkdown:
 		return blankBlockComments(src, "<!--", "-->")
 	case syntaxHashAtLineStart:
@@ -90,6 +98,7 @@ const (
 	syntaxGo              = "go"
 	syntaxSQL             = "sql"
 	syntaxYAML            = "yaml"
+	syntaxHelmYAML        = "helm-yaml"
 	syntaxHelmPartial     = "helm-partial"
 	syntaxHelmNotes       = "helm-notes"
 	syntaxMarkdown        = "markdown"
@@ -101,11 +110,16 @@ const (
 // having to observe a t.Fatal.
 func commentSyntaxFor(path string) (string, bool) {
 	base, ext := filepath.Base(path), filepath.Ext(path)
+	slash := filepath.ToSlash(path)
 	switch {
 	case ext == ".go":
 		return syntaxGo, true
 	case ext == ".sql":
 		return syntaxSQL, true
+	case (ext == ".yaml" || ext == ".yml") && strings.Contains(slash, "/templates/"):
+		// Under charts/*/templates a .yaml file is a Helm template that emits
+		// YAML, not a plain YAML document. See syntaxHelmYAML.
+		return syntaxHelmYAML, true
 	case ext == ".yaml", ext == ".yml":
 		return syntaxYAML, true
 	case ext == ".tpl":
@@ -178,6 +192,67 @@ func blankBlockComments(src, opener, closer string) string {
 		i = end
 	}
 	return string(out)
+}
+
+// blankHelmTemplateComments blanks every Helm `{{/* … */}}` comment,
+// including the whitespace-control forms (`{{- /* … */ -}}`, `{{ /* … */}}`,
+// `{{-/* … */}}`). A literal search for `{{/*` alone left `{{- /* ENV: */}}`
+// readable to every chart wiring gate that goes through commentFreeSource.
+func blankHelmTemplateComments(src string) string {
+	out := []byte(src)
+	for i := 0; i < len(src); {
+		start, body, ok := findHelmCommentOpen(src, i)
+		if !ok {
+			break
+		}
+		closeAt := strings.Index(src[body:], "*/")
+		if closeAt < 0 {
+			blank(out, start, len(src))
+			break
+		}
+		end := body + closeAt + len("*/")
+		// Optional whitespace-control dash and spaces before the closing }}.
+		for end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+			end++
+		}
+		if end < len(src) && src[end] == '-' {
+			end++
+		}
+		for end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+			end++
+		}
+		if end+1 < len(src) && src[end] == '}' && src[end+1] == '}' {
+			end += 2
+		}
+		blank(out, start, end)
+		i = end
+	}
+	return string(out)
+}
+
+// findHelmCommentOpen locates the next Helm comment opener at or after i and
+// returns the index of the opening `{{`, the index just past `/*`, and whether
+// one was found.
+func findHelmCommentOpen(src string, i int) (start, body int, ok bool) {
+	for i < len(src) {
+		j := strings.Index(src[i:], "{{")
+		if j < 0 {
+			return 0, 0, false
+		}
+		start = i + j
+		p := start + 2
+		if p < len(src) && src[p] == '-' {
+			p++
+		}
+		for p < len(src) && (src[p] == ' ' || src[p] == '\t') {
+			p++
+		}
+		if p+1 < len(src) && src[p] == '/' && src[p+1] == '*' {
+			return start, p + 2, true
+		}
+		i = start + 2
+	}
+	return 0, 0, false
 }
 
 // blankYAMLComments applies YAML's actual comment rule: a # opens a comment
@@ -332,10 +407,21 @@ func TestCommentsCannotSatisfyASubstringAssertion(t *testing.T) {
 		},
 		{
 			name:    "yaml full-line and trailing comments",
-			path:    "configmap.yaml",
+			path:    "values.yaml",
 			src:     "data:\n  # name: VAULT_HMAC_SECRET_FILE\n  KEY: value # name: VAULT_KMS_KEY\n  URL: \"http://x/#frag\"\n",
 			gone:    []string{"VAULT_HMAC_SECRET_FILE", "VAULT_KMS_KEY"},
 			kept:    []string{"KEY: value", "http://x/#frag"},
+			sameLen: true,
+		},
+		{
+			name: "helm yaml template comments including whitespace-control",
+			path: "charts/vault/templates/configmap.yaml",
+			src: "data:\n  {{- /* VAULT_DPOP_ENABLED: \"false\" */}}\n" +
+				"  {{/* VAULT_MINT_ENABLED: \"true\" */ -}}\n" +
+				"  # VAULT_HMAC_SECRET_FILE: x\n" +
+				"  VAULT_APP_NAME: \"x\"\n",
+			gone:    []string{"VAULT_DPOP_ENABLED", "VAULT_MINT_ENABLED", "VAULT_HMAC_SECRET_FILE"},
+			kept:    []string{"VAULT_APP_NAME"},
 			sameLen: true,
 		},
 		{
@@ -365,8 +451,8 @@ func TestCommentsCannotSatisfyASubstringAssertion(t *testing.T) {
 		{
 			name:    "helm template comments",
 			path:    "_helpers.tpl",
-			src:     "{{/* dir .Values.firstBootCredential.path */}}\n{{- define \"vault.x\" -}}\n# dir .Values.other.path\n{{- end -}}\n",
-			gone:    []string{"firstBootCredential.path", "other.path"},
+			src:     "{{/* dir .Values.firstBootCredential.path */}}\n{{- /* dir .Values.dashComment.path */ -}}\n{{- define \"vault.x\" -}}\n# dir .Values.other.path\n{{- end -}}\n",
+			gone:    []string{"firstBootCredential.path", "dashComment.path", "other.path"},
 			kept:    []string{"vault.x"},
 			sameLen: true,
 		},
@@ -424,7 +510,7 @@ func TestAnUnknownFileTypeIsRefusedRatherThanReadRaw(t *testing.T) {
 	for path, want := range map[string]string{
 		"internal/server/server.go":             syntaxGo,
 		"migrations/018_x.sql":                  syntaxSQL,
-		"charts/vault/templates/configmap.yaml": syntaxYAML,
+		"charts/vault/templates/configmap.yaml": syntaxHelmYAML,
 		"charts/vault/values.yml":               syntaxYAML,
 		"charts/vault/templates/_helpers.tpl":   syntaxHelmPartial,
 		"charts/vault/templates/NOTES.txt":      syntaxHelmNotes,

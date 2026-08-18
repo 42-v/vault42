@@ -127,6 +127,37 @@ func TestAdminChain_ReplacesAClientSuppliedRequestID(t *testing.T) {
 	}
 }
 
+// The admin plane's MaxBody(64KiB) is the whole bound on an unauthenticated
+// login POST body. The structural layer register only pins the call name
+// "MaxBody", and the unit test wraps MaxBody(10) around its own handler — so
+// MaxBody(1<<30) on NewRouter kept every prior suite green while a caller could
+// push an arbitrary body at the Argon2id login path. Drive the router the
+// gateway returns: a password field past 64KiB must fail at decode (400), not
+// reach credential verification (401).
+func TestAdminChain_CapsAnUnauthenticatedLoginBodyAt64KiB(t *testing.T) {
+	h := adminRouterUnderTest(t)
+
+	// 64KiB ceiling, ~70KiB JSON body. Valid shape so that without MaxBody the
+	// decoder would succeed and the handler would answer invalid_credentials.
+	huge := strings.Repeat("a", 70*1024)
+	body := `{"username":"attack-admin","password":"` + huge + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/auth/login", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized login body = %d (%s), want 400 invalid_request. The deployed "+
+			"MaxBody(64KiB) is not capping reads on the router NewRouter returns, so the "+
+			"Argon2id login path is willing to ingest an arbitrary body.",
+			rec.Code, rec.Body.String())
+	}
+	if reason := refusalReason(t, rec); reason != "invalid_request" {
+		t.Errorf("refused with %q, want invalid_request (decode failed under MaxBytesReader)", reason)
+	}
+}
+
 // The admin login route verifies a client secret with Argon2id and is reachable
 // without credentials, which makes it both a password-guessing surface and a CPU
 // exhaustion surface. Its limiter's own doc says it is independent of account

@@ -590,6 +590,17 @@ var chainLimiterBudgets = map[string]struct{ limit, window string }{
 	"mintRL":          {"60", "time.Minute"},
 }
 
+// chainLimiterWeights pins the IP-intel weight on the credential-guessing
+// limiters. Limit and Window alone stay green if Weight: vpnScrutiny is
+// deleted, and the only Weight coverage in the tree wraps IPIntelWeight in
+// isolation — the same hand-built certification pattern that let MaxBody drift
+// off the deployed chain.
+var chainLimiterWeights = map[string]string{
+	"loginRL":         "vpnScrutiny",
+	"registerRL":      "vpnScrutiny",
+	"passwordResetRL": "vpnScrutiny",
+}
+
 // TestEveryRateLimiterBudgetIsPinned fails when a deployed budget changes
 // without the register changing with it.
 func TestEveryRateLimiterBudgetIsPinned(t *testing.T) {
@@ -634,6 +645,15 @@ func TestEveryRateLimiterBudgetIsPinned(t *testing.T) {
 				serverSource, fset.Position(as.Pos()).Line, name.Name,
 				gotLimit, gotWindow, want.limit, want.window)
 		}
+		if wantWeight, weighted := chainLimiterWeights[name.Name]; weighted {
+			gotWeight := chainFieldText(t, fset, lit, "Weight")
+			if gotWeight != wantWeight {
+				t.Errorf("%s:%d deploys %q with Weight %s; the weight register pins %s. Dropping "+
+					"vpnScrutiny leaves Limit/Window unchanged while VPN/Tor/hosting sources keep "+
+					"the full credential-guessing budget instead of the 3× weight.",
+					serverSource, fset.Position(as.Pos()).Line, name.Name, gotWeight, wantWeight)
+			}
+		}
 		return true
 	})
 
@@ -642,6 +662,11 @@ func TestEveryRateLimiterBudgetIsPinned(t *testing.T) {
 			t.Errorf("the budget register names %q, which %s no longer builds. Remove the entry, "+
 				"so a future limiter reusing the name cannot inherit a budget written for a "+
 				"different route.", name, serverSource)
+		}
+	}
+	for name := range chainLimiterWeights {
+		if !seen[name] {
+			t.Errorf("the weight register names %q, which %s no longer builds.", name, serverSource)
 		}
 	}
 }
@@ -662,6 +687,13 @@ var chainAdminLayers = []struct{ call, why string }{
 	{"RejectProxyHeaders", "layer 4 of the six-layer local-only enforcement"},
 	{"LocalOnly", "layer 6, and the one that writes the admin:killswitch_triggered audit record"},
 }
+
+// chainAdminMaxBodyArgs is the body-cap argument NewRouter must pass. The layer
+// register above only pins the call name "MaxBody"; MaxBody(1<<30) still
+// satisfies that while leaving the admin plane effectively uncapped. The vault
+// half pins MaxBodyWithExemptions's numbers in chainPinnedArgs; this is the
+// admin twin.
+const chainAdminMaxBodyArgs = "64 * 1024"
 
 // TestTheAdminRouterInstallsEveryLayerInOrder is the admin twin of the vault
 // chain gate. The two loopback layers are inside the !DevMode branch, which is
@@ -713,6 +745,67 @@ func TestTheAdminRouterInstallsEveryLayerInOrder(t *testing.T) {
 	if len(installed) == len(want) {
 		t.Errorf("adminapi.NewRouter installs the right layers in the wrong order.\n got: %v\nwant: %v",
 			installed, want)
+	}
+}
+
+// TestTheAdminRouterPinsTheMaxBodyCap fails when NewRouter still wraps MaxBody
+// but with a different (or missing) byte ceiling. Widening 64KiB to a gibibyte
+// keeps every layer-name assertion green and the hand-built MaxBody(10) unit
+// test green while an unauthenticated login POST can push an arbitrary body.
+func TestTheAdminRouterPinsTheMaxBodyCap(t *testing.T) {
+	root := repoRoot(t)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, chainAdminSource), nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", chainAdminSource, err)
+	}
+	fn := findTopLevelFunc(file, "NewRouter")
+	if fn == nil {
+		t.Fatalf("%s no longer defines NewRouter", chainAdminSource)
+	}
+
+	stmts := chainAllStmts(fn.Body)
+	gotArgs := make([]string, 0, len(stmts))
+	for _, stmt := range stmts {
+		as, ok := stmt.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		lhs, ok := as.Lhs[0].(*ast.Ident)
+		if !ok || lhs.Name != "handler" {
+			continue
+		}
+		// MaxBody(N)(handler) is a CallExpr whose Fun is itself the call MaxBody(N).
+		outer, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		inner, ok := outer.Fun.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		ident, ok := inner.Fun.(*ast.Ident)
+		if !ok || ident.Name != "MaxBody" {
+			continue
+		}
+		args := make([]string, 0, len(inner.Args))
+		for _, a := range inner.Args {
+			args = append(args, nodeText(t, fset, a))
+		}
+		gotArgs = append(gotArgs, strings.Join(args, ", "))
+	}
+	if len(gotArgs) == 0 {
+		t.Fatalf("adminapi.NewRouter no longer assigns MaxBody(...) into the chain; the layer " +
+			"register should have failed first. This pin exists so a renamed wrapper cannot " +
+			"quietly drop the 64KiB ceiling.")
+	}
+	for _, got := range gotArgs {
+		if got != chainAdminMaxBodyArgs {
+			t.Errorf("adminapi.NewRouter calls MaxBody(%s); the admin body-cap register pins "+
+				"MaxBody(%s). Widening the ceiling leaves the MaxBody layer name in place while "+
+				"an unauthenticated login POST can push an arbitrary body at Argon2id.",
+				got, chainAdminMaxBodyArgs)
+		}
 	}
 }
 
