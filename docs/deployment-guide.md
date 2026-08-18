@@ -115,6 +115,20 @@ Operational properties worth knowing before you enable it:
 
 Two limits are real: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. Two issuance paths are not wrapped. `POST /client/token` is not a DPoP issuance path, so client-credential tokens used by `/kms/unwrap` and `/mint` stay unbound. `GET /auth/oauth2/callback/{provider}` is not wrapped either: the provider redirects the browser with a GET, which cannot carry a proof, so federated login never stamps `cnf.jkt`. Enable it when password-login and refresh clients can send proofs. Leaving it at the default (`false`) leaves that control off.
 
+Set it from the chart with `dpop.enabled`, which renders `VAULT_DPOP_ENABLED` into
+the ConfigMap and defaults to `false` to match the binary:
+
+```bash
+helm upgrade --install vault charts/vault --set dpop.enabled=true
+```
+
+That value did not exist before vault42 1.0.0's reachability pass. Until it was
+added the chart had no way to set this variable at all and no `extraEnv` hatch, so
+a section telling an operator to "enable it when clients can send proofs"
+described something no Helm install could do. `tests/spec/chart_control_switch_wiring_test.go`
+is the gate that now fails when a control switch the binary reads is missing from
+the chart.
+
 ### 4. Install the Helm Chart
 
 ```bash
