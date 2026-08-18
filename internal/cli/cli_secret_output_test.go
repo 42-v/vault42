@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -136,5 +137,41 @@ func TestRotateJWKS_NeverPrintsThePrivateKey(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "--output") {
 		t.Errorf("rotate-jwks did not tell the operator to name a key file: %s", errOut)
+	}
+}
+
+// --output is now the only way the signing key leaves the process, which makes
+// how it opens that path part of the same finding. os.WriteFile follows a
+// symlink and keeps a pre-existing file's mode, so a path an attacker had
+// prepared received the private key at whatever permissions they chose — the
+// same disclosure as printing it, one directory along. cmd/recover's openOutput
+// already solves this with O_EXCL, which fails with EEXIST on a symlink whether
+// or not its target exists.
+func TestRotateJWKS_OutputDoesNotFollowASymlinkOrClobber(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-readable")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "signing-key.pem")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	c, _, _, _, _ := newTestCLI()
+	var stderr string
+	captureStdout(t, func() {
+		stderr = captureStderr(t, func() { c.rotateJWKS([]string{"--output", link}) })
+	})
+
+	if !strings.Contains(stderr, "ERROR:") {
+		t.Errorf("rotate-jwks did not refuse a symlinked --output: %q", stderr)
+	}
+	got, err := os.ReadFile(target) // #nosec G304 -- path built by the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("the private key was written through the symlink: %d bytes", len(got))
 	}
 }

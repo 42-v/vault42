@@ -14,6 +14,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -388,7 +389,7 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	}
 	pemBytes := pem.EncodeToMemory(pemBlock)
 
-	if err := os.WriteFile(output, pemBytes, 0o600); err != nil {
+	if err := writeKeyFileExclusive(output, pemBytes); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
 		return true
 	}
@@ -397,6 +398,25 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	fmt.Fprintln(os.Stderr, "NOTE: Vault generates JWKS keys in memory at startup. To use this key,")
 	fmt.Fprintln(os.Stderr, "configure the key file path and restart the service.")
 	return true
+}
+
+// writeKeyFileExclusive writes a private key to a path the process must create
+// itself.
+//
+// O_EXCL rather than os.WriteFile, on the model of cmd/recover's openOutput: it
+// refuses to follow a symlink planted at the path, because open(2) with
+// O_CREAT|O_EXCL fails with EEXIST on a symlink whether or not its target
+// exists, and os.WriteFile would otherwise have written the signing key through
+// it at whatever mode the attacker's file already carried. It also refuses to
+// truncate a key that is already there, which would leave the previous key's
+// mode in place and the previous key gone.
+func writeKeyFileExclusive(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator names their own key file
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	return errors.Join(werr, f.Close())
 }
 
 // argon2idPrefix marks the PHC-encoded form of an Argon2id hash and is what
