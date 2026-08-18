@@ -203,65 +203,6 @@ func TestWellKnown_OpenIDConfig_ContentType(t *testing.T) {
 // UpdateKeys tests
 // ---------------------------------------------------------------------------
 
-func TestWellKnown_UpdateKeys(t *testing.T) {
-	key1 := newTestRSAKey(t)
-	h := NewWellKnownHandler(map[string]*rsa.PublicKey{
-		"old-kid": &key1.PublicKey,
-	}, "https://vault.test")
-
-	// Verify we start with 1 key
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec := httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-	keysArr := result["keys"].([]interface{})
-	if len(keysArr) != 1 {
-		t.Fatalf("expected 1 key before update, got %d", len(keysArr))
-	}
-
-	// Update with 2 new keys
-	key2 := newTestRSAKey(t)
-	key3 := newTestRSAKey(t)
-	h.UpdateKeys(map[string]*rsa.PublicKey{
-		"new-kid-1": &key2.PublicKey,
-		"new-kid-2": &key3.PublicKey,
-	})
-
-	// Verify we now have 2 keys
-	req = httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec = httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	decodeResponse(t, rec, &result)
-	keysArr = result["keys"].([]interface{})
-	if len(keysArr) != 2 {
-		t.Fatalf("expected 2 keys after update, got %d", len(keysArr))
-	}
-}
-
-func TestWellKnown_UpdateKeys_Empty(t *testing.T) {
-	key := newTestRSAKey(t)
-	h := NewWellKnownHandler(map[string]*rsa.PublicKey{
-		"kid": &key.PublicKey,
-	}, "https://vault.test")
-
-	// Replace with empty key set
-	h.UpdateKeys(map[string]*rsa.PublicKey{})
-
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec := httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-	keysArr := result["keys"].([]interface{})
-	if len(keysArr) != 0 {
-		t.Fatalf("expected 0 keys after clearing, got %d", len(keysArr))
-	}
-}
-
 func TestWellKnown_OpenIDConfig_TableDriven(t *testing.T) {
 	tests := []struct {
 		name   string

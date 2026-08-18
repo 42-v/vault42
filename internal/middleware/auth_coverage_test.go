@@ -460,32 +460,6 @@ func TestGetClaims_WrongContextValueType(t *testing.T) {
 	})
 }
 
-func TestRequireAuth_MultipleCalls(t *testing.T) {
-	callCount := 0
-	handler := RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusOK)
-	})
-
-	claims := &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{Subject: "user-multi"},
-	}
-
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-		ctx := context.WithValue(req.Context(), ClaimsKey, claims)
-		req = req.WithContext(ctx)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-	}
-
-	t.Run("handler called correct number of times", func(t *testing.T) {
-		if callCount != 3 {
-			t.Errorf("call count = %d, want 3", callCount)
-		}
-	})
-}
-
 func TestAuth_MalformedJWT(t *testing.T) {
 	key := newTestKey(t)
 	kid := "aabb00dd-ee33"

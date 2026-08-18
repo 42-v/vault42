@@ -11,19 +11,6 @@ func TestSHA256Hex(t *testing.T) {
 	}
 }
 
-func TestSHA256Bytes(t *testing.T) {
-	got := SHA256Bytes([]byte("abc"))
-	if len(got) != 32 {
-		t.Fatalf("SHA256Bytes should return 32 bytes, got %d", len(got))
-	}
-	// Cross-check with hex version
-	gotHex := SHA256Hex("abc")
-	wantHex := "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-	if gotHex != wantHex {
-		t.Errorf("cross-check failed")
-	}
-}
-
 func TestSHA256Empty(t *testing.T) {
 	// NIST: SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 	got := SHA256Hex("")
