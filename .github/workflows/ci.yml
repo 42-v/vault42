@@ -321,23 +321,75 @@ jobs:
           install-mode: goinstall
           args: --timeout 15m --new-from-merge-base=origin/${{ env.BASE_REF }}
 
-      - name: Full run (report only)
-        continue-on-error: true
+      # This used to be `continue-on-error: true` with a summary table, which is
+      # how the tree reached 109 findings: a step that cannot fail records a
+      # backlog, it does not hold one. It is a ratchet now. Each linter's count
+      # may fall and may not rise, so the backlog can only shrink while it is
+      # being burned down, and the step still prints the same table.
+      #
+      # This does not replace --new-from-merge-base above, it covers the other
+      # half: that gate requires the diff to be clean, this one requires the
+      # rest of the tree not to get worse behind it.
+      #
+      # When .golangci-baseline.json reaches zero everywhere, delete it and make
+      # this a plain `golangci-lint run ./...`.
+      - name: Full run
         shell: bash
         run: |
+          set -uo pipefail
           golangci-lint run --timeout 15m --output.json.path=golangci.json ./... || true
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import collections, json, os
-          issues = json.load(open("golangci.json")).get("Issues") or []
-          print(f"### golangci-lint: {len(issues)} pre-existing issues\n")
-          by_linter = collections.Counter(i["FromLinter"] for i in issues)
+          if [ ! -s golangci.json ]; then
+            echo "::error::golangci-lint produced no report. That is a failed run," \
+                 "not a clean one."
+            exit 1
+          fi
+          python3 - golangci.json .golangci-baseline.json <<'PY'
+          import collections, json, os, sys
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  report = json.load(fh)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"golangci report is not valid JSON, so the run did not complete: {exc}")
+
+          issues = report.get("Issues")
+          if issues is None:
+              sys.exit("golangci report has no Issues key; the format changed or the run aborted")
+
+          baseline = json.load(open(sys.argv[2]))["findings_by_linter"]
+          counts = collections.Counter(i["FromLinter"] for i in issues)
           by_pkg = collections.Counter(os.path.dirname(i["Pos"]["Filename"]) for i in issues)
-          print("| linter | count |\n|---|---|")
-          for k, n in by_linter.most_common():
-              print(f"| `{k}` | {n} |")
-          print("\n| package | count |\n|---|---|")
+
+          summary = open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a")
+          print(f"### golangci-lint: {len(issues)} findings "
+                f"(baseline {sum(baseline.values())})\n", file=summary)
+          print("| linter | count | baseline |\n|---|---|---|", file=summary)
+          for k in sorted(set(counts) | set(baseline)):
+              print(f"| `{k}` | {counts.get(k, 0)} | {baseline.get(k, 0)} |", file=summary)
+          print("\n| package | count |\n|---|---|", file=summary)
           for k, n in by_pkg.most_common(25):
-              print(f"| `{k}` | {n} |")
+              print(f"| `{k}` | {n} |", file=summary)
+
+          worse = {k: (n, baseline.get(k, 0)) for k, n in counts.items()
+                   if n > baseline.get(k, 0)}
+          for linter, (now, was) in sorted(worse.items()):
+              print(f"::error::golangci-lint {linter} rose from {was} to {now}")
+              for i in issues:
+                  if i["FromLinter"] == linter:
+                      pos = i["Pos"]
+                      print(f"    {pos['Filename']}:{pos['Line']} {i['Text']}")
+
+          better = {k: (counts.get(k, 0), n) for k, n in baseline.items()
+                    if counts.get(k, 0) < n}
+          if better:
+              for linter, (now, was) in sorted(better.items()):
+                  print(f"golangci-lint {linter} fell from {was} to {now}; lower the baseline")
+              print("replacement for findings_by_linter:")
+              print(json.dumps(dict(sorted(counts.items())), indent=2))
+
+          if worse:
+              sys.exit(f"{len(worse)} linter(s) regressed against .golangci-baseline.json")
+          print(f"golangci-lint at or below baseline ({len(issues)} vs {sum(baseline.values())})")
           PY
 
   # govulncheck, gosec and Trivy used to run only at 03:00 UTC on main, so a PR
