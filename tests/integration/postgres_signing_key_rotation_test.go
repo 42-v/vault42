@@ -1,7 +1,11 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,5 +239,135 @@ func TestSigningKeyRotationSurfacesDatabaseFailures(t *testing.T) {
 
 	if kid, err := ks.RotateIfOlderThan(ctx, time.Nanosecond); err == nil {
 		t.Fatalf("RotateIfOlderThan against a closed pool returned (%q, nil), want an error", kid)
+	}
+}
+
+// rotationLogCapture collects what the rotation writes to the standard logger.
+// The unlock failure has no return value and no metric; the log line is the
+// entire observable, so an operator debugging a fleet whose rotations have
+// stopped has nothing else to read.
+type rotationLogCapture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *rotationLogCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *rotationLogCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// TestSigningKeyRotationSurvivesItsSessionDyingUnderTheLock is the failure a
+// rotation meets in a real fleet rather than in a closed-pool unit test.
+//
+// RotateIfOlderThan takes a SESSION advisory lock, so the lock lives on one
+// connection and travels with it. A rotation whose backend is terminated while
+// it holds that lock — a failover, an idle-session timeout, an operator running
+// pg_terminate_backend on what looks like a stuck query — has to do two things.
+// It has to report the failure rather than return ("", nil), because "nothing
+// was due" is indistinguishable from a healthy check and would let a deployment
+// sit on one signing key with clean logs. And its unlock, which cannot succeed
+// on a dead connection, has to say so: a session lock believed released but
+// still held would block every later rotation in the fleet, and the release is
+// deferred with no error to return.
+//
+// The kill window is made deterministic by taking an ACCESS EXCLUSIVE lock on
+// auth.signing_keys first. The rotation then blocks inside its age query with
+// the advisory lock already taken, which is the only moment its session can be
+// killed with the lock held.
+func TestSigningKeyRotationSurvivesItsSessionDyingUnderTheLock(t *testing.T) {
+	pool, _, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+	truncateSigningKeys(t, pool)
+
+	ks := newKeyStore(t, pool, time.Hour, 0x77)
+	defer ks.Stop()
+	if err := ks.EnsureKey(ctx, nil); err != nil {
+		t.Fatalf("EnsureKey: %v", err)
+	}
+
+	blocker, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire the blocking session: %v", err)
+	}
+	defer blocker.Release()
+	tx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the blocking transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `LOCK TABLE auth.signing_keys IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock auth.signing_keys: %v", err)
+	}
+
+	var logs rotationLogCapture
+	priorOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(priorOutput) })
+
+	type outcome struct {
+		kid string
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		kid, err := ks.RotateIfOlderThan(ctx, time.Nanosecond)
+		done <- outcome{kid, err}
+	}()
+
+	// Wait for the rotation's own backend to be the one blocked on the table
+	// lock, then kill it. Matching on the age query's text keeps this off the
+	// keystore's refresh loop, which reads the same table.
+	var pid int32
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		err := pool.QueryRow(ctx, `
+			SELECT pid FROM pg_stat_activity
+			WHERE state = 'active'
+			  AND query LIKE '%SELECT created_at FROM auth.signing_keys%'
+			  AND pid <> pg_backend_pid()
+			LIMIT 1`).Scan(&pid)
+		if err == nil && pid != 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("the rotation never reached its age query, so its session was never killed under the lock")
+	}
+	if _, err := pool.Exec(ctx, `SELECT pg_terminate_backend($1)`, pid); err != nil {
+		t.Fatalf("terminate the rotation's backend: %v", err)
+	}
+
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("RotateIfOlderThan never returned after its session was terminated")
+	}
+	_ = tx.Rollback(context.Background())
+
+	if got.err == nil {
+		t.Fatalf("RotateIfOlderThan returned (%q, nil) after its session died mid-query; a rotation "+
+			"that reports no error and no kid is indistinguishable from one that found nothing due, "+
+			"and the deployment would stay on one signing key with clean logs", got.kid)
+	}
+	if !strings.Contains(got.err.Error(), "read active key age") {
+		t.Errorf("error = %q, want it to name the age query that failed", got.err)
+	}
+	if got.kid != "" {
+		t.Errorf("RotateIfOlderThan returned kid %q alongside an error", got.kid)
+	}
+	if out := logs.String(); !strings.Contains(out, "keystore rotation: unlock failed") {
+		t.Errorf("the failed advisory unlock was not reported. A session lock the fleet believes is "+
+			"released and is not blocks every later rotation, and this log line is the only place it "+
+			"is visible. Captured:\n%s", out)
 	}
 }
