@@ -102,6 +102,41 @@ Secret name to use
 {{- end }}
 
 {{/*
+Every key the vault Deployment mounts out of that Secret, in the order its env
+block names them, under the same conditions.
+
+This exists because NOTES.txt used to carry a hand-written list of five, and the
+Deployment mounts eight. The two the list left out are not cosmetic: without
+`pepper` the production profile refuses to start at all ("VAULT_PEPPER_FILE
+required (>=32 bytes) in production profile"), so an operator following the
+instructions gets CrashLoopBackOff on a fresh install; and without `signing-key`
+the process only warns, then each of the three default replicas signs with its
+own ephemeral key, so a token minted by one is rejected by the other two.
+
+Both templates still write their own conditions -- a helper cannot emit an env
+block and a prose list from one source -- so the drift is closed by a gate
+instead: tests/spec/chart_secret_key_notes_test.go renders this helper and the
+Deployment side by side across the value profiles that switch each condition,
+and fails when the two disagree.
+*/}}
+{{- define "vault.requiredSecretKeys" -}}
+{{- $keys := list .Values.secrets.keys.masterKey .Values.secrets.keys.dbMigPassword .Values.secrets.keys.dbAppPassword .Values.secrets.keys.hmacSecret -}}
+{{- if .Values.secrets.keys.adminToken -}}
+{{- $keys = append $keys .Values.secrets.keys.adminToken -}}
+{{- end -}}
+{{- if and (eq .Values.cache.backend "redis") .Values.secrets.keys.redisPassword -}}
+{{- $keys = append $keys .Values.secrets.keys.redisPassword -}}
+{{- end -}}
+{{- if .Values.secrets.keys.signingKey -}}
+{{- $keys = append $keys .Values.secrets.keys.signingKey -}}
+{{- end -}}
+{{- if .Values.secrets.keys.pepper -}}
+{{- $keys = append $keys .Values.secrets.keys.pepper -}}
+{{- end -}}
+{{- join ", " $keys -}}
+{{- end }}
+
+{{/*
 Secret name for the honeypot instance.
 
 Deliberately not the release Secret. The honeypot mounted the production one, so

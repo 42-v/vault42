@@ -3,8 +3,23 @@ The Vault has been deployed.
 {{ if not .Values.secrets.existingSecret -}}
 0. This chart mounts credentials, it does not create them. If the Secret
    {{ include "vault.secretName" . }} does not exist in {{ .Release.Namespace }}, the pods stay in
-   ContainerCreating with the reason only in `kubectl describe pod`. It needs the
-   keys: {{ .Values.secrets.keys.masterKey }}, {{ .Values.secrets.keys.dbMigPassword }}, {{ .Values.secrets.keys.dbAppPassword }}, {{ .Values.secrets.keys.hmacSecret }}{{ if .Values.secrets.keys.adminToken }}, {{ .Values.secrets.keys.adminToken }}{{ end }}.
+   ContainerCreating with the reason only in `kubectl describe pod`. It needs
+   every key this release mounts, which is all of these:
+
+     {{ include "vault.requiredSecretKeys" . }}
+
+   That is the whole list, not the interesting part of it. Two of them are easy
+   to leave out and neither failure names itself:
+{{- if .Values.secrets.keys.pepper }}
+   without {{ .Values.secrets.keys.pepper }} the process refuses to start in the production profile
+   ("VAULT_PEPPER_FILE required (>=32 bytes)"), so a fresh install is a
+   CrashLoopBackOff;
+{{- end }}
+{{- if .Values.secrets.keys.signingKey }}
+   without {{ .Values.secrets.keys.signingKey }} it starts, logs one warning, and gives each of the
+   {{ .Values.replicaCount }} replicas its own ephemeral signing key, so a token minted by one is
+   rejected by the others.
+{{- end }}
 {{- if .Values.bridge.enabled }}
    The honeypot needs its own, {{ include "vault.honeypotSecretName" . }}, with the same key
    names and different values. It is the component attackers are routed into, so
