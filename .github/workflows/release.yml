@@ -109,11 +109,17 @@ jobs:
           TAG: ${{ steps.parse.outputs.tag }}
         run: |
           set -eu
-          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" \
-            || { echo "::error::$TAG does not exist on origin; a release publishes a tag that was already pushed"; exit 1; }
+          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" || {
+            echo "::error::$TAG does not exist on origin; a release publishes" \
+                 "a tag that was already pushed"
+            exit 1
+          }
           tagged=$(git rev-list -n 1 "$TAG")
-          [ "$tagged" = "$GITHUB_SHA" ] \
-            || { echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA; re-run the workflow with $TAG as the selected ref"; exit 1; }
+          [ "$tagged" = "$GITHUB_SHA" ] || {
+            echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA;" \
+                 "re-run the workflow with $TAG as the selected ref"
+            exit 1
+          }
 
       # A tag on a branch that never merged would publish code main does not
       # have, under a version number main will later reuse.
@@ -159,6 +165,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      # tests/spec renders the chart and asserts on the rendered manifests. With
+      # no helm on PATH those assertions skip, and a skipped assertion reports
+      # green, which is indistinguishable from one that ran and passed. Three
+      # separate gates in this repository turned out to be incapable of failing;
+      # a silent skip is the same defect wearing a different hat.
+      #
+      # The version matches the chart jobs so CI renders with one helm, not two.
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      # setup-helm failing soft would put us straight back to silent skips.
+      - name: helm is on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v helm >/dev/null || {
+            echo "::error::helm is not on PATH; the rendered-manifest assertions" \
+                 "in tests/spec would skip and report green"
+            exit 1
+          }
+          helm version --short
 
       # The same canonical run ci.yml's coverage-gate performs, on the tagged ref.
       - name: Canonical coverage run
@@ -641,10 +670,10 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name:    ${{ needs.detect.outputs.tag }}
-          name:        Vault42 ${{ needs.detect.outputs.version }}
-          prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
-          make_latest:  ${{ !contains(needs.detect.outputs.version, '-') }}
+          tag_name: ${{ needs.detect.outputs.tag }}
+          name: Vault42 ${{ needs.detect.outputs.version }}
+          prerelease: ${{ contains(needs.detect.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.detect.outputs.version, '-') }}
           generate_release_notes: true
           files: dist/*
           body: |
