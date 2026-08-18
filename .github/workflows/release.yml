@@ -50,6 +50,7 @@ jobs:
   detect:
     name: Resolve release version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -143,6 +144,7 @@ jobs:
     name: Coverage gate
     needs: detect
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -178,6 +180,7 @@ jobs:
     name: Build & push images (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -346,6 +349,7 @@ jobs:
     name: Binaries, checksums & SBOMs
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # cosign keyless blob signing
@@ -452,6 +456,7 @@ jobs:
     name: Publish Helm chart
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -532,6 +537,7 @@ jobs:
     name: NuGet (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # NuGet trusted publishing
@@ -584,6 +590,7 @@ jobs:
     name: GitHub release
     needs: [detect, images, artifacts, chart]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # The only job in this file that writes to the repository.
     permissions:
       contents: write

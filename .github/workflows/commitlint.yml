@@ -11,6 +11,7 @@ jobs:
   commitlint:
     name: Validate Conventional Commits
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -47,6 +48,7 @@ jobs:
   pr-title:
     name: Validate PR Title
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # The action defaults to the conventional-commit-types list, which has no
       # `security`. commitlint.config.js does allow it, so a `security:` title
