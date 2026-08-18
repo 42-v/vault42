@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { use2FA, useWebAuthn, useConfirm, VaultAuthGuard, useT } from '@vault42/vue'
 import QRCode from 'qrcode'
 import { friendlyError } from '../errorMessages'
+import { useModalFocus } from '../composables/useModalFocus'
 
 const { totpSetup, backupCodes, mfaStatus, isLoading, error, isVerified, setupTOTP, verifyTOTP, disableTOTP, generateBackupCodes, fetchMFAStatus } = use2FA()
 const {
@@ -79,6 +80,8 @@ function cancelConfirm() {
   confirmPassword.value = ''
 }
 
+const { dialogRef } = useModalFocus(showConfirmDialog, cancelConfirm)
+
 async function handleVerify() {
   if (code.value.length !== 6) return
   await verifyTOTP(code.value)
@@ -150,7 +153,7 @@ function copyBackupCodes() {
         <!-- Confirmation Dialog -->
         <Teleport to="body">
           <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-            <div class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+            <div ref="dialogRef" class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
               <h3 id="confirm-dialog-title" class="text-lg font-semibold">{{ t('twoFactor.confirmPassword') }}</h3>
               <p class="text-sm text-vault42-muted">
                 {{ t('twoFactor.confirmPasswordDesc') }}
@@ -158,13 +161,19 @@ function copyBackupCodes() {
               <div v-if="confirmError" class="vault42-alert-error text-sm" role="alert">
                 {{ friendlyError(confirmError.code) }}
               </div>
-              <input
-                v-model="confirmPassword"
-                type="password"
-                :placeholder="t('twoFactor.enterPassword')"
-                class="vault42-input w-full"
-                @keyup.enter="handleConfirm"
-              />
+              <div>
+                <label for="confirm-password" class="vault42-label">{{ t('twoFactor.enterPassword') }}</label>
+                <input
+                  id="confirm-password"
+                  v-model="confirmPassword"
+                  type="password"
+                  autocomplete="current-password"
+                  :aria-invalid="confirmError ? 'true' : undefined"
+                  :placeholder="t('twoFactor.enterPassword')"
+                  class="vault42-input w-full"
+                  @keyup.enter="handleConfirm"
+                />
+              </div>
               <div class="flex gap-3 justify-end">
                 <button class="vault42-btn-outline vault42-btn-sm" @click="cancelConfirm">{{ t('common.cancel') }}</button>
                 <button

@@ -584,4 +584,22 @@ describe('BlobsView', () => {
 
     expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
   })
+
+  it('closes the delete modal on Escape without deleting', async () => {
+    mockBlobs.value = [
+      { id: 'blob-1', label: 'doc.pdf', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    const wrapper = mountView()
+
+    await wrapper.findAll('button').filter(b => b.text() === 'Delete')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+    expect(mockDeleteBlob).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

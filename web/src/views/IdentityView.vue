@@ -3,10 +3,12 @@ import { onMounted, ref, reactive } from 'vue'
 import { useIdentity, VaultAuthGuard, useT } from '@vault42/vue'
 import type { IdentityData } from '@vault42/vue'
 import { friendlyError } from '../errorMessages'
+import { useModalFocus } from '../composables/useModalFocus'
 
 const { identity, isLoading, isSaving, error, fetchIdentity, saveIdentity, deleteIdentity } = useIdentity()
 const { t } = useT()
 const showDeleteConfirm = ref(false)
+const { dialogRef } = useModalFocus(showDeleteConfirm, () => { showDeleteConfirm.value = false })
 const saveSuccess = ref(false)
 
 const form = reactive<IdentityData>({
@@ -179,8 +181,8 @@ async function handleDelete() {
           <!-- Delete confirmation -->
           <Teleport to="body">
             <div v-if="showDeleteConfirm" class="vault42-modal-overlay" @click.self="showDeleteConfirm = false">
-              <div class="vault42-modal" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold mb-2">{{ t('identity.deleteTitle') }}</h3>
+              <div ref="dialogRef" class="vault42-modal" role="dialog" aria-modal="true" aria-labelledby="identity-delete-dialog-title">
+                <h3 id="identity-delete-dialog-title" class="text-lg font-semibold mb-2">{{ t('identity.deleteTitle') }}</h3>
                 <p class="text-sm text-vault42-muted mb-4">{{ t('identity.deleteConfirm') }}</p>
                 <div class="flex gap-3">
                   <button class="vault42-btn-danger" @click="handleDelete">{{ t('common.delete') }}</button>
