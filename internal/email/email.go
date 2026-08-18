@@ -1,7 +1,7 @@
 // Package email provides email sending capabilities for The Vault via a
 // pluggable [Sender] interface. Implementations include [SMTPSender] and
 // [SendGridSender]. Auth emails (verification, password reset, MFA code,
-// lockout) are rendered by [TemplateRenderer] / [RenderTemplate], and the
+// lockout) are rendered by [TemplateRenderer], and the
 // per-app white-label layer is applied by [Mailer].
 package email
 

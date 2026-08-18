@@ -14,9 +14,9 @@ import (
 // ever reads the variable never calls Do, so it takes no ordering from the Once
 // at all, and the write to the pointer races with its read.
 //
-// The read side is not hypothetical. RenderTemplate is the package-level entry
-// point used all over the product, and NewMailer falls back to the same
-// variable whenever it is handed a nil renderer. Both are reached from
+// The read side is not hypothetical. NewMailer falls back to the same variable
+// whenever it is handed a nil renderer, which is how internal/service and
+// internal/handler build theirs. It is reached from
 // goroutines that outlive the request that spawned them: internal/service
 // finishes verification and password-reset mail asynchronously so the HTTP
 // handler can return, and those goroutines are still running while startup
@@ -66,22 +66,23 @@ func TestSetRenderer_PublicationIsSafeForReadersThatNeverCallOnce(t *testing.T) 
 	}()
 
 	// The readers: goroutines that never call Do and therefore inherit no
-	// ordering from the Once. RenderTemplate and NewMailer are separate reads of
-	// the same variable, so both are driven.
+	// ordering from the Once. NewMailer is the read that ships, so it is the one
+	// driven, and the renderer it settled on is used to render.
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 			for n := 0; n < emailPublicationReads; n++ {
-				subject, html, text := RenderTemplate(TemplateVerification, TemplateData{AppName: "PublicationTest"})
+				m := NewMailer(nil, nil, nil, Branding{}, nil)
+				if m.renderer == nil {
+					t.Error("NewMailer fell back to a nil package renderer, which means it read the variable before publication finished")
+					return
+				}
+				subject, html, text := m.renderer.Render(TemplateVerification, TemplateData{AppName: "PublicationTest"})
 				if subject == "" || html == "" || text == "" {
 					t.Errorf("a concurrently published renderer produced an empty render (subject=%q html=%d bytes text=%d bytes)",
 						subject, len(html), len(text))
-					return
-				}
-				if m := NewMailer(nil, nil, nil, Branding{}, nil); m.renderer == nil {
-					t.Error("NewMailer fell back to a nil package renderer, which means it read the variable before publication finished")
 					return
 				}
 			}

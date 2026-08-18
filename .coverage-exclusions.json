@@ -299,7 +299,7 @@
     {
       "package": "internal/email",
       "file": "internal/email/templates.go",
-      "line": 276,
+      "line": 272,
       "occurrence": 1,
       "source": "\t\tpanic(\"email: failed to initialize default templates: \" + err.Error())",
       "bucket": "C",
