@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -244,6 +245,10 @@ func (s *BlobService) decryptBlob(blob *model.Blob, pseudo string) (data []byte,
 	if err != nil {
 		return nil, "", "", fmt.Errorf("blob decrypt: %w", err)
 	}
+	// The compressed plaintext is the user's blob. It is ours, it does not
+	// escape this function, and the decompressor is finished with it by the time
+	// this runs (AR-25, ASVS V8.3.2).
+	defer config.ZeroBytes(compressed)
 
 	// Decompress with size limit to prevent decompression bombs.
 	// 10 MB is generous for user blobs but prevents unbounded memory use.
@@ -268,7 +273,9 @@ func (s *BlobService) decryptBlob(blob *model.Blob, pseudo string) (data []byte,
 		if err != nil {
 			return nil, "", "", fmt.Errorf("blob label decrypt: %w", err)
 		}
+		// string() copies, so the label survives the wipe.
 		label = string(labelBytes)
+		config.ZeroBytes(labelBytes)
 	}
 
 	return decompressed, label, blob.Checksum, nil
@@ -307,6 +314,10 @@ func (s *BlobService) List(ctx context.Context, userID string) ([]*BlobMeta, *Bl
 			labelBytes, err := vaultcrypto.Decrypt(b.LabelEnc, s.masterKey, labelAAD)
 			if err == nil {
 				meta.Label = string(labelBytes)
+				// Wiped here rather than deferred: this runs once per blob in
+				// the listing, and a defer would hold every label until the
+				// whole list is built.
+				config.ZeroBytes(labelBytes)
 			}
 		}
 		metas = append(metas, meta)
