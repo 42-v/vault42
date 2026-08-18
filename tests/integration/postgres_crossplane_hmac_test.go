@@ -173,7 +173,6 @@ func TestDivergentPlaneSecretsEraseNothingAndReportSuccess(t *testing.T) {
 		userID := crossPlaneFixture(t, pool, planeSecretA)
 
 		err := crossPlaneErasure(pool, planeSecretB).DeleteAccount(ctx, userID, "admin:test", "user_request")
-
 		if err != nil {
 			t.Fatalf("this test measures the silent case; the cascade reported: %v", err)
 		}

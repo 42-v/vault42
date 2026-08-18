@@ -41,7 +41,7 @@ const (
 //
 // Per package rather than per function: the two binaries read the secret and
 // run the check in the same main(), but a refactor that lifts either into a
-// helper is a reorganisation, not a regression, and a gate that failed on it
+// helper is a reorganization, not a regression, and a gate that failed on it
 // would be noise.
 func TestEveryPlaneThatDerivesPseudonymsChecksTheOther(t *testing.T) {
 	root := repoRoot(t)

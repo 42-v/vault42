@@ -22,7 +22,7 @@ const gatewayHMACSecret = "0123456789abcdef"
 
 // A recorded fingerprint belonging to another secret is fatal. Refusing the
 // whole gateway is deliberate: the alternative is a running gateway whose
-// erasure endpoint answers 200 to requests it silently does not fulfil.
+// erasure endpoint answers 200 to requests it silently does not fulfill.
 func TestAGatewayDisagreeingWithTheVaultPlaneRefusesToStart(t *testing.T) {
 	const otherPlane = "ffeeddccbbaa99887766554433221100"
 	f := newFixture(t)

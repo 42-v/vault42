@@ -102,7 +102,7 @@ func containerCandidates() []string {
 
 // pickContainerHost returns the first candidate that answers, and a trace line
 // per candidate saying what it did. It is separate from resolveContainerRuntime
-// so the walk-past-a-wedged-socket behaviour can be tested against sockets a
+// so the walk-past-a-wedged-socket behavior can be tested against sockets a
 // test controls rather than against whatever the host happens to be running.
 func pickContainerHost(candidates []string) containerRuntime {
 	rt := containerRuntime{}
