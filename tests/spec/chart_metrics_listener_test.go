@@ -38,7 +38,7 @@ const metricsPath = "/metrics"
 // the Go source rather than repeating it, so renaming the constant without
 // touching the chart fails here instead of in a cluster.
 func TestTheChartSetsTheEnvTheServerActuallyReads(t *testing.T) {
-	src := readFileString(t, filepath.Join(repoRoot(t), "internal", "server", "server.go"))
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), "internal", "server", "server.go"))
 
 	match := regexp.MustCompile(`metricsAddrEnv\s*=\s*"([^"]+)"`).FindStringSubmatch(src)
 	if match == nil {
@@ -48,8 +48,8 @@ func TestTheChartSetsTheEnvTheServerActuallyReads(t *testing.T) {
 	}
 	env := match[1]
 
-	configmap := readFileString(t, filepath.Join(repoRoot(t), chartDir, "templates", "configmap.yaml"))
-	if !strings.Contains(configmap, env+":") {
+	configmap := commentFreeSource(t, filepath.Join(repoRoot(t), chartDir, "templates", "configmap.yaml"))
+	if !containsIdentifier(configmap, env+":") {
 		t.Errorf("charts/vault/templates/configmap.yaml does not set %s. Without it the "+
 			"listener keeps its own default, which is loopback, and every scrape from "+
 			"Prometheus is refused at connect while the pod reports perfectly healthy.", env)
@@ -58,7 +58,7 @@ func TestTheChartSetsTheEnvTheServerActuallyReads(t *testing.T) {
 	// The default is loopback on purpose. A chart that leaves it there ships a
 	// scrape target nothing outside the pod can reach.
 	defaultMatch := regexp.MustCompile(`defaultMetricsAddr\s*=\s*"([^"]+)"`).FindStringSubmatch(src)
-	if defaultMatch != nil && strings.Contains(configmap, env+": \""+defaultMatch[1]+"\"") {
+	if defaultMatch != nil && containsIdentifier(configmap, env+": \""+defaultMatch[1]+"\"") {
 		t.Errorf("charts/vault/templates/configmap.yaml sets %s to the server's own default "+
 			"%q, which binds loopback. Nothing outside the pod can reach that, so the "+
 			"ServiceMonitor below resolves to a port that refuses every connection.",

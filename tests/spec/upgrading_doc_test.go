@@ -46,7 +46,7 @@ func TestUpgradingDocIsReferencedWhereAnOperatorLooks(t *testing.T) {
 	}
 
 	for file, reader := range referencesToUpgradingDoc {
-		if !strings.Contains(readFileString(t, filepath.Join(root, file)), upgradingDoc) {
+		if !strings.Contains(commentFreeSource(t, filepath.Join(root, file)), upgradingDoc) {
 			t.Errorf("%s does not mention %s, so it is invisible to %s.", file, upgradingDoc, reader)
 		}
 	}

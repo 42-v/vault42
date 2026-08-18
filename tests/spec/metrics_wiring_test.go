@@ -63,7 +63,7 @@ func TestEveryArgon2SignalReachesTheCollector(t *testing.T) {
 			"naming changed and this gate has stopped seeing what it guards")
 	}
 
-	wiring := readFileString(t, filepath.Join(root, "cmd", "vault", "main.go"))
+	wiring := commentFreeSource(t, filepath.Join(root, "cmd", "vault", "main.go"))
 	for _, name := range accessors {
 		if reason, exempt := argon2AccessorsNotScraped[name]; exempt {
 			if reason == "" {
@@ -71,7 +71,7 @@ func TestEveryArgon2SignalReachesTheCollector(t *testing.T) {
 			}
 			continue
 		}
-		if !strings.Contains(wiring, "vaultcrypto."+name) {
+		if !containsIdentifier(wiring, "vaultcrypto."+name) {
 			t.Errorf("internal/crypto exports %s and cmd/vault/main.go never passes it to the "+
 				"metrics collector, so the signal is computed on every request and read by "+
 				"nobody. Wire it, or add %q to argon2AccessorsNotScraped with the reason it is "+
@@ -85,7 +85,7 @@ func TestEveryArgon2SignalReachesTheCollector(t *testing.T) {
 // function that no longer exists is an exemption a future accessor could inherit
 // by reusing the name.
 func TestTheArgon2ExemptionListHasNoStaleEntries(t *testing.T) {
-	src := readFileString(t, filepath.Join(repoRoot(t), "internal", "crypto", "argon2.go"))
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), "internal", "crypto", "argon2.go"))
 	for name := range argon2AccessorsNotScraped {
 		if !strings.Contains(src, "func "+name+"(") {
 			t.Errorf("argon2AccessorsNotScraped names %q, which internal/crypto no longer "+

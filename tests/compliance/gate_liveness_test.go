@@ -1165,3 +1165,219 @@ func skipSites(t *testing.T) []skipSite {
 	}
 	return out
 }
+
+// --- 7. A comment satisfies a substring assertion ---------------------------
+//
+// tests/spec asserts most of its properties by reading a production file and
+// asking whether a construct is in it. Read raw, "is it in the file" is answered
+// yes by a sentence describing the construct, by a commented-out draft of it,
+// and by the note explaining why it was taken out. The gate then certifies a
+// claim the code does not make.
+//
+// The canonical instance is one level up from here: a comment on namespace() in
+// internal/middleware/ratelimit.go argued the fallback was safe because
+// TestRateLimitersAreNamespaced asserted it, and for weeks the only occurrence
+// of that name in the tree was the sentence making the claim. Check 5 above
+// catches that one. This catches the same shape in a chart template, a
+// Dockerfile, a migration and a Go file: the line in the template that explains
+// what the template no longer does still contains the words the gate looks for.
+//
+// tests/spec resolves it with commentFreeSource, which blanks comments and
+// preserves byte offsets. The rule here is that a text scan may not run on a
+// read that did not go through it.
+//
+// Scope: tests/spec only, and deliberately so rather than by oversight.
+// tests/compliance reads production source through readProductionSource in over
+// a hundred places and has the same exposure; converting it is its own piece of
+// work with its own findings, and is recorded as such rather than half-done
+// here.
+
+// textScanners are the calls that answer "does this text contain that" — the
+// question a comment answers wrongly.
+var textScanners = map[string]struct{}{
+	"Contains": {}, "Index": {}, "LastIndex": {}, "Count": {}, "Split": {}, "SplitN": {},
+	"containsIdentifier": {},
+}
+
+// rawSourceReaders return production source with its comments intact.
+var rawSourceReaders = map[string]struct{}{"readFileString": {}, "ReadFile": {}}
+
+// sourceSanitizers return source a text scan may be run on.
+var sourceSanitizers = map[string]struct{}{
+	"commentFreeSource": {}, "blankComments": {}, "withoutComments": {}, "stripSQLComments": {},
+}
+
+// rawSourceScanByDesign are the text scans allowed to run on an unsanitized
+// read, keyed by "<repo-relative file>:<enclosing function>", each with why.
+//
+// Empty on purpose: every one of the 22 found when this check was written was
+// fixed rather than exempted. The map and its ratchet exist so that the next one
+// has to be argued for in writing instead of merged in silence.
+var rawSourceScanByDesign = map[string]string{}
+
+func TestGateLiveness_NoSpecGateScansProductionSourceWithItsCommentsIntact(t *testing.T) {
+	scans, sanitized := rawSourceScans(t)
+
+	// If commentFreeSource stopped being used, this check would find nothing to
+	// complain about and report the same green as a clean suite. The number of
+	// sanitized reads is therefore the floor: it can rise, and it cannot fall
+	// to nothing without somebody noticing.
+	const sanitizedReadFloor = 15
+	if sanitized < sanitizedReadFloor {
+		t.Fatalf("only %d sanitized production reads in tests/spec, below the floor of %d. Either "+
+			"the suite stopped stripping comments before scanning, or this scan has stopped "+
+			"recognizing that it does; both make every assertion below vacuous",
+			sanitized, sanitizedReadFloor)
+	}
+
+	for _, s := range scans {
+		if reason, exempt := rawSourceScanByDesign[s.key]; exempt {
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("rawSourceScanByDesign[%q] carries no reason. An exemption without one "+
+					"is indistinguishable from an oversight.", s.key)
+			}
+			continue
+		}
+		t.Errorf("%s:%d in %s runs %s over %s, which was read with its comments intact. A "+
+			"construct that appears only in a comment satisfies the assertion, so the gate "+
+			"certifies a claim the file does not make. Read it through commentFreeSource, or add "+
+			"%q to rawSourceScanByDesign with the argument for why the comments have to be there.",
+			s.file, s.line, s.fn, s.scanner, s.target, s.key)
+	}
+}
+
+// TestGateLiveness_NoStaleRawSourceScanExemption deletes an entry whose scan is
+// gone, so an argument written for one read cannot be inherited by the next.
+func TestGateLiveness_NoStaleRawSourceScanExemption(t *testing.T) {
+	scans, _ := rawSourceScans(t)
+	present := map[string]struct{}{}
+	for _, s := range scans {
+		present[s.key] = struct{}{}
+	}
+	for key, reason := range rawSourceScanByDesign {
+		if _, ok := present[key]; !ok {
+			t.Errorf("rawSourceScanByDesign names %q, which no longer scans an unsanitized read. "+
+				"Remove the entry: the list may only shrink. (Reason on file: %s)", key, reason)
+		}
+	}
+}
+
+// rawSourceScan is one text scan over source that still carries its comments.
+type rawSourceScan struct {
+	key     string
+	file    string
+	fn      string
+	line    int
+	scanner string
+	target  string
+}
+
+// rawSourceScans walks tests/spec and returns every text scan over an
+// unsanitized read, together with the number of sanitized reads it saw.
+//
+// Scoped per function rather than per file: a variable holding raw source in one
+// test says nothing about a same-named variable in the next, and treating the
+// file as one scope would report the second as an offender because the first
+// read raw.
+func rawSourceScans(t *testing.T) ([]rawSourceScan, int) {
+	t.Helper()
+
+	corpus := filepath.Join("tests", "spec")
+	dir := filepath.Join(repoRoot(t), corpus)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", corpus, err)
+	}
+
+	var out []rawSourceScan
+	sanitized := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", entry.Name(), err)
+		}
+		rel := filepath.ToSlash(filepath.Join(corpus, entry.Name()))
+
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			raw := map[string]struct{}{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				assign, ok := n.(*ast.AssignStmt)
+				if !ok || len(assign.Rhs) == 0 || len(assign.Lhs) == 0 {
+					return true
+				}
+				call, ok := assign.Rhs[0].(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := callName(call)
+				if _, isSanitizer := sourceSanitizers[name]; isSanitizer {
+					sanitized++
+					return true
+				}
+				if _, isRaw := rawSourceReaders[name]; !isRaw {
+					return true
+				}
+				if ident, ok := assign.Lhs[0].(*ast.Ident); ok && ident.Name != "_" {
+					raw[ident.Name] = struct{}{}
+				}
+				return true
+			})
+
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				name := callName(call)
+				if _, isScan := textScanners[name]; !isScan {
+					return true
+				}
+				// A bare Contains is this package's own helper; a qualified one
+				// has to be strings', because bytes.Contains over source has the
+				// same exposure and a different first argument.
+				if q := selectorName(call.Fun); q != "" && !strings.HasPrefix(q, "strings.") {
+					return true
+				}
+				target := call.Args[0]
+				if slice, ok := target.(*ast.SliceExpr); ok {
+					target = slice.X
+				}
+				scanner := name
+				if q := selectorName(call.Fun); q != "" {
+					scanner = q
+				}
+				record := func(desc string) {
+					out = append(out, rawSourceScan{
+						key:     rel + ":" + fn.Name.Name,
+						file:    rel,
+						fn:      fn.Name.Name,
+						line:    fset.Position(call.Pos()).Line,
+						scanner: scanner,
+						target:  desc,
+					})
+				}
+				switch v := target.(type) {
+				case *ast.Ident:
+					if _, isRaw := raw[v.Name]; isRaw {
+						record(v.Name)
+					}
+				case *ast.CallExpr:
+					if _, isRaw := rawSourceReaders[callName(v)]; isRaw {
+						record(callName(v) + "(...)")
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out, sanitized
+}

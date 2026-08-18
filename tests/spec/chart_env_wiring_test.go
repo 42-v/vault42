@@ -18,7 +18,6 @@ package spec_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -47,10 +46,10 @@ func TestChartsProvideEveryFeatureGatingSecret(t *testing.T) {
 	for template, required := range chartEnvRequirements {
 		t.Run(template, func(t *testing.T) {
 			path := filepath.Join(root, "charts", "vault", "templates", template)
-			src := readFileString(t, path)
+			src := commentFreeSource(t, path)
 
 			for env, capability := range required {
-				if !strings.Contains(src, "name: "+env) {
+				if !containsIdentifier(src, "name: "+env) {
 					t.Errorf("charts/vault/templates/%s does not set %s. The process starts "+
 						"without it and reports healthy, and %s is switched off. An operator "+
 						"discovers that from the failing request, not from the install.",

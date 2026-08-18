@@ -420,7 +420,7 @@ func TestEveryPodTemplateTakesItsSecurityContextFromOneOfTwoPlaces(t *testing.T)
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		src := readFileString(t, filepath.Join(dir, e.Name()))
+		src := commentFreeSource(t, filepath.Join(dir, e.Name()))
 		// "containers:" at pod-template indentation is what marks a file as
 		// carrying a workload. Nothing else in this chart has it.
 		if !strings.Contains(src, "\n      containers:") {
@@ -461,7 +461,7 @@ func TestEveryPodTemplateTakesItsSecurityContextFromOneOfTwoPlaces(t *testing.T)
 // securityContext can only refuse to start a container that was built to need
 // root. Both halves have to hold.
 func TestTheFrontendImageDoesNotRunAsRoot(t *testing.T) {
-	src := readFileString(t, filepath.Join(repoRoot(t), "web", "Dockerfile"))
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), "web", "Dockerfile"))
 
 	if !strings.Contains(src, "nginx-unprivileged") {
 		t.Error("web/Dockerfile no longer builds on an unprivileged nginx base. " +
@@ -501,7 +501,7 @@ func TestTheFrontendKeepsItsWritablePaths(t *testing.T) {
 // builds, a rollback does not roll the frontend back, and the version an
 // incident is reconstructed against is whatever the registry happened to hold.
 func TestTheFrontendImageTagIsPinnedToTheChart(t *testing.T) {
-	src := readFileString(t, filepath.Join(repoRoot(t), chartDir, "templates", "frontend.yaml"))
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), chartDir, "templates", "frontend.yaml"))
 
 	if !strings.Contains(src, ".Chart.AppVersion") {
 		t.Error("charts/vault/templates/frontend.yaml no longer falls back to .Chart.AppVersion " +

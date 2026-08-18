@@ -44,7 +44,7 @@ const devProfile = "dev"
 // than left asserting something no longer true.
 func TestTheRefreshCookieStillCarriesTheHostPrefix(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "internal", "handler", "auth.go")
-	src := readFileString(t, path)
+	src := commentFreeSource(t, path)
 	if !strings.Contains(src, `refreshTokenCookie = "__Host-refresh_token"`) {
 		t.Fatalf("%s no longer declares refreshTokenCookie as \"__Host-refresh_token\". "+
 			"The values gate below exists because a browser discards a __Host- cookie sent "+
@@ -95,7 +95,7 @@ func TestEveryShippedValuesProfileServesSecureCookies(t *testing.T) {
 // it is a restarting pod rather than a failed install.
 func TestTheChartRefusesToRenderNonSecureCookiesOutsideDev(t *testing.T) {
 	path := filepath.Join(repoRoot(t), chartDir, "templates", "configmap.yaml")
-	src := readFileString(t, path)
+	src := commentFreeSource(t, path)
 
 	guard := ""
 	for _, line := range strings.Split(src, "\n") {

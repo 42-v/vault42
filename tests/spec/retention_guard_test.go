@@ -125,7 +125,7 @@ func TestRetentionGuardsCompareTheComputedCutoffNotTheRawInterval(t *testing.T) 
 // above, because the guard itself would still look correct.
 func TestAuditCleanupDeletesOnTheValueItValidated(t *testing.T) {
 	root := repoRoot(t)
-	src := readFileString(t, filepath.Join(root, "migrations", "018_audit_retention_guard_uses_cutoff.sql"))
+	src := commentFreeSource(t, filepath.Join(root, "migrations", "018_audit_retention_guard_uses_cutoff.sql"))
 
 	body := src[strings.Index(src, "CREATE OR REPLACE FUNCTION audit.cleanup_old_entries"):]
 
