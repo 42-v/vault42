@@ -67,9 +67,16 @@ func TestAuditCleanupBatchedDeletesAtMostMaxRows(t *testing.T) {
 
 	// The append-only trigger has to be back on afterwards, or the purge has
 	// left the audit table deletable by anyone who can reach it.
-	var remaining int64
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM audit.audit_log").Scan(&remaining); err != nil {
-		t.Fatalf("count: %v", err)
+	//
+	// audit_log_no_delete is BEFORE DELETE FOR EACH ROW, so it only fires if
+	// the DELETE actually reaches a row. The purge above emptied the table, so
+	// this needs a row inside the horizon to aim at — otherwise the check
+	// passes on a statement that deleted nothing and proves nothing.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO audit.audit_log (id, event_type, timestamp, risk_score)
+		 VALUES (gen_random_uuid(), 'login_failure', NOW(), 0)`,
+	); err != nil {
+		t.Fatalf("seed a live row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, "DELETE FROM audit.audit_log"); err == nil {
 		t.Fatal("a plain DELETE on audit.audit_log succeeded after the batched purge; the " +
@@ -88,13 +95,18 @@ func TestAuditCleanupBatchedKeepsTheHorizonGuard(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	// "1 mon -29 days" is deliberately absent. Whether its cutoff lands in the
+	// future depends on the month the test runs in — that is the whole point of
+	// the bug migration 018 fixed — so a hardcoded verdict for it passes all
+	// year and fails every February. TestAuditCleanupMixedUnitHorizonMatchesThe
+	// Oracle below asks Postgres instead, the way the single-argument form's
+	// test does.
 	for _, tc := range []struct {
 		name     string
 		interval interface{}
 		maxRows  interface{}
 	}{
 		{"a horizon under a day", "12 hours", 100},
-		{"a mixed-unit horizon whose cutoff is in the future", "1 mon -29 days", 100},
 		{"a null horizon", nil, 100},
 		{"a zero batch", "90 days", 0},
 		{"a negative batch", "90 days", -1},
@@ -108,6 +120,48 @@ func TestAuditCleanupBatchedKeepsTheHorizonGuard(t *testing.T) {
 			if err == nil {
 				t.Fatalf("cleanup_old_entries(%v, %v) was accepted; the batched form must carry "+
 					"every guard the unbatched one does", tc.interval, tc.maxRows)
+			}
+		})
+	}
+}
+
+// TestAuditCleanupMixedUnitHorizonMatchesTheOracle is the mixed-unit half of
+// the guard, asked rather than assumed.
+//
+// Comparing two intervals canonicalizes a month to 30 days; subtracting one
+// from NOW() uses the real calendar month. Any interval carrying a month
+// component therefore behaves differently depending on today's date, so the
+// only stable assertion is that the function agrees with the cutoff Postgres
+// actually computes right now. Same shape as the single-argument form's test,
+// for the same reason.
+func TestAuditCleanupMixedUnitHorizonMatchesTheOracle(t *testing.T) {
+	skipIfNoDocker(t)
+
+	pool, _, cleanup := setupPostgres(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, iv := range []string{"1 mon -29 days", "1 mon -28 days", "1 mon -30 days", "2 mons -59 days"} {
+		t.Run(iv, func(t *testing.T) {
+			var wipesRecent bool
+			if err := pool.QueryRow(ctx,
+				"SELECT NOW() - $1::interval > NOW() - INTERVAL '1 day'", iv,
+			).Scan(&wipesRecent); err != nil {
+				t.Fatalf("oracle query for %q: %v", iv, err)
+			}
+
+			var deleted int64
+			err := pool.QueryRow(ctx,
+				"SELECT audit.cleanup_old_entries($1::interval, $2)", iv, 100,
+			).Scan(&deleted)
+
+			if wipesRecent && err == nil {
+				t.Fatalf("cleanup_old_entries(%q, 100) was accepted, but its cutoff is less than "+
+					"a day back — the batched form dropped the guard the unbatched one carries", iv)
+			}
+			if !wipesRecent && err != nil {
+				t.Fatalf("cleanup_old_entries(%q, 100) was rejected (%v), but its cutoff is a full "+
+					"day back, so the sweeper cannot run", iv, err)
 			}
 		})
 	}
