@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -33,6 +32,7 @@ import (
 	pgrepo "github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/server"
 	"github.com/42-v/vault42/internal/service"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // skipIfNoContainerRuntime skips if env flags set.
@@ -43,23 +43,15 @@ func skipIfNoContainerRuntime(t *testing.T) {
 	}
 }
 
-// probeContainerRuntime probes DOCKER_HOST and does a quick docker availability check
-// (testcontainers-go start will further skip if unreachable).
+// probeContainerRuntime skips unless a container daemon answers over its socket.
+//
+// The probe is the API rather than the docker CLI: a machine can have a working
+// daemon and no client binary (and vice versa), and a set DOCKER_HOST used to
+// be trusted without being asked anything at all.
 func probeContainerRuntime(t *testing.T) {
 	t.Helper()
 	skipIfNoContainerRuntime(t)
-	if dh := os.Getenv("DOCKER_HOST"); dh != "" {
-		return
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("no container runtime reachable (no docker in PATH and DOCKER_HOST unset): %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}")
-	if err := cmd.Run(); err != nil {
-		t.Skipf("no container runtime reachable (docker probe failed): %v", err)
-	}
+	testutil.RequireContainerRuntime(t)
 }
 
 // findMigrationsDir walks up from the test's working directory to locate the

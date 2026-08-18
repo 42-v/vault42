@@ -16,6 +16,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // The Postgres backend keeps its expiry rules in SQL, which is the one part of
@@ -48,29 +50,18 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// cachePGRuntime points DOCKER_HOST at a reachable container socket, or skips.
-// Failing hard would make a runtime-free machine indistinguishable from a
-// broken backend; the canonical coverage run refuses to start without a
+// cachePGRuntime points DOCKER_HOST at a container daemon that answers, or
+// skips. Failing hard would make a runtime-free machine indistinguishable from
+// a broken backend; the canonical coverage run refuses to start without a
 // runtime, so nothing is silently skipped there.
+//
+// This package is the one that paid for the old os.Stat selection most dearly:
+// its container is shared behind a sync.Once, so a wedged socket chosen on
+// presence blocked every test in the file behind a single dial that never
+// returned. See tests/testutil/containerruntime.go.
 func cachePGRuntime(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
-	if os.Getenv("DOCKER_HOST") != "" {
-		return
-	}
-	candidates := []string{"/run/podman/podman.sock", "/var/run/docker.sock"}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		candidates = append([]string{runtimeDir + "/podman/podman.sock"}, candidates...)
-	}
-	for _, sock := range candidates {
-		if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			t.Setenv("DOCKER_HOST", "unix://"+sock)
-			return
-		}
-	}
-	t.Skip("no container runtime found; set DOCKER_HOST or start the rootless podman socket")
+	testutil.RequireContainerRuntime(t)
 }
 
 // cachePGStripRoleGrants drops the top-level GRANT/REVOKE/ALTER DEFAULT

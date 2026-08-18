@@ -32,15 +32,15 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // atkDBSkipIfNoDocker honors the same opt-out switch the integration suite uses,
-// so a machine with no container runtime can still run the pure-Go tests.
+// so a machine with no container runtime can still run the pure-Go tests, and
+// probes the runtime rather than assuming testcontainers will find a live one.
 func atkDBSkipIfNoDocker(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
+	testutil.RequireContainerRuntime(t)
 }
 
 // atkDBSetupPG starts a PostgreSQL container and applies every migration in
