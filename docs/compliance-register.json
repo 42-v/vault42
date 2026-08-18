@@ -5807,7 +5807,7 @@
       "requirement": "Expiration",
       "status": "Met",
       "evidence": [
-        "internal/keystore/keystore.go:468"
+        "internal/keystore/keystore.go:473"
       ],
       "tests": [
         "TestNIST63B4_4_4_EphemeralAuthenticatorsExpire",

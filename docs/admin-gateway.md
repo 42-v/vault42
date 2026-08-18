@@ -230,7 +230,7 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
 | `auth.admin_sessions` | none (revoked in 002) | Full CRUD |
 | `auth.app_roles` | SELECT | SELECT, INSERT, DELETE |
-| `auth.signing_keys` | SELECT, INSERT, UPDATE, DELETE (narrowed by trigger, below) | SELECT, INSERT, UPDATE |
+| `auth.signing_keys` | SELECT, INSERT, DELETE + column-level UPDATE on `status`, `retired_at`, `expires_at` only (DELETE narrowed by trigger, below) | SELECT, INSERT + the same column-level UPDATE |
 | `audit.audit_log` | SELECT, INSERT | SELECT, INSERT |
 
 `vault_app`'s DELETE on `auth.signing_keys` is the one grant in this table that a
@@ -246,6 +246,22 @@ fire in name order and `signing_keys_reap_scope` sorts ahead of
 clause is what leaves migration 017 as the only guard that answers for a revoked
 key. `vault_admin` holds no DELETE here, and 020 states the revoke explicitly so
 the absence reads as a decision rather than an oversight.
+
+The UPDATE on `auth.signing_keys` is column-level for the opposite reason: a
+trigger cannot make the whole grant safe. `kid`, `private_key`, `public_key`,
+`algorithm` and `created_at` are written by exactly one statement in the tree,
+the upsert in `keystore.Import`, and migration 037 moved that upsert into
+`auth.import_signing_key`, a `SECURITY DEFINER` function on 015's pattern, so the
+raw privilege has no remaining caller and comes off both roles. What is left is
+`status`, `retired_at` and `expires_at`, which `Revoke` and `Import`'s retire
+step genuinely write and which 017, 020, 026, 027 and 035 already judge. The
+split is between the columns a guard can reason about and the ones it cannot: a
+re-import and a substitution of key material differ only in whether the
+ciphertext opens under the master key, which the database does not hold, so that
+write is constrained by who may issue it rather than by what it contains.
+`kid` also carries 037's `signing_keys_kid_immutable` trigger, because the
+privilege answers only for these two roles while the trigger states the invariant
+for every other one, including the owner.
 
 `vault_app`'s INSERT on `auth.clients` is the other grant a trigger rather than
 the grant itself makes safe. The grant exists so declarative seeding can register

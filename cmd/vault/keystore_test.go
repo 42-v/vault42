@@ -107,6 +107,18 @@ func signingKeysRuleFunc(answers func(prior int) [][][]byte) pgRule {
 	}
 }
 
+// importSigningKeyRule scripts auth.import_signing_key, the SECURITY DEFINER
+// function migration 037 made the only writer of a signing key's material.
+// wrote is what KeyStore.Import reads to tell a stored key from a kid the
+// function refused to overwrite because it is revoked.
+func importSigningKeyRule(wrote bool) pgRule {
+	return pgRule{
+		match: "auth.import_signing_key",
+		cols:  []pgColumn{{name: "import_signing_key", oid: pgOIDBool}},
+		rows:  [][][]byte{{pgBool(wrote)}},
+	}
+}
+
 // keystoreEnv is bootEnv plus the two variables that turn the keystore on.
 func keystoreEnv(t *testing.T, stub *pgStub, addr string) map[string]string {
 	t.Helper()
@@ -213,13 +225,15 @@ func TestDBBackedKeystoreAdoptsARotationWhileRunning(t *testing.T) {
 func TestDBBackedKeystoreImportsTheFileKeyOnFirstBoot(t *testing.T) {
 	keyPEM, kid := signingKeyPEM(t)
 
-	// The table starts empty, so EnsureKey imports. The INSERT must report a
-	// row so the keystore does not read it as a revoked kid, and the follow-up
-	// refresh then returns the imported key.
+	// The table starts empty, so EnsureKey imports. Migration 037 moved the
+	// upsert into auth.import_signing_key, so the write is a SELECT of that
+	// function and it must answer true: false is how the function reports a
+	// revoked kid it declined to overwrite, and the keystore reads it as such.
+	// The follow-up refresh then returns the imported key.
 	imported := importedKeyRow(t, keyPEM, kid)
 	stub := startPGStub(t,
 		adminTokenRule("$argon2id$already-provisioned"),
-		pgRule{match: "INSERT INTO auth.signing_keys", tag: "INSERT 0 1"},
+		importSigningKeyRule(true),
 		signingKeysRuleFunc(func(prior int) [][][]byte {
 			if prior == 0 {
 				return nil // the table is empty until the import writes to it

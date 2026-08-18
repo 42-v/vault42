@@ -102,6 +102,16 @@ func textRow(vals ...string) [][]byte {
 func pgText(s string) []byte  { return []byte(s) }
 func pgBytea(b []byte) []byte { return b }
 
+// pgBool encodes a boolean the way PostgreSQL does on the binary wire: one byte,
+// 0 or 1. It is what auth.import_signing_key returns, which is the statement
+// KeyStore.Import writes a signing key with since migration 037.
+func pgBool(b bool) []byte {
+	if b {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
 // pgTimestamptz encodes a timestamp the way PostgreSQL does on the binary wire:
 // microseconds since midnight 2000-01-01 UTC.
 func pgTimestamptz(ts time.Time) []byte {
@@ -481,6 +491,7 @@ func (s *pgStub) describe(cols []pgColumn, simple bool) []byte {
 // ---------------------------------------------------------------------------
 
 const (
+	pgOIDBool        uint32 = 16
 	pgOIDText        uint32 = 25
 	pgOIDBytea       uint32 = 17
 	pgOIDTimestamptz uint32 = 1184
@@ -495,7 +506,7 @@ const (
 // one function makes a future scripted column type an explicit decision.
 func pgWireFormat(oid uint32) int16 {
 	switch oid {
-	case pgOIDBytea, pgOIDTimestamptz:
+	case pgOIDBool, pgOIDBytea, pgOIDTimestamptz:
 		return pgBinaryFormatCode
 	default:
 		return pgTextFormatCode
