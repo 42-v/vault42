@@ -230,10 +230,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # fetch-depth: 0 was here for the `git diff` in the changed-files lint.
+      # That step is gone and nothing else in this job reads history, so the
+      # checkout is shallow again.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -259,42 +261,19 @@ jobs:
       - name: Test web
         run: pnpm -C web test:coverage
 
-      # eslint.config.mjs is 94 lines that nothing has ever run. The tree it
-      # inherits has 53 errors, so the blocking gate is scoped to the files a
-      # change touches; the full run below reports the rest without failing.
-      - name: Lint changed files
-        if: github.event_name == 'pull_request'
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -eo pipefail
-          mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD \
-            -- '*.js' '*.mjs' '*.cjs' '*.ts' '*.tsx' '*.vue')
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "no JS/TS/Vue files changed"
-            exit 0
-          fi
-          printf 'linting %d changed file(s)\n' "${#files[@]}"
-          pnpm exec eslint "${files[@]}"
-
-      - name: Lint whole tree (report only)
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          pnpm exec eslint . -f json -o eslint.json || true
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import collections, json, os
-          data = json.load(open("eslint.json"))
-          errors = sum(f["errorCount"] for f in data)
-          warnings = sum(f["warningCount"] for f in data)
-          print(f"### eslint: {errors} errors, {warnings} warnings\n")
-          rules = collections.Counter(m.get("ruleId") for f in data for m in f["messages"])
-          print("| rule | count |\n|---|---|")
-          for rule, n in rules.most_common(20):
-              print(f"| `{rule}` | {n} |")
-          PY
+      # Two steps used to live here: a blocking lint scoped to the files a pull
+      # request touched, and a whole-tree run with `continue-on-error: true`
+      # that only printed a table. That shape existed because the tree carried
+      # 53 errors and 23 warnings, and it is also what let them accumulate: a
+      # gate that cannot fail is not a gate, and a changed-files gate cannot see
+      # a regression in a file the pull request did not touch.
+      #
+      # The tree is at zero on both counts now, so one honest whole-tree gate
+      # replaces both. `pnpm lint` is `eslint . --max-warnings 0`, so the
+      # standard lives in package.json where a developer runs the same command,
+      # rather than being restated here.
+      - name: Lint
+        run: pnpm lint
 
   # .golangci.yml is 119 lines of tuned configuration that no workflow, script or
   # hook has ever invoked. `revive: exported` is on now, and it is the check that
