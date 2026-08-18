@@ -2915,7 +2915,7 @@
       "requirement": "Verify that application administrators are able to terminate active sessions for an individual user or for all users.",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:425",
+        "internal/adminapi/handler.go:554",
         "internal/adminapi/router.go"
       ],
       "tests": [

@@ -216,7 +216,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP ASVS|V6.8.1|internal/seed/seed.go":                                          {},
 	"OWASP ASVS|V6.8.2|internal/oauth2/oidc_idtoken.go":                                {},
 	"OWASP ASVS|V7.4.1|internal/repository/postgres/refresh_token.go":                  {},
-	"OWASP ASVS|V7.4.5|internal/adminapi/handler.go":                                   {},
 	"OWASP ASVS|V9.1.3|internal/crypto/jwt.go":                                         {},
 	"OWASP ASVS|V9.2.1|internal/jwt/validate.go":                                       {},
 	"OWASP ASVS|V9.2.2|internal/crypto/jwt.go":                                         {},
