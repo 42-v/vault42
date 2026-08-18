@@ -39,6 +39,26 @@ type VaultClaims struct {
 	// which is the claim that marks a client-credentials caller and is read as
 	// such by the service document store.
 	MintedBy string `json:"minted_by,omitempty"`
+
+	// ACR is the OIDC Core §2 authentication context class reference: the
+	// assurance level this session reached, as "urn:vault42:aal:N". OIDC leaves
+	// the value space to the issuer, so the URN is vault42's own and its
+	// meaning is the NIST SP 800-63B AAL of the same number.
+	ACR string `json:"acr,omitempty"`
+	// AMR is the OIDC Core §2 authentication methods reference: the RFC 8176
+	// values for the authenticators this session actually presented.
+	AMR []string `json:"amr,omitempty"`
+	// AuthTime is the OIDC Core §2 auth_time: seconds since the Unix epoch at
+	// which the end user authenticated, which for a rotated token is when the
+	// refresh family began rather than when the token was minted. Zero means no
+	// authentication event is recorded, and the claim is omitted.
+	AuthTime int64 `json:"auth_time,omitempty"`
+	// Factors lists the vault42 authenticator methods already completed. It
+	// appears only on a 2fa_challenge token, where it carries the first factor
+	// across to the second-factor verify so the completed login knows whether it
+	// began with a password or with an upstream identity provider. It is not an
+	// authorization claim and no access token carries it.
+	Factors []string `json:"factors,omitempty"`
 }
 
 // Confirmation holds DPoP proof-of-possession binding (RFC 9449).

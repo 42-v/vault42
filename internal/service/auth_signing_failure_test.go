@@ -71,7 +71,7 @@ func TestAuthFlows_UnusableSigningKeyFailsClosed(t *testing.T) {
 			name: "MFA completion token pair",
 			wire: func(_ *mockAuthOpts) {},
 			call: func(svc *AuthService) error {
-				_, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "1.2.3.4", "TestAgent", "")
+				_, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "1.2.3.4", "TestAgent", "", MFACompletion{Method: MethodTOTP})
 				return err
 			},
 			want: "nil private key",

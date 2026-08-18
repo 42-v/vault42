@@ -595,7 +595,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			requiresMFA = true
 		}
 		if requiresMFA {
-			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp)
+			// The first factor here is the upstream provider's assertion, not a
+			// password. It travels on the challenge so the completed login
+			// does not claim a memorized secret vault42 never verified.
+			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp, service.MethodFederated)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, "internal_error")
 				return
@@ -618,10 +621,14 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Issue tokens
-	pair, err := h.tokenSvc.IssueTokenPair(
+	// Issue tokens. The only factor vault42 observed is the provider assertion,
+	// so this is AAL1 and carries no amr value: RFC 8176 registers none for "an
+	// assertion from another issuer", and inventing one would name a check this
+	// server did not make.
+	pair, err := h.tokenSvc.IssueTokenPairWithAuth(
 		userID, []string{"user"}, []string{"read", "write"},
 		"", fp, "", false,
+		service.NewAuthContext(time.Now(), []string{service.MethodFederated}, false),
 	)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")

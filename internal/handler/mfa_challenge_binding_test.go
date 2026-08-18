@@ -53,7 +53,7 @@ func TestCompleteMFAIfChallenge_ChallengeFromAnotherDeviceIsRefused(t *testing.T
 	req.Header.Set("User-Agent", "SomeOtherBrowser/1.0")
 	rec := httptest.NewRecorder()
 
-	handled := completeMFAIfChallenge(rec, req, claims, svc, false)
+	handled := completeMFAIfChallenge(rec, req, claims, svc, false, service.MFACompletion{Method: service.MethodTOTP})
 
 	if !handled {
 		t.Fatal("the challenge was not handled at all")
@@ -100,7 +100,7 @@ func TestCompleteMFAIfChallenge_CompletionFailureIsA500(t *testing.T) {
 	req.RemoteAddr = "203.0.113.9:5000"
 	rec := httptest.NewRecorder()
 
-	handled := completeMFAIfChallenge(rec, req, claims, svc, false)
+	handled := completeMFAIfChallenge(rec, req, claims, svc, false, service.MFACompletion{Method: service.MethodTOTP})
 
 	if !handled {
 		t.Fatal("the challenge was not handled")

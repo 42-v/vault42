@@ -11,6 +11,7 @@ import (
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
 )
 
@@ -36,7 +37,7 @@ func runChallengeGate(t *testing.T, user *model.User) *httptest.ResponseRecorder
 	req.RemoteAddr = "203.0.113.9:5000"
 	rec := httptest.NewRecorder()
 
-	if !completeMFAIfChallenge(rec, req, claims, svc, false) {
+	if !completeMFAIfChallenge(rec, req, claims, svc, false, service.MFACompletion{Method: service.MethodTOTP}) {
 		t.Fatal("the challenge was not handled at all")
 	}
 	return rec

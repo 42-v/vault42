@@ -31,7 +31,7 @@ func TestCompleteMFALoginRefusesDeletedAccount(t *testing.T) {
 		return nil
 	}
 
-	res, err := svc.CompleteMFALogin(context.Background(), "erased-during-mfa", "fp", "9.9.9.9", "UA", "")
+	res, err := svc.CompleteMFALogin(context.Background(), "erased-during-mfa", "fp", "9.9.9.9", "UA", "", MFACompletion{Method: MethodTOTP})
 	if !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("err = %v, want ErrTokenInvalid; an account erased during the challenge window completed 2FA into a full session", err)
 	}

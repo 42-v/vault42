@@ -440,7 +440,12 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "webauthn"})
 
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	// credential.Flags.UserVerified is the authenticator's own UV bit from the
+	// assertion just verified. It is what separates a multi-factor
+	// cryptographic device from a key that only proved possession, and
+	// therefore AAL3 from AAL2.
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies,
+		service.MFACompletion{Method: service.MethodWebAuthn, UserVerified: credential.Flags.UserVerified}) {
 		return
 	}
 
