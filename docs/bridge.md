@@ -4,7 +4,7 @@
 
 ## Architecture
 
-```
+```text
                 Internet
                    │
           ┌────────▼────────┐
@@ -59,7 +59,7 @@ Score-based detection -- cumulative score >= `BRIDGE_FLAG_THRESHOLD` (default: 1
 
 ## Routing Logic
 
-```
+```text
 Request
   │
   ├─ /bridge/* path? ──────────── Admin/health handlers
@@ -156,7 +156,7 @@ curl -X DELETE https://bridge/bridge/flag \
 
 When `bridge.enabled=true`, network policies enforce:
 
-```
+```text
 Bridge → Real Vault42:       ALLOW
 Bridge → Honeypot Vault42:   ALLOW
 Bridge → Redis:            ALLOW (if enabled)

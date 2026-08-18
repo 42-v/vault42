@@ -290,7 +290,7 @@ func TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged(t *testing.T) {
 	}
 }
 
-// The authorization half of V16.3.2, and the closure of what was AR-16. A failed
+// The authorization half of V16.3.2, and the closure of what was CR-16. A failed
 // RBAC decision on the admin plane must reach the append-only audit log, or a
 // privilege-boundary probe leaves no trail. This drives a denied permission
 // check through the real RBACCheck middleware and asserts the record the

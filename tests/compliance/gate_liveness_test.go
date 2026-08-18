@@ -1,0 +1,416 @@
+package compliance
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// =============================================================================
+// The gate on the gates: a check that cannot fail is worse than no check.
+//
+// Three separate gates in this repository have never been capable of failing,
+// and each looked healthy from the outside — a green tick next to a claim
+// nothing was testing.
+//
+//   - TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded read
+//     migrations/001_initial_schema.sql for family_created_at. That column
+//     landed in 013_session_lifetime.sql, so the tripwire it was named for
+//     could never trip.
+//   - A fuzz target fuzzed a local copy of a validator instead of the shipped
+//     one, so no input it found could ever reach the code that ships.
+//   - Fifty-two Met rows rest on five umbrella tests, which means a single test
+//     is the sole evidence for a dozen distinct requirements and cannot
+//     possibly assert all of them.
+//
+// A false negative in a gate is invisible by construction: nothing goes red, so
+// nobody looks. The only defence is to check the gates the way the gates check
+// the code. That is what this file is.
+// =============================================================================
+
+// --- 1. A test with no failure call cannot fail -----------------------------
+
+// failureCalls are the ways a Go test reports a failure. A test function that
+// contains none of them is a program that runs and returns, which is exactly
+// what a passing test looks like from the outside.
+var failureCalls = map[string]struct{}{
+	"Error": {}, "Errorf": {}, "Fatal": {}, "Fatalf": {}, "FailNow": {}, "Fail": {},
+}
+
+func TestGateLiveness_NoComplianceTestIsIncapableOfFailing(t *testing.T) {
+	for _, fn := range complianceTestFunctions(t) {
+		if fn.hasSubtests {
+			// A table-driven test delegates its assertions to t.Run bodies,
+			// which the walk below already descends into; this flag only exists
+			// so the message can say so if one is ever empty.
+			continue
+		}
+		if fn.failureCalls == 0 {
+			t.Errorf("%s (%s) contains no t.Error, t.Fatal or t.Fail of any kind. It runs, it "+
+				"returns, and it reports success whatever the code does. A register row naming it "+
+				"as evidence has a green tick and no assertion behind it.", fn.name, fn.file)
+		}
+	}
+}
+
+// --- 2. A scan over an empty corpus passes vacuously ------------------------
+
+// corpusBuilders are the calls that produce the set a structural test then
+// asserts over. If the set comes back empty — a moved directory, a changed
+// suffix, a walk that errors and is ignored — every assertion inside the loop
+// is skipped and the test is green.
+var corpusBuilders = map[string]string{
+	"productionGoFiles":     "the production Go tree",
+	"complianceTestNames":   "the compliance test functions",
+	"os.ReadDir":            "a directory listing",
+	"filepath.WalkDir":      "a directory walk",
+	"filepath.Walk":         "a directory walk",
+	"FindAllString":         "a regular-expression match set",
+	"FindAllStringSubmatch": "a regular-expression match set",
+}
+
+// TestGateLiveness_EveryCorpusScanAssertsItsCorpusIsNonEmpty requires a
+// structural test to state the floor it expects.
+//
+// productionGoFiles and complianceTestNames carry their own floors, which is why
+// this looks for one in the test as well only when the test builds its corpus
+// directly. The rule is the same either way: a number, compared, with a failure
+// on the wrong side of it.
+func TestGateLiveness_EveryCorpusScanAssertsItsCorpusIsNonEmpty(t *testing.T) {
+	for _, fn := range complianceTestFunctions(t) {
+		if len(fn.corpusBuilders) == 0 {
+			continue
+		}
+		if _, exempt := corpusFloorExemptions[fn.name]; exempt {
+			if fn.hasCorpusFloor {
+				t.Errorf("%s is in corpusFloorExemptions and now asserts a floor. Delete the entry: "+
+					"the list may only shrink.", fn.name)
+			}
+			continue
+		}
+		if !fn.hasCorpusFloor {
+			sort.Strings(fn.corpusBuilders)
+			t.Errorf("%s (%s) builds a corpus from %v and never asserts it is non-empty. If the "+
+				"walk finds nothing — a moved directory, a renamed suffix, an error swallowed by "+
+				"the callback — the loop body never runs and the test passes. Assert a floor and "+
+				"fail below it, the way productionGoFiles does.", fn.name, fn.file, fn.corpusBuilders)
+		}
+	}
+}
+
+// corpusFloorExemptions are the tests whose corpus comes from a helper that
+// already asserts its own floor, and which add nothing by repeating it. Each
+// entry is a hole in the gate above, so the list is short and is a ratchet.
+var corpusFloorExemptions = map[string]struct{}{
+	// This one iterates productionGoFiles, which already fails below 100 files,
+	// and its assertion is that a construct is absent. It records which case it
+	// observed instead of counting, which is the same guarantee written the
+	// other way round.
+	"TestASVS_V12_3_2_NoInsecureSkipVerifyInProductionCode": {},
+}
+
+// --- 3. A tripwire over one file of a numbered family cannot see the rest ---
+
+var (
+	migrationRead   = regexp.MustCompile(`readProductionSource\(t,\s*"(migrations/[^"]+)"\)`)
+	tripwirePhrases = []string{"now exists", "now has", "has since", "no longer absent", "is closed"}
+)
+
+// TestGateLiveness_NoTripwireWatchesOnlyOneMigration is the shape of the bug
+// that started this file.
+//
+// A test that fails when a column appears has to look everywhere that column
+// could appear. migrations/ is a numbered family: 001 creates the schema and
+// every later file alters it, so reading 001 alone and concluding a column does
+// not exist is a conclusion about 2023, not about the database.
+func TestGateLiveness_NoTripwireWatchesOnlyOneMigration(t *testing.T) {
+	root := repoRoot(t)
+
+	migrations, err := os.ReadDir(filepath.Join(root, "migrations"))
+	if err != nil {
+		t.Fatalf("read migrations/: %v", err)
+	}
+	sqlFiles := 0
+	for _, m := range migrations {
+		if strings.HasSuffix(m.Name(), ".sql") {
+			sqlFiles++
+		}
+	}
+	if sqlFiles < 2 {
+		t.Fatalf("only %d migration files found; this gate has no family to reason about and would "+
+			"pass vacuously", sqlFiles)
+	}
+
+	for _, fn := range complianceTestFunctions(t) {
+		reads := migrationRead.FindAllStringSubmatch(fn.source, -1)
+		if len(reads) == 0 {
+			continue
+		}
+
+		tripwire := ""
+		lowered := strings.ToLower(fn.source)
+		for _, phrase := range tripwirePhrases {
+			if strings.Contains(lowered, phrase) {
+				tripwire = phrase
+				break
+			}
+		}
+		if tripwire == "" {
+			continue // reading one migration to assert what it does contain is fine
+		}
+
+		named := map[string]struct{}{}
+		for _, m := range reads {
+			named[m[1]] = struct{}{}
+		}
+		if len(named) < sqlFiles {
+			missing := sqlFiles - len(named)
+			t.Errorf("%s (%s) fails on %q — it is a tripwire — but reads only %d of the %d files in "+
+				"migrations/. %d later migration(s) can introduce exactly the thing it is watching "+
+				"for and it will never see them. This is the bug that made "+
+				"TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded incapable of "+
+				"failing: it read 001_initial_schema.sql for a column that landed in "+
+				"013_session_lifetime.sql. Read the whole directory.",
+				fn.name, fn.file, tripwire, len(named), sqlFiles, missing)
+		}
+	}
+}
+
+// --- 4. One test cannot be the sole evidence for a dozen requirements -------
+
+// umbrellaTestCeiling is the number of Met rows one test may be the *only*
+// named evidence for before the register is asked to say more.
+//
+// The number is not a law of nature; it is a threshold above which a reader
+// should stop believing the row and start reading the test. Fifty-two Met rows
+// currently rest on five tests, which is how a suite comes to look thorough
+// while a dozen requirements share one assertion.
+const umbrellaTestCeiling = 6
+
+func TestGateLiveness_NoSingleTestIsTheSoleEvidenceForTooManyRequirements(t *testing.T) {
+	reg := loadRegister(t)
+
+	soleEvidence := map[string][]string{}
+	for _, r := range reg.Requirements {
+		if r.Status != statusMet || len(r.Tests) != 1 {
+			continue
+		}
+		soleEvidence[r.Tests[0]] = append(soleEvidence[r.Tests[0]], r.Standard+" "+r.RequirementID)
+	}
+
+	names := make([]string, 0, len(soleEvidence))
+	for name := range soleEvidence {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		rows := soleEvidence[name]
+		if len(rows) <= umbrellaTestCeiling {
+			continue
+		}
+		if allowed, exempt := umbrellaTestBaseline[name]; exempt {
+			if len(rows) > allowed {
+				t.Errorf("%s is the sole evidence for %d Met requirements, up from the %d recorded "+
+					"when this baseline was frozen. An umbrella test may not grow: give the new rows "+
+					"a test that asserts what they specifically require. Rows: %v",
+					name, len(rows), allowed, rows)
+			}
+			continue
+		}
+		t.Errorf("%s is the sole named evidence for %d Met requirements, above the ceiling of %d. "+
+			"One assertion cannot prove a dozen different things; a reader following any of these "+
+			"rows lands on a test that was written for one of them. Rows: %v",
+			name, len(rows), umbrellaTestCeiling, rows)
+	}
+
+	total := 0
+	for _, rows := range soleEvidence {
+		if len(rows) > umbrellaTestCeiling {
+			total += len(rows)
+		}
+	}
+	t.Logf("%d Met rows have a single named test; %d of those rest on an umbrella test above the ceiling of %d",
+		len(soleEvidence), total, umbrellaTestCeiling)
+}
+
+// umbrellaTestBaseline freezes the umbrella tests that already exist, at the
+// count they already carry.
+//
+// Forty-six Met rows currently rest on four tests. That is not the same defect
+// as a test that cannot fail — each of these four asserts something real, and
+// each would go red if its property broke — but it is the same *shape*: a
+// reader following any one of those rows lands on a test that was written for
+// a different one, and the register's promise that a Met row names a test which
+// proves it is weaker than it reads.
+//
+// Splitting them is work on the suite rather than on the register, and doing it
+// in the same change that discovered the problem is how a register acquires
+// errors instead of losing them. So they are frozen at their current counts.
+// The list is a ratchet: a frozen umbrella may not grow by one row, and a new
+// one is not permitted at all, so the number can only come down.
+var umbrellaTestBaseline = map[string]int{
+	// 17 rows. A taint-and-validation scan over the input path, standing in for
+	// every encoding, canonicalisation and validation requirement in V1 and V2.
+	"TestNIST80053_SI_10_InputIsValidatedBeforeUse": 17,
+	// 13 rows. A route-table property, standing in for every requirement that
+	// says a particular route must be authenticated.
+	"TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated": 13,
+	// 8 rows each. Configuration defaults and rate limiting.
+	"TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults": 8,
+	"TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed":   8,
+}
+
+// --- shared: parse the package's own test functions -------------------------
+
+type complianceTestFn struct {
+	name           string
+	file           string
+	source         string
+	failureCalls   int
+	corpusBuilders []string
+	hasCorpusFloor bool
+	hasSubtests    bool
+}
+
+func complianceTestFunctions(t *testing.T) []complianceTestFn {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), "tests", "compliance")
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read tests/compliance: %v", err)
+	}
+
+	var out []complianceTestFn
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, path, raw, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", entry.Name(), err)
+		}
+
+		lines := strings.Split(string(raw), "\n")
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
+				continue
+			}
+			start := fset.Position(fn.Pos()).Line
+			end := fset.Position(fn.End()).Line
+			body := strings.Join(lines[start-1:min(end, len(lines))], "\n")
+
+			info := complianceTestFn{name: fn.Name.Name, file: entry.Name(), source: body}
+			builders := map[string]struct{}{}
+
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := callName(call)
+				if _, isFailure := failureCalls[name]; isFailure {
+					info.failureCalls++
+				}
+				if name == "Run" {
+					info.hasSubtests = true
+				}
+				if _, isBuilder := corpusBuilders[name]; isBuilder {
+					builders[name] = struct{}{}
+				}
+				if q := selectorName(call.Fun); q != "" {
+					if _, isBuilder := corpusBuilders[q]; isBuilder {
+						builders[q] = struct{}{}
+					}
+				}
+				return true
+			})
+
+			for b := range builders {
+				info.corpusBuilders = append(info.corpusBuilders, b)
+			}
+			info.hasCorpusFloor = hasCorpusFloor(fn)
+			out = append(out, info)
+		}
+	}
+
+	if len(out) < 50 {
+		t.Fatalf("only %d compliance test functions parsed; this gate's own corpus is broken, which "+
+			"would make every assertion in this file vacuous — precisely the failure it exists to "+
+			"detect", len(out))
+	}
+	return out
+}
+
+// hasCorpusFloor reports whether a function compares a len() against a numeric
+// literal, which is the shape of "the scan found nothing and that is a bug".
+func hasCorpusFloor(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		bin, ok := n.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		if bin.Op != token.LSS && bin.Op != token.LEQ && bin.Op != token.EQL &&
+			bin.Op != token.GTR && bin.Op != token.GEQ && bin.Op != token.NEQ {
+			return true
+		}
+		lenSide := func(e ast.Expr) bool {
+			call, ok := e.(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			return ok && ident.Name == "len"
+		}
+		numSide := func(e ast.Expr) bool {
+			lit, ok := e.(*ast.BasicLit)
+			if ok && lit.Kind == token.INT {
+				return true
+			}
+			ident, isIdent := e.(*ast.Ident)
+			return isIdent && (ident.Name == "sqlFiles" || ident.Name == "scanned")
+		}
+		if (lenSide(bin.X) && numSide(bin.Y)) || (numSide(bin.X) && lenSide(bin.Y)) {
+			found = true
+		}
+		// A counter compared against a literal is the same guard written the
+		// other way: `if scanned < 10 { t.Fatalf(...) }`.
+		if id, ok := bin.X.(*ast.Ident); ok {
+			if _, isNum := bin.Y.(*ast.BasicLit); isNum &&
+				(strings.Contains(strings.ToLower(id.Name), "count") ||
+					strings.Contains(strings.ToLower(id.Name), "scanned") ||
+					strings.Contains(strings.ToLower(id.Name), "checked") ||
+					strings.Contains(strings.ToLower(id.Name), "sites") ||
+					strings.Contains(strings.ToLower(id.Name), "named") ||
+					strings.Contains(strings.ToLower(id.Name), "files") ||
+					strings.Contains(strings.ToLower(id.Name), "strict") ||
+					strings.Contains(strings.ToLower(id.Name), "total")) {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

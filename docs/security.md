@@ -118,7 +118,7 @@ Two consequences are accepted:
 
 **Not covered by this risk: the admin plane.** The admin gateway does not use JWT roles. Its
 authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 29
-`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 37 admin endpoints
+`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 36 admin endpoints
 are permission-gated in `adminapi.NewRouter` (`internal/adminapi/router.go`), including a
 role-catalog management API (`GET`/`POST`/`DELETE /admin/roles`), admin user management
 (`/admin/admins`) and an HTML dashboard. Every check re-reads the admin row from the database
@@ -269,7 +269,7 @@ It is not one. Since Go 1.24 `crypto/rsa` derives an unexported representation o
 - **The clear still runs, and still helps.** Zeroing the reachable fields costs nothing, removes the copies a heap dump surfaces most readily, and becomes a real control again unmodified the day the standard library stops caching.
 - **The limit is executable, not documentary.** `TestZeroPrivateKeyLeavesTheKeyUsable` asserts that a wiped key still produces the same valid signature. If a future toolchain makes the wipe effective, that test fails, and this entry is deleted rather than quietly outliving its truth.
 
-Related: AR-4 covers the same class of limitation for string-typed secrets, and AR-25 in `docs/COMPLIANCE.md` covers the decrypted signing-key PEM buffer in the keystore.
+Related: AR-4 covers the same class of limitation for string-typed secrets. The decrypted signing-key PEM buffer in the keystore is wiped (`internal/keystore/keystore.go:211,442`); what CR-25 in the compliance register still carries is the decrypted blob plaintext and label. `CR-nn` identifiers belong to `docs/compliance-register.json`; `AR-nn` identifiers in this file and in Go source belong to this file.
 
 ---
 

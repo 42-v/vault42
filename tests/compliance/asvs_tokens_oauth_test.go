@@ -1,6 +1,8 @@
 package compliance
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -324,20 +326,24 @@ func localCallsAfter(body string, offset int) []string {
 // "Verify that refresh tokens have an absolute expiration, including if sliding
 // refresh token expiration is applied."
 //
-// This is the requirement the sliding-window issue lands on. Rotation currently
-// stamps a fresh full TTL on every refresh and no column records when the
-// family was created, so a continuously refreshing client holds a session
-// indefinitely. The register carries it as an accepted risk (AR-14) until the
-// family-age column lands.
+// This test replaces one that could never fail. The old version asserted that
+// family_created_at did not exist and would "fail once the family-creation
+// column appears, which is the signal to promote the register row to Met" --
+// but it looked for the column in migrations/001_initial_schema.sql, and the
+// column landed in 013_session_lifetime.sql. The column had existed for a
+// release; the row had already been promoted to Met by hand; and the tripwire
+// sat green in CI the whole time, guarding nothing.
 //
-// This test asserts the half that holds, an expiry on each individual token,
-// and fails once the family-creation column appears, which is the signal to
-// promote the register row to Met.
-func TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded(t *testing.T) {
+// A tripwire over a numbered migration family has to read the family, not its
+// first member. This one reads every .sql file under migrations/, which is what
+// TestGateLiveness_NoTripwireWatchesOnlyOneMigration now requires of any test
+// shaped like this.
+func TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped(t *testing.T) {
 	if !strings.Contains(readProductionSource(t, "internal/service/token.go"), "RefreshExpAt") {
 		t.Fatal("V10.4.8: refresh tokens no longer carry an expiry at all")
 	}
 
+	// Half one: each individual token expires.
 	schema := readProductionSource(t, "migrations/001_initial_schema.sql")
 	idx := strings.Index(schema, "CREATE TABLE auth.refresh_tokens")
 	if idx < 0 {
@@ -347,9 +353,61 @@ func TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded(t *testi
 		t.Error("V10.4.8: auth.refresh_tokens has no expires_at column")
 	}
 
-	for _, column := range []string{"family_created_at", "family_expires_at", "absolute_expires_at"} {
-		if strings.Contains(schema, column) {
-			t.Fatalf("V10.4.8: %s now exists. AR-14 is closed: move the register row to Met and replace this test with an assertion that a family older than the cap is refused.", column)
+	// Half two, the one the requirement singles out: sliding expiration is
+	// bounded by an absolute family deadline. Read every migration, because the
+	// column that provides it is not in the one that creates the table.
+	root := repoRoot(t)
+	entries, err := os.ReadDir(filepath.Join(root, "migrations"))
+	if err != nil {
+		t.Fatalf("read migrations/: %v", err)
+	}
+	var origin, notNull string
+	scanned := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		scanned++
+		body := readProductionSource(t, "migrations/"+entry.Name())
+		if strings.Contains(body, "family_created_at") {
+			origin = entry.Name()
+			if strings.Contains(body, "SET NOT NULL") {
+				notNull = entry.Name()
+			}
 		}
 	}
+	if scanned < 5 {
+		t.Fatalf("V10.4.8: only %d migration files read; the scan is broken and this assertion "+
+			"would pass vacuously, which is exactly how the test this one replaces failed", scanned)
+	}
+	if origin == "" {
+		t.Fatalf("V10.4.8: no migration adds family_created_at. Without a stored family origin the "+
+			"refresh window slides indefinitely and the absolute expiration this requirement asks "+
+			"for does not exist. %d migrations searched.", scanned)
+	}
+	if notNull == "" {
+		t.Errorf("V10.4.8: family_created_at is added by %s but never made NOT NULL, so a row "+
+			"inserted without an origin escapes the bound entirely", origin)
+	}
+
+	// Half three: the deadline is applied, not merely stored. Rotation clamps
+	// the new pair to the family origin plus the configured maximum, and the
+	// refresh path refuses a family past it.
+	token := readCodeOnly(t, "internal/service/token.go")
+	if !strings.Contains(token, "maxSessionLifetime") {
+		t.Error("V10.4.8: TokenService no longer holds a maximum session lifetime, so nothing " +
+			"clamps a rotated pair to the family deadline")
+	}
+	auth := readCodeOnly(t, "internal/service/auth.go")
+	if !strings.Contains(auth, "enforceSessionLifetime") {
+		t.Error("V10.4.8: the refresh path no longer enforces the family deadline. A stored origin " +
+			"that nothing reads is a column, not a control.")
+	}
+	if !strings.Contains(readCodeOnly(t, "cmd/vault/main.go"), "SetMaxSessionLifetime") {
+		t.Error("V10.4.8: cmd/vault/main.go no longer configures the maximum session lifetime, so " +
+			"the bound is whatever the zero value means")
+	}
+
+	t.Logf("V10.4.8: family origin added by %s, enforced from cmd/vault/main.go; %d migrations scanned",
+		origin, scanned)
 }

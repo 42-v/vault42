@@ -68,6 +68,10 @@ func TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion(t *testing.T) {
 // choice; that difference is recorded in the compliance register rather than
 // asserted away here.
 func TestASVS_V12_1_1_InboundListenersRequireTLS13(t *testing.T) {
+	if files := productionGoFiles(t); len(files) < 100 {
+		t.Fatalf("V12.1.1: only %d production files parsed; the scan is broken and every assertion below would pass vacuously", len(files))
+	}
+
 	inbound := map[string]bool{
 		"internal/server/server.go": false,
 		"cmd/admin-gateway/main.go": false,

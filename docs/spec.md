@@ -281,6 +281,7 @@ Vault42 is a production-grade authentication and authorization microservice buil
 The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/admin-gateway` serves the 41-route administrative API plus its HTML console, behind mTLS, RBAC and loopback-only enforcement, and is never exposed alongside the public API. Section 16 inventories both.
 
 **Key properties:**
+
 - Go 1.26, 3 direct runtime dependencies (+ test-only dependencies)
 - Single binary, distroless container, non-root, read-only filesystem
 - PostgreSQL with least-privilege roles (`vault_mig` for DDL, `vault_app` for runtime, `vault_admin` for admin gateway)
@@ -362,6 +363,7 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 9. Redirect to `{origin}/oauth/callback#code={exchangeCode}`
 
 **Exchange:** `POST /auth/oauth2/exchange` (rate-limited 10/min/IP)
+
 1. Client submits `code` from the callback fragment
 2. Code hashed and looked up in cache (keyed by hash + fingerprint)
 3. Atomically deleted after retrieval (single-use)
@@ -399,11 +401,13 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 ### 2.6 Password Reset
 
 **Request:** `POST /auth/password/reset`
+
 - Always returns `200 OK` with `"If that email exists, a reset link has been sent."` (prevents enumeration)
 - If user not found, a dummy Argon2id verification runs for constant timing
 - Token stored hashed in cache (1-hour TTL), email sent with reset link
 
 **Confirm:** `POST /auth/password/reset/confirm`
+
 - Token atomically retrieved and deleted (`GetAndDelete`) -- single-use
 - Password length validated
 - Password history checked (last 5 hashes)
@@ -550,12 +554,14 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 - **Signing key update:** thread-safe via `sync.RWMutex` in `TokenService`
 - **`kid` derivation:** deterministic, computed as SHA-256 of the public key modulus
 
-**Mode 1: File-Based (Default)**
+#### Mode 1: File-Based (Default)
+
 - If `SIGNING_KEY_FILE` is set: RSA-2048 key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive pod restarts.
 - If not set (fallback): ephemeral key generated at startup. Tokens invalidated on restart. Multi-pod deployments will fail (each pod signs with a different key).
 - Key rotation via `TokenService.UpdateSigningKey()` or restart
 
-**Mode 2: DB-Backed (`VAULT_KEY_ROTATION_DB=true`)**
+#### Mode 2: DB-Backed (`VAULT_KEY_ROTATION_DB=true`)
+
 - Keys stored in `auth.signing_keys` table, encrypted at rest with AES-256-GCM (master key), `kid` as AAD
 - Unique partial index enforces exactly one `active` key at a time
 - All pods refresh from DB every `VAULT_KEY_REFRESH_INTERVAL` (default 60s) -- automatic multi-pod coordination
@@ -574,12 +580,14 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 ### 4.1 TOTP (RFC 6238)
 
 **Setup:** `POST /auth/2fa/totp/setup` (authenticated + confirmed)
+
 - Generates 20-byte secret (base32-encoded)
 - Secret encrypted with AES-256-GCM using master key before storage (user ID as AAD)
 - Returns `secret` and `otp_url` (otpauth:// URI for QR code generation)
 - Previous unverified setups are deleted
 
 **Verify:** `POST /auth/2fa/totp/verify` (authenticated or challenge)
+
 - 6-digit code validated with +/-1 period skew (30-second periods)
 - Constant-time comparison (`crypto/subtle`)
 - TOTP replay prevention: `last_totp_counter` stored per-user in DB -- replayed codes (same or earlier counter) rejected. Returns HTTP 429 `totp_code_already_used`
@@ -587,6 +595,7 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 - If first-time verification: marks TOTP as verified
 
 **Disable:** `DELETE /auth/2fa/totp` (authenticated + confirmed)
+
 - Requires recent password confirmation
 - Deletes TOTP secret from database
 
@@ -599,20 +608,24 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 Implemented via the `go-webauthn/webauthn` library.
 
 **Register Begin:** `POST /auth/2fa/webauthn/register/begin` (authenticated + confirmed)
+
 - Returns WebAuthn creation options
 - Session data cached (5-minute TTL)
 
 **Register Finish:** `POST /auth/2fa/webauthn/register/finish` (authenticated + confirmed)
+
 - Validates attestation response
 - Session data atomically consumed (`GetAndDelete`) to prevent reuse race conditions
 - Stores credential ID, public key, sign count in database
 - Multiple credentials per user supported
 
 **Verify Begin:** `POST /auth/2fa/webauthn/verify/begin` (authenticated or challenge)
+
 - Returns assertion options
 - Session data cached (5-minute TTL)
 
 **Verify Finish:** `POST /auth/2fa/webauthn/verify/finish` (authenticated or challenge)
+
 - Validates assertion response
 - Session data atomically consumed (`GetAndDelete`)
 - Sign count updated (clone detection)
@@ -628,12 +641,14 @@ Implemented via the `go-webauthn/webauthn` library.
 ### 4.3 Backup Codes
 
 **Generate:** `POST /auth/2fa/backup-codes` (authenticated + confirmed)
+
 - Generates 10 single-use codes (16 hex chars each, 64-bit entropy)
 - Each code hashed with HMAC-SHA256 before storage (high-entropy codes make Argon2id unnecessary; avoids 10× Argon2id cost on generation)
 - Previous codes are deleted
 - Codes shown once and never displayed again
 
 **Verify:** `POST /auth/2fa/backup-code/verify` (authenticated or challenge)
+
 - 6-digit backup code submitted
 - Constant-time HMAC comparison against stored hashes
 - Single-use: atomically marked as used (CAS)
@@ -644,10 +659,12 @@ Implemented via the `go-webauthn/webauthn` library.
 ### 4.4 MFA Policy and Status
 
 **Status:** `GET /auth/2fa/status` (authenticated)
+
 - Returns: `totp_enabled`, `webauthn_enabled`, `backup_codes_remaining`, `mfa_methods`,
   `available_methods` (deprecated alias of `mfa_methods`), `mfa_required`
 
 **Policy:**
+
 - MFA is required at login if the user has any verified 2FA method configured
 - `VAULT_MFA_REQUIRED` (default: `true`) forces all users to set up MFA
 - Trusted devices can skip MFA (within trust window, checked via `RequiresMFA`)
@@ -681,11 +698,13 @@ rather than null on a non-MFA login. See section 16.1.
 When `VAULT_MFA_REQUIRED=true` but a user has no configured 2FA methods (no TOTP, no WebAuthn, no backup codes), the system falls back to email OTP:
 
 **Verify:** `POST /auth/2fa/email-otp/verify` (authenticated or challenge)
+
 - 6-digit numeric code sent to user's verified email address
 - Code cached with 10-minute TTL, single-use (`GetAndDelete`)
 - Shares the TOTP rate limiter (5 attempts / 5 min / IP)
 
 **Resend:** `POST /auth/2fa/email-otp/resend` (authenticated or challenge)
+
 - Re-sends the email OTP code
 - Shares the TOTP rate limiter
 
@@ -699,7 +718,7 @@ When `VAULT_MFA_REQUIRED=true` but a user has no configured 2FA methods (no TOTP
 
 ### 5.1 Composition
 
-```
+```text
 fingerprint = SHA256(length_prefix(IP) + length_prefix(User-Agent) + length_prefix(Accept-Language) + length_prefix(TLS-fingerprint))
 
 The TLS-fingerprint field is populated from the header specified by VAULT_TLS_FINGERPRINT_HEADER
@@ -742,14 +761,17 @@ Length-prefixed fields (4-byte big-endian length + data) prevent separator colli
 Clients are registered via CLI commands, the admin gateway API, or declarative seed files. There is no public API endpoint for client creation.
 
 **CLI:**
-```
+
+```bash
 vault42 add-client --admin-token <token> --name "frontend" --role "frontend" --scopes "user:read,user:write"
 ```
 
 **Declarative seeding (JSON):**
-```
+
+```text
 VAULT_SEED_FILE=/etc/vault42/seed.json
 ```
+
 Or via CLI: `vault42 seed --admin-token <token> --file seed.json`
 
 Seed files define clients and users declaratively. Seeding is idempotent -- existing entries (matched by client name) are skipped. Client secrets are always generated (never in the seed file) and printed to stdout. See `seed.example.json` for the file format.
@@ -794,6 +816,7 @@ All commands require `--admin-token`:
 | `export-audit` | Export audit log entries as JSONL to stdout |
 
 **Admin token lifecycle:**
+
 1. Taken from `ADMIN_TOKEN_FILE` on first boot when that is set, as either the token or its Argon2id hash. Otherwise generated (256-bit random) and displayed once to stdout.
 2. Stored as Argon2id hash in `auth.admin_config` table
 3. Verified with `VerifyPassword` (Argon2id) on every CLI command
@@ -902,13 +925,16 @@ Accepts partial update with pointer-field semantics (`display_name`, `avatar_url
 ### 7.2 Sessions
 
 **List:** `GET /user/sessions` (authenticated)
+
 - Returns all devices for the user with: `id`, `friendly_name`, `ip`, `user_agent`, `trusted`, `last_seen_at`, `first_seen_at`
 
 **Revoke:** `DELETE /user/sessions/{id}` (authenticated)
+
 - Verifies device belongs to user
 - Revokes all refresh tokens for the device, then deletes the device
 
 **Revoke All:** `DELETE /user/sessions` (authenticated)
+
 - Revokes all refresh tokens for the user
 - Deletes all device records
 
@@ -916,6 +942,7 @@ Accepts partial update with pointer-field semantics (`display_name`, `avatar_url
 
 **List:** `GET /user/devices` (authenticated)
 **Rename:** `PATCH /user/devices/{id}` (authenticated)
+
 - Friendly name max 100 runes, control characters rejected
 **Delete:** `DELETE /user/devices/{id}` (authenticated)
 - Revokes associated refresh tokens before deleting
@@ -927,6 +954,7 @@ Accepts partial update with pointer-field semantics (`display_name`, `avatar_url
 The Identity Store provides encrypted storage for personal identity information (PII). All data is encrypted at rest with AES-256-GCM and keyed to the user via HMAC-SHA256 pseudonymous foreign keys, ensuring that even database administrators cannot associate identity data with user accounts.
 
 **Architecture:**
+
 - Pseudonymous key: `HMAC-SHA256(userID + ":identity", hmac_secret)` -- a different salt than blob storage, so identity and blob pseudonyms cannot be correlated
 - Data encryption: JSON-serialized identity fields encrypted with AES-256-GCM using the master key
 - AAD binding: pseudonym ID used as authenticated additional data (AAD) for AES-256-GCM encryption -- ciphertext bound to owner
@@ -935,6 +963,7 @@ The Identity Store provides encrypted storage for personal identity information 
 - Permissions: `vault_app` role has SELECT, INSERT, UPDATE, DELETE on identity schema (DELETE required for user-initiated data removal)
 
 **Fields:**
+
 - `given_name` -- max 100 runes
 - `family_name` -- max 100 runes
 - `country` -- ISO 3166-1 alpha-2 (regex `^[A-Z]{2}$`)
@@ -948,6 +977,7 @@ The Identity Store provides encrypted storage for personal identity information 
   - `vat_id` -- max 50 runes
 
 **Endpoints:**
+
 - `GET /user/identity` -- retrieve decrypted identity (404 if none set)
 - `PUT /user/identity` -- upsert identity (create or replace)
 - `DELETE /user/identity` -- permanently delete identity data
@@ -961,6 +991,7 @@ The Identity Store provides encrypted storage for personal identity information 
 Encrypted blob storage allows users to upload, download, and manage encrypted files. Blobs are compressed with DEFLATE, encrypted with AES-256-GCM, and stored in PostgreSQL. Labels are encrypted separately to allow metadata listing without full decryption of blob data.
 
 **Architecture:**
+
 - Pseudonymous key: `HMAC-SHA256(userID + ":objects", hmac_secret)` -- different salt from identity store
 - Pipeline: raw data → DEFLATE compression → AES-256-GCM encryption → PostgreSQL BYTEA
 - Labels encrypted separately with AES-256-GCM
@@ -973,6 +1004,7 @@ Encrypted blob storage allows users to upload, download, and manage encrypted fi
 - **Decompression bomb protection:** Download decompression capped at 10 MB (`io.LimitReader`)
 
 **Quota enforcement:**
+
 - Per-user file count limit: `VAULT_BLOB_MAX_PER_USER` (default: 50)
 - Per-user total storage limit: `VAULT_BLOB_QUOTA_BYTES` (default: 10 MB)
 - Minimum blob size: `VAULT_BLOB_MIN_SIZE` (default: 0, disabled -- empty blobs are still rejected)
@@ -981,10 +1013,12 @@ Encrypted blob storage allows users to upload, download, and manage encrypted fi
 - Quota checked before compression/encryption to fail fast
 
 **Upload methods:**
+
 - Raw binary body with `X-Blob-Label` header
 - Multipart form data with `file` field and optional `label` field
 
 **Endpoints:**
+
 - `POST /user/blobs` -- upload a blob (returns metadata with id, size, checksum)
 - `GET /user/blobs` -- list blobs with metadata and quota info
 - `GET /user/blobs/{id}` -- download decrypted blob (returns `application/octet-stream`)
@@ -1114,6 +1148,7 @@ enabling it is an explicit operator decision rather than a consequence of upgrad
 visibility tier is a second, separate switch.
 
 **Architecture:**
+
 - Schema: `objects.service_documents(id UUID PK, client_id UUID FK -> auth.clients, subject_hash
   VARCHAR(128), doc_key VARCHAR(128), visibility SMALLINT, data_enc BYTEA, size_bytes INT,
   stored_bytes INT, version INT, created_at, updated_at)`, `migrations/014_service_documents.sql`
@@ -1165,6 +1200,7 @@ evaluated against the state the write would produce, so a replacement is not cha
 not consume a document slot it already holds.
 
 **Access control:**
+
 - `svcdoc:write` on `PUT` and `DELETE`, `svcdoc:read` on both `GET`s, via `middleware.RequireScope`
 - Every handler additionally asserts a non-empty `client_id` claim. `RequireScope` checks only the
   scopes array, and a user token can never carry a `svcdoc` scope today only because every
@@ -1277,6 +1313,7 @@ the escape hatch that permits turning it off in a production profile at all; see
 ### 8.2 Response Headers
 
 All rate-limited responses include:
+
 - `X-RateLimit-Limit` -- maximum requests in window
 - `X-RateLimit-Remaining` -- remaining requests
 - `X-RateLimit-Reset` -- Unix timestamp when window resets
@@ -1406,6 +1443,7 @@ Templates are HTML files embedded into the Go binary via `go:embed`. A shared ba
 Interface: `email.Sender` with a single method `Send(ctx context.Context, to, subject, htmlBody, textBody string) error`.
 
 **Built-in adapters:**
+
 - **SMTP** -- configured via `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER_FILE`, `SMTP_PASS_FILE`
 - **SendGrid** -- configured via `VAULT_EMAIL_PROVIDER=sendgrid`
 
@@ -1917,11 +1955,13 @@ The Vue SPA can be served directly from the Go binary via `go:embed`. The build 
 ### 15.1 Docker Image
 
 Multi-stage build, every stage pinned by digest:
+
 1. **Frontend:** `node:22-alpine` -- builds the Vue SPA for embedding
 2. **Builder:** `golang:1.26.6-alpine` -- builds the static binary (`CGO_ENABLED=0`)
 3. **Runtime:** `gcr.io/distroless/static-debian12:nonroot`
 
 Properties:
+
 - Static binary, no CGO, no dynamic linking
 - Non-root user (`nonroot:nonroot`)
 - Read-only root filesystem
@@ -1945,7 +1985,7 @@ Single deployment method for all environments. Templates:
 | `service.yaml` | ClusterIP service |
 | `ingress.yaml` | Split routing: API to vault42, `/` to frontend |
 | `configmap.yaml` | Non-secret configuration |
-| `postgres.yaml` | Optional in-cluster PostgreSQL (dev) |
+| `postgres.yaml` | Optional in-cluster PostgreSQL (dev only, off by default; not a supported production path) |
 | `redis.yaml` | Optional in-cluster Redis (dev) |
 | `frontend.yaml` | Optional Vue frontend |
 | `mailpit.yaml` | Optional dev email server |
@@ -1962,6 +2002,7 @@ Single deployment method for all environments. Templates:
 | `servicemonitor.yaml` | Prometheus ServiceMonitor |
 
 **Values files:**
+
 - `values.yaml` -- production defaults
 - `values-dev.yaml` -- dev overlay (single replica, local images, TLS, in-cluster services)
 
@@ -2213,6 +2254,7 @@ Nine layers:
 **CI pipeline:** `go vet` -> unit/attack/compliance -> fuzz (10 targets, 1 min each) -> gosec -> govulncheck -> trivy -> hadolint -> frontend build + test. Zero tolerance on security findings.
 
 **Test infrastructure:**
+
 - Integration tests use testcontainers-go (PostgreSQL module)
 - Browser tests use chromedp in a separate module to keep it out of the main dependency tree
 - Frontend: Vitest + Vue Test Utils for Vue component testing

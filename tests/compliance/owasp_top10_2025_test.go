@@ -778,7 +778,7 @@ func TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned(t *testing.T) {
 // A09 was renamed in the 2025 edition to add "Alerting", and that rename is
 // what moves vault42 from Met to an accepted risk: nothing in the tree reads a
 // risk score and raises anything. The logging half is real and is pinned here;
-// the alerting half is carried as AR-15 with a named revisit condition.
+// the alerting half is carried as CR-15 with a named revisit condition.
 //
 // This test fails when the gap closes, which is the signal to move the register
 // row rather than let it drift.
@@ -786,7 +786,7 @@ func TestOWASP_A09_2025_RiskScoreIsStillWriteOnly(t *testing.T) {
 	filterSrc := readProductionSource(t, "internal/repository/repository.go")
 	idx := strings.Index(filterSrc, "type AuditFilter struct")
 	if idx < 0 {
-		t.Skip("A09:2025: AuditFilter has moved; re-derive AR-15 against the new query surface")
+		t.Skip("A09:2025: AuditFilter has moved; re-derive CR-15 against the new query surface")
 	}
 	filter := filterSrc[idx:]
 	if end := strings.Index(filter, "\n}"); end > 0 {
@@ -794,7 +794,7 @@ func TestOWASP_A09_2025_RiskScoreIsStillWriteOnly(t *testing.T) {
 	}
 
 	if strings.Contains(strings.ToLower(filter), "risk") {
-		t.Fatal("A09:2025: AuditFilter can now select on risk score. AR-15 is closed: move the register row to Met and delete this test.")
+		t.Fatal("A09:2025: AuditFilter can now select on risk score. CR-15 is closed: move the register row to Met and delete this test.")
 	}
 }
 

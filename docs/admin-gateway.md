@@ -8,7 +8,7 @@ All admin operations -- key management, user management, audit log access, clien
 
 ## Architecture
 
-```
+```text
 Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
                                                        │
                                                        ├── RBAC + Session Auth
@@ -17,6 +17,7 @@ Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
 ```
 
 The admin gateway is a separate Go binary with its own:
+
 - Database role (`vault_admin`) -- full CRUD on admin tables, read on user tables plus lock/unlock and erasure
 - TLS configuration -- mTLS with client certificate verification
 - Session system -- 64-byte tokens, SHA256-hashed, stored in `auth.admin_sessions`
@@ -199,7 +200,7 @@ Migration `001_initial_schema.sql` creates (among other tables):
 
 On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The credentials are printed to stdout (one-time only):
 
-```
+```text
 admin-gateway: FIRST BOOT -- created super_admin "admin" with password: <random>
 ```
 
@@ -320,6 +321,7 @@ scripts/generate-admin-certs.sh
 ```
 
 Generates CA, server, and client certificates in `secrets/admin-gateway/`:
+
 - `ca.crt` -- Certificate Authority
 - `server.key`, `server.crt` -- Server certificate (SANs: localhost, 127.0.0.1, ::1)
 - `client.key`, `client.crt` -- Client certificate (CN: admin-operator)
@@ -362,7 +364,7 @@ docker run --rm \
 
 Multi-arch images (amd64 + arm64) published to GHCR on release:
 
-```
+```text
 ghcr.io/42-v/vault42-admin-gateway:<version>
 ghcr.io/42-v/vault42-admin-gateway:latest
 ```

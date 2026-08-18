@@ -63,8 +63,13 @@ type registerFile struct {
 		CompensatingControl string `json:"compensating_control"`
 		ResidualRisk        string `json:"residual_risk"`
 		RevisitWhen         string `json:"revisit_when"`
+		CostOfClosing       string `json:"cost_of_closing"`
 		SecurityMd          string `json:"security_md"`
 	} `json:"accepted_risks"`
+	// RetiredRisks records register identifiers that have closed. A reference to
+	// one has to resolve to something, or "CR-16 has since closed" is a dangling
+	// pointer wearing a status report's clothes.
+	RetiredRisks map[string]string `json:"retired_risks"`
 	Requirements []struct {
 		Standard      string   `json:"standard"`
 		Revision      string   `json:"revision"`
@@ -76,6 +81,10 @@ type registerFile struct {
 		Tests         []string `json:"tests"`
 		Notes         string   `json:"notes"`
 		AcceptedRisk  string   `json:"accepted_risk"`
+		// NABasis names the kind of reason a Not Applicable row rests on. See
+		// naBases in register_gates_test.go: leaving it unstated is how a claim
+		// about the code came to read like a claim about scope.
+		NABasis string `json:"na_basis"`
 	} `json:"requirements"`
 }
 
@@ -192,6 +201,12 @@ func TestComplianceRegister_NamedTestsAreNotUnconditionallySkipped(t *testing.T)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read tests/compliance: %v", err)
+	}
+	// A directory listing that comes back short means the walk, not the suite,
+	// changed. Every assertion below is inside the loop, so an empty listing
+	// would report success for a scan that never ran.
+	if len(entries) < 20 {
+		t.Fatalf("only %d entries in tests/compliance; the listing is broken and this gate would pass vacuously", len(entries))
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {

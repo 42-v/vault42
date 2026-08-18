@@ -14,7 +14,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 ## Highlights
 
 - **RS256 JWT**: algorithm whitelist (rejects `none`, `HS256`, all others), fingerprint-bound, 8KB size limit
-- **Argon2id**: 46 MiB / 1 iteration, NIST SP 800-63B compliant, 15-char minimum, HIBP breach check
+- **Argon2id**: 46 MiB / 1 iteration, per-password salt and server-side pepper, 15-char default password minimum over an enforced floor of 8 outside the dev profile (see [CR-31](docs/COMPLIANCE.md#accepted-risks)), HIBP breach check
 - **Refresh token rotation**: family tracking, single-use, replay detection nukes the entire family
 - **KMS unwrap oracle**: `POST /kms/unwrap` KEK envelope-unwrap, gated by the `kms:unwrap` scope, fail-closed rate limit, synchronous audit, every failure collapsed to one opaque error; the `vault kms wrap` CLI produces envelopes
 - **WebAuthn/FIDO2**: passkey registration and authentication
@@ -43,7 +43,7 @@ replay protection. See [docs/security.md](docs/security.md) AR-10.
 
 ## Architecture
 
-```
+```text
 cmd/vault/              Entry point (also hosts the `vault ...` admin CLI)
 cmd/admin-gateway/      mTLS admin gateway (key rotation, erasure, RBAC)
 cmd/bridge/             Honeypot bridge proxy (standalone, stdlib only)
@@ -123,7 +123,7 @@ scripts/release-check.sh
 | Profile | Cache | Use Case |
 |---|---|---|
 | `production` | Redis | Full features, TLS 1.3, external PostgreSQL + Redis |
-| `embedded` | In-memory | RPi5 / edge (~60 MB RAM), in-cluster Postgres, 5 conns |
+| `embedded` | In-memory | RPi5 / edge (~60 MB RAM), 5 conns. Point it at a PostgreSQL you run; the chart's bundled one is a development convenience, off by default, and did not start on any released version -- see [deployment-guide](docs/deployment-guide.md#the-bundled-postgresql) |
 | `honeypot` | Memory | Trap user detection, webhook alerts, embedded frontend |
 | `dev` | Inherits production | Debug logging, auto-migrate, permissive CORS, 24h refresh TTL |
 
@@ -184,7 +184,7 @@ commit that is already on `main`; nothing in a commit subject triggers one.
 
 Found a vulnerability? **Do not open a public issue.**
 
-Email **vault@42-v.com** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md) for the
+Email **<vault@42-v.com>** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md) for the
 intake process, how a security fix ships, the supported-version and semver policy, and how to
 verify a release with `cosign`.
 

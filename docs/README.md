@@ -31,12 +31,12 @@ Adding a document means adding a row here.
 
 | Document | What it covers |
 |---|---|
-| [Security Decisions & Accepted Risks](security.md) | The accepted-risk register (AR-1 through AR-12): what Vault42 deliberately does not defend against, and why. Read this before deploying. |
+| [Security Decisions & Accepted Risks](security.md) | The engineering accepted-risk log, AR-1 through AR-18: what Vault42 deliberately does not defend against, and why. The compliance register numbers its own risks CR-nn; the two namespaces are disjoint. Read this before deploying. |
 | [Attack Cheatsheet](cheatsheet.md) | Concrete attack vectors against JWT, sessions, crypto, OAuth2, the KMS unwrap oracle and the deployment surface, each mapped to the defence and the test that proves it. |
 | [Standards Compliance](COMPLIANCE.md) | Mapping to NIST SP 800-63B, OWASP ASVS, OWASP Top 10 and the RFC family, with the tests that back each claim. |
 | [Privacy & Data Protection Policy](PRIVACY.md) | GDPR posture: lawful basis, data inventory, retention, data-subject rights, processors, and the breach-notification procedure. |
 
-Vulnerability reports go to **vault@42-v.com**, never to a public issue. See
+Vulnerability reports go to **<vault@42-v.com>**, never to a public issue. See
 [SECURITY.md](../SECURITY.md) for the intake process, the security-release process, and the
 support and versioning policy. Contributors should read
 [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request.

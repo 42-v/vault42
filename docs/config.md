@@ -202,6 +202,7 @@ hop and the reason the first row of that pair is the documented answer.
 | `DB_APP_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_app` role password. Used for all runtime queries. See [Secret Loading](#secret-loading-_file-convention). |
 
 The application uses two PostgreSQL roles with least-privilege separation:
+
 - **`vault_mig`** -- DDL privileges for migrations only. Connection is closed after migrations complete.
 - **`vault_app`** -- SELECT/INSERT/UPDATE on `auth` schema, INSERT/SELECT only on `audit` schema (append-only: no UPDATE, no DELETE). No TRUNCATE, no DDL. DELETE is held on the per-user and per-session tables for token lifecycle and the erasure cascade, and on `auth.signing_keys` for the key reap, where a trigger narrows it to retired keys past expiry. Two writes are narrowed further than their grant: it may not put a vault42 capability scope on a client row (migration 023), and it may not un-confirm an email address, re-arm `import_pending`, ban or disable an account (migration 024). See [admin-gateway.md](admin-gateway.md#database-role-separation).
 
@@ -726,6 +727,14 @@ When deployed via the Helm chart (`charts/vault/`), environment variables are se
 
 1. **ConfigMap** (non-sensitive values) -- generated from `values.yaml` fields like `profile`, `listenAddr`, `origin`, etc. These map directly to the env vars documented above.
 2. **Secret volume mounts** (sensitive values) -- a Kubernetes Secret is mounted at `secrets.mountPath` (default: `/run/secrets`), and `_FILE` env vars point to the individual files within it.
+
+**Seed data is a Secret, not a ConfigMap.** `seed.users[].password` is a
+credential, and a ConfigMap is stored unencrypted and is readable by anything
+holding `get configmaps` in the namespace -- a much wider set than the Secret
+readers an operator thinks about. The seed document renders into a Secret and is
+mounted read-only at `/etc/vault42/seed.json`. If a doc, a values comment or a
+runbook of yours still says the seed lives in a ConfigMap, it predates that
+change and the passwords it describes were in plaintext.
 
 Key Helm values and their corresponding env vars:
 
