@@ -330,7 +330,7 @@ func TestPutEmailTemplate_EntropyFailureWritesNothing(t *testing.T) {
 		maxTemplateSize: 1 << 20,
 	}
 
-	body := `{"subject":"Verify your email","html_content":"<p>Hello {{.DisplayName}}</p>"}`
+	body := `{"subject":"Verify your email","html_content":"<p>Hello {{.AppName}}</p>"}`
 	req := httptest.NewRequest(http.MethodPut, "/admin/email-templates/beon3/verification", strings.NewReader(body))
 	req.SetPathValue("app", "beon3")
 	req.SetPathValue("name", "verification")

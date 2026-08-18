@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestRenderVerification(t *testing.T) {
@@ -169,16 +170,30 @@ func TestTemplateRendererOverride(t *testing.T) {
 	}
 }
 
-func TestTemplateRendererOverrideExecuteErrors(t *testing.T) {
-	t.Run("subject execute error falls back to Notification", func(t *testing.T) {
-		dir := t.TempDir()
-		custom := `{{define "subject"}}{{.Nope}}{{end}}{{define "content"}}<p>x</p>{{end}}`
-		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
-
-		r, err := NewTemplateRenderer(dir)
+// Render must not emit a half-built body when a template fails to execute.
+//
+// These two cases used to arrive through an override directory. They cannot any
+// more: validateTemplate now renders an operator-authored template with canary
+// data and refuses one that will not execute, so a {{.Nope}} override is
+// rejected at construction rather than silently mailed as a blank notice. That
+// is the better failure, and it leaves the embedded defaults as the only way to
+// reach these branches -- defaults are trusted and deliberately not validated,
+// which is exactly what makes them the right lever here.
+func TestTemplateRendererExecuteErrorsProduceNoPartialBody(t *testing.T) {
+	brokenDefault := func(t *testing.T, body string) *TemplateRenderer {
+		t.Helper()
+		fsys := apGoodTemplates()
+		fsys["templates/"+TemplateVerification+".html"] = &fstest.MapFile{Data: []byte(body)}
+		apUseTemplateFS(t, fsys)
+		r, err := NewTemplateRenderer("")
 		if err != nil {
 			t.Fatalf("NewTemplateRenderer: %v", err)
 		}
+		return r
+	}
+
+	t.Run("subject execute error falls back to Notification", func(t *testing.T) {
+		r := brokenDefault(t, `{{define "subject"}}{{.Nope}}{{end}}{{define "content"}}<p>x</p>{{end}}`)
 		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
 		if subject != "Notification" {
 			t.Errorf("subject = %q, want Notification", subject)
@@ -188,14 +203,7 @@ func TestTemplateRendererOverrideExecuteErrors(t *testing.T) {
 		}
 	})
 	t.Run("content execute error keeps subject drops body", func(t *testing.T) {
-		dir := t.TempDir()
-		custom := `{{define "subject"}}RealSubject{{end}}{{define "content"}}{{.Nope}}{{end}}`
-		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
-
-		r, err := NewTemplateRenderer(dir)
-		if err != nil {
-			t.Fatalf("NewTemplateRenderer: %v", err)
-		}
+		r := brokenDefault(t, `{{define "subject"}}RealSubject{{end}}{{define "content"}}{{.Nope}}{{end}}`)
 		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
 		if subject != "RealSubject" {
 			t.Errorf("subject = %q, want RealSubject", subject)
@@ -215,8 +223,13 @@ func TestTemplateRendererRejectsBrokenOverrideSyntax(t *testing.T) {
 	if err == nil {
 		t.Fatal("should reject a syntactically invalid override")
 	}
-	if !strings.Contains(err.Error(), "parse content") {
-		t.Errorf("err = %v, want a parse content error", err)
+	// The refusal now comes from validation rather than from the renderer's own
+	// parse: validateTemplate has to compile the template to inspect what it
+	// renders, so it is the first thing that sees the broken syntax. The
+	// renderer's parse error still guards the embedded defaults, which are not
+	// validated (TestNewTemplateRenderer_UnusableDefaultsFailAtConstruction).
+	if !strings.Contains(err.Error(), "unsafe template") || !strings.Contains(err.Error(), "does not compile") {
+		t.Errorf("err = %v, want the override refused as uncompilable", err)
 	}
 }
 

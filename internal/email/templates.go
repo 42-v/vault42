@@ -72,16 +72,23 @@ var (
 	spaceRe = regexp.MustCompile(`\s+`)
 )
 
-// unsafePattern matches dangerous content that must not appear in custom email
-// templates. Beyond active scripting it also rejects the passive auto-loading
-// vectors a credential-bearing email must never carry — meta-refresh redirects,
-// <base> hijacks, <link>/<style>/<svg> external loads, any <form>, data: URIs,
-// and CSS url() — so an admin-authored template cannot beacon a live
-// verification/reset token or OTP code out to an arbitrary host.
-// It allows benign structure a real HTML email needs (a <meta charset>/viewport,
-// a <style> block of inline CSS) but rejects the beacon-capable subset: any
-// http-equiv meta (refresh redirect), <base>, <link>, <svg>, <form>, data: URIs,
-// and CSS url().
+// unsafePattern is a fast first gate over the template SOURCE. It names the
+// active-content and auto-loading families outright — script, iframe, object,
+// embed, base, link, svg, form, http-equiv meta, javascript: and data: URIs,
+// CSS url(), on* handlers and the call/js directives — so the ordinary hostile
+// template is refused with an error that names what it did.
+//
+// It is NOT the control that holds the no-exfiltration property, and it never
+// could be. It reads the source, and the source is compiled by html/template
+// before anyone sees it, so a template action splits any literal this pattern
+// blocks: <scr{{"ipt"}}> carries no <script here and renders a working one. Its
+// list was also incomplete — img, href and background were never named, so the
+// plainest exfiltration of all, an image whose URL carries the reset token,
+// passed it untouched.
+//
+// The property is held by guardTemplate, which renders the template and
+// inspects the document a mail client would actually receive. See
+// template_guard.go for the argument.
 var unsafePattern = regexp.MustCompile(
 	`(?i)` +
 		`<\s*script|<\s*iframe|<\s*object|<\s*embed|` +
@@ -228,12 +235,22 @@ func (r *TemplateRenderer) Render(templateName string, data TemplateData) (strin
 	return subject, htmlBody, textBody
 }
 
-// validateTemplate rejects templates containing unsafe patterns.
+// validateTemplate is the single gate every operator-authored template passes,
+// whether it arrives as a file override or as a database row. It refuses any
+// template that could cause a live verification token, reset token, OTP code or
+// action link to leave the recipient's mail client for a host the operator did
+// not configure.
+//
+// The source-text denylist runs first because its errors name the construct.
+// guardTemplate is what actually holds the property: it renders the template
+// and applies an element/attribute allowlist to the document a mail client
+// would receive, so a construct split across a template action is already
+// reassembled by the time it is judged.
 func validateTemplate(data []byte) error {
 	if unsafePattern.Match(data) {
 		return fmt.Errorf("template contains forbidden content (script/iframe/object/embed/meta/base/link/style/svg/form tags, javascript:/data: URIs, css url(), event handlers, or call/js directives)")
 	}
-	return nil
+	return guardTemplate(data)
 }
 
 // stripHTML removes HTML tags and collapses whitespace for plain-text fallback.
