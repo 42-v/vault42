@@ -42,6 +42,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -404,20 +405,17 @@ func TestErasureRegisterEntriesAreBacked(t *testing.T) {
 					"endpoint reports success.", table, e.erasedBy, erasureCascadeSource)
 			}
 
-			src, err := os.ReadFile(filepath.Join(root, e.source))
-			if err != nil {
-				t.Fatalf("%s: register names %s as the eraser and it cannot be read: %v",
-					table, e.source, err)
-			}
-			body := string(src)
 			method := e.erasedBy[strings.LastIndex(e.erasedBy, ".")+1:]
-			if !strings.Contains(body, "func (r *") || !strings.Contains(body, method+"(ctx context.Context") {
-				t.Errorf("%s: %s does not define %s. The register is pointing at the wrong file.",
-					table, e.source, method)
+			sql, defined := erasureSQLIn(t, filepath.Join(root, e.source), method)
+			if !defined {
+				t.Fatalf("%s: %s does not define a method %s. The register is pointing at the "+
+					"wrong file, so nothing below is checking the erasure.", table, e.source, method)
 			}
-			if !strings.Contains(body, e.proof) {
-				t.Errorf("%s: %s does not contain %q. Either the statement changed or the "+
-					"register is describing code that no longer exists.", table, e.source, e.proof)
+			if !strings.Contains(sql, e.proof) {
+				t.Errorf("%s: %s issues no statement containing %q. Either the statement changed "+
+					"or the register is describing code that no longer runs.\nThe SQL %s actually "+
+					"issues is:\n\t%s", table, e.erasedBy, e.proof, e.erasedBy,
+					strings.ReplaceAll(strings.TrimSpace(sql), "\n", "\n\t"))
 			}
 
 			// The proof either names the table itself, or names a SECURITY DEFINER
@@ -444,6 +442,103 @@ func TestErasureRegisterEntriesAreBacked(t *testing.T) {
 	}
 }
 
+// erasureSQLIn returns the SQL one repository method actually issues: every
+// string literal reachable from the named method's body, with SQL line comments
+// blanked. It reports whether the method exists at all.
+//
+// Scoping to the method is the whole point, and it is the difference between a
+// register that is evidence and one that is a list of intentions.
+//
+// The check this replaced read the whole FILE for the proof fragment. A file
+// holding a repository has many methods and many queries: internal/repository/
+// postgres/device.go names auth.devices in half a dozen statements, so
+// DeleteAllForUser could be emptied to `return nil` and "DELETE FROM
+// auth.devices" would still be somewhere in the file, and the register would
+// still certify that an Art. 17 erasure clears the table.
+//
+// That consequence is not confined to the test suite. This register is the
+// evidence behind the erasure endpoint: DeleteAccount reports success, the
+// subject is told their data is gone, and the row is still there. A comment
+// quoting the old statement had the same effect, which is why only string
+// literals count -- comments are not statements the database ever sees.
+//
+// Package-level string constants are resolved, because a query held in a const
+// beside the method is the same query, and refusing to see it would push people
+// to inline SQL to satisfy a test.
+func erasureSQLIn(t *testing.T, path, method string) (string, bool) {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if v, err := strconv.Unquote(lit.Value); err == nil {
+						consts[name.Name] = v
+					}
+				}
+			}
+		}
+	}
+
+	var found *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Recv != nil && fn.Body != nil && fn.Name.Name == method {
+			found = fn
+			break
+		}
+	}
+	if found == nil {
+		return "", false
+	}
+
+	var sql strings.Builder
+	ast.Inspect(found.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.BasicLit:
+			if node.Kind == token.STRING {
+				if v, err := strconv.Unquote(node.Value); err == nil {
+					sql.WriteString(v)
+					sql.WriteByte('\n')
+				}
+			}
+		case *ast.Ident:
+			if v, ok := consts[node.Name]; ok {
+				sql.WriteString(v)
+				sql.WriteByte('\n')
+			}
+		}
+		return true
+	})
+
+	// A comment inside a query string is text the database discards, so it may
+	// not satisfy the proof either -- and a rewrite that leaves the old
+	// statement behind as `SELECT 1 /* was: DELETE FROM auth.devices */` is
+	// exactly the shape that would. Blocks first, then line comments, and with
+	// the Go path so the SQL blanker's block-comment refusal (which is about
+	// migration files, where an unhandled block would be a silent mis-parse)
+	// does not fire here.
+	return blankLineComments(t, path, blankBlockComments(sql.String(), "/*", "*/"), "--", anywhere), true
+}
+
 // allMigrationText returns every migration's contents keyed by filename.
 func allMigrationText(t *testing.T, root string) map[string]string {
 	t.Helper()
@@ -457,11 +552,10 @@ func allMigrationText(t *testing.T, root string) map[string]string {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatalf("read migration %s: %v", e.Name(), err)
-		}
-		out[e.Name()] = string(raw)
+		// Comment-blanked: the tie between a SECURITY DEFINER function and the
+		// table it clears has to be made by SQL the database runs, not by a
+		// commented-out draft of it.
+		out[e.Name()] = commentFreeSource(t, filepath.Join(dir, e.Name()))
 	}
 	return out
 }
