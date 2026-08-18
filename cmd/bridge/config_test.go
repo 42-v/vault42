@@ -31,6 +31,8 @@ var bridgeEnvKeys = []string{
 	"BRIDGE_REAL_IP_HEADER",
 	"BRIDGE_LOG_LEVEL",
 	"BRIDGE_STRIP_HEADERS",
+	"BRIDGE_MAX_BODY_BYTES",
+	"BRIDGE_MAX_INFLIGHT",
 }
 
 // clearBridgeEnv blanks every BRIDGE_* variable for the duration of the test.
@@ -87,6 +89,16 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "info")
+	}
+	// The two DoS caps were absent from this list and from the override sweep,
+	// so a default that drifted to zero would have disabled both silently.
+	if cfg.MaxBodyBytes != 16<<20 {
+		t.Errorf("MaxBodyBytes = %d, want 16 MiB; a proxied body is otherwise bounded only by the "+
+			"read timeout", cfg.MaxBodyBytes)
+	}
+	if cfg.MaxInflight != 512 {
+		t.Errorf("MaxInflight = %d, want 512; nothing else counts concurrent upstream sockets",
+			cfg.MaxInflight)
 	}
 
 	// The optional integrations must stay off unless asked for. An admin token
@@ -165,6 +177,8 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 	t.Setenv("BRIDGE_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("BRIDGE_REAL_IP_HEADER", "CF-Connecting-IP")
 	t.Setenv("BRIDGE_LOG_LEVEL", "debug")
+	t.Setenv("BRIDGE_MAX_BODY_BYTES", "1048576")
+	t.Setenv("BRIDGE_MAX_INFLIGHT", "64")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -189,6 +203,8 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 		{"RedisAddr", cfg.RedisAddr, "redis.internal:6379"},
 		{"RealIPHeader", cfg.RealIPHeader, "CF-Connecting-IP"},
 		{"LogLevel", cfg.LogLevel, "debug"},
+		{"MaxBodyBytes", cfg.MaxBodyBytes, int64(1 << 20)},
+		{"MaxInflight", cfg.MaxInflight, 64},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -197,12 +213,19 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 	}
 }
 
-// TestLoadConfigIgnoresUnparseableNumbers pins a genuinely dangerous behavior
-// so that it is at least a known one: a malformed threshold or window is not an
-// error, it silently reverts to the default. An operator who writes
-// BRIDGE_FLAG_THRESHOLD=1O0 with a letter O gets 100, and an operator who writes
-// BRIDGE_RATE_WINDOW=60 without a unit gets one minute by luck rather than by
-// parsing. Nothing in the logs says so.
+// TestLoadConfigIgnoresUnparseableNumbers covers the fallback and the warning
+// that now goes with it.
+//
+// A malformed threshold or window is not a startup error: a bridge that refuses
+// to start because one number is mistyped takes the whole edge down with it. An
+// operator who writes BRIDGE_FLAG_THRESHOLD=1O0 with a letter O gets 100, and
+// one who writes BRIDGE_RATE_WINDOW=60 without a unit gets one minute by luck
+// rather than by parsing.
+//
+// What was dangerous was the silence. This test used to pin the fallback and
+// stop there, which read as coverage of the whole behaviour while the only thing
+// an operator could act on — being told the value they set is not the value in
+// force — was absent and unasserted. Both halves are asserted now.
 func TestLoadConfigIgnoresUnparseableNumbers(t *testing.T) {
 	clearBridgeEnv(t)
 	setRequiredUpstreams(t)
@@ -212,10 +235,14 @@ func TestLoadConfigIgnoresUnparseableNumbers(t *testing.T) {
 	t.Setenv("BRIDGE_RATE_WINDOW", "60")
 	t.Setenv("BRIDGE_FLAG_TTL", "one day")
 
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
+	var cfg *Config
+	out := captureBridgeLog(t, func() {
+		var err error
+		cfg, err = LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+	})
 
 	if cfg.RateThreshold != 60 {
 		t.Errorf("RateThreshold = %d, want the default 60", cfg.RateThreshold)
@@ -228,6 +255,94 @@ func TestLoadConfigIgnoresUnparseableNumbers(t *testing.T) {
 	}
 	if cfg.FlagTTL != 24*time.Hour {
 		t.Errorf("FlagTTL = %v, want the default 24h", cfg.FlagTTL)
+	}
+
+	// One line per rejected value, each naming the variable and what is in
+	// force instead. An operator reading the log has to be able to find which
+	// of their settings did not take.
+	for _, key := range []string{
+		"BRIDGE_RATE_THRESHOLD", "BRIDGE_FLAG_THRESHOLD",
+		"BRIDGE_RATE_WINDOW", "BRIDGE_FLAG_TTL",
+	} {
+		if !strings.Contains(out, key) {
+			t.Errorf("startup log = %q, which never names %s. The value the operator set is not "+
+				"the value in force and nothing says so, which is how a configuration and a "+
+				"running process come to disagree for months.", out, key)
+		}
+	}
+	if strings.Count(out, "WARNING") != 4 {
+		t.Errorf("startup log carries %d warnings, want one per rejected value:\n%s",
+			strings.Count(out, "WARNING"), out)
+	}
+}
+
+// TestLoadConfigRefusesCapsThatDisableThemselves is the gate for the shape that
+// had no test at all.
+//
+// Every cap here is applied by a `> 0` guard in proxy.go, so a negative value
+// does not lower the limit, it removes it. BRIDGE_MAX_INFLIGHT=-1 leaves the
+// bridge with no bound on concurrent upstream sockets and BRIDGE_MAX_BODY_BYTES=-1
+// removes the request-body cap, in both cases while the operator is reading a
+// configuration that says the opposite and a process that reports healthy.
+//
+// strconv.Atoi accepts a minus sign, so nothing between the environment and the
+// guard had an opinion. The two DoS controls the bridge exists to provide were
+// one keystroke from off.
+func TestLoadConfigRefusesCapsThatDisableThemselves(t *testing.T) {
+	for _, tc := range []struct {
+		key, value, why string
+	}{
+		{"BRIDGE_MAX_INFLIGHT", "-1", "no bound on concurrent upstream sockets"},
+		{"BRIDGE_MAX_BODY_BYTES", "-1", "no bound on a proxied request body"},
+		{"BRIDGE_RATE_THRESHOLD", "-1", "every request counts as over the rate threshold"},
+		{"BRIDGE_LOGIN_FAIL_THRESHOLD", "-1", "every login failure scores immediately"},
+		{"BRIDGE_FLAG_THRESHOLD", "0", "every address is flagged into the honeypot at once"},
+		{"BRIDGE_RATE_WINDOW", "-1m", "a window that runs backwards"},
+		{"BRIDGE_LOGIN_FAIL_WINDOW", "0s", "a window nothing can fall inside"},
+		{"BRIDGE_FLAG_TTL", "-1h", "a flag that has already expired when it is written"},
+	} {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			clearBridgeEnv(t)
+			setRequiredUpstreams(t)
+			t.Setenv(tc.key, tc.value)
+
+			cfg, err := LoadConfig()
+			if err == nil {
+				t.Fatalf("LoadConfig accepted %s=%s and returned a config; the result is %s, and "+
+					"the operator has no way to tell that from the limit they asked for",
+					tc.key, tc.value, tc.why)
+			}
+			if cfg != nil {
+				t.Errorf("LoadConfig returned both an error and a config; a caller that ignores " +
+					"the error gets the broken one")
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("error = %q, which does not name %s; an operator cannot fix a value the "+
+					"message does not identify", err, tc.key)
+			}
+		})
+	}
+}
+
+// TestZeroInflightStillDisablesTheCapOnPurpose keeps the refusal above from
+// swallowing the one documented way to ask for no limit.
+//
+// MaxInflight's doc says "Zero disables the cap", and an operator terminating
+// the bridge behind something that already bounds concurrency has a reason to
+// use it. A validation that refuses every falsy value would be a different
+// control from the one documented.
+func TestZeroInflightStillDisablesTheCapOnPurpose(t *testing.T) {
+	clearBridgeEnv(t)
+	setRequiredUpstreams(t)
+	t.Setenv("BRIDGE_MAX_INFLIGHT", "0")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig refused BRIDGE_MAX_INFLIGHT=0, which the field's own doc calls the "+
+			"way to disable the cap: %v", err)
+	}
+	if cfg.MaxInflight != 0 {
+		t.Errorf("MaxInflight = %d, want 0", cfg.MaxInflight)
 	}
 }
 
