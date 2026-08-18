@@ -136,7 +136,7 @@ release, including a patch.
 
 | Surface | Why it is excluded |
 |---------|--------------------|
-| `risk_score` on `GET /admin/audit` | An opaque severity tag, not a measurement. Section 0.6.1. |
+| `risk_score` on `GET /admin/audit` | A severity band, not a measurement. Section 0.6.1. |
 | `VAULT_DPOP_ENABLED` remaining limits | Refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. Section 0.6.2. |
 | Admin gateway HTML pages (`GET /admin/`, `/admin/login`, `/admin/ui/*`, `/admin/static/*`) | A user interface, not an API. |
 | The `GET /metrics` exposition body | The endpoint, its gate and its content type are stable; the metric names, labels and cardinality track the code. |
@@ -147,16 +147,24 @@ release, including a patch.
 
 #### 0.6.1 `risk_score`
 
-`risk_score` is public on `GET /admin/audit`. It is a **hardcoded per-event-type severity tag**,
-not a computed or adaptive score (`internal/audit/audit.go` call sites pass a constant). Two
-consequences, both normative:
+`risk_score` is public on `GET /admin/audit`. It is a **per-event-class severity band**, not a
+computed or adaptive score: one table keyed by event class (`internal/audit/severity.go`) supplies
+it, `audit.Logger.Log` takes no score argument, and no call site can choose one. It used to be a
+call-site literal, which is why the previous text said values were not comparable across event
+types -- they were not, and the same class carried four different numbers.
 
-- values are **not comparable across event types**. A 70 on one event and a 70 on another mean only
-  that the catalog assigns both a 70;
-- values MAY change for any event type, and new values MAY appear, without a major bump.
+The bands are `0` routine, `25` notable, `50` elevated, `75` serious, `100` critical, and they are
+comparable: a row scoring at least 75 is at least as serious as any other row scoring 75, whatever
+class it came from. That is what makes `min_risk_score` a usable filter (section 21.4).
 
-Clients MUST NOT threshold, sum, average, sort or alert on it. Treat it as an opaque label. When
-adaptive scoring lands the range and meaning will change, and that will not be a breaking change.
+Two consequences remain normative:
+
+- **the band of any event class MAY change** without a major bump, and new classes MAY appear.
+  A threshold an operator sets is a monitoring decision, not a contract;
+- the numbers are bands, not a scale to do arithmetic on. Clients MUST NOT sum or average them.
+
+Thresholding, sorting and alerting on the band are supported and are what it is for. When adaptive
+scoring lands the *range* may change, and that will not be a breaking change.
 `GET /admin/audit` deliberately does not expose `fingerprint_hash`, which correlates events across
 accounts; `device_id` identifies the same device without being a cross-account correlator.
 
@@ -225,8 +233,11 @@ a capability that is absent:
   section 5.2 specifies `invalid_client`. Section 0.4 freezes both until 2.0.0.
 - **Not multi-tenant.** Section 0.9.
 - **No SIEM streaming.** The audit log is queryable (`GET /admin/audit`) and exportable
-  (`export-audit`). There is no push, no syslog sink, and no webhook other than the honeypot
-  alerter.
+  (`export-audit`). There is no push of audit *records*, no syslog sink, and no webhook other than
+  the honeypot alerter. Detections are a different thing and do leave the process: a crossed
+  alert rule writes one `SECURITY ALERT` line to the process log and increments
+  `vault_security_alerts_total`, which is the deployment's existing log and metrics pipeline
+  rather than a sink vault42 opens a connection to. Section 21.4.
 - **No server-rendered auth pages.** Per-app white-label branding applies to outbound email only
   (section 10.3). The embedded SPA is a convenience, not a themed server-side render.
 - **No multi-region or multi-writer topology, no read replicas, no connection pooler, no row-level
@@ -2435,8 +2446,15 @@ verb (`rotate-client-secret`) and was documented as a path by mistake before 1.0
 
 ### 21.4 Audit
 
-`GET /admin/audit` filters on `user_id`, `event_type`, `since` and `until` (both RFC 3339), with
-`limit` and `offset` on the same defaults and cap as every other admin list route.
+`GET /admin/audit` filters on `user_id`, `event_type`, `since` and `until` (both RFC 3339) and
+`min_risk_score`, with `limit` and `offset` on the same defaults and cap as every other admin list
+route.
+
+`min_risk_score` selects rows scoring at least that much on the severity scale in section 0.6.1,
+so `?min_risk_score=75` returns everything serious or worse. A value that does not parse as a
+positive integer leaves the predicate off rather than landing on a different threshold, which is
+the same behaviour `since` and `until` have for an unparseable timestamp: a filter that silently
+becomes a different filter gives a wrong answer rather than no answer.
 
 The response projects each row explicitly (`auditEntryView`) rather than serialising the model, and
 the projection is part of the contract:

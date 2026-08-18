@@ -146,7 +146,7 @@ func (h *Handler) RotateKey(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRotate, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"kid": kid,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "rotated", "kid": kid})
 }
@@ -170,7 +170,7 @@ func (h *Handler) RevokeKey(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"kid": kid,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
@@ -373,7 +373,7 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 		"target_user":      id,
 		"until":            until.Format(time.RFC3339),
 		"sessions_revoked": revoked,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "locked", "until": until.Format(time.RFC3339)})
 }
@@ -394,7 +394,7 @@ func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserUnlock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"target_user": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
 }
@@ -426,7 +426,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserDelete, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"target_user": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -570,7 +570,7 @@ func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.AdminSessionRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"scope":  "all",
 		"target": "user_refresh_tokens",
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "all_sessions_revoked"})
 }
@@ -627,6 +627,17 @@ func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("until"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			filter.Until = &t
+		}
+	}
+	// min_risk_score selects on the internal/audit severity scale: 0 routine,
+	// 25 notable, 50 elevated, 75 serious, 100 critical. A value that does not
+	// parse, or one below the scale, leaves the predicate off rather than
+	// landing on some other threshold -- the same shape as since and until
+	// above, and for the same reason: a filter that silently becomes a
+	// different filter gives a wrong answer rather than no answer.
+	if v := q.Get("min_risk_score"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.MinRiskScore = n
 		}
 	}
 
@@ -793,7 +804,7 @@ func (h *Handler) CreateClient(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminClientCreate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"client_name": req.Name,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
 		"id":     id,
@@ -816,7 +827,7 @@ func (h *Handler) RevokeClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := GetAdmin(r.Context())
-	_ = h.auditLog.Log(r.Context(), audit.AdminClientRevoke, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRevoke, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
@@ -855,7 +866,7 @@ func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := GetAdmin(r.Context())
-	_ = h.auditLog.Log(r.Context(), audit.AdminClientRotate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRotate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"status": "rotated",
@@ -926,7 +937,7 @@ func (h *Handler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"config_key": key,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated", "key": key})
 }
@@ -948,7 +959,7 @@ func (h *Handler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"config_key": key,
 		"action":     "delete",
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted", "key": key})
 }
@@ -1085,7 +1096,7 @@ func (h *Handler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		"new_admin_id":       id,
 		"new_admin_username": req.Username,
 		"new_admin_role":     req.Role,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
 		"id":       id,
@@ -1120,7 +1131,7 @@ func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"revoked_admin_id": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }

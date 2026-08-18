@@ -8,7 +8,11 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
+<<<<<<< HEAD
 > **404 requirements in scope across 9 standards: 345 Met, 13 Accepted Risk,
+=======
+> **404 requirements in scope across 9 standards: 339 Met, 19 Accepted Risk,
+>>>>>>> hard/alerting
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -146,8 +150,10 @@ requirement rather than standing alone.
 Supply Chain Failures** is new, and it is the category vault42 was best placed to
 evidence all along: SBOM, SLSA build provenance and keyless cosign signatures
 have shipped since 0.8 and were cited nowhere. **A09** was renamed to
-*Security Logging and **Alerting** Failures*, and that single word moves vault42
-off Met, because nothing in the tree raises an alert. See CR-15.
+*Security Logging and **Alerting** Failures*, and that single word moved vault42
+off Met, because nothing in the tree raised an alert. It is Met again: an alert
+detector is installed on every profile and raises one windowed, deduplicated
+record per detection. See CR-15 in the closed-risks table.
 
 ---
 
@@ -202,9 +208,15 @@ than being retired on a technicality.
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
+<<<<<<< HEAD
 | **Total** | **345** | **13** | **46** | **404** |
 
 The 13 Accepted Risk rows collapse to **9 distinct accepted risks**: several
+=======
+| **Total** | **339** | **19** | **46** | **404** |
+
+The 19 Accepted Risk rows collapse to **10 distinct accepted risks**: several
+>>>>>>> hard/alerting
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -276,7 +288,11 @@ neither namespace.
 | ID | Severity | What is accepted | Requirements affected |
 |---|---|---|---|
 | **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
+<<<<<<< HEAD
 | **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
+=======
+| **CR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
+>>>>>>> hard/alerting
 | **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
 | **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
@@ -307,7 +323,9 @@ of the list:
 - **SOC 2 and ISO/IEC 27001.** Both attest an organisation, not a codebase. A
   repository cannot be "SOC 2 compliant". The only legitimate artefact would be
   a customer-enablement mapping, clearly labelled, and it would publish a gap on
-  day one: CC7.2 and CC7.3 are directly blocked by CR-15.
+  day one: CC7.2 and CC7.3 need an operator's own monitoring and response
+  process on top of what vault42 detects, which CR-15's closure supplies the
+  detection half of and nothing in a repository can supply the rest of.
 - **PCI-DSS.** vault42 stores, processes and transmits no cardholder data and
   has never been in a CDE assessment. The only honest sentence is that vault42
   can serve as the authentication component supporting Requirement 8 in an
@@ -367,9 +385,8 @@ rather than deleted.
 
 ### Closed since this document was first written
 
-Five accepted risks closed on the merge that integrated the code work, and in
-each case the test written to fail *on closure* is what forced the row to move
-rather than a person remembering to.
+Six accepted risks have closed, and in each case the test written to fail *on
+closure* is what forced the row to move rather than a person remembering to.
 
 | ID | What closed it | The test that fired |
 |---|---|---|
@@ -378,6 +395,7 @@ rather than a person remembering to.
 | **CR-33** | `adminGateway.hostNetwork` now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile with no exemption. It stays opt-in for operators who want the `LocalOnly` posture. | `TestK8sPSS_Restricted_ThereAreNoDeviationsLeft` |
 | **CR-31** | `passwordMinLengthFloor` is now **15**, not 8, and the dev profile no longer has *no* floor -- it has a lower one of 8, which is itself the figure §3.1.1.1 requires a verifier to accept. | `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` |
 | **CR-32** | `.github/dependabot.yml` exists and covers github-actions, gomod for both modules, npm, nuget and docker. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
+| **CR-15** | `internal/alert` keeps windowed counts per subject and per masked source network, raises one alert per rule crossing with a cooldown, bounds its key space and reports its own saturation; `cmd/vault/main.go` installs it on every profile with `alert.LogSink`. `risk_score` stopped being a per-call-site literal: `audit.Severity` keys one scale by event class, `Logger.Log` no longer takes a score, and `AuditFilter.MinRiskScore` emits a `risk_score >=` predicate reachable as `min_risk_score` on `GET /admin/audit`. **CR-24 did not close with it** -- nothing here ships audit records off-box or detects tampering at read time. | the tripwire asserting that `repository.AuditFilter` still carried no field mentioning risk, written to fail on closure and named in `tests/compliance/owasp_top10_2025_test.go` where it used to stand. It fired, and is replaced in the same change by `TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten` and `TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile` |
 
 Full text for each, including what was accepted while it was open, is in
 `retired_risks` in the register.

@@ -165,7 +165,7 @@ func TestLogger_ConcurrentLogFlushCloseAccountsForEveryEvent(t *testing.T) {
 					eventType = LoginFailure
 				}
 				if err := l.Log(ctx, eventType, "u", "", "203.0.113.9", "", "", "",
-					map[string]interface{}{"seq": seq}, 0); err != nil {
+					map[string]interface{}{"seq": seq}); err != nil {
 					t.Errorf("Log returned an error during the storm: %v", err)
 					return
 				}
@@ -267,7 +267,7 @@ func TestLogger_LogAfterCloseIsWrittenSynchronously(t *testing.T) {
 	ctx := context.Background()
 
 	if err := l.Log(ctx, LoginFailure, "u", "", "203.0.113.9", "", "", "",
-		map[string]interface{}{"seq": 1}, 0); err != nil {
+		map[string]interface{}{"seq": 1}); err != nil {
 		t.Fatalf("pre-close Log: %v", err)
 	}
 	if err := l.Close(ctx); err != nil {
@@ -278,7 +278,7 @@ func TestLogger_LogAfterCloseIsWrittenSynchronously(t *testing.T) {
 	}
 
 	if err := l.Log(ctx, LoginFailure, "u", "", "203.0.113.9", "", "", "",
-		map[string]interface{}{"seq": 2}, 0); err != nil {
+		map[string]interface{}{"seq": 2}); err != nil {
 		t.Fatalf("post-close Log: %v", err)
 	}
 	if got := repo.written(2); got != 1 {

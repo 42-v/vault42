@@ -93,6 +93,14 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 		args = append(args, *filter.Until)
 		argIdx++
 	}
+	// Zero is absence, matching the field's contract: risk_score >= 0 is every
+	// row, so emitting the predicate for an unset filter would put a clause in
+	// the plan that selects nothing out and reads as though it did.
+	if filter.MinRiskScore > 0 {
+		conditions = append(conditions, fmt.Sprintf("risk_score >= $%d", argIdx))
+		args = append(args, filter.MinRiskScore)
+		argIdx++
+	}
 
 	query := "SELECT id, timestamp, event_type, COALESCE(user_id::text,''), COALESCE(client_id::text,''), COALESCE(ip,''), COALESCE(user_agent,''), COALESCE(fingerprint_hash,''), COALESCE(device_id::text,''), metadata, risk_score FROM audit.audit_log"
 	if len(conditions) > 0 {

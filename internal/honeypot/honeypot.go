@@ -136,7 +136,7 @@ func (a *Alerter) Alert(ctx context.Context, event Event) {
 				"event_type": event.EventType,
 				"email":      event.Email,
 				"risk_score": event.RiskScore,
-			}, event.RiskScore)
+			})
 	}
 
 	// Send webhook
@@ -187,7 +187,7 @@ func (a *Alerter) Alert(ctx context.Context, event Event) {
 		if suppressed > 0 {
 			meta["suppressed_since_last"] = suppressed
 		}
-		a.auditLog.Log(ctx, audit.HoneypotAlert, "", "", event.IP, event.UserAgent, "", "", meta, 0) // #nosec G104 -- audit is best-effort
+		a.auditLog.Log(ctx, audit.HoneypotAlert, "", "", event.IP, event.UserAgent, "", "", meta) // #nosec G104 -- audit is best-effort
 	}
 
 	if resp.StatusCode >= 400 {

@@ -46,10 +46,10 @@ func TestAHoneypotTriggerIsWrittenEvenWhenTheAuditBufferIsFull(t *testing.T) {
 	ctx := context.Background()
 	defer logger.Close(ctx) // #nosec G104 -- test cleanup
 
-	if err := logger.Log(ctx, audit.LoginSuccess, "", "", "", "", "", "", nil, 0); err != nil {
+	if err := logger.Log(ctx, audit.LoginSuccess, "", "", "", "", "", "", nil); err != nil {
 		t.Fatalf("filling the buffer: %v", err)
 	}
-	if err := logger.Log(ctx, audit.HoneypotTrigger, "", "", "203.0.113.7", "", "", "", nil, 100); err != nil {
+	if err := logger.Log(ctx, audit.HoneypotTrigger, "", "", "203.0.113.7", "", "", "", nil); err != nil {
 		t.Fatalf("logging the trigger: %v", err)
 	}
 

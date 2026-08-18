@@ -359,8 +359,17 @@ type AuditFilter struct {
 	EventType string
 	Since     *time.Time
 	Until     *time.Time
-	Limit     int
-	Offset    int
+	// MinRiskScore selects entries scoring at least this much on the
+	// internal/audit severity scale. It is what makes the severity signal
+	// reviewable: the filter carried user, event type and time window only, so
+	// there was no predicate an operator could write that meant "show me
+	// everything that mattered", and the score sat in the store unread.
+	//
+	// Zero means absent rather than a floor of zero, because a floor of zero
+	// selects everything and would make an unset filter look set.
+	MinRiskScore int
+	Limit        int
+	Offset       int
 }
 
 // SocialAccountRepository manages social login persistence.

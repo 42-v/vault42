@@ -57,7 +57,7 @@ func TestLogImmediate(t *testing.T) {
 	ctx := context.Background()
 
 	err := logger.Log(ctx, LoginSuccess, "user-1", "", "1.2.3.4", "Mozilla", "fp123", "",
-		map[string]interface{}{"action": "login"}, 0)
+		map[string]interface{}{"action": "login"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +83,8 @@ func TestLogBatchFlush(t *testing.T) {
 	logger := NewLogger(repo, 100*time.Millisecond)
 	ctx := context.Background()
 
-	logger.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil, 0)
-	logger.Log(ctx, LoginFailure, "u2", "", "2.2.2.2", "", "", "", nil, 50)
+	logger.Log(ctx, LoginSuccess, "u1", "", "1.1.1.1", "", "", "", nil)
+	logger.Log(ctx, LoginFailure, "u2", "", "2.2.2.2", "", "", "", nil)
 
 	// Not flushed yet
 	repo.mu.Lock()
@@ -120,7 +120,7 @@ func TestScrubSensitiveMetadata(t *testing.T) {
 			"access_token": "at-value",
 			"action":       "login",            // this should survive
 			"email":        "user@example.com", // this should survive
-		}, 0)
+		})
 
 	e := repo.entries[0]
 	if _, ok := e.Metadata["password"]; ok {

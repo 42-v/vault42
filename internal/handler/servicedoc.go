@@ -286,7 +286,7 @@ func (h *ServiceDocumentHandler) audit(r *http.Request, event, subject, clientID
 	}
 	// #nosec G104 -- audit is best-effort and must never block the document path
 	h.auditLog.Log(r.Context(), event, userID, clientID, middleware.ClientIP(r),
-		r.Header.Get("User-Agent"), "", "", meta, 0)
+		r.Header.Get("User-Agent"), "", "", meta)
 }
 
 // writeError maps service errors to status codes.

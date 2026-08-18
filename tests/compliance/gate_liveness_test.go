@@ -517,6 +517,11 @@ var commentTestNameExemptions = map[string]string{
 		"register's prose as well as its tests[] arrays, so naming it is the point",
 	"TestSSDF_800_218_DependencyUpdateAutomationIsAbsent": "retired the day it fired, and named " +
 		"in the same comment for the same reason as its sibling above",
+	"TestOWASP_A09_2025_RiskScoreIsStillWriteOnly": "retired the day it fired. It asserted that " +
+		"repository.AuditFilter still carried no risk field and said in its own failure message " +
+		"that closing CR-15 meant moving the row and deleting it. Both the comment standing where " +
+		"it used to be and alerting_test.go name it, because a tripwire that is removed without a " +
+		"trace is indistinguishable from one that was quietly deleted while the gap was open",
 	"TestComplianceRegister": "a `go test -run` regular expression, not a function: it matches " +
 		"every TestComplianceRegister_* gate in tests/compliance",
 	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "a name that has never existed, quoted " +

@@ -120,7 +120,7 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), audit.OAuth2Authorize, "", "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"provider": providerName,
-			}, 0)
+			})
 	}
 
 	authURL := provider.AuthURL(state, nonce, challenge)
@@ -610,7 +610,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 					r.Header.Get("User-Agent"), fp, "", map[string]interface{}{
 						"provider":     providerName,
 						"mfa_required": true,
-					}, 0)
+					})
 			}
 
 			fragment := url.Values{}
@@ -707,7 +707,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), audit.OAuth2Callback, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), fp, "", map[string]interface{}{
 				"provider": providerName,
-			}, 0)
+			})
 	}
 
 	// Store access token behind a one-time code instead of placing it in the URL fragment.

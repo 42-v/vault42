@@ -47,7 +47,7 @@ func TestLog_IDGenerationFailureWritesNothing(t *testing.T) {
 	l := NewLogger(repo, 0)
 	apStarveEntropy(t)
 
-	err := l.Log(context.Background(), "login_success", "user-1", "", "203.0.113.1", "curl", "", "", nil, 0)
+	err := l.Log(context.Background(), "login_success", "user-1", "", "203.0.113.1", "curl", "", "", nil)
 	if err == nil {
 		t.Fatal("Log reported success while it could not generate an entry ID")
 	}
@@ -67,7 +67,7 @@ func TestNewLoggerWithBufferSize_NonPositiveFallsBackToDefault(t *testing.T) {
 		t.Cleanup(func() { _ = l.Close(context.Background()) })
 
 		for i := 0; i < defaultAuditBufferSize; i++ {
-			if err := l.Log(context.Background(), "login_failed", "user-1", "", "", "", "", "", nil, 0); err != nil {
+			if err := l.Log(context.Background(), "login_failed", "user-1", "", "", "", "", "", nil); err != nil {
 				t.Fatalf("bufferSize %d: Log: %v", size, err)
 			}
 		}
@@ -75,7 +75,7 @@ func TestNewLoggerWithBufferSize_NonPositiveFallsBackToDefault(t *testing.T) {
 			t.Fatalf("bufferSize %d: %d events dropped before the default capacity was reached", size, dropped)
 		}
 
-		if err := l.Log(context.Background(), "login_failed", "user-1", "", "", "", "", "", nil, 0); err != nil {
+		if err := l.Log(context.Background(), "login_failed", "user-1", "", "", "", "", "", nil); err != nil {
 			t.Fatalf("bufferSize %d: Log: %v", size, err)
 		}
 		if dropped := l.DroppedTotal(); dropped != 1 {

@@ -134,7 +134,7 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until) |
+| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score) |
 
 ### Client Management
 

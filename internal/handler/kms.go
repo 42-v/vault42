@@ -79,12 +79,8 @@ func (h *KMSHandler) audit(r *http.Request, clientID, kid string, ok bool) {
 	if h.auditLog == nil {
 		return
 	}
-	risk := 0
-	if !ok {
-		risk = 20
-	}
 	// #nosec G104 -- audit is best-effort and must never block the KMS path
 	h.auditLog.Log(r.Context(), audit.KMSUnwrap, clientID, clientID, middleware.ClientIP(r),
 		r.Header.Get("User-Agent"), "", "",
-		map[string]interface{}{"kid": kid, "success": ok}, risk)
+		map[string]interface{}{"kid": kid, "success": ok})
 }

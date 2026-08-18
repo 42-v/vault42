@@ -158,7 +158,7 @@ func (h *Handler) RequirePasswordReset(w http.ResponseWriter, r *http.Request) {
 		"target_user":      user.ID,
 		"reason":           reason,
 		"sessions_revoked": revoked,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":           "password_reset_required",
@@ -201,7 +201,7 @@ func (h *Handler) ClearPasswordReset(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserResetCleared, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"target_user": user.ID,
 		"reason":      reason,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "password_reset_not_required"})
 }

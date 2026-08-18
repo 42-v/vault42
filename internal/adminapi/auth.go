@@ -109,7 +109,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, "", "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 			"reason":   "user_not_found",
 			"username": req.Username,
-		}, 5)
+		})
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
@@ -118,7 +118,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if admin.LockedUntil != nil && time.Now().Before(*admin.LockedUntil) {
 		_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, admin.ID, "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 			"reason": "account_locked",
-		}, 3)
+		})
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
@@ -216,7 +216,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(ctx, audit.AdminLogin, admin.ID, "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 		"username": admin.Username,
 		"role":     admin.Role,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, loginResponse{
 		Token:     token,
@@ -249,7 +249,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	if admin != nil {
 		adminID = admin.ID
 	}
-	_ = h.auditLog.Log(r.Context(), audit.AdminLogout, adminID, "", r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminLogout, adminID, "", r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
@@ -371,7 +371,7 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.TwoFASetup, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"method": "totp",
 		"admin":  true,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "totp_verified"})
 }
@@ -508,13 +508,13 @@ func (h *AuthHandler) handleFailedLogin(ctx context.Context, admin *model.AdminU
 			"username":     admin.Username,
 			"failed_count": newCount,
 			"locked_until": lockUntil.Format(time.RFC3339),
-		}, 8)
+		})
 	}
 
 	_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, admin.ID, "", ip, ua, "", "", map[string]interface{}{
 		"username": admin.Username,
 		"reason":   "wrong_password",
-	}, 5)
+	})
 }
 
 func hashSessionToken(token string) string {

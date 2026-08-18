@@ -127,7 +127,7 @@ func TestGDPR_Art5_1_c_AuditMetadataScrubbed(t *testing.T) {
 			"secret":   "client-secret-value",
 			"provider": "github",
 		},
-	}, 10)
+	})
 	if err != nil {
 		t.Fatalf("Log: %v", err)
 	}

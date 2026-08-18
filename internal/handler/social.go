@@ -99,7 +99,7 @@ func (h *SocialHandler) Unlink(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "social_unlink", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
-			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"link_id": id}, 0)
+			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"link_id": id})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "unlinked"})

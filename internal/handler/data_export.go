@@ -228,7 +228,7 @@ func (h *DataExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.DataExport, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks the response
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	WriteJSON(w, http.StatusOK, resp)

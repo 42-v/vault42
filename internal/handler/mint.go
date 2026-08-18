@@ -197,16 +197,19 @@ func (h *MintHandler) auditIssued(r *http.Request, clientID string, result *serv
 			"scopes":     result.Scopes,
 			"expires_in": result.ExpiresIn,
 			"success":    true,
-		}, mintRiskScore)
+		})
 }
 
 // audit records a rejected mint. A refused assertion is as interesting as an
 // accepted one: a client probing for roles it cannot mint is the early signal
 // that the credential has been taken.
-// It takes no success flag on purpose. The accepted path audits separately at
-// mintRiskScore, so a caller passing success here would file an accepted mint
-// under the rejection score and quietly corrupt the one signal this event exists
-// to carry.
+//
+// It takes no success flag on purpose: the accepted path audits separately, and
+// a caller passing success here would file an accepted mint through the
+// rejection path and quietly corrupt the one signal this event exists to carry.
+// The two used to score differently as well, which is how the outcome came to
+// be recorded twice -- once in the metadata and once in a sortable column. It is
+// recorded in the metadata now, and only there.
 func (h *MintHandler) audit(r *http.Request, clientID, subject, reason string) {
 	if h.auditLog == nil {
 		return
@@ -217,16 +220,8 @@ func (h *MintHandler) audit(r *http.Request, clientID, subject, reason string) {
 			"minted":  true,
 			"success": false,
 			"reason":  reason,
-		}, mintRejectedRiskScore)
+		})
 }
-
-// Risk scores. A mint is a credential-issuing event, so a success scores like
-// one and a refusal scores higher: a rejected mint means a trusted service
-// asked for something the operator did not allow.
-const (
-	mintRiskScore         = 30
-	mintRejectedRiskScore = 45
-)
 
 // mintErrorCode maps a mint failure to a status and a stable error code.
 func mintErrorCode(err error) (int, string) {

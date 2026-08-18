@@ -81,7 +81,7 @@ func TestRequireScopeAuditsARefusal(t *testing.T) {
 	repo := &capturingAuditRepo{}
 	logger := audit.NewLogger(repo, 0)
 
-	h := RequireScope("mint:token", WithScopeRefusalAudit(logger, audit.TokenMinted, 45))(
+	h := RequireScope("mint:token", WithScopeRefusalAudit(logger, audit.TokenMinted))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			t.Fatal("the handler ran on a request that should have been refused")
 		}))
@@ -127,7 +127,7 @@ func TestRequireScopeRefusalSurvivesRequestCancellation(t *testing.T) {
 	repo := &capturingAuditRepo{}
 	logger := audit.NewLogger(repo, 0)
 
-	h := RequireScope("mint:token", WithScopeRefusalAudit(logger, audit.TokenMinted, 45))(
+	h := RequireScope("mint:token", WithScopeRefusalAudit(logger, audit.TokenMinted))(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
 	ctx, cancel := context.WithCancel(context.Background())

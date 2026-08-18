@@ -174,7 +174,6 @@ type ScopeOption func(*scopeOptions)
 type scopeOptions struct {
 	auditLog   *audit.Logger
 	auditEvent string
-	riskScore  int
 }
 
 // WithScopeRefusalAudit makes RequireScope record every request it refuses.
@@ -192,11 +191,10 @@ type scopeOptions struct {
 // It is an option rather than a required argument because RequireScope is a
 // general gate and most resources behind it are not signing oracles; the
 // decision is enforced identically with or without it.
-func WithScopeRefusalAudit(logger *audit.Logger, eventType string, riskScore int) ScopeOption {
+func WithScopeRefusalAudit(logger *audit.Logger, eventType string) ScopeOption {
 	return func(o *scopeOptions) {
 		o.auditLog = logger
 		o.auditEvent = eventType
-		o.riskScore = riskScore
 	}
 }
 
@@ -258,7 +256,7 @@ func (o scopeOptions) recordRefusal(r *http.Request, claims *vaultcrypto.VaultCl
 			"scope":   scope,
 			"method":  r.Method,
 			"path":    r.URL.Path,
-		}, o.riskScore)
+		})
 }
 
 // Confirmed checks that the user recently confirmed their password via POST /auth/confirm.

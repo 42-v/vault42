@@ -79,7 +79,7 @@ func TestFlushKeepsEntriesWhenTheStoreRejectsThem(t *testing.T) {
 
 	const events = 5
 	for i := 0; i < events; i++ {
-		if err := l.Log(context.Background(), LoginSuccess, "user-1", "", "10.0.0.1", "ua", "", "", nil, 10); err != nil {
+		if err := l.Log(context.Background(), LoginSuccess, "user-1", "", "10.0.0.1", "ua", "", "", nil); err != nil {
 			t.Fatalf("Log: %v", err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestFlushCountsWhatItCannotKeep(t *testing.T) {
 	l := NewLoggerWithBufferSize(repo, time.Hour, capacity)
 
 	for i := 0; i < capacity; i++ {
-		if err := l.Log(context.Background(), LoginSuccess, "user-1", "", "10.0.0.1", "ua", "", "", nil, 10); err != nil {
+		if err := l.Log(context.Background(), LoginSuccess, "user-1", "", "10.0.0.1", "ua", "", "", nil); err != nil {
 			t.Fatalf("Log: %v", err)
 		}
 	}
@@ -132,7 +132,7 @@ func TestFlushCountsWhatItCannotKeep(t *testing.T) {
 	// Fill it again on top of what was put back, so the next failure has more
 	// than the buffer can hold.
 	for i := 0; i < capacity; i++ {
-		_ = l.Log(context.Background(), LoginSuccess, "user-2", "", "10.0.0.2", "ua", "", "", nil, 10) // #nosec G104 -- overflow is the condition under test
+		_ = l.Log(context.Background(), LoginSuccess, "user-2", "", "10.0.0.2", "ua", "", "", nil) // #nosec G104 -- overflow is the condition under test
 	}
 	if err := l.Flush(context.Background()); err == nil {
 		t.Fatal("Flush reported success while the store was failing")

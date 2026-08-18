@@ -72,6 +72,7 @@ type Collector struct {
 var (
 	auditBufferFull    atomic.Int64
 	auditEventsDropped atomic.Int64
+	securityAlerts     atomic.Int64
 )
 
 // RecordAuditBufferFull counts an audit event that arrived to a full in-memory
@@ -90,6 +91,18 @@ func RecordAuditEventsDropped(n int64) {
 		auditEventsDropped.Add(n)
 	}
 }
+
+// RecordSecurityAlert counts one alert raised by internal/alert.
+//
+// It is package level for the same reason the two counters above are: the
+// detector is built beside the audit logger, before the collector exists, and
+// the figure is process-wide anyway.
+//
+// A counter is the second half of the delivery decision. The alert itself is a
+// log record, which is what an operator reads; this is what their monitoring
+// alerts on when nobody is reading, and it is the one signal a deployment can
+// page on without parsing text.
+func RecordSecurityAlert() { securityAlerts.Add(1) }
 
 // NewCollector creates a new metrics collector. The argon2 accessor functions
 // are passed in to avoid a circular import between crypto and metrics.
@@ -213,6 +226,10 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_audit_events_dropped_total Buffered audit entries discarded because a rejected batch would not fit back into the buffer. Each one is a missing audit record.\n")
 		fmt.Fprintf(w, "# TYPE vault_audit_events_dropped_total counter\n")
 		fmt.Fprintf(w, "vault_audit_events_dropped_total %d\n", auditEventsDropped.Load())
+
+		fmt.Fprintf(w, "# HELP vault_security_alerts_total Security alerts raised from the audit trail by internal/alert. Any non-zero rate is a detection that fired.\n")
+		fmt.Fprintf(w, "# TYPE vault_security_alerts_total counter\n")
+		fmt.Fprintf(w, "vault_security_alerts_total %d\n", securityAlerts.Load())
 
 		fmt.Fprintf(w, "# HELP vault_login_failed_total Total failed logins.\n")
 		fmt.Fprintf(w, "# TYPE vault_login_failed_total counter\n")

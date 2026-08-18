@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/42-v/vault42/internal/alert"
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/cli"
@@ -169,6 +170,23 @@ func main() {
 
 	// Initialize audit logger
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
+	// Detection, on every profile and behind no switch.
+	//
+	// The gap CR-15 recorded was not missing code. honeypot.Alerter existed, with
+	// a rate limit and an audit trail of its own; it was built only under
+	// config.ProfileHoneypot, so on a production deployment the only outbound
+	// alert channel in the tree was never constructed. Installing this one
+	// conditionally would reproduce that exactly, which is why tests/spec fails
+	// the build if the call moves inside an if.
+	//
+	// There is no key to turn it off with, deliberately. Thresholds and windows
+	// are security decisions rather than deployment ones, and the one setting an
+	// operator would reach for -- "quieter" -- is the setting that reopens the
+	// finding. Delivery is a process-log record on the SECURITY ALERT prefix,
+	// which is the channel this deployment already routes: the chart's
+	// NetworkPolicy admits no 443 egress, so a webhook would have been a feature
+	// that could not work on the topology vault42 ships.
+	auditLogger.SetDetector(alert.NewDetector(alert.LogSink{}, alert.DefaultMaxKeys))
 	defer auditLogger.Close(ctx)
 	// Registered LAST of the four shutdown defers, so LIFO drains the pool FIRST.
 	// A job still running needs the audit logger (notifyNewCountry writes a row),

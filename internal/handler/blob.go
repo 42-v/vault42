@@ -105,7 +105,7 @@ func (h *BlobHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"blob_id":    blob.ID,
 				"size_bytes": blob.SizeBytes,
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusCreated, BlobUploadResponse{
@@ -169,7 +169,7 @@ func (h *BlobHandler) UploadNamed(w http.ResponseWriter, r *http.Request) {
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"blob_id": blob.ID,
 				"named":   true,
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusOK, BlobUploadResponse{
@@ -210,7 +210,7 @@ func (h *BlobHandler) DownloadNamed(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "blob_download_named", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"named": true,
-			}, 0)
+			})
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -251,7 +251,7 @@ func (h *BlobHandler) DeleteNamed(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "blob_delete_named", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"named": true,
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})
@@ -306,7 +306,7 @@ func (h *BlobHandler) Download(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "blob_download", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"blob_id": blobID,
-			}, 0)
+			})
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -347,7 +347,7 @@ func (h *BlobHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), "blob_delete", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"blob_id": blobID,
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "deleted"})
