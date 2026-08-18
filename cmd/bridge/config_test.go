@@ -31,6 +31,8 @@ var bridgeEnvKeys = []string{
 	"BRIDGE_REAL_IP_HEADER",
 	"BRIDGE_LOG_LEVEL",
 	"BRIDGE_STRIP_HEADERS",
+	"BRIDGE_MAX_BODY_BYTES",
+	"BRIDGE_MAX_INFLIGHT",
 }
 
 // clearBridgeEnv blanks every BRIDGE_* variable for the duration of the test.
@@ -87,6 +89,18 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "info")
+	}
+
+	// The two DoS caps, which no test asserted at all. Both are applied behind a
+	// `> 0` guard, so a default of -1 would switch them off for every deployment
+	// that leaves them alone - nothing bounding a proxied request body, nothing
+	// counting concurrent requests - and the whole bridge suite stayed green
+	// through exactly that change.
+	if cfg.MaxBodyBytes != 16<<20 {
+		t.Errorf("MaxBodyBytes = %d, want %d", cfg.MaxBodyBytes, 16<<20)
+	}
+	if cfg.MaxInflight != 512 {
+		t.Errorf("MaxInflight = %d, want 512", cfg.MaxInflight)
 	}
 
 	// The optional integrations must stay off unless asked for. An admin token
@@ -165,6 +179,8 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 	t.Setenv("BRIDGE_REDIS_ADDR", "redis.internal:6379")
 	t.Setenv("BRIDGE_REAL_IP_HEADER", "CF-Connecting-IP")
 	t.Setenv("BRIDGE_LOG_LEVEL", "debug")
+	t.Setenv("BRIDGE_MAX_BODY_BYTES", "2097152")
+	t.Setenv("BRIDGE_MAX_INFLIGHT", "64")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -189,6 +205,8 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 		{"RedisAddr", cfg.RedisAddr, "redis.internal:6379"},
 		{"RealIPHeader", cfg.RealIPHeader, "CF-Connecting-IP"},
 		{"LogLevel", cfg.LogLevel, "debug"},
+		{"MaxBodyBytes", cfg.MaxBodyBytes, int64(2097152)},
+		{"MaxInflight", cfg.MaxInflight, 64},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -531,5 +549,66 @@ func TestLoadConfigLeavesStripHeadersEmptyWhenUnset(t *testing.T) {
 	}
 	if len(cfg.StripHeaders) != 0 {
 		t.Fatalf("StripHeaders = %q with the variable unset, want none", cfg.StripHeaders)
+	}
+}
+
+// A negative cap is not a small cap. Both BRIDGE_MAX_BODY_BYTES and
+// BRIDGE_MAX_INFLIGHT are applied behind a `> 0` guard at the point of use, so
+// -1 removes the limit instead of lowering it: nothing bounds a proxied request
+// body, and nothing counts the goroutines and upstream sockets a request flood
+// opens. Both used to be accepted silently, on the process whose whole job is to
+// stand in front of the vault, and no test covered the negative path at all.
+//
+// TestLoadConfigIgnoresUnparseableNumbers pins the neighbouring silent-fallback
+// behaviour, which is what made this look covered: a malformed value there is
+// documented as reverting to the default. A negative value is different, because
+// the value parses and is then used.
+func TestLoadConfigRejectsNegativeCaps(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"max body bytes", "BRIDGE_MAX_BODY_BYTES", "BRIDGE_MAX_BODY_BYTES"},
+		{"max inflight", "BRIDGE_MAX_INFLIGHT", "BRIDGE_MAX_INFLIGHT"},
+	}
+	for _, tc := range tests {
+		for _, value := range []string{"-1", "-4194304"} {
+			t.Run(tc.name+"="+value, func(t *testing.T) {
+				clearBridgeEnv(t)
+				setRequiredUpstreams(t)
+				t.Setenv(tc.key, value)
+
+				cfg, err := LoadConfig()
+				if err == nil {
+					t.Fatalf("LoadConfig accepted %s=%s and returned MaxBodyBytes=%d MaxInflight=%d: "+
+						"the cap is disabled, not lowered, and the bridge starts anyway",
+						tc.key, value, cfg.MaxBodyBytes, cfg.MaxInflight)
+				}
+				// The operator has to be able to tell which variable to fix from
+				// the line the process died on.
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("LoadConfig error does not name %s: %v", tc.want, err)
+				}
+			})
+		}
+	}
+}
+
+// Zero is not the same mistake. BRIDGE_MAX_INFLIGHT is documented as taking zero
+// to disable the concurrency cap deliberately, so rejecting negatives must not
+// take that with it.
+func TestLoadConfigAcceptsZeroCaps(t *testing.T) {
+	clearBridgeEnv(t)
+	setRequiredUpstreams(t)
+	t.Setenv("BRIDGE_MAX_INFLIGHT", "0")
+	t.Setenv("BRIDGE_MAX_BODY_BYTES", "0")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig rejected the documented way to disable the caps: %v", err)
+	}
+	if cfg.MaxInflight != 0 || cfg.MaxBodyBytes != 0 {
+		t.Errorf("MaxInflight = %d, MaxBodyBytes = %d, want both 0", cfg.MaxInflight, cfg.MaxBodyBytes)
 	}
 }

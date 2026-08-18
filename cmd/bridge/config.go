@@ -132,6 +132,24 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("BRIDGE_HONEYPOT_UPSTREAM is required")
 	}
 
+	// Both caps are applied behind a `> 0` guard at the point of use, so a
+	// negative value does not lower them, it removes them. BRIDGE_MAX_INFLIGHT=-1
+	// leaves nothing counting goroutines or upstream sockets, and
+	// BRIDGE_MAX_BODY_BYTES=-1 leaves the proxy streaming whatever a client sends
+	// for as long as ReadTimeout allows. An operator typing a negative number is
+	// asking for a smaller limit and would get no limit at all, silently, on the
+	// process whose whole job is to stand in front of the vault. Zero stays
+	// accepted: it is the documented way to turn the concurrency cap off on
+	// purpose.
+	if cfg.MaxBodyBytes < 0 {
+		return nil, fmt.Errorf("BRIDGE_MAX_BODY_BYTES is %d: a negative value disables the request "+
+			"body cap rather than lowering it", cfg.MaxBodyBytes)
+	}
+	if cfg.MaxInflight < 0 {
+		return nil, fmt.Errorf("BRIDGE_MAX_INFLIGHT is %d: a negative value disables the concurrency "+
+			"cap rather than lowering it; use 0 to disable it deliberately", cfg.MaxInflight)
+	}
+
 	// Load admin token from file (_FILE convention)
 	tokenFile := os.Getenv("BRIDGE_ADMIN_TOKEN_FILE")
 	if tokenFile != "" {
