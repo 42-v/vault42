@@ -519,13 +519,13 @@ func TestComplianceDocs_EveryTestNamedInProseExists(t *testing.T) {
 				return nil
 			}
 			fset := token.NewFileSet()
-			parsed, parseErr := parser.ParseFile(fset, path, nil, 0)
-			if parseErr != nil {
-				return nil // a file that does not parse is a different test's problem
-			}
-			for _, decl := range parsed.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
-					existing[fn.Name.Name] = struct{}{}
+			// A file that does not parse is a different test's problem, so it
+			// contributes no names rather than failing the walk.
+			if parsed, parseErr := parser.ParseFile(fset, path, nil, 0); parseErr == nil {
+				for _, decl := range parsed.Decls {
+					if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+						existing[fn.Name.Name] = struct{}{}
+					}
 				}
 			}
 			return nil

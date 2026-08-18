@@ -55,6 +55,7 @@ func TestDashboardRequiresAuth(t *testing.T) {
 
 func TestDashboardPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Dashboard")
@@ -66,6 +67,7 @@ func TestDashboardPage(t *testing.T) {
 
 func TestUsersPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/users")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Users")
@@ -75,6 +77,7 @@ func TestUsersPage(t *testing.T) {
 
 func TestKeysPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/keys")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Signing Keys")
@@ -83,6 +86,7 @@ func TestKeysPage(t *testing.T) {
 
 func TestSessionsPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/sessions")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Admin Sessions")
@@ -91,6 +95,7 @@ func TestSessionsPage(t *testing.T) {
 
 func TestAuditPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/audit")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Audit Log")
@@ -100,6 +105,7 @@ func TestAuditPage(t *testing.T) {
 
 func TestClientsPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/clients")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Service Clients")
@@ -109,6 +115,7 @@ func TestClientsPage(t *testing.T) {
 
 func TestAdminsPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/admins")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Admin Accounts")
@@ -118,6 +125,7 @@ func TestAdminsPage(t *testing.T) {
 
 func TestConfigPage(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/config")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	requireContains(t, body, "Configuration")
@@ -198,6 +206,7 @@ func TestLoginSuccess(t *testing.T) {
 	}
 	// Verify the session is actually usable by hitting /admin/status.
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/status")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 	var status map[string]any
 	decodeJSON(t, resp, &status)
@@ -242,6 +251,7 @@ func TestLoginNonexistentUser(t *testing.T) {
 
 func TestStatusEndpoint(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/status")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var status map[string]any
@@ -281,6 +291,7 @@ func TestLogout(t *testing.T) {
 
 func TestKeysAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/keys")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -292,6 +303,7 @@ func TestKeysAPI(t *testing.T) {
 
 func TestSessionsAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/sessions")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -307,6 +319,7 @@ func TestSessionsAPI(t *testing.T) {
 
 func TestAuditAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/audit?limit=5")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -318,6 +331,7 @@ func TestAuditAPI(t *testing.T) {
 
 func TestClientsAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/clients")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -329,6 +343,7 @@ func TestClientsAPI(t *testing.T) {
 
 func TestAdminsAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/admins")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -344,6 +359,7 @@ func TestAdminsAPI(t *testing.T) {
 
 func TestConfigAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/config")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -353,6 +369,7 @@ func TestConfigAPI(t *testing.T) {
 
 func TestMetricsAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/metrics")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
@@ -372,6 +389,7 @@ func TestClientCreateAndRevoke(t *testing.T) {
 		"redirect_uris": []string{},
 	}
 	resp := authedPost(t, sharedClient, sharedToken, "/admin/clients", createBody)
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body := readBody(t, resp)
 		t.Fatalf("create client: %d %s", resp.StatusCode, body)
@@ -388,6 +406,7 @@ func TestClientCreateAndRevoke(t *testing.T) {
 
 	// Verify it appears in the list.
 	resp2 := authedGet(t, sharedClient, sharedToken, "/admin/clients")
+	defer resp2.Body.Close()
 	requireStatus(t, resp2, http.StatusOK)
 	var listed map[string]any
 	decodeJSON(t, resp2, &listed)
@@ -406,6 +425,7 @@ func TestClientCreateAndRevoke(t *testing.T) {
 
 	// Revoke it.
 	resp3 := authedPost(t, sharedClient, sharedToken, "/admin/clients/"+clientID+"/revoke", nil)
+	defer resp3.Body.Close()
 	if resp3.StatusCode != http.StatusOK && resp3.StatusCode != http.StatusNoContent {
 		body := readBody(t, resp3)
 		t.Fatalf("revoke client: %d %s", resp3.StatusCode, body)
@@ -415,6 +435,7 @@ func TestClientCreateAndRevoke(t *testing.T) {
 
 func TestUserSearchAPI(t *testing.T) {
 	resp := authedGet(t, sharedClient, sharedToken, "/admin/users?q=dev@vault.localhost")
+	defer resp.Body.Close()
 	requireStatus(t, resp, http.StatusOK)
 
 	var result map[string]any

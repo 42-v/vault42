@@ -12,7 +12,7 @@ import (
 //
 // Every gap this register has published came from the same shape — a sentence
 // about the code that stopped being true and nothing noticed. A test that
-// asserts only the code's current behaviour does not catch it: the code was
+// asserts only the code's current behavior does not catch it: the code was
 // never wrong, the document was.
 //
 // So these read both sides. Each one derives a fact from source and then

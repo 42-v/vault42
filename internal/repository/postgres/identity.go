@@ -21,7 +21,6 @@ func NewIdentityRepo(db *DB) *IdentityRepo {
 	return &IdentityRepo{db: db}
 }
 
-// Upsert creates or updates an identity profile by pseudonym ID.
 // UpsertCAS writes a profile only if the stored row still matches expectedUpdatedAt,
 // returning false when it does not. The profile is a single encrypted blob, so a
 // read-modify-write (decrypt, change one field, re-encrypt) cannot be expressed as
@@ -57,6 +56,10 @@ func (r *IdentityRepo) UpsertCAS(ctx context.Context, profile *model.IdentityPro
 	return tag.RowsAffected() > 0, nil
 }
 
+// Upsert creates or updates an identity profile by pseudonym ID, last write
+// wins. Callers that read the profile first must use UpsertCAS instead: this
+// one cannot tell a concurrent writer's row from the one it read, so it would
+// silently discard the other writer's changes.
 func (r *IdentityRepo) Upsert(ctx context.Context, profile *model.IdentityProfile) error {
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO identity.profiles (pseudonym_id, data_enc, version, updated_at, created_at)

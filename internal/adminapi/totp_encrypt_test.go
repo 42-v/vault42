@@ -17,7 +17,7 @@ import (
 // another's row at the database level.
 //
 // If the encryption failed and setup carried on, the admin would be shown a QR code and
-// would enrol it in their authenticator, while the server had stored either nothing or
+// would enroll it in their authenticator, while the server had stored either nothing or
 // something it cannot decrypt. On the break-glass account, that is a lockout from the tool
 // you reach for when everything else is already broken.
 func TestAdminTOTPSetup_UnusableMasterKeyStoresNothing(t *testing.T) {

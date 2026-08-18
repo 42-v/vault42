@@ -241,7 +241,7 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 	ctx := context.Background()
 	rows, release, err := open(ctx, *dsn, *limit)
 	if err != nil {
-		// pgx puts the DSN it dialled into its connect errors, and this is the one
+		// pgx puts the DSN it dialed into its connect errors, and this is the one
 		// tool that always holds the production DSN — that is what the offline host
 		// is for. Unredacted, a wrong host or a firewall in the way printed the
 		// database password onto the operator's terminal and into whatever captured

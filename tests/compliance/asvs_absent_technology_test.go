@@ -98,7 +98,7 @@ var absentTechnologies = []absentTechnology{
 		consequence: "the push out-of-band factor rows would apply; the only out-of-band factor is an emailed code",
 	},
 	{
-		label:       "WebRTC signalling, media or data channels",
+		label:       "WebRTC signaling, media or data channels",
 		rows:        "ASVS V17.1.1, V17.2.1, V17.2.2, V17.2.3, V17.2.4, V17.3.1, V17.3.2",
 		markers:     []string{"webrtc", "pion/", "rtcpeerconnection", "icecandidate", "stunserver", "datachannel"},
 		consequence: "the whole of ASVS chapter V17, seven rows, would apply",

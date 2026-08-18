@@ -1176,8 +1176,10 @@ func TestRotateJWKS(t *testing.T) {
 
 		var kids []string
 		for i := 0; i < 3; i++ {
-			args := []string{"vault", "rotate-jwks", "--admin-token", token,
-				"--output", filepath.Join(dir, fmt.Sprintf("key-%d.pem", i))}
+			args := []string{
+				"vault", "rotate-jwks", "--admin-token", token,
+				"--output", filepath.Join(dir, fmt.Sprintf("key-%d.pem", i)),
+			}
 			var stdout string
 			captureStderr(t, func() {
 				stdout = captureStdout(t, func() {

@@ -9,7 +9,7 @@ import (
 
 // This is the one tool that always holds the production DSN — it is the whole
 // point of the offline host it runs on — and it was the only one that logged a
-// connect failure without redacting it. pgx puts the DSN it dialled into that
+// connect failure without redacting it. pgx puts the DSN it dialed into that
 // error, so a wrong host or a firewall between the two printed the database
 // password onto the operator's terminal and into whatever captured its stderr.
 // cmd/vault and cmd/admin-gateway both strip the userinfo before logging; this

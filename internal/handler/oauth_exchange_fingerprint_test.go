@@ -37,7 +37,7 @@ import (
 // check into the payload, or "simplifying" the key — would pass green.
 //
 // These tests run both halves against a real cache and assert only observable
-// behaviour: what a second browser gets, what the first browser still gets
+// behavior: what a second browser gets, what the first browser still gets
 // afterwards, and that the two failures are byte-identical. They do not assert
 // the key format, so the guarantee survives a rewrite that keeps it and only
 // a rewrite that loses it fails.

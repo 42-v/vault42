@@ -41,7 +41,7 @@ func TestSeedRun_HashFailureCreatesNothing(t *testing.T) {
 			},
 			Users: &mocks.MockUserRepo{},
 		}
-		sf := &SeedFile{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
+		sf := &File{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
 
 		err := Run(context.Background(), sf, deps, "")
 		if err == nil {
@@ -71,7 +71,7 @@ func TestSeedRun_HashFailureCreatesNothing(t *testing.T) {
 				CreateFn:     func(_ context.Context, u *model.User) error { written = append(written, u); return nil },
 			},
 		}
-		sf := &SeedFile{Users: []UserSeed{
+		sf := &File{Users: []UserSeed{
 			{Email: "first@example.com", Password: "correctP@ssw0rd!"},
 			{Email: "second@example.com", Password: "correctP@ssw0rd!"},
 		}}
@@ -100,7 +100,7 @@ func TestSeedRun_HashFailureCreatesNothing(t *testing.T) {
 func TestSeedRunAdmins_HashFailureCreatesNothing(t *testing.T) {
 	calls := cliconfigStubHasher(t, vaultcrypto.ErrArgon2Overloaded)
 	admins := newMockAdminUserRepo()
-	sf := &SeedFile{Admins: []AdminSeed{{Username: "root", Password: "correctP@ssw0rd!", Role: "super_admin"}}}
+	sf := &File{Admins: []AdminSeed{{Username: "root", Password: "correctP@ssw0rd!", Role: "super_admin"}}}
 
 	err := RunAdmins(context.Background(), sf, admins, "")
 	if err == nil {
@@ -139,7 +139,7 @@ func TestSeed_PepperReachesPasswordHashesOnly(t *testing.T) {
 		Users: &mocks.MockUserRepo{GetByEmailFn: func(context.Context, string) (*model.User, error) { return nil, nil }},
 	}
 
-	if err := Run(context.Background(), &SeedFile{Clients: []ClientSeed{{Name: "c", Role: "app"}}}, deps, "server-side-pepper"); err == nil {
+	if err := Run(context.Background(), &File{Clients: []ClientSeed{{Name: "c", Role: "app"}}}, deps, "server-side-pepper"); err == nil {
 		t.Fatal("expected the stub hasher to abort client seeding")
 	}
 	if len(peppers) != 1 || len(peppers[0]) != 0 {
@@ -147,7 +147,7 @@ func TestSeed_PepperReachesPasswordHashesOnly(t *testing.T) {
 	}
 
 	peppers = nil
-	sf := &SeedFile{Users: []UserSeed{{Email: "u@example.com", Password: "correctP@ssw0rd!"}}}
+	sf := &File{Users: []UserSeed{{Email: "u@example.com", Password: "correctP@ssw0rd!"}}}
 	if err := Run(context.Background(), sf, deps, "server-side-pepper"); err == nil {
 		t.Fatal("expected the stub hasher to abort user seeding")
 	}

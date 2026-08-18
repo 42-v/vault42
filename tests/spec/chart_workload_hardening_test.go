@@ -75,7 +75,7 @@ func (w workload) String() string {
 
 // TestEveryRenderedWorkloadRunsAsNonRoot is the pod-level half of the profile.
 //
-// runAsNonRoot alone is not enough. The kubelet honours it by refusing to start
+// runAsNonRoot alone is not enough. The kubelet honors it by refusing to start
 // an image whose user resolves to 0, so an image with a nonroot USER passes it
 // while still running as whatever uid that image chose. The uid and gid have to
 // be named for the pod to be reproducible, and fsGroup has to match the gid or

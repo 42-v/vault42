@@ -130,7 +130,7 @@ func TestAlert_WebhookReturnsErrorStatus(t *testing.T) {
 	a := NewAlerter(srv.URL, nil, nil)
 
 	// Should not panic; the error status is logged but not propagated.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.1",
 		UserAgent: "test-agent",
@@ -147,7 +147,7 @@ func TestAlert_WebhookReturns500(t *testing.T) {
 	a := NewAlerter(srv.URL, nil, nil)
 
 	// Should not panic.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "scan_detected",
 		IP:        "10.0.0.2",
 		RiskScore: 50,
@@ -169,7 +169,7 @@ func TestAlert_WebhookConnectionFailed(t *testing.T) {
 	a := NewAlerter(url, nil, nil)
 
 	// Should not panic; connection errors are logged but not propagated.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.3",
 		RiskScore: 90,
@@ -180,7 +180,7 @@ func TestAlert_WebhookUnresolvableHost(t *testing.T) {
 	a := NewAlerter("http://this-host-does-not-exist.invalid:9999/webhook", nil, nil)
 
 	// Should not panic; DNS resolution failure is logged.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "probe",
 		IP:        "10.0.0.4",
 		RiskScore: 20,
@@ -315,7 +315,7 @@ func TestCollectHeaders_MultiValueHeader(t *testing.T) {
 
 func TestAlert_NoWebhook_NoPanic(t *testing.T) {
 	a := NewAlerter("", []string{"trap@test.com"}, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "192.168.1.1",
 		Email:     "trap@test.com",
@@ -331,7 +331,7 @@ func TestAlert_SanitizedScheme_NoWebhookSent(t *testing.T) {
 	a := NewAlerter("ftp://evil.com/exfil", nil, nil)
 
 	// Should not panic and should not attempt to send to ftp://.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "probe",
 		IP:        "10.0.0.5",
 		RiskScore: 10,

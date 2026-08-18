@@ -51,7 +51,7 @@ func TestAlert_UnparseableWebhookURL(t *testing.T) {
 	buf := captureLog(t)
 
 	a := NewAlerter("http://127.0.0.1/\n", nil, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "203.0.113.7",
 	})

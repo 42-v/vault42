@@ -257,7 +257,7 @@ func (s *IdentityService) UpdateMarketingConsent(ctx context.Context, userID str
 //
 //   - The prior record is read, then a concurrent unsubscribe commits, then this
 //     write lands carrying the pre-withdrawal consent — silently reverting a
-//     withdrawal the user was told had been honoured. The CAS turns that into a
+//     withdrawal the user was told had been honored. The CAS turns that into a
 //     retry, which re-reads the withdrawal and preserves it.
 //   - If the prior read fails, treating that as "no prior consent" would blank a
 //     stored withdrawal and re-stamp an imported flag as affirmative. The error is
@@ -391,7 +391,7 @@ func (d *IdentityData) ReconcileMarketingConsent(submitted *bool, prior *Consent
 
 // normalizeConsent keeps the legacy bool and the consent record from drifting.
 // The record is authoritative when present; a profile written before consent
-// provenance existed keeps its value but is labelled legacy rather than being
+// provenance existed keeps its value but is labeled legacy rather than being
 // backfilled with an invented timestamp.
 func (d *IdentityData) normalizeConsent() {
 	switch {

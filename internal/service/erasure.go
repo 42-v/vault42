@@ -244,7 +244,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	// countries an account signed in from is location data about a person, and it
 	// survived every erasure between 028 and this line.
 	//
-	// Guarded like svcDocs so the cascade degrades to its previous behaviour
+	// Guarded like svcDocs so the cascade degrades to its previous behavior
 	// rather than panicking if a call site forgets the setter; what actually
 	// prevents that is tests/spec/erasure_cascade_test.go, which fails the build
 	// when a production ErasureService is built without it.

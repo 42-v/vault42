@@ -19,7 +19,7 @@ import (
 //
 // The callback is not a guessing surface. Reaching its body already takes an
 // HMAC-valid state, a matching __Host-oauth_state cookie, an unconsumed
-// server-side PKCE verifier and a code the identity provider will honour, so
+// server-side PKCE verifier and a code the identity provider will honor, so
 // there is nothing in it to brute-force and nothing that budget was protecting.
 // Spending it had two costs. A user on a VPN got one login-or-callback per
 // quarter hour across both endpoints — one mistyped password and their social
@@ -76,15 +76,15 @@ func callFrom(t *testing.T, mux *http.ServeMux, method, path, addr string) int {
 }
 
 // spendUntilLimited hits the route until it answers 429, and fails if it never
-// does within max attempts — an endpoint with no bound at all is not the fix.
-func spendUntilLimited(t *testing.T, mux *http.ServeMux, method, path, addr string, max int) int {
+// does within attempts tries — an endpoint with no bound at all is not the fix.
+func spendUntilLimited(t *testing.T, mux *http.ServeMux, method, path, addr string, attempts int) int {
 	t.Helper()
-	for i := 1; i <= max; i++ {
+	for i := 1; i <= attempts; i++ {
 		if callFrom(t, mux, method, path, addr) == http.StatusTooManyRequests {
 			return i
 		}
 	}
-	t.Fatalf("%s %s answered %d requests from one address without ever limiting", method, path, max)
+	t.Fatalf("%s %s answered %d requests from one address without ever limiting", method, path, attempts)
 	return 0
 }
 

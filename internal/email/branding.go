@@ -122,7 +122,7 @@ func ValidTemplateName(name string) bool { return knownTemplateNames[name] }
 
 var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
-// ValidHexColor reports whether s is a #RRGGBB colour.
+// ValidHexColor reports whether s is a #RRGGBB color.
 func ValidHexColor(s string) bool { return hexColorRe.MatchString(s) }
 
 // ValidLogoURL reports whether s is an absolute https URL with a public host.

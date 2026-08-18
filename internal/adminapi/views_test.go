@@ -55,7 +55,7 @@ func TestListSessions_DoesNotLeakTheSessionTokenHash(t *testing.T) {
 		t.Errorf("the session was not returned at all: %s", body)
 	}
 	if strings.Contains(body, tokenHash) {
-		t.Error("the session token hash was serialised to the admin — live credential material sent to the browser")
+		t.Error("the session token hash was serialized to the admin — live credential material sent to the browser")
 	}
 }
 
@@ -109,7 +109,7 @@ func TestListUsers_SearchDoesNotLeakThePasswordHash(t *testing.T) {
 				t.Errorf("the user was not found by %s: %s", tc.name, body)
 			}
 			if strings.Contains(body, pwHash) {
-				t.Error("the password hash was serialised to the admin — an offline cracking target handed out over HTTP")
+				t.Error("the password hash was serialized to the admin — an offline cracking target handed out over HTTP")
 			}
 			if strings.Contains(body, "argon2") {
 				t.Error("password hash material leaked into the admin response")
@@ -135,7 +135,7 @@ func TestListUsers_NoMatchIsAnEmptyList(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "[]") {
-		t.Errorf("an empty search did not serialise as []: %s", body)
+		t.Errorf("an empty search did not serialize as []: %s", body)
 	}
 }
 

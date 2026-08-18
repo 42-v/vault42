@@ -152,7 +152,7 @@ func TestAuditRepo_RefusedCommitLosesTheBatchLoudly(t *testing.T) {
 	}
 }
 
-// The retention sweep serialises on an advisory lock and reports whether it got
+// The retention sweep serializes on an advisory lock and reports whether it got
 // one. Both failure points below must leave acquired=false and deleted=0: a
 // caller told "acquired, 0 rows" would log a successful purge that never ran,
 // and the Art. 5(1)(e) horizon would look enforced while nothing was deleted.

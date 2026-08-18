@@ -10,7 +10,7 @@ import (
 // Deterministic coverage for the ctx.Done branch in pool.get. CI runs flaked
 // 0..1 statement on this line because it depends on goroutine scheduling
 // during parallel tests; this test pins it by saturating the semaphore and
-// pre-cancelling the context.
+// pre-canceling the context.
 func TestPoolGet_CtxCancelled(t *testing.T) {
 	p := newPool(&Options{PoolSize: 1})
 	defer close(p.done)

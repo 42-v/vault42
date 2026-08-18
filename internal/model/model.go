@@ -574,7 +574,7 @@ type AppRole struct {
 
 // EmailBranding holds the per-app white-label overrides applied to auth emails.
 // App is the tenant slug (e.g. "acme"). Any empty field falls back to the
-// global default at render time. FromAddress is honoured only when its domain
+// global default at render time. FromAddress is honored only when its domain
 // is on the configured From allowlist (see config.EmailFromAllowedDomains).
 type EmailBranding struct {
 	// App is the tenant slug matching ^[a-z0-9][a-z0-9_-]{0,63}$. It is

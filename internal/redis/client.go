@@ -276,8 +276,8 @@ func (c *Client) exec(ctx context.Context, cn *conn, args ...string) (reply, err
 		// the Nil sentinel is produced by Get/GetDel from r.isNil after exec has
 		// already returned. So err is always a real failure at this point.
 		//
-		// RedisError is a server error (e.g., WRONGTYPE), connection is still healthy
-		var redisErr *RedisError
+		// ServerError is a server error (e.g., WRONGTYPE), connection is still healthy
+		var redisErr *ServerError
 		if errors.As(err, &redisErr) {
 			cn.netConn.SetDeadline(time.Time{}) // #nosec G104 -- deadline clear; errors surface on next I/O op //nolint:errcheck
 			c.pool.put(cn)

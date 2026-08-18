@@ -39,7 +39,7 @@ func TestIsTrapUserEmpty(t *testing.T) {
 }
 
 func TestAlertSendsWebhook(t *testing.T) {
-	var received HoneypotEvent
+	var received Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("webhook method = %s, want POST", r.Method)
@@ -53,7 +53,7 @@ func TestAlertSendsWebhook(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAlerter(srv.URL, nil, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		Timestamp: time.Now(),
 		EventType: "trap_login",
 		IP:        "1.2.3.4",
@@ -76,7 +76,7 @@ func TestAlertSendsWebhook(t *testing.T) {
 func TestAlertNoWebhookURL(t *testing.T) {
 	// Should not panic with empty webhook URL
 	a := NewAlerter("", nil, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "test",
 		IP:        "1.2.3.4",
 	})

@@ -93,7 +93,7 @@ func TestVerifyEmailOTP_WithoutCacheFailsClosed(t *testing.T) {
 
 // A password known to be breached must be refused at registration. This is the one
 // check that stops a user re-using a credential that is already in an attacker's
-// wordlist, and it is off by default — so if the flag is honoured incorrectly, the
+// wordlist, and it is off by default — so if the flag is honored incorrectly, the
 // failure is silent.
 func TestRegister_BreachedPasswordIsRejected(t *testing.T) {
 	const breached = "correct horse battery staple"

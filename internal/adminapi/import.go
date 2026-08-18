@@ -30,7 +30,7 @@ type importUser struct {
 	// consent: a migrated flag may be a default the user was never shown (this is
 	// exactly the case for BeOn3, whose column defaults to true and whose consent
 	// checkbox ships pre-ticked). The value is preserved so the operator can run a
-	// re-permission campaign against it; it does not by itself authorise sending.
+	// re-permission campaign against it; it does not by itself authorize sending.
 	MarketingEmails *bool `json:"marketing_emails,omitempty"`
 }
 
@@ -105,8 +105,7 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if u.MarketingEmails != nil {
-			switch {
-			case h.identity == nil:
+			if h.identity == nil {
 				// No identity service wired, so the preference cannot be stored with
 				// its provenance. Count it and say so per-row rather than silently
 				// dropping it: the operator would otherwise see imported/0-failed and
@@ -115,15 +114,14 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 				results = append(results, importResult{Email: email, Status: "imported", Error: "consent_not_stored"})
 				imported++
 				continue
-			default:
-				data := &service.IdentityData{}
-				data.StampMarketingConsent(*u.MarketingEmails, service.ConsentSourceImport, source)
-				if err := h.identity.Upsert(r.Context(), id, data); err != nil {
-					// The account is already created; a lost preference must not fail
-					// the import. Record it and move on — a dropped flag fails closed
-					// (no consent), which is the safe direction.
-					consentFailed++
-				}
+			}
+			data := &service.IdentityData{}
+			data.StampMarketingConsent(*u.MarketingEmails, service.ConsentSourceImport, source)
+			if err := h.identity.Upsert(r.Context(), id, data); err != nil {
+				// The account is already created; a lost preference must not fail
+				// the import. Record it and move on — a dropped flag fails closed
+				// (no consent), which is the safe direction.
+				consentFailed++
 			}
 		}
 		imported++

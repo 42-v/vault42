@@ -191,11 +191,116 @@ func loadGeoIPHeader() string {
 	return v
 }
 
+// denyByCIDR applies the CIDR allowlist and then the blocklist, writing the
+// refusal itself and reporting whether it wrote one. An address that will not
+// parse is refused rather than passed through: the lists cannot answer for an
+// address they cannot represent, and failing open there would make a malformed
+// forwarded header the cheapest way around the fence.
+func denyByCIDR(w http.ResponseWriter, reqID, clientIP string, allowCIDRs, blockCIDRs []*net.IPNet) bool {
+	if len(allowCIDRs) == 0 && len(blockCIDRs) == 0 {
+		return false
+	}
+
+	ip := net.ParseIP(clientIP)
+	if ip == nil {
+		log.Printf("ip_access: deny req=%s ip=%q reason=unparseable_ip", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+		httputil.WriteError(w, http.StatusForbidden, "access_denied")
+		return true
+	}
+
+	// Allowlist: if configured, IP must match
+	if len(allowCIDRs) > 0 {
+		allowed := false
+		for _, cidr := range allowCIDRs {
+			if cidr.Contains(ip) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			log.Printf("ip_access: deny req=%s ip=%s reason=ip_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			httputil.WriteError(w, http.StatusForbidden, "access_denied")
+			return true
+		}
+	}
+
+	// Blocklist: reject if IP matches
+	for _, cidr := range blockCIDRs {
+		if cidr.Contains(ip) {
+			log.Printf("ip_access: deny req=%s ip=%s reason=ip_in_blocklist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			httputil.WriteError(w, http.StatusForbidden, "access_denied")
+			return true
+		}
+	}
+
+	return false
+}
+
+// denyByGeo applies the country allowlist and blocklist, writing the refusal
+// itself and reporting whether it wrote one. It runs only when a geo header is
+// configured, because without one there is no country to judge.
+func denyByGeo(w http.ResponseWriter, r *http.Request, reqID, clientIP string, geoAllow, geoBlock map[string]bool) bool {
+	geoHeader := loadGeoIPHeader()
+	if geoHeader == "" || (len(geoAllow) == 0 && len(geoBlock) == 0) {
+		return false
+	}
+
+	// The country is believed only from a hop the operator trusts,
+	// the same contract ClientIP applies to X-Forwarded-For and to
+	// the app header. It used to be read straight off the request, so
+	// anyone reaching the origin directly, through a leaked ClusterIP,
+	// a NodePort, a mis-published Service, or any hop that forwards
+	// client headers, simply sent the country the list wanted.
+	// IPAccess is mounted globally and ahead of authentication, so
+	// that was the entire fence for login, register, reset and the
+	// client-credentials grant.
+	var country string
+	if isTrustedProxy(stripPort(r.RemoteAddr)) {
+		country = strings.ToUpper(strings.TrimSpace(r.Header.Get(geoHeader)))
+	}
+
+	// An allowlist says only these countries may reach this service,
+	// so a caller whose country cannot be established is not one of
+	// them. Skipping the ladder on an absent header made omitting it
+	// the simplest bypass available, requiring no knowledge of which
+	// countries were listed.
+	//
+	// A blocklist is the other shape. It names what is refused, so an
+	// unknown country matches nothing on it, and denying there would
+	// quietly turn a blocklist into an allowlist of one.
+	if country == "" {
+		if len(geoAllow) > 0 {
+			log.Printf("ip_access: deny req=%s ip=%s reason=geo_country_unknown", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			httputil.WriteError(w, http.StatusForbidden, "access_denied")
+			return true
+		}
+		return false
+	}
+
+	if len(geoAllow) > 0 && !geoAllow[country] {
+		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
+		httputil.WriteError(w, http.StatusForbidden, "access_denied")
+		return true
+	}
+	if len(geoBlock) > 0 && geoBlock[country] {
+		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_in_blocklist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
+		httputil.WriteError(w, http.StatusForbidden, "access_denied")
+		return true
+	}
+
+	return false
+}
+
 // IPAccess returns a middleware that enforces IP allowlist/blocklist and
 // geographic restrictions. Health endpoints (/healthz, /readyz) bypass all checks.
 // When no lists are configured, the middleware is a zero-cost passthrough.
 //
-//nolint:gocognit // exhaustive ladder: bypass paths, allowlist, blocklist, dynamic ban, geo-allow, geo-block — all in one place by design
+// The two fences are separate functions because they answer different
+// questions from different evidence, and each writes its own refusal so the
+// order they run in is the only thing this function decides. That order is
+// load-bearing: the CIDR lists are checked first, so an address the operator
+// has blocked outright is refused without the geo header being consulted at
+// all.
 func IPAccess() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,87 +324,11 @@ func IPAccess() func(http.Handler) http.Handler {
 			clientIP := ClientIP(r)
 			reqID := GetRequestID(r.Context())
 
-			// IP checks
-			if len(allowCIDRs) > 0 || len(blockCIDRs) > 0 {
-				ip := net.ParseIP(clientIP)
-				if ip == nil {
-					log.Printf("ip_access: deny req=%s ip=%q reason=unparseable_ip", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
-					httputil.WriteError(w, http.StatusForbidden, "access_denied")
-					return
-				}
-
-				// Allowlist: if configured, IP must match
-				if len(allowCIDRs) > 0 {
-					allowed := false
-					for _, cidr := range allowCIDRs {
-						if cidr.Contains(ip) {
-							allowed = true
-							break
-						}
-					}
-					if !allowed {
-						log.Printf("ip_access: deny req=%s ip=%s reason=ip_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
-						httputil.WriteError(w, http.StatusForbidden, "access_denied")
-						return
-					}
-				}
-
-				// Blocklist: reject if IP matches
-				if len(blockCIDRs) > 0 {
-					for _, cidr := range blockCIDRs {
-						if cidr.Contains(ip) {
-							log.Printf("ip_access: deny req=%s ip=%s reason=ip_in_blocklist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
-							httputil.WriteError(w, http.StatusForbidden, "access_denied")
-							return
-						}
-					}
-				}
+			if denyByCIDR(w, reqID, clientIP, allowCIDRs, blockCIDRs) {
+				return
 			}
-
-			// Geo checks — only when a geo header is configured
-			geoHeader := loadGeoIPHeader()
-			if geoHeader != "" && (len(geoAllow) > 0 || len(geoBlock) > 0) {
-				// The country is believed only from a hop the operator trusts,
-				// the same contract ClientIP applies to X-Forwarded-For and to
-				// the app header. It used to be read straight off the request, so
-				// anyone reaching the origin directly, through a leaked ClusterIP,
-				// a NodePort, a mis-published Service, or any hop that forwards
-				// client headers, simply sent the country the list wanted.
-				// IPAccess is mounted globally and ahead of authentication, so
-				// that was the entire fence for login, register, reset and the
-				// client-credentials grant.
-				var country string
-				if isTrustedProxy(stripPort(r.RemoteAddr)) {
-					country = strings.ToUpper(strings.TrimSpace(r.Header.Get(geoHeader)))
-				}
-
-				// An allowlist says only these countries may reach this service,
-				// so a caller whose country cannot be established is not one of
-				// them. Skipping the ladder on an absent header made omitting it
-				// the simplest bypass available, requiring no knowledge of which
-				// countries were listed.
-				//
-				// A blocklist is the other shape. It names what is refused, so an
-				// unknown country matches nothing on it, and denying there would
-				// quietly turn a blocklist into an allowlist of one.
-				if country == "" && len(geoAllow) > 0 {
-					log.Printf("ip_access: deny req=%s ip=%s reason=geo_country_unknown", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
-					httputil.WriteError(w, http.StatusForbidden, "access_denied")
-					return
-				}
-
-				if country != "" {
-					if len(geoAllow) > 0 && !geoAllow[country] {
-						log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
-						httputil.WriteError(w, http.StatusForbidden, "access_denied")
-						return
-					}
-					if len(geoBlock) > 0 && geoBlock[country] {
-						log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_in_blocklist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
-						httputil.WriteError(w, http.StatusForbidden, "access_denied")
-						return
-					}
-				}
+			if denyByGeo(w, r, reqID, clientIP, geoAllow, geoBlock) {
+				return
 			}
 
 			next.ServeHTTP(w, r)

@@ -9,7 +9,7 @@ import (
 )
 
 // Refresh tokens are single-use: MarkUsed is the atomic compare-and-set that decides
-// whether this token has already been spent. Its bool is the whole replay defence.
+// whether this token has already been spent. Its bool is the whole replay defense.
 //
 // A DB failure that returned (true, nil) would mean a replayed refresh token is
 // accepted — the exact attack rotation exists to stop — and it would do so silently.
@@ -223,7 +223,7 @@ func TestWebAuthnRepo_SurfacesDatabaseFailures(t *testing.T) {
 }
 
 // The identity profile is the encrypted PII blob. UpsertCAS is the compare-and-set that
-// serialises concurrent writes: its bool means "I won the race and my write landed". A
+// serializes concurrent writes: its bool means "I won the race and my write landed". A
 // database failure that returned (true, nil) would report a write that never happened,
 // and the caller would stop retrying — which is precisely how a withdrawn marketing
 // consent gets silently reverted.

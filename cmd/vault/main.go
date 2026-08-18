@@ -211,8 +211,8 @@ func main() {
 	// the declared clients and users as a side effect, and a broken seed file
 	// killed an unrelated admin subcommand with log.Fatalf. The retention
 	// sweepers sit below for the same reason.
-	if cfg.SeedFile != "" {
-		sf, err := seed.Load(cfg.SeedFile)
+	if cfg.File != "" {
+		sf, err := seed.Load(cfg.File)
 		if err != nil {
 			_ = auditLogger.Close(ctx)
 			log.Fatalf("Failed to load seed file: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above

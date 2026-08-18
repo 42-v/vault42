@@ -29,7 +29,7 @@ import (
 //
 // Excluding web/ *source* from assessment is legitimate and stays. It is not a
 // reason to mark server-side HTTP response controls Not Applicable: CORS, CSP,
-// cookie and redirect behaviour are all emitted by in-scope Go code, on every
+// cookie and redirect behavior are all emitted by in-scope Go code, on every
 // response, whether or not the SPA is the thing consuming them.
 //
 // These tests are what those rows now rest on.
@@ -170,7 +170,7 @@ func TestASVS_V3_5_2_SensitiveFunctionalityAlwaysTriggersPreflight(t *testing.T)
 
 // POST /auth/refresh authenticates from a cookie, not from a bearer token
 // (internal/handler/auth.go reads r.Cookie(refreshTokenCookie)), which is
-// exactly the shape the requirement addresses. The defence is the cookie's own
+// exactly the shape the requirement addresses. The defense is the cookie's own
 // attributes: SameSite=Strict means the browser does not attach it to a
 // cross-site request at all, so the forged request arrives unauthenticated.
 //
@@ -267,7 +267,7 @@ func TestASVS_V3_7_1_NoObsoletePluginTechnologyIsShipped(t *testing.T) {
 //
 // The assertion is structural because that is where the property lives: the
 // danger is a *new* redirect somewhere else, taking its target from a request
-// parameter. A behavioural test of the four sites that exist today cannot see
+// parameter. A behavioral test of the four sites that exist today cannot see
 // the fifth one arriving.
 func TestASVS_V3_7_2_EveryRedirectTargetIsServerControlled(t *testing.T) {
 	// Accessors that read attacker-controlled request data.

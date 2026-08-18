@@ -16,7 +16,7 @@ import (
 // It is what makes the TOCTOU deterministic in both directions. With the quota
 // decision unserialised all n uploaders reach the quota read together, the
 // barrier releases immediately, and every one of them reads the same
-// pre-write total. With the decision serialised only one can be inside at a
+// pre-write total. With the decision serialized only one can be inside at a
 // time, so the barrier never fills, each uploader pays the timeout, and the
 // second one reads the total the first produced. No sleeps in the test body and
 // no dependence on the scheduler.
@@ -97,7 +97,7 @@ func TestConcurrentUploadsCannotAllPassOneQuotaRead(t *testing.T) {
 	}
 }
 
-// lockingBlobRepo is a blob repository that can also serialise a write section
+// lockingBlobRepo is a blob repository that can also serialize a write section
 // across processes, the way the document repository does with
 // pg_advisory_xact_lock. The in-process stripe alone only orders the goroutines
 // of one pod.
@@ -155,10 +155,10 @@ func TestBlobWritesUseTheRepositoryLockWhenTheStoreOffersOne(t *testing.T) {
 	}
 	if repo.createsHeld != 1 {
 		t.Errorf("%d of the writes happened inside the repository lock, want 1: a lock the write "+
-			"does not run inside serialises nothing", repo.createsHeld)
+			"does not run inside serializes nothing", repo.createsHeld)
 	}
 	if want := svc.Pseudonym("user-1"); repo.keys[0] != want {
 		t.Errorf("locked on %q, want the owner pseudonym %q: a lock on any other key does not "+
-			"serialise the writers that share a quota", repo.keys[0], want)
+			"serialize the writers that share a quota", repo.keys[0], want)
 	}
 }

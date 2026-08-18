@@ -149,7 +149,7 @@ func TestGDPR_Art7_MarketingAllowedFailsClosed(t *testing.T) {
 				t.Fatalf("MarketingAllowed: %v", err)
 			}
 			if allowed {
-				t.Error("Art. 7: a state with no demonstrable consent must not authorise sending")
+				t.Error("Art. 7: a state with no demonstrable consent must not authorize sending")
 			}
 		})
 	}
@@ -252,7 +252,7 @@ func TestGDPR_Art7_1_RealChangeIsStampedAsProfile(t *testing.T) {
 func TestGDPR_Art7_3_UnsubscribeWithdrawsConsent(t *testing.T) {
 	// Granting is one checkbox, so withdrawal is one authenticated POST with no
 	// body and no confirmation step. The withdrawal must land with unsubscribe
-	// provenance so the controller can show it was honoured.
+	// provenance so the controller can show it was honored.
 	repo := gdprIdentityRepo()
 	svc := gdprIdentityService(repo)
 	ctx := context.Background()

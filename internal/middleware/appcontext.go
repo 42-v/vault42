@@ -9,9 +9,9 @@ import (
 // AppContext extracts the white-label tenant slug from the X-Vault-App request
 // header and stores it in the request context for the email layer to pick up.
 //
-// The slug decides whose name, logo and colours a genuine auth email wears, and
+// The slug decides whose name, logo and colors a genuine auth email wears, and
 // none of the endpoints that send one are authenticated. It is therefore only
-// honoured when the request reached vault42 through a trusted proxy
+// honored when the request reached vault42 through a trusted proxy
 // (TRUSTED_PROXIES): the gateway or BFF in front of vault42 sets the header per
 // tenant and overwrites whatever the client sent. A request arriving directly,
 // or through a peer outside the trusted set, selects no tenant, so an outside

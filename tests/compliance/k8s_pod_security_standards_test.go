@@ -27,7 +27,7 @@ import (
 //     binds the node's loopback. That is a real deviation and is recorded as
 //     one rather than being called compliance;
 //   - the bundled PostgreSQL and Mailpit are development conveniences, both
-//     disabled by default and both labelled "dev only" in values.yaml. They do
+//     disabled by default and both labeled "dev only" in values.yaml. They do
 //     not meet restricted, and the register says so rather than quietly scoping
 //     them out.
 //

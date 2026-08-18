@@ -19,7 +19,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	boom := errors.New("db down")
 
 	t.Run("a client that cannot be looked up", func(t *testing.T) {
-		sf := &SeedFile{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
+		sf := &File{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{
 				GetByNameFn: func(context.Context, string) (*model.Client, error) { return nil, boom },
@@ -37,7 +37,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	})
 
 	t.Run("a client that cannot be created", func(t *testing.T) {
-		sf := &SeedFile{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
+		sf := &File{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{
 				GetByNameFn: func(context.Context, string) (*model.Client, error) { return nil, nil },
@@ -52,7 +52,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	})
 
 	t.Run("a user that cannot be created", func(t *testing.T) {
-		sf := &SeedFile{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
+		sf := &File{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{},
 			Users: &mocks.MockUserRepo{
@@ -71,7 +71,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	})
 
 	t.Run("a user that cannot be looked up", func(t *testing.T) {
-		sf := &SeedFile{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
+		sf := &File{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{},
 			Users: &mocks.MockUserRepo{

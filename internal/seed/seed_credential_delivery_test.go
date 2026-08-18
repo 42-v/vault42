@@ -22,7 +22,7 @@ func TestSeedClient_SecretNeverReachesTheProcessOutput(t *testing.T) {
 	t.Setenv("VAULT_FIRST_BOOT_CREDENTIAL_FILE", credFile)
 
 	clients := newMockClientRepo()
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "web", Role: "frontend", Scopes: []string{"user:read"}}}}
+	sf := &File{Clients: []ClientSeed{{Name: "web", Role: "frontend", Scopes: []string{"user:read"}}}}
 
 	out := captureProcessOutput(t, func() {
 		if err := Run(context.Background(), sf, Deps{Clients: clients}, ""); err != nil {
@@ -57,7 +57,7 @@ func TestSeedClient_UndeliverableSecretCreatesNoClient(t *testing.T) {
 	t.Setenv("VAULT_FIRST_BOOT_CREDENTIAL_FILE", filepath.Join(t.TempDir(), "no-such-dir", "first-boot.env"))
 
 	clients := newMockClientRepo()
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "web", Role: "frontend", Scopes: []string{"user:read"}}}}
+	sf := &File{Clients: []ClientSeed{{Name: "web", Role: "frontend", Scopes: []string{"user:read"}}}}
 
 	var err error
 	captureProcessOutput(t, func() {

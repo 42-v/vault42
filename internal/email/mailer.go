@@ -25,7 +25,7 @@ var ErrNoSender = errors.New("email: mailer has no sender configured")
 // Mailer applies the per-app white-label layer on top of the global templates
 // and a [Sender]. It resolves each tenant's branding, renders either a custom
 // override or the global template, picks an allowlisted From line, and sends.
-// A zero/absent app slug reproduces the pre-white-label global behaviour.
+// A zero/absent app slug reproduces the pre-white-label global behavior.
 type Mailer struct {
 	renderer           *TemplateRenderer
 	sender             Sender

@@ -365,16 +365,19 @@ type Config struct {
 	// (VAULT_KEY_REFRESH_INTERVAL). Default: 60s.
 	KeyRefreshInterval time.Duration
 
-	// SeedFile is the path to a JSON seed file for declarative user and client
+	// File is the path to a JSON seed file for declarative user and client
 	// creation at startup (VAULT_SEED_FILE). Empty = no seeding.
-	SeedFile string
+	File string
 }
 
 // Load reads configuration from environment variables and secret files,
 // applies profile-specific defaults, and returns a validated Config.
 // Secrets are loaded via the _FILE suffix convention (see [LoadSecret]).
 //
-//nolint:gocognit // each env var is one branch; splitting hides defaults across files
+// The body stays one long straight line of assignments on purpose: every
+// setting and its default are readable in the order they are applied, and
+// splitting that across functions would scatter the defaults. What is
+// extracted is only the parsing that repeats (see envList).
 func Load() (*Config, error) {
 	// Ahead of everything, including the secret files: VAULT_SECRET_FILE_CONSUME
 	// makes the first read of a secret destructive, so a config that is going to
@@ -483,28 +486,14 @@ func Load() (*Config, error) {
 
 		KeyRefreshInterval: envDuration("VAULT_KEY_REFRESH_INTERVAL", 60*time.Second),
 
-		SeedFile: os.Getenv("VAULT_SEED_FILE"),
+		File: os.Getenv("VAULT_SEED_FILE"),
 	}
 
 	// Load honeypot trap users from comma-separated list
-	if tu := os.Getenv("VAULT_HONEYPOT_TRAP_USERS"); tu != "" {
-		for _, entry := range strings.Split(tu, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.HoneypotTrapUsers = append(c.HoneypotTrapUsers, strings.ToLower(entry))
-			}
-		}
-	}
+	c.HoneypotTrapUsers = envListFold("VAULT_HONEYPOT_TRAP_USERS", strings.ToLower)
 
 	// Load trusted proxies from comma-separated CIDR/IP list
-	if tp := os.Getenv("TRUSTED_PROXIES"); tp != "" {
-		for _, entry := range strings.Split(tp, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.TrustedProxies = append(c.TrustedProxies, entry)
-			}
-		}
-	}
+	c.TrustedProxies = envList("TRUSTED_PROXIES")
 
 	// Real IP header (proxy-specific, e.g. "CF-Connecting-IP")
 	c.RealIPHeader = strings.TrimSpace(os.Getenv("REAL_IP_HEADER"))
@@ -518,58 +507,16 @@ func Load() (*Config, error) {
 	// Mint allow-lists. Absent means empty, which denies every role and scope: a
 	// signing oracle that grants nothing is the safe failure, so no default is
 	// substituted here.
-	if v := os.Getenv("VAULT_MINT_ROLES"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.MintAllowedRoles = append(c.MintAllowedRoles, entry)
-			}
-		}
-	}
-	if v := os.Getenv("VAULT_MINT_SCOPES"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.MintAllowedScopes = append(c.MintAllowedScopes, entry)
-			}
-		}
-	}
+	c.MintAllowedRoles = envList("VAULT_MINT_ROLES")
+	c.MintAllowedScopes = envList("VAULT_MINT_SCOPES")
 
 	// Load IP allowlist/blocklist from comma-separated CIDR/IP list
-	if v := os.Getenv("IP_ALLOWLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.IPAllowlist = append(c.IPAllowlist, entry)
-			}
-		}
-	}
-	if v := os.Getenv("IP_BLOCKLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.IPBlocklist = append(c.IPBlocklist, entry)
-			}
-		}
-	}
+	c.IPAllowlist = envList("IP_ALLOWLIST")
+	c.IPBlocklist = envList("IP_BLOCKLIST")
 
 	// Load geo allowlist/blocklist (uppercase country codes)
-	if v := os.Getenv("GEO_ALLOWLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(strings.ToUpper(entry))
-			if entry != "" {
-				c.GeoAllowlist = append(c.GeoAllowlist, entry)
-			}
-		}
-	}
-	if v := os.Getenv("GEO_BLOCKLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(strings.ToUpper(entry))
-			if entry != "" {
-				c.GeoBlocklist = append(c.GeoBlocklist, entry)
-			}
-		}
-	}
+	c.GeoAllowlist = envListFold("GEO_ALLOWLIST", strings.ToUpper)
+	c.GeoBlocklist = envListFold("GEO_BLOCKLIST", strings.ToUpper)
 
 	// Apply profile defaults for any unset values
 	applyProfileDefaults(c)
@@ -578,12 +525,12 @@ func Load() (*Config, error) {
 	// VAULT_EMBEDDED_TRUSTED_UPSTREAM=true, vault42 is running behind a
 	// sibling proxy on the same private network (typical Hermod/k8s pod
 	// pattern). Auto-trust RFC1918 ranges so X-Forwarded-For from that
-	// upstream is honoured for ClientIP() — required for per-attacker
+	// upstream is honored for ClientIP() — required for per-attacker
 	// rate-limit + audit attribution. Explicit TRUSTED_PROXIES /
 	// REAL_IP_HEADER env values always win; this only fills the gaps.
 	if c.EmbeddedTrustedUpstream {
 		// Fail closed: this shortcut auto-trusts whole RFC1918 + loopback ranges
-		// and blindly honours X-Forwarded-For, collapsing per-IP rate-limit and
+		// and blindly honors X-Forwarded-For, collapsing per-IP rate-limit and
 		// audit attribution on a flat network. Only the embedded sidecar profile
 		// may use it; anywhere else, set TRUSTED_PROXIES/REAL_IP_HEADER explicitly
 		// (audit M7).
@@ -665,17 +612,10 @@ func Load() (*Config, error) {
 // signing), empty pepper (weakens password hashing), empty origin (disables JWT
 // issuer/audience binding), or plaintext serving (drops the Secure cookie flag).
 func (c *Config) Validate() error {
-	// Checked ahead of the dev short-circuit: a mint audience equal to the issuer
-	// makes every minted token valid against vault42 itself, so the oracle becomes
-	// account takeover for any subject. That is not a production-only hazard, and a
-	// dev deployment that teaches the wrong configuration gets copied.
-	if c.MintEnabled {
-		if c.MintAudience == "" {
-			return fmt.Errorf("VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set")
-		}
-		if c.MintAudience == c.Origin {
-			return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
-		}
+	// Checked ahead of the dev short-circuit, for the reason checkMintAudience
+	// documents.
+	if err := c.checkMintAudience(); err != nil {
+		return err
 	}
 	// Also checked ahead of the dev short-circuit. A dev operator who mounts an
 	// admin token and gets a generated one instead learns the wrong thing about
@@ -725,6 +665,14 @@ func (c *Config) Validate() error {
 	if c.Profile == ProfileProduction && c.CacheBackend == "redis" && c.RedisAddr == "" {
 		return fmt.Errorf("REDIS_ADDR required when CACHE_BACKEND=redis in %s profile; without it the cache falls back to per-process memory and every shared-state control degrades by the replica count", c.Profile)
 	}
+	// M5 and M4 stay inline rather than moving to a checkTLSTermination helper
+	// like the guards above and below them. Two compliance gates read the text of
+	// Validate itself and fail if the TLS refusals are not in it:
+	// TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults reads only as far
+	// as the next func, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride
+	// wants VAULT_ALLOW_PLAINTEXT under this signature. Extracting them passes the
+	// linter and silently converts a checked claim into an unchecked one.
+	//
 	// M5: refuse to silently disable TLS.
 	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
 		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
@@ -737,39 +685,45 @@ func (c *Config) Validate() error {
 	if err := c.checkGeoFence(); err != nil {
 		return err
 	}
-	// The connection carries the role password in the startup packet and every
-	// row of every table after it, including the encrypted TOTP secrets and the
-	// password hashes. Three of the six legal modes do not guarantee it is
-	// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
-	// back to plaintext without telling anyone.
-	//
-	// This refuses rather than warns, and it refuses for the same reason M5
-	// fourteen lines above refuses a disabled listener: an unencrypted link is a
-	// control that is absent, and a SECURITY WARNING that boots anyway is
-	// indistinguishable from no control at all once the log scrolls. Deployments
-	// that run Postgres in the same pod legitimately want "disable"
-	// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
-	// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
-	// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
-	// keeps the posture visible where an operator reviews it.
-	//
-	// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
-	// is unreachable through Load (envOr defaults it to "require" and the enum
-	// check rejects every other spelling) and keeps the warning, so a Config
-	// assembled in code is judged on what it says rather than on what it omits.
-	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
-		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
+	if err := c.checkDatabaseLink(); err != nil {
+		return err
 	}
-	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
-		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
+	c.warnOnDegradedControls()
+	return nil
+}
+
+// checkMintAudience refuses a mint oracle whose tokens authenticate against
+// vault42 itself.
+//
+// A mint audience equal to the issuer makes every minted token valid against
+// vault42, so the oracle becomes account takeover for any subject. Validate
+// runs this ahead of the dev short-circuit because that is not a
+// production-only hazard, and a dev deployment that teaches the wrong
+// configuration gets copied.
+func (c *Config) checkMintAudience() error {
+	if !c.MintEnabled {
+		return nil
 	}
+	if c.MintAudience == "" {
+		return fmt.Errorf("VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set")
+	}
+	if c.MintAudience == c.Origin {
+		return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
+	}
+	return nil
+}
+
+// warnOnDegradedControls reports the settings that cost a deployment a control
+// without costing it a boot. Each one refuses to hard-fail on purpose: the
+// effect is a weaker deployment rather than an open door, and a deployment
+// already running this way must not stop booting on upgrade.
+func (c *Config) warnOnDegradedControls() {
 	// A proxy header nobody is trusted to set is a header that is never read.
 	// ClientIP returns the peer address when TrustedProxies is empty, so every
 	// client behind the ingress shares one rate-limit bucket, one lockout counter
 	// and one address in the audit log, and the operator's evidence that
-	// per-client attribution works is the variable they set. This one warns
-	// rather than refuses: the effect is lost attribution, not a lost gate, and
-	// a deployment already running this way must not stop booting on upgrade.
+	// per-client attribution works is the variable they set. The effect is lost
+	// attribution, not a lost gate.
 	if len(c.TrustedProxies) == 0 {
 		for _, h := range []struct{ name, value string }{
 			{"REAL_IP_HEADER", c.RealIPHeader},
@@ -785,6 +739,38 @@ func (c *Config) Validate() error {
 	// operators can opt out deliberately.
 	if len(c.RecoveryPublicKeyPEM) == 0 {
 		log.Printf("SECURITY WARNING: VAULT_RECOVERY_PUBLIC_KEY_FILE not set — account erasures will not be recoverable")
+	}
+}
+
+// checkDatabaseLink refuses a non-dev database connection that is not
+// encrypted.
+//
+// The connection carries the role password in the startup packet and every
+// row of every table after it, including the encrypted TOTP secrets and the
+// password hashes. Three of the six legal modes do not guarantee it is
+// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
+// back to plaintext without telling anyone.
+//
+// This refuses rather than warns, and it refuses for the same reason Validate's
+// M5 guard refuses a disabled listener: an unencrypted link is a control that
+// is absent, and a SECURITY WARNING that boots anyway is indistinguishable from
+// no control at all once the log scrolls. Deployments that run Postgres in the
+// same pod legitimately want "disable"
+// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
+// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
+// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
+// keeps the posture visible where an operator reviews it.
+//
+// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
+// is unreachable through Load (envOr defaults it to "require" and the enum
+// check rejects every other spelling) and keeps the warning, so a Config
+// assembled in code is judged on what it says rather than on what it omits.
+func (c *Config) checkDatabaseLink() error {
+	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
+		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
+	}
+	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
+		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
 	}
 	return nil
 }
@@ -1126,6 +1112,34 @@ func splitTrimLower(s string) []string {
 		if v := strings.ToLower(strings.TrimSpace(raw)); v != "" {
 			out = append(out, v)
 		}
+	}
+	return out
+}
+
+// envList reads a comma-separated environment variable. Blank entries are
+// dropped rather than kept as empty strings, so a trailing comma or a list
+// wrapped over lines in a manifest does not add a member that matches nothing
+// but still makes the list non-empty — and a non-empty allowlist is the
+// difference between "no restriction" and "only these" for the IP and geo
+// fences. An unset variable yields nil, matching the append-based form this
+// replaced.
+func envList(key string) []string {
+	var out []string
+	for _, entry := range strings.Split(os.Getenv(key), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// envListFold is envList for the lists whose members are compared without
+// regard to case: trap usernames are held lowercase and country codes
+// uppercase, folded once here so no comparison downstream has to remember to.
+func envListFold(key string, fold func(string) string) []string {
+	out := envList(key)
+	for i, entry := range out {
+		out[i] = fold(entry)
 	}
 	return out
 }

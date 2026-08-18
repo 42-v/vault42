@@ -148,7 +148,7 @@ func (r *AuditRepo) CountByUser(ctx context.Context, userID string) (int, error)
 	return count, nil
 }
 
-// auditRetentionLockKey is the advisory-lock key the retention sweep serialises
+// auditRetentionLockKey is the advisory-lock key the retention sweep serializes
 // on. Arbitrary but fixed: every replica must pick the same number.
 const auditRetentionLockKey int64 = 4242
 

@@ -94,9 +94,9 @@ type Config struct {
 	// Shutdown timeout
 	ShutdownTimeout time.Duration
 
-	// SeedFile is the path to a JSON seed file for declarative admin user
+	// File is the path to a JSON seed file for declarative admin user
 	// creation at startup (VAULT_SEED_FILE). Empty = no seeding.
-	SeedFile string
+	File string
 }
 
 // LoadConfig reads configuration from environment variables.
@@ -124,7 +124,7 @@ func LoadConfig() (*Config, error) {
 
 		AutoMigrate:     envBool("ADMIN_GW_AUTO_MIGRATE"),
 		ShutdownTimeout: envDuration("ADMIN_GW_SHUTDOWN_TIMEOUT", 15*time.Second),
-		SeedFile:        os.Getenv("VAULT_SEED_FILE"),
+		File:            os.Getenv("VAULT_SEED_FILE"),
 	}
 
 	// Load secrets from _FILE env vars.

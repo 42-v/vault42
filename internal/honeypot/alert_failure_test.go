@@ -42,7 +42,7 @@ func TestAlerter_UnencodableEventStillAuditsAndSendsNothing(t *testing.T) {
 
 	// time.Time refuses to marshal a year outside [0,9999], so an event carrying
 	// a corrupt timestamp cannot be encoded.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		Timestamp: time.Date(-1, time.January, 1, 0, 0, 0, 0, time.UTC),
 		EventType: "trap_login",
 		IP:        "203.0.113.1",

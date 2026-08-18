@@ -516,7 +516,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		// exists to slow credential guessing, and the callback is not a guessing
 		// surface: reaching its body already takes an HMAC-valid state, a matching
 		// __Host-oauth_state cookie, an unconsumed server-side PKCE verifier and a
-		// code the provider will honour. Sharing it meant a caller on a VPN got one
+		// code the provider will honor. Sharing it meant a caller on a VPN got one
 		// login-or-callback per quarter hour across both endpoints (5 per 15
 		// minutes, counted at triple weight for a flagged address), and that anyone
 		// on the same egress — office, CGNAT pool, VPN exit — could spend the

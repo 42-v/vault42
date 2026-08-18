@@ -35,16 +35,15 @@
 package spec_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
-
-	"go/ast"
-	"go/parser"
-	"go/token"
 )
 
 // subjectColumns name a data subject. A table carrying one holds personal data

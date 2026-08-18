@@ -139,8 +139,8 @@ func main() {
 	}
 
 	// Seed admin users from JSON file (idempotent — skips existing)
-	if cfg.SeedFile != "" {
-		sf, err := seed.Load(cfg.SeedFile)
+	if cfg.File != "" {
+		sf, err := seed.Load(cfg.File)
 		if err != nil {
 			log.Printf("admin-gateway: seed load error: %v", err)
 		} else {

@@ -1038,7 +1038,7 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 	// unauthenticated and attacker-triggered, and Alert opens an outbound
 	// connection to the operator's alerting endpoint, so a bare `go` let the
 	// attacker choose how many of those this process holds open at once.
-	event := honeypot.HoneypotEvent{
+	event := honeypot.Event{
 		Timestamp: time.Now(),
 		EventType: "trap_login",
 		IP:        ip,

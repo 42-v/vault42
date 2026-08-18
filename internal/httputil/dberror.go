@@ -20,7 +20,7 @@ var dbURLPattern = regexp.MustCompile(`(postgres(?:ql)?://)[^:@/]+:[^@]*@`)
 
 // RedactDSN strips connection-URL credentials from an error message.
 //
-// pgx puts the DSN it dialled into its connect errors, so any tool that logs one
+// pgx puts the DSN it dialed into its connect errors, so any tool that logs one
 // raw prints the database password. This is the shared home for the redaction
 // that cmd/vault and cmd/admin-gateway each carry a private copy of; cmd/recover
 // had none at all, which mattered most because it is the tool that always holds
