@@ -174,7 +174,7 @@
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:875 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
-      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:499) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
+      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:527) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
       "cost_of_closing": "Nothing to build. Closing it means documenting the separate-hostname topology as the supported production shape and keeping VAULT_SERVE_FRONTEND for development and the honeypot profile."
@@ -197,7 +197,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1816).",
+      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1811).",
       "compensating_control": "The chart deploys Redis as a workload beside vault and its NetworkPolicy admits port 6379 only from the vault pods, so the link is pod-to-pod inside one namespace rather than across a network the operator does not own; the same policy admits no egress to 443 at all. The AUTH secret is read from REDIS_PASS_FILE rather than the environment. Nothing durable transits the link: the cache holds short-TTL rate-limit counters, lockout markers, single-use challenge markers and an HMAC of the email one-time code, and every value that authorises anything is re-checked against the database or against a signed token before it is honoured.",
       "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
       "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
@@ -512,7 +512,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:571"
+        "internal/config/config.go:607"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -535,12 +535,12 @@
         "internal/outbound/outbound.go:94",
         "internal/outbound/outbound.go:147",
         "internal/oauth2/oidc.go:184",
-        "cmd/vault/main.go:600"
+        "cmd/vault/main.go:623"
       ],
       "tests": [
         "TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist"
       ],
-      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:76). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:184): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:600 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
+      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:85). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:184): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:623 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
     },
     {
       "standard": "OWASP ASVS",
@@ -669,12 +669,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:406"
+        "internal/adminapi/handler.go:420"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "Numeric request values are parsed with strconv and range-clamped before use. Handler.DeleteUser (internal/adminapi/handler.go:406) is the admin-plane entry point, writing the escrow record before the cascade."
+      "notes": "Numeric request values are parsed with strconv and range-clamped before use. Handler.DeleteUser (internal/adminapi/handler.go:420) is the admin-plane entry point, writing the escrow record before the cascade."
     },
     {
       "standard": "OWASP ASVS",
@@ -890,7 +890,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1764",
+        "internal/service/auth.go:1781",
         "internal/handler/data_export.go:18"
       ],
       "tests": [
@@ -977,13 +977,13 @@
       "status": "Met",
       "evidence": [
         "internal/handler/blob.go:434",
-        "internal/handler/blob.go:220",
-        "internal/handler/blob.go:317"
+        "internal/handler/blob.go:221",
+        "internal/handler/blob.go:319"
       ],
       "tests": [
         "TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType"
       ],
-      "notes": "All three of the controls this requirement names by example are now present. X-Content-Type-Options: nosniff is set on every response and default-src 'none' covers API paths; the third, the attachment disposition type, is set by attachmentDisposition (internal/handler/blob.go:434) on both download paths (internal/handler/blob.go:220 and :315), so a browser navigated straight at a blob URL saves the bytes instead of deciding for itself whether to render them. The test asserts the disposition type rather than the header's presence, because inline is also a Content-Disposition and is the rendering context this requirement exists to prevent. Previously accepted risk CR-26, now retired; Not Applicable before that."
+      "notes": "All three of the controls this requirement names by example are now present. X-Content-Type-Options: nosniff is set on every response and default-src 'none' covers API paths; the third, the attachment disposition type, is set by attachmentDisposition (internal/handler/blob.go:434) on both download paths (internal/handler/blob.go:221 and :315), so a browser navigated straight at a blob URL saves the bytes instead of deciding for itself whether to render them. The test asserts the disposition type rather than the header's presence, because inline is also a Content-Disposition and is the rendering context this requirement exists to prevent. Previously accepted risk CR-26, now retired; Not Applicable before that."
     },
     {
       "standard": "OWASP ASVS",
@@ -1571,7 +1571,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:374"
+        "internal/handler/blob.go:376"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
@@ -1640,12 +1640,12 @@
       "evidence": [
         "internal/handler/blob.go:134",
         "internal/handler/blob.go:138",
-        "internal/handler/blob.go:374"
+        "internal/handler/blob.go:376"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
       ],
-      "notes": "Met: PUT /user/blobs/named/{name} stores under a caller-supplied name, so the requirement's second branch applies and strict validation is what it asks for. validRefName (internal/handler/blob.go:374, called at :138) restricts the name to [a-zA-Z0-9_-], which excludes every path separator, dot, NUL and shell metacharacter; the length is capped at 255 runes (:134). The stored object is a database row keyed by an HMAC of the name, never a filesystem path. TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated drives eleven traversal and injection shapes plus a positive control. Previously Not Applicable on the claim that no name is ever caller-supplied."
+      "notes": "Met: PUT /user/blobs/named/{name} stores under a caller-supplied name, so the requirement's second branch applies and strict validation is what it asks for. validRefName (internal/handler/blob.go:376, called at :138) restricts the name to [a-zA-Z0-9_-], which excludes every path separator, dot, NUL and shell metacharacter; the length is capped at 255 runes (:134). The stored object is a database row keyed by an HMAC of the name, never a filesystem path. TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated drives eleven traversal and injection shapes plus a positive control. Previously Not Applicable on the claim that no name is ever caller-supplied."
     },
     {
       "standard": "OWASP ASVS",
@@ -1660,14 +1660,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:374",
+        "internal/handler/blob.go:376",
         "internal/handler/blob.go:409",
         "internal/handler/blob.go:434"
       ],
       "tests": [
         "TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer"
       ],
-      "notes": "Both clauses hold. Caller-submitted names are validated by validRefName before use (internal/handler/blob.go:374), and both download paths now specify a filename through attachmentDisposition (internal/handler/blob.go:434). The filename is the blob's own reference reduced by contentDispositionFilename (internal/handler/blob.go:409) to [A-Za-z0-9._-] and capped at maxDispositionFilename, with everything else dropped rather than escaped, falling back to a fixed literal when nothing usable remains. Dropping rather than escaping is deliberate: DownloadNamed reads its name straight out of the route and never runs validRefName, so the response header cannot borrow the upload path's guarantee, and a quote that survived would open a second parameter. Previously accepted risk CR-26, now retired; Not Applicable before that."
+      "notes": "Both clauses hold. Caller-submitted names are validated by validRefName before use (internal/handler/blob.go:376), and both download paths now specify a filename through attachmentDisposition (internal/handler/blob.go:434). The filename is the blob's own reference reduced by contentDispositionFilename (internal/handler/blob.go:409) to [A-Za-z0-9._-] and capped at maxDispositionFilename, with everything else dropped rather than escaped, falling back to a fixed literal when nothing usable remains. Dropping rather than escaping is deliberate: DownloadNamed reads its name straight out of the route and never runs validRefName, so the response header cannot borrow the upload path's guarantee, and a quote that survived would open a second parameter. Previously accepted risk CR-26, now retired; Not Applicable before that."
     },
     {
       "standard": "OWASP ASVS",
@@ -1680,7 +1680,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/blob.go:85",
-        "internal/handler/blob.go:222",
+        "internal/handler/blob.go:223",
         "internal/handler/blob.go:441"
       ],
       "tests": [
@@ -1701,7 +1701,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:296",
+        "internal/handler/blob.go:297",
         "internal/service/blob.go:142"
       ],
       "tests": [
@@ -1784,14 +1784,14 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:439",
-        "internal/config/config.go:708",
-        "internal/config/config.go:928"
+        "internal/config/config.go:744",
+        "internal/config/config.go:975"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestASVS_V2_1_1_PasswordMinLengthConfigured"
       ],
-      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:928) is 15 and a non-dev profile refuses to start below it (:622); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:405, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
+      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:975) is 15 and a non-dev profile refuses to start below it (:622); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:432, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
     },
     {
       "standard": "OWASP ASVS",
@@ -2024,7 +2024,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:145",
+        "internal/service/auth.go:154",
         "internal/server/server.go:424"
       ],
       "tests": [
@@ -2172,7 +2172,7 @@
       "requirement": "Verify that valid users cannot be deduced from failed authentication challenges, such as by basing on error messages, HTTP response codes, or different response times. Registration and forgot password functionality must also have this protection.",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:667",
+        "internal/service/auth.go:676",
         "internal/handler/auth.go:91"
       ],
       "tests": [
@@ -2632,13 +2632,13 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:538",
+        "internal/config/config.go:574",
         "internal/service/auth.go:2498"
       ],
       "tests": [
         "TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes"
       ],
-      "notes": "Met, all three clauses. Both timeouts are documented in docs/config.md and both are configurable: VAULT_MAX_SESSION_LIFETIME (default 720h) and VAULT_INACTIVITY_TIMEOUT (default 1h, internal/config/config.go:538). They are appropriate in combination -- the inactivity window is four access-token lifetimes wide, so a session in normal use never approaches it, and the absolute bound is the outer limit that a rotating client cannot slide. The deviation clause is satisfied and is the reason this row is not simply inherited from the two settings: docs/config.md states the NIST SP 800-63B-4 section 2.2.3 figures (24 hours overall, 1 hour of inactivity), says which one this deployment meets and which it deviates from, and says why. The entry previously cited 12 hours as the AAL2 figure, which is the withdrawn Rev 3 number; a merge reintroduced it after it was first corrected, and TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes now fails if it comes back. That test also parses both documented defaults out of the published table and compares them with what config.Load produces, so the document cannot drift from the code in either direction."
+      "notes": "Met, all three clauses. Both timeouts are documented in docs/config.md and both are configurable: VAULT_MAX_SESSION_LIFETIME (default 720h) and VAULT_INACTIVITY_TIMEOUT (default 1h, internal/config/config.go:574). They are appropriate in combination -- the inactivity window is four access-token lifetimes wide, so a session in normal use never approaches it, and the absolute bound is the outer limit that a rotating client cannot slide. The deviation clause is satisfied and is the reason this row is not simply inherited from the two settings: docs/config.md states the NIST SP 800-63B-4 section 2.2.3 figures (24 hours overall, 1 hour of inactivity), says which one this deployment meets and which it deviates from, and says why. The entry previously cited 12 hours as the AAL2 figure, which is the withdrawn Rev 3 number; a merge reintroduced it after it was first corrected, and TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes now fails if it comes back. That test also parses both documented defaults out of the published table and compares them with what config.Load produces, so the document cannot drift from the code in either direction."
     },
     {
       "standard": "OWASP ASVS",
@@ -2706,7 +2706,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:74"
+        "internal/service/token.go:78"
       ],
       "tests": [
         "TestASVS_V3_2_1_NewTokenPerAuthentication"
@@ -2748,7 +2748,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:748"
+        "internal/service/auth.go:757"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated",
@@ -2832,7 +2832,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:845"
+        "internal/service/auth.go:854"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -2870,7 +2870,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:596"
+        "internal/server/server.go:598"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -3003,7 +3003,7 @@
       "status": "Met",
       "evidence": [
         "internal/model/model.go:186",
-        "internal/adminapi/handler.go:520"
+        "internal/adminapi/handler.go:534"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
@@ -3067,12 +3067,12 @@
       "status": "Met",
       "evidence": [
         "internal/handler/response_types.go",
-        "internal/adminapi/handler.go:520"
+        "internal/adminapi/handler.go:193"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
       ],
-      "notes": "Responses are built from explicit view types rather than serialised models."
+      "notes": "Responses are built from explicit view types rather than serialised models. internal/adminapi/handler.go:193 declares userSummary, the type both admin user reads project onto, so a field added to model.User does not reach a response by default."
     },
     {
       "standard": "OWASP ASVS",
@@ -3239,7 +3239,7 @@
       "requirement": "Verify that, if a token issuer uses the same private key for issuing tokens to different audiences, the issued tokens contain an audience restriction that uniquely identifies the intended audiences. This will prevent a token from being reused with an unintended audience. If the audience identifier is dynamically provisioned, the token issuer must validate these audiences in order to make sure that they do not result in audience impersonation.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:74"
+        "internal/service/token.go:78"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3361,7 +3361,7 @@
       "requirement": "Verify that if an access control decision requires identifying a unique user from an access token (JWT or related token introspection response), the resource server identifies the user from claims that cannot be reassigned to other users. Typically, it means using a combination of 'iss' and 'sub' claims.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:74"
+        "internal/service/token.go:78"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3469,7 +3469,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:64",
-        "internal/service/auth.go:748"
+        "internal/service/auth.go:757"
       ],
       "tests": [
         "TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet",
@@ -3489,7 +3489,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/oauth.go:82",
-        "internal/oauth2/oidc.go:152"
+        "internal/oauth2/oidc.go:180"
       ],
       "tests": [
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge",
@@ -3632,7 +3632,7 @@
       "requirement": "Verify that the client rejects attempts by a malicious authorization server to impersonate another authorization server through authorization server metadata. The client must reject authorization server metadata if the issuer URL in the authorization server metadata does not exactly match the pre-configured issuer URL expected by the client.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:135"
+        "internal/oauth2/oidc.go:156"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4127,7 +4127,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:617"
+        "internal/config/config.go:653"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -4204,12 +4204,12 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:470"
+        "internal/config/config.go:498"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:470). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
+      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:498). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
     },
     {
       "standard": "OWASP ASVS",
@@ -4267,7 +4267,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:636",
+        "internal/config/config.go:672",
         "migrations/001_initial_schema.sql:354"
       ],
       "tests": [
@@ -4309,7 +4309,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:634"
+        "internal/config/config.go:639"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4351,7 +4351,7 @@
       "status": "Met",
       "evidence": [
         "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/oauth2/oidc.go:135"
+        "internal/oauth2/oidc.go:156"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4377,7 +4377,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/secrets.go:18",
-        "cmd/vault/main.go:338"
+        "cmd/vault/main.go:339"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4832,7 +4832,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/response_types.go",
-        "internal/adminapi/handler.go:520"
+        "internal/adminapi/handler.go:554"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
@@ -4849,7 +4849,7 @@
       "requirement": "Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:135"
+        "internal/oauth2/oidc.go:156"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4976,7 +4976,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:225"
+        "internal/audit/audit.go:229"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -4997,7 +4997,7 @@
       "status": "Met",
       "evidence": [
         "migrations/001_initial_schema.sql:154",
-        "internal/audit/audit.go:219"
+        "internal/model/model.go:450"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -5078,7 +5078,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:522"
+        "internal/service/auth.go:531"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -5430,8 +5430,8 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/config/config.go:538",
-        "internal/config/config.go:537",
+        "internal/config/config.go:574",
+        "internal/config/config.go:573",
         "internal/service/auth.go:2498",
         "migrations/013_session_lifetime.sql"
       ],
@@ -5480,15 +5480,15 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:439",
-        "internal/config/config.go:708",
-        "internal/config/config.go:936"
+        "internal/config/config.go:744",
+        "internal/config/config.go:983"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestNIST_NoCompositionRules",
         "TestNIST_NoForcedPasswordExpiration"
       ],
-      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:936), and every other profile enforces 15. The evidence previously cited internal/config/config.go:405, a doc comment on an unrelated field."
+      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:983), and every other profile enforces 15. The evidence previously cited internal/config/config.go:432, a doc comment on an unrelated field."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5499,9 +5499,9 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:439",
-        "internal/config/config.go:708",
-        "internal/config/config.go:928",
-        "internal/config/config.go:936"
+        "internal/config/config.go:744",
+        "internal/config/config.go:975",
+        "internal/config/config.go:983"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5510,7 +5510,7 @@
         "TestNIST_PasswordNoTruncation",
         "TestNIST_SaltLength"
       ],
-      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:928) equals the default (:412), and a deployment configuring less is refused at startup (:622). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:936), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
+      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:975) equals the default (:412), and a deployment configuring less is refused at startup (:622). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:983), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5616,7 +5616,7 @@
       "requirement": "Rate Limiting (Throttling)",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:145"
+        "internal/service/auth.go:154"
       ],
       "tests": [
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
@@ -5673,7 +5673,7 @@
       "requirement": "Verifier-CSP or IdP Communications",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:135",
+        "internal/oauth2/oidc.go:156",
         "internal/server/server.go:224"
       ],
       "tests": [
@@ -5803,7 +5803,7 @@
       "requirement": "Account Notifications",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:749"
+        "internal/service/auth.go:758"
       ],
       "tests": [
         "TestNIST63B4_4_6_SubscribersAreNotifiedOfLockout"
@@ -5836,7 +5836,7 @@
       "requirement": "Session Bindings: Access Tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:74"
+        "internal/service/token.go:78"
       ],
       "tests": [
         "TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent",
@@ -5853,7 +5853,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:2498",
-        "internal/service/auth.go:2356"
+        "internal/service/auth.go:2447"
       ],
       "tests": [
         "TestNIST63B4_5_2_ReauthenticationMeansANewLoginNotAnotherRotation"
@@ -5868,7 +5868,7 @@
       "requirement": "Session Monitoring",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:796",
+        "internal/service/auth.go:805",
         "internal/handler/user.go:125"
       ],
       "tests": [
@@ -5946,7 +5946,7 @@
       "requirement": "Unsuccessful Logon Attempts",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:145"
+        "internal/service/auth.go:154"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
@@ -6006,12 +6006,13 @@
       "requirement": "Content of Audit Records",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:225"
+        "internal/model/model.go:446",
+        "internal/audit/audit.go:373"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
       ],
-      "notes": ""
+      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:373) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6039,7 +6040,7 @@
       "evidence": [
         "internal/repository/repository.go:370",
         "internal/repository/postgres/audit.go:100",
-        "internal/adminapi/handler.go:638",
+        "internal/adminapi/handler.go:652",
         "internal/audit/alerting.go:49",
         "internal/alert/detector.go:121"
       ],
@@ -6530,7 +6531,7 @@
       "requirement": "Authentication Failures",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:145"
+        "internal/service/auth.go:154"
       ],
       "tests": [
         "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
@@ -6561,7 +6562,7 @@
       "requirement": "Security Logging and Alerting Failures",
       "status": "Met",
       "evidence": [
-        "cmd/vault/main.go:189",
+        "cmd/vault/main.go:190",
         "internal/alert/alert.go:160",
         "internal/audit/audit.go:397"
       ],
@@ -6913,7 +6914,7 @@
       "requirement": "OAuth 2.0 Security BCP: refresh token replay detection",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:748"
+        "internal/service/auth.go:757"
       ],
       "tests": [
         "TestRFC9700_4_14_2_RefreshRotationReplay",
@@ -6929,14 +6930,14 @@
       "requirement": "DPoP: sender-constrained access tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:221",
+        "internal/service/token.go:276",
         "internal/service/token.go:394",
         "internal/middleware/dpop.go:110"
       ],
       "tests": [
         "TestRFC9700_4_10_1_SenderConstrainedDPoP"
       ],
-      "notes": "Met. Access tokens are sender-constrained: when the middleware has validated a DPoP proof, issuance stamps cnf.jkt with its thumbprint (internal/service/token.go:221 on the login and rotation paths, :278 on the challenge token), and the middleware then compares the presented proof's thumbprint against the claim in constant time and refuses a mismatch (internal/middleware/dpop.go:110). WithDPoPScheme has a production caller, so the DPoP authentication scheme is accepted rather than declared. This row was an accepted risk, CR-25, for as long as no issuance path assigned cnf.jkt and the middleware therefore compared a proof against nothing.\n\nTwo limits, stated rather than rounded up. Refresh tokens are NOT sender-constrained: the refresh token is an opaque value in a __Host- cookie with no jkt column to bind it to, so its protection remains single-use rotation with family revocation on replay, not proof-of-possession. And no DPoP-Nonce is issued, so a proof's replay window is bounded by its iat freshness check and the one-time jti cache rather than by a server-supplied nonce. Full sender-constraint across every credential is not claimed; the access token is bound and the two gaps are named."
+      "notes": "Met. Access tokens are sender-constrained: when the middleware has validated a DPoP proof, issuance stamps cnf.jkt with its thumbprint (internal/service/token.go:276 on the login and rotation paths, :278 on the challenge token), and the middleware then compares the presented proof's thumbprint against the claim in constant time and refuses a mismatch (internal/middleware/dpop.go:110). WithDPoPScheme has a production caller, so the DPoP authentication scheme is accepted rather than declared. This row was an accepted risk, CR-25, for as long as no issuance path assigned cnf.jkt and the middleware therefore compared a proof against nothing.\n\nTwo limits, stated rather than rounded up. Refresh tokens are NOT sender-constrained: the refresh token is an opaque value in a __Host- cookie with no jkt column to bind it to, so its protection remains single-use rotation with family revocation on replay, not proof-of-possession. And no DPoP-Nonce is issued, so a proof's replay window is bounded by its iat freshness check and the one-time jti cache rather than by a server-supplied nonce. Full sender-constraint across every credential is not claimed; the access token is bound and the two gaps are named."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -7008,7 +7009,7 @@
       "requirement": "OAuth 2.0: refreshing an access token",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:748"
+        "internal/service/auth.go:757"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated"
@@ -7056,7 +7057,7 @@
       "evidence": [
         "internal/service/blob.go:142",
         "internal/handler/servicedoc.go:105",
-        "internal/handler/blob.go:296"
+        "internal/handler/blob.go:297"
       ],
       "tests": [
         "TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered"
@@ -7177,7 +7178,7 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:675",
+        "internal/config/config.go:697",
         "internal/middleware/security_headers.go:17"
       ],
       "tests": [
@@ -7425,7 +7426,7 @@
       "requirement": "Configure software to have secure settings by default",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:675",
+        "internal/config/config.go:697",
         ".github/workflows/ci.yml:427"
       ],
       "tests": [
@@ -7660,14 +7661,14 @@
     "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
-    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:928) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
+    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:975) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
-    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:221, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
+    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:276, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
-    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:650). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:686). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
     "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
     "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:184 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
-    "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:220 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee.",
+    "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:221 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee.",
     "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk."
   }
 }

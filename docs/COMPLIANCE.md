@@ -8,11 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-<<<<<<< HEAD
-> **404 requirements in scope across 9 standards: 345 Met, 13 Accepted Risk,
-=======
-> **404 requirements in scope across 9 standards: 339 Met, 19 Accepted Risk,
->>>>>>> hard/alerting
+> **404 requirements in scope across 9 standards: 348 Met, 10 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -201,22 +197,16 @@ than being retired on a technicality.
 |---|---:|---:|---:|---:|
 | OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 214 | 7 | 42 | 263 |
 | NIST SP 800-63B-4 | 28 | 1 | 2 | 31 |
-| NIST SP 800-53 Rev 5 (Release 5.2.0) | 31 | 2 | 1 | 34 |
-| OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
+| NIST SP 800-53 Rev 5 (Release 5.2.0) | 32 | 1 | 1 | 34 |
+| OWASP Top 10:2025 | 10 | 0 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
-<<<<<<< HEAD
-| **Total** | **345** | **13** | **46** | **404** |
+| **Total** | **348** | **10** | **46** | **404** |
 
-The 13 Accepted Risk rows collapse to **9 distinct accepted risks**: several
-=======
-| **Total** | **339** | **19** | **46** | **404** |
-
-The 19 Accepted Risk rows collapse to **10 distinct accepted risks**: several
->>>>>>> hard/alerting
+The 10 Accepted Risk rows collapse to **8 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -288,11 +278,7 @@ neither namespace.
 | ID | Severity | What is accepted | Requirements affected |
 |---|---|---|---|
 | **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
-<<<<<<< HEAD
 | **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
-=======
-| **CR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
->>>>>>> hard/alerting
 | **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
 | **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
