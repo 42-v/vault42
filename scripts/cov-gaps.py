@@ -187,7 +187,16 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # the same review. A package the shape guard does not name can fall out of the
 # run entirely and only the floor would notice, which is the one check a genuine
 # deletion is expected to move.
-BASELINE_TOTAL_STATEMENTS = 12783
+#
+# Raised to 12856 by the adversarial campaign's two fixes, diffed by package
+# against the 12783 profile so the whole change is accounted for and none of it
+# is a wider measurement:
+#
+#   +67  internal/email        the positive rule for what a secret pipeline may
+#                              be, the $-rooted variable case, the {{template}}
+#                              refusal, and the arms of both walks
+#    +6  internal/outbound     ClientForIssuer's per-hop redirect check
+BASELINE_TOTAL_STATEMENTS = 12856
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
