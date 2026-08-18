@@ -143,8 +143,14 @@ func TestAuditCleanupLockedMissingFunction(t *testing.T) {
 	repo := postgres.NewAuditRepo(&postgres.DB{Pool: pool})
 	seedAuditEntry(t, repo, time.Now().UTC().Add(-90*24*time.Hour))
 
-	if _, err := pool.Exec(ctx, `DROP FUNCTION audit.cleanup_old_entries(interval)`); err != nil {
-		t.Fatalf("drop cleanup function: %v", err)
+	// Both overloads. Migration 030 added a batched form and CleanupLocked
+	// calls that one, so dropping only the single-argument function left the
+	// one under test in place and the sweep reported a clean success — which is
+	// exactly the silent no-op this test exists to catch.
+	for _, sig := range []string{"interval", "interval, integer"} {
+		if _, err := pool.Exec(ctx, `DROP FUNCTION audit.cleanup_old_entries(`+sig+`)`); err != nil {
+			t.Fatalf("drop cleanup function(%s): %v", sig, err)
+		}
 	}
 
 	deleted, acquired, err := repo.CleanupLocked(ctx, time.Now().UTC().Add(-30*24*time.Hour))
