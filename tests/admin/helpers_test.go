@@ -166,16 +166,6 @@ func makeClient() (*http.Client, error) {
 	}, nil
 }
 
-// newClient creates a fresh mTLS client for tests that need one.
-func newClient(t *testing.T) *http.Client {
-	t.Helper()
-	c, err := makeClient()
-	if err != nil {
-		t.Fatalf("create client: %v", err)
-	}
-	return c
-}
-
 // ---------------------------------------------------------------------------
 // Login + TOTP setup
 // ---------------------------------------------------------------------------
@@ -305,17 +295,6 @@ func generateTOTPAt(secret string, t time.Time) (string, error) {
 	return fmt.Sprintf("%06d", code%1000000), nil
 }
 
-// login authenticates and returns the session token (for tests needing a separate session).
-// Uses the shared TOTP secret if set.
-func login(t *testing.T, client *http.Client, username, password string) string {
-	t.Helper()
-	token, _, err := doLogin(client, username, password, sharedTOTPSecret)
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	return token
-}
-
 // ---------------------------------------------------------------------------
 // Authenticated request helpers
 // ---------------------------------------------------------------------------
@@ -351,20 +330,6 @@ func authedPost(t *testing.T, client *http.Client, token, path string, body any)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
-	}
-	return resp
-}
-
-func authedDelete(t *testing.T, client *http.Client, token, path string) *http.Response {
-	t.Helper()
-	req, err := http.NewRequest("DELETE", baseURL()+path, nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("DELETE %s: %v", path, err)
 	}
 	return resp
 }
