@@ -50,7 +50,7 @@ Commits are linted as [Conventional Commits](https://www.conventionalcommits.org
 request (`.github/workflows/commitlint.yml`), and so is the pull request title. Configuration
 lives in `commitlint.config.js`. The allowed types are:
 
-```
+```text
 feat  fix  docs  style  refactor  perf  test  build  ci  chore  revert  security
 ```
 
@@ -130,8 +130,8 @@ Keep the docs in step with the code in the same commit. In particular:
 ## Security issues do not go here
 
 Do not open a public issue, and do not send a pull request that reveals an unfixed
-vulnerability. Email **vault@42-v.com**. See [SECURITY.md](SECURITY.md).
+vulnerability. Email <vault@42-v.com>. See [SECURITY.md](SECURITY.md).
 
-## Licence
+## License
 
-Contributions are accepted under the MIT licence in [LICENSE](LICENSE).
+Contributions are accepted under the MIT license in [LICENSE](LICENSE).

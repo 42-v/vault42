@@ -66,7 +66,7 @@ select = [
 #              rewrite, not a defect fix.
 #   D    (13)  same, for docstring style; both files already have module and
 #              function docstrings where they matter.
-#   PTH  (12)  os.path -> pathlib is a refactor with no behavioural payoff here.
+#   PTH  (12)  os.path -> pathlib is a refactor with no behavioral payoff here.
 #   PL   (18)  pylint thresholds (magic values, branch/statement counts) on
 #              report generators with long argparse and dispatch bodies. The Go
 #              side declined the equivalent gocyclo findings for the same reason.
