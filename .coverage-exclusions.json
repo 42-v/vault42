@@ -29,7 +29,16 @@
     "an entry then has to be a two-file diff, and the second file is the one a",
     "reviewer already reads. A new entry needs the same review as a security",
     "change, and its justification must be checkable by reading the cited call",
-    "sites and nothing else. Deleting the branch outright always beats listing",
+    "sites and nothing else -- cov-gaps.py resolves every path:NNN written in a",
+    "justification and fails when one lands on a blank line, a comment or a bare",
+    "brace, because a citation a reader cannot follow is not checkable by",
+    "reading it. That check exists because f692621 re-anchored 25 entries and",
+    "updated exactly one justification: every machine-checked field was correct",
+    "afterwards and five arguments cited code that had moved. It proves the",
+    "cited line still holds a statement, not that it holds the right one; a",
+    "citation that resolves to real but unrelated code is caught by reading the",
+    "justification, which is what the review is for. Deleting the branch",
+    "outright always beats listing",
     "it here: six statements that qualified were deleted rather than excluded",
     "(the Nil branch in redis exec, the dead crypto/rand.Read error checks in",
     "crypto/argon2.go and crypto/recovery.go, and the duplicate template compile",
@@ -65,7 +74,7 @@
       "source": "\t\tfatalAfterDrain(ctx, auditLogger, \"admin-gateway: keystore init: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "LoadConfig returns an error unless len(c.MasterKey) == 32 (cmd/admin-gateway/config.go:159) and main() dies on that error at main.go:66, long before this line. main.go:147 hands keystore.New a full-length copy of that key, append([]byte(nil), cfg.MasterKey...), and internal/keystore/keystore.go:128 holds keystore.New's only error return, the len(masterKey) != 32 check, so New cannot fail at this call site. Both legs are pinned by tests that fail if the reasoning stops holding: TestKeystoreNewHasExactlyOneErrorPath (cmd/admin-gateway/main_test.go:1186) fails if keystore.New grows a second error return or if its one return stops being guarded by the length check, and TestLoadConfigRequiredSettings/\"master key must be 32 bytes\" (cmd/admin-gateway/config_test.go:220) fails if LoadConfig stops refusing a short key. The child-process fixture cannot provoke it either: the master key reaches the binary only through MASTER_KEY_FILE, which LoadConfig validates before the process opens a database connection (TestConfigErrorIsFatalBeforeAnyDatabaseWork). The error is read rather than discarded on purpose, so a future second error path in keystore.New arrives here as a loud exit instead of a nil dereference on the next line. The call is fatalAfterDrain rather than an inline drain plus log.Fatalf so this unreachable block costs one statement instead of two; the helper's own body is covered by the three reachable sites that call it."
+      "justification": "LoadConfig returns an error unless len(c.MasterKey) == 32 (cmd/admin-gateway/config.go:183) and main() dies on that error at main.go:79, long before this line. main.go:164 hands keystore.New a full-length copy of that key, append([]byte(nil), cfg.MasterKey...), and internal/keystore/keystore.go:141 holds keystore.New's only error return, the len(masterKey) != 32 check, so New cannot fail at this call site. Both legs are pinned by tests that fail if the reasoning stops holding: TestKeystoreNewHasExactlyOneErrorPath (cmd/admin-gateway/main_test.go:1201) fails if keystore.New grows a second error return or if its one return stops being guarded by the length check, and TestLoadConfigRequiredSettings/\"master key must be 32 bytes\" (cmd/admin-gateway/config_test.go:220) fails if LoadConfig stops refusing a short key. The child-process fixture cannot provoke it either: the master key reaches the binary only through MASTER_KEY_FILE, which LoadConfig validates before the process opens a database connection (TestConfigErrorIsFatalBeforeAnyDatabaseWork). The error is read rather than discarded on purpose, so a future second error path in keystore.New arrives here as a loud exit instead of a nil dereference on the next line. The call is fatalAfterDrain rather than an inline drain plus log.Fatalf so this unreachable block costs one statement instead of two; the helper's own body is covered by the three reachable sites that call it."
     },
     {
       "package": "cmd/bridge",
@@ -85,7 +94,7 @@
       "source": "\t\tlog.Fatalf(\"bridge: initialization error: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "The same os.Exit(1) as the config guard above it, on the NewBridge error. NewBridge (cmd/bridge/proxy.go:81) returns an error only when url.Parse rejects one of the two upstreams, which TestNewBridgeRejectsUnparseableUpstreams asserts directly on the constructor; what stays unexecuted here is only main's log.Fatalf reaction to it."
+      "justification": "The same os.Exit(1) as the config guard above it, on the NewBridge error. NewBridge (cmd/bridge/proxy.go:94) returns an error only when url.Parse rejects one of the two upstreams, which TestNewBridgeRejectsUnparseableUpstreams asserts directly on the constructor; what stays unexecuted here is only main's log.Fatalf reaction to it."
     },
     {
       "package": "cmd/bridge",
@@ -105,7 +114,7 @@
       "source": "\t\treturn errno",
       "bucket": "B",
       "confirmed": true,
-      "justification": "hardenProcess takes no arguments and is called from exactly one place, run (cmd/recover/main.go:177), so every execution makes the identical syscall: both operands of this prctl are untyped constants declared at cmd/recover/harden_linux.go:11-12, prSetDumpable = 4 (PR_SET_DUMPABLE) and dumpDisable = 0 (SUID_DUMP_DISABLE). The kernel returns EINVAL only for an unknown option or for a dumpable value outside {0, 1}, and this call needs no privilege, so on a Linux kernel errno is always 0 here. What the branch defends against is a host that refuses the syscall anyway: a seccomp filter carrying a prctl rule, or an LSM that denies it. A test cannot enter that state in-process, because a seccomp filter cannot be removed once installed and would go on filtering the Go runtime's own prctl calls for the life of the test binary; the alternative is to parameterize the prctl value so a test can pass an invalid one, a seam whose only consumer would be the test. The call is proven rather than assumed on the kernel the tests run on: TestHardenProcess_LeavesTheProcessUndumpable (cmd/recover/harden_linux_test.go:36) puts PR_SET_DUMPABLE back to SUID_DUMP_USER, calls hardenProcess and reads the flag back as 0, so a kernel that started refusing the call fails that test instead of passing silently. The errno is returned rather than dropped because run reports it to the operator through warnIfUnhardened (cmd/recover/main.go:334), whose own branches are covered by TestWarnIfUnhardened_SaysWhatTheFailedStepWouldHavePrevented (cmd/recover/opsec_test.go:149)."
+      "justification": "hardenProcess takes no arguments and is called from exactly one place, run (cmd/recover/main.go:178), so every execution makes the identical syscall: both operands of this prctl are untyped constants declared at cmd/recover/harden_linux.go:11-12, prSetDumpable = 4 (PR_SET_DUMPABLE) and dumpDisable = 0 (SUID_DUMP_DISABLE). The kernel returns EINVAL only for an unknown option or for a dumpable value outside {0, 1}, and this call needs no privilege, so on a Linux kernel errno is always 0 here. What the branch defends against is a host that refuses the syscall anyway: a seccomp filter carrying a prctl rule, or an LSM that denies it. A test cannot enter that state in-process, because a seccomp filter cannot be removed once installed and would go on filtering the Go runtime's own prctl calls for the life of the test binary; the alternative is to parameterize the prctl value so a test can pass an invalid one, a seam whose only consumer would be the test. The call is proven rather than assumed on the kernel the tests run on: TestHardenProcess_LeavesTheProcessUndumpable (cmd/recover/harden_linux_test.go:36) puts PR_SET_DUMPABLE back to SUID_DUMP_USER, calls hardenProcess and reads the flag back as 0, so a kernel that started refusing the call fails that test instead of passing silently. The errno is returned rather than dropped because run reports it to the operator through warnIfUnhardened (cmd/recover/main.go:340), whose own branches are covered by TestWarnIfUnhardened_SaysWhatTheFailedStepWouldHavePrevented (cmd/recover/opsec_test.go:149)."
     },
     {
       "package": "cmd/recover",
@@ -125,7 +134,7 @@
       "source": "\t\treturn nil, 0, err",
       "bucket": "B",
       "confirmed": true,
-      "justification": "The fstat error inside readKeyFile, on the descriptor os.Open returned six lines above at cmd/recover/main.go:556. readKeyFile's only caller is loadRecoveryKey (cmd/recover/main.go:358) and its only argument is the operator's --key path; the handle is open and stays open until the deferred Close at cmd/recover/main.go:560, and fstat(2) on a valid descriptor has no failure mode for a file on a local filesystem, so no --key value reaches this return. The failures a bad --key really produces are the os.Open error above it and the io.ReadAll error below it, both covered by TestRun_UnusableKeyIsFatalBeforeConnecting (cmd/recover/main_test.go:661), whose 'path is a directory' case opens and stats the directory successfully and then fails at the read with EISDIR. What is left needs the key file on a filesystem that can fail a getattr after a successful open, a FUSE or network mount that disconnects between the two calls, which a test cannot construct in-process; the alternative is to give readKeyFile an interface parameter so a fake can fail its Stat, a seam whose only consumer would be the test. The error is returned rather than ignored because the mode it carries is what drives the group- and other-readable key warning at cmd/recover/main.go:372: a run that could not read the mode must not report 0 and silently suppress that warning."
+      "justification": "The fstat error inside readKeyFile, on the descriptor os.Open returned eight lines above at cmd/recover/main.go:562. readKeyFile's only caller is loadRecoveryKey (cmd/recover/main.go:363) and its only argument is the operator's --key path; the handle is open and stays open until the deferred Close at cmd/recover/main.go:566, and fstat(2) on a valid descriptor has no failure mode for a file on a local filesystem, so no --key value reaches this return. The failures a bad --key really produces are the os.Open error above it and the io.ReadAll error below it, both covered by TestRun_UnusableKeyIsFatalBeforeConnecting (cmd/recover/main_test.go:661), whose 'path is a directory' case opens and stats the directory successfully and then fails at the read with EISDIR. What is left needs the key file on a filesystem that can fail a getattr after a successful open, a FUSE or network mount that disconnects between the two calls, which a test cannot construct in-process; the alternative is to give readKeyFile an interface parameter so a fake can fail its Stat, a seam whose only consumer would be the test. The error is returned rather than ignored because the mode it carries is what drives the group- and other-readable key warning at cmd/recover/main.go:378: a run that could not read the mode must not report 0 and silently suppress that warning."
     },
     {
       "package": "cmd/vault",
@@ -135,7 +144,7 @@
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:242 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:290 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
     },
     {
       "package": "cmd/vault",
@@ -145,7 +154,7 @@
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
       "confirmed": true,
-      "justification": "The fail-open arm of ipintel.Default() in main. Default (internal/ipintel/ipintel.go:109) returns a non-nil error only when Load(embeddedBlob) cannot decode the embedded table, a build-time defect in the go:embed constant internal/ipintel/data/ipintel.bin rather than a runtime input: an absent or empty embed returns an empty table with a nil error at ipintel.go:119-120, and the VAULT_IPINTEL_DATA override is fail-open, ignoring any unreadable or undecodable path and falling through to the embedded blob (asserted by TestDefaultFallsBackFromUnusableOverride). No operator input and no runtime state reaches this branch, which mirrors the embedded-asset guards excluded in internal/adminapi/frontend.go and internal/email/templates.go. The block is two statements, this log line and the ipintel.NewEmpty() substitution below it; both are named so the whole block is excluded."
+      "justification": "The fail-open arm of ipintel.Default() in main. Default (internal/ipintel/ipintel.go:110) returns a non-nil error only when Load(embeddedBlob) cannot decode the embedded table, a build-time defect in the go:embed constant internal/ipintel/data/ipintel.bin rather than a runtime input: an absent or empty embed returns an empty table with a nil error at ipintel.go:120-121, and the VAULT_IPINTEL_DATA override is fail-open, ignoring any unreadable or undecodable path and falling through to the embedded blob (asserted by TestDefaultFallsBackFromUnusableOverride). No operator input and no runtime state reaches this branch, which mirrors the embedded-asset guards excluded in internal/adminapi/frontend.go and internal/email/templates.go. The block is two statements, this log line and the ipintel.NewEmpty() substitution below it; both are named so the whole block is excluded."
     },
     {
       "package": "cmd/vault",
@@ -155,7 +164,7 @@
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:363: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
+      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:412: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
     },
     {
       "package": "internal/adminapi",
@@ -315,7 +324,7 @@
       "source": "\t\treturn",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Companion statement of the entry for webauthn.go:106; the block holds a WriteError and this return, and a partially named block is rejected. Both are the arm of a json.Marshal(session) that cannot fail: in go-webauthn v0.17.4 BeginRegistration builds SessionData from Challenge, RelyingPartyID, UserID, UserVerification, CredParams, Mediation and Expires only, all strings, byte slices, a time and enum strings. Extensions is the one member that could hold an unmarshalable value and BeginRegistration never assigns it. Verified against webauthn@v0.17.4/webauthn/registration.go:103-110 and types_session.go:32-43."
+      "justification": "Companion statement of the entry for webauthn.go:161; the block holds a WriteError and this return, and a partially named block is rejected. Both are the arm of a json.Marshal(session) that cannot fail: in go-webauthn v0.17.4 BeginRegistration builds SessionData from Challenge, RelyingPartyID, UserID, UserVerification, CredParams, Mediation and Expires only, all strings, byte slices, a time and enum strings. Extensions is the one member that could hold an unmarshalable value and BeginRegistration never assigns it. Verified against webauthn@v0.17.4/webauthn/registration.go:103-110 and webauthn@v0.17.4/webauthn/types_session.go:32-43."
     },
     {
       "package": "internal/handler",
@@ -465,7 +474,7 @@
       "source": "\t\t\treturn nil, \"\", \"\", aadErr",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Bucket C. Redundant with the identical check at blob.go:239. decryptBlob calls blobDataAAD(blob.ID, pseudo) first and returns on error, and blobLabelAAD applies the same blobAADSafeID predicate to the same blob.ID, so a stored row whose id would fail here has already been refused. The guard is kept because the two AAD helpers are independent and a future caller may reach the label path without the data path."
+      "justification": "Bucket C. Redundant with the identical check at blob.go:369. decryptBlob calls blobDataAAD(blob.ID, pseudo) first and returns on error, and blobLabelAAD applies the same blobAADSafeID predicate to the same blob.ID, so a stored row whose id would fail here has already been refused. The guard is kept because the two AAD helpers are independent and a future caller may reach the label path without the data path."
     },
     {
       "package": "internal/service",
@@ -485,7 +494,7 @@
       "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",
       "confirmed": true,
-      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (seed/seed.go:75) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
+      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (internal/seed/seed.go:110) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
     },
     {
       "package": "internal/service",

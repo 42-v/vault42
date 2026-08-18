@@ -38,6 +38,7 @@ release gate.
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -182,8 +183,8 @@ BASELINE_TOTAL_STATEMENTS = 11928
 #       rejects it only under a seccomp rule or an LSM, a state a test cannot
 #       enter in-process because a filter cannot be removed once installed and
 #       would then catch the Go runtime's own prctl calls.
-#   +1  cmd/recover/main.go:564, the f.Stat() error in readKeyFile, from the same
-#       audit's key-permission warning. The descriptor is open six lines above
+#   +1  cmd/recover/main.go:570, the f.Stat() error in readKeyFile, from the same
+#       audit's key-permission warning. The descriptor is open eight lines above
 #       and fstat has no failure mode on a valid descriptor for a local file.
 #       The error must stay rather than be dropped: the mode it carries is what
 #       drives the world-readable-key warning, so swallowing it would report
@@ -197,13 +198,13 @@ BASELINE_TOTAL_STATEMENTS = 11928
 # make room is exactly the pressure this constant exists to resist.
 # Raised from 48 to 50 by the AR-18 geo/VPN feature: +2 entries for the ipintel
 # fail-open branch in cmd/vault/main.go (the WARNING log line and the
-# ipintel.NewEmpty() substitution at main.go:363-364). ipintel.Default() returns
-# an error only when the embedded blob fails to decode (a build-time defect) and
-# its VAULT_IPINTEL_DATA override is fail-open, so neither statement is reachable
-# at runtime; they mirror the embedded-asset guards already excluded in
-# internal/adminapi and internal/email. The three cmd/vault fatal branches the
-# feature shifted (keystore init, honeypot key gen, honeypot rotation warning)
-# were relocated in place, not added, and the empty-embed fallback in
+# ipintel.NewEmpty() substitution at cmd/vault/main.go:412-413).
+# ipintel.Default() returns an error only when the embedded blob fails to decode
+# (a build-time defect) and its VAULT_IPINTEL_DATA override is fail-open, so
+# neither statement is reachable at runtime; they mirror the embedded-asset
+# guards already excluded in internal/adminapi and internal/email. The three
+# cmd/vault fatal branches the feature shifted (keystore init, honeypot key gen,
+# honeypot rotation warning) were relocated in place, not added, and the empty-embed fallback in
 # internal/ipintel/ipintel.go was covered by a test rather than excluded.
 BASELINE_MAX_ENTRIES = 50
 
@@ -284,7 +285,11 @@ def load(path):
 
 
 def split_key(key):
-    """"pkg/path/file.go:12.34,56.78" -> ("pkg/path/file.go", 12, 56)."""
+    """Split a profile key into its file and its first and last line.
+
+    A key looks like <path>:<startLine>.<col>,<endLine>.<col> -- the path, then
+    the block's opening and closing positions.
+    """
     path, _, span = key.rpartition(":")
     start, _, end = span.partition(",")
     return path, int(start.split(".")[0]), int(end.split(".")[0])
@@ -437,6 +442,202 @@ def check_sources(entries):
     return problems, moved
 
 
+# ---------------------------------------------------------------------------
+# Justification citations.
+#
+# The anchors in this file are machine-checked: check_sources() proves that the
+# occurrence-th line carrying an entry's frozen text is the line it names. The
+# argument for the entry is not, and the argument is what a reviewer is actually
+# asked to accept -- the anchor says which statement is excluded, the
+# justification says why it is unreachable, and only the second one can be wrong
+# in a way that matters.
+#
+# f692621 re-anchored 25 entries against the hardened tree and updated exactly
+# one justification. Every machine-checked field was correct afterwards and 50/50
+# anchors resolved, while five justifications had come to cite blank lines,
+# comments and a bare closing brace. This file's own policy promises that a
+# justification "must be checkable by reading the cited call sites and nothing
+# else", and a citation that lands on a blank line cannot be read at all.
+#
+# So every path:NNN inside the prose is resolved the same way the anchors are.
+# What this can prove is that the cited line still holds something: a citation
+# resolving to a blank line, a comment or a bare delimiter is one that used to
+# point at code and now points at where the code was. What it cannot prove is
+# that the line holds the RIGHT code -- entry #10 cited a fail-open branch at
+# cmd/vault/main.go:363 after that line had become an unrelated email-provider
+# log line, which is a real statement and the wrong one. Proving that would mean
+# freezing the cited text the way `source` freezes the anchor, at the cost of a
+# re-review every time any cited line moves. The mechanical class is the one
+# that drifts silently; the semantic class fails a reading of the justification,
+# which is what the review is for.
+
+# Extensions a citation may name. A reference to a file the checker cannot read
+# as text is not resolvable, so the set is closed rather than open.
+CITED_EXTENSIONS = ("go", "sql", "sh", "py", "ts", "js", "yaml", "yml", "conf", "json")
+
+CITATION = re.compile(
+    r"\b([A-Za-z0-9_.@-]+(?:/[A-Za-z0-9_.@-]+)*\.(?:" + "|".join(CITED_EXTENSIONS) + r")):(\d+)\b")
+
+# A citation into a dependency's source, written in Go's module@version form.
+# webauthn@v0.17.4/webauthn/registration.go:103 is a legitimate reference and no
+# checkout of this repository can resolve it, so it is skipped -- but only in
+# that explicit form, so an unresolvable repo path cannot hide behind the same
+# exemption.
+MODULE_CITATION = re.compile(r"@v[0-9]")
+
+# Line-comment markers by extension. Go, TypeScript and JavaScript also get
+# block-comment tracking below; the rest have none worth modelling.
+LINE_COMMENT = {".go": "//", ".ts": "//", ".js": "//", ".sql": "--",
+                ".sh": "#", ".py": "#", ".yaml": "#", ".yml": "#", ".conf": "#"}
+BLOCK_COMMENT = (".go", ".ts", ".js")
+
+# A line that carries only a delimiter closes something; it is never evidence of
+# what the thing was.
+BARE_DELIMITERS = frozenset(("{", "}", "(", ")", "[", "]", "},", "),", "],",
+                             "};", ");", "})", "}),", "});"))
+
+# Directories with no citable source in them. web/dist and coverage/ are build
+# output, and node_modules would make the walk cost more than the rest of the
+# gate put together.
+SKIP_DIRS = frozenset((".git", "node_modules", "dist", "coverage", "tmp",
+                       ".pnpm-store", "testdata"))
+
+
+def index_tree():
+    """basename -> [repo-relative path], for resolving partially-qualified refs."""
+    index = defaultdict(list)
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel_dir = os.path.relpath(dirpath, REPO_ROOT)
+        for name in filenames:
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            index[name].append(rel.replace(os.sep, "/"))
+    return index
+
+
+def resolve_citation(ref, home_dir, index):
+    """Repo-relative path for a cited reference, or None with the reason.
+
+    Justifications cite three ways and all three are readable to a person:
+    the full repo-relative path, a bare basename meaning "the file this entry is
+    about", and a partial path such as seed/seed.go. Each is resolved, and an
+    ambiguous partial path is a failure rather than a guess -- the point is that
+    a reader can follow the citation, and one that could mean two files cannot
+    be followed either.
+    """
+    if os.path.exists(os.path.join(REPO_ROOT, ref)):
+        return ref, None
+    base = ref.rsplit("/", 1)[-1]
+    if "/" not in ref and home_dir:
+        local = f"{home_dir}/{ref}"
+        if os.path.exists(os.path.join(REPO_ROOT, local)):
+            return local, None
+    matches = [p for p in index.get(base, ()) if p == ref or p.endswith("/" + ref)]
+    if len(matches) == 1:
+        return matches[0], None
+    if not matches:
+        return None, "no file in the tree matches it"
+    return None, "it matches " + ", ".join(sorted(matches))
+
+
+def classify_line(path, lineno, cache):
+    """What sits at a cited line: 'code', or why it is not evidence."""
+    if path not in cache:
+        try:
+            with open(os.path.join(REPO_ROOT, path)) as fh:
+                cache[path] = fh.read().split("\n")
+        except OSError:
+            cache[path] = None
+    lines = cache[path]
+    if lines is None:
+        return "the file cannot be read"
+    if lineno > len(lines):
+        return f"the file has {len(lines)} lines"
+    ext = os.path.splitext(path)[1]
+
+    in_block = False
+    if ext in BLOCK_COMMENT:
+        for raw in lines[:lineno - 1]:
+            i, s = 0, raw.strip()
+            while i < len(s):
+                if not in_block and s.startswith("/*", i):
+                    in_block, i = True, i + 2
+                elif in_block and s.startswith("*/", i):
+                    in_block, i = False, i + 2
+                elif not in_block and s.startswith("//", i):
+                    break
+                else:
+                    i += 1
+
+    text = lines[lineno - 1].strip()
+    if text == "":
+        return "it is a blank line"
+    if in_block:
+        return "it is inside a block comment"
+    marker = LINE_COMMENT.get(ext)
+    if marker and text.startswith(marker):
+        return "it is a comment line"
+    if ext in BLOCK_COMMENT and text.startswith(("/*", "*")):
+        return "it is a comment line"
+    if text in BARE_DELIMITERS:
+        return f"it is a bare {text!r}"
+    return "code"
+
+
+def check_citations(doc):
+    """Resolve every path:NNN written in the policy text and the justifications.
+
+    Returns (problems, checked).
+    """
+    problems, checked, cache = [], 0, {}
+    index = index_tree()
+
+    # This script's own prose is checked alongside the document's. The published
+    # arithmetic for the 48 -> 50 raise cited cmd/vault/main.go:363-364 for statements
+    # had moved to 412-413, so the exclusion set's justification and the ratchet's
+    # justification drifted in the same way at the same time. A gate that read one
+    # and not the other would have reported the set clean while the reason for its
+    # size still pointed at the wrong lines.
+    try:
+        with open(os.path.abspath(__file__)) as fh:
+            own_prose = fh.read()
+    except OSError:
+        own_prose = ""
+
+    sources = [
+        ("policy", "", "\n".join(doc.get("policy", ()))),
+        (repo_path(__file__), "", own_prose),
+    ]
+    for e in doc.get("entries", ()):
+        if not isinstance(e, dict) or "justification" not in e:
+            continue
+        sources.append((f"{e.get('file')}:{e.get('line')}",
+                        os.path.dirname(str(e.get("file", ""))),
+                        str(e["justification"])))
+
+    for where, home_dir, text in sources:
+        for match in CITATION.finditer(text):
+            ref, lineno = match.group(1), int(match.group(2))
+            # A module@version reference names a dependency's source, which no
+            # checkout of this repository contains.
+            if MODULE_CITATION.search(ref):
+                continue
+            checked += 1
+            path, why = resolve_citation(ref, home_dir, index)
+            if path is None:
+                problems.append(f"{where}: the justification cites {ref}:{lineno} and {why}. "
+                                f"Cite a path this tree contains, or write a dependency "
+                                f"reference in module@version form so it is recognisable "
+                                f"as one.")
+                continue
+            verdict = classify_line(path, lineno, cache)
+            if verdict != "code":
+                problems.append(f"{where}: the justification cites {ref}:{lineno} ({path}), and "
+                                f"{verdict}. A reader following the citation lands where the "
+                                f"code was rather than on the code. Re-derive the line.")
+    return problems, checked
+
+
 def index_profile(blocks, module):
     """{repo-relative file: [(start, end, statements, covered, key)]}."""
     prefix = module.rstrip("/") + "/" if module else ""
@@ -547,6 +748,8 @@ def verify_exclusions(args):
         return 1
 
     problems += src_problems
+    cite_problems, cited = check_citations(doc)
+    problems += cite_problems
     buckets = defaultdict(int)
     for e in entries:
         buckets[e["bucket"]] += 1
@@ -575,6 +778,7 @@ def verify_exclusions(args):
     print(f"entries     {len(entries)} "
           f"({', '.join(f'{n} {b}' for b, n in sorted(buckets.items()))})")
     print(f"source      {len(entries) - len(src_problems)}/{len(entries)} match their frozen text")
+    print(f"citations   {cited - len(cite_problems)}/{cited} in the prose resolve to code")
 
     if args.profile is None:
         # Without a measurement the only check that ran was the one above. Every
