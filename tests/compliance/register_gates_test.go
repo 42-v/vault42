@@ -550,6 +550,15 @@ func TestComplianceDocs_EveryTestNamedInProseExists(t *testing.T) {
 		t.Fatalf("walk docs/: %v", err)
 	}
 	files = append(files, filepath.Join(root, "README.md"), filepath.Join(root, "SECURITY.md"))
+	// And the register itself. The walk above reads docs/*.md, and the register
+	// is .json, so the one document that names a test in almost every row was
+	// the one document this gate did not read. Two names in its notes referred
+	// to tests that had been retired the day they fired --
+	// TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded across all ten
+	// PSS rows, and TestSSDF_800_218_DependencyUpdateAutomationIsAbsent in PO.3.2
+	// -- while the tests[] arrays beside them resolved 219 out of 219. Rows are
+	// gated; the sentences explaining the rows were not.
+	files = append(files, filepath.Join(root, "docs", "compliance-register.json"))
 
 	named := 0
 	for _, path := range files {
