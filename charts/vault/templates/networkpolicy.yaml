@@ -23,6 +23,20 @@ spec:
     - ports:
         - port: 8080
           protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    # The metrics port. This rule is the mitigation the old in-code comment
+    # asked for and could not have: while /metrics was a path on 8080, a
+    # NetworkPolicy had no way to express it -- policies match ports, not paths,
+    # so "protect it with a NetworkPolicy" meant allowing 8080 to everything that
+    # needed the vault at all. On its own port it is finally expressible.
+    - ports:
+        - port: {{ .Values.metrics.port }}
+          protocol: TCP
+      {{- with .Values.metrics.networkPolicy.from }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
   egress:
     # PostgreSQL
     - to:

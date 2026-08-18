@@ -58,6 +58,11 @@ data:
   {{- end }}
   {{- if .Values.metrics.enabled }}
   VAULT_METRICS_ENABLED: {{ .Values.metrics.enabled | quote }}
+  # Without this the listener keeps its own default of 127.0.0.1:9090 and only
+  # something inside the pod can reach it, so every scrape from Prometheus is
+  # refused at connect. Binding all interfaces here is the deliberate half of
+  # that trade; metrics.networkPolicy.from is the other half.
+  VAULT_METRICS_ADDR: ":{{ .Values.metrics.port }}"
   {{- end }}
   {{- if .Values.keyRotation.enabled }}
   VAULT_KEY_ROTATION_DB: {{ .Values.keyRotation.enabled | quote }}
