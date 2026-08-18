@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-18 | Tests: 4996 | Total: 98.52% statement coverage
+Generated: 2026-08-19 | Tests: 5037 | Total: 99.60% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -38,37 +38,23 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `cmd/admin-gateway` | 99.72% |
 | `internal/handler` | 99.69% |
 | `internal/keystore` | 99.62% |
+| `internal/email` | 99.56% |
+| `cmd/bridge` | 99.55% |
 | `internal/service` | 99.28% |
 | `internal/jwt` | 99.22% |
-| `internal/email` | 98.71% |
 | `cmd/vault` | 98.39% |
-| `internal/crypto` | 98.16% |
+| `internal/crypto` | 98.36% |
 | `cmd/recover` | 98.15% |
 | `internal/firstboot` | 96.88% |
-| `cmd/bridge` | 83.02% |
 
 ## Uncovered Functions
 
 | Function | File |
 |----------|------|
-| `joinHeader` | cmd/bridge/proxy.go:526 |
 | `main` | cmd/recover/main.go:134 |
 
 ## Low Coverage (1-74%)
 
 | Function | File | Coverage |
 |----------|------|----------|
-| `obfuscatedIP` | cmd/bridge/proxy.go:402 | 33.3% |
-| `setProxyHeaders` | cmd/bridge/proxy.go:441 | 27.8% |
-| `stripConnectionTokens` | cmd/bridge/proxy.go:483 | 42.9% |
-| `rightmostUntrusted` | cmd/bridge/proxy.go:545 | 31.2% |
-| `clientIP` | cmd/bridge/proxy.go:563 | 58.6% |
-| `isTrustedProxy` | cmd/bridge/proxy.go:603 | 35.7% |
-| `extractIP` | cmd/bridge/proxy.go:619 | 50.0% |
-| `StartReaper` | cmd/bridge/proxy.go:628 | 46.7% |
-| `Close` | cmd/bridge/proxy.go:643 | 33.3% |
-| `NewWebhookSender` | cmd/bridge/proxy.go:681 | 33.3% |
-| `Send` | cmd/bridge/proxy.go:717 | 23.1% |
-| `Close` | cmd/bridge/proxy.go:741 | 44.4% |
-| `deliver` | cmd/bridge/proxy.go:760 | 45.0% |
 | `hardenProcess` | cmd/recover/harden_linux.go:23 | 66.7% |
