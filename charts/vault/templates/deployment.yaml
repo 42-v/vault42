@@ -10,12 +10,35 @@ spec:
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
+    # Exactly vault.selectorLabels, and deliberately not one label more.
+    #
+    # spec.selector is the only immutable field this chart writes. Every other
+    # selector over these pods -- the Service, the NetworkPolicy, the PDB, the
+    # ServiceMonitor -- does name app.kubernetes.io/component: vault, because a
+    # selector is a subset match and without it they would also match the bridge
+    # and honeypot pods. All four are patchable in place; that was verified on a
+    # live cluster, where the failed upgrade below had still moved the Service
+    # and the PDB to the component-scoped form.
+    #
+    # This one is not. Adding the component label here made `helm upgrade` from
+    # every released chart fail outright:
+    #
+    #   Error: UPGRADE FAILED: cannot patch "v42-vault-auth" with kind
+    #   Deployment: ... spec.selector: Invalid value: ...: field is immutable
+    #
+    # and left the release `failed` with the Service and ConfigMap already
+    # patched -- a mixed state an operator has to roll back out of. The label
+    # bought nothing here either: the ReplicaSet a Deployment creates selects on
+    # pod-template-hash as well, and the bridge and honeypot pod templates hash
+    # differently, so no pod of theirs was ever selectable by this Deployment.
+    # What has to carry the label is the pod template below, and it has since
+    # v0.9.9 -- which is why dropping it here costs no pod churn on upgrade.
+    #
+    # If some future change genuinely needs a narrower selector, it is a
+    # breaking chart change: it needs the orphan-delete procedure in
+    # docs/UPGRADING.md written and released with it, not discovered afterwards.
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
-      # Subset match: scope to the vault component (the pod template below carries
-      # it) so this Deployment never adopts a bridge or honeypot pod that shares
-      # the name and instance labels. See networkpolicy.yaml.
-      app.kubernetes.io/component: vault
   template:
     metadata:
       annotations:
