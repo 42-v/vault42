@@ -257,6 +257,11 @@ func (h *WebAuthnHandler) RegisterFinish(w http.ResponseWriter, r *http.Request)
 		"credential_id": credID,
 	})
 
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "webauthn", "enrolled"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "webauthn_registered"})
 }
 
@@ -516,6 +521,15 @@ func (h *WebAuthnHandler) DeleteCredential(w http.ResponseWriter, r *http.Reques
 		"action":        "removed",
 		"credential_id": credID,
 	})
+
+	// A credential is removed because it may be in someone else's hands. The
+	// sessions it opened are the thing being taken back, so containment runs on
+	// this path for the same reason it runs on a clone warning — only here the
+	// caller, not the sign counter, is the one raising the alarm.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "webauthn", "removed"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "credential_removed"})
 }

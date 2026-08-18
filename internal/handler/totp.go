@@ -109,6 +109,11 @@ func (h *TOTPHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "totp", "enrolled"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	otpURL := vaultcrypto.BuildOTPAuthURL(secret, h.issuer, claims.Subject)
 
 	WriteJSON(w, http.StatusOK, TOTPSetupResponse{
@@ -243,6 +248,13 @@ func (h *TOTPHandler) Disable(w http.ResponseWriter, r *http.Request) {
 		"method": "totp",
 		"action": "removed",
 	})
+
+	// After the trail, so a factor removal is recorded whether or not the
+	// containment behind it lands.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "totp", "removed"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "totp_disabled"})
 }
