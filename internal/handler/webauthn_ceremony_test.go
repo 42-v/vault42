@@ -75,8 +75,9 @@ func wanfidoCBORText(s string) []byte {
 // coseKey encodes the public key in the COSE_Key form an authenticator reports:
 // kty=EC2(2), alg=ES256(-7), crv=P-256(1), x, y.
 func (a *wanfidoAuthenticator) coseKey() []byte {
-	x := a.priv.PublicKey.X.FillBytes(make([]byte, 32))
-	y := a.priv.PublicKey.Y.FillBytes(make([]byte, 32))
+	pub := &a.priv.PublicKey
+	x := pub.X.FillBytes(make([]byte, 32))
+	y := pub.Y.FillBytes(make([]byte, 32))
 
 	out := []byte{0xa5}
 	out = append(out, 0x01, 0x02)

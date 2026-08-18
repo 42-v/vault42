@@ -28,8 +28,8 @@ func TestLocalOnly_UserAgentCannotForgeALogRecord(t *testing.T) {
 		"backspace (rewrites the line as drawn)": "curl\x08\x08\x08admin-gateway: all clear",
 		"vertical tab":                           "curl\x0badmin-gateway: all clear",
 		"form feed":                              "curl\x0cadmin-gateway: all clear",
-		"U+0085 NEL (a record separator)":        "curladmin-gateway: all clear",
-		"U+009B (8-bit CSI)":                     "curladmin-gateway: all clear",
+		"U+0085 NEL (a record separator)":        "curl\u0085admin-gateway: all clear",
+		"U+009B (8-bit CSI)":                     "curl\u009badmin-gateway: all clear",
 		"U+2028 line separator":                  "curl admin-gateway: all clear",
 		"U+2029 paragraph separator":             "curl admin-gateway: all clear",
 	} {
