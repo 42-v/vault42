@@ -238,6 +238,14 @@ jobs:
     timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
+    # github.base_ref is a branch name in the base repository, and it was
+    # interpolated straight into the args string the lint action hands to a
+    # shell. Exploiting that needs push access to the base repo to create a
+    # branch whose name carries shell metacharacters, so it is not a fork-PR
+    # vector, but binding the value and checking its shape removes the class.
+    # It is empty on a push, which is what the fallback covers.
+    env:
+      BASE_REF: ${{ github.base_ref || 'main' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -247,6 +255,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Base ref is a plain branch name
+        run: |
+          set -eu
+          printf '%s' "$BASE_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+            || { echo "::error::refusing to pass base ref '$BASE_REF' to golangci-lint"; exit 1; }
 
       - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
@@ -258,7 +272,7 @@ jobs:
           # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
           # target-Go match.
           install-mode: goinstall
-          args: --timeout 15m --new-from-merge-base=origin/${{ github.base_ref || 'main' }}
+          args: --timeout 15m --new-from-merge-base=origin/${{ env.BASE_REF }}
 
       - name: Full run (report only)
         continue-on-error: true
