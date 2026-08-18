@@ -20,6 +20,11 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.seed.enabled }}
+        # Hashed, never the values themselves: this annotation is readable by
+        # anything that can read the pod.
+        checksum/seed: {{ toJson .Values.seed | sha256sum }}
+        {{- end }}
       {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -102,6 +107,10 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -118,8 +127,9 @@ spec:
         {{- end }}
         {{- if .Values.seed.enabled }}
         - name: seed
-          configMap:
-            name: {{ include "vault.fullname" . }}-seed
+          secret:
+            secretName: {{ include "vault.seedSecretName" . }}
+            defaultMode: 0400
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

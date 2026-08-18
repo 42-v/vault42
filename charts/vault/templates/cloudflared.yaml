@@ -35,17 +35,31 @@ spec:
         {{- include "vault.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cloudflared
     spec:
-      # The last workload in this chart still mounting one, and the one holding
-      # the tunnel credential: whatever got into it got both a way out of the
-      # cluster and a token for the API server. cloudflared calls no Kubernetes
-      # API.
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
+      # This was the only pod in the chart still automounting a ServiceAccount
+      # token, and it is the one holding the tunnel credential: whatever got into
+      # it got both a way out of the cluster and a token to talk to the API server
+      # with. cloudflared calls no Kubernetes API.
       automountServiceAccountToken: false
+      securityContext:
+        {{- include "vault.podSecurityContext" (dict "uid" 65532 "gid" 65532) | nindent 8 }}
       containers:
         - name: cloudflared
-          image: "{{ .Values.cloudflared.image.repository }}:{{ .Values.cloudflared.image.tag }}"
+          image: "{{ include "vault.image" (dict "image" .Values.cloudflared.image) }}"
           args:
             - tunnel
+            # The metrics listener is what gives this pod a readiness signal.
+            # Without it a connector that has lost every edge connection still
+            # reads as Ready and keeps taking traffic it cannot carry. It binds
+            # all interfaces because the kubelet probes the pod IP; the
+            # NetworkPolicy below is what keeps the port to that.
+            - --metrics
+            - 0.0.0.0:2000
             - run
+          ports:
+            - name: metrics
+              containerPort: 2000
+              protocol: TCP
           # The token is the tunnel's credential: anything holding it can stand
           # up a connector for this tunnel and receive the traffic meant for the
           # cluster. cloudflared reads it from TUNNEL_TOKEN on its own, so
@@ -59,22 +73,69 @@ spec:
                   name: {{ $secretName }}
                   key: {{ .Values.cloudflared.secretKey }}
           resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
+            {{- toYaml (.Values.cloudflared.resources | default dict) | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
+            {{- include "vault.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 30
+            failureThreshold: 6
+{{- if .Values.networkPolicy.enabled }}
+---
+# cloudflared: egress-only. The connector dials out to the Cloudflare edge and
+# forwards inbound tunnel traffic to the vault service, so what matters is where
+# it can reach, not who can reach it. Ingress is left unrestricted so the
+# kubelet's probe of the metrics port is not the thing a CNI drops.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-cloudflared
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cloudflared
+  policyTypes:
+    - Egress
+  egress:
+    # Vault, or the bridge in front of it
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "vault.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: {{ if .Values.bridge.enabled }}bridge{{ else }}vault{{ end }}
+      ports:
+        - port: {{ if .Values.bridge.enabled }}8080{{ else }}{{ .Values.service.port | int }}{{ end }}
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # The Cloudflare edge. QUIC first, falling back to TLS on 443.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 7844
+          protocol: UDP
+        - port: 7844
+          protocol: TCP
+{{- end }}
 {{- end }}

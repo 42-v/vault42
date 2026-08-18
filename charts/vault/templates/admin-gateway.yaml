@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vault.labels" . | nindent 4 }}
     app.kubernetes.io/component: admin-gateway
@@ -21,6 +22,10 @@ spec:
       {{- if .Values.adminGateway.hostNetwork }}
       # hostNetwork: true binds to the node's loopback, not pod loopback.
       # Combined with 127.0.0.1 bind, only local connections reach the gateway.
+      # It is opt-in, not the default: both the baseline and the restricted Pod
+      # Security Standards profiles forbid hostNetwork, so a namespace enforcing
+      # either rejects this pod unless it has been given an exemption. See
+      # charts/vault/README.md.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
@@ -34,13 +39,17 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: admin-gateway
-          image: "{{ .Values.adminGateway.image.repository }}:{{ .Values.adminGateway.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "vault.image" (dict "image" .Values.adminGateway.image "tag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.adminGateway.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: https
+              containerPort: 9443
+              protocol: TCP
           env:
             {{- if and (not .Values.adminGateway.hostNetwork) (not .Values.adminGateway.devMode) }}
-            {{- fail "adminGateway.hostNetwork is false, which means the admin plane is reachable through the cluster network rather than node loopback. LocalOnly refuses every such request, so the gateway can only serve with adminGateway.devMode=true, and that also switches off RejectProxyHeaders. Set adminGateway.devMode explicitly to state that you accept a network-reachable admin plane whose remaining control is the bearer session token, and put a proxy in front of it that carries the weight LocalOnly did." }}
+            {{- fail "adminGateway.hostNetwork is false, which means the admin plane is reachable through the cluster network rather than node loopback. LocalOnly refuses every such request, so the gateway can only serve with adminGateway.devMode=true, and that also switches off RejectProxyHeaders. There are two ways forward and the chart will not pick one for you. Set adminGateway.hostNetwork=true to keep the local-only posture, on a namespace whose Pod Security Standards policy permits hostNetwork -- both the baseline and restricted profiles forbid it, so this needs an explicit exemption. Or set adminGateway.devMode=true to state that you accept a network-reachable admin plane whose remaining control is the bearer session token, and put a proxy in front of it that carries the weight LocalOnly did." }}
             {{- end }}
             {{- if .Values.adminGateway.devMode }}
             # Set from adminGateway.devMode, never inferred. It used to be forced
@@ -111,6 +120,31 @@ spec:
               mountPath: /tmp
           resources:
             {{- toYaml .Values.adminGateway.resources | nindent 12 }}
+          {{- if not .Values.adminGateway.hostNetwork }}
+          # tcpSocket, not httpGet: the gateway requires a client certificate, so
+          # an HTTP probe is rejected at the handshake and reads as a dead pod.
+          #
+          # Probes exist only off the host network. With hostNetwork the gateway
+          # binds the node's loopback, and the kubelet probes the pod IP, which on
+          # the host network is the node address rather than 127.0.0.1 -- the same
+          # property that keeps everything else off the admin plane keeps the
+          # probe off it. A probe added there would fail every time and restart a
+          # healthy gateway in a loop.
+          startupProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+            failureThreshold: 6
+          {{- end }}
       volumes:
         {{- include "vault.firstBootCredentialVolume" . | nindent 8 }}
         - name: secrets
@@ -131,7 +165,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- if .Values.adminGateway.hostNetwork }}
+{{- if and .Values.networkPolicy.enabled .Values.adminGateway.hostNetwork }}
 ---
 # NetworkPolicy: deny ALL ingress to admin-gateway.
 # This is layer 5 of the 6-layer local-only enforcement.
@@ -141,6 +175,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "vault.fullname" . }}-admin-gateway-deny-all
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vault.labels" . | nindent 4 }}
 spec:
@@ -152,6 +187,49 @@ spec:
     - Ingress
   # Empty ingress = deny all inbound traffic
   ingress: []
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.adminGateway.hostNetwork) }}
+---
+# NetworkPolicy for the admin gateway off the host network. The deny-all above
+# only ever rendered in hostNetwork mode, so the configuration that actually
+# exposes the admin plane to the cluster network was the one with no policy on
+# it. This narrows that exposure to the gateway's own port and gives it egress
+# only to the database and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  # No `from`: the client is an ingress controller or a port-forward, and this
+  # chart cannot know which namespace either lives in. The port is the limit, and
+  # mTLS is what decides who gets past it.
+  ingress:
+    - ports:
+        - port: 9443
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.postgresSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.database.port | int }}
+          protocol: TCP
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 {{- end }}
 {{- if not .Values.adminGateway.hostNetwork }}
 ---

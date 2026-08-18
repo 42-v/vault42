@@ -1,5 +1,6 @@
 # Local production overlay — Cloudflare Tunnel for real HTTPS.
-# Usage: helm install vault charts/vault -f charts/vault/values-local.yaml --set cloudflared.existingSecret=cloudflared-token
+# Usage: helm install vault charts/vault -f charts/vault/values-local.yaml \
+#   --set cloudflared.existingSecret=cloudflared-token
 fullnameOverride: vault
 replicaCount: 1
 
@@ -63,7 +64,6 @@ cloudflared:
 
 postgres:
   enabled: true
-  appPassword: "local-app-password"
 
 mailpit:
   enabled: true

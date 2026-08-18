@@ -41,19 +41,20 @@ spec:
         app: redis
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # uid 999, gid 1000. redis:7-alpine puts the redis user in group 1000, not
+      # 999; runAsGroup: 999 named a group the process is not in, and fsGroup
+      # followed it, so every volume redis writes was owned by a group it did not
+      # have.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
-        seccompProfile:
-          type: RuntimeDefault
+        {{- include "vault.podSecurityContext" (dict "uid" 999 "gid" 1000) | nindent 8 }}
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository | default "redis" }}:{{ .Values.redis.image.tag | default "7-alpine" }}"
+          image: "{{ include "vault.image" (dict "image" .Values.redis.image "repository" "redis" "tag" "7-alpine") }}"
           ports:
             - containerPort: 6379
+              name: redis
 {{- if $requirePassword }}
           # The password reaches redis as a config file it reads at startup,
           # never as an argument. kubelet expands $(VAR) before exec, so
@@ -81,6 +82,14 @@ spec:
             - name: config
               mountPath: /etc/redis
               readOnly: true
+            # redis keeps the built-in save rules, so it writes dump.rdb into its
+            # working directory. On a read-only root that write fails, and with
+            # stop-writes-on-bgsave-error the cache then starts refusing writes --
+            # a failure that surfaces as the vault losing its cache rather than as
+            # anything pointing here. emptyDir because none of it is meant to
+            # outlive the pod.
+            - name: data
+              mountPath: /data
 {{- if $requirePassword }}
             - name: password
               mountPath: /run/secrets
@@ -89,16 +98,28 @@ spec:
               mountPath: /run/redis
 {{- end }}
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            seccompProfile:
-              type: RuntimeDefault
+            {{- include "vault.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
+          resources:
+            {{- toYaml (.Values.redis.resources | default dict) | nindent 12 }}
+          # Unauthenticated, on purpose. With requirepass set this answers NOAUTH,
+          # which is a live server replying, and redis-cli exits 0 on it. Passing
+          # -a would put the password back into /proc/<pid>/cmdline, which is
+          # exactly what the command above was written to avoid.
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            failureThreshold: 6
       volumes:
         - name: config
           configMap:
             name: {{ include "vault.fullname" . }}-redis
+        - name: data
+          emptyDir: {}
 {{- if $requirePassword }}
         # Only the one key. The release Secret also holds the master key, the
         # HMAC secret and the pepper, and redis has no business being able to

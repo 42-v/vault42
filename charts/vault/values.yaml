@@ -8,6 +8,8 @@ image:
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default: Chart appVersion)
   tag: ""
+  # -- Pin the image by digest. Set, it wins over the tag above.
+  digest: ""
 
 # -- Image pull secrets for private registries
 imagePullSecrets: []
@@ -38,13 +40,21 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# -- Container security context
+# -- Container security context. The values here are the same restricted profile
+# the vault.containerSecurityContext helper renders for the bundled
+# infrastructure workloads; they live in values because these are the product's
+# own containers and an operator may have to tune them for a specific cluster.
+# Anything removed from this map is removed from every product workload at once.
 securityContext:
   allowPrivilegeEscalation: false
+  privileged: false
   readOnlyRootFilesystem: true
+  runAsNonRoot: true
   capabilities:
     drop:
       - ALL
+  seccompProfile:
+    type: RuntimeDefault
 
 # -- Vault profile: production | embedded | dev
 profile: production
@@ -164,14 +174,21 @@ blob:
   quotaBytes: "10485760"
 
 # ---- Seed ----
-# Declarative seeding of clients and users at startup. Data is stored in a
-# ConfigMap and mounted as /etc/vault/seed.json. Seeding is idempotent.
+# Declarative seeding of clients and users at startup. seed.users carries a
+# cleartext password per user, so the rendered data is a Secret mounted as
+# /etc/vault/seed.json, never a ConfigMap. Seeding is idempotent.
 seed:
   # -- Enable declarative seeding from JSON
   enabled: false
+  # -- Name of an existing Secret holding seed.json. Set it to keep seed
+  # credentials out of the values file and out of `helm get values` entirely;
+  # the chart then renders no seed object of its own.
+  existingSecret: ""
   # -- Client definitions to seed
   clients: []
-  # -- User definitions to seed
+  # -- User definitions to seed. Each entry's password is a real credential:
+  # anything that can read this values file, the release's stored values, or the
+  # rendered manifest can read it.
   users: []
 
 # ---- Secrets ----
@@ -249,8 +266,20 @@ redis:
     repository: redis
     # -- Redis image tag
     tag: "7-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Redis maxmemory setting
   maxMemory: "64mb"
+  # -- Redis resource requests/limits. The memory limit has to clear maxMemory
+  # above with room for the process itself, or the pod is OOM-killed at the point
+  # the cache fills, which is the point it is most useful.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
 
 # ---- SMTP ----
 smtp:
@@ -272,10 +301,10 @@ ingress:
   enabled: false
   # -- Ingress class name
   className: ""
-  # -- Ingress annotations
+  # -- Ingress annotations. Examples:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/ssl-redirect: "true"
   annotations: {}
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   # -- Ingress hosts
   hosts:
     - host: auth.example.com
@@ -311,6 +340,19 @@ readinessProbe:
     port: http
   initialDelaySeconds: 5
   periodSeconds: 5
+
+# -- Startup probe configuration. autoMigrate is on by default, so the first
+# boot against a new or upgraded database runs the schema migration before the
+# server answers anything. Without a startup probe the liveness probe's
+# initialDelaySeconds is what has to cover that migration, and a slow one on a
+# large database gets the pod killed part-way through it. failureThreshold x
+# periodSeconds is the budget: five minutes here.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 5
+  failureThreshold: 60
 
 autoscaling:
   # -- Enable HPA
@@ -365,10 +407,20 @@ frontend:
     tag: ""
     # -- Frontend image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Number of frontend replicas
   replicaCount: 1
-  # -- Frontend resource requests/limits
-  resources: {}
+  # -- Frontend resource requests/limits. An nginx serving static files needs
+  # very little; the point of the limit is that a pod with none is scheduled as
+  # best-effort and is the first thing evicted when a node runs short.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 # ---- PostgreSQL (dev/embedded only) ----
 postgres:
@@ -379,10 +431,20 @@ postgres:
     repository: postgres
     # -- PostgreSQL image tag
     tag: "17-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- PVC storage size
   storage: 1Gi
-  # -- Password for the vault_app role (set via init SQL)
-  appPassword: ""
+  # -- PostgreSQL resource requests/limits. This key used to be read by nothing:
+  # values-embedded.yaml and values-honeypot.yaml both set it and the template
+  # never referenced it, so two profiles configured a limit that never existed.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
 # ---- Mailpit (dev only) ----
 mailpit:
@@ -391,8 +453,20 @@ mailpit:
   image:
     # -- Mailpit image repository
     repository: axllent/mailpit
-    # -- Mailpit image tag
-    tag: latest
+    # -- Mailpit image tag. A version, not "latest": the tag records which
+    # release the digest below is, and a floating tag would let a rebuilt image
+    # replace a running pod on restart.
+    tag: "v1.30.7"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a"
+  # -- Mailpit resource requests/limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   ingress:
     # -- Expose Mailpit web UI via ingress
     enabled: false
@@ -413,6 +487,8 @@ bridge:
     tag: ""
     # -- Bridge image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Bridge listen address
   listenAddr: ":8080"
   # -- Requests per window before scoring
@@ -449,6 +525,19 @@ bridge:
 
 # ---- Honeypot Instance (bridge mode only) ----
 honeypotInstance:
+  secrets:
+    # -- Name of the Secret holding the honeypot's credentials. Empty resolves to
+    # <release>-honeypot, and the chart refuses to render if it resolves to the
+    # production Secret.
+    #
+    # The honeypot used to mount the production one, which handed the component
+    # this deployment invites attackers into the production master key, HMAC
+    # secret, pepper, signing key, admin token and database passwords. Breaking
+    # the decoy was breaking the vault. This Secret carries the same key names as
+    # `secrets.keys` and must carry different values: a honeypot holding a copy
+    # of the real master key is not a honeypot, it is a second copy of the vault
+    # with the door open.
+    existingSecret: ""
   database:
     # -- Honeypot database name (separate from real)
     name: vault_honeypot
@@ -463,6 +552,14 @@ honeypotInstance:
   postgres:
     # -- Honeypot PostgreSQL PVC storage size
     storage: 1Gi
+    # -- Honeypot PostgreSQL resource requests/limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 # ---- Admin Gateway ----
 # Local-only mTLS admin gateway with RBAC for operator access.
@@ -476,8 +573,18 @@ adminGateway:
     tag: ""
     # -- Image pull policy
     pullPolicy: IfNotPresent
-  # -- Use host network (binds to node loopback for production local-only access)
-  hostNetwork: true
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
+  # -- Bind the gateway to the node's loopback via the host network namespace.
+  # Off by default. hostNetwork is forbidden by both the baseline and the
+  # restricted Pod Security Standards profiles, so shipping it on meant the
+  # chart's default posture could not be admitted to an enforcing namespace, and
+  # the operator who found that out found it out as a rejected pod. It remains
+  # the strongest posture for the admin plane -- it is layer 1 of the local-only
+  # story in docs/admin-gateway.md -- but it is now something a deployment opts
+  # in to, on a namespace that has been given the exemption to allow it. See
+  # charts/vault/README.md.
+  hostNetwork: false
   # -- Run the gateway in dev mode. This DISABLES two controls: LocalOnly, which
   # restricts the admin plane to loopback, and RejectProxyHeaders. It must be set
   # explicitly whenever hostNetwork is false, because LocalOnly refuses every
@@ -533,8 +640,21 @@ cloudflared:
   image:
     # -- cloudflared image repository
     repository: cloudflare/cloudflared
-    # -- cloudflared image tag
-    tag: latest
+    # -- cloudflared image tag. A version, not "latest". The connector holds the
+    # tunnel credential, so what runs under this name should be a decision, not
+    # whatever the registry moved the tag to since the last restart. Cloudflare
+    # ships releases often; raise this deliberately rather than floating.
+    tag: "2026.8.2"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+  # -- cloudflared resource requests/limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   # -- Tunnel token from `cloudflared tunnel token <name>`
   tunnelToken: ""
   # -- Use an existing Kubernetes Secret for tunnel token

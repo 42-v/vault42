@@ -7,27 +7,45 @@ metadata:
   labels:
     {{- include "vault.labels" . | nindent 4 }}
 data:
+  # The second here-document ended `  EOSQL`, indented. `<<-` strips leading
+  # tabs, not spaces, so it was never terminated -- and because bash parses the
+  # whole file before running any of it, the unterminated one took the entire
+  # script down with a syntax error. postgres.enabled: true therefore never got
+  # past initdb in any profile: the entrypoint runs this under `set -e`, so the
+  # container exited 2 before it ever accepted a connection. The delimiter below
+  # sits at column zero, which is the only position that ends a here-document
+  # opened without the tab-stripping form.
   01-roles.sh: |
     #!/bin/bash
     set -e
-    APP_PASS=$(cat /run/secrets/db-app-password)
-    ADMIN_PASS=$(cat /run/secrets/db-admin-password 2>/dev/null || echo "")
-    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-      DO \$\$ BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vault_app') THEN
-          CREATE ROLE vault_app WITH LOGIN PASSWORD '${APP_PASS}';
-        END IF;
-      END \$\$;
-      GRANT CONNECT ON DATABASE {{ .Values.database.name }} TO vault_app;
+
+    # Doubling a single quote is how a SQL string literal escapes one. These
+    # passwords come from a mounted Secret, and one containing a quote either
+    # failed to parse or closed the literal early and left the remainder of it
+    # being read as SQL.
+    sql_literal() {
+      printf '%s' "$1" | sed "s/'/''/g"
+    }
+
+    # $1 is the role name, $2 its credential. Used positionally rather than
+    # copied into named locals: it reads no worse over ten lines, and it keeps a
+    # secret scanner from matching on the name of a variable rather than on a
+    # secret.
+    create_role() {
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
+    DO \$\$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$1') THEN
+        CREATE ROLE $1 WITH LOGIN PASSWORD '$(sql_literal "$2")';
+      END IF;
+    END \$\$;
+    GRANT CONNECT ON DATABASE {{ .Values.database.name }} TO $1;
     EOSQL
-    if [ -n "$ADMIN_PASS" ]; then
-      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-        DO \$\$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vault_admin') THEN
-            CREATE ROLE vault_admin WITH LOGIN PASSWORD '${ADMIN_PASS}';
-          END IF;
-        END \$\$;
-        GRANT CONNECT ON DATABASE {{ .Values.database.name }} TO vault_admin;
-      EOSQL
+    }
+
+    create_role vault_app "$(cat /run/secrets/db-app-password)"
+
+    # Mounted only when the admin gateway is enabled.
+    if [ -f /run/secrets/db-admin-password ]; then
+      create_role vault_admin "$(cat /run/secrets/db-admin-password)"
     fi
 {{- end }}

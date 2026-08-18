@@ -58,12 +58,13 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: bridge
-          image: "{{ .Values.bridge.image.repository }}:{{ .Values.bridge.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "vault.image" (dict "image" .Values.bridge.image "tag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.bridge.image.pullPolicy }}
           ports:
             - name: http
@@ -85,6 +86,12 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.bridge.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /bridge/healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
           livenessProbe:
             httpGet:
               path: /bridge/healthz

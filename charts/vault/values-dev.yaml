@@ -131,6 +131,16 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
+# HTTPS like the two above: this profile terminates TLS in the server, so a probe
+# left on the chart default speaks plaintext to a TLS port and never succeeds.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+    scheme: HTTPS
+  periodSeconds: 5
+  failureThreshold: 60
+
 secrets:
   existingSecret: vault-secrets
 
