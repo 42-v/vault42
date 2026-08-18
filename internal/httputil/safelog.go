@@ -1,6 +1,7 @@
 package httputil
 
 import (
+	"context"
 	"net"
 	"strings"
 )
@@ -42,4 +43,27 @@ func ObfuscatedIP(s string) string {
 		return v4.Mask(net.CIDRMask(24, 32)).String()
 	}
 	return ip.Mask(net.CIDRMask(64, 128)).String()
+}
+
+// clientIPCtxKey is the request-context slot holding the address the edge
+// resolved for this request.
+type clientIPCtxKey struct{}
+
+// WithClientIP returns a context carrying the resolved client address.
+//
+// It lives here rather than in the middleware package so the service layer,
+// which only ever receives a context, can key per-source state on the same
+// address the rate limiter used without importing the HTTP middleware.
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, clientIPCtxKey{}, ip)
+}
+
+// ClientIPFromContext returns the address WithClientIP stored, or "" when the
+// context did not come through the HTTP edge (background sweepers, CLI, tests).
+//
+// An empty result must always be safe to act on: it means "source unknown", not
+// "source trusted".
+func ClientIPFromContext(ctx context.Context) string {
+	ip, _ := ctx.Value(clientIPCtxKey{}).(string)
+	return ip
 }

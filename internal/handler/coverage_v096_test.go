@@ -350,7 +350,10 @@ func TestTOTPHandler_Verify_LockedAccount(t *testing.T) {
 	}
 	mockCache := &mocks.MockCache{
 		GetFn: func(ctx context.Context, key string) (string, error) {
-			if key == "lockout:user-1" {
+			// Prefix, because the lockout counter is now two keys: the
+			// per-(account, source) one the hard lock reads, and the
+			// account-wide one the distributed threshold reads.
+			if strings.HasPrefix(key, "lockout:user-1") {
 				return "5", nil
 			}
 			return "", cache.ErrNotFound
@@ -454,8 +457,8 @@ func TestTOTPHandler_Verify_WrongCodeRecordsMFAFailure(t *testing.T) {
 	if result["error"] != "invalid_code" {
 		t.Fatalf("expected error=invalid_code, got %q", result["error"])
 	}
-	if incrementedKey != "lockout:user-1" {
-		t.Fatalf("expected the failed attempt to increment lockout:user-1, got %q", incrementedKey)
+	if !strings.HasPrefix(incrementedKey, "lockout:user-1") {
+		t.Fatalf("expected the failed attempt to increment a lockout:user-1 counter, got %q", incrementedKey)
 	}
 }
 
@@ -467,7 +470,10 @@ func TestEmailOTPVerify_LockedAccount(t *testing.T) {
 	otpFetched := false
 	mockCache := &mocks.MockCache{
 		GetFn: func(ctx context.Context, key string) (string, error) {
-			if key == "lockout:user-1" {
+			// Prefix, because the lockout counter is now two keys: the
+			// per-(account, source) one the hard lock reads, and the
+			// account-wide one the distributed threshold reads.
+			if strings.HasPrefix(key, "lockout:user-1") {
 				return "5", nil
 			}
 			return "", cache.ErrNotFound

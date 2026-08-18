@@ -538,3 +538,17 @@ func CheckAccountLockout(ctx context.Context, c cache.Cache, userID string, thre
 	}
 	return count > int64(threshold), nil
 }
+
+// ClientIPContext stores the resolved client address on the request context.
+//
+// The service layer only ever receives a context, so without this the account
+// lockout could not tell one source from another and had to key solely on the
+// user id — which made five failed logins from any single address a fifteen
+// minute denial of service against any account whose email the caller knew.
+// Resolving the address once, here, also guarantees the lockout and the rate
+// limiter agree on what "the client" is.
+func ClientIPContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(httputil.WithClientIP(r.Context(), ClientIP(r))))
+	})
+}

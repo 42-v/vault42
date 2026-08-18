@@ -190,14 +190,14 @@ func TestIsAccountLockedDBFallback(t *testing.T) {
 	o.userRepo.GetByIDFn = func(_ context.Context, _ string) (*model.User, error) {
 		return nil, errors.New("db down")
 	}
-	if svc.isAccountLocked(ctx, "u") {
+	if svc.isAccountLocked(ctx, "u", "203.0.113.9") {
 		t.Fatal("lookup error should report not-locked")
 	}
 
 	o.userRepo.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
 		return &model.User{ID: id, FailedLoginCount: 1000}, nil
 	}
-	if !svc.isAccountLocked(ctx, "u") {
+	if !svc.isAccountLocked(ctx, "u", "203.0.113.9") {
 		t.Fatal("failed-login count over threshold should lock via DB fallback")
 	}
 }

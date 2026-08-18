@@ -56,7 +56,9 @@ func runOAuthGate(t *testing.T, c oauthGateCase) oauthGateOutcome {
 	cache := &mocks.MockCache{
 		GetAndDeleteFn: func(context.Context, string) (string, error) { return "verifier", nil },
 		GetFn: func(_ context.Context, key string) (string, error) {
-			if c.lockoutCount != "" && key == "lockout:"+c.user.ID {
+			// Prefix: the hard lock reads lockout:<user>|<source>, and the
+			// account-wide counter it also consults is lockout:<user>.
+			if c.lockoutCount != "" && strings.HasPrefix(key, "lockout:"+c.user.ID) {
 				return c.lockoutCount, nil
 			}
 			return "", nil

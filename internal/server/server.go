@@ -156,6 +156,7 @@ func (s *Server) Start() error {
 		h = honeypot.LoggingMiddleware(s.deps.HoneypotAlerter)(h)
 	}
 	h = middleware.MaxBodyWithExemptions(8*1024, []string{"/user/blobs", "/service/documents"})(h) // 8KB max body; blob uploads and service documents enforce their own limit
+	h = middleware.ClientIPContext(h)                                                              // resolve the client address once, for the rate limiter and the per-source lockout
 	h = middleware.AppContext(h)                                                                   // resolve X-Vault-App tenant for white-label emails
 	h = middleware.CORS(cfg.Origin, parseCORSOrigins(cfg.CORSOrigins), cfg.CORSAllowAll)(h)
 	h = middleware.IPAccess()(h)

@@ -101,12 +101,57 @@ type familyOriginReader interface {
 	FamilyOrigin(ctx context.Context, familyID string) (time.Time, error)
 }
 
-// Lockout defaults: 5 failures triggers a 15-minute lockout per user,
-// 20 failures per IP triggers a 15-minute IP-wide lockout.
+// Lockout defaults: 5 failures locks one (account, source address) pair for 15
+// minutes, 50 failures across all sources locks the account itself, and 20
+// failures from one address locks that address.
+//
+// The per-source key is what makes lockout a defence rather than a weapon. The
+// counter used to be keyed on the user id alone, so five wrong passwords from
+// one address denied logins to any account whose email the caller knew, for
+// fifteen minutes, at a cost of five HTTP requests and no credential. MFA verify
+// shared that counter, so the victim could not climb out with a second factor
+// either. Keying the hard lock on (user, source) means an attacker locks only
+// the path they are attacking from.
+//
+// distributedLockoutThreshold keeps the account-wide lock for what it was
+// actually for: a genuine distributed attack. Reaching it needs at least ten
+// distinct source addresses, because each is cut off at lockoutThreshold and the
+// per-IP lockout stops any one address at ipLockoutThreshold across all
+// accounts. This is an explicit trade, and it is the one NIST SP 800-63B 5.2.2
+// asks for: aggregate guesses against one account rise from 5 to 50 per window,
+// throttled from the sixth failure by loginThrottleDelay, in exchange for
+// removing a five-request remote denial of service against every account. 50 is
+// half the ">= 100 consecutive failures, with throttling" that guidance allows.
+//
+// The reset-from-email escape (handler/password.go) still works from any state,
+// unchanged.
 const (
-	lockoutThreshold   = 5
-	ipLockoutThreshold = 20
-	lockoutDuration    = 15 * time.Minute
+	lockoutThreshold            = 5
+	distributedLockoutThreshold = 50
+	ipLockoutThreshold          = 20
+	lockoutDuration             = 15 * time.Minute
+)
+
+// Progressive delay applied to every login attempt against an identity that has
+// recent failures, whether or not that identity exists.
+//
+// It is the throughput half of the lockout rework: the per-source hard lock
+// stops one address, and this stops a botnet from spending the account-wide
+// budget in a burst. The delay grows 100ms, 200ms, 400ms... and stops at 2s,
+// well inside the server's write timeout, costing a sleeping goroutine rather
+// than the 46 MiB the same request's argon2 hash costs.
+//
+// It is applied identically to every outcome — success, wrong password, unknown
+// address, locked, deleted — because a delay only existing accounts pay is an
+// enumeration oracle. The counter behind it is keyed on the submitted address
+// rather than on a user id for the same reason: an address with no account must
+// accrue and spend it exactly like one that has.
+//
+// Variables, not constants, so a test that has to drive dozens of failures
+// through the real Login path does not have to spend the real minutes.
+var (
+	loginThrottleBase = 100 * time.Millisecond
+	loginThrottleMax  = 2 * time.Second
 )
 
 // AuthService handles registration, login, and token operations.
@@ -639,11 +684,26 @@ func (r LoginResult) MarshalJSON() ([]byte, error) {
 // Login authenticates a user and issues tokens.
 //
 //nolint:gocognit,gocyclo // login owns user-lockout, ip-lockout, anti-enumeration burns, MFA challenge, family rotation, audit, metrics — all coupled to one state machine
-func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string) (*LoginResult, error) {
+func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string) (result *LoginResult, err error) {
 	if s.metrics != nil {
 		s.metrics.RecordLoginAttempt()
 	}
 	email := strings.ToLower(strings.TrimSpace(input.Email))
+
+	// Every non-success outcome advances the identity throttle counter, in one
+	// place, for the same reason recordLoginFailure exists: the paths must not
+	// drift apart into distinguishable side effects. An unknown address, a
+	// wrong password, a locked account and a soft-deleted account all accrue the
+	// delay at the same rate, so the delay cannot be read as an oracle.
+	//
+	// ErrArgon2Overloaded is excluded. That branch is a 503 that mutates nothing
+	// by design, and counting it would let anyone who can push the semaphore
+	// over the edge throttle every address they know.
+	defer func() {
+		if err != nil && !errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			s.recordIdentityFailure(ctx, email)
+		}
+	}()
 	// White-label tenant for any auth email sent during this login (verification
 	// resend, import claim, lockout alert, email-OTP). Empty => global branding.
 	app := vaultemail.AppFromContext(ctx)
@@ -659,6 +719,12 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// came back faster than failure: the reverse of every real deployment, and an
 	// oracle needing no reference host to read.
 	trap := s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email)
+
+	// Progressive delay for an address with recent failures. Applied before any
+	// lookup so success and every kind of failure pay it identically, and before
+	// the argon2 burn so a throttled caller holds a sleeping goroutine rather
+	// than 46 MiB of hashing memory.
+	s.throttleLogin(ctx, email)
 
 	// Check IP-wide lockout (prevents credential stuffing from a single IP)
 	if s.isIPLocked(ctx, ip) {
@@ -723,7 +789,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			map[string]interface{}{"reason": "account_locked", "source": "admin"}, 30)
 		return nil, ErrInvalidCredentials
 	}
-	if s.isAccountLocked(ctx, user.ID) {
+	if s.isAccountLocked(ctx, user.ID, ip) {
 		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 			return nil, err
 		}
@@ -885,8 +951,10 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 
 	// Single-step login: no second factor is owed, so the login is complete and
 	// the shared lockout counter can be cleared (the MFA path defers this to
-	// CompleteMFALogin).
-	s.clearLockout(ctx, user.ID)
+	// CompleteMFALogin). The identity throttle goes too: a user who mistyped six
+	// times and then got in should not keep paying the delay.
+	s.clearLockout(ctx, user.ID, ip)
+	s.clearIdentityFailures(ctx, email)
 
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, user.ID); err != nil {
@@ -979,7 +1047,8 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 	// caller or an operator could do with the answer, and a log line per trap
 	// login would hand the attacker the honeypot's disk.
 	_ = s.users.ResetFailedLogin(ctx, sub)
-	s.clearLockout(ctx, sub)
+	s.clearLockout(ctx, sub, ip)
+	s.clearIdentityFailures(ctx, email)
 
 	input.Fingerprint.IP = ip
 	input.Fingerprint.UserAgent = ua
@@ -1090,7 +1159,7 @@ func (s *AuthService) trapCookieMaxAge(rememberMe bool) int {
 func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, ip, ua, app, reason string, riskScore int) {
 	// Failed-login counter is best-effort; lockout is enforced by isAccountLocked.
 	_ = s.users.IncrementFailedLogin(ctx, user.ID)
-	s.recordFailedAttempt(ctx, user.ID)
+	s.recordFailedAttempt(ctx, user.ID, ip)
 	s.recordFailedIP(ctx, ip)
 	if s.metrics != nil {
 		s.metrics.RecordLoginFailed()
@@ -1099,7 +1168,7 @@ func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, 
 		map[string]interface{}{"reason": reason}, riskScore)
 
 	// Send lock notification email once per lockout window
-	if s.isAccountLocked(ctx, user.ID) && s.cache != nil && s.emailSender != nil {
+	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {
 		lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
 		if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
 			go func() { // #nosec G118 -- intentional: email send outlives HTTP request
@@ -1309,8 +1378,10 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 			return nil, ErrChallengeConsumed
 		}
 	}
-	// Successful second factor clears the per-account failure counter (audit H2).
-	s.clearLockout(ctx, userID)
+	// Successful second factor clears this source's failure counter (audit H2).
+	// The account-wide counter is left to expire: it exists to see the other
+	// sources still guessing, and one success must not erase them.
+	s.clearLockout(ctx, userID, ip)
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, userID); err != nil {
 		return nil, err
@@ -1548,69 +1619,189 @@ func (s *AuthService) lockedByStoredCount(ctx context.Context, userID string) bo
 	return false
 }
 
-// isAccountLocked checks the cache-based lockout counter, falling back to the
-// stored failed_login_count whenever the cache cannot answer.
-func (s *AuthService) isAccountLocked(ctx context.Context, userID string) bool {
-	if s.cache == nil {
-		return s.lockedByStoredCount(ctx, userID)
-	}
-	key := fmt.Sprintf("lockout:%s", userID)
+// accountLockoutKey is the account-wide failure counter: every source, one key.
+// It is what the distributed threshold reads.
+func accountLockoutKey(userID string) string {
+	return fmt.Sprintf("lockout:%s", userID)
+}
+
+// sourceLockoutKey is the per-(account, source address) failure counter, and the
+// one the hard lock is enforced from.
+//
+// An unknown source ("" — a CLI call, a background task, a request that did not
+// come through the HTTP edge) gets its own shared bucket rather than being
+// silently exempted. Exempting it would let anyone who can reach the service
+// without a resolvable address bypass the lock entirely.
+func sourceLockoutKey(userID, ip string) string {
+	return fmt.Sprintf("lockout:%s|%s", userID, ip)
+}
+
+// cachedCount reads a counter key, reporting whether the cache could answer at
+// all.
+//
+// A key that is absent is a successful read of zero, not a failure. That is what
+// an account with no recent failures looks like, and it is the overwhelming
+// majority of logins: treating it as a failure would put a database read in
+// front of nearly every one of them to learn what the cache just answered
+// correctly. Only a real error — a refused connection, a timeout — falls back to
+// the durable count.
+func (s *AuthService) cachedCount(ctx context.Context, key string) (n int, ok bool) {
 	val, err := s.cache.Get(ctx, key)
+	if errors.Is(err, cache.ErrNotFound) {
+		return 0, true
+	}
 	if err != nil {
-		// A failing cache takes the same durable fallback as an absent one.
-		//
-		// This branch used to answer "not locked" without consulting the stored
-		// count, so lockout held with no cache configured and stopped holding the
-		// moment the configured cache broke, which is precisely the situation the
-		// fallback was written for. During a cache outage the pods stay in
-		// rotation, because a degraded cache still reports ready, so every
-		// account was unlocked regardless of what the database had recorded.
-		return s.lockedByStoredCount(ctx, userID)
+		return 0, false
 	}
 	if val == "" {
-		// A successful read with no counter is what an account with no recent
-		// failures looks like. Falling back here too would put a database read in
-		// front of nearly every login to learn what the cache just answered
-		// correctly.
-		return false
+		return 0, true
 	}
-	var n int
 	fmt.Sscanf(val, "%d", &n) // #nosec G104 -- parse failure returns 0, which means not locked
-	return n >= lockoutThreshold
+	return n, true
 }
 
-// recordFailedAttempt increments the lockout counter for the user.
-func (s *AuthService) recordFailedAttempt(ctx context.Context, userID string) {
+// isAccountLocked reports whether this account is locked to this source.
+//
+// Two counters, two thresholds. The per-source counter is the ordinary
+// brute-force control and trips at lockoutThreshold exactly as before, but it
+// only ever locks the address that earned it. The account-wide counter trips at
+// distributedLockoutThreshold, which no single source can reach on its own.
+//
+// Both fall back to the durable failed_login_count when the cache cannot answer,
+// because a lockout that stops holding the moment the cache breaks is not a
+// lockout — and a degraded cache still reports ready, so the pods stay in
+// rotation while it is down.
+func (s *AuthService) isAccountLocked(ctx context.Context, userID, ip string) bool {
+	if s.cache == nil {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip))
+	if !ok {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	if perSource >= lockoutThreshold {
+		return true
+	}
+	account, ok := s.cachedCount(ctx, accountLockoutKey(userID))
+	if !ok {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	return account >= distributedLockoutThreshold
+}
+
+// recordFailedAttempt advances both lockout counters for the user: the one for
+// the source that failed, and the account-wide one the distributed threshold
+// reads.
+func (s *AuthService) recordFailedAttempt(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	key := fmt.Sprintf("lockout:%s", userID)
-	s.cache.Increment(ctx, key, lockoutDuration) // #nosec G104 -- best-effort lockout counter
+	s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration) // #nosec G104 -- best-effort lockout counter
+	s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration)    // #nosec G104 -- best-effort lockout counter
 }
 
-// clearLockout resets the lockout counter on successful login.
-func (s *AuthService) clearLockout(ctx context.Context, userID string) {
+// clearLockout resets this source's lockout counter on successful login.
+//
+// The account-wide counter is deliberately NOT cleared. It exists to see a
+// distributed attack, and one successful login — which an attacker who has
+// guessed a password can produce — must not erase the evidence of the other
+// sources still guessing. It expires on its own after lockoutDuration.
+func (s *AuthService) clearLockout(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	key := fmt.Sprintf("lockout:%s", userID)
-	s.cache.Delete(ctx, key) // #nosec G104 -- best-effort counter reset
+	s.cache.Delete(ctx, sourceLockoutKey(userID, ip)) // #nosec G104 -- best-effort counter reset
+}
+
+// identityThrottleKey is the failure counter behind the progressive login delay.
+//
+// Keyed on the submitted address, not on a user id, so an address with no
+// account accrues it identically — a throttle only real accounts pay would tell
+// an unauthenticated caller which addresses are registered. Peppered and hashed
+// so a reader of the cache cannot enumerate the addresses that have been tried.
+func (s *AuthService) identityThrottleKey(email string) string {
+	return "auththrottle:" + vaultcrypto.SHA256Hex(s.pepper+"|auththrottle|"+email)
+}
+
+// loginThrottleDelay is the delay owed for a given number of recent failures.
+// Zero up to lockoutThreshold, then doubling from loginThrottleBase, capped at
+// loginThrottleMax.
+func loginThrottleDelay(failures int) time.Duration {
+	if failures <= lockoutThreshold {
+		return 0
+	}
+	d := loginThrottleBase
+	for i := lockoutThreshold + 1; i < failures; i++ {
+		d *= 2
+		if d >= loginThrottleMax {
+			return loginThrottleMax
+		}
+	}
+	return d
+}
+
+// throttleLogin sleeps the delay this identity's recent failures have earned.
+//
+// Interruptible: a client that hangs up frees the goroutine immediately, so the
+// throttle cannot be turned into a way to pin server goroutines.
+func (s *AuthService) throttleLogin(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	n, ok := s.cachedCount(ctx, s.identityThrottleKey(email))
+	if !ok {
+		return
+	}
+	d := loginThrottleDelay(n)
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// recordIdentityFailure advances the throttle counter for a submitted address.
+func (s *AuthService) recordIdentityFailure(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Increment(ctx, s.identityThrottleKey(email), lockoutDuration) // #nosec G104 -- best-effort throttle counter
+}
+
+// clearIdentityFailures drops the throttle counter once the address has proven
+// the password, so a user who mistyped six times is not still paying for it.
+func (s *AuthService) clearIdentityFailures(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Delete(ctx, s.identityThrottleKey(email)) // #nosec G104 -- best-effort counter reset
 }
 
 // MFAVerifyLocked reports whether the account is locked out from further auth
-// attempts. MFA verify endpoints MUST call this before checking a second factor:
-// the per-IP rate limit alone is defeated by IP rotation, so without a per-account
-// gate the second factor is brute-forceable within the challenge window (audit H2).
+// attempts by the caller's source. MFA verify endpoints MUST call this before
+// checking a second factor: the per-IP rate limit alone is defeated by IP
+// rotation, so without a per-account gate the second factor is brute-forceable
+// within the challenge window (audit H2).
+//
+// The source address comes from the request context rather than the signature,
+// so the four MFA handlers did not have to change. A context with no address
+// (a CLI call, a test) still gets a gate: it reads the shared unknown-source
+// bucket, never an exemption.
 func (s *AuthService) MFAVerifyLocked(ctx context.Context, userID string) bool {
-	return s.isAccountLocked(ctx, userID)
+	return s.isAccountLocked(ctx, userID, httputil.ClientIPFromContext(ctx))
 }
 
-// RecordMFAFailure counts a failed second-factor attempt toward the per-account
-// lockout (shared counter with the password path, so combined failures trip the
-// same lockoutThreshold/lockoutDuration) and audits it. Reset on success via
-// clearLockout in CompleteMFALogin (audit H2).
+// RecordMFAFailure counts a failed second-factor attempt toward the lockout for
+// this (account, source) pair and toward the account-wide distributed counter,
+// so password and MFA failures from one address still trip the same
+// lockoutThreshold within lockoutDuration. Reset on success via clearLockout in
+// CompleteMFALogin (audit H2).
 func (s *AuthService) RecordMFAFailure(ctx context.Context, userID, ip, ua string) {
-	s.recordFailedAttempt(ctx, userID)
+	s.recordFailedAttempt(ctx, userID, ip)
 	if s.auditLog != nil {
 		s.auditLog.Log(ctx, audit.LoginFailure, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort
 			map[string]interface{}{"reason": "mfa_failed"}, 30)

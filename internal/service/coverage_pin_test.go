@@ -82,7 +82,7 @@ func TestIsAccountLockedDBFallbackBelowThreshold(t *testing.T) {
 		return &model.User{ID: id, FailedLoginCount: lockoutThreshold - 1}, nil
 	}
 
-	if svc.isAccountLocked(context.Background(), "user-1") {
+	if svc.isAccountLocked(context.Background(), "user-1", "") {
 		t.Fatal("failed-login count below threshold must not lock via DB fallback")
 	}
 }
