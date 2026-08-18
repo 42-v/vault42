@@ -131,7 +131,8 @@ func TestMetricsListenerServesOnItsOwnPort(t *testing.T) {
 		t.Fatal("server did not shut down on SIGTERM")
 	}
 
-	if _, err := http.Get("http://" + scrapeAddr + "/metrics"); err == nil {
+	if resp, err := http.Get("http://" + scrapeAddr + "/metrics"); err == nil {
+		resp.Body.Close()
 		t.Error("the metrics listener kept serving after shutdown; it outlives the process's drain")
 	}
 }
