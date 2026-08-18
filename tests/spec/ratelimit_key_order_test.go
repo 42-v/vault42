@@ -126,6 +126,68 @@ func TestClientKeyedLimitersSitInsideAuth(t *testing.T) {
 	}
 }
 
+// failClosedCredentialReleaseLimiters are IP-keyed, FailClosed limiters on
+// routes that release credentials (KMS unwrap today). Unlike the client-keyed
+// set above, mounting them outside authMw does not break their key function —
+// it breaks their budget: an unauthenticated flood from a shared egress IP
+// burns the same fail-closed bucket legitimate clients need, and the next
+// authenticated unwrap is refused with 429. mintRL is client-keyed and already
+// covered by TestClientKeyedLimitersSitInsideAuth.
+var failClosedCredentialReleaseLimiters = map[string]bool{
+	"kmsUnwrapRL": true,
+}
+
+// TestFailClosedCredentialReleaseLimitersSitInsideAuth fails when an
+// IP-keyed fail-closed unwrap/mint-class limiter wraps authMw rather than
+// sitting inside it. The route register still names the limiter either way;
+// only the nesting decides whether anonymous traffic can exhaust it.
+func TestFailClosedCredentialReleaseLimitersSitInsideAuth(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "internal", "server", "server.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing server.go: %v", err)
+	}
+	src := commentFreeSource(t, path)
+
+	var checked int
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		start := fset.Position(call.Pos()).Offset
+		end := fset.Position(call.End()).Offset
+		if start < 0 || end > len(src) || start >= end {
+			return true
+		}
+		text := src[start:end]
+
+		for name := range failClosedCredentialReleaseLimiters {
+			li := strings.Index(text, name+"(")
+			ai := strings.Index(text, authIdent+"(")
+			if li < 0 || ai < 0 {
+				continue
+			}
+			checked++
+			if li < ai {
+				t.Errorf("%s:%d applies the fail-closed credential-release limiter %q outside %s. "+
+					"Unauthenticated requests from a shared egress IP then burn the unwrap budget "+
+					"before any legitimate client reaches the key-release path.",
+					"internal/server/server.go", fset.Position(call.Pos()).Line, name, authIdent)
+			}
+		}
+		return true
+	})
+
+	if checked == 0 {
+		t.Fatal("no route was found applying a fail-closed credential-release limiter alongside " +
+			"authMw; the mounting style changed and this gate needs updating")
+	}
+}
+
 // readFileString reads a source file so the nesting check above can work on byte
 // offsets taken from the same parse.
 func readFileString(t *testing.T, path string) string {

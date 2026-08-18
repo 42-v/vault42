@@ -805,7 +805,18 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		kmsUnwrapRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Name: "kmsunwrap", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 		}, rlEnabled)
-		mux.Handle("POST /kms/unwrap", kmsUnwrapRL(authMw(middleware.RequireScope("kms:unwrap")(dpopWrap(http.HandlerFunc(kmsHandler.Unwrap))))))
+		// Inside authMw, but not for the reason mint and svcDoc are: those two
+		// have no choice, because ClientRateLimitKey reads a client id from
+		// claims that do not exist until auth has run. This limiter is IP-keyed
+		// and would work in either position. It sits inside because it is
+		// FailClosed, and a fail-closed bucket in front of authentication is a
+		// denial-of-service primitive: an unauthenticated flood from one egress
+		// address exhausts the budget, and the legitimate machine client behind
+		// the same NAT is then refused the key-release path outright. That is the
+		// same defect shape as the DPoP replay entry written for tokens it could
+		// not protect. Refusing a bad token is cheap; what needs bounding is the
+		// authenticated key-release work behind it.
+		mux.Handle("POST /kms/unwrap", authMw(kmsUnwrapRL(middleware.RequireScope("kms:unwrap")(dpopWrap(http.HandlerFunc(kmsHandler.Unwrap))))))
 	}
 
 	// Subject-assertion signing oracle (POST /mint). Not mounted at all unless

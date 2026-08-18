@@ -38,7 +38,10 @@ func TestGuardRefusesDerivedSecrets(t *testing.T) {
 		`<p>{{len .Token}}{{.Token}}</p><span>{{slice .URL 8 12}}</span>`,
 	} {
 		err := guardBad(t, body)
-		if !strings.Contains(err.Error(), "changes with the value") {
+		// Structural refusal of non-verbatim secret actions now fires before the
+		// differential; either reason is the property holding.
+		if !strings.Contains(err.Error(), "changes with the value") &&
+			!strings.Contains(err.Error(), "derives") {
 			t.Errorf("%q was refused for the wrong reason: %v", body, err)
 		}
 	}
