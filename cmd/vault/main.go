@@ -204,6 +204,29 @@ func main() {
 		return
 	}
 
+	// Cross-plane agreement on HMAC_SECRET, before this process serves anything.
+	//
+	// The admin gateway derives the same subject pseudonyms from the same secret
+	// and erases by them. Two planes holding different secrets produce different
+	// pseudonyms, so an admin erasure clears zero rows from identity.profiles,
+	// objects.blobs and objects.service_documents and reports success anyway.
+	// Nothing downstream can notice: clearing no rows is also what erasing an
+	// account that held no profile looks like.
+	//
+	// Placed after the CLI branch so a subcommand an operator runs to diagnose
+	// the disagreement still works, and fatal rather than degraded because every
+	// pseudonym this server writes from here on would be unreachable by the other
+	// plane. A store that cannot answer is a different matter: this process is
+	// about to depend on that same pool for everything and its own errors will
+	// say so, so an unanswered check is reported rather than made fatal.
+	if err := config.VerifyHMACPlaneAgreement(ctx, adminConfigRepo, hmacSecret); err != nil {
+		if errors.Is(err, config.ErrHMACPlaneMismatch) {
+			_ = auditLogger.Close(ctx)
+			log.Fatalf("%v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		}
+		log.Printf("WARNING: %v; erasure agreement with the admin gateway is unverified", err)
+	}
+
 	// Declarative seeding from VAULT_SEED_FILE (idempotent).
 	//
 	// Applied only once we know this is the server and not a CLI invocation:

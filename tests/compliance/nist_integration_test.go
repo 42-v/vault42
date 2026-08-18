@@ -24,6 +24,7 @@ import (
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/service"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // =============================================================================
@@ -37,43 +38,14 @@ import (
 // `go test ./tests/compliance/` must get a clean result showing which
 // requirements are proven container-free and which need a database, not a wall
 // of connection errors that makes the whole report look broken.
+//
+// "Reachable" was os.Stat on the socket path, which answers a different
+// question than the one the skip message claims: a rootless podman that has
+// stopped serving keeps its socket file, so the suite reported a runtime,
+// started a container against it and hung. testutil probes the API instead.
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
-	if !containerRuntimeAvailable() {
-		t.Skip("no container runtime reachable; this requirement is verified against a real Postgres in CI")
-	}
-}
-
-// containerRuntimeAvailable reports whether a Docker-compatible socket answers.
-// The result is computed once: probing per test would add a syscall to every
-// skip in the suite.
-var containerRuntimeAvailable = sync.OnceValue(func() bool {
-	if host := os.Getenv("DOCKER_HOST"); host != "" {
-		if path, found := strings.CutPrefix(host, "unix://"); found {
-			return socketExists(path)
-		}
-		// A non-unix DOCKER_HOST (tcp://, ssh://) is a deliberate operator
-		// choice; assume it works and let testcontainers report the truth.
-		return true
-	}
-	candidates := []string{"/var/run/docker.sock", "/run/docker.sock"}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		candidates = append(candidates, runtimeDir+"/docker.sock", runtimeDir+"/podman/podman.sock")
-	}
-	for _, path := range candidates {
-		if socketExists(path) {
-			return true
-		}
-	}
-	return false
-})
-
-func socketExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode()&os.ModeSocket != 0
+	testutil.RequireContainerRuntime(t)
 }
 
 // setupPostgres starts a PostgreSQL testcontainer and runs the initial migration.

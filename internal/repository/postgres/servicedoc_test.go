@@ -21,6 +21,7 @@ import (
 
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/service"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // Compile-time interface satisfaction. A signature drift here is a build
@@ -126,29 +127,18 @@ const (
 	svcDocPGClientC = "cccccccc-0000-4000-8000-000000000003"
 )
 
-// svcDocRequireContainerRuntime points DOCKER_HOST at a reachable container
-// socket, or skips. Failing hard would make a runtime-free machine
+// svcDocRequireContainerRuntime points DOCKER_HOST at a container daemon that
+// answers, or skips. Failing hard would make a runtime-free machine
 // indistinguishable from a broken repository; the canonical coverage run
 // refuses to start without a runtime, so nothing is silently skipped there.
+//
+// The selection lives in testutil because it used to live here as os.Stat, and
+// a socket file that exists is not a daemon that answers: a wedged rootless
+// podman was preferred over a working docker and this package then blocked
+// until its test timeout. See tests/testutil/containerruntime.go.
 func svcDocRequireContainerRuntime(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
-	if os.Getenv("DOCKER_HOST") != "" {
-		return
-	}
-	candidates := []string{"/run/podman/podman.sock", "/var/run/docker.sock"}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		candidates = append([]string{runtimeDir + "/podman/podman.sock"}, candidates...)
-	}
-	for _, sock := range candidates {
-		if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			t.Setenv("DOCKER_HOST", "unix://"+sock)
-			return
-		}
-	}
-	t.Skip("no container runtime found; set DOCKER_HOST or start the rootless podman socket")
+	testutil.RequireContainerRuntime(t)
 }
 
 // svcDocStripRoleGrants drops the top-level GRANT/REVOKE/ALTER DEFAULT
