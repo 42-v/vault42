@@ -92,13 +92,38 @@ Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup code 
 
 ## Device Fingerprint
 
-Authenticated requests are fingerprint-verified. The fingerprint is computed as `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)` and embedded in the access token at issuance. The TLS-fingerprint component is populated from the header specified by `VAULT_TLS_FINGERPRINT_HEADER` (e.g. `X-TLS-Fingerprint`), which the TLS-terminating proxy must set. When the header is not configured, the TLS-fingerprint field is empty (backward compatible). On each authenticated request, the server recomputes the fingerprint and compares it to the token claim. A mismatch results in:
+The fingerprint is `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)`, computed at issuance and carried in the access token as the `fingerprint` claim. The TLS-fingerprint component comes from the header named by `VAULT_TLS_FINGERPRINT_HEADER` (e.g. `X-TLS-Fingerprint`), which the TLS-terminating proxy must set; with that variable unset the component is empty and the other three still apply.
+
+Whether a given request is actually checked turns on two conditions, and both of them have exceptions, so neither is worth stating as "authenticated requests are fingerprint-verified".
+
+**1. The route has to run the check.** It is mounted on every authenticated end-user route -- everything reached through `authed`, `confirmed` or `authedChallenge` in `internal/server/server.go`. The machine endpoints deliberately do not run it, because a service client has no device to bind to:
+
+<!-- BEGIN FINGERPRINT EXEMPTIONS -->
+
+| Authenticated route | Fingerprint check |
+|---------------------|-------------------|
+| `POST /mint` | Not mounted -- machine endpoint |
+| `POST /kms/unwrap` | Not mounted -- machine endpoint |
+| `PUT /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `GET /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `DELETE /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `GET /service/documents/{subject}` | Not mounted -- machine endpoint |
+
+<!-- END FINGERPRINT EXEMPTIONS -->
+
+Every other authenticated route runs it. `tests/spec/fingerprint_docs_test.go` compares that table against the chain the server installs and fails if either side moves.
+
+**2. The presented token has to carry the claim.** `middleware.Fingerprint` passes a request whose token has no `fingerprint` claim straight through rather than rejecting it (`internal/middleware/fingerprint.go`). Tokens issued by `POST /auth/login`, `POST /auth/refresh` and the 2FA challenge flow carry one. Tokens issued by `POST /client/token` and `POST /mint` do not -- both are issued with an empty fingerprint -- so a machine token presented to a user route is not fingerprint-checked, even on a route that mounts the check. That is the shipped behaviour and not an oversight: those tokens are constrained by scope and by DPoP, not by a device.
+
+When both conditions hold and the recomputed value differs from the claim, the request is rejected with:
 
 ```json
 {"error": "invalid_token"}
 ```
 
 Status: `401 Unauthorized`
+
+The per-endpoint sections below do not repeat any of this. They used to carry an unqualified `Fingerprint: Verified` line on 38 routes, which was true of the chain and not true of the request: it said nothing about condition 2 and nothing about the six routes above.
 
 ---
 
@@ -581,7 +606,6 @@ curl -X POST https://vault42.example.com/auth/refresh \
 Revoke all refresh tokens for the authenticated user and clear the refresh token cookie.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -617,7 +641,6 @@ curl -X POST https://vault42.example.com/auth/logout \
 Verify the user's password to grant a 5-minute elevated access window for sensitive operations (TOTP setup, WebAuthn management, backup codes).
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 15 minutes (per IP)
 
 **Request body:**
@@ -754,7 +777,6 @@ curl -X POST https://vault42.example.com/auth/password/reset/confirm \
 Change the password for the currently authenticated user. Requires the current password. Revokes all existing sessions after a successful change.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -810,7 +832,6 @@ curl -X POST https://vault42.example.com/user/password \
 Retrieve the authenticated user's profile information.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -857,7 +878,6 @@ curl https://vault42.example.com/user/profile \
 Update the authenticated user's profile fields. Only fields included in the request body are updated; omitted fields remain unchanged. Email is not updatable via this endpoint.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -907,7 +927,6 @@ curl -X PUT https://vault42.example.com/user/profile \
 List all active sessions (devices) for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -951,7 +970,6 @@ curl https://vault42.example.com/user/sessions \
 Revoke a specific session. Removes the device record and revokes all associated refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -991,7 +1009,6 @@ curl -X DELETE https://vault42.example.com/user/sessions/device-uuid-1 \
 Revoke all sessions (sign out everywhere). Removes all device records and revokes all refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1023,7 +1040,6 @@ curl -X DELETE https://vault42.example.com/user/sessions \
 List all registered devices for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1069,7 +1085,6 @@ curl https://vault42.example.com/user/devices \
 Rename a device (set a friendly name).
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1124,7 +1139,6 @@ curl -X PATCH https://vault42.example.com/user/devices/device-uuid-1 \
 Remove a device and revoke all associated refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1171,7 +1185,6 @@ Erase the authenticated user's account. **This is the most destructive endpoint 
 **Mounted only when an account-recovery repository is wired.** Where it is not, the route does not exist and answers a `text/plain` 404 rather than the JSON error envelope.
 
 **Authentication:** Bearer token **and** the current password in the request body. A stolen access token alone cannot erase an account.
-**Fingerprint:** Verified
 **Rate limit:** 3 requests per hour (per IP), fail-closed
 
 **Request body:**
@@ -1228,7 +1241,6 @@ Return every category of personal data the service holds for the authenticated u
 The endpoint aggregates the live repositories and stores nothing of its own, so an export cannot drift from what is actually held.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per minute (per IP)
 
 **Success response (200 OK):**
@@ -1313,7 +1325,6 @@ Encrypted personal identity information (PII). All fields are encrypted at rest 
 Retrieve the authenticated user's identity profile. Returns decrypted fields.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1358,7 +1369,6 @@ curl https://vault42.example.com/user/identity \
 Create or replace the authenticated user's identity profile. All fields are optional.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -1410,7 +1420,6 @@ curl -X PUT https://vault42.example.com/user/identity \
 Permanently delete the authenticated user's identity profile.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1500,7 +1509,6 @@ provider. An ID that does not exist (or is not the caller's) reports success rat
 response must not become an oracle for whether an ID belongs to somebody else.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1530,7 +1538,6 @@ Encrypted file storage with per-user quotas. Blobs are compressed (DEFLATE), enc
 Upload an encrypted blob. Accepts raw binary body or multipart form data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Raw upload:**
 
@@ -1614,7 +1621,6 @@ curl -X POST https://vault42.example.com/user/blobs \
 List all blobs for the authenticated user with metadata and quota usage.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1693,7 +1699,6 @@ account that uploaded it, as bytes, and no browser is asked to interpret it.
 Download a decrypted blob. Returns raw binary data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1737,7 +1742,6 @@ curl https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 Permanently delete an encrypted blob.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1774,7 +1778,6 @@ curl -X DELETE https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef
 Create or replace a **named blob**. Named blobs are addressed by a human-readable name (e.g. `session-data`, `preferences`) instead of a UUID. If a blob with the same name already exists for this user, it is replaced atomically (delete + insert). The name is stored as an HMAC hash in the database -- the plaintext name never touches persistent storage.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1826,7 +1829,6 @@ curl -X PUT https://vault42.example.com/user/blobs/named/session-data \
 Download a named blob by its reference name. Returns raw binary data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1870,7 +1872,6 @@ curl https://vault42.example.com/user/blobs/named/session-data \
 Delete a named blob by its reference name.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1911,7 +1912,6 @@ curl -X DELETE https://vault42.example.com/user/blobs/named/session-data \
 Retrieve the MFA status for the authenticated user, including which methods are configured.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1954,7 +1954,6 @@ curl https://vault42.example.com/auth/2fa/status \
 Begin TOTP setup. Generates a new TOTP secret and returns it along with an `otpauth://` URL for QR code generation. Requires recent password confirmation via `POST /auth/confirm`.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -1998,7 +1997,6 @@ Verify a TOTP code. Has two modes of operation:
 2. **Login MFA challenge:** When called with a `2fa_challenge` token (from the login flow), completes authentication and issues full access/refresh tokens.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:**
@@ -2060,7 +2058,6 @@ curl -X POST https://vault42.example.com/auth/2fa/totp/verify \
 Disable TOTP for the authenticated user. Requires recent password confirmation.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -2096,7 +2093,6 @@ curl -X DELETE https://vault42.example.com/auth/2fa/totp \
 Begin WebAuthn/FIDO2 credential registration. Returns a `PublicKeyCredentialCreationOptions` object for the browser's `navigator.credentials.create()` API. Requires recent password confirmation. Session data is cached for 5 minutes.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -2147,7 +2143,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/register/begin \
 Complete WebAuthn credential registration. Send the `AuthenticatorAttestationResponse` from the browser's `navigator.credentials.create()` call.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:** The `AuthenticatorAttestationResponse` JSON object from the browser WebAuthn API (passed through directly as the raw HTTP request body).
 
@@ -2190,7 +2185,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/register/finish \
 Begin WebAuthn authentication (login verification). Returns a `PublicKeyCredentialRequestOptions` object for the browser's `navigator.credentials.get()` API.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -2238,7 +2232,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/verify/begin \
 Complete WebAuthn authentication. Send the `AuthenticatorAssertionResponse` from the browser's `navigator.credentials.get()` call. When completing a login MFA challenge, issues full access/refresh tokens.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 
 **Request body:** The `AuthenticatorAssertionResponse` JSON object from the browser WebAuthn API.
 
@@ -2296,7 +2289,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/verify/finish \
 List all registered WebAuthn credentials for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -2336,7 +2328,6 @@ curl https://vault42.example.com/auth/2fa/webauthn/credentials \
 Delete a specific WebAuthn credential. Requires recent password confirmation.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -2377,7 +2368,6 @@ curl -X DELETE https://vault42.example.com/auth/2fa/webauthn/credentials/cred-uu
 Generate a new set of 10 backup codes. Any existing backup codes are replaced. Requires recent password confirmation. Each code is 12 hex characters (48-bit entropy), stored as Argon2id hashes.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -2431,7 +2421,6 @@ Consume a single-use backup code. Like the TOTP and email-OTP verify endpoints, 
 Codes are stored as HMAC-SHA256 hashes and compared in constant time. Consumption is atomic (compare-and-swap on `used`), so a code cannot be spent twice even under concurrent requests.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP), fail-closed
 
 **Request body:**
@@ -2495,7 +2484,6 @@ Verify an email one-time password code. Has two modes of operation:
 An email OTP is automatically sent during login when the user's only available 2FA method is `email_otp`. Use `POST /auth/2fa/email-otp/resend` to request a new code.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:**
@@ -2555,7 +2543,6 @@ curl -X POST https://vault42.example.com/auth/2fa/email-otp/verify \
 Resend the email one-time password code. Generates a new 6-digit code and sends it to the user's registered email address. The previous code (if any) is replaced.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:** None
@@ -2786,7 +2773,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. Those tokens are not DPoP-bound: `POST /client/token` is not wrapped in the DPoP middleware, so they never carry `cnf.jkt` and `VAULT_DPOP_ENABLED=true` adds no required proof here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. See `spec.md` section 0.6.2.
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. Sender-constraint follows the token rather than the route: `POST /client/token` **is** DPoP-wrapped (`internal/server/server.go:560`), so a client-credential token minted while presenting a valid proof carries `cnf.jkt`, and this route then refuses it without a matching proof under the `DPoP` scheme. A token minted without a proof stays an ordinary bearer token and this route demands none. Both cases need `VAULT_DPOP_ENABLED=true`; with the flag off, its default, no token carries `cnf.jkt` at all. For an unbound token, replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. See `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2864,10 +2851,9 @@ Subject-assertion signing oracle. The caller names a subject, and vault42 signs 
 Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:613-620`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
-**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:768`). The limiter sits inside `authMw` because `ClientRateLimitKey` reads the client id from claims that do not exist until auth has run.
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:832`). No fingerprint verification: this is a machine endpoint. The limiter sits inside `authMw` because `ClientRateLimitKey` reads the client id from claims that do not exist until auth has run.
 **Rate limit:** 60 per minute per authenticated `client_id`, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The limiter is mounted **inside** the auth middleware, so the key function reads the client id from the validated claims and buckets by `client_id`; its source-IP fallback is unreachable here, because a request carrying no claims is rejected by the auth middleware before it reaches the limiter. Plan capacity as 60/min per client, not per source address.
-**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. Mint tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and a request with no `DPoP` header still passes through. See `spec.md` section 0.6.2.
-**Fingerprint:** not verified. `POST /mint` is a machine endpoint and carries no device binding.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. With the flag on, whether a proof is required here is decided by the token, not by this route: `POST /client/token` **is** a DPoP issuance path (`internal/server/server.go:560`), so a client-credential token minted with a proof carries `cnf.jkt` and is refused here without a matching one. A token minted without a proof carries no `cnf.jkt`, and a request presenting it with no `DPoP` header passes through. See `spec.md` section 0.6.2.
 **Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
 
 **Request body:**
@@ -3007,8 +2993,8 @@ A namespaced JSON document store with an ownership axis: a registered service cl
 Mounted **only** when `VAULT_SVCDOC_ENABLED=true`; otherwise the four routes do not exist and `ServeMux` answers `404` in `text/plain`. Off by default because this is new surface reachable by every existing client-credentials holder, so enabling it is an explicit operator decision rather than a consequence of upgrading. The shared visibility tier is a second, separate switch (`VAULT_SVCDOC_SHARED_ENABLED`).
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying `svcdoc:read` (reads) or `svcdoc:write` (writes). Every handler additionally requires a non-empty `client_id` claim.
-**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> DPoP wrapper -> handler (`internal/server/server.go:697-706`). No fingerprint verification: this is a machine endpoint.
-**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. These tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and a request with no `DPoP` header still passes through. See `spec.md` section 0.6.2.
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> DPoP wrapper -> handler (`internal/server/server.go:760-769`). No fingerprint verification: this is a machine endpoint.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. With the flag on, the token decides: `POST /client/token` **is** a DPoP issuance path (`internal/server/server.go:560`), so a client-credential token minted with a proof carries `cnf.jkt` and these routes refuse it without a matching one. A token minted without a proof carries no `cnf.jkt` and passes through with no `DPoP` header. See `spec.md` section 0.6.2.
 **Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s, keyed by the authenticated `client_id`. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs inside the auth middleware, so the bucket is the client id read from the validated claims; the per-client key function's source-IP fallback is unreachable, because the auth middleware rejects a claimless request first.
 **Max body:** the `/service/documents` prefix is exempt from the global 8 KiB cap, so a 64 KiB document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of `VAULT_SVCDOC_MAX_SIZE` + 1 KiB.
 
