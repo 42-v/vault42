@@ -125,11 +125,31 @@ checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
   algorithm: sha256
 
+# Only `documents:` was set here, so the syft invocation and therefore the
+# published format were goreleaser's defaults: SPDX-JSON today, and whatever a
+# future goreleaser release decides tomorrow, under an unchanged filename and
+# with nothing in the tree to notice the swap. Both formats are named explicitly
+# now.
+#
+# CycloneDX is added alongside rather than instead. SPDX is what most consumers
+# and GitHub's own tooling read; CycloneDX is what Dependency-Track and the OWASP
+# tools read.
+#
+# This renames the published files from `<archive>.sbom.json` to
+# `<archive>.spdx.sbom.json`. No release has ever shipped an SBOM, so nothing
+# downstream breaks today, and that stops being true once 1.0.0 cuts.
 sboms:
-  - id: archives
+  - id: archives-spdx
     artifacts: archive
     documents:
-      - "${artifact}.sbom.json"
+      - "${artifact}.spdx.sbom.json"
+    args: ["$artifact", "--output", "spdx-json=$document"]
+
+  - id: archives-cyclonedx
+    artifacts: archive
+    documents:
+      - "${artifact}.cdx.sbom.json"
+    args: ["$artifact", "--output", "cyclonedx-json=$document"]
 
 # Keyless blob signing over the checksum file. One signature covers every
 # artifact, because every artifact's digest is in the file being signed.
