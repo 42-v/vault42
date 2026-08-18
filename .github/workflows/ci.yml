@@ -578,6 +578,128 @@ jobs:
           version: '~> v2'
           args: check
 
+  # Five suites were invoked by no workflow at all: tests/admin (admin-gateway
+  # mTLS + RBAC), tests/browser (its own go.mod, which the root ./... never
+  # enters), tests/honeypot, tests/stress and tests/e2e-browser (19 Playwright
+  # files, 160 tests). Between them they hold the only coverage of several real
+  # security properties.
+  #
+  # None of them can actually RUN here: they need a deployed vault, mTLS client
+  # certs, kubectl, Mailpit, Chromium, or five containers that must reach each
+  # other on host-mapped ports. Every one already carries a skip notice and a
+  # VAULT_*_REQUIRED env var that turns the skip into a failure, and all of that
+  # machinery was correct and unreachable, because nothing invoked it.
+  #
+  # So this job does the two things that are possible, and refuses to be quiet
+  # about the third:
+  #
+  #   1. Compiles all five, with the build tags that hide most of them, so a
+  #      rename in internal/ cannot silently break a suite for months.
+  #   2. Runs each in skip mode with -v and ASSERTS the notice appeared. Without
+  #      -v, `go test` swallows the notice entirely and prints `ok` — which is
+  #      how a suite that ran nothing looks identical to one that passed.
+  #   3. Writes the whole list to the run summary, so "did not run" is on the
+  #      screen of anyone reading a green build.
+  unrunnable-suites:
+    name: Suites CI cannot run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The tagged files are the ones at risk: nothing else in the repository
+      # ever compiles them, so they drift silently against internal/ and against
+      # their own module.
+      - name: Compile every suite, tags included
+        shell: bash
+        run: |
+          set -euo pipefail
+          go vet ./tests/admin/...
+          go vet -tags honeypot_e2e ./tests/honeypot/...
+          go vet -tags stress ./tests/stress/...
+          ( cd tests/browser && go vet -tags browser ./... )
+
+      # --list type-resolves and collects all 19 spec files without a browser
+      # download and without a reachable vault, which is the Playwright
+      # equivalent of the compile check above.
+      - name: Collect the Playwright suite
+        run: pnpm -C tests/e2e-browser exec playwright test --list
+
+      - name: Report what did not run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sum() { printf '%s\n' "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"; }
+
+          failed=0
+          report() {
+            name=$1 envvar=$2 log=$3 rc=$4
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::$name exited $rc in skip mode; it must skip cleanly or run"
+              sum "| \`$name\` | **exited $rc** | \`$envvar\` |"
+              failed=1
+              return
+            fi
+            if ! grep -q 'Nothing in this suite ran' "$log"; then
+              echo "::error::$name printed no skip notice, so a green result here is" \
+                   "indistinguishable from a run that actually happened"
+              sum "| \`$name\` | **no notice** | \`$envvar\` |"
+              failed=1
+              return
+            fi
+            sum "| \`$name\` | did not run | \`$envvar\` |"
+          }
+
+          sum '### Suites that did not run'
+          sum ''
+          sum 'Each needs a deployment, a browser or a container topology a GitHub'
+          sum 'Actions runner does not have. They are compiled on every run so they'
+          sum 'cannot rot, and each prints why it did not run. Set the env var to'
+          sum 'make its skip fatal.'
+          sum ''
+          sum '| suite | status | make the skip fatal with |'
+          sum '|---|---|---|'
+
+          go test ./tests/admin/... -count=1 -v > admin.log 2>&1 && rc=0 || rc=$?
+          report tests/admin VAULT_ADMIN_E2E_REQUIRED admin.log "$rc"
+
+          go test ./tests/honeypot/... -count=1 -v > honeypot.log 2>&1 && rc=0 || rc=$?
+          report tests/honeypot VAULT_HONEYPOT_E2E_REQUIRED honeypot.log "$rc"
+
+          go test ./tests/stress/... -count=1 -v > stress.log 2>&1 && rc=0 || rc=$?
+          report tests/stress VAULT_STRESS_REQUIRED stress.log "$rc"
+
+          ( cd tests/browser && go test ./... -count=1 -v ) > browser.log 2>&1 && rc=0 || rc=$?
+          report tests/browser VAULT_BROWSER_REQUIRED browser.log "$rc"
+
+          tests/e2e-browser/run.sh > e2e-browser.log 2>&1 && rc=0 || rc=$?
+          report tests/e2e-browser VAULT_E2E_BROWSER_REQUIRED e2e-browser.log "$rc"
+
+          for f in admin honeypot stress browser e2e-browser; do
+            echo "===== $f ====="
+            cat "$f.log"
+          done
+
+          [ "$failed" -eq 0 ] || {
+            echo "::error::a suite neither ran nor explained itself"
+            exit 1
+          }
+
   lint:
     name: Hadolint
     runs-on: ubuntu-latest

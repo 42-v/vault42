@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "HIGH and CRITICAL gosec findings in _test.go files, per rule, as of the",
+    "1.0.0 hardening pass. CI fails if any rule exceeds its number here, so this",
+    "can only be lowered. It is not a suppression list: a new InsecureSkipVerify",
+    "or a new hardcoded credential in a test still turns CI red.",
+    "Production code is scanned separately and must stay at zero; it is at zero.",
+    "Lower a number whenever you remove a finding. The CI step prints the exact",
+    "replacement block when a count drops."
+  ],
+  "high_and_critical_by_rule": {
+    "G101": 76,
+    "G115": 38,
+    "G122": 4,
+    "G402": 2,
+    "G702": 2,
+    "G703": 5
+  },
+  "total": 127
+}
