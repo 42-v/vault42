@@ -43,40 +43,114 @@ const (
 	MethodEmailOTP   = "email_otp"   // one-time code delivered out-of-band by email
 	MethodBackupCode = "backup_code" // pre-shared single-use recovery code
 	MethodWebAuthn   = "webauthn"    // WebAuthn / FIDO2 phishing-resistant authenticator
+	// MethodFederated is an assertion from an upstream identity provider. It is
+	// a first factor like a password — the IdP verified the user by some means
+	// vault42 did not observe — and it is never a second one.
+	MethodFederated = "federated"
 )
 
-// AALForMethods maps a set of completed authenticator methods to the NIST SP
-// 800-63B assurance level they satisfy. It applies the §5.2.4 combination rules:
-//
-//   - WebAuthn / FIDO2 present                  → AAL3 (phishing-resistant MFA)
-//   - password + TOTP or password + email-OTP   → AAL2 (multi-factor)
-//   - password (or any single factor) only      → AAL1 (single-factor)
-//   - no recognized factor                       → AAL1 (lowest)
-//
-// This is a documentation-grade helper: it derives the assurance level from the
-// factors already verified elsewhere and changes no authentication behavior.
-func AALForMethods(methods []string) AuthenticatorAssuranceLevel {
-	var hasPassword, hasTOTP, hasEmailOTP, hasWebAuthn bool
+// RFC 8176 authentication method reference values vault42 emits in "amr".
+const (
+	amrPassword     = "pwd"  // memorized secret
+	amrOTP          = "otp"  // one-time password: TOTP, the email code, a backup code
+	amrHardwareKey  = "hwk"  // proof of possession of a hardware-backed key
+	amrUserVerified = "user" // the authenticator verified the user (WebAuthn UV)
+	amrMultiFactor  = "mfa"  // two or more distinct factor types were presented
+)
+
+// factorSet is which of the recognized authenticators a login presented.
+type factorSet struct {
+	password, totp, emailOTP, backupCode, webAuthn, federated bool
+}
+
+func factorsFrom(methods []string) factorSet {
+	var f factorSet
 	for _, m := range methods {
 		switch m {
 		case MethodPassword:
-			hasPassword = true
+			f.password = true
 		case MethodTOTP:
-			hasTOTP = true
+			f.totp = true
 		case MethodEmailOTP:
-			hasEmailOTP = true
+			f.emailOTP = true
+		case MethodBackupCode:
+			f.backupCode = true
 		case MethodWebAuthn:
-			hasWebAuthn = true
+			f.webAuthn = true
+		case MethodFederated:
+			f.federated = true
 		}
 	}
+	return f
+}
+
+// AALForMethods maps a set of completed authenticator methods to the NIST SP
+// 800-63B assurance level they satisfy, applying the §5.2.4 combination rules:
+//
+//   - WebAuthn with the authenticator's user-verification flag set → AAL3.
+//     That is a multi-factor cryptographic device: possession of the key plus
+//     the PIN or biometric that unlocked it.
+//   - a first factor (password or an upstream IdP assertion) plus any
+//     possession factor → AAL2.
+//   - anything else → AAL1.
+//
+// userVerified is the WebAuthn UV flag from the assertion that completed the
+// login, and it is the reason this takes two arguments. A discoverable-
+// credential assertion with UV clear proves possession of a key and nothing
+// else: it is single-factor, and treating it as AAL3 asserted the highest
+// assurance level NIST defines over one factor.
+func AALForMethods(methods []string, userVerified bool) AuthenticatorAssuranceLevel {
+	f := factorsFrom(methods)
+	firstFactor := f.password || f.federated
+	possession := f.totp || f.emailOTP || f.backupCode || f.webAuthn
 	switch {
-	case hasWebAuthn:
+	case f.webAuthn && userVerified:
 		return AAL3
-	case hasPassword && (hasTOTP || hasEmailOTP):
+	case firstFactor && possession:
 		return AAL2
 	default:
 		return AAL1
 	}
+}
+
+// ACRForAAL renders an assurance level as the OIDC Core §2 "acr" value.
+//
+// OIDC leaves the acr value space to the issuer ("parties using this claim will
+// need to agree upon the meanings of the values used"), so this is vault42's
+// own URN and it means the NIST SP 800-63B AAL of the same number. It is
+// deliberately not one of the idmanagement.gov URLs, which belong to a US
+// federal assurance program vault42 has not been assessed under.
+func ACRForAAL(aal AuthenticatorAssuranceLevel) string {
+	return fmt.Sprintf("urn:vault42:aal:%d", aal)
+}
+
+// AMRForMethods renders the completed methods as RFC 8176 "amr" values.
+//
+// Each value describes something this server verified. A federated first factor
+// contributes none: the upstream provider performed that authentication and RFC
+// 8176 registers no value for "an assertion from another issuer", so claiming
+// one would describe a check vault42 did not make. "mfa" is appended whenever
+// the combination reaches AAL2 or above, per RFC 8176 §2, which allows the
+// specific methods to be listed alongside it.
+func AMRForMethods(methods []string, userVerified bool) []string {
+	f := factorsFrom(methods)
+	var amr []string
+	if f.password {
+		amr = append(amr, amrPassword)
+	}
+	if f.totp || f.emailOTP || f.backupCode {
+		amr = append(amr, amrOTP)
+	}
+	if f.webAuthn {
+		amr = append(amr, amrHardwareKey)
+		if userVerified {
+			amr = append(amr, amrUserVerified)
+		}
+	}
+	if AALForMethods(methods, userVerified) >= AAL2 {
+		amr = append(amr, amrMultiFactor)
+	}
+	return amr
 }
 
 // MFAService handles MFA policy decisions.

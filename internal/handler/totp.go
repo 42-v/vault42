@@ -207,7 +207,7 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "totp"})
 
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies, service.MFACompletion{Method: service.MethodTOTP}) {
 		return
 	}
 

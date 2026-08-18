@@ -855,7 +855,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		hasMethods := status != nil && len(status.Methods) > 0
 		if hasMethods {
 			// Issue a short-lived challenge token instead of real tokens
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -869,7 +869,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
 			go s.sendEmailOTP(user.ID, user.Email, app) // #nosec G118 -- intentional: email OTP send outlives HTTP request
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -899,9 +899,12 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Issue tokens — use the user's persisted Roles, admin-filtered and
 	// catalog-validated, falling back to the historical default ["user"].
 	jwtRoles := s.effectiveRoles(ctx, user.Roles)
-	pair, err := s.tokenSvc.IssueTokenPair(
+	// A single-step login completed on the memorized secret alone, so the token
+	// says AAL1 and names the one factor it saw (OIDC Core §2).
+	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
 		user.ID, jwtRoles, []string{"read", "write"},
 		input.ClientID, fp, "", input.RememberMe,
+		NewAuthContext(time.Now(), []string{MethodPassword}, false),
 	)
 	if err != nil {
 		return nil, err
@@ -1003,7 +1006,7 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 			if hasMethods {
 				methods = status.Methods
 			}
-			challengePair, err := s.tokenSvc.IssueChallengeToken(sub, fp)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(sub, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -1293,10 +1296,31 @@ func (s *AuthService) RevokeAllTokensForUser(ctx context.Context, userID string)
 	return s.tokens.RevokeAllForUser(ctx, userID)
 }
 
+// MFACompletion describes the second factor that finished an MFA login and the
+// factors that preceded it, so the issued token can state the combination
+// rather than assume one.
+type MFACompletion struct {
+	// Method is the authenticator just verified.
+	Method string
+	// UserVerified is the WebAuthn user-verification flag from the assertion.
+	// It is false for every other authenticator, and it is what separates AAL3
+	// from AAL2 on the WebAuthn path.
+	UserVerified bool
+	// Prior lists the factors completed before the challenge was minted, read
+	// off the challenge token. Empty derives AAL1 rather than assuming a
+	// password: a federated login reaches this path too.
+	Prior []string
+}
+
+// methods is the full factor list the completed login presented.
+func (c MFACompletion) methods() []string {
+	return append(append([]string{}, c.Prior...), c.Method)
+}
+
 // CompleteMFALogin issues tokens after successful MFA verification.
 // Called by TOTP verify and WebAuthn verify handlers when a 2fa_challenge token is presented.
 // The jti parameter enforces single-use: once consumed, the same challenge token is rejected.
-func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint, ip, ua, jti string) (*LoginResult, error) {
+func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint, ip, ua, jti string, completion MFACompletion) (*LoginResult, error) {
 	// Enforce challenge token single-use via cache.
 	// SECURITY: fail closed — if cache is unavailable, reject the request.
 	if s.cache != nil && jti != "" {
@@ -1352,9 +1376,10 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	}
 
 	mfaRoles := s.effectiveRoles(ctx, mfaUser.Roles)
-	pair, err := s.tokenSvc.IssueTokenPair(
+	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
 		userID, mfaRoles, []string{"read", "write"},
 		"", fingerprint, "", false,
+		NewAuthContext(time.Now(), completion.methods(), completion.UserVerified),
 	)
 	if err != nil {
 		return nil, err

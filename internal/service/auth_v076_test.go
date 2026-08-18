@@ -20,7 +20,7 @@ func TestCompleteMFALoginSuccess(t *testing.T) {
 		return &model.User{ID: id, Roles: []string{"user", "admin"}}, nil
 	}
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "", MFACompletion{Method: MethodTOTP})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCompleteMFALoginChallengeConsumed(t *testing.T) {
 		return false, nil
 	}
 
-	_, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1")
+	_, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP})
 	if !errors.Is(err, ErrChallengeConsumed) {
 		t.Fatalf("want ErrChallengeConsumed, got %v", err)
 	}
@@ -49,7 +49,7 @@ func TestCompleteMFALoginCacheFailsClosed(t *testing.T) {
 		return false, errors.New("redis unavailable")
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1"); err == nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP}); err == nil {
 		t.Fatal("expected fail-closed error when cache is unavailable")
 	}
 }
@@ -77,7 +77,7 @@ func TestCompleteMFALoginRefusesUnresolvableUser(t *testing.T) {
 			stored := false
 			o.tokenRepo.CreateFn = func(context.Context, *model.RefreshToken) error { stored = true; return nil }
 
-			res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
+			res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "", MFACompletion{Method: MethodTOTP})
 			if !errors.Is(err, ErrTokenInvalid) {
 				t.Fatalf("err = %v, want ErrTokenInvalid: an unresolvable subject must not get a session", err)
 			}
@@ -99,7 +99,7 @@ func TestCompleteMFALoginStoreTokenError(t *testing.T) {
 		return dbErr
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); !errors.Is(err, dbErr) {
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); !errors.Is(err, dbErr) {
 		t.Fatalf("want the store error, got %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestCompleteMFALoginSetLastLoginNonFatal(t *testing.T) {
 		return errors.New("db down")
 	}
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "")
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP})
 	if err != nil {
 		t.Fatalf("SetLastLogin error must not block MFA completion, got %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCompleteMFALoginMetricsRecorded(t *testing.T) {
 	collector := metrics.NewCollector(zero, zero, func() int { return 0 })
 	svc.SetMetrics(collector)
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); err != nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestCompleteMFALoginSessionLimit(t *testing.T) {
 		return 5, nil
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", ""); !errors.Is(err, ErrTooManySessions) {
+	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); !errors.Is(err, ErrTooManySessions) {
 		t.Fatalf("want ErrTooManySessions, got %v", err)
 	}
 }

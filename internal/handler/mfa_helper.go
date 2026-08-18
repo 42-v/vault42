@@ -13,7 +13,11 @@ import (
 // token and, if so, completes the MFA login flow by issuing real tokens. It
 // returns true if the response was written (caller should return), false if the
 // caller should continue with its own response.
-func completeMFAIfChallenge(w http.ResponseWriter, r *http.Request, claims *vaultcrypto.VaultClaims, authSvc *service.AuthService, secureCookies bool) bool {
+//
+// completion names the second factor that was just verified. The factors that
+// preceded it travel on the challenge token, so a federated login is not
+// reported as having presented a password.
+func completeMFAIfChallenge(w http.ResponseWriter, r *http.Request, claims *vaultcrypto.VaultClaims, authSvc *service.AuthService, secureCookies bool, completion service.MFACompletion) bool {
 	if claims.TokenType != "2fa_challenge" || authSvc == nil {
 		return false
 	}
@@ -32,7 +36,8 @@ func completeMFAIfChallenge(w http.ResponseWriter, r *http.Request, claims *vaul
 		WriteError(w, http.StatusUnauthorized, "invalid_token")
 		return true
 	}
-	result, err := authSvc.CompleteMFALogin(r.Context(), claims.Subject, fp, ip, ua, claims.ID)
+	completion.Prior = claims.Factors
+	result, err := authSvc.CompleteMFALogin(r.Context(), claims.Subject, fp, ip, ua, claims.ID, completion)
 	if err != nil {
 		// CompleteMFALogin re-reads account state and deliberately refuses a
 		// banned, disabled, locked or deleted account, because the challenge TTL

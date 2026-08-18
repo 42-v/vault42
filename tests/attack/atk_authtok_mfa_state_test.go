@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/service"
 )
 
 // The 2FA challenge flow issues a short-lived (5 min) challenge token after the
@@ -44,7 +45,7 @@ func TestAtk_CompleteMFALoginIssuesForBannedUser(t *testing.T) {
 
 	// jti empty => single-use cache check is skipped, isolating the account-state
 	// question from the (correct, separately tested) challenge replay control.
-	res, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", "")
+	res, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", "", service.MFACompletion{Method: service.MethodTOTP})
 	if err == nil {
 		t.Fatalf("SECURITY: CompleteMFALogin issued a session for a BANNED account "+
 			"(access token len=%d); the second-factor issuance path skips the "+
@@ -63,7 +64,7 @@ func TestAtk_CompleteMFALoginIssuesForDisabledUser(t *testing.T) {
 		return &model.User{ID: id, Roles: []string{"user"}, Disabled: true}, nil
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", ""); err == nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", "", service.MFACompletion{Method: service.MethodTOTP}); err == nil {
 		t.Fatalf("SECURITY: CompleteMFALogin issued a session for a DISABLED account")
 	}
 }
@@ -81,7 +82,7 @@ func TestAtk_CompleteMFALoginIssuesForLockedUser(t *testing.T) {
 		return &model.User{ID: id, Roles: []string{"user"}, LockedUntil: &lockedUntil}, nil
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", ""); err == nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), userID, "fp", "9.9.9.9", "UA", "", service.MFACompletion{Method: service.MethodTOTP}); err == nil {
 		t.Fatalf("SECURITY: CompleteMFALogin issued a session for an admin-LOCKED account")
 	}
 }

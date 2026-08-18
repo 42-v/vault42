@@ -27,6 +27,39 @@ type TokenService struct {
 	maxSessionLifetime time.Duration
 }
 
+// AuthContext carries the OIDC Core §2 authentication-event claims onto an
+// issued access token: which assurance level the login reached (acr), which
+// authenticators it presented (amr), and when it happened (auth_time).
+//
+// A zero value emits none of them, which is what an issuance that observed no
+// authentication event — a client-credentials token — should say.
+type AuthContext struct {
+	ACR      string
+	AMR      []string
+	AuthTime time.Time
+}
+
+// NewAuthContext derives the authentication-event claims from the factors a
+// login completed with. userVerified is the WebAuthn UV flag; it is false for
+// every other authenticator.
+func NewAuthContext(at time.Time, methods []string, userVerified bool) AuthContext {
+	return AuthContext{
+		ACR:      ACRForAAL(AALForMethods(methods, userVerified)),
+		AMR:      AMRForMethods(methods, userVerified),
+		AuthTime: at,
+	}
+}
+
+// authTimeSeconds renders the authentication instant for the auth_time claim.
+// A zero instant means "not recorded" and emits nothing, because the alternative
+// is a token asserting the user authenticated at the Unix epoch.
+func authTimeSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 // TokenPair is an access+refresh token pair.
 type TokenPair struct {
 	AccessToken  string // #nosec G117 -- internal DTO, never serialized to JSON
@@ -86,6 +119,13 @@ func sessionDeadline(origin time.Time, maxLifetime time.Duration) time.Time {
 // is a rotation whose origin this function cannot know; rotations must go through
 // IssueRotatedPair, which supplies it.
 func (s *TokenService) IssueTokenPair(userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool) (*TokenPair, error) {
+	return s.IssueTokenPairWithAuth(userID, roles, scopes, clientID, fingerprint, familyID, rememberMe, AuthContext{})
+}
+
+// IssueTokenPairWithAuth is IssueTokenPair with the OIDC authentication-event
+// claims attached. Call it from a path that just authenticated a user; the
+// bare IssueTokenPair is for issuance that observed no such event.
+func (s *TokenService) IssueTokenPairWithAuth(userID string, roles, scopes []string, clientID, fingerprint, familyID string, rememberMe bool, auth AuthContext) (*TokenPair, error) {
 	now := time.Now()
 	jti, err := vaultcrypto.RandomUUID()
 	if err != nil {
@@ -109,6 +149,9 @@ func (s *TokenService) IssueTokenPair(userID string, roles, scopes []string, cli
 		ClientID:    clientID,
 		Fingerprint: fingerprint,
 		TokenType:   "Bearer",
+		ACR:         auth.ACR,
+		AMR:         auth.AMR,
+		AuthTime:    authTimeSeconds(auth.AuthTime),
 	}
 
 	// Signing stays inside the read lock: UpdateSigningKey wipes the key it
@@ -166,7 +209,11 @@ func (s *TokenService) IssueTokenPair(userID string, roles, scopes []string, cli
 // A zero familyOrigin means the age is unknown and no clamp is applied — callers
 // must reject rather than rotate in that case.
 func (s *TokenService) IssueRotatedPair(userID string, roles, scopes []string, clientID, fingerprint, familyID string, familyOrigin time.Time) (*TokenPair, error) {
-	pair, err := s.IssueTokenPair(userID, roles, scopes, clientID, fingerprint, familyID, false)
+	// A rotation cannot re-run the authentication, so it carries auth_time from
+	// the family origin — which is the instant the user authenticated — and
+	// omits acr and amr rather than restating factors it did not observe.
+	pair, err := s.IssueTokenPairWithAuth(userID, roles, scopes, clientID, fingerprint, familyID, false,
+		AuthContext{AuthTime: familyOrigin})
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +224,10 @@ func (s *TokenService) IssueRotatedPair(userID string, roles, scopes []string, c
 }
 
 // IssueChallengeToken creates a short-lived JWT for 2FA challenge.
-func (s *TokenService) IssueChallengeToken(userID, fingerprint string) (string, error) {
+// factors are the authenticator methods already completed when the challenge
+// was minted; they travel on the challenge so the second-factor verify can
+// state the full combination.
+func (s *TokenService) IssueChallengeToken(userID, fingerprint string, factors ...string) (string, error) {
 	now := time.Now()
 	jti, err := vaultcrypto.RandomUUID()
 	if err != nil {
@@ -196,6 +246,7 @@ func (s *TokenService) IssueChallengeToken(userID, fingerprint string) (string, 
 		},
 		Fingerprint: fingerprint,
 		TokenType:   "2fa_challenge",
+		Factors:     factors,
 	}
 
 	s.mu.RLock()

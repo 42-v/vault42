@@ -87,22 +87,32 @@ func emailOTPServiceWithCaptureCache(t *testing.T, captured *capturedOTPSet, hma
 // §5.2.4): a single factor never reaches AAL2, a memorized secret plus a second
 // factor does, and a phishing-resistant authenticator reaches AAL3.
 func TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors(t *testing.T) {
-	if got := service.AALForMethods([]string{service.MethodPassword}); got != service.AAL1 {
+	if got := service.AALForMethods([]string{service.MethodPassword}, false); got != service.AAL1 {
 		t.Fatalf("§2.2.2: password alone reached AAL%d, want AAL1; a single factor must not satisfy AAL2", got)
 	}
-	if got := service.AALForMethods([]string{service.MethodTOTP}); got != service.AAL1 {
+	if got := service.AALForMethods([]string{service.MethodTOTP}, false); got != service.AAL1 {
 		t.Fatalf("§2.2.2: a lone OTP factor reached AAL%d, want AAL1", got)
 	}
-	if got := service.AALForMethods([]string{service.MethodPassword, service.MethodTOTP}); got != service.AAL2 {
+	if got := service.AALForMethods([]string{service.MethodPassword, service.MethodTOTP}, false); got != service.AAL2 {
 		t.Fatalf("§2.2.2: password+TOTP reached AAL%d, want AAL2", got)
 	}
-	if got := service.AALForMethods([]string{service.MethodPassword, service.MethodEmailOTP}); got != service.AAL2 {
+	if got := service.AALForMethods([]string{service.MethodPassword, service.MethodEmailOTP}, false); got != service.AAL2 {
 		t.Fatalf("§2.2.2: password+email-OTP reached AAL%d, want AAL2", got)
 	}
-	if got := service.AALForMethods([]string{service.MethodWebAuthn}); got != service.AAL3 {
-		t.Fatalf("§2.2.2: WebAuthn reached AAL%d, want AAL3 (phishing-resistant MFA)", got)
+	// §5.1.7 / §5.2.4: a WebAuthn assertion is a multi-factor cryptographic
+	// device only when the authenticator verified the user. With UV clear it
+	// proves possession of a key and nothing else, so it is one factor and
+	// cannot reach AAL2 on its own, let alone AAL3.
+	if got := service.AALForMethods([]string{service.MethodWebAuthn}, true); got != service.AAL3 {
+		t.Fatalf("§2.2.2: user-verified WebAuthn reached AAL%d, want AAL3 (phishing-resistant MFA)", got)
 	}
-	if got := service.AALForMethods(nil); got == service.AAL2 || got == service.AAL3 {
+	if got := service.AALForMethods([]string{service.MethodWebAuthn}, false); got != service.AAL1 {
+		t.Fatalf("§2.2.2: WebAuthn without user verification reached AAL%d, want AAL1; possession alone is one factor", got)
+	}
+	if got := service.AALForMethods([]string{service.MethodPassword, service.MethodWebAuthn}, false); got != service.AAL2 {
+		t.Fatalf("§2.2.2: password + unverified WebAuthn reached AAL%d, want AAL2", got)
+	}
+	if got := service.AALForMethods(nil, false); got == service.AAL2 || got == service.AAL3 {
 		t.Fatalf("§2.2.2: an empty factor set reached AAL%d, must be below AAL2", got)
 	}
 }
