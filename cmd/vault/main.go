@@ -154,19 +154,6 @@ func main() {
 	}
 	defer func() { _ = appCache.Close() }()
 
-	// Registered AFTER the cache close, so LIFO runs it BEFORE: a deferred send
-	// still in flight writes its verification token to the cache and then mails
-	// the link, and a cache that has already been closed turns that into a link
-	// the user can never use. Bounded by the configured shutdown timeout, so a
-	// wedged relay cannot hold the process open.
-	defer func() {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-		defer drainCancel()
-		if err := deferwork.Close(drainCtx); err != nil {
-			log.Printf("WARNING: deferred email drain incomplete: %v", err)
-		}
-	}()
-
 	// Initialize repositories
 	userRepo := postgres.NewUserRepo(db)
 	refreshTokenRepo := postgres.NewRefreshTokenRepo(db)
@@ -189,6 +176,19 @@ func main() {
 	// Initialize audit logger
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
 	defer auditLogger.Close(ctx)
+	// Registered LAST of the four shutdown defers, so LIFO drains the pool FIRST.
+	// A job still running needs the audit logger (notifyNewCountry writes a row),
+	// the cache (a deferred send writes its token, then mails the link) and the pool
+	// behind both. deferwork.Close stated that rule for the cache and the pool and
+	// left the logger out, so the logger closed first and a job's row went into a
+	// buffer nothing would flush. TestShutdownDefersRunInDependencyOrder gates it.
+	defer func() {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer drainCancel()
+		if err := deferwork.Close(drainCtx); err != nil {
+			log.Printf("WARNING: deferred email drain incomplete: %v", err)
+		}
+	}()
 
 	// CLI commands (check before starting server)
 	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper).

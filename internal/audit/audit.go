@@ -204,6 +204,12 @@ type Logger struct {
 	closeOnce    sync.Once
 	droppedTotal atomic.Int64
 
+	// afterCloseTotal counts entries Log handled after Close, which take the
+	// synchronous path because the buffer they would otherwise join is dead.
+	// Separate from droppedTotal: these are written, not dropped, and mixing
+	// them would make both figures unreadable.
+	afterCloseTotal atomic.Int64
+
 	quarantinedTotal atomic.Int64
 }
 
@@ -269,6 +275,17 @@ func (l *Logger) DroppedTotal() int64 {
 	return l.droppedTotal.Load()
 }
 
+// AfterCloseTotal returns how many entries were logged after Close and
+// therefore written synchronously rather than buffered.
+//
+// Non-zero means something outlived the logger: a background job still running
+// when shutdown reached it. That is a shutdown-ordering fact worth having a
+// number for, because the alternative — the behavior this replaced — was a
+// silent append to a buffer nothing would flush.
+func (l *Logger) AfterCloseTotal() int64 {
+	return l.afterCloseTotal.Load()
+}
+
 // NewLogger creates an audit logger backed by the given repository. If
 // flushEvery is greater than zero, batch mode is enabled and a background
 // goroutine periodically flushes buffered entries.
@@ -297,6 +314,14 @@ func NewLoggerWithBufferSize(repo repository.AuditRepository, flushEvery time.Du
 // Log writes an audit entry. In batch mode, the entry is buffered until the
 // next flush interval. In immediate mode, it is written directly to the
 // repository. Metadata is scrubbed of sensitive keys before storage.
+//
+// After Close the buffer is dead — the flush loop has exited and nothing will
+// drain it again — so a closed logger writes straight through to the store and
+// reports what happens, rather than appending to a slice no one will read. A
+// caller can still be running at that point: notifyNewCountry writes from the
+// deferwork pool, and however carefully shutdown is ordered the ordering is a
+// property of one caller's defer stack, which is not the thing that should
+// decide whether an audit row survives.
 func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip, ua, fpHash, deviceID string, metadata map[string]interface{}, riskScore int) error {
 	id, err := crypto.RandomUUID()
 	if err != nil {
@@ -317,7 +342,7 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		RiskScore:       riskScore,
 	}
 
-	if l.flushEvery > 0 {
+	if l.flushEvery > 0 && !l.isClosed() {
 		l.mu.Lock()
 		// Cap buffer to prevent unbounded memory growth under DoS.
 		if len(l.buffer) >= l.bufferSize {
@@ -339,7 +364,31 @@ func (l *Logger) Log(ctx context.Context, eventType string, userID, clientID, ip
 		return nil
 	}
 
+	if l.flushEvery > 0 {
+		// Batch mode, closed logger. Loud on the way through: an entry arriving
+		// here is one whose writer outlived the logger, which is worth a line
+		// whether or not the store takes it.
+		l.afterCloseTotal.Add(1)
+		log.Printf("WARNING: audit entry written after Close (type=%s); inserting synchronously", eventType)
+		if err := l.repo.Insert(ctx, entry); err != nil {
+			log.Printf("WARNING: audit entry lost after Close (type=%s): %v", eventType, err)
+			return fmt.Errorf("audit: insert after close: %w", err)
+		}
+		return nil
+	}
+
 	return l.repo.Insert(ctx, entry)
+}
+
+// isClosed reports whether Close has run. The channel close is the
+// happens-before edge, so no additional synchronization is needed.
+func (l *Logger) isClosed() bool {
+	select {
+	case <-l.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // Flush writes all buffered entries to the repository.
