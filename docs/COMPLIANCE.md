@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **404 requirements in scope across 9 standards: 336 Met, 22 Accepted Risk,
+> **404 requirements in scope across 9 standards: 341 Met, 17 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -190,18 +190,18 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 206 | 15 | 42 | 263 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 212 | 9 | 42 | 263 |
 | NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
-| OWASP API Security Top 10:2023 | 9 | 1 | 0 | 10 |
+| OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
-| **Total** | **334** | **24** | **46** | **404** |
+| **Total** | **341** | **17** | **46** | **404** |
 
-The 22 Accepted Risk rows collapse to **11 distinct accepted risks**: several
+The 17 Accepted Risk rows collapse to **9 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -223,9 +223,10 @@ HTML body into `html/template`.
 
 | Movement | Count | Rows |
 |---|---:|---|
-| N/A → **Met** | 10 | V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.2.1, V5.2.3, V5.3.2, V5.4.2, plus V1.3.7 |
-| N/A → **Accepted Risk** | 7 | V3.2.1, V3.4.3, V3.5.3, V3.5.4, V5.1.1, V5.4.1, plus V1.3.1 |
+| N/A → **Met** | 13 | V3.2.1, V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.1.1, V5.2.1, V5.2.3, V5.3.2, V5.4.1, V5.4.2, plus V1.3.7 |
+| N/A → **Accepted Risk** | 4 | V3.4.3, V3.5.3, V3.5.4, plus V1.3.1 |
 | **Met** → Accepted Risk | 1 | NIST SP 800-63B-4 §3.1.1.2 -- the password floor. See CR-31. |
+| **Accepted Risk** → Met | 2 | ASVS V1.3.6 and OWASP API7:2023 -- the SSRF pair. See CR-17, retired. |
 | N/A, reason rewritten and now tested | 12 | V3.2.2, V3.5.5, V5.2.2, V5.3.1, V5.4.3, V1.3.4, V6.2.6, V6.7.1, V7.4.4, V10.4.1, V14.3.1, V15.3.6 |
 
 Two of those rows -- **V3.4.3** and **V3.5.3** -- were real gaps hidden behind a
@@ -273,13 +274,11 @@ neither namespace.
 |---|---|---|---|
 | **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
 | **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
-| **CR-17** | Low | No allowlist is enforced at the outbound HTTP client layer. Every destination is operator-configured rather than caller-supplied, so the SSRF precondition is absent; the chart's NetworkPolicy enforces the allowlist at the network layer instead. | ASVS V1.3.6 |
 | **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
 | **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
 | **CR-23** | Low | **Closed in the code, still open in the register.** The row says outbound SMTP negotiates STARTTLS opportunistically with no minimum version. `internal/email/smtp.go:112` sets `MinVersion: tls.VersionTLS12`, and `:115-117` refuses to send in the clear unless `VAULT_SMTP_ALLOW_PLAINTEXT` is set, which itself is refused outside dev and loopback. What remains is that a server advertising no STARTTLS is detected by its own EHLO response, so a downgrade needs an active attacker on the path. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
-| **CR-26** | Low | Neither blob download path sets `Content-Disposition`, so nothing tells a browser that a blob navigated to directly is a download rather than a document. `nosniff` and owner-scoped reads bound it. | ASVS V3.2.1, V5.1.1, V5.4.1 |
 | **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
 | **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
 | **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
@@ -292,7 +291,7 @@ of the list:
 
 | Added | Why it fits |
 |---|---|
-| **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. Nine Met, one accepted risk (API7 is CR-17, the same SSRF residual ASVS V1.3.6 carries). API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
+| **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. All ten Met. API7 was carried as an accepted risk alongside ASVS V1.3.6 until the four destinations an OIDC discovery document supplies -- the only ones vault42 takes from data -- were held to the issuer's own domain and judged again at dial time; see CR-17, retired. API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
 | **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. PO.3.2 is an accepted risk, CR-32: there is no dependency-update automation, and a nightly scanner is not one. |
 | **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. All ten controls Met across every workload the chart deploys, with no exclusions and no deviations. |
 

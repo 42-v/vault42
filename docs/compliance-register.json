@@ -131,18 +131,6 @@
       "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
       "cost_of_closing": "A risk-score predicate on AuditFilter, a threshold constant, an extracted Dispatcher interface from the honeypot alerter, and removal of the profile gate on the risk path."
     },
-    "CR-17": {
-      "title": "No allowlist is enforced at the outbound HTTP client layer",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "No request path lets a caller influence an outbound destination, so the server-side request forgery precondition is absent. The destinations divide three ways. Four are compiled-in https literals and cannot be pointed anywhere: SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints. Two are operator-configured: the SMTP relay and the OIDC issuer. Four are supplied by the issuer's discovery document rather than by the operator -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- and those are what make this a residual rather than nothing, because a provider that is compromised or misconfigured names the host vault42 then posts the client secret to. What exists against that is a protocol allowlist: fetchableEndpoint (internal/oauth2/oidc.go:67) admits https, or http only for loopback, and internal/oauth2/oidc.go:150 applies it to all four before the document is cached, on top of the OIDC section 3.1.3.7 issuer match. What does not exist is the domain, path and port half of the allowlist this requirement names.",
-      "compensating_control": "The OIDC issuer is pinned against its own discovery document and every endpoint that document names must be https or loopback. The chart's NetworkPolicy restricts egress to Postgres, Redis, DNS and a configured SMTP CIDR, which is a stricter allowlist than the requirement asks for: it admits no egress to 443 at all, so under the shipped policy every HTTPS destination in this inventory is unreachable until an operator widens it.",
-      "residual_risk": "An operator who misconfigures an issuer or a webhook URL gets no code-level warning beyond the https check, and a provider serving a hostile discovery document can direct the token-endpoint request, which carries the client secret, at any https host it names.",
-      "revisit_when": "Any feature accepts a URL from a request.",
-      "cost_of_closing": "A shared http.Client with a dial-time destination check, plus a constraint that the endpoints a discovery document names share a registrable domain with the issuer."
-    },
     "CR-20": {
       "title": "Authenticator loss is handled by operator escrow, not by repeated identity proofing",
       "severity": "Low",
@@ -178,18 +166,6 @@
       "residual_risk": "An adversary holding database superuser access can rewrite history without leaving evidence in the log itself.",
       "revisit_when": "1.1, together with an off-system mirror. A chain designed without one would be worse than none because it would imply a guarantee it does not provide.",
       "cost_of_closing": "A prev-hash column, a signing key held outside the process, read-time verification, and a checkpoint scheme that survives retention pruning. The batch insert path at internal/repository/postgres/audit.go:50 breaks a naive prev-hash chain and is the hard part."
-    },
-    "CR-26": {
-      "title": "Stored objects are served back without a Content-Disposition header",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-18",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "Both blob download paths set Content-Type: application/octet-stream and Content-Length and stop there (internal/handler/blob.go:216 and :311). Neither sets Content-Disposition, so nothing tells a browser that a blob navigated to directly is a download rather than a document. This surfaced because three requirements point at the same missing line: ASVS V3.2.1 names the attachment disposition type as one of its example controls, V5.4.1 requires the header outright, and V5.1.1 requires the documentation to say how stored objects are made safe to download, which cannot be written until there is something to write.",
-      "compensating_control": "X-Content-Type-Options: nosniff is set on every response, so a browser will not guess a type that contradicts application/octet-stream; the API paths carry a CSP of default-src 'none'; every read is scoped to the pseudonym of the caller's own authenticated subject, so a blob is only ever served to the account that stored it, and cross-user delivery, the case the header protects a third party from, has no reachable path.",
-      "residual_risk": "A user who navigates a browser directly at their own blob URL, with a valid session, gets bytes the browser decides what to do with. nosniff bounds that to the declared octet-stream type.",
-      "revisit_when": "Blobs become shareable between accounts, or any download path starts serving a type other than application/octet-stream. Either turns a self-inflicted rendering into a cross-user one.",
-      "cost_of_closing": "One header on each of the two download paths, plus the paragraph in docs/api.md that V5.1.1 wants. TestASVS_V3_2_1_And_V5_4_1_ContentDispositionMatchesWhatTheRegisterClaims fails when it lands, so the three rows move in the same change."
     },
     "CR-28": {
       "title": "Email verification changes state on a GET",
@@ -548,7 +524,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:493"
+        "internal/config/config.go:507"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -566,16 +542,17 @@
       "superseded_ids": [
         "v4.0.3-5.2.6"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-17",
+      "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:67",
-        "internal/oauth2/oidc.go:150"
+        "internal/outbound/outbound.go:94",
+        "internal/outbound/outbound.go:147",
+        "internal/oauth2/oidc.go:184",
+        "cmd/vault/main.go:567"
       ],
       "tests": [
-        "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
+        "TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist"
       ],
-      "notes": "Accepted risk CR-17. No request path lets a caller influence an outbound destination, so the forgery precondition is absent, and a protocol allowlist does exist: fetchableEndpoint (internal/oauth2/oidc.go:67) admits https, or http only for loopback, and internal/oauth2/oidc.go:150 applies it to the authorization, token, userinfo and jwks endpoints the issuer's discovery document names, before any of them is cached or used. Those four are the only destinations vault42 takes from data rather than from configuration or a compiled-in literal, and they are what makes this a residual rather than nothing. What is missing is the rest of the allowlist the requirement names -- domains, paths and ports -- at the HTTP client layer or anywhere else. The previous reason said there was no allowlist at all, which understated the protocol check, and enumerated four destinations without the four the discovery document supplies."
+      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:67). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:184): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:567 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
     },
     {
       "standard": "OWASP ASVS",
@@ -1009,14 +986,16 @@
         "v4.0.3-12.5.2",
         "v4.0.3-14.4.2"
       ],
-      "status": "Accepted Risk",
+      "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:216",
-        "internal/handler/blob.go:311"
+        "internal/handler/blob.go:434",
+        "internal/handler/blob.go:219",
+        "internal/handler/blob.go:315"
       ],
-      "tests": [],
-      "notes": "Accepted risk CR-26. Two of the three controls this requirement names by example are present: X-Content-Type-Options: nosniff on every response and default-src 'none' for API paths. The third, the attachment disposition type, is not: both blob download paths set Content-Type: application/octet-stream and no Content-Disposition, so a browser navigated straight at a blob URL decides for itself what to do with the bytes. TestASVS_V3_2_1_And_V5_4_1_ContentDispositionMatchesWhatTheRegisterClaims fails when the header lands. Previously Not Applicable.",
-      "accepted_risk": "CR-26"
+      "tests": [
+        "TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType"
+      ],
+      "notes": "All three of the controls this requirement names by example are now present. X-Content-Type-Options: nosniff is set on every response and default-src 'none' covers API paths; the third, the attachment disposition type, is set by attachmentDisposition (internal/handler/blob.go:434) on both download paths (internal/handler/blob.go:219 and :315), so a browser navigated straight at a blob URL saves the bytes instead of deciding for itself whether to render them. The test asserts the disposition type rather than the header's presence, because inline is also a Content-Disposition and is the rendering context this requirement exists to prevent. Previously accepted risk CR-26, now retired; Not Applicable before that."
     },
     {
       "standard": "OWASP ASVS",
@@ -1558,14 +1537,16 @@
       "chapter": "V5 File Handling",
       "level": "L2",
       "requirement": "Verify that the documentation defines the permitted file types, expected file extensions, and maximum size (including unpacked size) for each upload feature. Additionally, ensure that the documentation specifies how files are made safe for end-users to download and process, such as how the application behaves when a malicious file is detected.",
-      "status": "Accepted Risk",
+      "status": "Met",
       "evidence": [
-        "docs/api.md:1539",
-        "docs/api.md:1554"
+        "docs/api.md:1550",
+        "docs/api.md:1660",
+        "internal/handler/blob.go:434"
       ],
-      "tests": [],
-      "notes": "Accepted risk CR-26. The size half of this requirement is documented: docs/api.md carries the label cap, the minimum and maximum blob size and the per-user byte quota, and the rejection behaviour. There is no file type or extension to document, because the stored object is an opaque octet stream and the named-blob charset excludes the dot. What is missing is the clause about how stored objects are made safe for an end user to download, which is the Content-Disposition gap carried as CR-26. Previously Not Applicable on the false premise that vault42 accepts no uploads.",
-      "accepted_risk": "CR-26"
+      "tests": [
+        "TestASVS_V5_1_1_TheDocumentationSaysHowStoredObjectsAreMadeSafeToDownload"
+      ],
+      "notes": "Both clauses are documented. The size clause was already met: docs/api.md carries the label cap, the minimum and maximum blob size, the per-user byte quota and the rejection behaviour, and now states explicitly that there are no permitted file types or extensions to define, because the stored object is an opaque octet stream the server never parses and the named-blob charset excludes the dot, so the unpacked size equals the stored size. The clause that was open -- how stored objects are made safe for an end user to download -- is the 'How stored objects are made safe to download' section, which records that every read is scoped to the caller's own pseudonym, that attachmentDisposition (internal/handler/blob.go:434) marks both download paths as attachments, that the filename is the server's own reference rather than anything a caller supplied, and that nosniff and a default-src 'none' CSP bound what a browser will do with the response. The test reads the header off the shipped handler as well as the prose, so the document cannot describe a control the code does not set. Previously accepted risk CR-26, now retired; Not Applicable before that on the false premise that vault42 accepts no uploads."
     },
     {
       "standard": "OWASP ASVS",
@@ -1602,7 +1583,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:370"
+        "internal/handler/blob.go:372"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
@@ -1671,7 +1652,7 @@
       "evidence": [
         "internal/handler/blob.go:134",
         "internal/handler/blob.go:138",
-        "internal/handler/blob.go:370"
+        "internal/handler/blob.go:372"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
@@ -1689,14 +1670,16 @@
       "superseded_ids": [
         "v4.0.3-12.3.4"
       ],
-      "status": "Accepted Risk",
+      "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:138",
-        "internal/handler/blob.go:216"
+        "internal/handler/blob.go:372",
+        "internal/handler/blob.go:409",
+        "internal/handler/blob.go:434"
       ],
-      "tests": [],
-      "notes": "Accepted risk CR-26. The first half holds: caller-submitted names are validated by validRefName before use (internal/handler/blob.go:138). The second does not: neither download path specifies a filename in a Content-Disposition header, because neither sets the header at all (internal/handler/blob.go:216 and :311). TestASVS_V3_2_1_And_V5_4_1_ContentDispositionMatchesWhatTheRegisterClaims fails when it lands. Previously Not Applicable.",
-      "accepted_risk": "CR-26"
+      "tests": [
+        "TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer"
+      ],
+      "notes": "Both clauses hold. Caller-submitted names are validated by validRefName before use (internal/handler/blob.go:372), and both download paths now specify a filename through attachmentDisposition (internal/handler/blob.go:434). The filename is the blob's own reference reduced by contentDispositionFilename (internal/handler/blob.go:409) to [A-Za-z0-9._-] and capped at maxDispositionFilename, with everything else dropped rather than escaped, falling back to a fixed literal when nothing usable remains. Dropping rather than escaping is deliberate: DownloadNamed reads its name straight out of the route and never runs validRefName, so the response header cannot borrow the upload path's guarantee, and a quote that survived would open a second parameter. Previously accepted risk CR-26, now retired; Not Applicable before that."
     },
     {
       "standard": "OWASP ASVS",
@@ -1709,8 +1692,8 @@
       "status": "Met",
       "evidence": [
         "internal/handler/blob.go:85",
-        "internal/handler/blob.go:220",
-        "internal/handler/blob.go:384"
+        "internal/handler/blob.go:221",
+        "internal/handler/blob.go:441"
       ],
       "tests": [
         "TestASVS_V5_4_2_ServedLabelsCannotForgeResponseHeaders"
@@ -1730,7 +1713,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:294",
+        "internal/handler/blob.go:295",
         "internal/service/blob.go:142"
       ],
       "tests": [
@@ -1812,9 +1795,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:820"
+        "internal/config/config.go:426",
+        "internal/config/config.go:644",
+        "internal/config/config.go:853"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -2662,7 +2645,7 @@
       "accepted_risk": "CR-14",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:438"
+        "internal/config/config.go:452"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
@@ -2821,7 +2804,7 @@
       "evidence": [
         "internal/service/token.go:190",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:353"
+        "cmd/vault/main.go:354"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -3518,7 +3501,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/oauth.go:82",
-        "internal/oauth2/oidc.go:129"
+        "internal/oauth2/oidc.go:150"
       ],
       "tests": [
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge",
@@ -3554,7 +3537,7 @@
       "evidence": [
         "internal/service/token.go:190",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:353"
+        "cmd/vault/main.go:354"
       ],
       "tests": [
         "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
@@ -3661,7 +3644,7 @@
       "requirement": "Verify that the client rejects attempts by a malicious authorization server to impersonate another authorization server through authorization server metadata. The client must reject authorization server metadata if the issuer URL in the authorization server metadata does not exactly match the pre-configured issuer URL expected by the client.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:97"
+        "internal/oauth2/oidc.go:118"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4156,7 +4139,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:531"
+        "internal/config/config.go:553"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -4233,7 +4216,7 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:403"
+        "internal/config/config.go:417"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
@@ -4296,7 +4279,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:568",
+        "internal/config/config.go:590",
         "migrations/001_initial_schema.sql:354"
       ],
       "tests": [
@@ -4338,7 +4321,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:548"
+        "internal/config/config.go:570"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4380,7 +4363,7 @@
       "status": "Met",
       "evidence": [
         "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/oauth2/oidc.go:97"
+        "internal/oauth2/oidc.go:118"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4406,7 +4389,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/secrets.go:18",
-        "cmd/vault/main.go:336"
+        "cmd/vault/main.go:337"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4878,7 +4861,7 @@
       "requirement": "Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:97"
+        "internal/oauth2/oidc.go:118"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -5506,9 +5489,9 @@
       "requirement": "Password Authenticators",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:828"
+        "internal/config/config.go:426",
+        "internal/config/config.go:644",
+        "internal/config/config.go:861"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5525,10 +5508,10 @@
       "requirement": "Password Verifiers",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:820",
-        "internal/config/config.go:828"
+        "internal/config/config.go:426",
+        "internal/config/config.go:644",
+        "internal/config/config.go:853",
+        "internal/config/config.go:861"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5700,7 +5683,7 @@
       "requirement": "Verifier-CSP or IdP Communications",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:97",
+        "internal/oauth2/oidc.go:118",
         "internal/server/server.go:224"
       ],
       "tests": [
@@ -7074,7 +7057,7 @@
       "evidence": [
         "internal/service/blob.go:142",
         "internal/handler/servicedoc.go:105",
-        "internal/handler/blob.go:294"
+        "internal/handler/blob.go:295"
       ],
       "tests": [
         "TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered"
@@ -7176,14 +7159,16 @@
       "revision_date": "",
       "requirement_id": "API7:2023",
       "requirement": "Server Side Request Forgery",
-      "status": "Accepted Risk",
+      "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:150",
-        "charts/vault/templates/networkpolicy.yaml:1"
+        "internal/outbound/outbound.go:208",
+        "internal/outbound/outbound.go:147",
+        "internal/oauth2/oidc.go:184"
       ],
-      "tests": [],
-      "notes": "Accepted risk CR-17, the same residual ASVS V1.3.6 carries. No request path lets a caller influence a destination, so the precondition for server-side request forgery is absent. The inventory divides three ways: four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. That last group is checked against a protocol allowlist (internal/oauth2/oidc.go:150) and against no domain, path or port allowlist. The chart's NetworkPolicy enforces the network-layer half and is stricter than the requirement asks: it admits egress to Postgres, Redis, DNS and a configured SMTP CIDR and to nothing else, so no HTTPS destination in this inventory is reachable at all until an operator widens it.",
-      "accepted_risk": "CR-17"
+      "tests": [
+        "TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment"
+      ],
+      "notes": "The inventory divides three ways. Four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. Only the last four come from data, and they are what this control covers: internal/oauth2/oidc.go:184 holds them to the issuer's domain or the operator's list, and Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses they resolve to. Policy.refuseAddress (internal/outbound/outbound.go:208) refuses link-local unconditionally -- 169.254.0.0/16 and fe80::/10, where cloud instance metadata answers -- and refuses loopback, RFC 1918, IPv6 unique-local and RFC 6598 unless VAULT_OUTBOUND_ALLOW_PRIVATE is set, which defaults on only in the dev profile. Because the check is at dial time, a redirect is judged on the same terms as the endpoint it came from. The chart's NetworkPolicy is the network-layer half and it is no longer the stricter one: charts/vault/templates/networkpolicy.yaml admits egress on 443 to any destination by default (networkPolicy.httpsEgress.enabled: true, cidrs: []), because the shipped policy previously left the HIBP breach check enabled in configuration and unreachable in fact. Narrowing it with httpsEgress.cidrs is available and is a defence in depth, not this row's control. Previously accepted risk CR-17, now retired."
     },
     {
       "standard": "OWASP API Top 10",
@@ -7193,7 +7178,7 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:605",
+        "internal/config/config.go:627",
         "internal/middleware/security_headers.go:17"
       ],
       "tests": [
@@ -7441,7 +7426,7 @@
       "requirement": "Configure software to have secure settings by default",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:605",
+        "internal/config/config.go:627",
         ".github/workflows/ci.yml:427"
       ],
       "tests": [
@@ -7681,6 +7666,8 @@
     "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
     "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
-    "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second."
+    "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
+    "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:184 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
+    "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:219 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee."
   }
 }
