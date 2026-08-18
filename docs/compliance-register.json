@@ -3380,7 +3380,7 @@
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:280",
+        "internal/middleware/auth.go:253",
         "internal/server/server.go:686",
         "internal/crypto/jwt.go:47"
       ],
@@ -6263,12 +6263,12 @@
       "status": "Met",
       "evidence": [
         "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/middleware/ipaccess.go:199"
+        "internal/middleware/ipaccess.go:220"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
       ],
-      "notes": "A 259-line NetworkPolicy ships enabled by default, restricting vault, Postgres, Redis and bridge ingress and egress; application-level IP allow and block lists and trusted-proxy handling sit above it. Previously filed as a partial asking for network-policy examples that already existed."
+      "notes": "A 259-line NetworkPolicy ships enabled by default, restricting vault, Postgres, Redis and bridge ingress and egress. Above it, internal/middleware/ipaccess.go enforces the application-level boundary: denyByCIDR refuses a request whose client address falls outside the configured allow CIDRs or inside the block CIDRs, and denyByGeo applies the same rule to the geo header, with the lists swapped atomically so a runtime ban takes effect without a restart. Trusted-proxy handling decides which address is judged. Previously filed as a partial asking for network-policy examples that already existed."
     },
     {
       "standard": "NIST SP 800-53",
@@ -7197,8 +7197,7 @@
       "requirement": "Improper Inventory Management",
       "status": "Met",
       "evidence": [
-        "docs/api.md:1",
-        "internal/handler/wellknown.go:53"
+        "docs/api.md:1"
       ],
       "tests": [
         "TestAPITop10_API9_2023_EveryMountedRouteAppearsInThePublishedReference"

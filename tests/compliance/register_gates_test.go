@@ -168,7 +168,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"NIST SP 800-53|SC-28|internal/service/identity.go":                                {},
 	"NIST SP 800-53|SC-5|internal/crypto/argon2.go":                                    {},
 	"NIST SP 800-53|SC-5|internal/server/server.go":                                    {},
-	"NIST SP 800-53|SC-7|internal/middleware/ipaccess.go":                              {},
 	"NIST SP 800-53|SC-8|internal/server/server.go":                                    {},
 	"NIST SP 800-53|SI-10|internal/sanitize/sanitize.go":                               {},
 	"NIST SP 800-53|SI-11|internal/httputil/response.go":                               {},

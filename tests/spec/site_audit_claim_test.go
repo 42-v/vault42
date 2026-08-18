@@ -100,22 +100,47 @@ func registerRisk(t *testing.T, id string) bool {
 	return open
 }
 
-// TestSiteDoesNotClaimAChainTheCodeLacks fails if the landing page presents hash
-// chaining as a property of the deployment while the register accepts its
-// absence.
-func TestSiteDoesNotClaimAChainTheCodeLacks(t *testing.T) {
+// TestSiteAuditClaimMatchesTheRegister holds the landing page to whatever the
+// register currently says about the chain, in whichever direction that runs.
+//
+// It is deliberately one test with a branch rather than two tests that skip past
+// each other. tests/compliance/gate_liveness_test.go caught the earlier shape and
+// was right to: a skipped test prints the same "ok" as one that ran, so a pair of
+// mutually exclusive tests reports a control as active while half of it is off.
+// Here every run asserts something.
+func TestSiteAuditClaimMatchesTheRegister(t *testing.T) {
 	t.Parallel()
 
-	if !registerRisk(t, cr24) {
-		t.Skipf("%s is no longer an open accepted risk; TestSiteClaimsTheChainOnceItExists owns this case", cr24)
-	}
+	root := repoRoot(t)
+	open := registerRisk(t, cr24)
 
-	for _, name := range siteFiles {
-		body, err := os.ReadFile(filepath.Join(repoRoot(t), name))
+	read := func(name string) string {
+		body, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		text := string(body)
+		return string(body)
+	}
+
+	if !open {
+		// CR-24 has been retired, so the chain exists. The page must not still be
+		// disclaiming it: understating a property the code earned is the same
+		// class of defect as overstating one it lacks, and the compliance gates
+		// here already fire in both directions for exactly this reason.
+		text := strings.ToLower(read(filepath.Join("site", "index.html")))
+		for _, q := range qualifiers {
+			if strings.Contains(text, q) {
+				t.Errorf("%s has been retired, so the audit log is chained now, but site/index.html "+
+					"still disclaims the ledger as %q. The page is understating a property the code "+
+					"earned; rewrite it and drop this qualifier.", cr24, q)
+			}
+		}
+		return
+	}
+
+	// CR-24 is open: the chain does not exist, so the site may not claim it.
+	for _, name := range siteFiles {
+		text := read(name)
 		for _, claim := range productionChainClaims {
 			if loc := claim.FindStringIndex(text); loc != nil {
 				t.Errorf("%s asserts a hash chain as a production property (%q), but %s records that the "+
@@ -125,45 +150,21 @@ func TestSiteDoesNotClaimAChainTheCodeLacks(t *testing.T) {
 					name, strings.TrimSpace(text[loc[0]:loc[1]]), cr24)
 			}
 		}
-		if strings.Contains(strings.ToLower(text), "hash-chain") {
-			lower := strings.ToLower(text)
-			qualified := false
-			for _, q := range qualifiers {
-				if strings.Contains(lower, q) {
-					qualified = true
-					break
-				}
-			}
-			if !qualified {
-				t.Errorf("%s uses chain vocabulary with nothing marking it as the browser simulation. A "+
-					"reader cannot tell the demo from the deployment, which is how the original claim "+
-					"passed review.", name)
+		if !strings.Contains(strings.ToLower(text), "hash-chain") {
+			continue
+		}
+		lower := strings.ToLower(text)
+		qualified := false
+		for _, q := range qualifiers {
+			if strings.Contains(lower, q) {
+				qualified = true
+				break
 			}
 		}
-	}
-}
-
-// TestSiteClaimsTheChainOnceItExists is the other direction of the coupling. If
-// someone implements chaining and retires CR-24, this fails until the landing
-// page is rewritten to say so -- the same rule the compliance gates apply to
-// code that improves past what a row claims.
-func TestSiteClaimsTheChainOnceItExists(t *testing.T) {
-	t.Parallel()
-
-	if registerRisk(t, cr24) {
-		t.Skipf("%s is still an open accepted risk; the chain does not exist yet", cr24)
-	}
-
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), "site", "index.html"))
-	if err != nil {
-		t.Fatalf("read site/index.html: %v", err)
-	}
-	lower := strings.ToLower(string(body))
-	for _, q := range qualifiers {
-		if strings.Contains(lower, q) {
-			t.Fatalf("%s has been retired, so the audit log is chained now, but site/index.html still "+
-				"disclaims the ledger as %q. The page is understating a property the code earned; "+
-				"rewrite it and drop this qualifier.", cr24, q)
+		if !qualified {
+			t.Errorf("%s uses chain vocabulary with nothing marking it as the browser simulation. A "+
+				"reader cannot tell the demo from the deployment, which is how the original claim "+
+				"passed review.", name)
 		}
 	}
 }

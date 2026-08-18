@@ -453,18 +453,33 @@ func TestASVS_V6_5_1_PasswordVerificationRefusesANearMissHash(t *testing.T) {
 		t.Fatalf("V6.5.1: the right password was refused (ok=%v err=%v)", ok, err)
 	}
 
-	// Flip the last base64 character of the stored hash. The candidate the verify
-	// derives is unchanged, so only the comparison decides.
+	// Flip the last BYTE of the stored hash. The candidate the verify derives is
+	// unchanged, so only the comparison decides.
+	//
+	// This decodes and re-encodes rather than substituting the final base64
+	// character, which is what it used to do and which made this gate flaky at
+	// about one run in sixteen. 43 base64 characters carry the 32-byte key, so
+	// the last character holds four significant bits and two that decode to
+	// nothing; Go's decoder is non-strict and ignores them. Replacing that
+	// character with 'A' therefore produced a byte-identical hash whenever the
+	// original was 'A' through 'D' -- 4 of 64, measured at 6.21% over 20000
+	// samples -- and VerifyPassword rightly returned true, failing a test that
+	// had proven nothing about the comparison. The 'A'-becomes-'B' special case
+	// made it worse: both are in that same group, so a hash ending in 'A' failed
+	// every time.
 	idx := strings.LastIndex(encoded, "$")
 	if idx < 0 || idx+1 >= len(encoded) {
 		t.Fatalf("V6.5.1: stored hash has no final segment: %q", encoded)
 	}
-	last := encoded[len(encoded)-1]
-	replacement := byte('A')
-	if last == 'A' {
-		replacement = 'B'
+	key, err := base64.RawStdEncoding.DecodeString(encoded[idx+1:])
+	if err != nil {
+		t.Fatalf("V6.5.1: stored hash segment is not raw base64: %v", err)
 	}
-	nearMiss := encoded[:len(encoded)-1] + string(replacement)
+	if len(key) == 0 {
+		t.Fatalf("V6.5.1: stored hash carries no key material: %q", encoded)
+	}
+	key[len(key)-1] ^= 0x01
+	nearMiss := encoded[:idx+1] + base64.RawStdEncoding.EncodeToString(key)
 
 	ok, err = vaultcrypto.VerifyPassword("correct horse battery staple", nearMiss)
 	if err != nil {
