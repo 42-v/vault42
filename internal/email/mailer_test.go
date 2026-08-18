@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -230,7 +231,7 @@ func TestMailer_FromAddressDomainNotAllowed(t *testing.T) {
 
 func TestMailer_DisabledReturnsErrNoSender(t *testing.T) {
 	m := testMailer(t, nil, nil, Branding{}, nil)
-	if err := m.Send(context.Background(), "", TemplateVerification, "u@test.com", TemplateData{}); err != ErrNoSender {
+	if err := m.Send(context.Background(), "", TemplateVerification, "u@test.com", TemplateData{}); !errors.Is(err, ErrNoSender) {
 		t.Errorf("Send without sender = %v, want ErrNoSender", err)
 	}
 	if m.Enabled() {

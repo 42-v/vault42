@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,7 +27,7 @@ func TestAcquireShedsPastTheQueueDepth(t *testing.T) {
 	err := acquireArgon2()
 	elapsed := time.Since(start)
 
-	if err != ErrArgon2Overloaded {
+	if !errors.Is(err, ErrArgon2Overloaded) {
 		if err == nil {
 			releaseArgon2()
 		}
