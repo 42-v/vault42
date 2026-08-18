@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **404 requirements in scope across 9 standards: 334 Met, 24 Accepted Risk,
+> **404 requirements in scope across 9 standards: 336 Met, 22 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -201,7 +201,7 @@ than being retired on a technicality.
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
 | **Total** | **334** | **24** | **46** | **404** |
 
-The 24 Accepted Risk rows collapse to **12 distinct accepted risks**: several
+The 22 Accepted Risk rows collapse to **11 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused

@@ -197,7 +197,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/server/server.go:490 mounts GET /auth/verify-email, and internal/handler/auth.go:194 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation, and no Sec-Fetch-* header is read anywhere in the tree. The constraint is real rather than an oversight: the link is delivered by email and followed by a browser navigation, which is a GET, and turning it into a POST means an interstitial page the user must click through.",
+      "rationale": "internal/server/server.go:490 mounts GET /auth/verify-email, and internal/handler/auth.go:298 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation, and no Sec-Fetch-* header is read anywhere in the tree. The constraint is real rather than an oversight: the link is delivered by email and followed by a browser navigation, which is a GET, and turning it into a POST means an interstitial page the user must click through.",
       "compensating_control": "The token is single-use and consumed atomically by a compare-and-delete, so a replayed or prefetched link verifies at most once; the token is high-entropy and short-lived; the effect is bounded to marking an address the operator already sent mail to as verified, and confers no session; the route is rate limited. This is the emailed-link pattern docs/security.md AR-1 already covers.",
       "residual_risk": "A mail client, security scanner or link prefetcher that follows the link performs the verification without the user acting. Nothing else is reachable through the route.",
       "revisit_when": "Any additional state change is added behind a GET route, or the verification link starts conferring a session rather than only marking an address verified.",
@@ -209,7 +209,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:819 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:875 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -904,7 +904,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:811",
-        "internal/handler/oauth.go:252"
+        "internal/handler/oauth.go:253"
       ],
       "tests": [
         "TestASVS_V10_4_2_AuthorizationArtifactsAreSingleUse",
@@ -1298,7 +1298,7 @@
       "status": "Accepted Risk",
       "evidence": [
         "internal/server/server.go:490",
-        "internal/handler/auth.go:194"
+        "internal/handler/auth.go:298"
       ],
       "tests": [],
       "notes": "Accepted risk CR-28. GET /auth/verify-email mutates state: it marks an address verified. The requirement offers two ways out, a non-safe method or strict Sec-Fetch-* validation, and vault42 has neither. What bounds it is a single-use token consumed atomically, and the emailed-link pattern is the one docs/security.md AR-1 already covers. TestASVS_V3_5_3_StateChangingGETMatchesWhatTheRegisterClaims fails when either remedy lands. Previously Not Applicable, which is how this stayed invisible.",
@@ -1317,7 +1317,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:819",
+        "internal/server/server.go:875",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
@@ -1444,7 +1444,7 @@
       "requirement": "Verify that all application components (including load balancers, firewalls, and application servers) determine boundaries of incoming HTTP messages using the appropriate mechanism for the HTTP version to prevent HTTP request smuggling. In HTTP/1.x, if a Transfer-Encoding header field is present, the Content-Length header must be ignored per RFC 2616. When using HTTP/2 or HTTP/3, if a Content-Length header field is present, the receiver must ensure that it is consistent with the length of the DATA frames.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:158"
+        "internal/server/server.go:159"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -2053,7 +2053,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105",
+        "internal/service/auth.go:118",
         "internal/server/server.go:410"
       ],
       "tests": [
@@ -2265,7 +2265,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:332"
+        "internal/handler/password.go:377"
       ],
       "tests": [
         "TestNIST_PasswordResetSingleUse",
@@ -2861,7 +2861,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:744"
+        "internal/service/auth.go:818"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -2881,7 +2881,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:332",
+        "internal/handler/password.go:377",
         "internal/handler/webauthn.go:265"
       ],
       "tests": [
@@ -2996,7 +2996,7 @@
       "requirement": "Verify that creation of a session requires either the user's consent or an explicit action, preventing the creation of new application sessions without user interaction.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:104"
+        "internal/handler/oauth.go:105"
       ],
       "tests": [
         "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
@@ -3320,7 +3320,7 @@
       "requirement": "Verify that, if the code flow is used, the OAuth client has protection against browser-based request forgery attacks, commonly known as cross-site request forgery (CSRF), which trigger token requests, either by using proof key for code exchange (PKCE) functionality or checking the 'state' parameter that was sent in the authorization request.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:104",
+        "internal/handler/oauth.go:105",
         "internal/handler/oauth.go:219"
       ],
       "tests": [
@@ -4617,7 +4617,7 @@
       "status": "Met",
       "evidence": [
         "internal/cache/cache.go",
-        "internal/handler/oauth.go:252"
+        "internal/handler/oauth.go:253"
       ],
       "tests": [
         "TestASVS_V14_2_2_SingleUseArtifactsArePurgedOnRead"
@@ -4843,12 +4843,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:819"
+        "internal/server/server.go:875"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:819), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:875), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",
@@ -5005,7 +5005,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:205"
+        "internal/audit/audit.go:216"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5063,7 +5063,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/model/model.go:177"
+        "internal/model/model.go:189"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5107,7 +5107,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:469"
+        "internal/service/auth.go:495"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -5128,7 +5128,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/middleware.go:208",
+        "internal/adminapi/middleware.go:213",
         "internal/adminapi/auth.go:107"
       ],
       "tests": [
@@ -5642,7 +5642,7 @@
       "requirement": "Rate Limiting (Throttling)",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:118"
       ],
       "tests": [
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
@@ -5781,7 +5781,7 @@
       "requirement": "Account Recovery",
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:332",
+        "internal/handler/password.go:377",
         "internal/service/recovery_retention.go"
       ],
       "tests": [
@@ -5798,7 +5798,7 @@
       "requirement": "Expiration",
       "status": "Met",
       "evidence": [
-        "internal/keystore/keystore.go:468"
+        "internal/keystore/keystore.go:473"
       ],
       "tests": [
         "TestNIST63B4_4_4_EphemeralAuthenticatorsExpire",
@@ -5894,7 +5894,7 @@
       "requirement": "Session Monitoring",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:709",
+        "internal/service/auth.go:783",
         "internal/handler/user.go:125"
       ],
       "tests": [
@@ -5972,7 +5972,7 @@
       "requirement": "Unsuccessful Logon Attempts",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:118"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
@@ -6031,7 +6031,7 @@
       "requirement": "Content of Audit Records",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:205"
+        "internal/audit/audit.go:216"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -6127,7 +6127,7 @@
       "requirement": "Audit Record Generation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:199"
+        "internal/audit/audit.go:210"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -6551,7 +6551,7 @@
       "requirement": "Authentication Failures",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:118"
       ],
       "tests": [
         "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
@@ -6583,7 +6583,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-15",
       "evidence": [
-        "internal/audit/audit.go:199"
+        "internal/audit/audit.go:210"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore",
@@ -6883,7 +6883,7 @@
       "requirement": "OAuth 2.0 Security BCP: CSRF protection on the redirect endpoint",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:104"
+        "internal/handler/oauth.go:105"
       ],
       "tests": [
         "TestIETF_RFC9700_s411_StateIntegrityAndSessionBinding"
