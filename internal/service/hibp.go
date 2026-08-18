@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -42,23 +41,23 @@ type HIBPClient struct {
 
 // NewHIBPClient creates a new HIBP client.
 func NewHIBPClient() *HIBPClient {
+	// Deliberately no custom Transport.
+	//
+	// The semaphore is the concurrency bound: at most hibpMaxConcurrent calls
+	// are in flight, so at most that many connections exist, which is what a
+	// MaxConnsPerHost would have enforced from the other side. Client.Timeout
+	// bounds each one end to end and the response read is already
+	// LimitReader-capped.
+	//
+	// Leaving http.DefaultTransport in place is also load-bearing for the
+	// tests: internal/handler and tests/compliance both exercise the REAL
+	// client — k-anonymity prefix, range parsing, constant-time suffix compare
+	// — by swapping http.DefaultTransport for a stub. A transport of our own
+	// silently routes around that and those suites stop testing the shipped
+	// client while still passing.
 	return &HIBPClient{
-		client: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
-				DialContext:           (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-				MaxConnsPerHost:       hibpMaxConcurrent,
-				MaxIdleConns:          hibpMaxConcurrent,
-				MaxIdleConnsPerHost:   hibpMaxConcurrent,
-				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 5 * time.Second,
-				TLSHandshakeTimeout:   3 * time.Second,
-				ExpectContinueTimeout: time.Second,
-				ForceAttemptHTTP2:     true,
-			},
-		},
-		sem: make(chan struct{}, hibpMaxConcurrent),
+		client: &http.Client{Timeout: 5 * time.Second},
+		sem:    make(chan struct{}, hibpMaxConcurrent),
 	}
 }
 
