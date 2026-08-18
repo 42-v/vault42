@@ -41,17 +41,45 @@ FIRST-BOOT CREDENTIALS. This release mints credentials that are shown once and
 {{- end }}
 
    The image is distroless, so it has no shell to `kubectl exec cat` with and no
-   tar for `kubectl cp`. Attach an ephemeral container that can see the
-   filesystem:
+   tar for `kubectl cp`. Attach an ephemeral container that can see its
+   filesystem, then read the file over `kubectl exec`. Two commands, and the
+   reason for that is below them:
 
-     kubectl debug -n {{ .Release.Namespace }} -it deploy/{{ include "vault.fullname" . }} \
-       --image=busybox --target={{ .Chart.Name }} \
+     POD=$(kubectl get pod -n {{ .Release.Namespace }} -o name \
+       -l app.kubernetes.io/name={{ include "vault.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=vault \
+       | head -1)
+
+     kubectl debug -n {{ .Release.Namespace }} $POD --image=busybox --target={{ .Chart.Name }} \
+       --profile=general --container=cred-reader --attach=false -- sleep 600
+
+     kubectl exec -n {{ .Release.Namespace }} $POD -c cred-reader \
        -- cat /proc/1/root{{ .Values.firstBootCredential.path }}
+
+   A Pod, not deploy/{{ include "vault.fullname" . }}: `kubectl debug` attaches an ephemeral
+   container, which only a Pod can hold, and the Deployment form fails with
+   `error: "apps/v1, Kind=Deployment" not supported by debug`.
+
+   And `sleep`, not `cat`. An ephemeral container's command writes to that
+   container's stdout, and that stdout is a container log, so
+   `kubectl debug ... -- cat` puts the credential straight into
+   `kubectl logs $POD -c cred-reader` and from there into whatever scrapes this
+   cluster -- which is the exposure the 0600 file exists to avoid. `kubectl exec`
+   streams to your terminal instead: the API server records that an exec
+   happened, never what it carried. Dropping -it does not help; cat writes to
+   that stdout either way.
+
+   IF YOU HAVE ALREADY RUN A FORM THAT PRINTED IT -- `kubectl debug ... -- cat`,
+   or an `-it` session where the value appeared on screen -- the credential is in
+   the cluster's logs and has to be treated as disclosed. Rotate it: the admin
+   token with `vault rotate-admin-token`, a client secret with
+   `vault rotate-client-secret`{{ if .Values.adminGateway.enabled }}, the super_admin password by logging into the
+   admin gateway and changing it{{ end }}. Deleting the pod does not remove the log record.
 {{- if gt (int .Values.replicaCount) 1 }}
 
    This release runs {{ .Values.replicaCount }} replicas and each has its own copy of that volume.
    Only the pod that won the race actually minted anything, so if the file is
-   absent, try the others -- or use a claim, which gives one place to look.
+   absent, try the others -- $POD above is just the first one listed -- or use a
+   claim, which gives one place to look.
 {{- end }}
 
 {{ end -}}
