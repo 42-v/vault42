@@ -39,7 +39,16 @@ const props = withDefaults(
     showRegisterLink?: boolean
     errorMessages?: Record<string, string>
   }>(),
-  { showRegisterLink: true },
+  // `redirectUrl` and `errorMessages` are optional by design, but Vue compiles a
+  // prop with no declared default to `undefined` at runtime while the type says
+  // it may be absent. Declaring them keeps the runtime and the published .d.ts
+  // saying the same thing, and `errorMessages` gets a factory so every instance
+  // holds its own object rather than sharing one.
+  {
+    redirectUrl: undefined,
+    showRegisterLink: true,
+    errorMessages: () => ({}),
+  },
 )
 
 // Optional: the form renders standalone, without app.use(createI18nPlugin(...)).

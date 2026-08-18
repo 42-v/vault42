@@ -81,6 +81,12 @@ export default [
     rules: {
       'no-console': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+      // vue/one-component-per-file is an SFC authoring rule: it exists so a .vue
+      // file resolves to one component. A .ts spec that calls defineComponent
+      // several times is building stubs and route targets, which is the whole
+      // point of the file — there is no second component for a reader to be
+      // surprised by, and no .vue file to split it into.
+      'vue/one-component-per-file': 'off',
     },
   },
 
