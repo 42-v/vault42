@@ -5128,14 +5128,15 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/middleware.go:213",
-        "internal/adminapi/auth.go:107"
+        "internal/adminapi/middleware.go:144",
+        "internal/adminapi/middleware.go:241",
+        "internal/adminapi/auth.go:109"
       ],
       "tests": [
         "TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged",
         "TestASVS_V16_3_2_RBACDenialsAreAudited"
       ],
-      "notes": "Both halves of the requirement are logged. Failed admin authentication, lockout and the killswitch trip were already recorded; RBACCheck now writes an admin_authz_denied event on a permission denial, so a failed authorization decision reaches the append-only audit log with the admin, the role and the permission it was refused. This closes what was tracked as CR-16. The admin plane is loopback-only behind mutual TLS, so the population of principals a denial can name is small and already identified."
+      "notes": "Both halves of the requirement are logged. Failed admin authentication, lockout and the killswitch trip were already recorded; RBACCheck now writes an admin_authz_denied event on a permission denial, so a failed authorization decision reaches the append-only audit log with the admin, the role and the permission it was refused. This closes what was tracked as CR-16. The admin plane is loopback-only behind mutual TLS, so the population of principals a denial can name is small and already identified. The context handoff between the two middlewares — SessionAuth resolves the session to an admin, RBACCheck judges that admin — is asserted end to end through the wired router by TestAdminAuth_TheSessionsAdminIsWhatRBACJudges in tests/attack, which is outside the package this row's tests are resolved in."
     },
     {
       "standard": "OWASP ASVS",

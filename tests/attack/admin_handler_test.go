@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,11 +95,19 @@ func adminSessionTokenHash(token string) string {
 // super-admin with 2FA verified — the state an authenticated operator is in.
 func adminRouterUnderTest(t *testing.T) http.Handler {
 	t.Helper()
+	h, _, _ := adminRouterForRole(t, rbac.RoleSuperAdmin)
+	return h
+}
+
+// adminRouterForRole is the same fixture at a chosen role, returning the admin
+// the live session points at and every audit row the plane wrote.
+func adminRouterForRole(t *testing.T, role rbac.Role) (http.Handler, *model.AdminUser, *auditCapture) {
+	t.Helper()
 
 	admin := &model.AdminUser{
 		ID:           "00000000-0000-0000-0000-0000000000a1",
 		Username:     "attack-admin",
-		Role:         string(rbac.RoleSuperAdmin),
+		Role:         string(role),
 		TOTPVerified: true,
 	}
 	admins := &fakeAdminUsers{byID: map[string]*model.AdminUser{admin.ID: admin}}
@@ -111,14 +120,39 @@ func adminRouterUnderTest(t *testing.T) http.Handler {
 		},
 	}}
 
-	auditLog := audit.NewLogger(&mocks.MockAuditRepo{}, time.Hour)
+	captured := &auditCapture{}
+	auditLog := audit.NewLogger(&mocks.MockAuditRepo{InsertFn: captured.insert}, 0)
 	authHandler := adminapi.NewAuthHandler(admins, sessions, auditLog, make([]byte, 32), "", time.Hour, 5, time.Hour)
 	apiHandler := adminapi.NewHandler(
 		&mocks.MockUserRepo{}, &mocks.MockClientRepo{}, &mocks.MockRefreshTokenRepo{},
 		&mocks.MockAuditRepo{}, admins, sessions, &mocks.MockAdminConfigRepo{},
 		nil, auditLog, make([]byte, 32), "",
 	)
-	return adminapi.NewRouter(authHandler, apiHandler)
+	return adminapi.NewRouter(authHandler, apiHandler), admin, captured
+}
+
+// auditCapture records every row the admin plane wrote.
+type auditCapture struct {
+	mu      sync.Mutex
+	entries []model.AuditEntry
+}
+
+func (c *auditCapture) insert(_ context.Context, e *model.AuditEntry) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = append(c.entries, *e)
+	return nil
+}
+
+func (c *auditCapture) find(eventType string) (model.AuditEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.entries {
+		if e.EventType == eventType {
+			return e, true
+		}
+	}
+	return model.AuditEntry{}, false
 }
 
 // hitAdminRoute drives one request at the wired router from loopback, since the
@@ -364,5 +398,42 @@ func TestAdminListKeys_NoPrivateKeyMaterial(t *testing.T) {
 		if strings.Contains(body, field) {
 			t.Fatalf("ListKeys response contains %q: %s", field, body)
 		}
+	}
+}
+
+// TestAdminAuth_TheSessionsAdminIsWhatRBACJudges is the handoff the plane's
+// authorization rests on: SessionAuth resolves the session to an admin and puts
+// it on the context, and RBACCheck judges that admin. Both halves were covered
+// in isolation and the join was not — the middleware wrote the context with
+// context.WithValue of its own while every test fixture in the tree built one
+// with adminapi.WithAdmin, so the two could have disagreed on the key and
+// nothing would have failed.
+//
+// A viewer session on a route the viewer tier does not hold must be refused with
+// insufficient_permissions, and the audit row must name the admin the session
+// pointed at — which only happens if the context RBACCheck read is the one
+// SessionAuth built.
+func TestAdminAuth_TheSessionsAdminIsWhatRBACJudges(t *testing.T) {
+	router, admin, captured := adminRouterForRole(t, rbac.RoleViewer)
+
+	rec := hitAdminRoute(t, router, http.MethodPost, "/admin/admins", "Bearer "+validAdminToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a viewer session answered %d on POST /admin/admins, want 403: %s", rec.Code, rec.Body.String())
+	}
+	if reason := refusalReason(t, rec); reason != "insufficient_permissions" {
+		t.Fatalf("a viewer was refused with %q, want %q — the refusal did not come from RBACCheck",
+			reason, "insufficient_permissions")
+	}
+
+	entry, ok := captured.find("admin_authz_denied")
+	if !ok {
+		t.Fatal("no admin_authz_denied row was written for a refused permission")
+	}
+	if entry.UserID != admin.ID {
+		t.Errorf("the denial names admin %q, want %q — RBACCheck did not read the admin SessionAuth resolved",
+			entry.UserID, admin.ID)
+	}
+	if got := entry.Metadata["role"]; got != admin.Role {
+		t.Errorf("the denial records role %v, want %q", got, admin.Role)
 	}
 }
