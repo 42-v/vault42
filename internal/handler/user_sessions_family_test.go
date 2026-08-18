@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/tests/mocks"
@@ -271,4 +272,93 @@ func TestRevokeSessionFailsWhenFamiliesCannotBeRead(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
+}
+
+// A user with several live sessions is the ordinary case — a laptop, a phone, a
+// CI token — and the id in the request has to select among them.
+//
+// The skip is what makes that selection happen. Without it the first family the
+// repository happens to return is treated as the one named: the revoke still
+// runs against the requested id, so the response looks right, but the audit row
+// names the wrong device and, worse, an id that is NOT one of the caller's
+// families never reaches the device alias or the 404 below it. Signing out a
+// device by its cached id would silently end an unrelated live session instead.
+// The listing order is the repository's, so the damage would be intermittent.
+func TestRevokeSessionSelectsTheNamedFamilyAmongSeveral(t *testing.T) {
+	now := time.Now().UTC()
+	families := []*repository.ActiveFamily{
+		{FamilyID: "family-laptop", DeviceID: "device-laptop", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{FamilyID: "family-lost-phone", DeviceID: "device-phone", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{FamilyID: "family-ci", DeviceID: "", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+	}
+
+	t.Run("the audit trail names the device of the family that was asked for", func(t *testing.T) {
+		var revoked []string
+		tokens := &mocks.MockRefreshTokenRepo{
+			ListActiveFamiliesFn: func(context.Context, string) ([]*repository.ActiveFamily, error) {
+				return families, nil
+			},
+			RevokeFamilyFn: func(_ context.Context, familyID string) error {
+				revoked = append(revoked, familyID)
+				return nil
+			},
+		}
+
+		trail := &auditCapture{}
+		h := NewUserHandler(&mocks.MockUserRepo{}, &mocks.MockDeviceRepo{}, tokens, nil)
+		h.SetAuditLog(trail.logger())
+
+		req := setAuthContext(httptest.NewRequest(http.MethodDelete, "/user/sessions/family-lost-phone", nil), "user-123")
+		req.SetPathValue("id", "family-lost-phone")
+		rec := httptest.NewRecorder()
+		h.RevokeSession(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		if len(revoked) != 1 || revoked[0] != "family-lost-phone" {
+			t.Fatalf("RevokeFamily called with %v, want exactly [family-lost-phone]", revoked)
+		}
+		if got := trail.only(t, audit.SessionRevoke).DeviceID; got != "device-phone" {
+			t.Fatalf("the revocation was recorded against device %q, want %q; the audit trail names a "+
+				"device whose session is still live", got, "device-phone")
+		}
+	})
+
+	t.Run("an id that is not one of the caller's families falls through to the device alias", func(t *testing.T) {
+		var revokedDevice string
+		tokens := &mocks.MockRefreshTokenRepo{
+			ListActiveFamiliesFn: func(context.Context, string) ([]*repository.ActiveFamily, error) {
+				return families, nil
+			},
+			RevokeFamilyFn: func(_ context.Context, familyID string) error {
+				t.Errorf("RevokeFamily(%q) — the id names no family of this caller, so no family may be revoked", familyID)
+				return nil
+			},
+			RevokeByDeviceIDFn: func(_ context.Context, deviceID string) error {
+				revokedDevice = deviceID
+				return nil
+			},
+		}
+		devices := &mocks.MockDeviceRepo{
+			GetByIDFn: func(_ context.Context, id string) (*model.Device, error) {
+				return &model.Device{ID: id, UserID: "user-123"}, nil
+			},
+			DeleteFn: func(context.Context, string, string) error { return nil },
+		}
+
+		h := NewUserHandler(&mocks.MockUserRepo{}, devices, tokens, nil)
+		req := setAuthContext(httptest.NewRequest(http.MethodDelete, "/user/sessions/device-laptop", nil), "user-123")
+		req.SetPathValue("id", "device-laptop")
+		rec := httptest.NewRecorder()
+		h.RevokeSession(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		if revokedDevice != "device-laptop" {
+			t.Fatalf("RevokeByDeviceID called with %q, want %q; a cached device id stopped reaching the "+
+				"alias once the caller had any live family at all", revokedDevice, "device-laptop")
+		}
+	})
 }
