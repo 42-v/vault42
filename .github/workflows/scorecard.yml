@@ -1,0 +1,61 @@
+# OpenSSF Scorecard.
+#
+# The release notes for 1.0.0 claimed a Scorecard score, and nothing in the
+# repository produced one: no workflow, no badge, no stored result, and
+# api.securityscorecards.dev had never seen this project. A score nobody can
+# reproduce is not evidence, so the claim is replaced by the run.
+#
+# The result is uploaded as SARIF so it lands in the Security tab and moves with
+# the code, and published to the OpenSSF API so the badge in README.md resolves
+# for anyone who has never cloned this repository.
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly. Scorecard reads repository configuration and dependency metadata
+    # that change on their own schedule rather than on ours, so a push trigger
+    # alone would report a stale posture between releases.
+    - cron: '41 5 * * 2'
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Upload the SARIF result to the code-scanning dashboard.
+      security-events: write
+      # Publish the result to the OpenSSF API, which is what makes the score
+      # verifiable by someone outside this repository.
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
+        with:
+          sarif_file: results.sarif

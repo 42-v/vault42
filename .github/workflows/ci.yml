@@ -275,6 +275,16 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The release notes claim the frontend went from eight high-severity
+      # advisories to none, and that was true when it was measured -- and held in
+      # place by nothing. The overrides in package.json that produced it are
+      # ordinary dependency pins, so the next lockfile update can undo them
+      # silently. Auditing at high and above rather than at every severity keeps
+      # the gate on the findings the claim is about, so a new low advisory in a
+      # transitive dev dependency does not block a release.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
+
   # .golangci.yml is 119 lines of tuned configuration that no workflow, script or
   # hook has ever invoked. `revive: exported` is on now, and it is the check that
   # catches undocumented exported API, so the tree starts with a backlog. New
