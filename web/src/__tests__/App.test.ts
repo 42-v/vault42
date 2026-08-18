@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import { createRouter, createWebHistory, type Router } from 'vue-router'
 import App from '../App.vue'
+import { loadLocale } from '../i18n'
 import en from '../locales/en.json'
 import sk from '../locales/sk.json'
 
@@ -89,6 +90,13 @@ function hamburger(wrapper: Awaited<ReturnType<typeof mountApp>>['wrapper']) {
 }
 
 describe('App shell', () => {
+  // LanguageSwitcher.select awaits the locale's catalogue chunk before it
+  // switches. Warming them puts it on the already-loaded fast path, so one
+  // flushPromises settles the click instead of racing a cold dynamic import.
+  beforeAll(async () => {
+    await Promise.all(['en', 'sk'].map(loadLocale))
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsAuthenticated.value = true

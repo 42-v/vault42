@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createI18n } from '@vault42/vue'
-import { messages, detectLocale } from '../i18n'
+import { messages, availableLocales, detectLocale, loadLocale } from '../i18n'
 import en from '../locales/en.json'
 
 const localesDir = resolvePath(dirname(fileURLToPath(import.meta.url)), '../locales')
@@ -23,10 +23,30 @@ function i18n(locale: string) {
   return createI18n({ locale, fallbackLocale: 'en', messages })
 }
 
+// Catalogues load one chunk per locale now, so a suite that reads all of them
+// has to ask for all of them. The app itself only ever loads two.
+beforeAll(async () => {
+  await Promise.all(availableLocales.map(loadLocale))
+})
+
 describe('i18n bundle', () => {
   it('registers every locale file that ships in src/locales', () => {
     expect(Object.keys(messages).sort()).toEqual(localeFiles)
+    expect(availableLocales).toEqual(localeFiles)
     expect(localeFiles.length).toBe(38)
+  })
+
+  it('reports a locale it has no catalogue for instead of throwing', async () => {
+    // A stale vault42-locale in localStorage, or a hand-typed tag, must not be
+    // able to break startup.
+    await expect(loadLocale('kl-GL')).resolves.toBe(false)
+    expect(messages['kl-GL']).toBeUndefined()
+  })
+
+  it('is idempotent, so a repeated switch costs no second fetch', async () => {
+    const before = messages.sk
+    await expect(loadLocale('sk')).resolves.toBe(true)
+    expect(messages.sk).toBe(before)
   })
 
   it('re-exports detectLocale so main.ts has a single i18n entry point', () => {

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import { loadLocale } from '../i18n'
 import en from '../locales/en.json'
 
 const AVAILABLE = ['en', 'sk', 'ja', 'zh-Hans', 'xx']
@@ -9,6 +10,20 @@ const AVAILABLE = ['en', 'sk', 'ja', 'zh-Hans', 'xx']
 const mockLocale = ref('en')
 const mockSetLocale = vi.fn((loc: string) => {
   mockLocale.value = loc
+})
+
+/** Flipped by one test to simulate a locale chunk that will not download. */
+const mockLocaleChunkFails = { value: false }
+
+vi.mock('../i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n')>()
+  return {
+    ...actual,
+    loadLocale: async (locale: string) => {
+      if (mockLocaleChunkFails.value) throw new Error('failed to fetch dynamically imported module')
+      return actual.loadLocale(locale)
+    },
+  }
 })
 
 vi.mock('@vault42/vue', () => ({
@@ -34,7 +49,29 @@ function optionButtons(wrapper: ReturnType<typeof mountSwitcher>) {
   return wrapper.findAll('button').slice(1)
 }
 
+/**
+ * Clicks an option and waits for the switch to settle.
+ *
+ * `select` fetches the locale's catalogue before flipping the locale, so a bare
+ * `trigger('click')` returns while the chunk is still in flight.
+ */
+async function pick(wrapper: ReturnType<typeof mountSwitcher>, label: string) {
+  const option = optionButtons(wrapper).find(b => b.text().includes(label))
+  expect(option, `no option matching ${label}`).toBeDefined()
+  await option!.trigger('click')
+  await flushPromises()
+}
+
 describe('LanguageSwitcher', () => {
+  // `select` awaits loadLocale before switching. Warming the catalogues here
+  // puts it on its already-loaded fast path, so a single flushPromises settles
+  // the click; a cold dynamic import needs more than one drain of the microtask
+  // queue and the assertions would race it. The loader's own cold path,
+  // including the miss that returns false, is covered in i18nIndex.test.ts.
+  beforeAll(async () => {
+    await Promise.all(['en', 'sk', 'ja', 'zh-Hans'].map(loadLocale))
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockLocale.value = 'en'
@@ -104,8 +141,7 @@ describe('LanguageSwitcher', () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
 
-    const slovak = optionButtons(wrapper).find(b => b.text().includes('Slovencina'))
-    await slovak!.trigger('click')
+    await pick(wrapper, 'Slovencina')
 
     expect(mockSetLocale).toHaveBeenCalledExactlyOnceWith('sk')
     expect(localStorage.getItem('vault42-locale')).toBe('sk')
@@ -115,8 +151,7 @@ describe('LanguageSwitcher', () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
 
-    const zh = optionButtons(wrapper).find(b => b.text().includes('Zhongwen (Jian)'))
-    await zh!.trigger('click')
+    await pick(wrapper, 'Zhongwen (Jian)')
 
     expect(mockSetLocale).toHaveBeenCalledExactlyOnceWith('zh-Hans')
     expect(localStorage.getItem('vault42-locale')).toBe('zh-Hans')
@@ -128,16 +163,46 @@ describe('LanguageSwitcher', () => {
     document.documentElement.lang = 'en'
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
-    await optionButtons(wrapper).find(b => b.text().includes('Nihongo'))!.trigger('click')
+    await pick(wrapper, 'Nihongo')
 
     expect(document.documentElement.lang).toBe('ja')
     expect(document.documentElement.dir).toBe('ltr')
   })
 
+  it('keeps the current language when a locale has no catalogue to load', async () => {
+    // 'xx' is offered by the mocked availableLocales but has no locale file, so
+    // its chunk cannot load. Switching anyway would render nothing but keys.
+    const wrapper = mountSwitcher()
+    await trigger(wrapper).trigger('click')
+    await pick(wrapper, 'xx')
+
+    expect(mockSetLocale).not.toHaveBeenCalled()
+    expect(localStorage.getItem('vault42-locale')).toBeNull()
+    expect(optionButtons(wrapper)).toHaveLength(0)
+  })
+
+  it('survives a locale chunk that fails to download', async () => {
+    // Offline, or a stale index pointing at an evicted chunk. Neither may leave
+    // the switcher stuck open or the app rendering bare translation keys.
+    mockLocaleChunkFails.value = true
+    try {
+      const wrapper = mountSwitcher()
+      await trigger(wrapper).trigger('click')
+      await pick(wrapper, 'Slovencina')
+
+      expect(mockSetLocale).not.toHaveBeenCalled()
+      expect(localStorage.getItem('vault42-locale')).toBeNull()
+      expect(optionButtons(wrapper)).toHaveLength(0)
+      expect(trigger(wrapper).text()).toContain('English')
+    } finally {
+      mockLocaleChunkFails.value = false
+    }
+  })
+
   it('closes the list and relabels the trigger after a selection', async () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
-    await optionButtons(wrapper).find(b => b.text().includes('Slovencina'))!.trigger('click')
+    await pick(wrapper, 'Slovencina')
 
     expect(optionButtons(wrapper)).toHaveLength(0)
     expect(trigger(wrapper).text()).toContain('Slovencina')
@@ -190,6 +255,7 @@ describe('LanguageSwitcher', () => {
     await trigger(wrapper).trigger('click')
     await wrapper.find('input[type="text"]').setValue('sloven')
     await optionButtons(wrapper)[0].trigger('click')
+    await flushPromises()
     await trigger(wrapper).trigger('click')
 
     expect((wrapper.find('input[type="text"]').element as HTMLInputElement).value).toBe('')

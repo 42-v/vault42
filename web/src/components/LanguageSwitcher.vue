@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useT } from '@vault42/vue'
-import { applyDocumentLocale } from '../i18n'
+import { applyDocumentLocale, loadLocale } from '../i18n'
 
 const { locale, setLocale, availableLocales } = useT()
 
@@ -61,12 +61,20 @@ const filtered = computed(() => {
   })
 })
 
-function select(loc: string) {
+async function select(loc: string) {
+  open.value = false
+  search.value = ''
+
+  // Catalogues are fetched one chunk at a time, so the copy has to be in hand
+  // before the locale ref flips; switching first would render bare keys until a
+  // later re-render happened to pick the catalogue up. A chunk that fails to
+  // load leaves the current language in place rather than switching to one that
+  // would render nothing but keys.
+  if (!(await loadLocale(loc).catch(() => false))) return
+
   setLocale(loc)
   applyDocumentLocale(loc)
   localStorage.setItem('vault42-locale', loc)
-  open.value = false
-  search.value = ''
 }
 
 function toggle() {
