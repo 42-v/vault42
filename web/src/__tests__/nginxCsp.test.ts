@@ -25,7 +25,17 @@ const nginxConf = readFileSync(
 
 const csp = /add_header Content-Security-Policy "([^"]+)"/.exec(nginxConf)?.[1] ?? ''
 
-/** Directive -> the value it must have, and why anything looser is a hole. */
+/**
+ * Directive -> the value it must have, and why anything looser is a hole.
+ *
+ * `base-uri` expects `'none'`, not `'self'`. It read `'self'` until 1.0.0, which
+ * pinned the one directive in this file that did not meet ASVS V3.4.3 — the
+ * requirement names `object-src 'none'` and `base-uri 'none'` by value, and the
+ * compliance register carries V3.4.3 as Met. Because this suite gates CI, the
+ * expectation made the conforming value unshippable: correcting nginx.conf broke
+ * the build. The expectation moved because the policy it pinned was wrong, not
+ * because the policy changed underneath a passing test.
+ */
 const REQUIRED_DIRECTIVES: Record<string, string> = {
   'default-src': "'self'",
   'script-src': "'self'",
@@ -33,7 +43,7 @@ const REQUIRED_DIRECTIVES: Record<string, string> = {
   'connect-src': "'self'",
   'object-src': "'none'",
   'frame-ancestors': "'none'",
-  'base-uri': "'self'",
+  'base-uri': "'none'",
   'form-action': "'self'",
 }
 

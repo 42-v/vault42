@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -47,24 +48,79 @@ func registerRowStatus(t *testing.T, standard, requirementID string) (status, ac
 // default-src does not cover base-uri. A <base> injection re-points every
 // relative URL in the document and is unaffected by default-src 'self', which
 // is exactly why the requirement names it separately.
-func TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims(t *testing.T) {
-	src := readCodeOnly(t, "internal/middleware/security_headers.go")
+//
+// The gate used to read only the apiCSP and frontendCSP literals out of
+// internal/middleware/security_headers.go, and the register said "both" policies
+// carried the directives. There were four. The two it could not see were the
+// admin gateway's, which conformed, and web/nginx.conf's, which shipped
+// base-uri 'self' into the frontend image the chart deploys — the one policy a
+// browser receives from a container rather than from the Go binary, and the only
+// one that failed the requirement this row is Met on. A gate scoped to one file
+// reports on that file, not on the claim.
+//
+// So every policy the repository serves is enumerated here, from every file that
+// emits one, and cspPolicySources is a floor: adding a fifth policy somewhere new
+// without adding it to this list fails the count check rather than passing
+// silently.
+var cspPolicySources = []struct {
+	file  string
+	want  int
+	goSrc bool
+}{
+	// apiCSP and frontendCSP, chosen per request path, so a directive on one of
+	// the two is a directive on some of the responses.
+	{file: "internal/middleware/security_headers.go", want: 2, goSrc: true},
+	// The admin gateway's own middleware, a separate binary and a separate policy.
+	{file: "internal/adminapi/middleware.go", want: 1, goSrc: true},
+	// The optional standalone frontend image. Off by default, but
+	// charts/vault/templates/frontend.yaml deploys it when it is on, and then it
+	// is the policy a browser actually receives.
+	{file: "web/nginx.conf", want: 1, goSrc: false},
+}
 
-	// Both policies have to carry them: the API policy and the frontend policy
-	// are chosen per request path, so a directive on one of the two is a
-	// directive on some of the responses.
-	policies := regexp.MustCompile(`(?m)^\s*(apiCSP|frontendCSP)\s*:?=\s*"([^"]*)"`).FindAllStringSubmatch(src, -1)
-	if len(policies) != 2 {
-		t.Fatalf("V3.4.3: expected two Content-Security-Policy strings in security_headers.go, found %d; "+
-			"the gate cannot tell what is served", len(policies))
+// cspLiteralRe matches a Go string literal holding a policy. Read against
+// comment-stripped source, so the prose explaining the directives cannot be
+// mistaken for a policy that declares them.
+var cspLiteralRe = regexp.MustCompile(`"([^"\n]*default-src [^"\n]*)"`)
+
+// nginxCSPRe matches the add_header form.
+var nginxCSPRe = regexp.MustCompile(`add_header\s+Content-Security-Policy\s+"([^"]*)"`)
+
+func TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims(t *testing.T) {
+	type policy struct{ where, value string }
+	var policies []policy
+
+	for _, src := range cspPolicySources {
+		var body string
+		re := nginxCSPRe
+		if src.goSrc {
+			body, re = readCodeOnly(t, src.file), cspLiteralRe
+		} else {
+			body = readProductionSource(t, src.file)
+		}
+		found := re.FindAllStringSubmatch(body, -1)
+		if len(found) != src.want {
+			t.Fatalf("V3.4.3: expected %d Content-Security-Policy string(s) in %s, found %d; "+
+				"the gate cannot tell what is served", src.want, src.file, len(found))
+		}
+		for i, m := range found {
+			policies = append(policies, policy{where: fmt.Sprintf("%s[%d]", src.file, i+1), value: m[1]})
+		}
+	}
+
+	// A floor over the whole corpus, on top of the per-file counts above. Each
+	// per-file check reads its expected count out of the table, so emptying the
+	// table satisfies every one of them vacuously; this does not.
+	if len(policies) < 4 {
+		t.Fatalf("V3.4.3: only %d Content-Security-Policy strings were collected. The repository "+
+			"serves four, and a gate cannot report on a policy it did not read.", len(policies))
 	}
 
 	complete := true
 	for _, p := range policies {
-		name, policy := p[1], p[2]
 		for _, directive := range []string{"object-src 'none'", "base-uri 'none'"} {
-			if !strings.Contains(policy, directive) {
-				t.Logf("V3.4.3: %s does not declare %s", name, directive)
+			if !strings.Contains(p.value, directive) {
+				t.Logf("V3.4.3: %s does not declare %s", p.where, directive)
 				complete = false
 			}
 		}
@@ -73,9 +129,9 @@ func TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims(t *testing.T) {
 	status, ar := registerRowStatus(t, "OWASP ASVS", "V3.4.3")
 
 	if complete && status != statusMet {
-		t.Errorf("V3.4.3: both policies now declare object-src 'none' and base-uri 'none', but the "+
-			"register still carries the row as %q (%s). The gap closed: move the row to Met, name "+
-			"this test, and retire the accepted risk.", status, ar)
+		t.Errorf("V3.4.3: all %d served policies now declare object-src 'none' and base-uri 'none', but "+
+			"the register still carries the row as %q (%s). The gap closed: move the row to Met, name "+
+			"this test, and retire the accepted risk.", len(policies), status, ar)
 	}
 	if !complete && status == statusMet {
 		t.Error("V3.4.3: the register marks this Met, but at least one served policy is missing " +
