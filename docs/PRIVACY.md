@@ -41,13 +41,13 @@ Each processing purpose below is tied to the lawful basis on which it is carried
 | P4 | **Security monitoring and abuse prevention** -- audit logging, rate limiting, account lockout, breach-password screening | Audit entries (user/client id, IP, user-agent, fingerprint hash, event metadata, risk score), rate-limit counters, failed-login counters | Art. 6(1)(f) legitimate interest in securing the service; Art. 6(1)(c) legal obligation to keep security records where applicable |
 | P5 | **Identity profile** -- storing optional personal details an end user chooses to provide (name, country, date of birth, sex, billing address, app-specific data) | Encrypted identity profile | Art. 6(1)(b) where required to deliver a requested feature; otherwise Art. 6(1)(a) consent |
 | P6 | **Encrypted user data blobs** -- opaque user-supplied data stored on the user's behalf | Encrypted blob payload + encrypted label | Art. 6(1)(b) contract (storage feature requested by the user) |
-| P7 | **Social / federated login** -- linking an external OAuth/OIDC identity to an account | Provider name, provider user id, provider-supplied email, encrypted provider tokens | Art. 6(1)(b) contract; Art. 6(1)(a) consent (the user initiates the link) |
+| P7 | **Social / federated login** -- linking an external OAuth/OIDC identity to an account | Provider name and provider user id. The provider-supplied email is read during the callback and not persisted, and no provider access or refresh token is stored | Art. 6(1)(b) contract; Art. 6(1)(a) consent (the user initiates the link) |
 | P8 | **Account import** -- migrating a pre-existing account from a prior system | Email, source-system tag, source-system id, import-pending flag | Art. 6(1)(b) contract; Art. 6(1)(f) legitimate interest in service continuity |
 | P9 | **Transactional email** -- verification, password reset, MFA codes, security notices | Email address | Art. 6(1)(b) contract (necessary to operate the account) |
 | P10 | **Marketing email** -- optional product/marketing communications | Email address + marketing-email preference flag | Art. 6(1)(a) consent -- sent only when the user has opted in |
 | P12 | **Service-scoped documents** -- opaque JSON a trusted service stores about a user on the platform's behalf, private to the writing service unless it marks a document shared | Encrypted document payload + HMAC pseudonym of the user id, owning client id, document key, size and visibility | Art. 6(1)(b) contract, on the same footing as P6: the Operator's service requests the storage. The contents are opaque to vault42, so the Operator remains responsible for what its services write |
 | P11 | **Account-deletion recovery escrow** -- keeping a recoverable record of an erased account so an accidental or malicious deletion can be reversed | Encrypted payload (email, creation date, roles, display name) + HMAC pseudonym of the user id, requester and reason tag | Art. 6(1)(f) legitimate interest in the integrity and availability of user accounts. Only when the Operator configures a recovery key; see §3.1, §4 and §5.3 |
-| P13 | **New-location login notice and VPN/anonymiser abuse scrutiny** -- warning a user when their account is accessed from a country it has not signed in from before, and raising rate-limit scrutiny on anonymising/hosting infrastructure. The client IP is resolved **locally** against an embedded IP-registration table (no third-party geo-IP lookup, no request leaves the service) to a coarse signal: the ISO 3166-1 alpha-2 registration country, and VPN/hosting/Tor flags. **Data minimisation: only the country code is derived and stored** -- never the IP, never a city or coordinates -- and the notice and its audit record carry the country code alone. The set of countries a user has logged in from (`auth.login_countries`) is user-id-owned and cascade-deleted on erasure. The VPN/hosting/Tor flags are used transiently to weight the login/register/reset rate limiters and are never stored; they only tighten a bucket, they never block a VPN. | Login country codes per user; transiently, VPN/hosting/Tor flags derived from the IP | Art. 6(1)(f) legitimate interest in account security and abuse prevention (notifying the user of an unusual location; resisting credential-stuffing from anonymising infrastructure) |
+| P13 | **New-location login notice and VPN/anonymiser abuse scrutiny** -- warning a user when their account is accessed from a country it has not signed in from before, and raising rate-limit scrutiny on anonymising/hosting infrastructure. The client IP is resolved **locally** against an embedded IP-registration table (no third-party geo-IP lookup, no request leaves the service) to a coarse signal: the ISO 3166-1 alpha-2 registration country, and VPN/hosting/Tor flags. **Data minimisation: only the country code is derived and stored** -- never the IP, never a city or coordinates -- and the notice and its audit record carry the country code alone. The set of countries a user has logged in from (`auth.login_countries`) is user-id-owned and removed by an explicit step in the erasure cascade; the table's declared `ON DELETE CASCADE` never fires, because erasure tombstones the user row instead of deleting it. The VPN/hosting/Tor flags are used transiently to weight the login/register/reset rate limiters and are never stored; they only tighten a bucket, they never block a VPN. | Login country codes per user; transiently, VPN/hosting/Tor flags derived from the IP | Art. 6(1)(f) legitimate interest in account security and abuse prevention (notifying the user of an unusual location; resisting credential-stuffing from anonymising infrastructure) |
 
 Consent (P5 where applicable, P7, P10) is freely given, specific, and withdrawable. Withdrawing
 consent does not affect the lawfulness of processing carried out before withdrawal. Marketing
@@ -84,17 +84,37 @@ sender and fails closed on everything except the two affirmative sources.
 
 ## 3. Data Inventory
 
-Personal data is held in five logical stores: the **auth** store (account and credential
-records), the **identity** store (encrypted personal profile, keyed by pseudonym), the
-**objects** store (encrypted user blobs, keyed by pseudonym), the **audit** store
-(append-only security log), and the **recovery escrow** (`auth.account_recovery`, an
-append-only log of encrypted deletion records, written only when the Operator configures a
-recovery key).
+The database has four schemas -- `auth`, `audit`, `identity` and `objects` -- and personal
+data is held in six logical stores across them:
+
+- the **auth** store (account and credential records);
+- the **identity** store (encrypted personal profile, keyed by pseudonym);
+- the **objects** store, which holds two distinct things: encrypted user blobs keyed by
+  pseudonym (P6), and service-scoped documents keyed by owning client and subject pseudonym
+  (P12);
+- the **audit** store (append-only security log);
+- the **recovery escrow** (`auth.account_recovery`), a table inside the `auth` schema and
+  counted separately because it has its own append-only triggers, its own retention routine
+  and its own exemption from the erasure cascade. It is an append-only log of encrypted
+  deletion records, written only when the Operator configures a recovery key;
+- the **cache** (`auth.cache`, Redis or in-memory, per `CACHE_BACKEND`). It is transient and
+  TTL-bounded, and it is not free of personal data: it holds a user id against a verification
+  token hash for 24 hours, a user id against a reset token hash for one hour, and whole client
+  IP addresses as rate-limit keys.
+
+The process log is not one of these stores. What it may carry is described in §3.3.
 
 ### 3.1 Sensitivity and protection notes
 
 - **Encrypted at rest (AES-256-GCM):** the identity profile, user data blobs and blob labels,
-  TOTP secrets, and stored OAuth/OIDC provider tokens.
+  service-scoped documents, and TOTP secrets. Each is bound to its own record by additional
+  authenticated data, so a ciphertext moved to another row does not open: the identity profile
+  under the pseudonym, a blob under its id and pseudonym, a service document under the owning
+  client, subject and document key, and a TOTP secret under the user id.
+- **Not stored at all:** OAuth/OIDC provider access and refresh tokens. The columns exist on
+  `auth.social_accounts` and no code path ever assigns them, so every row carries them empty.
+  vault42 uses a provider token once, during the callback, to read the profile, and discards
+  it.
 - **Pseudonymization:** the identity profile and blobs are stored under a deterministic
   **pseudonym** derived by HMAC from the user id, not under the user id or email. The plaintext
   reference name of a named blob never reaches the database -- only its HMAC is stored. Audit
@@ -137,11 +157,10 @@ recovery key).
 | import_pending, imported_from, legacy_id | P8 | Cleared/retained per import lifecycle | 6(1)(b) |
 | created_at, updated_at | account lifecycle | Life of account | 6(1)(b) |
 | **auth.password_history** | | | |
-| password_hash (historical) | P1 (reuse prevention) | Life of account; cascade-deleted with user | 6(1)(f) |
+| password_hash (historical) | P1 (reuse prevention) | Life of account; removed by an explicit erasure step | 6(1)(f) |
 | **auth.social_accounts** | | | |
 | provider, provider_user_id | P7 | Until unlinked or account erased | 6(1)(b)/6(1)(a) |
-| email (provider-supplied) | P7 | Until unlinked or account erased | 6(1)(b)/6(1)(a) |
-| access_token_enc, refresh_token_enc | P7 | Until unlinked or account erased | 6(1)(b) |
+| email, access_token_enc, refresh_token_enc | P7 | Columns exist and are never written. The provider email is read during the callback and dropped by the INSERT; no provider token is stored | -- |
 | **auth.refresh_tokens** | | | |
 | token_hash, family_id, device_id, fingerprint_hash | P3 | Until expiry, rotation, or revocation (§4) | 6(1)(b)/6(1)(f) |
 | expires_at, used, revoked | P3 | As above | 6(1)(b) |
@@ -152,7 +171,7 @@ recovery key).
 | user_agent | P3, P4 | Until device removed or account erased | 6(1)(f) |
 | trusted, trusted_until, first/last_seen_at | P3 | Until device removed or account erased | 6(1)(f) |
 | **auth.login_countries** | | | |
-| country_code (ISO alpha-2), first_seen_at | P13 | Until account erased (cascade-deleted with the user) | 6(1)(f) |
+| country_code (ISO alpha-2), first_seen_at | P13 | Until account erased, by an explicit erasure step | 6(1)(f) |
 | **auth.totp_secrets** | | | |
 | secret_enc, verified | P2 | Until MFA removed or account erased | 6(1)(b)/6(1)(f) |
 | **auth.webauthn_credentials** | | | |
@@ -174,7 +193,7 @@ recovery key).
 | data_enc (payload), label_enc | P6 | Until blob deleted or account erased | 6(1)(b) |
 | ref_hash, checksum, size_bytes, stored_bytes | P6 | As above | 6(1)(b) |
 | **objects.service_documents** (encrypted, pseudonym-keyed, off unless configured) | | | |
-| value_enc (payload) | P12 | Until the document is deleted or the account is erased | 6(1)(b) |
+| data_enc (payload) | P12 | Until the document is deleted or the account is erased | 6(1)(b) |
 | client_id (owning service), doc_key, visibility, size_bytes | P12 | As above | 6(1)(b) |
 | subject_hash (HMAC pseudonym of the user id) | P12 | As above | 6(1)(b) |
 | **audit.audit_log** (append-only) | | | |
@@ -196,13 +215,27 @@ carries a retention period. The process log is not one of them: it is diagnostic
 lifetime belongs to the Operator's log pipeline rather than to this service, so it is held to a
 stricter rule than the stores instead of a retention of its own.
 
-**A client IP address is never written to the process log in full.** Every log line that names one
-renders it through `httputil.ObfuscatedIP`, which keeps the IPv4 /24 or the IPv6 /64 and discards
-the rest, so a reader can still tell which network a refusal, an auto-flag or a fingerprint
-mismatch came from without the log becoming a second copy of the audit store. The full address is
-held only where §3.2 inventories it -- the audit log (P4) and the device record (P3) -- and the
-request id printed beside the masked network is the link to that record. A value that does not
-parse as an address is rendered as the constant `invalid_ip` rather than echoed back.
+**The auth server and the bridge mask client IP addresses in their process logs.** A log line
+that names one renders it through `httputil.ObfuscatedIP`, or through the bridge's own copy of
+that helper, since `cmd/bridge` is stdlib-only and imports no internal package. Masking keeps the
+IPv4 /24 or the IPv6 /64 and discards the rest, so a reader can still tell which network a
+refusal, an auto-flag or a fingerprint mismatch came from without the log becoming a second copy
+of the audit store, and the request id printed beside the masked network is the link to the audit
+record. A value that does not parse as an address is rendered as the constant `invalid_ip` rather
+than echoed back.
+
+Three lines are outside that rule and an Operator should know which. The honeypot profile logs
+the peer address of every request it serves; the admin gateway logs the peer of a request it
+refuses, and the non-loopback killswitch carries the host into the panic message the runtime
+prints. All three are non-default deployment surfaces reached by an operator or an attacker
+rather than by an ordinary user, and none of them is a store: process-log retention is the
+Operator's, per §3.3.
+
+Whole addresses are also held outside the audit log (P4) and the device record (P3): as
+rate-limit keys in the cache and in `auth.rate_limits`, in the bridge's flag store and its
+`bridge:flag:<ip>` keys, and in the body of any honeypot or bridge webhook the Operator
+configures. The cache entries are TTL-bounded, the bridge flags expire on `BRIDGE_FLAG_TTL`
+(default 24 hours), and a webhook destination is a recipient the Operator chooses; see §6.
 
 The same rule covers the other identifiers that reach a log line: email addresses are masked
 before they are logged, blob reference names and labels are scrubbed from audit metadata (§3.1),
@@ -238,8 +271,9 @@ or the session they belong to. The following periods apply:
 - **Audit log:** retained for security and accountability, then purged. The retention horizon is
   **operator-set** via `VAULT_AUDIT_RETENTION_DAYS`; a background sweeper runs every 6 hours (and
   once at startup) and removes entries older than the horizon. Because the audit log is
-  append-only, this is the only sanctioned removal path; `vault cleanup-audit` performs the same
-  purge on demand. **The sweeper is disabled by default** (`VAULT_AUDIT_RETENTION_DAYS=0`):
+  append-only, this is the only sanctioned removal path. `vault cleanup-audit` is a retired stub
+  that issues no database write: there is deliberately no on-demand purge, and no admin tier holds
+  an audit-delete permission. **The sweeper is disabled by default** (`VAULT_AUDIT_RETENTION_DAYS=0`):
   silently deleting security logs is not a safe default, so an Operator processing personal data
   under Art. 5(1)(e) must set a horizon explicitly. Audit entries are deliberately exempt from the
   account-erasure cascade (Art. 17(3)(b)/(e)), which is precisely why they need a time-based
@@ -271,9 +305,10 @@ or the session they belong to. The following periods apply:
 - **Identity profile, blobs, devices, credentials:** retained for the life of the account (or
   the life of the specific item) and removed on the user's request or on account erasure.
 - **Abandoned data:** records tied to an account (identity profile, blobs, devices, credentials,
-  social links) are removed when the account is erased (§5). The Operator may additionally
-  configure scheduled pruning of stale sessions/devices; where it does, the pruning interval is
-  an operator setting and must be reflected in the Operator's end-user notice.
+  social links) are removed when the account is erased (§5). Spent and expired refresh tokens are
+  swept hourly and admin sessions likewise, both on a fixed interval that is not operator-tunable.
+  There is no device pruning: a device record survives until the user deletes it or the account is
+  erased.
 
 The Operator may set shorter retention than the defaults above to meet its own obligations, and
 must not retain personal data longer than necessary for the purpose for which it was collected
@@ -336,7 +371,7 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   used — invalidating a code leaves its hash and the user ID in the table, which is enough to end
   a session but not to erase a person. Account erasure is requested through the Operator (§8)
   where no self-service account-deletion endpoint is exposed in the deployment.
-- **Order of operations.** The cascade spans nine stores with no transaction across them, so the
+- **Order of operations.** The cascade spans ten stores with no transaction across them, so the
   account is tombstoned **before** any personal data is destroyed, never after. A failure part-way
   therefore leaves an account that has already stopped authenticating and still holds some data
   pending deletion — not a live, loginable account whose second factors have already been
@@ -363,9 +398,13 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
 
 ### 5.4 Right to restriction (Art. 18)
 
-- On a restriction request, the Operator can disable the account (account-state flag) so that
-  the data is retained but no longer actively processed for authentication, pending resolution of
-  a dispute over accuracy or lawfulness.
+- On a restriction request, the Operator locks the account through
+  `POST /admin/users/{id}/lock`, which sets `locked_until` and refuses authentication for that
+  period while the data is retained, pending resolution of a dispute over accuracy or lawfulness.
+- The `disabled` and `banned` flags are **not** the restriction control, despite reading like it.
+  Both are write-once at account creation: no update path sets either, and migration 024 revokes
+  `UPDATE` on them from the application role outright. An Operator planning to restrict by
+  disabling an existing account has no route to do so.
 
 ### 5.5 Right to object (Art. 21)
 
@@ -395,17 +434,37 @@ Operator enables. The set of processors depends on the Operator's configuration.
 
 | Recipient / processor | Role | Data shared | Notes |
 |---|---|---|---|
-| **OAuth / OIDC identity providers** (e.g. Google, GitHub, Facebook, and any generic OpenID Connect provider the Operator registers) | Processor / independent controller for federated login | The provider returns a provider user id and, typically, an email; vault42 stores these plus encrypted provider tokens | Used only when the Operator enables social login and the user initiates the link. The provider's own privacy notice governs data the user holds with that provider. |
-| **Email delivery service** (SMTP server, or a hosted email provider) | Processor | Recipient email address and message content (verification, reset, MFA, security and -- if opted in -- marketing messages) | Backend and credentials are operator-configured. Transactional mail is necessary to operate the account; marketing mail is sent only on opt-in. |
+| **OAuth / OIDC identity providers** (e.g. Google, GitHub, Facebook, and any generic OpenID Connect provider the Operator registers) | Processor / independent controller for federated login | The provider returns a provider user id and, typically, an email; vault42 persists the provider user id only. The email is used during the callback to match or create the account and is not stored on the link, and no provider access or refresh token is stored | Used only when the Operator enables social login and the user initiates the link. The provider's own privacy notice governs data the user holds with that provider. |
+| **Email delivery service** (SMTP server, or SendGrid, which is the only hosted backend implemented) | Processor | Recipient email address and message content (verification, reset, MFA, security and -- if opted in -- marketing messages) | Backend and credentials are operator-configured. Transactional mail is necessary to operate the account; marketing mail is sent only on opt-in. |
 | **Breach-password screening** (Have I Been Pwned range API) | Processor (k-anonymity) | A short prefix of the SHA-1 hash of a candidate password -- **never the password, email, or any account identifier** | Uses the k-anonymity range protocol: only a hash prefix leaves the server. Fail-open: if the service is unreachable the check is skipped and authentication is not blocked. |
 | **Primary datastore (PostgreSQL)** | Processor (storage) | All persisted records described in §3, with the encryption and hashing protections noted there | Hosting/region is the Operator's choice; encrypted blobs and the encrypted identity profile are held here under pseudonymous keys. |
-| **Cache backend** (in-memory, PostgreSQL, or Redis, per Operator choice) | Processor (transient) | Short-lived operational values (e.g. confirmation state, cache entries) | Transient; not a long-term store of personal data. |
+| **Cache backend** (in-memory, PostgreSQL, or Redis, per Operator choice) | Processor (transient) | A user id against a verification token hash for 24 hours, a user id against a reset token hash for one hour, whole client IP addresses as rate-limit keys, and confirmation state | Transient and TTL-bounded, but it does hold personal data; see §3. |
+| **Honeypot and bridge webhooks** (any URL the Operator configures in `VAULT_HONEYPOT_WEBHOOK` or the bridge's alert setting) | Recipient chosen by the Operator | The whole client IP address, and on a bridge decoy hit the User-Agent, plus the detection metadata | Only in the honeypot profile or behind the bridge, both non-default. The destination is arbitrary and outside vault42's control, so the Operator owns the Art. 28 and Arts. 44-49 position for it. |
 
 The Operator must put a data-processing agreement (Art. 28) in place with each processor it
 engages, and, where a processor is located outside the EEA, ensure an appropriate transfer
 mechanism (an adequacy decision or Standard Contractual Clauses) is in place (Arts. 44–49).
 Because processor selection and hosting region are operator-configurable, maintaining this list
 for a given deployment is the Operator's responsibility.
+
+### 6.1 Cookies and client-side storage
+
+vault42 sets two cookies, both `__Host-` prefixed, so neither carries a `Domain` and both are
+host-only. Neither is used for analytics or tracking, and there is no third-party cookie.
+
+| Name | Contents | Attributes | Lifetime |
+|---|---|---|---|
+| `__Host-refresh_token` | the refresh token itself, in the cookie value | `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` when TLS is on or `VAULT_FORCE_SECURE_COOKIES` is set | the refresh token's own expiry, up to 30 days with "remember me" |
+| `__Host-oauth_state` | the signed OAuth state for one login attempt | `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` on the same condition | 10 minutes |
+
+`SameSite` and the absence of `Domain` are fixed in code and are not operator-tunable; only the
+`Secure` attribute is, and an Operator terminating TLS at a proxy must set
+`VAULT_FORCE_SECURE_COOKIES` or the cookie ships without it.
+
+The shipped clients also use browser storage, which is the user's device rather than a store
+vault42 holds: the admin console keeps its bearer token in `sessionStorage`, the SPA keeps the
+selected locale in `localStorage`, and the Blazor client optionally keeps a refresh token and
+PKCE values in `sessionStorage` when the Operator turns off its default HTTP-only-cookie mode.
 
 ---
 
@@ -433,11 +492,14 @@ filter (`repository.AuditFilter`) supports user, event type and time range, so f
 risk score is done by the reviewer or by an external log pipeline, not by Vault42.
 
 The only automated reactions Vault42 performs are narrow, and none of them is breach detection:
-per-account lockout after 5 failed logins and per-IP lockout after 20 (`lockoutThreshold` and
-`ipLockoutThreshold`, `internal/service/auth.go`); the honeypot webhook, which fires on a login
-attempt against a name in `VAULT_HONEYPOT_TRAP_USERS` and only when `VAULT_HONEYPOT_WEBHOOK` is
-configured (wired in `cmd/vault/main.go`); and the admin gateway killswitch, which audits a
-non-loopback request and crashes the pod.
+lockout after 5 failed logins from one source against one account, 20 from one source against
+any account, and 50 against one account from all sources (`lockoutThreshold`,
+`ipLockoutThreshold` and `distributedLockoutThreshold`, `internal/service/auth.go`); the honeypot
+webhook, which fires on a login attempt against a name in `VAULT_HONEYPOT_TRAP_USERS`, only when
+`VAULT_HONEYPOT_WEBHOOK` names an http or https URL, and only in the honeypot profile, since the
+alerter is not built at all in any other (`cmd/vault/main.go`); and the admin gateway killswitch,
+which audits a non-loopback request and crashes the pod, outside the dev profile where it answers
+403 instead.
 
 **Detection is therefore the Operator's responsibility.** An Operator processing personal data
 should ship the audit log to its own monitoring and set the alerting rules there. Vault42 gives
