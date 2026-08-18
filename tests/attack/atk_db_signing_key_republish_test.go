@@ -71,10 +71,17 @@ func TestSigningKeyRepublishAndReapReinsertAsVaultApp(t *testing.T) {
 	// be mistaken for this one working.
 	isRetirePath := func(err error) bool {
 		return err != nil && (strings.Contains(err.Error(), "cannot return to active without new key material") ||
+			strings.Contains(err.Error(), "cannot be reactivated under different key material") ||
 			strings.Contains(err.Error(), "its expiry cannot be cleared or extended"))
 	}
 	isTombstoned := func(err error) bool {
 		return err != nil && strings.Contains(err.Error(), "is tombstoned")
+	}
+	// 035's CHECK, matched by constraint name so a trigger refusal is never read
+	// as the constraint holding. The two guard the same transition from opposite
+	// sides and only the constraint survives with row triggers suspended.
+	isRetirementStamp := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "signing_keys_active_is_not_retired")
 	}
 
 	t.Run("B2a: expires_at of a retired key cannot be cleared to republish it", func(t *testing.T) {
@@ -194,6 +201,145 @@ func TestSigningKeyRepublishAndReapReinsertAsVaultApp(t *testing.T) {
 		if !isTombstoned(err) {
 			t.Errorf("re-inserting the reaped kid %q returned %v, want the tombstone refusal: the "+
 				"identifier 017 relies on can otherwise be recycled one DELETE after a reap", reaped, err)
+		}
+	})
+
+	// ------------------------------------------------------------------------
+	// B2c: 026's reactivation guard is selected by the attacker.
+	//
+	// Its WHEN clause fires on NEW.status = 'active' AND NEW.private_key =
+	// OLD.private_key. 026 documents the exemption as the way keystore.Import's
+	// genuine re-import gets through, since Import always writes freshly
+	// encrypted material. But the exemption is chosen by whoever writes the
+	// UPDATE: an attacker who also sets private_key steps straight out of the
+	// condition, and the guard whose stated purpose is "a rotated-out key stays
+	// retired" never runs. Reproduced on PostgreSQL 16.15 with every migration
+	// applied verbatim.
+	//
+	// atkKeyRetireActive puts the sole key into the retired state the way
+	// vault_app can today: OLD.status = 'active' is judged by no guard, and 027
+	// requires the retired row to carry an expiry.
+	// ------------------------------------------------------------------------
+
+	atkKeyRetireActive := func(t *testing.T, kid string) {
+		t.Helper()
+		if _, err := app.Exec(ctx,
+			`UPDATE auth.signing_keys SET status = 'retired', retired_at = NOW(),
+			        expires_at = NOW() + INTERVAL '1 hour' WHERE kid = $1`, kid); err != nil {
+			t.Fatalf("retire the active key: %v", err)
+		}
+	}
+
+	t.Run("B2c: a retired key cannot be reactivated under different key material", func(t *testing.T) {
+		atkKeyTruncate(t, owner)
+		ks := atkKeyStoreRetention(t, app, time.Hour)
+
+		kid, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		atkKeyRetireActive(t, kid)
+
+		attacker, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		attackerPub, err := x509.MarshalPKIXPublicKey(&attacker.PublicKey)
+		if err != nil {
+			t.Fatalf("MarshalPKIXPublicKey: %v", err)
+		}
+
+		// retired_at is cleared in the same statement so this subtest is judged by
+		// the retire-path guard alone: the constraint below would otherwise mask
+		// whether the trigger sees the write at all.
+		//
+		// kid is the first 16 hex of SHA-256 over the public key's DER, so a row's
+		// public_key can never legitimately change under a fixed kid. A re-import
+		// of the same key supplies the same bytes; only an attacker supplies
+		// different ones.
+		_, err = app.Exec(ctx, `
+			UPDATE auth.signing_keys
+			SET status = 'active', private_key = $2, public_key = $3, retired_at = NULL
+			WHERE kid = $1`, kid, []byte{0x99}, attackerPub)
+		if !isRetirePath(err) {
+			t.Fatalf("reactivating a retired row under new material returned %v, want the retire-path "+
+				"refusal: writing private_key is all it took to step outside 026's WHEN clause", err)
+		}
+
+		var status string
+		if err := owner.QueryRow(ctx, `SELECT status FROM auth.signing_keys WHERE kid = $1`, kid).Scan(&status); err != nil {
+			t.Fatalf("read back status: %v", err)
+		}
+		if status != "retired" {
+			t.Errorf("kid %q is %q after a refused reactivation, want retired", kid, status)
+		}
+	})
+
+	t.Run("B2c: a reactivation cannot leave the retirement stamp behind", func(t *testing.T) {
+		atkKeyTruncate(t, owner)
+		ks := atkKeyStoreRetention(t, app, time.Hour)
+
+		kid, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		atkKeyRetireActive(t, kid)
+
+		// The narrower shape: only private_key is rewritten, so byte-for-byte this
+		// is what a genuine re-import looks like to a trigger comparing OLD and
+		// NEW. What it is not is a row that stopped being retired — Import clears
+		// retired_at, an attacker rewriting material in place does not.
+		_, err = app.Exec(ctx,
+			`UPDATE auth.signing_keys SET status = 'active', private_key = $2 WHERE kid = $1`,
+			kid, []byte{0x77})
+		if !isRetirementStamp(err) {
+			t.Fatalf("promoting a retired row while it still carries retired_at returned %v, want the "+
+				"signing_keys_active_is_not_retired violation", err)
+		}
+	})
+
+	t.Run("B2c: the retirement stamp holds with row triggers suspended", func(t *testing.T) {
+		atkKeyTruncate(t, owner)
+		ks := atkKeyStoreRetention(t, app, time.Hour)
+
+		kid, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		atkKeyRetireActive(t, kid)
+
+		// session_replication_role = replica suspends row triggers, and 016, 017,
+		// 020, 023, 024 and 026 all name it as a limit their triggers cannot
+		// answer. It is superuser-only, so this runs on the owner pool: the point
+		// is not that vault_app can reach it but that the invariant must not
+		// depend on a mechanism with an off switch. One connection, because the
+		// setting is per-session.
+		conn, err := owner.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer conn.Release()
+		defer func() { _, _ = conn.Exec(ctx, `RESET session_replication_role`) }()
+
+		if _, err := conn.Exec(ctx, `SET session_replication_role = 'replica'`); err != nil {
+			t.Fatalf("suspend row triggers: %v", err)
+		}
+
+		// Proof the triggers really are inert: extending a retired key's expiry is
+		// refused by 026 and by nothing else, and here it goes through.
+		if _, err := conn.Exec(ctx,
+			`UPDATE auth.signing_keys SET expires_at = NOW() + INTERVAL '100 years' WHERE kid = $1`,
+			kid); err != nil {
+			t.Fatalf("row triggers are still firing, so this subtest proves nothing about the "+
+				"constraint: %v", err)
+		}
+
+		_, err = conn.Exec(ctx,
+			`UPDATE auth.signing_keys SET status = 'active', private_key = $2 WHERE kid = $1`,
+			kid, []byte{0x55})
+		if !isRetirementStamp(err) {
+			t.Fatalf("with row triggers suspended, promoting a retired row returned %v: terminality "+
+				"is being asserted only by a mechanism that has an off switch", err)
 		}
 	})
 
