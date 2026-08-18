@@ -460,6 +460,14 @@ func paginate[T any](items []T, limit, offset int) []T {
 // ========== Session Management ==========
 
 // ListSessions handles GET /admin/sessions.
+//
+// It lists ADMIN sessions, not user sessions: the live roster of every
+// currently logged-in admin, with each one's source IP and user agent. That is
+// reconnaissance for an attacker holding a lower-tier admin session, which is
+// the stated reason internal/rbac/rbac.go keeps admins:manage at super_admin,
+// so the route is gated on admins:manage rather than the viewer-tier
+// sessions:list it used to take.
+//
 // Results are paginated via enforced limit/offset query params (default 50,
 // max 100) to bound the response size of an unbounded active-session set.
 func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
