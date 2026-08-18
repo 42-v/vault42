@@ -1,8 +1,6 @@
 package compliance
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -127,21 +125,20 @@ func TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent(t *testing.
 // lands as a SHALL. Establishing *a* definite overall timeout is mandatory;
 // the 24-hour figure is a SHOULD.
 //
-// State of the implementation at the time of writing, asserted below rather
-// than described:
+// This asserts the mechanism the ABSOLUTE bound is built from: TokenService
+// clamps a rotated pair's expiry to familyOrigin+maxSessionLifetime,
+// AuthService.enforceSessionLifetime refuses a family past the bound, and
+// migration 013 stores the family origin so the age is knowable at all.
 //
-//   - The mechanism exists. TokenService clamps a rotated pair's expiry to
-//     familyOrigin+maxSessionLifetime, AuthService.enforceSessionLifetime
-//     refuses a family past the bound, and migration 013 stores the family
-//     origin so the age is knowable at all.
-//   - The mechanism is not configured. SetMaxSessionLifetime has no non-test
-//     caller and no environment variable feeds it, so maxSessionLifetime is
-//     zero in every deployment and the bound is inert.
-//
-// A control that cannot be switched on is not established, so the register
-// carries 2.2.3 as an accepted risk (CR-14) rather than Met. This test asserts
-// the half that exists and fails the moment the wiring lands, which is the
-// signal to promote the row.
+// The paragraph that used to sit here said the mechanism had no non-test caller
+// and no environment variable feeding it, and concluded that a control which
+// cannot be switched on is not established. That stopped being true when
+// cmd/vault/main.go started calling SetMaxSessionLifetime, and the sentence
+// outlived the fact by a release. It is replaced rather than amended: the
+// wiring is now asserted, next door, by
+// TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot,
+// which reads the shipped defaults out of config.Load rather than describing
+// them.
 func TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented(t *testing.T) {
 	token := readCodeOnly(t, "internal/service/token.go")
 	for _, needle := range []string{"SetMaxSessionLifetime", "MaxSessionLifetime", "sessionDeadline"} {
@@ -171,68 +168,38 @@ func TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented(t *testing.T)
 	}
 }
 
-// The mandatory half of 2.2.3 is now satisfied: cmd/vault/main.go configures the
-// bound from VAULT_MAX_SESSION_LIFETIME, so a definite overall reauthentication
-// timeout is established. What remains is advisory and is carried as CR-14:
+// --- 2.2.3, the inactivity half: a retired tripwire ---
 //
-//   - The default is 720 hours. Section 2.2.3 says the overall timeout SHOULD be
-//     no more than 24 hours at AAL2.
-//   - There is no inactivity timeout at all. Section 2.2.3 says it SHOULD be no
-//     more than 1 hour at AAL2.
+// TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue
+// lived here. It asserted that the overall timeout was configured but above the
+// AAL2 SHOULD, and then walked every migration looking for a column named
+// last_activity_at, last_used_at or idle_expires_at, failing the moment one
+// appeared. That second half was the tripwire: it was written to fire on
+// whoever closed the gap, so the register could not be left behind by the code.
 //
-// This test pins the distinction. It fails if the bound stops being configured,
-// which would reopen the SHALL, and it fails if an inactivity timeout appears,
-// which is the signal to narrow CR-14 again.
-func TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue(t *testing.T) {
-	main := readCodeOnly(t, "cmd/vault/main.go")
-	if !strings.Contains(main, "SetMaxSessionLifetime") {
-		t.Fatal("2.2.3: cmd/vault/main.go no longer configures the absolute session lifetime, so no definite overall reauthentication timeout is established. This reopens a SHALL.")
-	}
-
-	config := readCodeOnly(t, "internal/config/config.go")
-	m := regexp.MustCompile(`envDuration\("VAULT_MAX_SESSION_LIFETIME",\s*(\d+)\s*\*\s*time\.Hour\)`).FindStringSubmatch(config)
-	if m == nil {
-		t.Fatal("2.2.3: VAULT_MAX_SESSION_LIFETIME no longer has an hour-denominated default; re-derive this assertion")
-	}
-	hours, err := strconv.Atoi(m[1])
-	if err != nil || hours <= 0 {
-		t.Fatalf("2.2.3: the absolute session lifetime defaults to %q, which establishes no bound", m[1])
-	}
-	if hours <= 24 {
-		t.Fatalf("2.2.3: the default is now %d hours, inside the 24-hour SHOULD. CR-14 narrows further: update the register and this assertion.", hours)
-	}
-	t.Logf("2.2.3: overall reauthentication timeout established at %d hours; the AAL2 SHOULD is 24 (CR-14)", hours)
-
-	// The inactivity half has no mechanism at all: no column records last
-	// activity and no decision consults one.
-	//
-	// This reads every migration rather than 001 alone. The version that read
-	// only 001 could not have seen an inactivity column arriving in a later
-	// migration, which is exactly how the sibling tripwire on family_created_at
-	// sat green through a release while the column it watched for existed in
-	// 013_session_lifetime.sql.
-	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "migrations"))
-	if err != nil {
-		t.Fatalf("2.2.3: read migrations/: %v", err)
-	}
-	scanned := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		scanned++
-		schema := readProductionSource(t, "migrations/"+entry.Name())
-		for _, column := range []string{"last_activity_at", "last_used_at", "idle_expires_at"} {
-			if strings.Contains(schema, column) {
-				t.Fatalf("2.2.3: %s now exists, in migrations/%s, so an inactivity timeout is possible. Narrow CR-14 and replace this assertion.", column, entry.Name())
-			}
-		}
-	}
-	if scanned < 5 {
-		t.Fatalf("2.2.3: only %d migration files scanned; the absence assertion above is vacuous", scanned)
-	}
-	t.Logf("2.2.3: no inactivity column across %d migrations (CR-14)", scanned)
-}
+// It is retired, and it is worth saying exactly why, because "the tripwire did
+// not fire" is not the reason.
+//
+// The tripwire watched for an IMPLEMENTATION — a new column — and not for the
+// property. The inactivity timeout shipped without one: the presented refresh
+// token's own created_at is already the instant its family last rotated, which
+// is the only activity a rotating family has, and repository.ActiveFamily
+// already publishes that same value to the user as LastUsedAt. So the gap
+// closed, the column never appeared, and this test would have gone on passing
+// and logging "no inactivity column across 39 migrations" for as long as anyone
+// left it there.
+//
+// That is the failure mode gate_liveness_test.go exists for, arriving through a
+// door it does not cover: not a gate that cannot fail, but a live gate watching
+// the wrong noun. A tripwire keyed on how a control is expected to be built
+// fires only on implementers who guessed the same way. Its replacements are
+// keyed on what the control does, and they are in session_inactivity_test.go —
+// TestASVS_V7_3_1_AnIdleSessionCannotRotateAndAnActiveOneCan and its siblings
+// drive the real refresh path, and
+// TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot
+// carries what is left of this one: it fails if the inactivity default rises
+// above the 1-hour SHOULD, and it fails if the 720-hour overall default drops
+// inside the 24-hour SHOULD, which is the remaining half of CR-14.
 
 // --- 4.6 Account Notifications ---
 

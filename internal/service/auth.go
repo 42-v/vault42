@@ -98,11 +98,20 @@ var (
 	// cookie-clearing behavior, and so the outcome is indistinguishable from an
 	// ordinary expiry to the client.
 	ErrSessionExpired = fmt.Errorf("session exceeded maximum lifetime: %w", ErrTokenExpired)
-	// ErrSessionAgeUnknown is the fail-closed outcome when the absolute session
-	// lifetime is configured but the family's age cannot be established. It wraps
-	// ErrTokenInvalid: an unbounded session must not be issued because a lookup
-	// failed.
+	// ErrSessionAgeUnknown is the fail-closed outcome when a session bound is
+	// configured but the age it measures cannot be established — the family's
+	// origin for the absolute lifetime, or the presented token's issuance instant
+	// for the inactivity timeout. It wraps ErrTokenInvalid: an unbounded session
+	// must not be issued because a lookup failed.
 	ErrSessionAgeUnknown = fmt.Errorf("session age could not be determined: %w", ErrTokenInvalid)
+	// ErrSessionIdle is returned when a refresh-token family has gone unused for
+	// longer than the inactivity timeout and must reauthenticate (ASVS V7.3.1,
+	// NIST SP 800-63B-4 §2.2.3 and §5.2, NIST SP 800-53 Rev 5 AC-12). It wraps
+	// ErrTokenExpired for the same reason ErrSessionExpired does: every transport
+	// that already maps an expired refresh token keeps its status code and its
+	// cookie-clearing behavior, and the outcome stays indistinguishable from an
+	// ordinary expiry to the client.
+	ErrSessionIdle = fmt.Errorf("session exceeded the inactivity timeout: %w", ErrTokenExpired)
 )
 
 // familyOriginReader is the one capability the absolute session lifetime needs
@@ -1362,6 +1371,14 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		return nil, err
 	}
 
+	// Inactivity timeout: the other reauthentication trigger, checked in the same
+	// window and for the same reason. The absolute bound goes first because it is
+	// the outer limit — a family past it is over regardless of how recently it
+	// was used, so that is the more accurate thing to tell the audit log.
+	if err := s.enforceSessionInactivity(ctx, stored, ip, ua); err != nil {
+		return nil, err
+	}
+
 	// Verify fingerprint
 	fpInput.IP = ip
 	fpInput.UserAgent = ua
@@ -2345,6 +2362,80 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 	}
 
 	return origin, nil
+}
+
+// enforceSessionInactivity terminates a refresh-token family that has gone unused
+// for longer than the inactivity timeout.
+//
+// SECURITY INVARIANT (ASVS V7.3.1, NIST SP 800-63B-4 §2.2.3 and §5.2, NIST SP
+// 800-53 Rev 5 AC-12): a session that stops being used is ended, and the user
+// must present a full authentication again rather than a rotation. This is the
+// half of reauthentication the absolute bound does not cover — that one ends a
+// session that is in constant use, this one ends a session that is not.
+//
+// WHY THE PRESENTED TOKEN'S OWN created_at IS THE ACTIVITY SIGNAL, and why there
+// is no last_activity_at column:
+//
+// A refresh-token family only advances by rotating, and a rotation writes a new
+// row whose created_at is that instant. The row the caller is presenting is by
+// construction the newest generation of its family — its predecessor was marked
+// used before this one was inserted — so created_at is exactly "when this family
+// last did something". A dedicated column would be written at the same moment,
+// from the same clock, to the same value, and would then need a migration, a
+// backfill, an extra bound parameter on the hot insert and its own invariant
+// that nothing else may move it. It would be a second copy of a fact the row
+// already carries, with a second way to be wrong.
+//
+// It also costs nothing to read. GetByTokenHash already selects created_at, so
+// this check adds no query, no write and no round trip to the refresh path.
+// Stamping activity on every authenticated request would have done the opposite:
+// it would turn a read-mostly table into a write on every call, on the hottest
+// path in the service.
+//
+// WHAT THIS MEASURES, EXACTLY: time since the last ROTATION, not time since the
+// last request. Between rotations a client works from an access token, so its
+// real last-request instant can be up to AccessTokenTTL later than the value
+// used here. The error is one-directional — this check can only conclude a
+// session is idler than it is, never fresher — so it fails safe. It is also why
+// the configured timeout must stay well above the access token TTL, which
+// cmd/vault warns about at startup.
+//
+// Fail-closed, the same way the absolute bound is: a bound that silently no-ops
+// when the store cannot answer is not a bound. Only the REFUSALS are gated on
+// the timeout being configured, so a deployment with no inactivity bound is
+// unaffected either way.
+func (s *AuthService) enforceSessionInactivity(ctx context.Context, stored *model.RefreshToken, ip, ua string) error {
+	if s.tokenSvc == nil {
+		return nil
+	}
+	idleTimeout := s.tokenSvc.InactivityTimeout()
+	if idleTimeout <= 0 {
+		return nil
+	}
+
+	// A zero created_at is "unknown", never "epoch". The column is NOT NULL in
+	// every migration, so this is a store that stopped reporting it rather than
+	// a row that lacks it — and reading it as the epoch would make every session
+	// infinitely idle, which is a different failure and a louder one.
+	if stored.CreatedAt.IsZero() {
+		log.Printf("auth: refresh token %s carries no issuance instant; inactivity timeout unenforceable", stored.ID)
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "issued_at_missing"}, 80)
+		return ErrSessionAgeUnknown
+	}
+
+	if !time.Now().Before(stored.CreatedAt.Add(idleTimeout)) {
+		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; rejecting regardless
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{
+				"reason":    "session_inactivity_exceeded",
+				"family_id": stored.FamilyID,
+				"idle":      time.Since(stored.CreatedAt).String(),
+			}, 40)
+		return ErrSessionIdle
+	}
+
+	return nil
 }
 
 // checkSessionLimit verifies that the user has not exceeded the maximum number of

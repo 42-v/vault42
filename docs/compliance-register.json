@@ -108,16 +108,16 @@
   ],
   "accepted_risks": {
     "CR-14": {
-      "title": "No inactivity timeout, and the absolute session lifetime defaults well above the AAL2 recommendation",
+      "title": "The absolute session lifetime defaults well above the AAL2 recommendation",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "The mandatory half of SP 800-63B-4 section 2.2.3 is satisfied as of 1.0.0: migration 013 gives every rotation family a stored birth date that rotation cannot advance and pruning cannot reset, TokenService clamps a rotated pair to that origin plus the bound, AuthService.enforceSessionLifetime refuses a family past it and fails closed when the age cannot be determined, and cmd/vault/main.go:353 configures it from VAULT_MAX_SESSION_LIFETIME. Two advisory halves remain open. The default overall timeout is 720 hours where section 2.2.3 says it SHOULD be no more than 24 at AAL2, because a 24-hour default would force a daily re-login on a general-purpose authentication server whose deployments are not all AAL2. And there is no inactivity timeout at all: no column records last activity and no auth decision consults one.",
-      "compensating_control": "Access tokens live 15 minutes; every refresh re-checks account state, re-verifies the device fingerprint, and rotates the token single-use with family revocation on replay; the absolute family bound is enforced and fails closed; users and administrators can revoke all sessions; the per-user session cap bounds how many can exist. An operator who needs the AAL2 figure can set VAULT_MAX_SESSION_LIFETIME=24h today.",
-      "residual_risk": "A session left idle is not terminated for inactivity, and the shipped default permits a continuously-refreshing client to hold one session for 30 days.",
-      "revisit_when": "Any deployment claims AAL2 conformance to a third party rather than self-assessing, in which case the default must move to 24 hours and an inactivity timeout must ship. Also revisit if a customer contract specifies an idle policy.",
-      "cost_of_closing": "For the default: one constant, plus a documented migration note because shortening it logs every existing session out. For inactivity: a last_activity_at column on auth.refresh_tokens, a write on every refresh, and a check before rotation."
+      "rationale": "NIST SP 800-63B-4 section 2.2.3 sets two advisory figures at AAL2: an overall reauthentication timeout of no more than 24 hours and an inactivity timeout of no more than 1 hour. The inactivity half closed: VAULT_INACTIVITY_TIMEOUT defaults to 1 hour and AuthService.enforceSessionInactivity terminates a refresh-token family that goes unused for longer, measured from the family's last rotation, failing closed when that instant cannot be read. ASVS V7.3.1, NIST 800-63B-4 section 5.2 and NIST 800-53 AC-12 moved to Met on it, and V7.1.1 moved with them because both timeouts are now documented and the deviation below is justified in docs/config.md. What remains is one figure: the overall timeout defaults to 720 hours, because a 24-hour default would force a daily re-login on a general-purpose authentication server whose deployments are not all AAL2.",
+      "compensating_control": "The inactivity timeout is the control that most limits the exposure: a session held for 720 hours has to be rotated at least once an hour for 30 days. Access tokens live 15 minutes; every refresh re-checks account state, re-verifies the device fingerprint, and rotates the token single-use with family revocation on replay; the absolute family bound is enforced and fails closed; users and administrators can revoke all sessions; the per-user session cap bounds how many can exist. An operator who needs the AAL2 figure can set VAULT_MAX_SESSION_LIFETIME=24h today.",
+      "residual_risk": "The shipped default permits a client that refreshes at least once an hour to hold one session for 30 days without reauthenticating.",
+      "revisit_when": "Any deployment claims AAL2 conformance to a third party rather than self-assessing, in which case the default must move to 24 hours. Also revisit if a customer contract specifies a maximum session age.",
+      "cost_of_closing": "One constant, plus a documented migration note: shortening the default logs every existing session out on upgrade."
     },
     "CR-15": {
       "title": "Security events are logged but nothing alerts on them",
@@ -210,7 +210,7 @@
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:875 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
-      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
+      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:444) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
       "cost_of_closing": "Nothing to build. Closing it means documenting the separate-hostname topology as the supported production shape and keeping VAULT_SERVE_FRONTEND for development and the honeypot profile."
@@ -233,7 +233,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1782).",
+      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1799).",
       "compensating_control": "The chart deploys Redis as a workload beside vault and its NetworkPolicy admits port 6379 only from the vault pods, so the link is pod-to-pod inside one namespace rather than across a network the operator does not own; the same policy admits no egress to 443 at all. The AUTH secret is read from REDIS_PASS_FILE rather than the environment. Nothing durable transits the link: the cache holds short-TTL rate-limit counters, lockout markers, single-use challenge markers and an HMAC of the email one-time code, and every value that authorises anything is re-checked against the database or against a signed token before it is honoured.",
       "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
       "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
@@ -548,7 +548,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:493"
+        "internal/config/config.go:507"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -903,7 +903,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:811",
+        "internal/service/auth.go:820",
         "internal/handler/oauth.go:253"
       ],
       "tests": [
@@ -925,7 +925,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1718",
+        "internal/service/auth.go:1735",
         "internal/handler/data_export.go:18"
       ],
       "tests": [
@@ -965,7 +965,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:142",
-        "internal/service/auth.go:1789",
+        "internal/service/auth.go:1806",
         "internal/handler/oauth.go:657"
       ],
       "tests": [
@@ -1812,15 +1812,15 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:820"
+        "internal/config/config.go:425",
+        "internal/config/config.go:636",
+        "internal/config/config.go:834"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestASVS_V2_1_1_PasswordMinLengthConfigured"
       ],
-      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:820) is 15 and a non-dev profile refuses to start below it (:622); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:348, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
+      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:834) is 15 and a non-dev profile refuses to start below it (:622); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:361, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
     },
     {
       "standard": "OWASP ASVS",
@@ -2053,7 +2053,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:118",
+        "internal/service/auth.go:127",
         "internal/server/server.go:424"
       ],
       "tests": [
@@ -2201,7 +2201,7 @@
       "requirement": "Verify that valid users cannot be deduced from failed authentication challenges, such as by basing on error messages, HTTP response codes, or different response times. Registration and forgot password functionality must also have this protection.",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:651",
+        "internal/service/auth.go:660",
         "internal/handler/auth.go:91"
       ],
       "tests": [
@@ -2496,7 +2496,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:811"
+        "internal/service/auth.go:820"
       ],
       "tests": [
         "TestASVSAuth_V6_6_2_EmailOTPBoundToOriginalRequest"
@@ -2658,16 +2658,16 @@
       "chapter": "V7 Session Management",
       "level": "L2",
       "requirement": "Verify that the user's session inactivity timeout and absolute maximum session lifetime are documented, are appropriate in combination with other controls, and that the documentation includes justification for any deviations from NIST SP 800-63B re-authentication requirements.",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-14",
+      "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:438"
+        "internal/config/config.go:482",
+        "internal/service/auth.go:2407"
       ],
       "tests": [
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes"
       ],
-      "notes": "Accepted risk CR-14, and two of the three clauses now hold. The absolute maximum session lifetime is documented and configurable (VAULT_MAX_SESSION_LIFETIME, default 720h, internal/config/config.go:438), and docs/config.md now carries the justification this requirement asks for: it states the SP 800-63B-4 section 2.2.3 figures the deployment deviates from and why. That entry previously cited 12 hours as the AAL2 reauthentication figure, which is the withdrawn Rev 3 number; section 2.2.3 of the current revision says the overall timeout SHOULD be no more than 24 hours and the inactivity timeout no more than 1 hour. The clause still unmet is the first one: there is no inactivity timeout to document, so no documentation of one can exist."
+      "notes": "Met, all three clauses. Both timeouts are documented in docs/config.md and both are configurable: VAULT_MAX_SESSION_LIFETIME (default 720h) and VAULT_INACTIVITY_TIMEOUT (default 1h, internal/config/config.go:482). They are appropriate in combination -- the inactivity window is four access-token lifetimes wide, so a session in normal use never approaches it, and the absolute bound is the outer limit that a rotating client cannot slide. The deviation clause is satisfied and is the reason this row is not simply inherited from the two settings: docs/config.md states the NIST SP 800-63B-4 section 2.2.3 figures (24 hours overall, 1 hour of inactivity), says which one this deployment meets and which it deviates from, and says why. The entry previously cited 12 hours as the AAL2 figure, which is the withdrawn Rev 3 number; a merge reintroduced it after it was first corrected, and TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes now fails if it comes back. That test also parses both documented defaults out of the published table and compares them with what config.Load produces, so the document cannot drift from the code in either direction."
     },
     {
       "standard": "OWASP ASVS",
@@ -2735,7 +2735,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:62"
+        "internal/service/token.go:66"
       ],
       "tests": [
         "TestASVS_V3_2_1_NewTokenPerAuthentication"
@@ -2777,7 +2777,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:730"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated",
@@ -2796,15 +2796,15 @@
       "superseded_ids": [
         "v4.0.3-3.3.2"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-14",
+      "status": "Met",
       "evidence": [
-        "internal/service/auth.go:680"
+        "internal/service/auth.go:2407",
+        "internal/service/auth.go:1378"
       ],
       "tests": [
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestASVS_V7_3_1_AnIdleSessionCannotRotateAndAnActiveOneCan"
       ],
-      "notes": "There is no inactivity timeout: auth.refresh_tokens records no last-activity timestamp and no auth decision consults one. Compensating controls are the 15-minute access token TTL, fingerprint binding re-checked on every refresh, the per-user session cap, the absolute family lifetime, and global revoke-all."
+      "notes": "Met. An inactivity timeout exists, is enforced, and re-authentication is what it requires: a family idle past VAULT_INACTIVITY_TIMEOUT is revoked and refused with ErrSessionIdle, so the way back is a full login rather than another rotation. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2407), called from the refresh path at internal/service/auth.go:1378 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip. The documented security decision the requirement asks for is the default of 1 hour and the reasoning in docs/config.md. The check fails closed on an unreadable issuance instant, the same way the absolute bound fails closed on an unknown family origin."
     },
     {
       "standard": "OWASP ASVS",
@@ -2819,13 +2819,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:190",
+        "internal/service/token.go:235",
         "migrations/013_session_lifetime.sql:35",
         "cmd/vault/main.go:353"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot"
       ],
       "notes": "An absolute maximum session lifetime is enforced from the family's stored creation instant, configured by VAULT_MAX_SESSION_LIFETIME (default 720h) and clamped into every rotated pair. Every branch that cannot date a family refuses rather than passing. The 7-day refresh TTL is no longer a sliding window without a bound. Whether 720h is the right value against the SP 800-63B-4 AAL2 recommendation of 24h is CR-14."
     },
@@ -2861,7 +2861,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:818"
+        "internal/service/auth.go:827"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -3268,7 +3268,7 @@
       "requirement": "Verify that, if a token issuer uses the same private key for issuing tokens to different audiences, the issued tokens contain an audience restriction that uniquely identifies the intended audiences. This will prevent a token from being reused with an unintended audience. If the audience identifier is dynamically provisioned, the token issuer must validate these audiences in order to make sure that they do not result in audience impersonation.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:62"
+        "internal/service/token.go:66"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3390,7 +3390,7 @@
       "requirement": "Verify that if an access control decision requires identifying a unique user from an access token (JWT or related token introspection response), the resource server identifies the user from claims that cannot be reassigned to other users. Typically, it means using a combination of 'iss' and 'sub' claims.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:62"
+        "internal/service/token.go:66"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3498,7 +3498,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:64",
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:730"
       ],
       "tests": [
         "TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet",
@@ -3552,7 +3552,7 @@
       "requirement": "Verify that refresh tokens have an absolute expiration, including if sliding refresh token expiration is applied.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:190",
+        "internal/service/token.go:235",
         "migrations/013_session_lifetime.sql:35",
         "cmd/vault/main.go:353"
       ],
@@ -4156,7 +4156,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:531"
+        "internal/config/config.go:545"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -4233,12 +4233,12 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:403"
+        "internal/config/config.go:416"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:403). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
+      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:416). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
     },
     {
       "standard": "OWASP ASVS",
@@ -4296,7 +4296,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:568",
+        "internal/config/config.go:582",
         "migrations/001_initial_schema.sql:354"
       ],
       "tests": [
@@ -4338,7 +4338,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:548"
+        "internal/config/config.go:562"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -5107,7 +5107,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:495"
+        "internal/service/auth.go:504"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -5277,7 +5277,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/ratelimit.go:285",
-        "internal/service/auth.go:1079"
+        "internal/service/auth.go:1088"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
@@ -5459,14 +5459,16 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/service/token.go:190",
+        "internal/config/config.go:482",
+        "internal/config/config.go:481",
+        "internal/service/auth.go:2407",
         "migrations/013_session_lifetime.sql"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot"
       ],
-      "notes": "Verbatim: \"A definite reauthentication overall timeout SHALL be established, which SHOULD be no more than 24 hours at AAL2. The inactivity timeout SHOULD be no more than 1 hour.\" The SHALL is satisfied: an overall timeout is established and enforced from the family creation instant. Both SHOULDs are not: the default overall timeout is 720 hours rather than 24, and no inactivity timeout exists."
+      "notes": "Verbatim: \"A definite reauthentication overall timeout SHALL be established, which SHOULD be no more than 24 hours at AAL2. The inactivity timeout SHOULD be no more than 1 hour.\" The SHALL is satisfied and so is the inactivity SHOULD: VAULT_INACTIVITY_TIMEOUT defaults to 1 hour and enforceSessionInactivity terminates a family that goes unused for longer. One SHOULD remains deviated, which is why this row is still an accepted risk under CR-14 and the other five rows that shared the risk are not: the overall timeout defaults to 720 hours where section 2.2.3 says it SHOULD be no more than 24 at AAL2. Closing it is one constant, and the cost is that every existing session is logged out on upgrade, so it is a product decision rather than an implementation gap. An operator who needs the figure sets VAULT_MAX_SESSION_LIFETIME=24h today."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5506,16 +5508,16 @@
       "requirement": "Password Authenticators",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:828"
+        "internal/config/config.go:425",
+        "internal/config/config.go:636",
+        "internal/config/config.go:842"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestNIST_NoCompositionRules",
         "TestNIST_NoForcedPasswordExpiration"
       ],
-      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:828), and every other profile enforces 15. The evidence previously cited internal/config/config.go:348, a doc comment on an unrelated field."
+      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:842), and every other profile enforces 15. The evidence previously cited internal/config/config.go:361, a doc comment on an unrelated field."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5525,10 +5527,10 @@
       "requirement": "Password Verifiers",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:412",
-        "internal/config/config.go:622",
-        "internal/config/config.go:820",
-        "internal/config/config.go:828"
+        "internal/config/config.go:425",
+        "internal/config/config.go:636",
+        "internal/config/config.go:834",
+        "internal/config/config.go:842"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5537,7 +5539,7 @@
         "TestNIST_PasswordNoTruncation",
         "TestNIST_SaltLength"
       ],
-      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:820) equals the default (:412), and a deployment configuring less is refused at startup (:622). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:828), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
+      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:834) equals the default (:412), and a deployment configuring less is refused at startup (:622). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:842), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5643,7 +5645,7 @@
       "requirement": "Rate Limiting (Throttling)",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:118"
+        "internal/service/auth.go:127"
       ],
       "tests": [
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
@@ -5830,7 +5832,7 @@
       "requirement": "Account Notifications",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:722"
+        "internal/service/auth.go:731"
       ],
       "tests": [
         "TestNIST63B4_4_6_SubscribersAreNotifiedOfLockout"
@@ -5863,7 +5865,7 @@
       "requirement": "Session Bindings: Access Tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:62"
+        "internal/service/token.go:66"
       ],
       "tests": [
         "TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent",
@@ -5877,15 +5879,15 @@
       "revision_date": "2025-07",
       "requirement_id": "5.2",
       "requirement": "Reauthentication",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-14",
+      "status": "Met",
       "evidence": [
-        "internal/service/auth.go:680"
+        "internal/service/auth.go:2407",
+        "internal/service/auth.go:2322"
       ],
       "tests": [
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestNIST63B4_5_2_ReauthenticationMeansANewLoginNotAnotherRotation"
       ],
-      "notes": "Periodic reauthentication is enforced at the absolute bound but not on inactivity, and the absolute default is well above the AAL2 recommendation. Same finding as 2.2.3."
+      "notes": "Met. Periodic reauthentication is now enforced on both triggers: at the absolute bound by enforceSessionLifetime and on inactivity by enforceSessionInactivity. Section 2.2.3 says that when the inactivity timeout has passed but the overall one has not, a verifier MAY accept a password or biometric together with the session secret. vault42 does not take that option and the choice is deliberate: middleware.Confirmed, the existing prove-it-again control, is a step-up over a LIVE session and requires a valid access token to reach, and an idle session's access token expired 45 minutes before the inactivity bound fires. The only call that could carry a re-proof is the refresh itself, which is the call being refused. So the family is terminated and the user reauthenticates through Login at full strength, which is stricter than the MAY and consistent with what the absolute bound already does."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5895,7 +5897,7 @@
       "requirement": "Session Monitoring",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:783",
+        "internal/service/auth.go:792",
         "internal/handler/user.go:125"
       ],
       "tests": [
@@ -5973,7 +5975,7 @@
       "requirement": "Unsuccessful Logon Attempts",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:118"
+        "internal/service/auth.go:127"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
@@ -5998,16 +6000,17 @@
       "revision_date": "2025-08-27",
       "requirement_id": "AC-12",
       "requirement": "Session Termination",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-14",
+      "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:91"
+        "internal/repository/postgres/refresh_token.go:363",
+        "internal/repository/postgres/refresh_token.go:350",
+        "internal/service/auth.go:2407"
       ],
       "tests": [
         "TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily",
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestNIST80053_AC_12_InactivityTerminatesTheWholeFamily"
       ],
-      "notes": "Explicit termination is complete and revokes every family, and an absolute age trigger now exists. There is still no inactivity trigger, which is the other half of what this control asks for."
+      "notes": "Met, both halves. Explicit termination is complete: RevokeAllForUser and RevokeFamily reach every generation of every family, and each state change that invalidates the credential a session rests on calls one of them. The trigger conditions the control asks for are now two, and both terminate rather than merely refuse -- the absolute age bound and the inactivity bound, each revoking the whole family and recording an audit event naming the trigger (session_lifetime_exceeded, session_inactivity_exceeded). Termination is also visible in the concurrent-session cap: issuance clamps a refresh token's stored expires_at to the inactivity window, so a timed-out family stops being counted by CountActiveFamilies instead of holding a slot for the rest of VAULT_REFRESH_TOKEN_TTL. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2407), called from the refresh path at internal/service/auth.go:1378 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6188,7 +6191,7 @@
       "requirement": "Authentication Feedback",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:479"
+        "internal/service/auth.go:488"
       ],
       "tests": [
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
@@ -6552,7 +6555,7 @@
       "requirement": "Authentication Failures",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:118"
+        "internal/service/auth.go:127"
       ],
       "tests": [
         "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
@@ -6931,7 +6934,7 @@
       "requirement": "OAuth 2.0 Security BCP: refresh token replay detection",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:730"
       ],
       "tests": [
         "TestRFC9700_4_14_2_RefreshRotationReplay",
@@ -6947,14 +6950,14 @@
       "requirement": "DPoP: sender-constrained access tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:171",
-        "internal/service/token.go:278",
+        "internal/service/token.go:215",
+        "internal/service/token.go:336",
         "internal/middleware/dpop.go:110"
       ],
       "tests": [
         "TestRFC9700_4_10_1_SenderConstrainedDPoP"
       ],
-      "notes": "Met. Access tokens are sender-constrained: when the middleware has validated a DPoP proof, issuance stamps cnf.jkt with its thumbprint (internal/service/token.go:171 on the login and rotation paths, :278 on the challenge token), and the middleware then compares the presented proof's thumbprint against the claim in constant time and refuses a mismatch (internal/middleware/dpop.go:110). WithDPoPScheme has a production caller, so the DPoP authentication scheme is accepted rather than declared. This row was an accepted risk, CR-25, for as long as no issuance path assigned cnf.jkt and the middleware therefore compared a proof against nothing.\n\nTwo limits, stated rather than rounded up. Refresh tokens are NOT sender-constrained: the refresh token is an opaque value in a __Host- cookie with no jkt column to bind it to, so its protection remains single-use rotation with family revocation on replay, not proof-of-possession. And no DPoP-Nonce is issued, so a proof's replay window is bounded by its iat freshness check and the one-time jti cache rather than by a server-supplied nonce. Full sender-constraint across every credential is not claimed; the access token is bound and the two gaps are named."
+      "notes": "Met. Access tokens are sender-constrained: when the middleware has validated a DPoP proof, issuance stamps cnf.jkt with its thumbprint (internal/service/token.go:215 on the login and rotation paths, :278 on the challenge token), and the middleware then compares the presented proof's thumbprint against the claim in constant time and refuses a mismatch (internal/middleware/dpop.go:110). WithDPoPScheme has a production caller, so the DPoP authentication scheme is accepted rather than declared. This row was an accepted risk, CR-25, for as long as no issuance path assigned cnf.jkt and the middleware therefore compared a proof against nothing.\n\nTwo limits, stated rather than rounded up. Refresh tokens are NOT sender-constrained: the refresh token is an opaque value in a __Host- cookie with no jkt column to bind it to, so its protection remains single-use rotation with family revocation on replay, not proof-of-possession. And no DPoP-Nonce is issued, so a proof's replay window is bounded by its iat freshness check and the one-time jti cache rather than by a server-supplied nonce. Full sender-constraint across every credential is not claimed; the access token is bound and the two gaps are named."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -7026,7 +7029,7 @@
       "requirement": "OAuth 2.0: refreshing an access token",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:730"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated"
@@ -7193,7 +7196,7 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:605",
+        "internal/config/config.go:619",
         "internal/middleware/security_headers.go:17"
       ],
       "tests": [
@@ -7441,7 +7444,7 @@
       "requirement": "Configure software to have secure settings by default",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:605",
+        "internal/config/config.go:619",
         ".github/workflows/ci.yml:427"
       ],
       "tests": [
@@ -7676,11 +7679,11 @@
     "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
-    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:820) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
+    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:834) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
-    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
+    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:215, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
-    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:590). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
     "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second."
   }
 }

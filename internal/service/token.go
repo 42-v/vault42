@@ -27,6 +27,10 @@ type TokenService struct {
 	// measured from the instant the family was created and independent of how
 	// often it is refreshed. Zero disables the bound.
 	maxSessionLifetime time.Duration
+	// inactivityTimeout bounds how long a refresh-token family may go unused
+	// before it must reauthenticate, measured from the instant the family last
+	// rotated. Zero disables the bound.
+	inactivityTimeout time.Duration
 }
 
 // AuthContext carries the OIDC Core §2 authentication-event claims onto an
@@ -104,6 +108,32 @@ func (s *TokenService) MaxSessionLifetime() time.Duration {
 	return s.maxSessionLifetime
 }
 
+// SetInactivityTimeout sets the bound on how long a refresh-token family may go
+// unused. Issuance clamps every refresh expiry to now+d, so a family that is not
+// rotated inside the window expires on its own rather than waiting for the full
+// refresh TTL (NIST SP 800-63B-4 §2.2.3). Zero disables the bound.
+//
+// This is the clamp only. AuthService.enforceSessionInactivity is what
+// TERMINATES the family, and it is the control: the clamp cannot revoke, cannot
+// audit, and cannot act on a row whose expiry was written before the bound was
+// configured. Setting this without the check would leave every pre-existing
+// session unbounded.
+//
+// Call once at wiring time, before the service starts issuing.
+func (s *TokenService) SetInactivityTimeout(d time.Duration) {
+	s.mu.Lock()
+	s.inactivityTimeout = d
+	s.mu.Unlock()
+}
+
+// InactivityTimeout returns the configured inactivity bound, or zero when no
+// bound is set.
+func (s *TokenService) InactivityTimeout() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.inactivityTimeout
+}
+
 // sessionDeadline is the instant a family created at origin must end, or the zero
 // time when no bound applies. A zero origin is "unknown", never "epoch": returning
 // a deadline from it would silently expire every session.
@@ -112,6 +142,20 @@ func sessionDeadline(origin time.Time, maxLifetime time.Duration) time.Time {
 		return time.Time{}
 	}
 	return origin.Add(maxLifetime)
+}
+
+// clampExpiry pulls exp back to deadline when the deadline is set and earlier.
+//
+// SECURITY INVARIANT: this only ever moves an expiry EARLIER. Every bound on a
+// refresh token is applied by composing calls to it, so the effective expiry is
+// the minimum of all of them and adding a bound can never extend one. The
+// absolute session lifetime therefore stays the outer limit no matter what else
+// is configured.
+func clampExpiry(exp, deadline time.Time) time.Time {
+	if !deadline.IsZero() && deadline.Before(exp) {
+		return deadline
+	}
+	return exp
 }
 
 // IssueTokenPair creates a new access+refresh token pair.
@@ -176,6 +220,7 @@ func (s *TokenService) IssueTokenPairWithAuth(ctx context.Context, userID string
 	s.mu.RLock()
 	accessToken, err := vaultcrypto.SignToken(accessClaims, s.privateKey, s.kid)
 	maxLifetime := s.maxSessionLifetime
+	idleTimeout := s.inactivityTimeout
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -200,10 +245,19 @@ func (s *TokenService) IssueTokenPairWithAuth(ctx context.Context, userID string
 
 	refreshExpAt := now.Add(refreshTTL)
 	if newFamily {
-		if deadline := sessionDeadline(now, maxLifetime); !deadline.IsZero() && deadline.Before(refreshExpAt) {
-			refreshExpAt = deadline
-		}
+		refreshExpAt = clampExpiry(refreshExpAt, sessionDeadline(now, maxLifetime))
 	}
+	// The inactivity clamp applies to a rotation as well as to a new family,
+	// because it is measured from THIS issuance rather than from the family's
+	// origin: whichever token the client is holding, it stops being accepted one
+	// idle window after it was minted.
+	//
+	// Without it the stored expires_at, and the cookie max-age derived from it,
+	// would go on claiming the full refresh TTL for a token the refresh path will
+	// refuse an hour from now. The row would also stay non-expired in
+	// countActiveFamilies, so a user's concurrent-session cap would be held by
+	// sessions that can never be rotated again.
+	refreshExpAt = clampExpiry(refreshExpAt, sessionDeadline(now, idleTimeout))
 
 	return &TokenPair{
 		AccessToken:  accessToken,
@@ -215,7 +269,8 @@ func (s *TokenService) IssueTokenPairWithAuth(ctx context.Context, userID string
 }
 
 // IssueRotatedPair issues the next pair in an existing family and clamps its
-// refresh expiry to the family's absolute deadline.
+// refresh expiry to the family's absolute deadline, and to the inactivity
+// window if one is configured.
 //
 // SECURITY INVARIANT: the returned refresh token can never outlive
 // familyOrigin+maxSessionLifetime. The caller also rejects an already-expired
@@ -237,9 +292,12 @@ func (s *TokenService) IssueRotatedPair(ctx context.Context, userID string, role
 	if err != nil {
 		return nil, err
 	}
-	if deadline := sessionDeadline(familyOrigin, s.MaxSessionLifetime()); !deadline.IsZero() && deadline.Before(pair.RefreshExpAt) {
-		pair.RefreshExpAt = deadline
-	}
+	// IssueTokenPairWithAuth has already applied the inactivity clamp, which is
+	// measured from now. This one is measured from the family origin, which only
+	// this function knows, and it is applied second so the absolute bound stays
+	// the outer limit: clampExpiry never moves an expiry later, so composing the
+	// two yields the earlier of the two deadlines.
+	pair.RefreshExpAt = clampExpiry(pair.RefreshExpAt, sessionDeadline(familyOrigin, s.MaxSessionLifetime()))
 	return pair, nil
 }
 

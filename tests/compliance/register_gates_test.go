@@ -156,7 +156,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"IETF RFC / OpenID Connect|RFC 9700 s4.14.2|internal/service/auth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.3.2|internal/handler/oauth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.5.3|internal/oauth2/oidc_idtoken.go":        {},
-	"NIST SP 800-53|AC-12|internal/repository/postgres/refresh_token.go":               {},
 	"NIST SP 800-53|AC-2|internal/adminapi/handler.go":                                 {},
 	"NIST SP 800-53|AC-3|internal/rbac/rbac.go":                                        {},
 	"NIST SP 800-53|AC-6|internal/rbac/rbac.go":                                        {},
@@ -488,6 +487,10 @@ var proseTestNameExceptions = map[string]string{
 	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "quoted in the corrections section as an " +
 		"example of a name that never existed. Naming it is the point; if it is ever removed from " +
 		"the document this entry goes with it",
+	"TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue": "retired when " +
+		"the inactivity timeout landed without the migration column it watched for. The corrections " +
+		"section names it to record what was retired and why a live gate can still be the wrong " +
+		"gate; this entry goes when that paragraph does",
 }
 
 // TestComplianceDocs_EveryTestNamedInProseExists closes the door that let

@@ -516,6 +516,11 @@ var commentTestNameExemptions = map[string]string{
 		"every TestComplianceRegister_* gate in tests/compliance",
 	"TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired": "a name that has never existed, quoted " +
 		"in register_gates_test.go as the example of the defect that gate closes",
+	"TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue": "retired the " +
+		"day the gap it watched closed, and named in nist_800_63b4_session_test.go by the comment " +
+		"explaining WHY it did not fire on the change that closed it. The retirement is the point: " +
+		"it watched migrations for a last-activity column, and the inactivity timeout shipped " +
+		"without one",
 	"TestNIST80053_IA_11_": "an elided reference — the comment writes " +
 		"`TestNIST80053_IA_11_...` because the point is the family, not one member of it",
 	"TestParseJWKHeaderValidECP384": "deleted, because it pinned as a contract a branch that " +
