@@ -138,7 +138,12 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # two profiles block by block shows the whole difference inside that one file,
 # 22 blocks reshaped for a net +1 statement, and nothing else moved. A full
 # cov_run against hard/integration reports 11918.
-BASELINE_TOTAL_STATEMENTS = 11918
+# Raised from 11918 to 11928 by the client-address masking pass: +10 statements
+# from httputil.ObfuscatedIP and the stdlib-only obfuscatedIP that cmd/bridge
+# carries because it cannot import it, plus the call sites in
+# internal/middleware, internal/adminapi and the four cmd/bridge files. A full
+# cov_run reports 11928, all 10 covered.
+BASELINE_TOTAL_STATEMENTS = 11928
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
