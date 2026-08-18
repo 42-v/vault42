@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
 	"time"
+
+	"github.com/42-v/vault42/internal/audit"
 )
 
 // clientIdentityPolicy is the second half of the admin gateway's mTLS gate.
@@ -47,6 +51,39 @@ type clientIdentityPolicy struct {
 	// could revoke every operator, so the signature is checked before the
 	// contents are believed.
 	issuer *x509.Certificate
+}
+
+// newClientIdentityPolicy builds the peer policy from configuration and reports
+// what it will enforce.
+//
+// A CRL path is validated here as well as on every handshake: a path that is
+// wrong must be a boot failure the operator sees immediately, not a gateway that
+// comes up reporting revocation checking as configured and then refuses every
+// operator at the first login.
+//
+// An unset allowlist is permitted, because refusing to start on it would break
+// every existing deployment on upgrade, but it is never silent: the whole content
+// of AR-9 is that the CA is then the only boundary, and an operator has to be
+// able to read that off the startup log.
+func newClientIdentityPolicy(ctx context.Context, auditLogger *audit.Logger, cfg *Config, clientCA []byte) clientIdentityPolicy {
+	policy := clientIdentityPolicy{
+		allowed: cfg.ClientCNAllowlist,
+		crlFile: cfg.ClientCRLFile,
+		issuer:  firstCertificate(clientCA),
+	}
+	if policy.crlFile != "" {
+		if _, err := loadCRL(policy.crlFile, policy.issuer); err != nil {
+			fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to load client CRL: %v", err)
+		}
+		log.Printf("admin-gateway: client certificates checked against the revocation list at %s on every handshake", policy.crlFile)
+	}
+	if len(policy.allowed) > 0 {
+		log.Printf("admin-gateway: client certificate identity pinned to %d allowed subject(s)", len(policy.allowed))
+	} else {
+		log.Printf("SECURITY WARNING: ADMIN_GW_CLIENT_CN_ALLOWLIST is unset — every certificate this CA has ever " +
+			"signed reaches the admin plane, including one issued for a decommissioned operator or another component (AR-9)")
+	}
+	return policy
 }
 
 // enabled reports whether the policy has anything to enforce. A policy with
