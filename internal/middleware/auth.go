@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
@@ -171,7 +172,43 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 // given OAuth2 scope. It must be chained AFTER an Auth middleware so the
 // validated claims are already in context. Used to gate the KMS unwrap oracle
 // to client-credential tokens explicitly granted "kms:unwrap".
-func RequireScope(scope string) func(http.Handler) http.Handler {
+// ScopeOption configures RequireScope.
+type ScopeOption func(*scopeOptions)
+
+type scopeOptions struct {
+	auditLog   *audit.Logger
+	auditEvent string
+	riskScore  int
+}
+
+// WithScopeRefusalAudit makes RequireScope record every request it refuses.
+//
+// A refusal here happens before the handler, so nothing downstream can write
+// the event: the pre-handler segment of the chain was the one place a
+// credential probe left no trace at all. POST /mint is the case that matters.
+// Its handler documents that "a client probing for roles it cannot mint is the
+// early signal that the credential has been taken", and docs/api.md states that
+// every path, accepted and refused, writes one token_minted event — neither of
+// which was true of the refusals that never reached the handler. A stolen
+// non-mint client token could be fired at the delegated-signing endpoint
+// indefinitely and produce nothing.
+//
+// It is an option rather than a required argument because RequireScope is a
+// general gate and most resources behind it are not signing oracles; the
+// decision is enforced identically with or without it.
+func WithScopeRefusalAudit(logger *audit.Logger, eventType string, riskScore int) ScopeOption {
+	return func(o *scopeOptions) {
+		o.auditLog = logger
+		o.auditEvent = eventType
+		o.riskScore = riskScore
+	}
+}
+
+func RequireScope(scope string, opts ...ScopeOption) func(http.Handler) http.Handler {
+	var o scopeOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := GetClaims(r.Context())
@@ -185,6 +222,7 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 					return
 				}
 			}
+			o.recordRefusal(r, claims, scope)
 			// RFC 6750 §3: insufficient_scope carries the scope the resource
 			// requires, so the client can ask for exactly it instead of
 			// guessing or re-authorizing for everything.
@@ -195,6 +233,32 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 			})
 		})
 	}
+}
+
+// recordRefusal writes the audit event for a scope refusal, when one was
+// configured.
+//
+// context.WithoutCancel is load-bearing, not tidiness. The client being refused
+// chooses when to hang up and can do it the instant the server starts handling
+// the request, so a write riding the request context would let a prober delete
+// their own record by closing the connection. The admin plane's refusal audits
+// established this pattern for the same reason.
+//
+// The error is discarded deliberately: the refusal has already been decided and
+// an audit store that is down must not turn a 403 into a 500.
+func (o scopeOptions) recordRefusal(r *http.Request, claims *vaultcrypto.VaultClaims, scope string) {
+	if o.auditLog == nil {
+		return
+	}
+	// #nosec G104 -- audit is best-effort and must never change the decision
+	o.auditLog.Log(context.WithoutCancel(r.Context()), o.auditEvent, claims.Subject, claims.ClientID,
+		ClientIP(r), r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"success": false,
+			"reason":  "insufficient_scope",
+			"scope":   scope,
+			"method":  r.Method,
+			"path":    r.URL.Path,
+		}, o.riskScore)
 }
 
 // Confirmed checks that the user recently confirmed their password via POST /auth/confirm.

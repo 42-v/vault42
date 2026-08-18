@@ -124,6 +124,12 @@ type Deps struct {
 	AuditEvents repository.AuditRepository
 }
 
+// mintRefusedRiskScore is the risk score a refused mint carries. It matches
+// mintRejectedRiskScore in internal/handler/mint.go: a refused mint means a
+// trusted service asked for something the operator did not allow, and the two
+// places a refusal can happen must not score it differently.
+const mintRefusedRiskScore = 45
+
 // Server is the main HTTP server for The Vault. It manages the middleware
 // chain, route registration, TLS configuration, and graceful shutdown.
 type Server struct {
@@ -647,7 +653,15 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		// Inside authMw for the same reason as the document routes: mintRL is keyed
 		// by client and the claims that carry the client id do not exist until
 		// authMw has run.
-		mux.Handle("POST /mint", authMw(mintRL(middleware.RequireScope(handler.MintScope)(dpopWrap(http.HandlerFunc(mintHandler.Mint))))))
+		//
+		// The scope gate audits its refusals. A request refused here never
+		// reaches MintHandler.Mint, so the handler's own audit call cannot see
+		// it, and probing the delegated-signing endpoint with a stolen non-mint
+		// client token produced no record at all. mintRefusedRiskScore mirrors
+		// the rejection score the handler uses for the refusals it does see, so
+		// both halves of a refused mint score the same.
+		mintRefusal := middleware.WithScopeRefusalAudit(d.AuditLog, audit.TokenMinted, mintRefusedRiskScore)
+		mux.Handle("POST /mint", authMw(mintRL(middleware.RequireScope(handler.MintScope, mintRefusal)(dpopWrap(http.HandlerFunc(mintHandler.Mint))))))
 	}
 
 	// Embedded frontend (SPA catch-all) — off by default, enabled via VAULT_SERVE_FRONTEND or honeypot profile
