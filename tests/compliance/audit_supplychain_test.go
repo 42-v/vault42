@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -435,5 +436,129 @@ func TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity(t *testing.T
 	http.DefaultTransport = rtDown
 	if service.NewHIBPClient().IsBreached(breached) {
 		t.Error("A07:2025: shipped HIBPClient did not fail open when the range API was unreachable")
+	}
+}
+
+// -----------------------------------------------------------------------------
+// The GitHub Release body is a published claim, and nothing read it.
+//
+// .github/workflows/release.yml wrote "SLSA Build Level 2 provenance" into the
+// body of every release, which is the widest audience any sentence in this
+// repository reaches, while docs/COMPLIANCE.md listed a SLSA build level under
+// what the project deliberately does not claim and the register carried no SLSA
+// row, no SLSA standard and no test. The two shipped together for the whole of
+// 1.0.0 because the release notes are the one published surface no gate parsed.
+//
+// The rule this enforces: the release body may not name a standard or an
+// assurance level that the register does not carry. It is coupled rather than
+// hardcoded — each entry names the standard the register would have to declare,
+// so adding SLSA as a standard with rows and evidence retires the corresponding
+// check here automatically, and the sentence becomes shippable the moment it
+// becomes backed. That is the same shape as the coupling gates in
+// register_code_coupling_test.go: the claim moves with the evidence, in both
+// directions.
+// -----------------------------------------------------------------------------
+
+// claimsForbiddenInReleaseNotes pairs a pattern that reads as a certification or
+// assurance-level claim with the register standard that would have to exist for
+// it to be one. Every entry is a claim docs/COMPLIANCE.md explicitly retracts
+// under "What this report deliberately does not say".
+var claimsForbiddenInReleaseNotes = []struct {
+	pattern  *regexp.Regexp
+	standard string
+	why      string
+}{
+	{regexp.MustCompile(`(?i)SLSA[ _-]*(build[ _-]*)?level[ _-]*[0-9]`), "SLSA",
+		"a SLSA level describes the build platform, and the register assesses this repository. " +
+			"Describe the mechanism -- signed provenance, GitHub's attestation service, Rekor -- " +
+			"which `gh attestation verify` checks, or land a SLSA standard block with rows."},
+	{regexp.MustCompile(`(?i)\bAAL[ _-]?3\b`), "NIST SP 800-63B-4",
+		"AAL3 needs a hardware authenticator the verifier has established as one; registration " +
+			"accepts \"none\" attestation and stores no AAGUID. See service.AALForMethods."},
+	{regexp.MustCompile(`(?i)FIPS[ _-]*140`), "FIPS 140",
+		"no cryptographic module in this tree has been validated, and the register says so."},
+	{regexp.MustCompile(`(?i)PCI[ _-]*DSS`), "PCI-DSS",
+		"vault42 stores, processes and transmits no cardholder data and has never been in a " +
+			"CDE assessment."},
+	{regexp.MustCompile(`(?i)SOC[ _-]*2\b`), "SOC 2",
+		"SOC 2 attests an organisation, not a codebase."},
+	{regexp.MustCompile(`(?i)ISO/?[ _-]*(IEC[ _-]*)?27001`), "ISO/IEC 27001",
+		"ISO 27001 attests an organisation, not a codebase."},
+	{regexp.MustCompile(`(?i)CIS[ _-]+Kubernetes`), "CIS Kubernetes Benchmark",
+		"the benchmark is overwhelmingly control-plane, etcd, kubelet and node configuration " +
+			"that a chart does not own. PSS-restricted is the workload-scoped standard, and it " +
+			"is what is claimed."},
+	{regexp.MustCompile(`(?i)FIDO2[ _-]+L[12]\b`), "FIDO2",
+		"FIDO Alliance L1/L2 certify authenticators. There is no such certification for a " +
+			"relying party; W3C WebAuthn RP conformance is what the register claims."},
+}
+
+func TestSupplyChain_TheReleaseNotesClaimNoStandardTheRegisterOmits(t *testing.T) {
+	raw := workflowSource(t, "release.yml")
+	if raw == "" {
+		t.Fatal("release notes: .github/workflows/release.yml is missing; nothing publishes a release body")
+	}
+
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Uses string            `yaml:"uses"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(raw), &wf); err != nil {
+		t.Fatalf("release notes: parse release.yml: %v", err)
+	}
+
+	// Every body the workflow publishes, not the one step this was written
+	// against: a second release step added later has to be read too.
+	var bodies []string
+	for _, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			if body, ok := step.With["body"]; ok && strings.TrimSpace(body) != "" {
+				bodies = append(bodies, body)
+			}
+		}
+	}
+	// A floor, because an empty corpus would pass every check below without
+	// reading a word. release.yml has published a body since 1.0.0 and the notes
+	// are the point of the job; finding none means the parse broke, not that the
+	// claim is clean.
+	if len(bodies) < 1 {
+		t.Fatal("release notes: no release step in release.yml carries a body:. Either the " +
+			"workflow stopped publishing notes, or this gate no longer knows how to read them; " +
+			"both need a person.")
+	}
+	joined := strings.Join(bodies, "\n")
+	if len(joined) < 500 {
+		t.Fatalf("release notes: the collected release body is %d characters. The published body "+
+			"is thousands; a fragment this small means the parse lost most of it and the scan "+
+			"below would clear the rest by not seeing it.", len(joined))
+	}
+
+	declared := map[string]bool{}
+	for _, s := range loadRegister(t).Standards {
+		declared[strings.ToLower(s.Name)] = true
+		declared[strings.ToLower(s.ShortName)] = true
+	}
+
+	for _, c := range claimsForbiddenInReleaseNotes {
+		hit := c.pattern.FindString(joined)
+		if hit == "" {
+			continue
+		}
+		if declared[strings.ToLower(c.standard)] {
+			// The register now carries it. The claim is backed, so it may ship.
+			t.Logf("release notes: %q is claimed and the register declares %s; backed", hit, c.standard)
+			continue
+		}
+		t.Errorf("release notes: the GitHub Release body says %q, and the register declares no "+
+			"%s standard, so every consumer of every release is told something no row, no "+
+			"evidence and no test in this repository supports. %s Either drop the claim from "+
+			"the body, or add the standard to docs/compliance-register.json with rows and "+
+			"evidence and remove it from the deliberately-not-claimed list in "+
+			"docs/COMPLIANCE.md.", hit, c.standard, c.why)
 	}
 }

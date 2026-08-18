@@ -720,8 +720,8 @@ jobs:
             ```
 
             **Provenance** — which workflow built it, from which commit. Every
-            binary archive, image and the chart carries **SLSA Build Level 2**
-            provenance, signed by GitHub's attestation service under this
+            binary archive, image and the chart carries a build-provenance
+            attestation, signed by GitHub's attestation service under this
             workflow's OIDC identity and recorded in the Rekor transparency log:
 
             ```
@@ -752,3 +752,14 @@ jobs:
             The images additionally carry BuildKit's own SLSA v0.2 predicate and
             an SPDX attestation. Those are unsigned and are not what the claim
             above rests on; `gh attestation verify` is.
+
+            **No SLSA level is claimed.** What is described above is the
+            mechanism, and the commands check it. A level describes the build
+            platform rather than this repository, so naming one here would be
+            vault42 repeating GitHub's assessment as though it were its own —
+            and this project publishes no claim it cannot evidence itself.
+            `docs/compliance-register.json` carries no SLSA row and
+            `docs/COMPLIANCE.md` lists a SLSA build level under what is
+            deliberately not claimed. This paragraph says the same thing, and
+            `TestSupplyChain_TheReleaseNotesClaimNoStandardTheRegisterOmits`
+            fails the build if the three ever disagree again.
