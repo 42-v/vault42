@@ -446,7 +446,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** If Redis is shared or unprotected, inject malicious data into the rate limit or session cache.
 
-**Defense:** Dedicated Redis instance per environment. Graceful degradation -- auth never fails because cache is down. Cache only stores rate limit counters, not session data.
+**Defense:** Dedicated Redis instance per environment, not a shared cache other software can write. The cache holds more than rate-limit counters: email-verify and password-reset tokens, TOTP replay keys, OAuth PKCE verifiers, WebAuthn ceremony state and password-confirmation windows. Refresh-token session rows live in PostgreSQL, not here. Cache outage is not "auth always works": FailClosed limiters (login, register, reset, 2FA verify, `/client/token`, `/kms/unwrap`, `/mint`, account deletion) reject with `503 rate_limiter_unavailable`. Ordinary limiters, including the OAuth callback, fall back to a per-pod counter. Several of those short-lived tokens are themselves cache reads, so an outage still fails the flow that needed them.
 
 **Test:** Cache interface tests in `internal/cache/`
 

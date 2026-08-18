@@ -267,9 +267,9 @@ POST /kms/unwrap                        mounted only when KMS_ROOT_KEY_FILE is s
   |
   v
 kmsUnwrapRL          RateLimit(30/min, per IP, FailClosed: true)
-  |                  Fail-closed, unlike the auth endpoints: a cache outage must not
-  |                  let the per-pod in-memory fallback multiply the key-release rate
-  |                  across replicas (audit L4).
+  |                  Fail-closed like login/register/reset, unlike the OAuth
+  |                  callback: a cache outage must not let the per-pod in-memory
+  |                  fallback multiply the key-release rate across replicas (audit L4).
   v
 authMw               Auth (or AuthDynamic under VAULT_KEY_ROTATION_DB). Resolves and
   |                  validates the client-credential token, puts claims in context.
@@ -296,22 +296,30 @@ model: the `internal/kms` package doc and [Attack Cheatsheet §8](cheatsheet.md)
 Rate limiting middleware is instantiated per-endpoint group with different limits
 and key functions, then wraps the appropriate routes:
 
-| Rate Limit | Limit | Window | Key | Endpoints |
-|------------|-------|--------|-----|-----------|
-| `loginRL` | 5 | 15 min | IP | POST /auth/login |
-| `registerRL` | 3 | 1 hour | IP | POST /auth/register |
-| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh |
-| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm |
-| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/totp/verify |
-| `confirmRL` | 5 | 15 min | IP | POST /auth/confirm |
-| `clientTokenRL` | 10 | 1 min | IP | POST /client/token |
-| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap (**fail-closed**) |
+| Rate Limit | Limit | Window | Key | Endpoints | On cache outage |
+|------------|-------|--------|-----|-----------|-----------------|
+| `loginRL` | 5 | 15 min | IP | POST /auth/login | Closed |
+| `registerRL` | 3 | 1 hour | IP | POST /auth/register | Closed |
+| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh | In-memory fallback |
+| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm | Closed |
+| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/{totp,backup-code,email-otp}/verify and email-otp/resend | Closed |
+| `confirmRL` | 5 | 15 min | user ID | POST /auth/confirm (and the other confirmRL routes) | In-memory fallback |
+| `clientTokenRL` | 10 | 1 min | IP | POST /client/token | Closed |
+| `oauthCallbackRL` | 10 | 1 min | IP | GET /auth/oauth2/callback/{provider} | In-memory fallback |
+| `authorizeRL` | 10 | 1 min | IP | GET /auth/oauth2/authorize | In-memory fallback |
+| `oauthExchangeRL` | 10 | 1 min | IP | POST /auth/oauth2/exchange | In-memory fallback |
+| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap | Closed |
+| `mintRL` | 60 | 1 min | client_id | POST /mint | Closed |
 
-Rate limiting uses `cache.Increment()` with a sliding window. On cache failure,
-requests are **allowed through** (graceful degradation -- auth never fails because
-the cache is down). `kmsUnwrapRL` is the exception: it is configured `FailClosed: true`, so a
-cache outage rejects unwraps rather than falling back to a per-pod in-memory counter that
-would multiply the effective key-release rate by the replica count.
+Rate limiting uses `cache.Increment()` with a fixed window. On cache failure an
+ordinary limiter falls back to a per-process in-memory counter: the limit stays
+enforced per pod, it is not lifted. A limiter marked Closed rejects with
+`503 rate_limiter_unavailable` instead, because the per-pod fallback would
+multiply the budget by the replica count. Login, register, password reset,
+TOTP/backup/email-OTP verify, `POST /client/token`, account deletion,
+`POST /kms/unwrap` and `POST /mint` are Closed. The OAuth callback is not:
+it used to share `loginRL` and no longer does (`internal/server/server.go`).
+A cache outage here is a per-pod 10/min, not a 503, and not "allow through".
 
 See: `internal/server/server.go`, `internal/middleware/`
 
@@ -967,7 +975,7 @@ this is the only path that can remove an escrow record.
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:
 
-- Rate limiting counters (sliding window via `Increment`)
+- Rate limiting counters (fixed window via `Increment`)
 - Email verification tokens (`verify:<hash>` -> user ID, 24h TTL)
 - Password reset tokens (`reset:<hash>` -> user ID, 1h TTL)
 - TOTP replay prevention (`totp_used:<user>:<step>` -> "1", 90s TTL)

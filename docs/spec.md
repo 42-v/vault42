@@ -234,9 +234,11 @@ a capability that is absent:
 - **No ACME.** Bring your own certificate; dev uses mkcert.
 - **No mTLS on the main binary.** The admin gateway requires it; vault42 itself does not offer
   service-to-service mTLS.
-- **No progressive login delay.** Rate limiting is fixed-window and fails closed on the
-  authentication endpoints; account lockout is absolute rather than graduated. Adding backoff later
-  changes latency and `Retry-After` values, both already in the contract, so it is compatible.
+- **No progressive login delay.** Rate limiting is fixed-window. Credential-guessing and
+  key-release routes fail closed on a cache outage (section 8.1); the OAuth authorize, callback
+  and exchange limiters fall back to a per-pod counter. Account lockout is absolute rather than
+  graduated. Adding backoff later changes latency and `Retry-After` values, both already in the
+  contract, so it is compatible.
 
 ### 0.9 Tenancy: what `X-Vault-App` does and does not guarantee
 
@@ -350,7 +352,7 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 3. PKCE verifier stored in cache keyed by nonce (10-minute TTL)
 4. Client redirected to provider's authorization URL
 
-**Callback:** `GET /auth/oauth2/callback/{provider}`
+**Callback:** `GET /auth/oauth2/callback/{provider}` (rate-limited 10/min/IP)
 
 1. State parameter parsed and HMAC signature verified
 2. Expiry checked (10-minute window)
@@ -815,7 +817,7 @@ All commands require `--admin-token`:
 | `unlock-user` | Retired: refuses and points at `POST /admin/users/{id}/unlock` |
 | `revoke-all-sessions` | Revoke all refresh tokens system-wide |
 | `rotate-admin-token` | Rotate the admin token itself |
-| `rotate-jwks` | Rotate the JWKS signing key |
+| `rotate-jwks` | Write a new RSA-2048 signing key to `--output` (mode 0600, `O_EXCL`). Does not touch the live keystore. Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. |
 | `seed` | Declarative client + user creation from JSON file |
 | `cleanup-audit` | Retired: prints an error and writes nothing. Audit retention is `VAULT_AUDIT_RETENTION_DAYS`. |
 | `cleanup-recovery` | Delete account-recovery escrow records older than N days |
@@ -1261,7 +1263,7 @@ material.
 | Endpoint | Limit | Window | Key | On cache outage |
 |----------|-------|--------|-----|-----------------|
 | `POST /auth/login` | 5 | 15 min | IP | Closed |
-| `GET /auth/oauth2/callback/{provider}` | 5 | 15 min | IP | Closed |
+| `GET /auth/oauth2/callback/{provider}` | 10 | 1 min | IP | In-memory fallback |
 | `POST /auth/register` | 3 | 1 hour | IP | Closed |
 | `POST /auth/password/reset` | 3 | 1 hour | IP | Closed |
 | `POST /auth/password/reset/confirm` | 3 | 1 hour | IP | Closed |
@@ -1298,10 +1300,22 @@ material.
 | `GET /service/documents/{subject}` | 300 | 1 min | client_id (see below) | In-memory fallback |
 | `POST /admin/auth/login` | 10 | 1 min | IP | n/a (in-process) |
 
+The OAuth authorize, callback and exchange routes are each 10/min per IP with the in-memory
+fallback, not the login bucket. The callback is not a credential-guessing surface (HMAC-valid
+state, `__Host-oauth_state`, single-use PKCE), so it no longer shares `loginRL`. An operator
+sizing 429s or treating Redis down as "callbacks reject" is looking at the old limiter.
+
+`loginRL`, `registerRL` and `passwordResetRL` also carry a VPN/hosting/Tor weight of 3
+(`middleware.IPIntelWeight`, `internal/server/server.go:420-433`). A flagged address increments
+the shared bucket once but is compared at triple weight, so it meets the ordinary 429 sooner.
+It is never answered 403: this is scrutiny, not a VPN block. The OAuth callback is not weighted.
+The table is compiled into the binary (`VAULT_IPINTEL_DATA` can replace it). An unreadable
+override or a failed load leaves an empty table and every address weighs 1.
+
 **"client_id (see below)"** marks the five routes configured with `handler.ClientRateLimitKey`,
 which buckets by the authenticated `client_id` and falls back to the source address only when the
 request carries no claims. Every one of those limiters is mounted **inside** `authMw`
-(`internal/server/server.go:561-570, 616-625`), so the validated claims are in context when the key
+(`internal/server/server.go:697-706` for the document routes, `:768` for `/mint`), so the validated claims are in context when the key
 is computed and the client bucket is the one taken. The source-address fallback is therefore
 unreachable in practice: a claimless request is rejected by `authMw` before it reaches the limiter. A
 caller behind a single in-cluster pod thus gets its own budget per `client_id` rather than sharing
@@ -1535,10 +1549,18 @@ gracefully, and an ordinary rate limiter falls back to a per-process counter.
 
 The exception is deliberate. The limiters listed as fail-closed in section 8.1 reject with
 `503 rate_limiter_unavailable` during a cache outage rather than fall back, because a per-pod
-counter would multiply the brute-force budget by the replica count. On those endpoints -- login, the
-OAuth2 callback, registration, password reset, account deletion, the 2FA verify and resend routes,
-and `POST /kms/unwrap` -- authentication does fail when the cache is down, and that is the intended
-behaviour.
+counter would multiply the brute-force budget by the replica count. On those endpoints -- login,
+registration, password reset, account deletion, `POST /client/token`, the 2FA verify and resend
+routes, `POST /kms/unwrap` and `POST /mint` -- authentication does fail when the cache is down, and
+that is the intended behaviour.
+
+The OAuth authorize, callback and exchange limiters are not on that list. They are 10/min per IP
+and take the in-memory fallback. The callback used to share `loginRL` (5 per 15 minutes, fail-closed,
+VPN-weighted). It does not any more: reaching its body already takes an HMAC-valid state, a matching
+`__Host-oauth_state` cookie and a single-use server-side PKCE verifier, so it is not a guessing
+surface, and sharing the login bucket let one office or VPN exit spend social login with five
+garbage login bodies. The verifier lookup is itself a cache read, so a cache outage still refuses
+the callback; what it does not do is answer `503 rate_limiter_unavailable`.
 
 ---
 
@@ -2098,7 +2120,7 @@ probing.
 | `GET` | `/.well-known/jwks.json` | None | -- | Always | JWKS public keys |
 | `GET` | `/.well-known/openid-configuration` | None | -- | Always | Issuer metadata (20) |
 | `GET` | `/auth/oauth2/authorize` | None | 10/m IP | >= 1 OAuth or OIDC provider configured | Start a social login |
-| `GET` | `/auth/oauth2/callback/{provider}` | None | 5/15m IP | >= 1 OAuth or OIDC provider configured | Provider redirect target |
+| `GET` | `/auth/oauth2/callback/{provider}` | None | 10/m IP | >= 1 OAuth or OIDC provider configured | Provider redirect target |
 | `POST` | `/auth/oauth2/exchange` | None | 10/m IP | >= 1 OAuth or OIDC provider configured | Exchange the one-time code for tokens |
 
 #### Main binary -- authenticated
@@ -2564,7 +2586,7 @@ wrong -- they denied features that ship -- so every row below cites what was che
 | **SIEM streaming** | Not implemented. The audit log is queryable and exportable; nothing is pushed. |
 | **IP geolocation** | Not implemented. `GEO_ALLOWLIST` / `GEO_BLOCKLIST` act on a country header the proxy supplies (`GEO_IP_HEADER`); vault42 performs no lookup of its own. |
 | **Risk scoring (adaptive)** | Not implemented. `risk_score` is hardcoded per event type (0, 10, 20, 30, 70, 90) and is nonetheless **public** on `GET /admin/audit`, so section 0.6.1 excludes it from the stability contract: values are not comparable between event types and may change without a major bump. Clients MUST NOT threshold or rank on it. |
-| **Progressive login delays** | Not implemented. Rate limiting is fixed-window and fails closed on the authentication endpoints, and account lockout is absolute. Backoff has no public API surface -- it changes latency and `Retry-After` values, both already in the contract -- so adding it later is compatible. |
+| **Progressive login delays** | Not implemented. Rate limiting is fixed-window. Credential-guessing and key-release routes fail closed (section 8.1); the OAuth authorize, callback and exchange limiters fall back to a per-pod counter. Account lockout is absolute. Backoff has no public API surface -- it changes latency and `Retry-After` values, both already in the contract -- so adding it later is compatible. |
 | **Row Level Security** | Not implemented |
 | **Audit log retention/cleanup** | Implemented as `VAULT_AUDIT_RETENTION_DAYS`, swept in-process via `audit.cleanup_old_entries()` (SECURITY DEFINER). `vault cleanup-audit` is a retired stub and writes nothing. |
 | **Account lock email notification** | Implemented: `TemplateAccountLocked` sent once per lockout window via cache dedup |
