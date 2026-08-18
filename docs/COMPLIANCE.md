@@ -309,23 +309,58 @@ of the list:
   has never been in a CDE assessment. The only honest sentence is that vault42
   can serve as the authentication component supporting Requirement 8 in an
   operator's CDE, and that vault42 itself is out of scope and unassessed.
-- **RFC 8414 (Authorization Server Metadata).** The discovery document publishes
-  three of the four fields §2 requires, and `internal/handler/client.go` returns
-  `invalid_client_credentials` where RFC 6749 §5.2 specifies `invalid_client`.
-  6749 first, then 8414 is free.
+- **RFC 8414 (Authorization Server Metadata).** vault42 is not an authorization
+  server: it has no authorize endpoint, and `GET /auth/oauth2/authorize` takes a
+  `provider` and redirects to an upstream IdP rather than accepting a `client_id`
+  or a `redirect_uri`. The discovery document at
+  `internal/handler/wellknown.go:76-80` publishes three fields, of which one
+  (`issuer`) is required by §2, one (`jwks_uri`) is optional, and one
+  (`access_token_signing_alg_values_supported`) is not a registered §2 metadata
+  name at all; `response_types_supported` and `token_endpoint` are both absent.
+  Claiming 8414 would mean claiming a role vault42 does not play. Separately,
+  `internal/handler/client.go` returns `invalid_client_credentials` where RFC
+  6749 §5.2 specifies `invalid_client`, its 401 carries no `WWW-Authenticate`
+  though it accepts Basic auth, and `grant_type` is never read, so
+  `unsupported_grant_type` is unreachable. Those are 6749 debts, and they are
+  worth paying on their own terms rather than as a step toward 8414.
 - **"FIDO2 L2".** FIDO Alliance L1/L2 are *authenticator* certifications; there
   is no such certification for a relying party. What is claimable, and what the
   WebAuthn rows say, is conformance to the W3C WebAuthn specification's relying
   party operations.
-- **A SLSA build level.** `provenance: true` is BuildKit provenance in
-  `mode=min`, which is not a signed build-level attestation. The SSDF PS.3.2 row
-  says exactly that rather than converting it into a number.
-- **FIPS 140 and AAL3.** Neither is claimed anywhere. AAL2 is claimed and stated
-  precisely: every SHALL met, two SHOULDs deviated from with published
-  justification (CR-14).
+- **FIPS 140.** Not claimed anywhere. There is no BoringCrypto build, no
+  `GOFIPS` setting and no FIPS build tag in the tree.
 - **OWASP Top 10:2021.** The register carries the 2025 edition. Adding 2021
   alongside it would recreate the two-editions-at-once confusion the ASVS
   4.0.3 -> 5.0.0 migration already cost this project.
+
+**Claimed elsewhere, and this section used to deny it.** Two entries were
+written when they were true and were not revisited when the code moved, which is
+the failure mode this whole document exists to catch, so they are corrected here
+rather than deleted.
+
+- **SLSA Build Level 2 is claimed**, in the body of every GitHub release
+  (`.github/workflows/release.yml:722-725`). The sentence this section used to
+  carry described only BuildKit's `provenance: true`, which is indeed an
+  unsigned `mode=min` predicate and is indeed not a level. It is not what the
+  claim rests on: `.github/workflows/release.yml:362-381`, `:435-441` and
+  `:589-596` run `actions/attest-build-provenance` over the three images, the
+  release archives and the chart, so each statement is assembled and signed by
+  GitHub's attestation service under the workflow's OIDC identity and recorded
+  in Rekor. The release body says so and names the weaker artefact separately at
+  `:752-754`. The register's SSDF PS.3.2 row still carries the superseded
+  wording and is owed the same edit.
+- **AAL3 is asserted**, on any login completed with a user-verified WebAuthn
+  authenticator. `internal/service/mfa.go:106-108` returns `AAL3` for that case,
+  `ACRForAAL` renders it as `urn:vault42:aal:3`, and
+  `internal/service/token.go:166` signs it into the access token's `acr` claim.
+  The precise statement is that AAL2 is the level vault42 meets in full, with
+  every SHALL met and two SHOULDs deviated from under CR-14, and that a
+  user-verified WebAuthn login is additionally *asserted* as AAL3 without vault42
+  having been assessed against §4.3. A relying party reading `acr` is entitled to
+  know which of those two it is holding. The register's
+  `NIST SP 800-63B-4 / 3.2.4` row files attestation as Not Applicable on the
+  basis that "vault42 publishes an AAL2 statement and no higher", which is the
+  premise this paragraph contradicts, and that row cites no test.
 
 ### Closed since this document was first written
 
