@@ -15,9 +15,9 @@
 // minted and where it went, never what it was. The value itself goes to one of
 // two places:
 //
-//   - the file named by VAULT_FIRST_BOOT_CREDENTIAL_FILE, created 0600, refusing
-//     a path that is not already a regular file no wider than 0600 (which is
-//     what rejects a symlink planted at the path); or
+//   - the file named by VAULT_FIRST_BOOT_CREDENTIAL_FILE, created 0600 and
+//     opened O_NOFOLLOW, refusing anything the open descriptor does not report
+//     as a private regular file this process owns outright; or
 //   - stdout, but only when stdout is a terminal, which is the one case where
 //     the reader is a human at a keyboard and not a log shipper.
 //
@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // CredentialFileEnv names the env var holding the path first-boot credentials
@@ -112,25 +113,68 @@ func openSink() (io.Writer, string, error) {
 // It is O_APPEND rather than O_EXCL because one boot can mint several
 // credentials (a seed file with three clients delivers three secrets), so the
 // symlink and permission protections O_EXCL would have given for free are made
-// explicit instead: an existing path must be a regular file whose mode grants
-// nothing to group or other, and a symlink fails that test because Lstat reports
-// the link rather than its target.
+// explicit instead.
+//
+// Every check runs against the open descriptor rather than against the path.
+// Checking the path first and opening it second is two lookups of a name that
+// anyone with write access to the containing directory controls, and the sink's
+// directory is exactly that kind of place: a memory-backed emptyDir, or /tmp
+// when an operator points the variable there. Be a regular 0600 file for the
+// first lookup, be a symlink by the second, and the credential lands wherever
+// the link's author chose. O_NOFOLLOW settles that in the kernel — the open
+// itself fails on a symlink, with no window between the decision and the write —
+// and Fstat then describes the one inode this descriptor is pinned to, which no
+// later rename can swap.
+//
+// Ownership and link count are checked for the same reason the mode is. A
+// hardlink to an inode the attacker already holds is a regular file at 0600 and
+// passes every mode test, while the credential is still readable through their
+// name for it.
 func openCredentialFile(path string) (*os.File, error) {
-	if fi, err := os.Lstat(path); err == nil {
-		if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("%s: %s is not a regular file", CredentialFileEnv, path)
-		}
-		if fi.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("%s: %s is mode %#o, so the credential would be readable by others; chmod 600 it",
-				CredentialFileEnv, path, fi.Mode().Perm())
-		}
-	}
-
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) // #nosec G304 -- the operator names their own credential file
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- the operator names their own credential file
 	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("%s: %s is a symlink, so the credential would be written to a path its author chose rather than the one configured",
+				CredentialFileEnv, path)
+		}
 		return nil, fmt.Errorf("%s: %w", CredentialFileEnv, err)
 	}
+
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s: %w", CredentialFileEnv, err)
+	}
+	if err := checkCredentialSink(path, fi); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return f, nil
+}
+
+// checkCredentialSink refuses a descriptor that is anything other than a private
+// regular file belonging to this process.
+func checkCredentialSink(path string, fi os.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: %s is not a regular file", CredentialFileEnv, path)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s: %s is mode %#o, so the credential would be readable by others; chmod 600 it",
+			CredentialFileEnv, path, fi.Mode().Perm())
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if uid := os.Getuid(); uid >= 0 && uint64(st.Uid) != uint64(uid) {
+		return fmt.Errorf("%s: %s is owned by uid %d and this process runs as %d, so the credential would be readable by another account; chown it",
+			CredentialFileEnv, path, st.Uid, uid)
+	}
+	if st.Nlink > 1 {
+		return fmt.Errorf("%s: %s has %d hard links, so the credential would be readable through a name that is not the configured one; rm it and let the boot recreate it",
+			CredentialFileEnv, path, st.Nlink)
+	}
+	return nil
 }
 
 // sanitizeLabel reduces a label to characters that cannot end a line or open a
