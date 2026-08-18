@@ -22,6 +22,17 @@ on:
         type: boolean
         default: false
         required: false
+      # Image scanning alone, without the attack suite. ci.yml sets this from a
+      # paths filter so a pull request that changes a base image pin or a
+      # dependency manifest gets its images scanned, while a pull request that
+      # only touches Go code does not pay for a container build it cannot
+      # affect. Before this, `full_scan` was the only switch and it defaults to
+      # false on workflow_call, so no pull request ever scanned an image: a
+      # HIGH base-image CVE merged green and was first seen at release time.
+      image_scan:
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -176,7 +187,8 @@ jobs:
 
   trivy-image:
     name: Trivy Image Scan
-    if: github.event_name == 'schedule' || inputs.full_scan
+    if: >-
+      github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -190,6 +202,14 @@ jobs:
           - name: admin-gateway
             dockerfile: Dockerfile.admin-gateway
             tag: vault-admin-gateway:scan
+          # release.yml has published ghcr.io/42-v/vault42-bridge since the
+          # bridge job was added, and charts/vault/values.yaml points bridge
+          # mode at it. It was in no scan matrix and on no schedule, so the one
+          # published image nobody looked at was the one running as a network
+          # edge component.
+          - name: bridge
+            dockerfile: Dockerfile.bridge
+            tag: vault-bridge:scan
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -202,6 +222,51 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  # The frontend image is deployed by the chart and built by nothing: no
+  # workflow builds web/Dockerfile, and charts/vault/values.yaml names a
+  # bare `vault-frontend` with no registry. So it cannot join the matrix above,
+  # which scans images this repository builds.
+  #
+  # Its OS package surface is entirely its base image: web/Dockerfile only
+  # COPYs static files on top. Scanning the base by the digest the Dockerfile
+  # pins therefore gives the same package findings with no SPA build and no
+  # container build at all, and reading the digest out of the file rather than
+  # repeating it here means the two cannot drift apart.
+  trivy-frontend-base:
+    name: Trivy Frontend Base Image
+    if: >-
+      github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve the pinned base image
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=$(sed -n 's/^FROM  *\([^ ]*\).*/\1/p' web/Dockerfile | head -1)
+          if [ -z "$ref" ]; then
+            echo "::error::no FROM line in web/Dockerfile; nothing to scan" >&2
+            exit 1
+          fi
+          case "$ref" in
+            *@sha256:*) ;;
+            *) echo "::error::web/Dockerfile base $ref is not digest-pinned" >&2; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "scanning $ref"
+
+      - name: Run Trivy (frontend base)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.base.outputs.ref }}
           severity: HIGH,CRITICAL
           exit-code: 1
 

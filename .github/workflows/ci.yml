@@ -295,9 +295,19 @@ jobs:
 
   # govulncheck, gosec and Trivy used to run only at 03:00 UTC on main, so a PR
   # could introduce a HIGH CVE and merge green.
+  #
+  # The image scans were still nightly-only, because `full_scan` defaults to
+  # false on workflow_call: a pull request that repointed a base image could
+  # introduce a HIGH or CRITICAL base-image CVE and merge green, and the first
+  # thing to notice was the release. image_scan turns them on for the pull
+  # requests that can actually change what is in an image, and leaves them off
+  # for the ones that cannot.
   security:
     name: Security
+    needs: [changes]
     uses: ./.github/workflows/nightly-security.yml
+    with:
+      image_scan: ${{ needs.changes.outputs.image_inputs_changed == 'true' }}
 
   chart:
     name: Helm chart
@@ -356,6 +366,7 @@ jobs:
     outputs:
       go_changed: ${{ steps.filter.outputs.go }}
       goreleaser_changed: ${{ steps.filter.outputs.goreleaser }}
+      image_inputs_changed: ${{ steps.filter.outputs.image_inputs }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -384,6 +395,20 @@ jobs:
             goreleaser:
               - '.goreleaser.yaml'
               - '.goreleaser.yml'
+            # What can change the vulnerability surface of a built image: the
+            # base image pin, the dependency manifests the image installs from,
+            # and the script that builds it. Deliberately NOT '**/*.go': editing
+            # a handler changes the binary but adds no CVE, and putting Go
+            # source here would run three container builds on nearly every pull
+            # request to learn nothing.
+            image_inputs:
+              - 'Dockerfile'
+              - 'Dockerfile.*'
+              - 'web/Dockerfile'
+              - 'go.mod'
+              - 'go.sum'
+              - 'pnpm-lock.yaml'
+              - 'scripts/ci-build-image.sh'
 
   modules:
     name: Go module hygiene
