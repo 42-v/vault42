@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -333,7 +334,7 @@ THIS IS INVALID SQL;`
 		}
 	})
 
-	t.Run("Canceled context fails creating tracking table", func(t *testing.T) {
+	t.Run("Canceled context fails acquiring the migration lock", func(t *testing.T) {
 		conn, cleanup := setupRawPostgres(t)
 		defer cleanup()
 
@@ -344,8 +345,56 @@ THIS IS INVALID SQL;`
 		if err == nil {
 			t.Fatal("expected error for canceled context, got nil")
 		}
+		if !strings.Contains(err.Error(), "acquire migration lock") {
+			t.Errorf("error = %q, want it to contain %q", err, "acquire migration lock")
+		}
+	})
+
+	t.Run("A role without CREATE on public fails at the tracking table", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		// The lock has to be reachable by a role that cannot create the table,
+		// or this covers the lock's error path a second time instead of the
+		// CREATE's. pg_advisory_lock is executable by PUBLIC; CREATE on schema
+		// public has not been granted to PUBLIC since PostgreSQL 15.
+		if _, err := conn.Exec(ctx,
+			`CREATE ROLE migrate_nocreate LOGIN PASSWORD 'migrate_nocreate'`); err != nil {
+			t.Fatalf("create role: %v", err)
+		}
+
+		cfg := conn.Config().Copy()
+		cfg.User = "migrate_nocreate"
+		cfg.Password = "migrate_nocreate"
+		limited, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			t.Fatalf("connect as migrate_nocreate: %v", err)
+		}
+		defer limited.Close(ctx)
+
+		err = migrate.Run(ctx, limited, t.TempDir())
+		if err == nil {
+			t.Fatal("expected error creating the tracking table without CREATE, got nil")
+		}
 		if !strings.Contains(err.Error(), "create schema_migrations") {
 			t.Errorf("error = %q, want it to contain %q", err, "create schema_migrations")
+		}
+
+		// The lock is released even though the run failed, so the next runner
+		// does not queue behind a session that already gave up. Asked from a
+		// third session, which is the only place the answer means anything.
+		var free bool
+		if err := conn.QueryRow(ctx,
+			"SELECT pg_try_advisory_lock($1)", migrate.LockKey).Scan(&free); err != nil {
+			t.Fatalf("probe the migration lock: %v", err)
+		}
+		if !free {
+			t.Error("the migration advisory lock is still held after a failed run; the next " +
+				"replica to boot would wait behind a session that already gave up")
+		} else if _, err := conn.Exec(ctx,
+			"SELECT pg_advisory_unlock($1)", migrate.LockKey); err != nil {
+			t.Fatalf("release the probe lock: %v", err)
 		}
 	})
 
@@ -496,4 +545,130 @@ INSERT INTO public.deferred_test VALUES (1), (1);`
 			t.Errorf("migration count = %d, want 0 (commit failed)", count)
 		}
 	})
+}
+
+// migrateReplicas is how many runners race. The chart ships replicaCount 3 with
+// VAULT_AUTO_MIGRATE true, and three was enough to lose two of them on a real
+// database, so the number here is the deployed one and not a stress figure.
+const migrateReplicas = 3
+
+// TestMigrateRunConcurrentReplicas is the gate on the advisory lock.
+//
+// Without it, three replicas booting together against one database is not a
+// theoretical race: two of the three die, on a fresh install with `create
+// schema_migrations: duplicate key value violates unique constraint
+// "pg_type_typname_nsp_index"` (CREATE TABLE IF NOT EXISTS is not atomic against
+// concurrent DDL), and on an upgrade with the same error against
+// pg_proc_proname_args_nsp_index (CREATE OR REPLACE FUNCTION races identically).
+// cmd/vault turns each into log.Fatalf, so each loser is a CrashLoopBackOff.
+//
+// Both shapes are here because they fail on different statements: the first
+// outside any transaction, the second inside one.
+func TestMigrateRunConcurrentReplicas(t *testing.T) {
+	t.Run("Fresh database", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+
+		dir := t.TempDir()
+		writeMigration(t, dir, "001_schema.sql",
+			`CREATE SCHEMA IF NOT EXISTS racy;
+CREATE TABLE racy.rows (id INT PRIMARY KEY);`)
+
+		runMigrateRace(t, conn, dir)
+		assertAppliedVersions(t, conn, []string{"001_schema.sql"})
+	})
+
+	t.Run("Upgrade staged one migration behind", func(t *testing.T) {
+		conn, cleanup := setupRawPostgres(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		dir := t.TempDir()
+		writeMigration(t, dir, "001_schema.sql", `CREATE SCHEMA IF NOT EXISTS racy;`)
+		if err := migrate.Run(ctx, conn, dir); err != nil {
+			t.Fatalf("stage the database: %v", err)
+		}
+
+		// A function replacement, which is what migration 030 does and what the
+		// three replicas collided on in the measured upgrade.
+		writeMigration(t, dir, "002_function.sql",
+			`CREATE OR REPLACE FUNCTION racy.answer() RETURNS INT
+LANGUAGE sql AS $$ SELECT 42 $$;`)
+
+		runMigrateRace(t, conn, dir)
+		assertAppliedVersions(t, conn, []string{"001_schema.sql", "002_function.sql"})
+	})
+}
+
+// runMigrateRace releases migrateReplicas runners on their own connections at
+// the same instant and requires every one of them to return nil.
+func runMigrateRace(t *testing.T, conn *pgx.Conn, dir string) {
+	t.Helper()
+	ctx := context.Background()
+
+	start := make(chan struct{})
+	errs := make([]error, migrateReplicas)
+	var wg sync.WaitGroup
+
+	for i := range migrateReplicas {
+		replica, err := pgx.ConnectConfig(ctx, conn.Config().Copy())
+		if err != nil {
+			t.Fatalf("connect replica %d: %v", i, err)
+		}
+		defer replica.Close(ctx)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = migrate.Run(ctx, replica, dir)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("replica %d failed: %v\nWith VAULT_AUTO_MIGRATE and more than one replica "+
+				"this is a pod that never becomes ready. The runs are serialized by an advisory "+
+				"lock precisely so every replica either applies the migrations or finds them "+
+				"already applied.", i, err)
+		}
+	}
+}
+
+func writeMigration(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+// assertAppliedVersions checks that the race applied each migration exactly
+// once. Three runners that each recorded a row would pass a count check on the
+// number of runners and mean the opposite of what this test is about.
+func assertAppliedVersions(t *testing.T, conn *pgx.Conn, want []string) {
+	t.Helper()
+	rows, err := conn.Query(context.Background(),
+		`SELECT version FROM public.schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("read schema_migrations: %v", err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatalf("scan version: %v", err)
+		}
+		got = append(got, v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate schema_migrations: %v", err)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("schema_migrations holds %v, want %v", got, want)
+	}
 }
