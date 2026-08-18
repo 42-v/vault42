@@ -4,7 +4,7 @@
 // The bug this exists to prevent is not "someone forgot a table". It is a wrong
 // premise that any competent schema author would reach: migration 028 wrote
 //
-//     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE
+//	user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE
 //
 // and concluded, in the file, that "account erasure (Art. 17) removes a user's
 // countries automatically with no bespoke cascade step". Every word of that is
@@ -19,7 +19,7 @@
 // of someone writing SQL eighteen migrations later. So the check moves into the
 // build.
 //
-// HOW IT WORKS
+// How the gate works:
 //
 // The set of subject-linked tables is derived from migrations/*.sql, not from a
 // list someone maintains: a table qualifies if it references auth.users or
