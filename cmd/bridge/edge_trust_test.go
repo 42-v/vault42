@@ -391,35 +391,6 @@ func TestBridgeUpstreamTransportIsBounded(t *testing.T) {
 	}
 }
 
-// TestSafeLogValueNeutralizesRecordForgery covers the log sanitiser: an address
-// arriving in a header the operator declared trusted used to reach log.Printf
-// raw, and a U+0085 in it forged a whole record.
-func TestSafeLogValueNeutralizesRecordForgery(t *testing.T) {
-	got := safeLogValue("203.0.113.1\n2026/01/01 forged: admin login")
-	if strings.ContainsAny(got, "\n\r") {
-		t.Fatalf("safeLogValue kept a line break: %q", got)
-	}
-	if got := safeLogValue("1.2.3.4\u0085forged"); strings.Contains(got, "\u0085") {
-		t.Fatalf("safeLogValue kept NEL: %q", got)
-	}
-	// U+2028 and U+2029 split a record for a log shipper exactly as a newline
-	// does. httputil.SafeLogValue was widened to cover them in 27b1735; this
-	// copy was written afterwards and was not, so a bridge log line stayed
-	// splittable by an attacker-controlled value.
-	for name, sep := range map[string]string{"line separator": "\u2028", "paragraph separator": "\u2029"} {
-		if got := safeLogValue("1.2.3.4" + sep + "forged"); strings.Contains(got, sep) {
-			t.Errorf("safeLogValue kept the unicode %s: %q", name, got)
-		}
-	}
-	long := safeLogValue(strings.Repeat("a", 500))
-	if len(long) > 200 {
-		t.Fatalf("safeLogValue returned %d bytes, want it truncated", len(long))
-	}
-	if got := safeLogValue("203.0.113.1"); got != "203.0.113.1" {
-		t.Fatalf("safeLogValue mangled an ordinary address: %q", got)
-	}
-}
-
 // mustCIDRs parses trusted-proxy ranges for a test config.
 func mustCIDRs(t *testing.T, cidrs ...string) []*net.IPNet {
 	t.Helper()

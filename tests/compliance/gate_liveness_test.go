@@ -502,6 +502,11 @@ var commentTestName = regexp.MustCompile(`\b((?:Test|Fuzz|Benchmark)[A-Z][A-Za-z
 // tests/spec/ratelimit_failclosed_test.go uses for failOpenByDesign: an
 // exemption with no written reason is indistinguishable from an oversight.
 var commentTestNameExemptions = map[string]string{
+	"FuzzEmailValidation": "the target this repository deleted, named by the comment on " +
+		"tests/spec/fuzz_targets_test.go's workflow gate and by the one on tests/fuzz/" +
+		"fuzz_sanitize_email_test.go that replaced it. Both sentences exist to say the name is " +
+		"gone: it fuzzed an isValidEmail defined in the same file, and ci.yml went on naming it " +
+		"in a -fuzz= flag that then matched nothing and exited 0",
 	"TestASVS_V10_4_8_PerTokenExpiryExistsAndFamilyAgeIsStillUnrecorded": "the historical dead " +
 		"gate this file was written about, named in the header so a reader can look it up. It was " +
 		"rewritten under a different name; naming the old one is the point",

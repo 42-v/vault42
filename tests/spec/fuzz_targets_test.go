@@ -25,6 +25,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,3 +123,75 @@ func TestEveryFuzzTargetReachesShippedCode(t *testing.T) {
 	}
 	t.Logf("%d fuzz targets checked, %d do not reach shipped code", targets, offenders)
 }
+
+// A -fuzz= name that matches no target is a job step that fuzzes nothing.
+//
+// `go test -fuzz=FuzzEmailValidation` against a tree with no such function
+// prints "testing: warning: no fuzz tests to fuzz", exits 0, and shows a green
+// tick next to "Fuzz email". That is what the workflow did for as long as it
+// took anyone to notice the dummy target had been deleted -- the same silent
+// pass as the target it replaced, one layer further out.
+func TestEveryFuzzNameAWorkflowRunsExists(t *testing.T) {
+	root := repoRoot(t)
+
+	declared := map[string]struct{}{}
+	dir := filepath.Join(root, "tests", "fuzz")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read tests/fuzz: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse tests/fuzz/%s: %v", entry.Name(), parseErr)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && strings.HasPrefix(fn.Name.Name, "Fuzz") {
+				declared[fn.Name.Name] = struct{}{}
+			}
+		}
+	}
+	if len(declared) < 10 {
+		t.Fatalf("only %d fuzz targets declared under tests/fuzz; this gate is reading the wrong "+
+			"directory and would call every workflow name unresolvable or resolvable at random",
+			len(declared))
+	}
+
+	workflows := filepath.Join(root, ".github", "workflows")
+	files, err := os.ReadDir(workflows)
+	if err != nil {
+		t.Fatalf("read .github/workflows: %v", err)
+	}
+	named := 0
+	for _, wf := range files {
+		if wf.IsDir() || !strings.HasSuffix(wf.Name(), ".yml") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(workflows, wf.Name()))
+		if readErr != nil {
+			t.Fatalf("read %s: %v", wf.Name(), readErr)
+		}
+		for _, m := range fuzzFlag.FindAllStringSubmatch(string(raw), -1) {
+			named++
+			if _, ok := declared[m[1]]; !ok {
+				t.Errorf(".github/workflows/%s runs -fuzz=%s, and no such target exists under "+
+					"tests/fuzz. `go test` treats an unmatched -fuzz name as nothing to run, "+
+					"exits 0, and the step reports the same green as a minute of real fuzzing.",
+					wf.Name(), m[1])
+			}
+		}
+	}
+	if named == 0 {
+		t.Fatal("no -fuzz= flag was found in any workflow. Either the fuzz job was deleted, or " +
+			"this scan has stopped seeing it and would pass over any name at all.")
+	}
+	t.Logf("%d -fuzz= names across the workflows, all resolving to one of %d declared targets",
+		named, len(declared))
+}
+
+// fuzzFlag matches the -fuzz= argument of a go test invocation in a workflow.
+var fuzzFlag = regexp.MustCompile(`-fuzz=([A-Za-z0-9_]+)`)

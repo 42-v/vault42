@@ -384,20 +384,16 @@ func coercedSubresource(r *http.Request) bool {
 	}
 }
 
-// safeLogValue neutralizes a value before it reaches a log record.
-//
-// cmd/bridge is deliberately stdlib-only and cannot import the vault's
-// httputil.SafeLogValue, so it carries its own. Client addresses reach
-// log.Printf from headers the operator has declared trusted, and a U+0085 or a
-// newline in one of those forges a whole log record.
 // obfuscatedIP renders a client address for a log line: IPv4 keeps its /24,
 // IPv6 keeps its /64, anything that does not parse becomes the constant
 // "invalid_ip".
 //
-// It mirrors httputil.ObfuscatedIP, which cmd/bridge cannot import for the
-// reason given on safeLogValue, and it answers a different question from that
-// function. safeLogValue stops a value forging a second log record; it has
-// nothing to say about writing a personal identifier into the first one.
+// It mirrors httputil.ObfuscatedIP, which cmd/bridge cannot import because this
+// binary is deliberately stdlib-only. It is the only sanitiser this package
+// carries: every value a client chooses reaches a bridge log line either through
+// this function, which returns a masked network or the constant "invalid_ip" and
+// so can never carry attacker text, or through a %q verb, which escapes the
+// control characters and the U+2028/U+2029 separators a log shipper splits on.
 //
 // The bridge keeps whole addresses where an operator has to act on one: the
 // flag store, /bridge/flags and the webhook body. The process log is read by
@@ -412,27 +408,6 @@ func obfuscatedIP(v string) string {
 		return v4.Mask(net.CIDRMask(24, 32)).String()
 	}
 	return ip.Mask(net.CIDRMask(64, 128)).String()
-}
-
-func safeLogValue(v string) string {
-	const maxLoggedLen = 128
-	if len(v) > maxLoggedLen {
-		v = v[:maxLoggedLen] + "..."
-	}
-	// The switch is written in the same shape and neutralizes the same runes as
-	// httputil.SafeLogValue, and tests/spec/safelog_parity_test.go fails when the
-	// two sets diverge. They did once: 27b1735 widened that one to cover U+2028
-	// and U+2029, which a log shipper splits records on as readily as a newline,
-	// and this copy was written afterwards without them. A second sanitiser that
-	// drifts from the first is how the original CWE-117 gap happened, and the copy
-	// exists only because this binary is stdlib-only.
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == '\u2028', r == '\u2029':
-			return '_'
-		}
-		return r
-	}, v)
 }
 
 // defaultStrippedHeaders are the request headers the vault trusts because of
