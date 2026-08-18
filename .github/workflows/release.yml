@@ -649,8 +649,14 @@ jobs:
             helm install vault oci://ghcr.io/42-v/charts/vault-auth --version ${{ needs.detect.outputs.version }}
             ```
 
-            Images and the chart are signed with cosign keyless. The checksum file
-            carries a detached signature and its Fulcio certificate:
+            ### Verifying this release
+
+            Two independent things are worth checking, and they answer different
+            questions.
+
+            **Authenticity** — who signed it. Images and the chart are signed
+            with cosign keyless; the checksum file carries a detached signature
+            and its Fulcio certificate:
 
             ```
             cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
@@ -663,3 +669,37 @@ jobs:
               --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```
+
+            **Provenance** — which workflow built it, from which commit. Every
+            binary archive, image and the chart carries **SLSA Build Level 2**
+            provenance, signed by GitHub's attestation service under this
+            workflow's OIDC identity and recorded in the Rekor transparency log:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/charts/vault-auth:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+            ```
+
+            The commands above resolve the statement through the GitHub API. To
+            verify with no network access to it, use the bundle shipped as a
+            release asset:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --bundle vault42_${{ needs.detect.outputs.version }}.intoto.jsonl \
+              --repo 42-v/vault42
+            ```
+
+            Each archive also ships an SBOM in both SPDX
+            (`.spdx.sbom.json`) and CycloneDX (`.cdx.sbom.json`) form, each
+            attested to the archive it describes.
+
+            The images additionally carry BuildKit's own SLSA v0.2 predicate and
+            an SPDX attestation. Those are unsigned and are not what the claim
+            above rests on; `gh attestation verify` is.
