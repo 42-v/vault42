@@ -150,6 +150,44 @@ func TestMailer_BadOverrideFallsBackToGlobal(t *testing.T) {
 	}
 }
 
+// TestMailer_OverrideRenderErrorFallsBackToGlobal covers the arm renderOverride
+// takes when an override compiled cleanly at load and then failed to render for
+// this particular send. TestMailer_BadOverrideFallsBackToGlobal covers the other
+// shape, where the store cannot compile the row and the mailer never holds an
+// override at all; here the store hands over a usable one whose body only breaks
+// once the tenant's real app name is substituted. Validation renders with
+// guardData's 27-character app name, so slicing to 20 passes there and fails for
+// the five-character default below. A send must still go out, on the global
+// template, rather than propagating the tenant's broken template as an error.
+func TestMailer_OverrideRenderErrorFallsBackToGlobal(t *testing.T) {
+	capture := &captureSender{}
+	ov := TemplateOverride{Subject: "Acme verify", HTMLContent: `<p>{{slice .AppName 0 20}}</p>`}
+	// The store only serves overrides that compile, so an override that reached
+	// the send path at all is one CompileOverride accepted.
+	if _, err := CompileOverride(ov); err != nil {
+		t.Fatalf("CompileOverride: %v, want it accepted so the failure is at render time", err)
+	}
+	store := &staticStore{app: "acme", tmpl: ov, tmplOK: true}
+	m := testMailer(t, capture, store, Branding{AppName: "Vault"}, nil)
+
+	if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("sender calls = %d, want the send to go out anyway", capture.calls)
+	}
+	wantSubject, wantHTML, _ := m.renderer.Render(TemplateVerification, TemplateData{AppName: "Vault", URL: "https://vault.test/v"})
+	if capture.subject != wantSubject {
+		t.Errorf("subject = %q, want the global %q", capture.subject, wantSubject)
+	}
+	if capture.html != wantHTML {
+		t.Error("html did not fall back to the global render")
+	}
+	if capture.subject == "Acme verify" {
+		t.Error("subject came from the override whose body failed to render")
+	}
+}
+
 func TestMailer_BrandingLogoAndColorOverlay(t *testing.T) {
 	capture := &captureSender{}
 	store := &staticStore{
