@@ -309,6 +309,37 @@ jobs:
           cosign sign --yes "ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}"
           cosign sign --yes "ghcr.io/42-v/vault42-bridge@${BRIDGE_DIGEST}"
 
+      # BuildKit's `provenance: true` above is not a substitute for these. It
+      # emits an unsigned SLSA v0.2 predicate produced by the same BuildKit
+      # process that ran the build, with nothing countersigning it and no
+      # transparency-log entry, and `gh attestation verify` cannot read it.
+      # These statements are assembled and signed by GitHub's attestation
+      # service under the workflow's OIDC identity and logged to Rekor, so a
+      # build step cannot mint provenance naming a source it did not build.
+      #
+      # push-to-registry stores each statement beside its image in GHCR, so
+      # verification does not depend on the GitHub API staying reachable.
+      - name: Attest build provenance (vault42)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42
+          subject-digest: ${{ steps.build_vault.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (admin-gateway)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-admin-gateway
+          subject-digest: ${{ steps.build_admin.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (bridge)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-bridge
+          subject-digest: ${{ steps.build_bridge.outputs.digest }}
+          push-to-registry: true
+
   # Every release before 1.0.0 shipped notes and nothing else: no binary, no
   # SHA256SUMS, no SBOM, no detached signature.
   artifacts:
@@ -355,6 +386,57 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ needs.detect.outputs.tag }}
 
+      # The cosign signature over SHA256SUMS establishes who published the
+      # archives. It says nothing about which workflow, at which commit, with
+      # which inputs produced them, which is the question SLSA answers and the
+      # one a consumer of a 1.0.0 tarball actually has.
+      - name: Attest build provenance (release archives)
+        id: attest_archives
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS
+
+      # gh attestation verify resolves statements through the GitHub API. The
+      # bundle is shipped as a release asset as well so the archives can also be
+      # verified offline, from the tarball and the bundle alone.
+      - name: Ship the provenance bundle as a release asset
+        env:
+          BUNDLE_PATH: ${{ steps.attest_archives.outputs.bundle-path }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" "dist/vault42_${VERSION}.intoto.jsonl"
+
+      # sbom-path names one file, and every archive carries its own SBOM, so
+      # this cannot be a single globbed step: one glob would attest whichever
+      # SBOM matched first to all four archives and quietly misdescribe three
+      # of them. goos/goarch in .goreleaser.yaml decide this list.
+      - name: Attest SBOM (linux_amd64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (linux_arm64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_amd64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_arm64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz.spdx.sbom.json
+
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -363,6 +445,7 @@ jobs:
             dist/*.tar.gz
             dist/*SHA256SUMS*
             dist/*.sbom.json
+            dist/*.intoto.jsonl
           if-no-files-found: error
 
   chart:
@@ -437,6 +520,13 @@ jobs:
 
       - name: Sign chart (keyless)
         run: cosign sign --yes "ghcr.io/42-v/charts/vault-auth@${{ steps.push.outputs.digest }}"
+
+      - name: Attest chart provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/charts/vault-auth
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   nuget:
     name: NuGet (${{ needs.detect.outputs.version }})
