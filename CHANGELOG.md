@@ -424,6 +424,130 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   the `user==nil` and import-pending paths burn, so a soft-deleted address answered about fifty
   milliseconds faster and was enumerable; it burns the same dummy hash now, so the masked error
   is masked in timing too.
+* **DPoP now binds the token to the key.** `VAULT_DPOP_ENABLED` mounted middleware that
+  checked a proof's structure, method, URI, `iat` freshness and single-use `jti`, and then
+  compared the proof's thumbprint against a `cnf.jkt` claim no issuance path ever set. The
+  comparison never ran, so a well-formed proof for any key passed, and a request carrying no
+  proof passed as well. Issuance writes the proven thumbprint into `cnf.jkt` on the access
+  token and the 2FA challenge token, and a token carrying one is refused unless the request
+  presents a proof over the matching key under the `DPoP` authorization scheme rather than
+  `Bearer`. The middleware sits inside the auth middleware on every authenticated route, not
+  only on the token endpoints, because one route that treats a bound token as an ordinary
+  bearer token is where a stolen token gets replayed instead. Two limits remain and are
+  stated rather than carried as a risk: refresh tokens are not sender-bound, and there is no
+  `DPoP-Nonce`, so freshness rests on the proof's own `iat` and the replay cache.
+* **The admin gateway's mTLS gate answered only one question.** `RequireAndVerifyClientCert`
+  established that a certificate chained to the configured CA and nothing looked at the peer
+  afterwards, so every certificate that CA had ever issued reached `POST /admin/login` and,
+  from there, the effectively global per-IP limiter of AR-8: a decommissioned operator's
+  certificate, a service certificate, one minted for a different component.
+  `ADMIN_GW_CLIENT_CN_ALLOWLIST` pins the accepted identities by exact match against the CN
+  and the DNS, email and URI SANs, and `ADMIN_GW_CLIENT_CRL_FILE` checks revocation on every
+  handshake against a list whose signature is verified against the gateway's own CA first.
+  Both fail closed once set. Neither is mandatory, because refusing to start without them
+  would break every deployment on upgrade; an unset allowlist logs a warning naming exactly
+  what it costs.
+* **Whole client addresses reached the process log.** `httputil.ObfuscatedIP` existed and the
+  compliance suite asserted under ASVS V16.4.1 that a source address is pseudonymised before
+  it is logged, but the assertion checked the helper rather than the call sites. Thirteen
+  lines across the middleware, the admin gateway and the bridge wrote the address in full.
+  Every one masks to a network now, IPv4 to /24 and IPv6 to /64. `cmd/bridge` is stdlib-only
+  and carries its own copy of the helper for the same reason it carries its own log
+  sanitiser.
+* **The Prometheus collector shared the API mux**, so every counter in the process was one
+  route away from the public listener. It binds its own listener now, `VAULT_METRICS_ADDR`,
+  defaulting to `127.0.0.1:9090`. A metrics bind failure stays non-fatal, and that ran
+  backwards while the metrics listener started first: pointing `VAULT_METRICS_ADDR` at the
+  API port meant the collector won the race and the API's own bind failed fatally, so for the
+  width of the crash loop the port the Ingress routes to answered an unauthenticated read of
+  every counter. The API listener binds first, and a contended metrics port is refused by
+  name.
+* **Nothing rotated the signing key.** `VAULT_KEY_REFRESH_INTERVAL` is how often a pod
+  re-reads the store and `VAULT_KEY_RETENTION_PERIOD` is how long a retired key lingers;
+  neither rotates anything, so a default install signed every token it ever issued under one
+  private key. `VAULT_KEY_ROTATION_INTERVAL` (default 720h) rotates on the stored key's own
+  age rather than on process uptime, serialised across replicas by a session advisory lock so
+  a rolling restart does not rotate once per pod. A non-positive value disables the scheduler
+  and says so at startup. Separately, migrations 026, 027 and 035 make retire, revoke and
+  reactivate terminal: a retired key could previously be walked back to active, a retired row
+  could carry no expiry so the reaper never collected it, and a rotated-out key could be
+  revived by re-importing its material.
+* **First-boot credentials were written to the process log and passed through argv.** The
+  first-boot `super_admin` password, the admin CLI token and each seeded client secret are
+  minted exactly once with no second chance to show them, and all three went to stdout or
+  stderr on a long-running process, which is a log shipper's input and a process listing.
+  They go to a configured sink opened `O_APPEND` with the symlink and permission checks made
+  explicitly rather than assumed, the CLI authenticates from `ADMIN_TOKEN_FILE`, and the
+  scripts stop echoing live tokens into captured output.
+* **Outbound SMTP would send unencrypted.** A server that did not offer STARTTLS got the mail
+  anyway, putting verification and reset links on the wire in cleartext. STARTTLS is required
+  with a TLS 1.2 floor unless `VAULT_SMTP_ALLOW_PLAINTEXT` says otherwise, which is itself
+  refused outside the dev profile and loopback. `DB_SSLMODE=disable` had the same shape and
+  the same fix: outside dev it refuses to start, because it moved the database credential and
+  every row in cleartext without comment.
+* **`POST /client/token` authenticated from the query string.** `client_id` and
+  `client_secret` in the request URI is what RFC 6749 §2.3.1 forbids, because a URI reaches
+  access logs, proxies and referrers. Credentials are read from the POST body only, and a
+  bearer rejection now carries the RFC 6750 §3 `WWW-Authenticate` challenge it owed a
+  conforming client.
+* **The first-admin bootstrap reopened whenever `auth.admin_users` was empty**, so deleting
+  every admin re-armed it. It fires once per deployment.
+* **Lockout counted per account only**, so an attacker spreading guesses across accounts from
+  one source never met it. It is keyed on the source as well, with a delay that grows with
+  the failure count. And enrolling or removing a second factor left every existing session
+  alive, so an attacker who added their own factor kept the sessions the change was meant to
+  invalidate; an MFA change revokes the subject's refresh-token families.
+* **A `/mint` request refused for a missing scope left no audit row.** The scope middleware
+  rejected it before the handler, and the handler owned the audit call, so the probes that
+  never reached it were exactly the ones nobody could see. The scope gate records every
+  refusal it makes, on a context of its own so a caller who hangs up cannot cancel their own
+  record.
+* **`POST /admin/sessions/revoke-all` did not revoke user tokens**, though four documents said
+  it did. It does. Revoking admin sessions deliberately has no route: that is a different
+  blast radius and wants its own permission at `super_admin` tier.
+* **The two planes could disagree about `HMAC_SECRET`.** Both derive the erasure tombstone
+  from it independently, so a deployment whose planes hold different values produces
+  tombstones the other plane cannot recognise. The admin gateway verifies agreement at
+  startup and refuses to serve otherwise.
+* **A login from a country the account had never used produced no signal to its owner.**
+  `auth.login_countries` records the set of countries seen, a first-seen country sends a
+  notice, and anonymising infrastructure raises the rate-limit scrutiny weight for the
+  credential-guessing buckets. The country is resolved from an embedded table with no
+  outbound request, and the table stores a two-letter code and a first-seen timestamp with
+  deliberately no IP column. Migration 030 erases it with the account.
+* **Erasure missed two classes of data.** `auth.login_countries` was not reached, and neither
+  was any `auth.users` column added after the tombstone function was written, because the
+  function names its columns rather than scrubbing the row. The `ON DELETE CASCADE` on those
+  tables never fires either, since erasure tombstones the user row instead of deleting it, so
+  every removal is an explicit step. Migrations 025, 030 and 031 close the set, the tombstone
+  address can no longer be re-registered, and a test now requires every subject-linked table
+  to declare an erasure story.
+* **Nothing bounded the consumable resources.** No `statement_timeout` or `lock_timeout` on
+  the pool, no `ReadHeaderTimeout` on the server, an unbounded in-memory cache, argon2 callers
+  queueing five seconds behind a full semaphore, a goroutine per deferred email and per
+  deferred audit write, and an audit purge that deleted the whole horizon in one statement.
+  Each is bounded, deferred work runs on a pool that shutdown drains, and both the argon2
+  queue depth and the fail-open HIBP count reach `/metrics` so the shed is observable before
+  logins start being refused.
+* **Limiter counters shared one key space**, so traffic to one endpoint consumed another's
+  budget; the fallback map was unbounded; the social-login callback had no budget of its own;
+  and the client-secret guessing surface failed open on a cache outage. Each limiter now
+  namespaces its own keys, and the auth-sensitive ones fail closed.
+* **The served Content-Security-Policy declared no `object-src` or `base-uri`** and was weaker
+  than the policy the nginx image shipped, whose `connect-src` carried a wildcard. Both
+  policies spell out `object-src`, `base-uri` and `form-action` rather than leaving them to
+  `default-src`, which does not cover `base-uri` at all.
+* **A `crit` header was ignored** on JWTs, on DPoP proofs and on verified `id_token`s, which
+  RFC 7515 §4.1.11 requires a verifier to reject when it does not understand the extension,
+  and a DPoP proof carrying private key material in its `jwk` header was accepted.
+* **The bridge trusted headers a client could author**, resolved the client address from the
+  wrong hop, let a `Connection` header strip the headers it relied on, and served a trap whose
+  responses told a scanner it was a trap.
+* **The chart shipped workloads the restricted Pod Security Standard rejects.** Every workload
+  renders under it now, with probes, a disruption budget and a network policy on by default;
+  seed credentials moved out of a ConfigMap into a Secret; the honeypot no longer mounts the
+  production Secret; the admin gateway is off the host network; cloudflared declines its
+  service account token; and mailpit and the nginx base are pinned by digest.
 
 ### Public API
 
@@ -466,6 +590,19 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   equivalent by design: audit retention is set with `VAULT_AUDIT_RETENTION_DAYS` and swept at
   startup and every six hours, and no admin tier holds an audit-delete permission. A script
   invoking any of the five must be repointed or dropped.
+* **`GET /user/sessions` is keyed on the refresh-token family, not the device.** A family
+  carrying no device was invisible in the list and therefore unrevocable, and two families
+  sharing one fingerprint collapsed into a single row an owner could not tell apart, which is
+  the opposite of what a session list is for. `SessionInfo.ID` is the family id and
+  `DELETE /user/sessions/{id}` addresses it, establishing ownership from the caller's own
+  active families rather than from the path value. The device id moved to `device_id`, and
+  `created_at` and `expires_at` were added. A device id is still accepted for one release.
+* **Access tokens carry `acr`, `amr` and `auth_time`.** A relying party could not tell a
+  password-only login from one that completed a second factor, because the token said nothing
+  about how the subject authenticated. The assurance level is derived from the authenticator's
+  own user-verification result rather than from the fact that a method was configured, and
+  `acr` is rendered as `urn:vault42:aal:N`, deliberately not one of the idmanagement.gov URLs,
+  which belong to a federal assurance program vault42 has not been assessed under.
 
 ### Features
 
@@ -483,6 +620,10 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   unmarshal. Off by default. Erasure reaches these documents across every owning service,
   and the data export returns them decrypted, including private ones: a service's privacy
   from other services is not privacy from the data subject.
+* **The frontend was not usable without a mouse or a working colour eye.** The palette did
+  not meet WCAG AA for text or controls, the three modals trapped no focus and restored none
+  on close, authentication failures were rendered without being announced to a screen reader,
+  and the document never declared its active locale despite shipping 38 of them.
 
 ### Compliance
 
@@ -500,6 +641,11 @@ requirement text is about something else.
   Rev 3 section numbers against a Rev 4 URL.
 * NIST 800-53 Rev 5 and the Top 10 had no test carrying any control ID between them, so 67
   of the claimed 242 rested on nothing executable. They now have suites.
+* three standards were added, each only where the code already satisfies it and a test can
+  prove every row: the OWASP API Security Top 10 (2023), NIST SP 800-218 SSDF 1.1, and the
+  Kubernetes Pod Security Standards restricted profile, which is the workload-scoped standard
+  a Helm chart can honestly be held to. The register carries 404 requirements across nine
+  standards.
 * **`docs/security.md` and `docs/PRIVACY.md` each claimed a control that does not exist.**
   AR-5 described a service with no admin UI, no role-management API and no RBAC consumers,
   written before roughly 30 RBAC-gated endpoints shipped. PRIVACY §7.1 asserted breach
@@ -541,6 +687,20 @@ requirement text is about something else.
   findings and reporting the backlog. There was no Go coverage gate at all.
 * release artifacts, checksums and an SBOM are attached to the release, and `SECURITY.md`
   documents how to verify the cosign signatures that were already being produced.
+* **a cosign signature says who published an artifact and nothing about what produced it.**
+  Every image, the chart and the release archives now carry a SLSA provenance attestation
+  assembled and signed by GitHub's attestation service under the release workflow's OIDC
+  identity and recorded in Rekor, pushed beside the artifact in the registry so verification
+  does not depend on the GitHub API staying reachable. The archives additionally ship their
+  bundle as a release asset, so `gh attestation verify --bundle` works offline. Each archive
+  carries SBOMs in both SPDX and CycloneDX form, and each SPDX document is attested to the
+  archive it describes rather than to whichever one a glob matched first. BuildKit's own
+  predicate still rides along on the images; it is unsigned and in no transparency log, and
+  the release body says so rather than letting a reader take it for the same thing.
+* the release binaries are reproducible, gosec scans the test files under a ratchet rather
+  than skipping them, Trivy scans configuration and secrets as well as dependencies, the
+  checkout token no longer persists in `.git/config`, and each release job holds only the
+  token scopes it uses.
 * `packages/dotnet` had 82% of its XML documentation written and shipped none of it: three
   separate switches suppressed it.
 * **the Go toolchain moved to 1.26.6**, clearing seven standard-library advisories in one bump:
