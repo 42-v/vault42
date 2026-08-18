@@ -23,9 +23,9 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	ConfigureFakeJWT("should-be-ignored", "should-be-ignored", 15*time.Minute)
 	ConfigureFakeJWT("also-ignored", "also-ignored", 15*time.Minute)
 
-	token, err := GenerateFakeJWT()
+	token, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT after ConfigureFakeJWT: %v", err)
+		t.Fatalf("trap mint after ConfigureFakeJWT: %v", err)
 	}
 
 	parts := strings.Split(token, ".")
@@ -56,41 +56,6 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	aud, ok := claims["aud"].([]interface{})
 	if !ok || len(aud) == 0 {
 		t.Errorf("aud claim should be a non-empty array like a real token's, got %#v", claims["aud"])
-	}
-}
-
-// ---------------------------------------------------------------------------
-// FakeLoginCookie tests
-// ---------------------------------------------------------------------------
-
-func TestFakeLoginCookie_ReturnsHexToken(t *testing.T) {
-	cookie, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie error: %v", err)
-	}
-	if len(cookie) != 64 {
-		t.Errorf("cookie length = %d, want 64 hex chars", len(cookie))
-	}
-	// Verify it is valid hex.
-	for _, c := range cookie {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			t.Errorf("non-hex character %q in cookie", c)
-			break
-		}
-	}
-}
-
-func TestFakeLoginCookie_Unique(t *testing.T) {
-	c1, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie: %v", err)
-	}
-	c2, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie: %v", err)
-	}
-	if c1 == c2 {
-		t.Error("consecutive FakeLoginCookie calls should produce unique values")
 	}
 }
 

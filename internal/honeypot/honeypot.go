@@ -295,30 +295,6 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, fmt.Errorf("honeypot: underlying ResponseWriter does not implement http.Hijacker")
 }
 
-// FakeLoginResponse returns a realistic-looking but fake login response.
-//
-// expires_in is read from the same configuration the token's own exp is built
-// from. A hardcoded 900 agreed with the token only on a deployment that had
-// never set VAULT_ACCESS_TOKEN_TTL, and a response whose stated lifetime
-// disagrees with the lifetime inside the token it wraps is a tell that needs no
-// second request.
-func FakeLoginResponse() (map[string]interface{}, error) {
-	jwt, err := GenerateFakeJWT()
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"access_token": jwt,
-		"token_type":   "Bearer",
-		"expires_in":   int(currentFakeJWTConfig().accessTTL.Seconds()),
-	}, nil
-}
-
-// FakeLoginCookie returns a fake refresh token value for the cookie.
-func FakeLoginCookie() (string, error) {
-	return GenerateFakeRefresh()
-}
-
 // Err returns a formatted error for honeypot operations.
 func Err(msg string) error {
 	return fmt.Errorf("honeypot: %s", msg)

@@ -45,10 +45,8 @@ func TestHoneypotTrapUserCaseInsensitive(t *testing.T) {
 // by the honeypot look like real JWTs (3 dot-separated base64 segments)
 // but have an invalid signature that can't be verified.
 func TestHoneypotFakeTokenFormat(t *testing.T) {
-	token, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
-	}
+	d := hpService(t, false)
+	token := hpTrapAccessToken(t, d)
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -71,10 +69,7 @@ func TestHoneypotFakeTokenFormat(t *testing.T) {
 	}
 
 	// Each token should be unique (random nonce)
-	token2, err := honeypot.GenerateFakeJWT()
-	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
-	}
+	token2 := hpTrapAccessToken(t, d)
 	if token == token2 {
 		t.Fatal("Two consecutive fake JWTs are identical — insufficient randomness")
 	}
