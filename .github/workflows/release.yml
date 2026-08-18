@@ -166,6 +166,29 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # tests/spec renders the chart and asserts on the rendered manifests. With
+      # no helm on PATH those assertions skip, and a skipped assertion reports
+      # green, which is indistinguishable from one that ran and passed. Three
+      # separate gates in this repository turned out to be incapable of failing;
+      # a silent skip is the same defect wearing a different hat.
+      #
+      # The version matches the chart jobs so CI renders with one helm, not two.
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      # setup-helm failing soft would put us straight back to silent skips.
+      - name: helm is on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v helm >/dev/null || {
+            echo "::error::helm is not on PATH; the rendered-manifest assertions" \
+                 "in tests/spec would skip and report green"
+            exit 1
+          }
+          helm version --short
+
       # The same canonical run ci.yml's coverage-gate performs, on the tagged ref.
       - name: Canonical coverage run
         shell: bash
