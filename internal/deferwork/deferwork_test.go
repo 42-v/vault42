@@ -1,4 +1,4 @@
-package mailqueue
+package deferwork
 
 import (
 	"context"

@@ -25,7 +25,7 @@ import (
 	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/kms"
-	"github.com/42-v/vault42/internal/mailqueue"
+	"github.com/42-v/vault42/internal/deferwork"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/oauth2"
@@ -162,7 +162,7 @@ func main() {
 	defer func() {
 		drainCtx, drainCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer drainCancel()
-		if err := mailqueue.Close(drainCtx); err != nil {
+		if err := deferwork.Close(drainCtx); err != nil {
 			log.Printf("WARNING: deferred email drain incomplete: %v", err)
 		}
 	}()

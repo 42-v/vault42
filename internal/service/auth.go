@@ -21,11 +21,11 @@ import (
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/deferwork"
 	vaultemail "github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/ipintel"
-	"github.com/42-v/vault42/internal/mailqueue"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -324,7 +324,7 @@ func (s *AuthService) notifyNewCountry(userID, emailAddr, ip, app string) {
 	if sent, _ := s.cache.SetIfNotExists(ctx, notifyKey, "1", newLocationNotifyWindow); !sent {
 		return
 	}
-	mailqueue.Go(func(ctx context.Context) {
+	deferwork.Go(func(ctx context.Context) {
 		// Email is best-effort; pass ONLY the country, never the IP.
 		_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateNewLocation, emailAddr, vaultemail.TemplateData{
 			Country: cc,
@@ -495,7 +495,7 @@ func (s *AuthService) SendSignupVerification(ctx context.Context, to, userID, re
 		return
 	}
 	app := vaultemail.AppFromContext(ctx)
-	mailqueue.Go(func(ctx context.Context) { s.sendVerificationEmail(ctx, to, userID, app, redirectTo) })
+	deferwork.Go(func(ctx context.Context) { s.sendVerificationEmail(ctx, to, userID, app, redirectTo) })
 }
 
 // sendVerificationEmail generates a verification token, stores it, and sends the
@@ -564,7 +564,7 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
 	if s.cache == nil || s.emailSender == nil {
 		return
 	}
-	mailqueue.Go(func(ctx context.Context) {
+	deferwork.Go(func(ctx context.Context) {
 		// Fail closed on a cache error: an unthrottled send is worse than a claim
 		// link the user re-requests, and the claim token needs this same cache to
 		// be stored at all.
@@ -932,7 +932,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
-			mailqueue.Go(func(context.Context) { s.sendEmailOTP(user.ID, user.Email, app) })
+			deferwork.Go(func(context.Context) { s.sendEmailOTP(user.ID, user.Email, app) })
 			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
@@ -990,7 +990,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 
 	// New-location notice (AR-18): out of band, country granularity only, so it
 	// never blocks or fails the login.
-	go s.notifyNewCountry(user.ID, user.Email, ip, app) // #nosec G118 -- intentional: derivation + send outlive the HTTP request
+	deferwork.Go(func(context.Context) { s.notifyNewCountry(user.ID, user.Email, ip, app) })
 
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,
@@ -1020,16 +1020,22 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 		return nil, err // 503, the same status the real-user path answers with under load
 	}
 
-	// Fire the alert asynchronously. It uses Background because the request
-	// context is canceled once the response is written.
-	go s.honeypotAlert.Alert(context.Background(), honeypot.HoneypotEvent{ // #nosec G118 -- intentional: honeypot alert outlives HTTP request
+	// Fire the alert asynchronously: the request context is canceled once the
+	// response is written, and the caller must not be able to time the alert.
+	//
+	// On the bounded pool rather than a bare goroutine. A trap login is
+	// unauthenticated and attacker-triggered, and Alert opens an outbound
+	// connection to the operator's alerting endpoint, so a bare `go` let the
+	// attacker choose how many of those this process holds open at once.
+	event := honeypot.HoneypotEvent{
 		Timestamp: time.Now(),
 		EventType: "trap_login",
 		IP:        ip,
 		UserAgent: ua,
 		Email:     email,
 		RiskScore: 100,
-	})
+	}
+	deferwork.Go(func(ctx context.Context) { s.honeypotAlert.Alert(ctx, event) })
 
 	// The user id this address is answered with, on every login for the life of
 	// the process. It is both the token's subject and the key of the lookups
@@ -1169,7 +1175,7 @@ func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, 
 	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {
 		lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
 		if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
-			mailqueue.Go(func(ctx context.Context) {
+			deferwork.Go(func(ctx context.Context) {
 				// Email is best-effort.
 				_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
 					IP: ip,
@@ -1449,7 +1455,8 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 	// login that finishes via a second factor gets the same country signal as a
 	// single-step one. Out of band, country granularity only. mfaUser is the
 	// re-read account resolved above (non-nil past the account-state gate).
-	go s.notifyNewCountry(userID, mfaUser.Email, ip, vaultemail.AppFromContext(ctx)) // #nosec G118 -- intentional: derivation + send outlive the HTTP request
+	app := vaultemail.AppFromContext(ctx)
+	deferwork.Go(func(context.Context) { s.notifyNewCountry(userID, mfaUser.Email, ip, app) })
 
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,

@@ -130,7 +130,7 @@ func TestDoS_SourceContracts(t *testing.T) {
 			"the batched cleanup function the sweeper loops over",
 		},
 		{
-			"internal/mailqueue/mailqueue.go", "DefaultQueueDepth",
+			"internal/deferwork/deferwork.go", "DefaultQueueDepth",
 			"four unauthenticated call sites used to spawn one goroutine and one relay " +
 				"connection per request, invisible to shutdown",
 		},
@@ -208,7 +208,7 @@ func TestDoS_MailDrainRunsBeforeTheCacheCloses(t *testing.T) {
 
 	src := dosRead(t, "cmd/vault/main.go")
 	cacheClose := strings.Index(src, "appCache.Close()")
-	mailDrain := strings.Index(src, "mailqueue.Close(")
+	mailDrain := strings.Index(src, "deferwork.Close(")
 	if cacheClose < 0 {
 		t.Fatal("cmd/vault no longer closes the cache")
 	}

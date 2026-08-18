@@ -1,23 +1,24 @@
-// Package mailqueue runs sends that outlive the request that triggered them,
-// on a bounded pool that shutdown drains.
+// Package deferwork runs work that outlives the request that triggered it, on a
+// bounded pool that shutdown drains.
 //
-// Four call sites used to `go` a send directly — signup verification, password
-// reset, the import-claim link and the account-locked notice — and every one of
-// them is reachable by an unauthenticated caller. That put two things in that
-// caller's hands: how many goroutines this process runs, and how many
-// connections it opens against the operator's mail relay. The bridge's webhook
-// sender had already reasoned this through and capped itself at eight workers
-// with a bounded queue; the same argument applies to SMTP and had not been
-// applied.
+// Eight call sites used to `go` the work directly — signup verification,
+// password reset, the import-claim link, the account-locked notice, the email
+// OTP fallback, two new-country notices and the honeypot alert — and every one
+// of them is reachable by an unauthenticated caller. That put two things in
+// that caller's hands: how many goroutines this process runs, and how many
+// connections it opens against the operator's mail relay and alerting endpoint.
+// cmd/bridge had already reasoned this through for webhooks and capped itself
+// at eight workers with a bounded queue; the same argument applies to every
+// site here and had not been applied to any of them.
 //
-// The second problem was shutdown. A detached send was invisible to it:
+// The second problem was shutdown. Detached work was invisible to it:
 // Server.Start returns after the HTTP drain and main's defers then close the
 // cache and the pool, so a verification send that writes its token to the cache
 // and then mails the link could write to a cache that was already closed. The
 // user got a verification link that never worked — on every rollout, for
 // anyone who registered inside the shutdown window. Close drains the queue
 // before main gets that far.
-package mailqueue
+package deferwork
 
 import (
 	"context"
@@ -28,7 +29,7 @@ import (
 
 // Defaults, matching cmd/bridge's webhook pool, for the same reason: deep
 // enough that ordinary traffic never reaches the bound, bounded so a flood
-// costs fixed memory and a fixed number of relay connections.
+// costs fixed memory and a fixed number of outbound connections.
 const (
 	DefaultWorkers    = 8
 	DefaultQueueDepth = 1024
@@ -39,7 +40,7 @@ const (
 // rather than write into torn-down state.
 type Job func(ctx context.Context)
 
-// Dispatcher is a bounded worker pool for deferred sends.
+// Dispatcher is a bounded worker pool for deferred work.
 type Dispatcher struct {
 	queue chan Job
 	wg    sync.WaitGroup
@@ -105,7 +106,7 @@ func (d *Dispatcher) Enqueue(job Job) {
 	default:
 		n := d.dropped.Add(1)
 		d.dropOnce.Do(func() {
-			log.Printf("mailqueue: workers saturated, deferred sends are being dropped (first at %d)", n)
+			log.Printf("deferwork: workers saturated, deferred work is being dropped (first at %d)", n)
 		})
 	}
 }
@@ -130,7 +131,7 @@ func (d *Dispatcher) QueueDepth() int {
 // Close stops accepting work and waits for what is queued, up to the caller's
 // deadline.
 //
-// It must run BEFORE the cache and the database pool are closed, so a send that
+// It must run BEFORE the cache and the database pool are closed, so a job that
 // is mid-flight cannot write into either after they are gone. In cmd/vault that
 // means registering the defer after theirs, since defers run last-in-first-out.
 func (d *Dispatcher) Close(ctx context.Context) error {
@@ -158,12 +159,12 @@ func (d *Dispatcher) Close(ctx context.Context) error {
 		// so they stop touching state the caller is about to tear down, and
 		// report it: a send abandoned here is a mail nobody sent.
 		err = ctx.Err()
-		log.Printf("mailqueue: drain deadline expired with %d queued jobs", len(d.queue))
+		log.Printf("deferwork: drain deadline expired with %d queued jobs", len(d.queue))
 	}
 	d.cancel()
 
 	if n := d.dropped.Load(); n > 0 {
-		log.Printf("mailqueue: %d deferred sends were dropped", n)
+		log.Printf("deferwork: %d deferred jobs were dropped", n)
 	}
 	return err
 }

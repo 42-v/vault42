@@ -13,7 +13,7 @@ import (
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/email"
-	"github.com/42-v/vault42/internal/mailqueue"
+	"github.com/42-v/vault42/internal/deferwork"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -157,7 +157,7 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	if h.sender != nil {
 		resetURL := h.origin + "/reset-password?token=" + token
 		app := email.AppFromContext(r.Context())
-		mailqueue.Go(func(ctx context.Context) {
+		deferwork.Go(func(ctx context.Context) {
 			// Email send is best-effort; failure logged inside Send.
 			_ = h.mailer.Send(ctx, app, email.TemplatePasswordReset, user.Email, email.TemplateData{
 				URL: resetURL,
