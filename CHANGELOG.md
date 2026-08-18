@@ -1,20 +1,23 @@
 # Changelog
 
-## 1.0.0 (2026-08-14)
+## 1.0.0 (2026-08-18)
 
 The version number is the coverage figure, so 1.0.0 could only ever mean a fully covered
 tree. It turned out not to be honestly reachable, and saying why is most of what this
 release is about.
 
-Of the 48 statements uncovered at 0.9.9, six were reachable by tests nobody had written,
-seven needed a production seam whose only consumer would have been a test, and thirty-five
-were defensive branches that cannot execute given inputs the surrounding code has already
-validated. Four were not defensive at all but dead: `readReply` never returns `Nil` as an
-error, and `crypto/rand.Read` cannot fail on the Go 1.26 toolchain, because it terminates
-the process instead. Those are deleted. The rest are covered, or recorded in a reviewed
-exclusion set with the source line frozen and a justification a reviewer can check. So the
-claim is **100.00% of reachable statements**, CI-gated on `covered + excluded == total`, and
-the exclusion set cannot grow or rot without failing the build.
+Of the 48 statements uncovered at 0.9.9, six were reachable by tests nobody had written and
+seven needed a production seam whose only consumer would have been a test. Six were not
+defensive at all but dead, and are deleted: the `Nil` branch in the redis exec path, the
+`crypto/rand.Read` error checks in `crypto/argon2.go` and `crypto/recovery.go`, which cannot
+fail on the Go 1.26 toolchain because it terminates the process instead, and the duplicate
+template compile in `email/preview.go`. The rest are defensive branches that cannot execute
+given inputs the surrounding code has already validated, and each is recorded in a reviewed
+exclusion set with the source line frozen and a justification a reviewer can check. The
+hardening work in this release added statements of its own, so that set stands at 50 entries
+rather than the 39 it started from. So the claim is **100.00% of reachable statements**,
+CI-gated on `covered + excluded == total`, with the entry count held as a ratchet in
+`scripts/cov-gaps.py` that a 51st entry fails on its own.
 
 1.0.0 is also the semver commitment, which made this the last cheap moment to fix the API
 shape. Everything under Public API below is breaking-after-1.0.0 and free before it.
@@ -31,9 +34,9 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   window.
 * **`GET /admin/clients/{id}` returned the argon2id client secret hash.** It serialized
   `*model.Client` directly. Tests already proved the session-token and password hashes did
-  not leak; nobody had written the equivalent for clients. All 22 model structs now carry
-  JSON tags, with credential material and the fingerprint HMAC marked `json:"-"` so
-  accidental serialization cannot put them on the wire at all.
+  not leak; nobody had written the equivalent for clients. All 22 serialized model structs now
+  carry JSON tags, with credential material and the device fingerprint hash marked `json:"-"`
+  so accidental serialization cannot put them on the wire at all.
 * **The import-claim login path was an unauthenticated oracle.** A `202
   import_claim_required` disclosed both that an address was registered and that it was an
   unclaimed import, fired an email to the victim on demand, and, because each send
@@ -53,8 +56,8 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   an unknown one answered `401`. They now run only after a successful `VerifyPassword`: a wrong
   password or an unknown address stays masked as `401`, and only a caller who proves the
   password learns the account is banned or disabled. With the locked and import-claim paths
-  this closes all four outcomes of ASVS V6.3.8 (accepted risk AR-19), now Met above the
-  assessed L2 baseline.
+  this closes all four outcomes of ASVS V6.3.8 (accepted risk CR-19 in the compliance
+  register), now Met above the assessed L2 baseline.
 * **The OAuth callback leaked which addresses were registered.** A provider that cannot prove
   the caller owns the address (Facebook publishes no per-address verification signal; an OIDC
   issuer can answer `email_verified:false`) let an attacker assert a victim's address. A
@@ -70,9 +73,10 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   and creates no family, which is a structural exemption rather than a gap.
 * the RSA private key rotated out of the token service is now zeroed, and the decrypted
   signing-key PEM in the keystore is wiped on both the success and the parse-failure paths.
-  The wipe is only sound because signing now holds the read lock for the whole of
-  `SignToken`, so acquiring the write lock drains in-flight signers first; those two facts
-  are documented together because they must change together.
+  Signing also holds the read lock for the whole of `SignToken`, so acquiring the write lock
+  drains in-flight signers first. That is ordering hygiene rather than what makes the wipe
+  sound: the wipe clears exported fields signing does not read, which is also why a retired
+  key stays usable afterwards.
 * **Refresh reuse detection did not burn the family.** Two requests presenting one stolen
   refresh token both passed every check on the row they read. The loser called
   `RevokeFamily`, which updates the rows a family has at that instant, and the winner then
@@ -118,13 +122,18 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   existed but was reached only when the cache was nil, never when a read errored.
 * **The audit log could lose a batch silently, and the loss was unobservable.** `Flush` emptied
   the buffer under the lock and inserted outside it, so a transient database error destroyed
-  the entries it held with the error discarded. A rejected batch is now requeued at the front
-  of the buffer, and two counters reach `/metrics`: meeting a full buffer is a tuning problem,
-  while a batch the database rejected means entries already reported as written are gone.
-  Summed they could not distinguish the two, which is why they are separate series.
-* **Four declared audit events had no emission site.** MFA enrollment, removal, verification and
+  the entries it held with the error discarded. A batch the database refuses outright is now
+  requeued at the front of the buffer; a partially accepted batch has its refused rows
+  quarantined and dropped, because requeueing them would wedge the pipeline on one unwritable
+  row forever. Two counters reach `/metrics`: meeting a full buffer is a tuning problem, while
+  a batch the database rejected means entries already reported as written are gone. Summed
+  they could not distinguish the two, which is why they are separate series.
+* **Four audit-worthy events had no emission site.** MFA enrollment, removal, verification and
   session revocation were never recorded, so an attacker who enrolled their own factor and
-  revoked the owner's sessions left no trace.
+  revoked the owner's sessions left no trace. Three constants cover them: removal is filed
+  under the enrollment event with `action=removed`, because the vocabulary in `internal/audit`
+  has no removal constant and inventing one per authenticator type would not have helped a
+  reader of the log.
 * **The audit retention guard validated a different value than it applied.**
   `audit.cleanup_old_entries` is the only path that can delete an audit row, since the
   append-only trigger blocks every other one and this function disables it for one `DELETE`.
@@ -153,8 +162,9 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   artifact that unwrapped to zero bytes, surfacing much later as an empty secret in a running
   service. The guard rejects the input without trimming the payload, because a key legitimately
   carries a trailing newline and trimming would seal it a byte short. It sits in
-  `kms.Service.Wrap` rather than in the CLI, since `Service.Wrap` is exported and deploy
-  tooling calls it directly. `POST /kms/unwrap` still opens a zero-byte envelope on purpose:
+  `kms.Service.Wrap` rather than only in the CLI, since `Service.Wrap` is exported and any
+  caller reaches it; the CLI adds a stricter check of its own that also refuses input which is
+  whitespace alone. `POST /kms/unwrap` still opens a zero-byte envelope on purpose:
   unwrap has to stay the exact inverse of every wrap that ever ran, and refusing one returns
   `unwrap_failed`, byte-identical to a tampered artifact, so the operator chases corruption
   instead. `vault kms wrap` also refuses a `--kid` outside `^[A-Za-z0-9][A-Za-z0-9._@-]*$`,
@@ -175,8 +185,12 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   exactly one caller, so there was no second path to the flag. The account was not
   unreachable, because a repeat login through the same provider still works, but the address
   was burned: password login is gated on the flag and any second provider is refused with
-  409. The signup path sends the mail now, fire-and-forget so a mailer outage cannot fail the
-  callback, and audits the three exits that produce no mail.
+  409. The callback refuses the signup outright now, before any lookup or create, and answers
+  the neutral `#error=verification_required` redirect: an address a provider will not vouch
+  for should not become an account at all, rather than become one that needs rescuing. An
+  account created from a vouched provider is verified on creation and needs no mail. The
+  three exits that produce no mail are audited on the password signup path, which is the
+  remaining caller.
 * **Two secrets were passed through argv.** The chart ran redis with
   `--requirepass $(REDIS_PASSWORD)` and cloudflared with `--token $(TUNNEL_TOKEN)`, both
   sourced from Secrets. The kubelet substitutes `$(VAR)` before exec, so both cleartext
@@ -264,25 +278,27 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 * **`vault_app` could flip privileged account state.** Migration 024 revokes `UPDATE` on
   `banned`, `ban_reason` and `disabled` outright, since no application path writes them, and
   narrows the two that are written to their legitimate direction: `email_verified` may only go
-  false to true, `import_pending` only true to false. `locked_until` is not closed, because the
-  web server itself writes it under the application role for failed-login auto-lockout and the
-  reset-on-success that clears it; `vault lock-user` and `vault unlock-user` no longer write it,
-  since both were retired to the admin plane this release (see Public API). Whether the column
-  can now be narrowed to a transition rule the way the other four were is recorded as AR-18.
-  Stated plainly rather than glossed: `vault_app` keeps
+  false to true, `import_pending` only true to false. `locked_until` was left open in 024 on the
+  grounds that the CLI wrote it; `vault lock-user` and `vault unlock-user` are retired stubs
+  now (see Public API), the web server's failed-login lockout is cache-backed and writes only
+  `failed_login_count`, and the sole runtime writer is the admin gateway under `vault_admin`.
+  Migration 029 revokes `UPDATE (locked_until)` from `vault_app`, which otherwise left the
+  web-facing role able to clear a lock the admin plane had imposed for containment, with no
+  audit trail of the clearing. Stated plainly rather than glossed: `vault_app` keeps
   `UPDATE (password_hash)` and always will, so takeover through a compromised application role
   is not closed and cannot be. What 024 removes is what password control does not reach, namely
   lifting a ban and mass account disablement.
 * **A logout could leave a rotating session alive.** `RevokeAllForUser`, `RevokeByDeviceID`
   and `RevokeAll` were single `UPDATE`s, so a rotation in flight inserted its successor after the
-  revocation had already chosen its rows. Measured with a client rotating across a logout, 207 of
-  300 logouts left a live rotating token; it is now zero. The fix is a deterministic lock order,
+  revocation had already chosen its rows, so a logout concurrent with a rotation could leave a
+  live token behind. The fix is a deterministic lock order,
   ascending primary key, applied per row rather than per family, because the rotation path holds
   several rows of one family and waits for the next. The order also binds statements that never
   say `FOR UPDATE`, since `DELETE` locks each row as its scan reaches it, which is how the first
-  attempt deadlocked against the expiry reaper. The two widest paths take a table lock instead,
-  because `vault_admin` holds `DELETE` but deliberately not `UPDATE`, and `SELECT ... FOR UPDATE`
-  requires it.
+  attempt deadlocked against the expiry reaper. The two widest paths take a table lock instead.
+  `DeleteAllForUser` does so because `vault_admin` holds `DELETE` but deliberately not `UPDATE`,
+  and `SELECT ... FOR UPDATE` requires it; `RevokeAll` does so because locking every row
+  individually before updating the whole table buys nothing over locking the table once.
 * **A refresh in flight survived the erasure it raced.** The rotation insert refuses a family
   that carries a revoked row, and erasure is the one revocation that removes the rows instead of
   marking them: a family `DeleteAllForUser` has emptied carries nothing, so the guard was
@@ -352,10 +368,9 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   signature length from whatever curve the presented key carried and never compared that curve
   against the one `alg` names, though RFC 7518 assigns exactly P-256 to `ES256`. A proof
   labeled `ES256` carrying a P-384 JWK, signed over SHA-256 and emitting 96 bytes of raw
-  `r||s`, verified end to end through `ValidateDPoPProof`. It buys no privilege today, since
-  `cnf.jkt` is populated nowhere and the attacker owns the key, but it becomes one when
-  sender-constrained tokens ship: the RFC 7638 thumbprint covers `crv`, so vault42 would
-  confirm proofs no conforming relying party accepts. The test that appeared to cover this
+  `r||s`, verified end to end through `ValidateDPoPProof`. That matters now that issuance binds
+  `cnf.jkt`: the RFC 7638 thumbprint covers `crv`, so vault42 would have confirmed proofs no
+  conforming relying party accepts, and bound tokens to them. The test that appeared to cover this
   labeled its proof `ES384`, which the algorithm allowlist rejects before any key is read, so
   it passed with the curve check deleted.
 * **One signature had unlimited spellings.** `encoding/base64` skips `\r` and `\n` anywhere
@@ -423,13 +438,13 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   nothing binds a client to the subjects it may assert, so `mint:token` means the holder may
   impersonate any subject the estate honors, and the four conditions under which that is
   reachable are written out there.
-* **DPoP is no longer advertised.** `cnf.jkt` is declared and assigned nowhere, so no token
-  is sender-constrained and the thumbprint comparison is dead code; the flag bought nothing
-  in either position while the discovery document claimed RS256 and ES256 support
-  unconditionally. The key is removed rather than gated, because gating would still be false
-  in the ON position, and absent-then-added is compatible where advertised-then-retracted is
-  breaking. The `DPoP` authorization scheme is now rejected unless the flag is set, instead
-  of silently degrading to Bearer.
+* **DPoP is no longer advertised in the discovery document.** It claimed RS256 and ES256
+  support unconditionally, which was false in the OFF position and would still have been
+  imprecise in the ON one. The key is removed rather than gated, because absent-then-added is
+  compatible where advertised-then-retracted is breaking. The `DPoP` authorization scheme is
+  rejected unless the flag is set, instead of silently degrading to Bearer. Binding itself
+  landed after this entry was written; see **DPoP now binds the token to the key** under
+  Security.
 * **The OIDC provider claim is retracted.** The discovery document advertised an
   authorization endpoint, a `token_endpoint` pointing at a JSON email/password handler that
   ignores `grant_type`, and a `registration_endpoint` pointing at end-user signup. It now
@@ -443,11 +458,14 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   `mfa_*` with the old key kept as a documented alias; nil slices serialize as `[]`;
   timestamps use one encoding; `avatar_url` is readable on `GET /user/profile`;
   `GET /admin/metrics` returns 501 rather than a 200-OK stub documented as real.
-* **Four `vault` CLI commands moved to the admin plane.** `lock-user`, `unlock-user`,
+* **Five `vault` CLI commands moved off the application role.** `lock-user`, `unlock-user`,
   `revoke-client` and `rotate-client-secret` are now retired stubs: each prints a pointer to the
   admin gateway and issues no database write. They ran under `vault_app`, whose grants this
-  release narrows (migrations 023 and 024), so the equivalent operations now go through the
-  authenticated admin gateway instead. A script invoking any of the four must be repointed.
+  release narrows (migrations 023, 024 and 029), so the equivalent operations now go through the
+  authenticated admin gateway instead. `cleanup-audit` is the fifth, and it has no admin-plane
+  equivalent by design: audit retention is set with `VAULT_AUDIT_RETENTION_DAYS` and swept at
+  startup and every six hours, and no admin tier holds an audit-delete permission. A script
+  invoking any of the five must be repointed or dropped.
 
 ### Features
 
@@ -493,7 +511,8 @@ requirement text is about something else.
 
 * `docs/spec.md` claimed authority "as of 2026-03-02" while three commits had edited its body
   since, making it a partially-updated hybrid rather than cleanly stale. It is rewritten
-  around the real 98-route surface, with a normative section 0 stating the stability
+  around the real route surface, which the sentinel-delimited inventory now enumerates in
+  full at 103 rows, with a normative section 0 stating the stability
   contract: the semver major is the API version, root paths are v1 permanently, and the
   asymmetry that clients must ignore unknown response fields while the server rejects unknown
   request fields is written down, because it means clients cannot feature-probe.
