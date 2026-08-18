@@ -246,6 +246,112 @@ func TestForcedPasswordResetIsSetByTheAdminPlaneAndClearedByTheApplicationRole(t
 
 		out := call(t, h.RequirePasswordReset, "/admin/users/"+u.ID+"/require-password-reset",
 			`{"reason":"legacy hash cannot be verified"}`)
+		// The revocation has to actually happen, because POST /auth/refresh does
+		// not read must_reset_password: a session that already exists would
+		// otherwise rotate straight past the forced reset and the route would
+		// report a containment it had not delivered.
+		//
+		// This was pinned as false until migration 040. vault_admin held SELECT
+		// (001) and DELETE (009) on auth.refresh_tokens and no UPDATE, so
+		// `UPDATE auth.refresh_tokens SET revoked = TRUE` answered 42501 and the
+		// handler honestly reported sessions_revoked=false. 040 grants UPDATE on
+		// the single column the revocation writes, which permits strictly less
+		// than the DELETE that role already holds for erasure.
+		//
+		// POST /admin/users/{id}/lock had the same gap and had had it since 009 --
+		// its own comment calls the revocation "what makes containment immediate",
+		// and in a real deployment it revoked nothing. The same grant fixes both.
+		if out["sessions_revoked"] != true {
+			t.Errorf("sessions_revoked = %v, want true: migration 040 grants vault_admin "+
+				"UPDATE (revoked) on auth.refresh_tokens, so the route can end the sessions "+
+				"it says it ends. If this is false the grant is missing or was revoked.",
+				out["sessions_revoked"])
+		}
+		got, err := postgres.NewUserRepo(ownerDB).GetByID(ctx, u.ID)
+		if err != nil || got == nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if !got.MustResetPassword {
+			t.Error("SetMustResetPassword reported success but GetByID does not see the flag, so " +
+				"Login never will either and the operator's forced reset does nothing at all")
+		}
+	})
+
+	// The application role must not reach the setter, whichever Go call site
+	// holds it. The interface is shared by both planes, so the database is the
+	// only thing that keeps the direction rule, and this is it being kept.
+	t.Run("the application role cannot impose a forced reset through the repository", func(t *testing.T) {
+		u := seedAccountStateUser(t, ctx, ownerDB, "forced-repo-app-set@test.com")
+		app := postgres.NewUserRepo(&postgres.DB{Pool: appPool})
+		if err := app.SetMustResetPassword(ctx, u.ID, true); !forcedResetRefused(err) {
+			t.Fatalf("vault_app imposed a forced reset through the repository: err = %v.\n"+
+				"The setter sits on the interface both planes hold, so the trigger is the only "+
+				"thing separating them, and it just let the web server ban every password login "+
+				"in the deployment.", err)
+		}
+	})
+
+	t.Run("a completed reset clears the flag through the repository", func(t *testing.T) {
+		u := seedAccountStateUser(t, ctx, ownerDB, "forced-repo-clear@test.com")
+		if _, err := gatewayPool.Exec(ctx,
+			`UPDATE auth.users SET must_reset_password = TRUE WHERE id = $1`, u.ID); err != nil {
+			t.Fatalf("seed the forced reset: %v", err)
+		}
+		app := postgres.NewUserRepo(&postgres.DB{Pool: appPool})
+		if err := app.ClearMustResetPassword(ctx, u.ID); err != nil {
+			t.Fatalf("vault_app cannot clear the flag, so a completed password reset can never "+
+				"lift it: %v", err)
+		}
+		got, err := postgres.NewUserRepo(ownerDB).GetByID(ctx, u.ID)
+		if err != nil || got == nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if got.MustResetPassword {
+			t.Error("ClearMustResetPassword reported success but the column did not move")
+		}
+	})
+
+	// The operator routes, end to end, over the real column under the real role.
+	//
+	// The unit tests in internal/adminapi drive these handlers against a mock, so
+	// what they prove is that the route calls the repository and audits it. What
+	// they cannot prove is that the call lands: that vault_admin actually holds
+	// the privilege migration 039 granted, that the direction trigger admits the
+	// statement from the gateway's role, and that the column the route writes is
+	// the one GetByID reads into model.User.MustResetPassword -- the field
+	// AuthService.Login branches on. That last hop is what turns "the route
+	// answered 200" into "the next login for this account is refused and mailed
+	// a reset link".
+	t.Run("the operator routes move the flag Login reads", func(t *testing.T) {
+		gatewayDB := &postgres.DB{Pool: gatewayPool}
+		users := postgres.NewUserRepo(gatewayDB)
+		h := adminapi.NewHandler(
+			users, postgres.NewClientRepo(gatewayDB), postgres.NewRefreshTokenRepo(gatewayDB),
+			postgres.NewAuditRepo(gatewayDB), postgres.NewAdminUserRepo(gatewayDB),
+			postgres.NewAdminSessionRepo(gatewayDB), postgres.NewAdminConfigRepo(gatewayDB),
+			nil, audit.NewLogger(postgres.NewAuditRepo(gatewayDB), 0), make([]byte, 32), "",
+		)
+
+		u := seedAccountStateUser(t, ctx, ownerDB, "forced-route@test.com")
+		call := func(t *testing.T, handler func(http.ResponseWriter, *http.Request), path, body string) map[string]any {
+			t.Helper()
+			r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			r.SetPathValue("id", u.ID)
+			r = r.WithContext(adminapi.WithAdmin(ctx, &model.AdminUser{ID: "adm-1", Username: "root"}))
+			rec := httptest.NewRecorder()
+			handler(rec, r)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			var out map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			return out
+		}
+
+		out := call(t, h.RequirePasswordReset, "/admin/users/"+u.ID+"/require-password-reset",
+			`{"reason":"legacy hash cannot be verified"}`)
 		// Pinned as false, and that is a finding rather than a design.
 		//
 		// The route asks RevokeAllForUser to end the account's live sessions,

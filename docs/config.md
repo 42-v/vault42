@@ -377,7 +377,9 @@ only `true`/`1`/`yes` and `false`/`0`/`no`, case-sensitive; any other spelling r
 |----------|------|---------|----------|-------------|
 | `VAULT_METRICS_ENABLED` | bool | `false` | No | Enable the Prometheus-compatible `/metrics` endpoint on a dedicated listener, not on the public one. Exposes operational counters (argon2 semaphore, login, token). |
 | `VAULT_METRICS_ADDR` | string | `127.0.0.1:9090` | No | Bind address for that dedicated listener. The default is loopback so a scrape from another pod cannot reach it. The Helm chart sets this to `:<metrics.port>` so Prometheus can scrape, and expects `metrics.networkPolicy` to be the fence the loopback default was. Leave the default unless something outside the pod must scrape. |
+<!-- loglevel-gate:begin -->
 | `LOG_LEVEL` | string | *(ignored)* | No | **Read and ignored.** vault42 has no log-verbosity control. If this is set, startup logs one line saying so and every log line is still emitted. It is not refused, because co-located software often inherits `LOG_LEVEL` and a hard error would turn that into a boot loop. Setting it does not cut log exposure. |
+<!-- loglevel-gate:end -->
 
 ### Blob Storage
 

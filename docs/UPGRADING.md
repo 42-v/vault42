@@ -102,7 +102,7 @@ write `locked_until` and that `vault_admin` can.
 
 ## `helm upgrade` fails with `field is immutable`
 
-```
+```text
 Error: UPGRADE FAILED: cannot patch "v42-vault-auth" with kind Deployment:
 Deployment.apps "v42-vault-auth" is invalid: spec.selector: Invalid value:
 {...}: field is immutable

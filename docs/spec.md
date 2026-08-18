@@ -1920,7 +1920,9 @@ reduce log volume should filter at the collector.
 
 Dev profile extends production -- it inherits all production defaults, then applies minimal overrides. TLS, rate limits, listen address, and cache backend are all inherited from production unless explicitly overridden.
 
+<!-- loglevel-gate:begin -->
 Honeypot profile extends production -- it inherits all production defaults, then enables auto-migration and the embedded frontend. Per-request honeypot logging (`honeypot.LoggingMiddleware`) is mounted when the profile is active. There is no debug log level; `LOG_LEVEL` is read and ignored. See section 14.4 for details.
+<!-- loglevel-gate:end -->
 
 ### 14.3 Secret Loading (_FILE Convention)
 
@@ -1953,7 +1955,9 @@ The honeypot profile (`VAULT_PROFILE=honeypot`) is a 4th deployment profile desi
 
 - **Auto-migration:** schema migrations run automatically on startup (`VAULT_AUTO_MIGRATE` left unset)
 - **Embedded frontend:** the Vue SPA is served from the Go binary (`ServeFrontend=true`), making the deployment look like a fully operational application to attackers
+<!-- loglevel-gate:begin -->
 - **Request logging middleware:** `honeypot.LoggingMiddleware` wraps all handlers and logs method, path, remote address, status, duration, user-agent and an automation risk score. There is no debug log level. `LOG_LEVEL` is read and ignored on every profile.
+<!-- loglevel-gate:end -->
 
 **Trap user detection:** Configurable via `VAULT_HONEYPOT_TRAP_USERS` (comma-separated list of fake email addresses). When a login attempt matches a trap user, the honeypot alerter fires an audit event (`honeypot_trigger`) and dispatches a webhook alert.
 

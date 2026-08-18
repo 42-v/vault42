@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-18 | Tests: 4800 | Total: 99.57% statement coverage
+Generated: 2026-08-18 | Tests: 4815 | Total: 99.58% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -10,6 +10,7 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | Package | Coverage |
 |---------|----------|
 | `internal/useragent` | 100.00% |
+| `internal/server` | 100.00% |
 | `internal/seed` | 100.00% |
 | `internal/sanitize` | 100.00% |
 | `internal/redis` | 100.00% |
@@ -30,18 +31,17 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
 | `internal/repository/postgres` | 99.91% |
-| `internal/adminapi` | 99.82% |
+| `internal/adminapi` | 99.83% |
 | `internal/oauth2` | 99.73% |
 | `cmd/admin-gateway` | 99.72% |
 | `internal/handler` | 99.69% |
 | `internal/keystore` | 99.62% |
-| `internal/server` | 99.61% |
 | `cmd/bridge` | 99.56% |
 | `internal/service` | 99.27% |
 | `internal/jwt` | 99.22% |
 | `internal/email` | 99.08% |
 | `cmd/vault` | 98.35% |
-| `internal/crypto` | 98.18% |
+| `internal/crypto` | 98.17% |
 | `cmd/recover` | 98.15% |
 | `internal/firstboot` | 96.88% |
 

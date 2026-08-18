@@ -1060,7 +1060,9 @@ Four deployment profiles control default configuration values:
 minimal overrides (CORS allow-all, shorter refresh TTL, faster shutdown,
 auto-migration). TLS, rate limits, listen address, and cache backend are all
 inherited from production unless explicitly overridden via environment
+<!-- loglevel-gate:begin -->
 variables. There is no log-level control: `LOG_LEVEL` is read and ignored.
+<!-- loglevel-gate:end -->
 
 **Embedded** is tuned for resource-constrained environments (e.g., Raspberry Pi 5)
 with in-memory cache, 5 DB connections, and auto-migration. Target memory
