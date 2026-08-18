@@ -160,8 +160,14 @@ func TestRecoveryPruneMissingFunction(t *testing.T) {
 	repo := postgres.NewAccountRecoveryRepo(&postgres.DB{Pool: pool})
 	seedRecoveryRecord(t, repo, time.Now().UTC().Add(-90*24*time.Hour))
 
-	if _, err := pool.Exec(ctx, `DROP FUNCTION auth.cleanup_old_recovery(interval)`); err != nil {
-		t.Fatalf("drop cleanup function: %v", err)
+	// Both overloads. 036 added the batched (interval, integer) form and moved
+	// PruneLocked onto it, so dropping only the one-argument form leaves the
+	// scheduled path working and this test asserting nothing.
+	for _, signature := range []string{"interval", "interval, integer"} {
+		if _, err := pool.Exec(ctx,
+			`DROP FUNCTION auth.cleanup_old_recovery(`+signature+`)`); err != nil {
+			t.Fatalf("drop cleanup function(%s): %v", signature, err)
+		}
 	}
 
 	deleted, acquired, err := repo.PruneLocked(ctx, time.Now().UTC().Add(-30*24*time.Hour))

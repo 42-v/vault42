@@ -1103,22 +1103,50 @@ func TestEmailTemplateOverrideRejectionIsFatal(t *testing.T) {
 	}
 }
 
-// TestAdminTokenInitFailureIsNotFatal is the counterweight to the tests above.
-// The admin token is provisioned on first boot, and a database that refuses the
-// write must be logged and survived: the token is an administrative convenience,
-// and refusing to serve authentication traffic because of it would turn a
-// degraded admin path into a full outage.
-func TestAdminTokenInitFailureIsNotFatal(t *testing.T) {
-	stub := startPGStub(t,
-		pgRule{match: "INSERT INTO auth.admin_config", errCode: "42501", errMsg: "permission denied for table admin_config"},
-	)
-	addr := freeAddr(t)
+// Two failures on the first-boot admin token path, with opposite verdicts.
+//
+// A database that refuses the write is survivable, and this is the counterweight
+// to the fatal tests above: the token is an administrative convenience, and
+// refusing to serve authentication traffic because of it would turn a degraded
+// admin path into a full outage.
+//
+// A credential that cannot be delivered is not survivable. Nothing is stored, so
+// the pod would come up Ready with no admin token in force and a single log line
+// to say so, and the instructions then send the operator to read a file that was
+// never written. internal/firstboot refuses; this is that refusal in the shipped
+// binary rather than in a unit test's seam.
+func TestAdminTokenInitFailures(t *testing.T) {
+	t.Run("a refused write is logged and survived", func(t *testing.T) {
+		stub := startPGStub(t,
+			pgRule{match: "INSERT INTO auth.admin_config", errCode: "42501", errMsg: "permission denied for table admin_config"},
+		)
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		env["VAULT_FIRST_BOOT_CREDENTIAL_FILE"] = filepath.Join(t.TempDir(), "first-boot.env")
 
-	res := bootAndShutdown(t, vaultRun{env: bootEnv(t, stub, addr)}, addr, syscall.SIGTERM, nil)
-	requireExit(t, res, 0, "Admin token init error")
-	if !strings.Contains(res.stderr, "Shutting down...") {
-		t.Fatalf("the server did not reach a normal shutdown\nstderr:\n%s", res.stderr)
-	}
+		res := bootAndShutdown(t, vaultRun{env: env}, addr, syscall.SIGTERM, nil)
+		requireExit(t, res, 0, "Admin token init error")
+		if !strings.Contains(res.stderr, "Shutting down...") {
+			t.Fatalf("the server did not reach a normal shutdown\nstderr:\n%s", res.stderr)
+		}
+	})
+
+	t.Run("a credential with nowhere to go stops the boot", func(t *testing.T) {
+		stub := startPGStub(t)
+		addr := freeAddr(t)
+		env := bootEnv(t, stub, addr)
+		// No sink, and a pod's stdout is not a terminal. Which is the shape of
+		// the defect: the chart supplies the file, and an install that does not
+		// used to come up healthy with no admin token in force.
+		env["VAULT_FIRST_BOOT_CREDENTIAL_FILE"] = ""
+
+		res := runVault(t, vaultRun{env: env})
+		requireExit(t, res, 1, "REFUSING TO START")
+		if strings.Contains(res.stderr, "listening on") {
+			t.Fatalf("the server served anyway with no admin token in force\nstderr:\n%s", res.stderr)
+		}
+		requireNoSecretLeak(t, res, dbPassword)
+	})
 }
 
 // ---------------------------------------------------------------------------
