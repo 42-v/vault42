@@ -209,8 +209,20 @@ redis:
     repository: redis
     # -- Redis image tag
     tag: "7-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Redis maxmemory setting
   maxMemory: "64mb"
+  # -- Redis resource requests/limits. The memory limit has to clear maxMemory
+  # above with room for the process itself, or the pod is OOM-killed at the point
+  # the cache fills, which is the point it is most useful.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
 
 # ---- SMTP ----
 smtp:
@@ -325,10 +337,20 @@ frontend:
     tag: ""
     # -- Frontend image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Number of frontend replicas
   replicaCount: 1
-  # -- Frontend resource requests/limits
-  resources: {}
+  # -- Frontend resource requests/limits. An nginx serving static files needs
+  # very little; the point of the limit is that a pod with none is scheduled as
+  # best-effort and is the first thing evicted when a node runs short.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 # ---- PostgreSQL (dev/embedded only) ----
 postgres:
@@ -531,8 +553,21 @@ cloudflared:
   image:
     # -- cloudflared image repository
     repository: cloudflare/cloudflared
-    # -- cloudflared image tag
-    tag: latest
+    # -- cloudflared image tag. A version, not "latest". The connector holds the
+    # tunnel credential, so what runs under this name should be a decision, not
+    # whatever the registry moved the tag to since the last restart. Cloudflare
+    # ships releases often; raise this deliberately rather than floating.
+    tag: "2026.8.2"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+  # -- cloudflared resource requests/limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   # -- Tunnel token from `cloudflared tunnel token <name>`
   tunnelToken: ""
   # -- Use an existing Kubernetes Secret for tunnel token
