@@ -69,9 +69,11 @@ var (
 // than the loss itself.
 func RecordAuditBufferFull() { auditBufferFull.Add(1) }
 
-// RecordAuditEventsDropped counts buffered audit entries discarded because a
-// rejected batch would not fit back into the buffer. Every one is a hole in the
-// audit trail, which has no second copy.
+// RecordAuditEventsDropped counts buffered audit entries discarded either
+// because a rejected batch would not fit back into the buffer, or because the
+// store refused them individually while it was accepting others and retrying
+// them would wedge the flush loop. Every one is a hole in the audit trail,
+// which has no second copy.
 func RecordAuditEventsDropped(n int64) {
 	if n > 0 {
 		auditEventsDropped.Add(n)

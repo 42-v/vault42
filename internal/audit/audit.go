@@ -203,6 +203,15 @@ type Logger struct {
 	done         chan struct{}
 	closeOnce    sync.Once
 	droppedTotal atomic.Int64
+
+	quarantinedTotal atomic.Int64
+}
+
+// QuarantinedTotal returns the number of entries the store refused individually
+// while it was demonstrably reachable, and which were therefore discarded
+// instead of retried.
+func (l *Logger) QuarantinedTotal() int64 {
+	return l.quarantinedTotal.Load()
 }
 
 // isCriticalEvent returns true for security-critical event types that must
@@ -344,10 +353,79 @@ func (l *Logger) Flush(ctx context.Context) error {
 		return nil
 	}
 	if err := l.repo.InsertBatch(ctx, entries); err != nil {
-		l.requeue(entries)
+		l.isolate(ctx, entries)
 		return err
 	}
 	return nil
+}
+
+// isolate decides what to do with a batch the store rejected as a whole.
+//
+// A batch is one transaction, so the first row the store refuses takes every
+// other row down with it and nothing lands. Requeueing the lot then puts the
+// offending row back at the FRONT, where it is retried first on the next tick,
+// and the next, forever: the buffer fills behind it, everything logged after it
+// is counted into droppedTotal and discarded, and the audit trail for that
+// process never drains again. One crafted request is enough to reach that state
+// — the audit actor id is a Go string written into a UUID column, so a service
+// document or a mint filed under a non-UUID subject is refused with 22P02 for
+// as long as the row exists — and a security control that dies silently is the
+// worst failure mode this repository has.
+//
+// So the two causes have to be told apart, and the evidence is in the same
+// flush. Each entry is offered to the store on its own. If the store took any
+// of them it is reachable, which makes the ones it refused the problem rather
+// than the store, and those are quarantined: dropped, counted and named in the
+// process log with the store's own error. If it took none, the store is down —
+// an outage, an exhausted pool, a partition — and every entry is requeued
+// exactly as before, because retrying is the right answer to that.
+//
+// The pass costs one round trip per entry of a batch that already failed. That
+// is the price of the distinction, it is bounded by the buffer size, and it is
+// only paid on the failure path.
+//
+// A batch whose entries are ALL unwritable takes no successes and is therefore
+// requeued. It unwedges itself on the first flush that also carries a writable
+// entry, which ordinary traffic supplies, and until then there is nothing
+// behind it to lose.
+func (l *Logger) isolate(ctx context.Context, entries []*model.AuditEntry) {
+	var (
+		accepted int
+		refused  []*model.AuditEntry
+		reasons  []error
+	)
+	for _, e := range entries {
+		if err := l.repo.Insert(ctx, e); err != nil {
+			refused = append(refused, e)
+			reasons = append(reasons, err)
+			continue
+		}
+		accepted++
+	}
+
+	if accepted == 0 {
+		l.requeue(refused)
+		return
+	}
+	l.quarantine(refused, reasons)
+}
+
+// quarantine discards entries the store refused while it was demonstrably
+// reachable, and makes the loss loud.
+//
+// This is still a lost audit record, so it is counted in the same
+// events-dropped metric an operator already alerts on, and each row names its
+// id, its event type and the store's verbatim error. That error carries the
+// SQLSTATE and the value the store choked on, which is what turns "the audit
+// log lost a row" into "this caller files events under a malformed actor id"
+// without anyone having to reproduce it.
+func (l *Logger) quarantine(entries []*model.AuditEntry, reasons []error) {
+	l.quarantinedTotal.Add(int64(len(entries)))
+	metrics.RecordAuditEventsDropped(int64(len(entries)))
+	for i, e := range entries {
+		log.Printf("ERROR: audit: quarantined an unwritable entry the store refused while it was "+
+			"accepting others: id=%s type=%s actor=%q: %v", e.ID, e.EventType, e.UserID, reasons[i])
+	}
 }
 
 // requeue puts a rejected batch back at the front of the buffer.
