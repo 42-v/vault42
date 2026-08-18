@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"math"
@@ -551,39 +550,21 @@ func isTrustedProxy(ipStr string) bool {
 	return false
 }
 
-// IsAccountLocked checks if a user is currently locked out without modifying the counter.
-func IsAccountLocked(ctx context.Context, c cache.Cache, userID string, threshold int) (bool, error) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	val, err := c.Get(ctx, key)
-	if err != nil {
-		// Graceful degradation: a cache miss or transient cache failure must not
-		// block authentication. Auth never fails because the cache is down.
-		return false, nil //nolint:nilerr // intentional fail-open per docs/spec.md cache invariants
-	}
-	count, _ := strconv.ParseInt(val, 10, 64)
-	return count > int64(threshold), nil
-}
-
-// RecordFailedAttempt increments the failed-attempt counter for lockout tracking.
-// Call this only after a confirmed authentication failure.
-func RecordFailedAttempt(ctx context.Context, c cache.Cache, userID string, lockDuration time.Duration) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	c.Increment(ctx, key, lockDuration) // #nosec G104 -- best-effort counter
-}
-
-// CheckAccountLockout atomically increments the failed-attempt counter and
-// reports whether the threshold has been crossed. Equivalent to
-// RecordFailedAttempt + IsAccountLocked but in a single round-trip — useful
-// in tight failure paths and for compliance assertions.
-func CheckAccountLockout(ctx context.Context, c cache.Cache, userID string, threshold int, lockDuration time.Duration) (bool, error) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	count, err := c.Increment(ctx, key, lockDuration)
-	if err != nil {
-		// Graceful degradation: same fail-open invariant as IsAccountLocked.
-		return false, nil //nolint:nilerr // intentional fail-open per docs/spec.md cache invariants
-	}
-	return count > int64(threshold), nil
-}
+// Account lockout does not live here. It is service.AuthService.isAccountLocked
+// and recordFailedAttempt, keyed on (account, source) and on the account alone
+// at two different thresholds, with a durable failed_login_count fallback.
+//
+// Three exported helpers used to sit at this spot — IsAccountLocked,
+// RecordFailedAttempt and CheckAccountLockout — implementing one flat counter
+// at a caller-supplied threshold, failing open on any cache error. Nothing in
+// production ever called them. Their only callers were the compliance and
+// attack suites certifying that vault42 resists brute force, so the evidence
+// for that claim measured a single-counter model no request reaches, and after
+// the source-keyed rework it did not even model the same scheme. They are gone;
+// those suites now drive AuthService.Login and the exported MFA gate.
+//
+// ClientIPContext below is the part of lockout that does belong to this
+// package: resolving the source address the service layer keys on.
 
 // ClientIPContext stores the resolved client address on the request context.
 //
