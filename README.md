@@ -1,6 +1,8 @@
 # Vault42
 
-Production-grade JWT authentication server written in Go, with an integrated Vue frontend, honeypot mode for threat observation, and only 3 direct dependencies. JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
+Production-grade JWT authentication server written in Go, with an integrated Vue frontend, honeypot mode for threat observation, and only 3 direct production dependencies. JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
+
+Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It is not an OAuth2 authorization server and not an OIDC provider: there is no authorize endpoint, no consent screen, and no `redirect_uri` a third-party client registers against it.
 
 <!-- badges -->
 | | | |
@@ -19,7 +21,7 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **KMS unwrap oracle**: `POST /kms/unwrap` KEK envelope-unwrap, gated by the `kms:unwrap` scope, fail-closed rate limit, synchronous audit, every failure collapsed to one opaque error; the `vault kms wrap` CLI produces envelopes
 - **WebAuthn/FIDO2**: passkey registration and authentication
 - **TOTP 2FA**: RFC 6238, hand-rolled (~80 lines), backup codes for recovery
-- **OAuth2/OIDC**: GitHub, Google, Facebook, plus generic OIDC (Okta, Auth0, Keycloak, Entra via `VAULT_OIDC_PROVIDERS`); PKCE S256 enforced, strict redirect URI matching
+- **OAuth2/OIDC login**: GitHub, Google, Facebook, plus generic OIDC (Okta, Auth0, Keycloak, Entra via `VAULT_OIDC_PROVIDERS`); PKCE S256 on every provider with no downgrade path, single-use verifier, and the outbound authorize URL checked to be absolute HTTPS before the browser is sent to it
 - **Encrypted identity store**: AES-256-GCM encrypted PII, HMAC-SHA256 pseudonymous keys
 - **DB-backed signing keys**: encrypted at rest (AES-256-GCM, kid as AAD), multi-pod refresh, zero-downtime rotation via the admin gateway
 - **Encrypted blob storage**: compress-then-encrypt (DEFLATE + AES-GCM), per-user quotas
@@ -133,8 +135,8 @@ scripts/release-check.sh
 |---|---|---|
 | `production` | Redis | Full features, TLS 1.3, external PostgreSQL + Redis |
 | `embedded` | In-memory | RPi5 / edge (~60 MB RAM), 5 conns. Point it at a PostgreSQL you run; the chart's bundled one is a development convenience, off by default, and did not start on any released version -- see [deployment-guide](docs/deployment-guide.md#the-bundled-postgresql) |
-| `honeypot` | Memory | Trap user detection, webhook alerts, embedded frontend |
-| `dev` | Inherits production | Debug logging, auto-migrate, permissive CORS, 24h refresh TTL |
+| `honeypot` | Redis | Production defaults plus auto-migrate and the embedded SPA, so the trap looks like a real deployment. Trap user detection and webhook alerts |
+| `dev` | Inherits production | Auto-migrate, permissive CORS, 24h refresh TTL, 5s shutdown. Logging is not louder in dev; there is no log-level setting |
 
 ## Dependencies
 
@@ -150,17 +152,17 @@ Everything else (JWT, Redis, TOTP, CORS, JWKS, config, migrations, password hash
 
 ## Testing
 
-Nine layers: unit, attack simulation (60+ vector files), NIST/OWASP compliance, integration (testcontainers), fuzz (11 targets), browser (chromedp), honeypot E2E (bridge + trap flows), frontend unit (vitest), frontend integration.
+Twelve Go suites under `tests/`: unit, attack simulation (93 vector files), NIST/OWASP compliance, spec (chart and workflow assertions), integration (testcontainers), end-to-end including a multi-replica keystore, fuzz (18 targets), browser (chromedp), Playwright, admin-gateway E2E over real mTLS, honeypot E2E (bridge + trap flows), and stress. The frontend adds its own vitest runs in `web/` and `packages/vue/`. Several suites need a container runtime, a build tag or a browser and are skipped without one; the `Suites CI cannot run` job fails the build if a suite neither ran nor said why.
 
 Coverage tooling lives in `scripts/`:
 
 | Script | Purpose |
 |---|---|
 | `scripts/t.sh [path]` | Run Go tests (default: all packages, single path supported) |
-| `scripts/tcount.sh` | Fast test-count summary, no execution |
+| `scripts/tcount.sh` | Test-count summary. It runs the suite; what it saves you is reading the output, not the wait |
 | `scripts/coverage.sh` | Regenerate `docs/test-coverage.md` with per-package + per-function coverage |
-| `scripts/security-scan.sh` | Standalone Go + frontend security pass (gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
-| `scripts/release-check.sh` | Full pre-release gate; mirrors nightly CI (govulncheck, gosec, trivy fs, attack suite, coverage) |
+| `scripts/security-scan.sh` | Standalone Go + frontend security pass (go vet, gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
+| `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, the golangci ratchet, helm, doc chart paths, a changelog section for the version, and a clean tree |
 | `scripts/precommit.sh` | Pre-commit verification: build, vet, gosec, tests, badges, docs |
 
 ## Docs
@@ -172,7 +174,7 @@ Full index with one line on each document: [docs/README.md](docs/README.md).
 | [Specification](docs/spec.md) | Authoritative spec (verified against implementation) |
 | [Architecture](docs/architecture.md) | Auth flows, middleware chain, token architecture |
 | [Configuration](docs/config.md) | Every env var, profiles, `_FILE` convention, fail-closed overrides |
-| [API Reference](docs/api.md) | 54 endpoints, schemas, curl examples |
+| [API Reference](docs/api.md) | 80 endpoints, schemas, curl examples: 62 on the main server, 18 on the admin gateway |
 | [Deployment Guide](docs/deployment-guide.md) | Kubernetes install, KMS root key, upgrades, backup |
 | [Admin Gateway](docs/admin-gateway.md) | mTLS admin plane, RBAC model, admin endpoints |
 | [Bridge Deployment](docs/bridge.md) | Honeypot bridge proxy |
