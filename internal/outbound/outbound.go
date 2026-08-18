@@ -191,8 +191,35 @@ func (p *Policy) Transport() *http.Transport {
 }
 
 // Client is Transport wrapped in an http.Client with an end-to-end timeout.
+//
+// Redirects are followed, and DialContext still refuses private/link-local
+// hop targets. Domain continuity on a redirect is not this method's job:
+// CheckDerived needs the issuer, which a bare Client does not have. Callers
+// that fetch discovery-derived endpoints (OIDC token, userinfo, JWKS) must
+// use ClientForIssuer so a 302 off the issuer's domain cannot carry a
+// client_secret to a host the operator never named.
 func (p *Policy) Client(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: p.Transport()}
+}
+
+// ClientForIssuer is Client with CheckRedirect re-applying CheckDerived to
+// every hop under issuer. Without it, an in-domain token_endpoint that 302s
+// to an arbitrary public host would bypass the trust boundary DialContext
+// cannot see: dial-time only judges address class, not whose host it is.
+func (p *Policy) ClientForIssuer(issuer string, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: p.Transport(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("outbound: stopped after 10 redirects")
+			}
+			if err := p.CheckDerived(issuer, "redirect", req.URL.String()); err != nil {
+				return fmt.Errorf("outbound: refusing redirect: %w", err)
+			}
+			return nil
+		},
+	}
 }
 
 // resolve answers with the addresses a destination names. An address literal

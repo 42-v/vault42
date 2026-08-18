@@ -102,7 +102,11 @@ func fetchableEndpoint(raw string) bool {
 // is unchanged.
 func (p *OIDCProvider) SetGuard(g *outbound.Policy) {
 	p.guard = g
-	p.client = g.Client(providerTimeout)
+	// ClientForIssuer, not Client: a discovery-admitted endpoint that 302s to
+	// another public host would otherwise bypass the domain rule. DialContext
+	// only refuses private/link-local addresses, so the hop has to be judged
+	// again under the issuer that CheckDerived already bound the document to.
+	p.client = g.ClientForIssuer(p.issuer, providerTimeout)
 }
 
 func (p *OIDCProvider) httpClient() *http.Client {
