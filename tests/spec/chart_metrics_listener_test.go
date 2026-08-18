@@ -256,30 +256,6 @@ func docOfKind(t *testing.T, docs []map[string]any, kind string) map[string]any 
 	return nil
 }
 
-func mapAt(m map[string]any, key string) map[string]any {
-	if m == nil {
-		return nil
-	}
-	nested, _ := m[key].(map[string]any)
-	return nested
-}
-
-func intAt(m map[string]any, key string) (int, bool) {
-	if m == nil {
-		return 0, false
-	}
-	switch v := m[key].(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	default:
-		return 0, false
-	}
-}
-
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
