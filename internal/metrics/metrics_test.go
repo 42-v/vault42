@@ -323,3 +323,38 @@ func TestCollector_Table(t *testing.T) {
 		})
 	}
 }
+
+// The alert counter is the half of the delivery decision a monitoring system can
+// page on. The alert itself is a log record, which is what an operator reads;
+// this is what fires when nobody is reading, and it is the only signal a
+// deployment can alert on without parsing text.
+//
+// It has to be its own series. Folding it into either audit tally would page the
+// team that fixes the database when an attacker is the one who moved the number.
+func TestSecurityAlertCounterIsItsOwnSeriesAndIsExposed(t *testing.T) {
+	before := renderCounter(t, "vault_security_alerts_total")
+	beforeFull := renderCounter(t, "vault_audit_buffer_full_total")
+	beforeDropped := renderCounter(t, "vault_audit_events_dropped_total")
+
+	RecordSecurityAlert()
+	RecordSecurityAlert()
+	RecordSecurityAlert()
+
+	if got := renderCounter(t, "vault_security_alerts_total") - before; got != 3 {
+		t.Errorf("vault_security_alerts_total moved by %d, want 3", got)
+	}
+	if got := renderCounter(t, "vault_audit_buffer_full_total") - beforeFull; got != 0 {
+		t.Errorf("raising an alert moved vault_audit_buffer_full_total by %d", got)
+	}
+	if got := renderCounter(t, "vault_audit_events_dropped_total") - beforeDropped; got != 0 {
+		t.Errorf("raising an alert moved vault_audit_events_dropped_total by %d", got)
+	}
+
+	rec := httptest.NewRecorder()
+	c := NewCollector(func() int64 { return 0 }, func() int64 { return 0 }, func() int { return 1 })
+	c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "# TYPE vault_security_alerts_total counter") {
+		t.Error("vault_security_alerts_total carries no TYPE annotation, so a scrape treats it as " +
+			"untyped and rate() over it is refused")
+	}
+}

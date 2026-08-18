@@ -139,17 +139,17 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 291,
+      "line": 309,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:290 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:301 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
     },
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 405,
+      "line": 423,
       "occurrence": 1,
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
@@ -159,7 +159,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 406,
+      "line": 424,
       "occurrence": 1,
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
@@ -549,7 +549,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 473,
+      "line": 491,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -559,7 +559,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 482,
+      "line": 500,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",
