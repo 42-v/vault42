@@ -109,10 +109,29 @@ func startFakePG(t *testing.T, srv *fakePG) string {
 	return fmt.Sprintf("postgres://recover:secret@%s/vault?sslmode=disable", ln.Addr().String())
 }
 
+// fakePGIdleTimeout bounds how long the fake backend waits for the next message
+// from the driver before giving up on the connection.
+//
+// It is what stops a regression looking like a hung job. When the tool fails to
+// release the connection, nothing closes the socket: the leaked pgx conn becomes
+// garbage and is closed only when the net package's finalizer runs, which the
+// runtime's forced collection reaches two minutes later (runtime forcegcperiod).
+// settle and the t.Cleanup below both wait on that, so dropping `defer release()`
+// cost 120s per test - 240s across the two tests that call settle - before either
+// reported anything. With this, the backend gives up in seconds and the run fails
+// on the assertion that says the connection was never terminated.
+//
+// Generous relative to what these tests do between messages, which is a couple of
+// RSA-2048 decrypts, so a loaded CI box cannot trip it.
+const fakePGIdleTimeout = 5 * time.Second
+
 // settle stops the listener and waits for the connection goroutines to drain.
 // The tool's release function sends Terminate and closes the socket on its way
 // out, which the backend observes some time later; without this, an assertion
 // about what the backend saw would be racing the driver's own shutdown.
+//
+// Bounded by fakePGIdleTimeout on the backend side, so a connection the tool
+// never released delays this by seconds rather than by two minutes.
 func (s *fakePG) settle(t *testing.T) {
 	t.Helper()
 	_ = s.ln.Close()
@@ -308,6 +327,9 @@ func (w *wire) msg(typ byte, body []byte) {
 
 func (w *wire) readStartup() ([]byte, error) {
 	var size [4]byte
+	if err := w.awaitPeer(); err != nil {
+		return nil, err
+	}
 	if _, err := io.ReadFull(w.conn, size[:]); err != nil {
 		return nil, err
 	}
@@ -322,8 +344,19 @@ func (w *wire) readStartup() ([]byte, error) {
 	return body, nil
 }
 
+// awaitPeer arms the idle timeout ahead of every read, so a driver that has
+// stopped talking - because the tool leaked the connection instead of releasing
+// it - unblocks the backend goroutine rather than parking it until the runtime
+// finalizes the socket.
+func (w *wire) awaitPeer() error {
+	return w.conn.SetReadDeadline(time.Now().Add(fakePGIdleTimeout))
+}
+
 func (w *wire) readFrontend() (byte, []byte, error) {
 	var head [5]byte
+	if err := w.awaitPeer(); err != nil {
+		return 0, nil, err
+	}
 	if _, err := io.ReadFull(w.conn, head[:]); err != nil {
 		return 0, nil, err
 	}
@@ -507,6 +540,28 @@ func (c *cursor) value() []byte {
 // Tests
 // ---------------------------------------------------------------------------
 
+// wantEscrowSQL is the one statement this tool sends to a production database,
+// written out here by hand.
+//
+// The check it replaces was `if sql != escrowQuery`, which compares the
+// production constant with itself. It proves pgx forwarded the constant
+// unchanged and nothing whatever about what the constant says, so appending
+// `, id ASC` to the ORDER BY was green - and that is not a cosmetic change: with
+// LIMIT, a tiebreaker decides which rows fall inside the boundary and therefore
+// which erasures a truncated read reports.
+//
+// Nothing here can be recomputed from main.go, so a change to the escrow read
+// has to be made in two places and is reviewed as a change to what the recovery
+// tool reads out of the production database.
+const wantEscrowSQL = "SELECT id::text, pseudonym, payload, deleted_at, deleted_by, reason " +
+	"FROM auth.account_recovery " +
+	"ORDER BY deleted_at DESC " +
+	"LIMIT $1"
+
+// normalizeSQL collapses the layout so that reindenting the constant is not a
+// test failure while every change to the statement itself is.
+func normalizeSQL(s string) string { return strings.Join(strings.Fields(s), " ") }
+
 // runAgainst drives the whole tool through openPostgres, the code path the
 // shipped binary uses.
 func runAgainst(t *testing.T, dsn string, args ...string) result {
@@ -559,8 +614,15 @@ func TestOpenPostgres_RecoversFromTheEscrowLog(t *testing.T) {
 
 	srv.settle(t)
 	sql, limit, terminated := srv.observed()
+	if got := normalizeSQL(sql); got != wantEscrowSQL {
+		t.Errorf("the statement that reached the server is not the escrow read:\n got %q\nwant %q", got, wantEscrowSQL)
+	}
+	// Kept beside the pin above, where it is worth something: this one says pgx
+	// sent the constant through unchanged, the pin says what the constant has to
+	// contain. On its own it is a comparison of the production constant with
+	// itself and cannot fail for any edit to the query.
 	if sql != escrowQuery {
-		t.Errorf("prepared SQL is not escrowQuery:\n%q", sql)
+		t.Errorf("pgx did not send escrowQuery verbatim:\n%q", sql)
 	}
 	if !strings.Contains(sql, "auth.account_recovery") || !strings.Contains(sql, "ORDER BY deleted_at DESC") {
 		t.Errorf("the query no longer reads the escrow log newest first:\n%q", sql)

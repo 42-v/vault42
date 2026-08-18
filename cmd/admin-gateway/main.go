@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 	"syscall"
 	"time"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/repository/postgres"
@@ -43,25 +43,19 @@ var (
 	BuildTime = "unknown"
 )
 
-// dbURLPattern matches the userinfo of a PostgreSQL DSN so it can be redacted
-// out of an error before it reaches a log.
+// sanitizeDBError strips connection-URL credentials from an error before it
+// reaches a log.
 //
-// Both schemes, because pgx accepts postgresql:// as well as postgres:// and
-// DATABASE_URL is operator-supplied, so the longer spelling reached these
-// messages unredacted. And [^:]+:[^@]* rather than [^\s]+, because the old
-// pattern stopped at whitespace: a DSN carrying a space anywhere before the @
-// did not match at all, and the entire string went to the log with the password
-// in it.
-//
-// Only the userinfo is replaced. The host and database survive, because an
-// operator reading a connection failure needs to know what it was connecting to.
-var dbURLPattern = regexp.MustCompile(`(postgres(?:ql)?://)[^:@/]+:[^@]*@`)
-
+// It delegates to httputil.RedactDSN rather than carrying a pattern of its own.
+// This file used to hold a private copy of that regex, as did cmd/vault, which
+// is exactly the drift RedactDSN's doc comment says the helper exists to
+// prevent: an improvement to the shared pattern reached cmd/recover and left
+// both copies behind, silently, with the whole suite green. The name stays
+// because it is what this binary's call sites and tests use; the behavior now
+// has one definition. tests/spec/dsn_redaction_drift_test.go fails the build if
+// a private copy reappears.
 func sanitizeDBError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", dbURLPattern.ReplaceAllString(err.Error(), "${1}***:***@"))
+	return httputil.RedactDSN(err)
 }
 
 func main() {

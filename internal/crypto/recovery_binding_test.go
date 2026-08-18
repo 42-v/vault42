@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
@@ -451,3 +452,92 @@ func TestRecoveryBinding_ErrorsCarryNoSecrets(t *testing.T) {
 // second discards a decrypt's plaintext so a table of failing calls reads as a
 // list of errors. It is only ever used on calls that must fail.
 func second(_ []byte, err error) error { return err }
+
+// The binding derivation, pinned to bytes nothing in the tree can recompute.
+//
+// Every other test of the binding - here, in cmd/recover, in tests/attack -
+// builds its expectation by calling RecoveryBinding. That is right for the
+// properties they assert, but it means one edit to this function moves the
+// derivation and its expectation together: cmd/recover seals every fixture with
+// RecoveryBinding and verifies it with RecoveryBinding, so its 159 assertions
+// stayed green through all three of the mutations below.
+//
+//   - Dropping the "\x00" separator, which is what stops (id="ab", pseu="cd")
+//     and (id="abc", pseu="d") producing the same bytes and putting two escrow
+//     rows into one equivalence class.
+//   - Dropping the recoveryBindingDomain prefix, which is the domain separation
+//     keeping these bytes out of every other subsystem's context namespace.
+//   - Swapping the two fields, which nothing in the repository caught.
+//
+// A golden vector cannot be moved by the same edit. It is also the compatibility
+// statement the subsystem needs: auth.account_recovery rows sealed by a shipped
+// release open only under these exact bytes, so a change here is not a refactor,
+// it is the point at which every escrow record ever written stops decrypting.
+//
+// Written as hex because the encoding is mostly NUL-separated text and the
+// separators are the part that matters; a Go string literal hides them.
+func TestRecoveryBinding_GoldenVector(t *testing.T) {
+	tests := []struct {
+		name      string
+		recordID  string
+		pseudonym string
+		want      string
+	}{
+		{
+			name:      "an escrow row",
+			recordID:  rowA,
+			pseudonym: pseA,
+			want: "7661756c7434322f7265636f766572792f763200" +
+				"33663235303465302d346638392d343164332d396130632d303330356538326333333031" + "00" +
+				"37623166306332653964346135623663376438653966306131623263336434653566363037313832393361346235633664376538663961306231633264336534",
+		},
+		{
+			// The same row id in the case a producer holding it as a Go string
+			// might emit. PostgreSQL hands the reader back the lowercase form,
+			// so these two have to be the same bytes or every record that
+			// producer sealed is unreadable.
+			name:      "the same row id in upper case",
+			recordID:  strings.ToUpper(rowA),
+			pseudonym: pseA,
+			want: "7661756c7434322f7265636f766572792f763200" +
+				"33663235303465302d346638392d343164332d396130632d303330356538326333333031" + "00" +
+				"37623166306332653964346135623663376438653966306131623263336434653566363037313832393361346235633664376538663961306231633264336534",
+		},
+		{
+			// Two characters per field, so the whole encoding is legible in one
+			// line: domain, NUL, the lowercased id, NUL, the pseudonym verbatim.
+			name:      "short values, so the framing is readable",
+			recordID:  "AB",
+			pseudonym: "cd",
+			want:      "7661756c7434322f7265636f766572792f7632" + "00" + "6162" + "00" + "6364",
+		},
+		{
+			// The empty-field cases are where a dropped separator stops being
+			// theoretical: without one, ("ab","") and ("","ab") differ only by
+			// which side the bytes fell on.
+			name:      "no pseudonym",
+			recordID:  "ab",
+			pseudonym: "",
+			want:      "7661756c7434322f7265636f766572792f7632" + "00" + "6162" + "00",
+		},
+		{
+			name:      "no record id",
+			recordID:  "",
+			pseudonym: "cd",
+			want:      "7661756c7434322f7265636f766572792f7632" + "00" + "" + "00" + "6364",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hex.EncodeToString(RecoveryBinding(tc.recordID, tc.pseudonym))
+			if got != tc.want {
+				t.Errorf("RecoveryBinding(%q, %q) =\n  %s\nwant\n  %s\n\n"+
+					"These bytes are what every escrow record in auth.account_recovery was sealed to. "+
+					"If this is a deliberate format change, every record written by a shipped release "+
+					"becomes unreadable and cmd/recover needs a compatibility path before it lands.",
+					tc.recordID, tc.pseudonym, got, tc.want)
+			}
+		})
+	}
+}
