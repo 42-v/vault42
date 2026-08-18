@@ -555,11 +555,14 @@ func refuseSecretBearingAutolink(text string) error {
 				"URL-shaped run of text (%q). Mail clients auto-linkify that text and the secret "+
 				"leaves for a host the operator did not configure", clip(run))
 		}
-		if end <= start {
-			i = start + 1
-			continue
-		}
-		i = end
+		// Always advance. extendAutolinkRun cannot return an end at or before
+		// start for a run findAutolinkStart reported -- those begin with a
+		// scheme, "//" or "www.", and none of the punctuation the trim removes
+		// can consume such a run to nothing. Writing the floor as part of the
+		// step rather than as a branch keeps the guarantee the walk depends on
+		// -- that it makes progress -- without resting it on that argument
+		// continuing to hold, and without an arm no input can reach.
+		i = max(start+1, end)
 	}
 	return nil
 }

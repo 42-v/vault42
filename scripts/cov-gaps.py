@@ -192,11 +192,14 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # against the 12783 profile so the whole change is accounted for and none of it
 # is a wider measurement:
 #
-#   +67  internal/email        the positive rule for what a secret pipeline may
+#   +64  internal/email        the positive rule for what a secret pipeline may
 #                              be, the $-rooted variable case, the {{template}}
-#                              refusal, and the arms of both walks
+#                              refusal, and the arms of both walks -- net of the
+#                              three statements removed when the autolink walk's
+#                              unreachable "did not advance" branch became one
+#                              always-advancing step
 #    +6  internal/outbound     ClientForIssuer's per-hop redirect check
-BASELINE_TOTAL_STATEMENTS = 12856
+BASELINE_TOTAL_STATEMENTS = 12853
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
