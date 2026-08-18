@@ -208,6 +208,7 @@ func TestBridgeDoesNotFlagACoercedBrowser(t *testing.T) {
 	coerced.Header.Set("User-Agent", "Mozilla/5.0")
 	coerced.Header.Set("Sec-Fetch-Site", "cross-site")
 	coerced.Header.Set("Sec-Fetch-Mode", "no-cors")
+	coerced.Header.Set("Sec-Fetch-Dest", "image")
 	b.ServeHTTP(httptest.NewRecorder(), coerced)
 
 	if b.flags.IsFlagged("203.0.113.77") {
@@ -223,6 +224,22 @@ func TestBridgeDoesNotFlagACoercedBrowser(t *testing.T) {
 
 	if !b.flags.IsFlagged("198.51.100.4") {
 		t.Fatal("a direct decoy hit was not flagged; the coercion check must not disable detection")
+	}
+
+	// A cross-site NAVIGATION still flags: the visitor sees the page, so it is
+	// not the silent coercion the check exists for, and it is what a scanner
+	// following links produces.
+	nav := httptest.NewRequest(http.MethodGet, "/wp-admin/", nil)
+	nav.RemoteAddr = "198.51.100.5:5000"
+	nav.Header.Set("User-Agent", "Mozilla/5.0")
+	nav.Header.Set("Sec-Fetch-Site", "cross-site")
+	nav.Header.Set("Sec-Fetch-Mode", "navigate")
+	nav.Header.Set("Sec-Fetch-Dest", "document")
+	b.ServeHTTP(httptest.NewRecorder(), nav)
+
+	if !b.flags.IsFlagged("198.51.100.5") {
+		t.Fatal("a cross-site navigation to a decoy was not flagged; only forced subresource " +
+			"loads are meant to be exempt")
 	}
 }
 

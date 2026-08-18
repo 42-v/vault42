@@ -354,15 +354,34 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 // the browser sends it, we flag the visitor. Sixty-one such tags cross the
 // default rate threshold with no decoy path at all.
 //
-// Sec-Fetch-Site: cross-site with Sec-Fetch-Mode: no-cors is a combination a
-// page cannot forge and a scanner does not send: fetch metadata is set by the
-// browser, and no ordinary client sends it at all. A scanner walking /wp-admin
-// still flags; a coerced browser does not.
+// The signature is all three fetch-metadata headers agreeing that this is a
+// cross-site subresource the page pulled in: Sec-Fetch-Site: cross-site,
+// Sec-Fetch-Mode: no-cors, and a Sec-Fetch-Dest that is a subresource rather
+// than a document. Fetch metadata is set by the browser and cannot be
+// overridden by the page, so a coerced <img> or <script> lands here while a
+// cross-site NAVIGATION — which the visitor sees, and which a scanner following
+// links produces — still flags, as does any client that sends no fetch metadata
+// at all.
+//
+// A caller sending these three headers by hand evades flagging. That is the
+// trade, and it is the right way round: what it costs is deception coverage,
+// not a security control — an unflagged attacker reaches the real vault, which
+// still has every rate limit, lockout and authentication check it had before.
+// What it buys is that an attacker can no longer aim the honeypot at people who
+// have never visited this service.
 func coercedSubresource(r *http.Request) bool {
 	if !strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
 		return false
 	}
-	return strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "no-cors")
+	if !strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "no-cors") {
+		return false
+	}
+	switch strings.ToLower(r.Header.Get("Sec-Fetch-Dest")) {
+	case "image", "script", "style", "font", "audio", "video", "track", "manifest", "object", "embed":
+		return true
+	default:
+		return false
+	}
 }
 
 // safeLogValue neutralises a value before it reaches a log record.
