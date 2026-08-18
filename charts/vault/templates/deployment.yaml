@@ -43,6 +43,11 @@ spec:
             - name: http
               containerPort: {{ if and .Values.tls.enabled .Values.tls.certFile }}8443{{ else }}8080{{ end }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "vault.fullname" . }}

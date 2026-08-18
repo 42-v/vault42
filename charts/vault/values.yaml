@@ -71,6 +71,25 @@ serveFrontend: false
 metrics:
   # -- Enable Prometheus-compatible /metrics endpoint (VAULT_METRICS_ENABLED)
   enabled: false
+  # -- Port the metrics listener binds. /metrics moved off the public listener,
+  # where it was an unauthenticated read of every counter in the process, onto a
+  # listener of its own. The server defaults that listener to 127.0.0.1:9090,
+  # reachable only from inside the pod, so this chart has to bind it to the pod
+  # IP for a scrape to arrive at all -- and the port being separate from the
+  # public one is what finally lets a NetworkPolicy fence it, which is something
+  # no policy could do while it was a path on port 8080.
+  port: 9090
+  networkPolicy:
+    # -- Sources allowed to reach the metrics port, as NetworkPolicy peers. Empty
+    # allows any pod the cluster lets connect, which is still far narrower than
+    # the public listener was, because it is one port serving one route rather
+    # than a path behind everything else the vault answers. Narrow it to the
+    # namespace Prometheus runs in wherever that is known, e.g.
+    #   from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    from: []
   serviceMonitor:
     # -- Deploy a Prometheus ServiceMonitor (requires prometheus-operator CRDs)
     enabled: false

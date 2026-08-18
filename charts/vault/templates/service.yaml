@@ -15,6 +15,16 @@ spec:
       {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
       nodePort: {{ .Values.service.nodePort }}
       {{- end }}
+    {{- if .Values.metrics.enabled }}
+    # A ServiceMonitor endpoint names a port on the Service, so the metrics port
+    # has to appear here for the scrape to resolve to anything. It is deliberately
+    # never a NodePort: the point of moving /metrics off the public listener was
+    # to stop it being reachable by anyone who can reach the vault.
+    - port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- end }}
   selector:
     {{- include "vault.selectorLabels" . | nindent 4 }}
     # A Service selector is a subset match: selectorLabels alone also match the
