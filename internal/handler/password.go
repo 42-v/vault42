@@ -214,13 +214,28 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clear lockout state so the user can login immediately after reset.
-	// Both cache-based counter and DB failed_login_count must be cleared.
+	// Clear every lockout standing against this account, so the reset is a way
+	// out rather than a step that appears to do nothing.
+	//
+	// Three pieces of state, not one, and this used to reach one of them. The
+	// account-wide cache counter, the durable failed_login_count, and the
+	// per-(account, source address) counters — one key per address, with nothing
+	// to enumerate them, so ClearAccountLockout retires them by generation rather
+	// than by deletion. Clearing only the first two left the user refused from the
+	// machine they were locked out on, behind the error a wrong password gets, so
+	// the reasonable conclusion was that the reset had failed and the reasonable
+	// next step was to reset again, which cleared nothing.
+	//
+	// It must reach every address, not the one this request came from: the reset
+	// link is usually opened on a different device from the one that got locked
+	// out.
 	if h.cache != nil {
-		h.cache.Delete(r.Context(), fmt.Sprintf("lockout:%s", user.ID)) // #nosec G104 -- best-effort lockout clear
+		if err := service.ClearAccountLockout(r.Context(), h.cache, user.ID); err != nil {
+			log.Printf("password: failed to clear the lockout for user %s after password reset: %v", user.ID, err)
+		}
 	}
 	if err := h.users.ResetFailedLogin(r.Context(), user.ID); err != nil {
-		log.Printf("password: failed to reset lockout for user %s after password reset: %v", user.ID, err)
+		log.Printf("password: failed to reset the stored failed-login count for user %s after password reset: %v", user.ID, err)
 	}
 
 	// Claim an imported account: setting a password via the magic link clears

@@ -195,7 +195,7 @@ func TestTheAccountWideCounterAlsoFallsBackWhenItCouldNotBeWritten(t *testing.T)
 	t.Cleanup(func() { _ = mc.Close() })
 
 	// Present before the flood, so the cap admits its updates.
-	if err := mc.Set(ctx, sourceLockoutKey(userID, ip), "0", lockoutDuration); err != nil {
+	if err := mc.Set(ctx, sourceLockoutKey(userID, ip, 0), "0", lockoutDuration); err != nil {
 		t.Fatalf("seed the per-source counter: %v", err)
 	}
 	fillCacheToCap(t, mc)
@@ -205,7 +205,7 @@ func TestTheAccountWideCounterAlsoFallsBackWhenItCouldNotBeWritten(t *testing.T)
 		svc.recordFailedAttempt(ctx, userID, ip)
 	}
 
-	if n, ok := svc.cachedCount(ctx, sourceLockoutKey(userID, ip)); !ok || n >= lockoutThreshold {
+	if n, ok := svc.cachedCount(ctx, sourceLockoutKey(userID, ip, 0)); !ok || n >= lockoutThreshold {
 		t.Fatalf("per-source counter = %d (answered=%v); the fixture must leave it below the "+
 			"threshold or the account-wide arm is never reached", n, ok)
 	}

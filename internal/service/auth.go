@@ -125,8 +125,14 @@ type familyOriginReader interface {
 // removing a five-request remote denial of service against every account. 50 is
 // half the ">= 100 consecutive failures, with throttling" that guidance allows.
 //
-// The reset-from-email escape (handler/password.go) still works from any state,
-// unchanged.
+// The reset-from-email escape (handler/password.go) works from any state and
+// from every address, but it stopped being free when the hard lock moved to
+// (account, source). There is one counter per address and nothing can enumerate
+// them, so deleting the account-wide key — which is all the reset path did —
+// left the user still refused on the machine they were sitting at, for the rest
+// of the window, behind the same masked error a wrong password gets. A completed
+// reset now calls ClearAccountLockout, which retires all of them at once by
+// advancing the generation the source key is namespaced under.
 const (
 	lockoutThreshold            = 5
 	distributedLockoutThreshold = 50
@@ -1678,8 +1684,82 @@ func accountLockoutKey(userID string) string {
 // come through the HTTP edge) gets its own shared bucket rather than being
 // silently exempted. Exempting it would let anyone who can reach the service
 // without a resolvable address bypass the lock entirely.
-func sourceLockoutKey(userID, ip string) string {
-	return fmt.Sprintf("lockout:%s|%s", userID, ip)
+// The generation namespaces the key. There is one counter per address and the
+// cache interface has no scan, so the only way to retire all of a user's
+// per-source counters at once — which is what a completed password reset has to
+// do — is to stop addressing the old ones. Advancing the generation does that in
+// one write, and the retired keys expire on their own within lockoutDuration.
+//
+// Generation zero renders the key exactly as it was rendered before generations
+// existed, byte for byte. That is deliberate and it is what keeps this change
+// contained: every account is at generation zero until its first reset, so
+// deploying this changes no key for anyone. Had the shape changed for the whole
+// fleet, the rollout would have zeroed every live per-source counter at once and
+// handed every in-flight attacker a fresh five guesses — the same objection that
+// rules out renaming accountLockoutKey, and it applies here too.
+func sourceLockoutKey(userID, ip string, generation int) string {
+	if generation == 0 {
+		return fmt.Sprintf("lockout:%s|%s", userID, ip)
+	}
+	return fmt.Sprintf("lockout:%s|g%d|%s", userID, generation, ip)
+}
+
+// lockoutGenerationKey holds the counter that namespaces a user's per-source
+// lockout keys. Absent means generation zero, which is where every account
+// starts and where almost all of them stay.
+func lockoutGenerationKey(userID string) string {
+	return fmt.Sprintf("lockout_gen:%s", userID)
+}
+
+// lockoutGenerationTTL keeps the generation alive strictly longer than any
+// counter written under an earlier one.
+//
+// The direction that matters is the generation falling BACK to a value whose
+// counters are still alive, which would resurrect a lockout a reset had already
+// cleared. Twice lockoutDuration makes that impossible: a counter written just
+// before the generation expires is itself dead a full lockoutDuration before
+// then. The other direction — counters orphaned under a generation nothing reads
+// any more — is harmless, and they expire regardless.
+const lockoutGenerationTTL = 2 * lockoutDuration
+
+// lockoutGeneration reads the user's current lockout generation, reporting
+// whether the cache could answer at all.
+//
+// A miss is generation zero and a successful read, on cachedCount's contract:
+// an account that has never reset its password has no generation key, and that
+// is nearly every account.
+func (s *AuthService) lockoutGeneration(ctx context.Context, userID string) (int, bool) {
+	return s.cachedCount(ctx, lockoutGenerationKey(userID))
+}
+
+// ClearAccountLockout retires every lockout counter standing against a user, and
+// is what a completed password reset calls.
+//
+// A free function over a cache rather than a method, because the caller is
+// handler.PasswordHandler, which holds a cache and has no reason to hold an
+// AuthService. What it must not do is what that handler used to do: build the
+// key itself from a literal. There are three pieces of lockout state and a
+// hand-rolled "lockout:"+id reached exactly one of them.
+//
+// The account-wide counter is deleted outright. The per-source counters cannot
+// be — one key per address, nothing to enumerate them — so the generation is
+// advanced instead, which makes every one of them unaddressable at once. The
+// durable failed_login_count is the caller's to reset; it lives in the user row,
+// not the cache.
+func ClearAccountLockout(ctx context.Context, c cache.Cache, userID string) error {
+	if c == nil {
+		return nil
+	}
+	if err := c.Delete(ctx, accountLockoutKey(userID)); err != nil {
+		return fmt.Errorf("clear the account-wide lockout counter: %w", err)
+	}
+	if _, err := c.Increment(ctx, lockoutGenerationKey(userID), lockoutGenerationTTL); err != nil {
+		// Not cosmetic. Without the advance, the per-source counters keep their
+		// keys and the user stays locked out on the address they were locked out
+		// on, which is the entire failure this function exists to prevent.
+		return fmt.Errorf("retire the per-source lockout counters: %w", err)
+	}
+	return nil
 }
 
 // cachedCount reads a counter key, reporting whether the cache could answer at
@@ -1722,7 +1802,18 @@ func (s *AuthService) isAccountLocked(ctx context.Context, userID, ip string) bo
 		return s.lockedByStoredCount(ctx, userID)
 	}
 	unwritable := s.lockoutCountersUnwritable()
-	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip))
+	// The generation is read without the zero-and-unwritable fallback the
+	// counters get. Zero is the generation of an account that has never reset a
+	// password, which is nearly every account, so treating it as unanswered
+	// during a cache-full episode would put a GetByID in front of the whole
+	// login path. A generation that could not be advanced is a reset that did
+	// not take, bounded by lockoutDuration, and ClearAccountLockout reports that
+	// to its caller rather than hiding it here.
+	generation, ok := s.lockoutGeneration(ctx, userID)
+	if !ok {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip, generation))
 	if !ok || (perSource == 0 && unwritable) {
 		return s.lockedByStoredCount(ctx, userID)
 	}
@@ -1779,7 +1870,12 @@ func (s *AuthService) recordFailedAttempt(ctx context.Context, userID, ip string
 	if s.cache == nil {
 		return
 	}
-	if _, err := s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration); err != nil {
+	// A generation that cannot be read is a counter that cannot be addressed,
+	// which is a counter that cannot be advanced — the same condition an outright
+	// write refusal creates, and latched the same way.
+	if generation, ok := s.lockoutGeneration(ctx, userID); !ok {
+		s.noteLockoutCounterRefused()
+	} else if _, err := s.cache.Increment(ctx, sourceLockoutKey(userID, ip, generation), lockoutDuration); err != nil {
 		s.noteLockoutCounterRefused()
 	}
 	if _, err := s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration); err != nil {
@@ -1797,7 +1893,11 @@ func (s *AuthService) clearLockout(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	s.cache.Delete(ctx, sourceLockoutKey(userID, ip)) // #nosec G104 -- best-effort counter reset
+	generation, ok := s.lockoutGeneration(ctx, userID)
+	if !ok {
+		return
+	}
+	s.cache.Delete(ctx, sourceLockoutKey(userID, ip, generation)) // #nosec G104 -- best-effort counter reset
 }
 
 // identityThrottleKey is the failure counter behind the progressive login delay.
