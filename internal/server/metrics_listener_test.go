@@ -183,11 +183,14 @@ func TestMetricsBindFailureLeavesTheVaultServing(t *testing.T) {
 
 // TestMetricsAddrDefaultsToLoopback pins the safe-by-default half.
 //
-// Nothing in the chart sets this variable, so the default is what a deployment
-// that is not changed gets. Loopback means the scrape port is unreachable from
-// the cluster until an operator deliberately opens it, which is the opposite of
-// the situation this finding described: an endpoint exposed through the port
-// the Ingress already published, with a mitigation that could not be written.
+// The default is what any deployment that does not set the variable gets, which
+// is every one except a Helm install with metrics.enabled: the chart's ConfigMap
+// renders VAULT_METRICS_ADDR ":<port>" precisely because a loopback bind refuses
+// every scrape from outside the pod, and it says so at the line that sets it.
+// So this pins the binary's own posture, not the deployed one — loopback until
+// something deliberately opens it, rather than the situation this finding
+// described: an endpoint exposed through the port the Ingress already published,
+// with a mitigation that could not be written.
 func TestMetricsAddrDefaultsToLoopback(t *testing.T) {
 	t.Setenv(metricsAddrEnv, "")
 	if got := metricsAddr(); got != defaultMetricsAddr {
