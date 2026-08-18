@@ -476,10 +476,16 @@ func (r *RefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string
 // the table in physical order it disagreed with every scoped revocation here,
 // and a routine cleanup tick could take a user's logout down with 40P01.
 //
-// The LIMIT is the only change to the statement. In particular there is no
-// SKIP LOCKED: the ORDER BY id FOR UPDATE above is what serialises this scan
-// against a concurrent scoped revocation, and skipping a locked row would mean
-// the reaper never queues behind that revocation at all. That is a different
+// The LIMIT is the only change to the statement, and it goes AFTER the locking
+// clause. PostgreSQL accepts either placement with identical semantics, and
+// TestRefreshTokenRepo_EveryLockingScanTakesItsRowsInAscendingIdOrder reads the
+// statement as text looking for "ORDER BY id FOR UPDATE" — splitting those two
+// across a LIMIT hides the ordering from the check that exists to enforce it.
+//
+// In particular there is no SKIP LOCKED. The ORDER BY id FOR UPDATE is what
+// serialises this scan against a concurrent scoped revocation, in a consistent
+// lock order, instead of deadlocking with it; skipping a locked row means the
+// reaper never queues behind that revocation at all. That is a different
 // property, it is not the one this statement was written to have, and
 // TestAWideRevocationRacingTheRotationPathDoesNotDeadlock asserts the original.
 func (r *RefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
@@ -489,9 +495,8 @@ func (r *RefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
 			DELETE FROM auth.refresh_tokens WHERE id IN (
 				SELECT id FROM auth.refresh_tokens
 				WHERE expires_at < NOW() AND (used = TRUE OR revoked = TRUE)
-				ORDER BY id
-				LIMIT $1
-				FOR UPDATE)`, refreshReapBatch)
+				ORDER BY id FOR UPDATE
+				LIMIT $1)`, refreshReapBatch)
 		if err != nil {
 			return total, fmt.Errorf("delete expired tokens: %w", err)
 		}
@@ -518,9 +523,8 @@ func (r *RefreshTokenRepo) DeleteExpiredUnused(ctx context.Context) (int64, erro
 			DELETE FROM auth.refresh_tokens WHERE id IN (
 				SELECT id FROM auth.refresh_tokens
 				WHERE expires_at < NOW() AND used = FALSE AND revoked = FALSE
-				ORDER BY id
-				LIMIT $1
-				FOR UPDATE)`, refreshReapBatch)
+				ORDER BY id FOR UPDATE
+				LIMIT $1)`, refreshReapBatch)
 		if err != nil {
 			return total, fmt.Errorf("delete expired unused tokens: %w", err)
 		}
