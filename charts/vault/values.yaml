@@ -466,8 +466,16 @@ adminGateway:
     tag: ""
     # -- Image pull policy
     pullPolicy: IfNotPresent
-  # -- Use host network (binds to node loopback for production local-only access)
-  hostNetwork: true
+  # -- Bind the gateway to the node's loopback via the host network namespace.
+  # Off by default. hostNetwork is forbidden by both the baseline and the
+  # restricted Pod Security Standards profiles, so shipping it on meant the
+  # chart's default posture could not be admitted to an enforcing namespace, and
+  # the operator who found that out found it out as a rejected pod. It remains
+  # the strongest posture for the admin plane -- it is layer 1 of the local-only
+  # story in docs/admin-gateway.md -- but it is now something a deployment opts
+  # in to, on a namespace that has been given the exemption to allow it. See
+  # charts/vault/README.md.
+  hostNetwork: false
   # -- Run the gateway in dev mode. This DISABLES two controls: LocalOnly, which
   # restricts the admin plane to loopback, and RejectProxyHeaders. It must be set
   # explicitly whenever hostNetwork is false, because LocalOnly refuses every
