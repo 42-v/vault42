@@ -435,20 +435,32 @@ const (
 // to the empty string rather than dropped.
 func (r *RefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string) ([]*repository.ActiveFamily, error) {
 	rows, err := r.db.Pool.Query(ctx, `
-		SELECT family_id, device_id, client_id, family_created_at, created_at, expires_at
+		WITH fam AS (
+			SELECT family_id, device_id, client_id, family_created_at,
+			       created_at, expires_at, revoked, used
+			FROM auth.refresh_tokens
+			WHERE user_id = $1
+		)
+		SELECT newest.family_id, newest.device_id, newest.client_id,
+		       birth.family_created_at, newest.created_at, newest.expires_at
 		FROM (
 			SELECT DISTINCT ON (family_id)
 			       family_id::text                     AS family_id,
 			       COALESCE(device_id::text, '')       AS device_id,
 			       COALESCE(client_id::text, '')       AS client_id,
-			       COALESCE(family_created_at, created_at) AS family_created_at,
 			       created_at,
 			       expires_at
-			FROM auth.refresh_tokens
-			WHERE user_id = $1 AND revoked = FALSE AND used = FALSE AND expires_at > NOW()
+			FROM fam
+			WHERE revoked = FALSE AND used = FALSE AND expires_at > NOW()
 			ORDER BY family_id, created_at DESC
 		) newest
-		ORDER BY created_at DESC`, userID)
+		JOIN (
+			SELECT family_id::text AS family_id,
+			       MIN(COALESCE(family_created_at, created_at)) AS family_created_at
+			FROM fam
+			GROUP BY family_id
+		) birth ON birth.family_id = newest.family_id
+		ORDER BY newest.created_at DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list active families: %w", err)
 	}
