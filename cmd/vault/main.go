@@ -453,7 +453,11 @@ func main() {
 			vaultcrypto.Argon2MaxConcurrent,
 		)
 		authSvc.SetMetrics(metricsCollector)
-		log.Println("Prometheus metrics enabled at GET /metrics")
+		// The address is announced by the server when the listener binds. Saying
+		// "at GET /metrics" alone would now be misleading: the collector is not
+		// on the public listener, and an operator reading this line needs to
+		// know it is looking for a different port.
+		log.Println("Prometheus metrics enabled on the dedicated metrics listener (VAULT_METRICS_ADDR)")
 	}
 
 	// Mint is built here rather than in setupRoutes because an unsafe mint policy

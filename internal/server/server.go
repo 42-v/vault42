@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -124,6 +125,23 @@ type Deps struct {
 	AuditEvents repository.AuditRepository
 }
 
+// metricsAddrEnv names the address the Prometheus collector binds to, and
+// defaultMetricsAddr is where it goes when nothing says otherwise.
+//
+// Loopback by default because the alternative is worse than the finding this
+// closes: a pod-IP-reachable scrape port that no chart change is required to
+// expose. An operator who wants Prometheus to reach it sets this to ":9090" and
+// fences the port with a NetworkPolicy, which is a decision they make rather
+// than one they inherit.
+//
+// Read from the environment here rather than from config.Config because the
+// address is a property of this listener and nothing else consumes it. Promoting
+// it to a config field is the tidier home and is left to the config owner.
+const (
+	metricsAddrEnv     = "VAULT_METRICS_ADDR"
+	defaultMetricsAddr = "127.0.0.1:9090"
+)
+
 // mintRefusedRiskScore is the risk score a refused mint carries. It matches
 // mintRejectedRiskScore in internal/handler/mint.go: a refused mint means a
 // trusted service asked for something the operator did not allow, and the two
@@ -135,6 +153,9 @@ const mintRefusedRiskScore = 45
 type Server struct {
 	deps    *Deps
 	httpSrv *http.Server
+	// metricsSrv serves the Prometheus collector on its own listener. Nil when
+	// metrics are disabled or the metrics port could not be bound.
+	metricsSrv *http.Server
 }
 
 // New creates a new Server with the given dependencies.
@@ -207,7 +228,12 @@ func (s *Server) Start() error {
 		defer cancel()
 		// Shutdown errors are non-actionable during signal handler.
 		_ = s.httpSrv.Shutdown(ctx)
+		if s.metricsSrv != nil {
+			_ = s.metricsSrv.Shutdown(ctx)
+		}
 	}()
+
+	s.startMetrics()
 
 	log.Printf("The Vault listening on %s (profile=%s)", cfg.ListenAddr, cfg.Profile)
 
@@ -225,6 +251,48 @@ func (s *Server) Start() error {
 		return nil
 	}
 	return fmt.Errorf("server: %w", err)
+}
+
+// startMetrics binds the Prometheus collector to a listener of its own.
+//
+// A bind failure is logged and nothing else. The metrics port is separate now,
+// so something else can hold it, and an authentication service that refuses to
+// start because Prometheus's port is busy turns an observability problem into an
+// outage. The deployment loses its scrape and keeps serving, which is the right
+// way round.
+func (s *Server) startMetrics() {
+	if s.deps.Metrics == nil {
+		return
+	}
+	addr := metricsAddr()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("WARNING: metrics listener not started, %s is unavailable: %v", addr, err)
+		return
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /metrics", s.deps.Metrics.Handler())
+	s.metricsSrv = &http.Server{
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+	log.Printf("metrics listening on %s", addr)
+	// Serve returns ErrServerClosed on the shutdown path and nothing actionable
+	// otherwise: the listener is already bound, so the remaining failures are
+	// the process going away.
+	go func() { _ = s.metricsSrv.Serve(ln) }()
+}
+
+// metricsAddr resolves where the collector listens.
+func metricsAddr() string {
+	if addr := os.Getenv(metricsAddrEnv); addr != "" {
+		return addr
+	}
+	return defaultMetricsAddr
 }
 
 func (s *Server) setupRoutes() *http.ServeMux {
@@ -360,10 +428,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /healthz", handler.Healthz)
 	mux.HandleFunc("GET /readyz", handler.Readyz(d.ReadyDeps))
 
-	// Prometheus metrics (gated by VAULT_METRICS_ENABLED; protect with NetworkPolicy in production)
-	if d.Metrics != nil {
-		mux.HandleFunc("GET /metrics", d.Metrics.Handler())
-	}
+	// Prometheus metrics are deliberately NOT mounted here. They live on their
+	// own listener (startMetrics), because the mitigation this route used to
+	// carry in a comment — "protect with NetworkPolicy in production" — cannot
+	// work on a shared listener: a NetworkPolicy selects on namespace, pod and
+	// port and has no path awareness, so it cannot admit /auth/login and refuse
+	// /metrics through the same port. The counters are process-global document
+	// read and write rates, which is a coarse cross-client volume oracle to any
+	// in-cluster caller, so the port has to be the boundary.
 
 	// Capabilities (public, no auth — lets clients discover server config)
 	oauthNames := make([]string, 0, len(d.OAuthProviders))

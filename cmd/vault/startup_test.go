@@ -15,6 +15,7 @@ package main
 // than one that is untested.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -855,39 +856,67 @@ func TestMintPolicyIsEnforcedAtStartup(t *testing.T) {
 }
 
 // TestMetricsEndpointFollowsTheFlag asserts the collector is wired only when
-// asked. /metrics exposes password-hashing concurrency counters, so a build that
-// mounted it unconditionally would widen the unauthenticated surface of every
-// deployment that never opted in.
+// asked, and that it never appears on the public listener. /metrics exposes
+// password-hashing concurrency and process-global document rates, so a build
+// that mounted it on the port the Ingress publishes would widen the
+// unauthenticated surface of every deployment — which is what it used to do,
+// under a comment recommending a NetworkPolicy that cannot select on a path.
 func TestMetricsEndpointFollowsTheFlag(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		enabled    string
-		wantStatus int
+		name    string
+		enabled string
+		want    int
 	}{
-		{name: "enabled", enabled: "true", wantStatus: 200},
-		{name: "disabled", enabled: "", wantStatus: 404},
+		{name: "enabled", enabled: "true", want: 200},
+		{name: "disabled", enabled: "", want: 0}, // 0 = nothing listening at all
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := bootedStub(t)
 			addr := freeAddr(t)
+			scrapeAddr := freeAddr(t)
 			env := bootEnv(t, stub, addr)
 			env["VAULT_METRICS_ENABLED"] = tc.enabled
+			env["VAULT_METRICS_ADDR"] = scrapeAddr
 
-			var status int
+			var status, publicStatus int
 			var body string
 			res := bootAndShutdown(t, vaultRun{env: env}, addr, syscall.SIGTERM, func(t *testing.T) {
-				status, body = get(t, addr, "/metrics")
+				publicStatus, _ = get(t, addr, "/metrics")
+				status, body = scrape(t, scrapeAddr)
 			})
 			requireExit(t, res, 0, "Shutting down...")
 
-			if status != tc.wantStatus {
-				t.Fatalf("GET /metrics = %d, want %d (body %q)", status, tc.wantStatus, body)
+			if publicStatus != http.StatusNotFound {
+				t.Fatalf("GET /metrics on the public listener = %d, want 404: the scrape endpoint "+
+					"shares the port the Ingress publishes", publicStatus)
+			}
+			if status != tc.want {
+				t.Fatalf("GET /metrics on the metrics listener = %d, want %d (body %q)",
+					status, tc.want, body)
 			}
 			if tc.enabled == "true" && !strings.Contains(res.stderr, "Prometheus metrics enabled") {
 				t.Fatalf("metrics were served without being announced\nstderr:\n%s", res.stderr)
 			}
 		})
 	}
+}
+
+// scrape requests /metrics from the dedicated metrics listener. It returns 0
+// when nothing is listening, which is what "metrics are off" now looks like:
+// the endpoint is absent rather than answering 404 on a shared port.
+func scrape(t *testing.T, addr string) (int, string) {
+	t.Helper()
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://" + addr + "/metrics")
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer resp.Body.Close() //nolint:errcheck // response body of a finished request
+	var b bytes.Buffer
+	if _, err := b.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("read metrics body: %v", err)
+	}
+	return resp.StatusCode, b.String()
 }
 
 // TestEmailProviderSelection walks the provider switch in startup order. The
@@ -1244,10 +1273,12 @@ func TestMintReportsToTheMetricsCollector(t *testing.T) {
 	env["VAULT_MINT_AUDIENCE"] = "https://beon3.test"
 	env["VAULT_MINT_ROLES"] = "service"
 	env["VAULT_METRICS_ENABLED"] = "true"
+	scrapeAddr := freeAddr(t)
+	env["VAULT_METRICS_ADDR"] = scrapeAddr
 
 	var mintStatus, metricsStatus int
 	res := bootAndShutdown(t, vaultRun{env: env}, addr, syscall.SIGTERM, func(t *testing.T) {
-		metricsStatus, _ = get(t, addr, "/metrics")
+		metricsStatus, _ = scrape(t, scrapeAddr)
 		mintStatus, _ = getNoRedirect(t, addr, "/mint")
 	})
 
