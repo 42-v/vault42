@@ -40,5 +40,8 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:5074667eecabac8ac5c5d39510
 WORKDIR /app
 COPY --from=builder /vault /app/vault
 COPY migrations /app/migrations
-USER nonroot:nonroot
+# 65532:65532 is `nonroot` in the distroless base. Numeric so that a
+# runtime with no /etc/passwd lookup -- and Kubernetes runAsNonRoot --
+# can resolve it; charts/vault/values.yaml pins the same numbers.
+USER 65532:65532
 ENTRYPOINT ["/app/vault"]
