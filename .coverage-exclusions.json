@@ -50,7 +50,7 @@
     {
       "package": "cmd/admin-gateway",
       "file": "cmd/admin-gateway/main.go",
-      "line": 170,
+      "line": 175,
       "occurrence": 1,
       "source": "\t\tfatalAfterDrain(ctx, auditLogger, \"admin-gateway: keystore init: %v\", err)",
       "bucket": "B",
@@ -100,7 +100,7 @@
     {
       "package": "cmd/recover",
       "file": "cmd/recover/main.go",
-      "line": 134,
+      "line": 135,
       "occurrence": 1,
       "source": "\tos.Exit(run(os.Args[1:], os.Stdout, os.Stderr, openPostgres))",
       "bucket": "B",
@@ -110,7 +110,7 @@
     {
       "package": "cmd/recover",
       "file": "cmd/recover/main.go",
-      "line": 564,
+      "line": 570,
       "occurrence": 2,
       "source": "\t\treturn nil, 0, err",
       "bucket": "B",
@@ -120,7 +120,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 250,
+      "line": 298,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
@@ -130,7 +130,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 363,
+      "line": 412,
       "occurrence": 1,
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
@@ -140,7 +140,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 364,
+      "line": 413,
       "occurrence": 1,
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
@@ -210,7 +210,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/argon2.go",
-      "line": 194,
+      "line": 239,
       "occurrence": 1,
       "source": "\t\th = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
       "bucket": "C",
@@ -240,7 +240,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/jwt.go",
-      "line": 111,
+      "line": 131,
       "occurrence": 1,
       "source": "\t\tder = pub.N.Bytes()",
       "bucket": "C",
@@ -260,7 +260,7 @@
     {
       "package": "internal/email",
       "file": "internal/email/mailer.go",
-      "line": 193,
+      "line": 182,
       "occurrence": 3,
       "source": "\t\treturn false",
       "bucket": "C",
@@ -310,8 +310,8 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 308,
-      "occurrence": 8,
+      "line": 313,
+      "occurrence": 9,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
       "confirmed": true,
@@ -320,12 +320,12 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/webauthn.go",
-      "line": 309,
-      "occurrence": 25,
+      "line": 314,
+      "occurrence": 26,
       "source": "\t\treturn",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Companion statement of the entry for webauthn.go:225, same block, same unreachable json.Marshal(session) arm. BeginLogin copies session.Extensions from assertion.Response.Extensions, which is only populated by a LoginOption applied in beginLogin's opts loop, and VerifyBegin calls BeginLogin with no options, so it stays nil. The remaining SessionData members are strings, byte slices, a time and enum strings. Verified against webauthn@v0.17.4/webauthn/login.go:79-132."
+      "justification": "Companion statement of the entry for webauthn.go:313, same block, same unreachable json.Marshal(session) arm. BeginLogin copies session.Extensions from assertion.Response.Extensions, which is only populated by a LoginOption applied in beginLogin's opts loop, and VerifyBegin calls BeginLogin with no options, so it stays nil. The remaining SessionData members are strings, byte slices, a time and enum strings. Verified against webauthn@v0.17.4/webauthn/login.go:79-132."
     },
     {
       "package": "internal/handler",
@@ -390,7 +390,7 @@
     {
       "package": "internal/repository/postgres",
       "file": "internal/repository/postgres/db.go",
-      "line": 31,
+      "line": 62,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"create pool: %w\", err)",
       "bucket": "C",
@@ -400,7 +400,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 142,
+      "line": 189,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress init: %w\", err)",
       "bucket": "C",
@@ -410,7 +410,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 145,
+      "line": 192,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress write: %w\", err)",
       "bucket": "C",
@@ -420,7 +420,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 148,
+      "line": 195,
       "occurrence": 1,
       "source": "\t\treturn nil, fmt.Errorf(\"blob compress close: %w\", err)",
       "bucket": "C",
@@ -430,7 +430,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 170,
+      "line": 215,
       "occurrence": 1,
       "source": "\t\treturn nil, err",
       "bucket": "C",
@@ -440,7 +440,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 184,
+      "line": 229,
       "occurrence": 1,
       "source": "\t\t\treturn nil, aadErr",
       "bucket": "C",
@@ -450,7 +450,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/blob.go",
-      "line": 265,
+      "line": 397,
       "occurrence": 1,
       "source": "\t\t\treturn nil, \"\", \"\", aadErr",
       "bucket": "C",
@@ -480,7 +480,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 804,
+      "line": 960,
       "occurrence": 3,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -490,7 +490,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 808,
+      "line": 964,
       "occurrence": 4,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -500,7 +500,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 818,
+      "line": 974,
       "occurrence": 5,
       "source": "\t\treturn nil, ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -510,7 +510,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 884,
+      "line": 1040,
       "occurrence": 2,
       "source": "\t\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -520,7 +520,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/servicedoc.go",
-      "line": 937,
+      "line": 1093,
       "occurrence": 8,
       "source": "\t\treturn ErrSvcDocInvalidDocument",
       "bucket": "C",
@@ -530,7 +530,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 431,
+      "line": 480,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -540,7 +540,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 440,
+      "line": 489,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",
