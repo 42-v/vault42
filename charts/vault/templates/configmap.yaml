@@ -31,6 +31,30 @@ data:
   VAULT_REGISTRATION_ENABLED: {{ .Values.registrationEnabled | quote }}
   VAULT_DPOP_ENABLED: {{ .Values.dpop.enabled | quote }}
   VAULT_STRICT_SESSION_LIMIT: {{ .Values.strictSessionLimit | quote }}
+  # Session and token lifetimes. The cap the switch above fails closed on is
+  # here too: exposing the failure mode of a limit and not the limit meant an
+  # operator could choose what happens when the count query breaks and not how
+  # many sessions a user may hold.
+  VAULT_MAX_SESSIONS_PER_USER: {{ .Values.sessions.maxPerUser | int64 | quote }}
+  VAULT_MAX_SESSION_LIFETIME: {{ .Values.sessions.maxLifetime | quote }}
+  VAULT_INACTIVITY_TIMEOUT: {{ .Values.sessions.inactivityTimeout | quote }}
+  {{- if .Values.sessions.accessTokenTTL }}
+  # The four below have no fixed default in the binary. applyProfileDefaults
+  # picks each one and the figure differs by profile -- a refresh token lives 7
+  # days in production and 24 hours in dev -- so rendering a value here would
+  # decide for a profile that had already decided. Each appears only when the
+  # operator names it.
+  VAULT_ACCESS_TOKEN_TTL: {{ .Values.sessions.accessTokenTTL | quote }}
+  {{- end }}
+  {{- if .Values.sessions.refreshTokenTTL }}
+  VAULT_REFRESH_TOKEN_TTL: {{ .Values.sessions.refreshTokenTTL | quote }}
+  {{- end }}
+  {{- if .Values.sessions.rememberMeTTL }}
+  VAULT_REMEMBER_ME_TTL: {{ .Values.sessions.rememberMeTTL | quote }}
+  {{- end }}
+  {{- if .Values.shutdownTimeout }}
+  VAULT_SHUTDOWN_TIMEOUT: {{ .Values.shutdownTimeout | quote }}
+  {{- end }}
   {{- if .Values.outboundAllowPrivate }}
   # Rendered only when true, unlike the four above. Its default is the one
   # setting here that the profile decides -- false in production, true in dev --
@@ -58,6 +82,21 @@ data:
   VAULT_MINT_ROLES: {{ join "," .Values.mint.allowedRoles | quote }}
   VAULT_MINT_SCOPES: {{ join "," .Values.mint.allowedScopes | quote }}
   VAULT_EMAIL_FROM: {{ .Values.emailFrom | quote }}
+  {{- if and (eq .Values.email.provider "sendgrid") (not .Values.secrets.keys.sendgridApiKey) }}
+  {{- fail "email.provider is sendgrid and secrets.keys.sendgridApiKey is empty. cmd/vault selects the SendGrid sender only when the provider name AND the API key are both present; with the key missing it falls through to SMTP, or to no sender at all when smtp.host is empty, and every verification, reset and one-time-code mail is silently dropped by a deployment that reports healthy. Name the key in the release Secret, or leave the provider on smtp." }}
+  {{- end }}
+  VAULT_EMAIL_PROVIDER: {{ .Values.email.provider | quote }}
+  VAULT_MAX_EMAIL_TEMPLATE_SIZE: {{ .Values.email.maxTemplateSize | int64 | quote }}
+  {{- if .Values.email.fromName }}
+  VAULT_EMAIL_FROM_NAME: {{ .Values.email.fromName | quote }}
+  {{- end }}
+  {{- if .Values.email.fromAllowedDomains }}
+  VAULT_EMAIL_FROM_ALLOWED_DOMAINS: {{ join "," .Values.email.fromAllowedDomains | quote }}
+  {{- end }}
+  {{- if .Values.branding.logoURL }}
+  VAULT_LOGO_URL: {{ .Values.branding.logoURL | quote }}
+  {{- end }}
+  VAULT_PRIMARY_COLOR: {{ .Values.branding.primaryColor | quote }}
   DB_HOST: {{ .Values.database.host | quote }}
   DB_PORT: {{ .Values.database.port | quote }}
   DB_NAME: {{ .Values.database.name | quote }}
@@ -66,6 +105,11 @@ data:
   VAULT_ALLOW_PLAINTEXT_DB: {{ .Values.database.allowPlaintext | quote }}
   {{- end }}
   DB_MAX_CONNS: {{ .Values.database.maxConns | quote }}
+  # Both at the binary's own figures. Without them a pathological query pins a
+  # connection until the client gives up, and maxConns of those stop the service
+  # answering with no error anywhere; the pod stays Ready throughout.
+  DB_STATEMENT_TIMEOUT: {{ .Values.database.statementTimeout | quote }}
+  DB_LOCK_TIMEOUT: {{ .Values.database.lockTimeout | quote }}
   VAULT_RATE_LIMIT_ENABLED: {{ .Values.rateLimitEnabled | quote }}
   CACHE_BACKEND: {{ .Values.cache.backend | quote }}
   REDIS_ADDR: {{ .Values.redis.addr | quote }}
@@ -80,6 +124,38 @@ data:
   {{- end }}
   {{- if .Values.tlsFingerprintHeader }}
   VAULT_TLS_FINGERPRINT_HEADER: {{ .Values.tlsFingerprintHeader | quote }}
+  {{- end }}
+  {{- if .Values.realIPHeader }}
+  REAL_IP_HEADER: {{ .Values.realIPHeader | quote }}
+  {{- end }}
+  {{- if .Values.corsOrigins }}
+  CORS_ORIGINS: {{ join "," .Values.corsOrigins | quote }}
+  {{- end }}
+  {{- if .Values.ipAllowlist }}
+  IP_ALLOWLIST: {{ join "," .Values.ipAllowlist | quote }}
+  {{- end }}
+  {{- if .Values.ipBlocklist }}
+  IP_BLOCKLIST: {{ join "," .Values.ipBlocklist | quote }}
+  {{- end }}
+  {{- if ne .Values.profile "dev" }}
+  {{- if and (or .Values.geoAllowlist .Values.geoBlocklist) (not .Values.geoIPHeader) }}
+  {{- fail "geoAllowlist or geoBlocklist is set and geoIPHeader is empty. The country is read from a header a proxy sets; with no header named, nothing is ever read and the geo fence never fires on a single request while the lists sit there looking like a control. Config.Validate refuses to start on this outside the dev profile, so the render fails here instead." }}
+  {{- end }}
+  {{- if and .Values.geoIPHeader (not .Values.trustedProxies) }}
+  {{- fail "geoIPHeader is set and trustedProxies is empty. A country header is believed only when the request arrived from a trusted hop, so with no trusted proxy the geo fence never fires. Config.Validate refuses to start on this outside the dev profile; set trustedProxies to the ingress or tunnel that terminates the connection." }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.geoIPHeader }}
+  GEO_IP_HEADER: {{ .Values.geoIPHeader | quote }}
+  {{- end }}
+  {{- if .Values.geoAllowlist }}
+  GEO_ALLOWLIST: {{ join "," .Values.geoAllowlist | quote }}
+  {{- end }}
+  {{- if .Values.geoBlocklist }}
+  GEO_BLOCKLIST: {{ join "," .Values.geoBlocklist | quote }}
+  {{- end }}
+  {{- if .Values.outboundAllowedHosts }}
+  VAULT_OUTBOUND_ALLOWED_HOSTS: {{ join "," .Values.outboundAllowedHosts | quote }}
   {{- end }}
   {{- if .Values.blob }}
   {{- if .Values.blob.minSize }}
@@ -107,7 +183,37 @@ data:
   VAULT_KEY_ROTATION_DB: {{ .Values.keyRotation.enabled | quote }}
   VAULT_KEY_RETENTION_PERIOD: {{ .Values.keyRotation.retentionPeriod | quote }}
   VAULT_KEY_REFRESH_INTERVAL: {{ .Values.keyRotation.refreshInterval | quote }}
+  # The one of the three that rotates anything. The other two say how often a
+  # pod re-reads the store and how long a retired key lingers; without this the
+  # scheduler runs on its own 30-day horizon and a deployment that rotates on a
+  # different one could not say so.
+  VAULT_KEY_ROTATION_INTERVAL: {{ .Values.keyRotation.rotationInterval | quote }}
   {{- end }}
+  # Audit log. The buffer is what stands between an audit write and the request
+  # path; entries past it are dropped, and a deployment that has to size that
+  # could not. The retention horizon is 0 -- the binary's default and disabled --
+  # because these rows hold personal data under Art. 5(1)(e) and deleting
+  # security logs is not something a chart should start doing on upgrade. Pick a
+  # horizon consistent with the retention table in docs/PRIVACY.md section 4.
+  VAULT_AUDIT_BUFFER_SIZE: {{ .Values.audit.bufferSize | int64 | quote }}
+  VAULT_AUDIT_RETENTION_DAYS: {{ .Values.audit.retentionDays | int64 | quote }}
+  {{- if .Values.audit.flushInterval }}
+  # Profile-decided: 30s on embedded, unbatched everywhere else.
+  VAULT_AUDIT_FLUSH_INTERVAL: {{ .Values.audit.flushInterval | quote }}
+  {{- end }}
+  # The account-recovery escrow is the only recoverable copy of an erased
+  # account and is exempt from the erasure cascade by design, so the same
+  # Art. 5(1)(e) argument applies and the same 0 default with it.
+  VAULT_RECOVERY_RETENTION_DAYS: {{ .Values.recoveryRetentionDays | int64 | quote }}
+  # Service-scoped document store. Off at the binary's default, with all four
+  # limits beside the switch: the switch alone would mount surface every
+  # existing client-credentials holder can reach, running on ceilings the
+  # operator never chose.
+  VAULT_SVCDOC_ENABLED: {{ .Values.svcdoc.enabled | quote }}
+  VAULT_SVCDOC_SHARED_ENABLED: {{ .Values.svcdoc.sharedEnabled | quote }}
+  VAULT_SVCDOC_MAX_SIZE: {{ .Values.svcdoc.maxSize | int64 | quote }}
+  VAULT_SVCDOC_MAX_PER_SUBJECT: {{ .Values.svcdoc.maxPerSubject | int64 | quote }}
+  VAULT_SVCDOC_QUOTA_BYTES: {{ .Values.svcdoc.quotaBytes | int64 | quote }}
   {{- if .Values.seed.enabled }}
   VAULT_SEED_FILE: "/etc/vault/seed.json"
   {{- end }}
@@ -120,4 +226,31 @@ data:
   {{- if .Values.smtp.host }}
   SMTP_HOST: {{ .Values.smtp.host | quote }}
   SMTP_PORT: {{ .Values.smtp.port | quote }}
+  {{- end }}
+  {{- if .Values.oauth.google.clientID }}
+  VAULT_OAUTH_GOOGLE_CLIENT_ID: {{ .Values.oauth.google.clientID | quote }}
+  {{- end }}
+  {{- if .Values.oauth.github.clientID }}
+  VAULT_OAUTH_GITHUB_CLIENT_ID: {{ .Values.oauth.github.clientID | quote }}
+  {{- end }}
+  {{- if .Values.oauth.facebook.clientID }}
+  VAULT_OAUTH_FACEBOOK_CLIENT_ID: {{ .Values.oauth.facebook.clientID | quote }}
+  {{- end }}
+  {{- if .Values.oidcProviders }}
+  {{- $names := list }}
+  {{- range .Values.oidcProviders }}
+  {{- if not (and .name .issuer .clientID) }}
+  {{- fail (printf "oidcProviders entry %q is missing a name, issuer or clientID. loadOIDCProviders skips an incomplete provider without a word, so the login button an operator added would 404 on a provider the server never registered." (.name | default "<unnamed>")) }}
+  {{- end }}
+  {{- $names = append $names .name }}
+  {{- end }}
+  VAULT_OIDC_PROVIDERS: {{ join "," $names | quote }}
+  {{- range .Values.oidcProviders }}
+  {{- $key := upper (replace "-" "_" .name) }}
+  VAULT_OIDC_{{ $key }}_ISSUER: {{ .issuer | quote }}
+  VAULT_OIDC_{{ $key }}_CLIENT_ID: {{ .clientID | quote }}
+  {{- if .scopes }}
+  VAULT_OIDC_{{ $key }}_SCOPES: {{ .scopes | quote }}
+  {{- end }}
+  {{- end }}
   {{- end }}

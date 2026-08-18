@@ -125,6 +125,13 @@ keyRotation:
   retentionPeriod: "1h"
   # -- How often pods refresh keys from the database (VAULT_KEY_REFRESH_INTERVAL)
   refreshInterval: "60s"
+  # -- How old the active signing key may get before the scheduler rotates it
+  # (VAULT_KEY_ROTATION_INTERVAL). The one of these three that rotates
+  # anything: the other two say how often a pod re-reads the store and how long
+  # a retired key lingers in JWKS afterwards. 720h is the binary's own horizon.
+  # 0 or less disables the scheduler, which is how a deployment that rotates
+  # through POST /admin/keys/rotate or the rotate-jwks CLI turns it off.
+  rotationInterval: "720h"
 
 # -- Force Secure flag on cookies even without local TLS (VAULT_FORCE_SECURE_COOKIES)
 # On by default because tls.enabled is off by default: this chart expects TLS to
@@ -138,6 +145,47 @@ forceSecureCookies: true
 
 # -- Trusted proxy CIDR ranges for X-Forwarded-For (TRUSTED_PROXIES)
 trustedProxies: ""
+
+# -- Header a trusted proxy puts the real client address in (REAL_IP_HEADER),
+# e.g. CF-Connecting-IP behind Cloudflare or X-Real-IP behind nginx. Believed
+# only when the connection itself came from a trustedProxies entry. Empty falls
+# back to X-Forwarded-For parsing. Without one of these the rate limiter, the
+# lockout counter and every audit row see the ingress controller's pod address
+# for every request in the deployment.
+realIPHeader: ""
+
+# -- Allowed CORS origins (CORS_ORIGINS), rendered comma-joined. This is the
+# setting that works in the production profile: applyProductionDefaults forces
+# CORS_ALLOW_ALL off without consulting the environment, so a wildcard is not
+# reachable there by any means and an origin has to be named.
+corsOrigins: []
+
+# -- Addresses or CIDR ranges allowed to reach the service (IP_ALLOWLIST),
+# rendered comma-joined. Empty allows all. An entry that is not an address or a
+# range refuses to start rather than being dropped, because a dropped entry is
+# an allowlist that covers less than it says.
+ipAllowlist: []
+
+# -- Addresses or CIDR ranges denied access (IP_BLOCKLIST), rendered
+# comma-joined. Evaluated after ipAllowlist. Changing it means changing this
+# value and rolling the deployment: the in-process mutators reach one replica.
+ipBlocklist: []
+
+# -- Header a trusted proxy puts the client's country code in (GEO_IP_HEADER),
+# e.g. CF-IPCountry. The geo lists below do nothing without it, and it does
+# nothing without trustedProxies, so the chart refuses to render either half on
+# its own outside the dev profile.
+geoIPHeader: ""
+
+# -- ISO 3166-1 alpha-2 country codes allowed access (GEO_ALLOWLIST), rendered
+# comma-joined. Empty allows all. Two letters exactly: the middleware compares
+# them against the header verbatim, so GEO_BLOCKLIST=UK blocks nothing because
+# the code for the United Kingdom is GB.
+geoAllowlist: []
+
+# -- ISO 3166-1 alpha-2 country codes denied access (GEO_BLOCKLIST), rendered
+# comma-joined. Empty blocks none.
+geoBlocklist: []
 
 # -- TLS fingerprint header from proxy (VAULT_TLS_FINGERPRINT_HEADER)
 # Requires a proxy that extracts JA4 during TLS handshake. Example: "X-TLS-Fingerprint"
@@ -191,6 +239,88 @@ dpop:
 # during one. Set true where holding the cap matters more than availability.
 strictSessionLimit: false
 
+# ---- Session and token lifetimes ----
+# strictSessionLimit above says what happens when the session-count query
+# fails; until this block existed the count it fails over was not settable from
+# a chart at all, and neither was any lifetime bound on the sessions it counts.
+sessions:
+  # -- Concurrent refresh-token families a user may hold
+  # (VAULT_MAX_SESSIONS_PER_USER). The binary's own figure.
+  maxPerUser: 10
+  # -- Total age a refresh-token family may reach, measured from creation and
+  # independent of how often it is refreshed (VAULT_MAX_SESSION_LIFETIME).
+  # Without it, rotation grants a fresh full TTL every time and a continuously
+  # refreshing client holds a session forever. NIST SP 800-63B-4 section 2.2.3
+  # says the overall AAL2 timeout SHOULD be no more than 24h; 720h is the
+  # binary's default and that is a deployment decision, not a default. 0
+  # disables the bound.
+  maxLifetime: "720h"
+  # -- How long a refresh-token family may go unused before it has to
+  # reauthenticate (VAULT_INACTIVITY_TIMEOUT). The other half of maxLifetime:
+  # that one ends a session in constant use, this one ends a session that
+  # stopped being used. Measured from the last rotation, so it has to stay
+  # comfortably above the access-token TTL or sessions that never went idle are
+  # terminated. 0 disables the bound.
+  inactivityTimeout: "1h"
+  # -- Access token lifetime (VAULT_ACCESS_TOKEN_TTL). Empty renders nothing and
+  # lets the profile decide: 15m in production and embedded.
+  accessTokenTTL: ""
+  # -- Refresh token lifetime (VAULT_REFRESH_TOKEN_TTL). Empty lets the profile
+  # decide: 7 days in production, 24 hours in embedded and dev. Pinning a value
+  # here would quietly make a dev release behave like a production one.
+  refreshTokenTTL: ""
+  # -- Refresh token lifetime when the login asked to be remembered
+  # (VAULT_REMEMBER_ME_TTL). Empty lets the profile decide: 30 days.
+  rememberMeTTL: ""
+
+# -- How long in-flight requests have to finish during a graceful shutdown
+# (VAULT_SHUTDOWN_TIMEOUT). Empty lets the profile decide: 15s in production,
+# 5s in embedded and dev.
+shutdownTimeout: ""
+
+# ---- Audit log ----
+audit:
+  # -- Entries buffered before new ones are dropped (VAULT_AUDIT_BUFFER_SIZE).
+  # It is what stands between an audit write and the request path, and a
+  # deployment writing faster than the sink drains loses the overflow silently.
+  bufferSize: 1000
+  # -- Days an audit entry is kept before the sweeper purges it
+  # (VAULT_AUDIT_RETENTION_DAYS). 0 is the binary's default and means disabled.
+  # These rows hold personal data -- user id, IP, user agent, fingerprint hash --
+  # so Art. 5(1)(e) caps how long they may live, and deleting security logs is
+  # not a safe thing for a chart to start doing on upgrade. Pick a horizon
+  # consistent with the retention table in docs/PRIVACY.md section 4.
+  retentionDays: 0
+  # -- How often buffered entries are flushed (VAULT_AUDIT_FLUSH_INTERVAL).
+  # Empty lets the profile decide: 30s on embedded, unbatched elsewhere.
+  flushInterval: ""
+
+# -- Days an account-recovery escrow record is kept
+# (VAULT_RECOVERY_RETENTION_DAYS). 0 is the binary's default and means disabled.
+# Each record holds an erased user's email, roles and display name encrypted to
+# the offline recovery key, and the escrow is exempt from the erasure cascade by
+# design, so the same Art. 5(1)(e) argument applies -- and so does the caution:
+# the escrow is the only recoverable copy of an erased account.
+recoveryRetentionDays: 0
+
+# ---- Service-scoped JSON documents ----
+# New surface reachable by every existing client-credentials holder, so it is
+# off at the binary's default. All five render together: the switch alone would
+# mount a store whose size, count and quota ceilings the operator never chose.
+svcdoc:
+  # -- Mount the service-scoped document store (VAULT_SVCDOC_ENABLED)
+  enabled: false
+  # -- Let a service publish a document every other service can read
+  # (VAULT_SVCDOC_SHARED_ENABLED). Documents are private to the writing service
+  # unless this is on and the write asks for it.
+  sharedEnabled: false
+  # -- Per-document ceiling in bytes (VAULT_SVCDOC_MAX_SIZE)
+  maxSize: 65536
+  # -- Document count ceiling per (subject, service) (VAULT_SVCDOC_MAX_PER_SUBJECT)
+  maxPerSubject: 32
+  # -- Total stored bytes per subject (VAULT_SVCDOC_QUOTA_BYTES)
+  quotaBytes: 1048576
+
 # -- Permit outbound connections to private address ranges
 # (VAULT_OUTBOUND_ALLOW_PRIVATE). False renders nothing and lets the profile
 # decide, which is false in production and true in dev. Set true only when an
@@ -237,8 +367,71 @@ mint:
   # kms:unwrap and mint:token are refused regardless of what is listed here.
   allowedScopes: []
 
+# -- Hosts an issuer's discovery document may name beyond the issuer's own
+# domain (VAULT_OUTBOUND_ALLOWED_HOSTS), rendered comma-joined. Empty is the
+# common case; the list exists for a provider whose endpoints legitimately span
+# domains, such as an accounts.google.com issuer serving keys from
+# www.googleapis.com.
+outboundAllowedHosts: []
+
 # -- Email sender address
 emailFrom: "noreply@example.com"
+
+# ---- Email delivery and branding ----
+email:
+  # -- Sending backend (VAULT_EMAIL_PROVIDER): smtp or sendgrid. The chart
+  # refuses to render sendgrid without secrets.keys.sendgridApiKey, because
+  # cmd/vault selects the SendGrid sender only when the provider name and the
+  # key are both present and otherwise falls through in silence.
+  provider: smtp
+  # -- Byte ceiling on a custom email template body accepted by the admin API
+  # (VAULT_MAX_EMAIL_TEMPLATE_SIZE)
+  maxTemplateSize: 65536
+  # -- Global display name on the From line (VAULT_EMAIL_FROM_NAME). Empty
+  # renders nothing.
+  fromName: ""
+  # -- Domains a per-app From-address override may use
+  # (VAULT_EMAIL_FROM_ALLOWED_DOMAINS), rendered comma-joined. Empty disables
+  # address overrides entirely; display-name overrides still apply.
+  fromAllowedDomains: []
+
+branding:
+  # -- Logo URL for email templates (VAULT_LOGO_URL). Empty renders nothing.
+  logoURL: ""
+  # -- Primary branding colour (VAULT_PRIMARY_COLOR). Must be #RRGGBB: the
+  # server refuses to start on anything else, because the value reaches a CSS
+  # attribute in an email template.
+  primaryColor: "#00FF42"
+
+# ---- Federated login ----
+# Empty means the provider is not registered and its button is not shown. Each
+# client id is public and lives in the ConfigMap; each client secret is a
+# credential and is named through secrets.keys, mounted from the release Secret
+# by the _FILE convention like every other credential here.
+oauth:
+  google:
+    # -- Google OAuth2 client id (VAULT_OAUTH_GOOGLE_CLIENT_ID)
+    clientID: ""
+  github:
+    # -- GitHub OAuth2 client id (VAULT_OAUTH_GITHUB_CLIENT_ID)
+    clientID: ""
+  facebook:
+    # -- Facebook OAuth2 client id (VAULT_OAUTH_FACEBOOK_CLIENT_ID)
+    clientID: ""
+
+# -- Generic OpenID Connect providers -- Okta, Auth0, Keycloak, Entra
+# (VAULT_OIDC_PROVIDERS and the per-name variables beside it). Each entry needs
+# a name, an issuer and a clientID; loadOIDCProviders skips an incomplete
+# provider without a word, so the chart fails the render instead. secretKey
+# names the key in the release Secret holding that provider's client secret.
+#
+#   oidcProviders:
+#     - name: okta
+#       issuer: https://example.okta.com
+#       clientID: 0oa1b2c3d4
+#       scopes: "openid email profile"
+#       secretKey: oidc-okta-client-secret
+oidcProviders: []
 
 # ---- Blob Storage ----
 blob:
@@ -274,7 +467,13 @@ seed:
 secrets:
   # -- Name of the existing Kubernetes Secret containing all credentials
   existingSecret: ""
-  # -- Key mappings inside the Secret
+  # -- Key mappings inside the Secret. The eight above the blank line are what a
+  # release has always mounted. Everything below it is empty by default and
+  # names a key only when the deployment needs the capability it gates, so an
+  # existing Secret is still the whole set the pod asks for. Naming one here is
+  # what puts its _FILE variable in the pod, exactly as with the eight; there is
+  # no bare path setting, because a path with nothing behind it is a capability
+  # that reports configured and does nothing.
   keys:
     masterKey: master-key
     dbMigPassword: db-mig-password
@@ -284,6 +483,30 @@ secrets:
     redisPassword: redis-password
     signingKey: signing-key
     pepper: pepper
+
+    # -- Root secret the per-kid KEKs for POST /kms/unwrap are derived from
+    # (KMS_ROOT_KEY_FILE). Empty means the KMS endpoint is not mounted at all.
+    # Kept cryptographically separate from the master key by HKDF domain
+    # separation, so it must be a different value.
+    kmsRootKey: ""
+    # -- PEM-encoded RSA public key the account-erasure escrow is encrypted to
+    # (VAULT_RECOVERY_PUBLIC_KEY_FILE). Empty means erasure escrows nothing and
+    # an erased account cannot be recovered by anyone, including the operator.
+    # The private half belongs offline.
+    recoveryPublicKey: ""
+    # -- SMTP username (SMTP_USER_FILE). Needed by any relay that authenticates.
+    smtpUser: ""
+    # -- SMTP password (SMTP_PASS_FILE)
+    smtpPass: ""
+    # -- SendGrid API key (SENDGRID_API_KEY_FILE). Required by
+    # email.provider=sendgrid; the chart refuses to render that provider
+    # without it.
+    sendgridApiKey: ""
+    # -- OAuth2 client secrets (VAULT_OAUTH_*_CLIENT_SECRET_FILE), one per
+    # provider whose clientID is set under oauth above.
+    oauthGoogleClientSecret: ""
+    oauthGithubClientSecret: ""
+    oauthFacebookClientSecret: ""
   # -- Mount path for secret files
   mountPath: /run/secrets
 
@@ -331,6 +554,14 @@ database:
   allowPlaintext: false
   # -- Max connections
   maxConns: "25"
+  # -- Server-side ceiling on a single statement (DB_STATEMENT_TIMEOUT), at the
+  # binary's own figure. Without it a pathological query holds its connection
+  # until the client gives up, and maxConns of those stop the service answering
+  # with no error anywhere and a pod that stays Ready. 0 disables it.
+  statementTimeout: "10s"
+  # -- Server-side ceiling on waiting for a lock (DB_LOCK_TIMEOUT), at the
+  # binary's own figure. 0 disables it.
+  lockTimeout: "3s"
 
 # ---- Cache ----
 cache:
@@ -633,6 +864,13 @@ honeypotInstance:
   database:
     # -- Honeypot database name (separate from real)
     name: vault_honeypot
+  # -- Fake usernames or emails that raise a honeypot alert when touched
+  # (VAULT_HONEYPOT_TRAP_USERS), rendered comma-joined. Read only in the
+  # honeypot profile, which is the profile this instance runs.
+  trapUsers: []
+  # -- Where a honeypot alert is POSTed (VAULT_HONEYPOT_WEBHOOK). Empty means
+  # the alerter is wired to nothing and a touched trap account notifies nobody.
+  webhookURL: ""
   # -- Honeypot vault resource requests/limits
   resources:
     requests:

@@ -878,6 +878,42 @@ Key Helm values and their corresponding env vars:
 | `mint.maxTTL` | `VAULT_MINT_MAX_TTL` |
 | `mint.allowedRoles` | `VAULT_MINT_ROLES` (comma-joined) |
 | `mint.allowedScopes` | `VAULT_MINT_SCOPES` (comma-joined) |
+| `sessions.maxPerUser` | `VAULT_MAX_SESSIONS_PER_USER` |
+| `sessions.maxLifetime` | `VAULT_MAX_SESSION_LIFETIME` |
+| `sessions.inactivityTimeout` | `VAULT_INACTIVITY_TIMEOUT` |
+| `sessions.accessTokenTTL` | `VAULT_ACCESS_TOKEN_TTL` (rendered only when set; empty lets the profile decide) |
+| `sessions.refreshTokenTTL` | `VAULT_REFRESH_TOKEN_TTL` (rendered only when set) |
+| `sessions.rememberMeTTL` | `VAULT_REMEMBER_ME_TTL` (rendered only when set) |
+| `shutdownTimeout` | `VAULT_SHUTDOWN_TIMEOUT` (rendered only when set) |
+| `database.statementTimeout` | `DB_STATEMENT_TIMEOUT` |
+| `database.lockTimeout` | `DB_LOCK_TIMEOUT` |
+| `audit.bufferSize` | `VAULT_AUDIT_BUFFER_SIZE` |
+| `audit.retentionDays` | `VAULT_AUDIT_RETENTION_DAYS` |
+| `audit.flushInterval` | `VAULT_AUDIT_FLUSH_INTERVAL` (rendered only when set) |
+| `recoveryRetentionDays` | `VAULT_RECOVERY_RETENTION_DAYS` |
+| `svcdoc.enabled` | `VAULT_SVCDOC_ENABLED` |
+| `svcdoc.sharedEnabled` | `VAULT_SVCDOC_SHARED_ENABLED` |
+| `svcdoc.maxSize` | `VAULT_SVCDOC_MAX_SIZE` |
+| `svcdoc.maxPerSubject` | `VAULT_SVCDOC_MAX_PER_SUBJECT` |
+| `svcdoc.quotaBytes` | `VAULT_SVCDOC_QUOTA_BYTES` |
+| `keyRotation.rotationInterval` | `VAULT_KEY_ROTATION_INTERVAL` (with `keyRotation.enabled`) |
+| `email.provider` | `VAULT_EMAIL_PROVIDER` |
+| `email.maxTemplateSize` | `VAULT_MAX_EMAIL_TEMPLATE_SIZE` |
+| `email.fromName` | `VAULT_EMAIL_FROM_NAME` (rendered only when set) |
+| `email.fromAllowedDomains` | `VAULT_EMAIL_FROM_ALLOWED_DOMAINS` (comma-joined, rendered only when set) |
+| `branding.primaryColor` | `VAULT_PRIMARY_COLOR` |
+| `branding.logoURL` | `VAULT_LOGO_URL` (rendered only when set) |
+| `realIPHeader` | `REAL_IP_HEADER` (rendered only when set) |
+| `corsOrigins` | `CORS_ORIGINS` (comma-joined, rendered only when set) |
+| `ipAllowlist` / `ipBlocklist` | `IP_ALLOWLIST` / `IP_BLOCKLIST` (comma-joined, rendered only when set) |
+| `geoIPHeader` | `GEO_IP_HEADER` (rendered only when set) |
+| `geoAllowlist` / `geoBlocklist` | `GEO_ALLOWLIST` / `GEO_BLOCKLIST` (comma-joined, rendered only when set) |
+| `outboundAllowedHosts` | `VAULT_OUTBOUND_ALLOWED_HOSTS` (comma-joined, rendered only when set) |
+| `oauth.google.clientID` | `VAULT_OAUTH_GOOGLE_CLIENT_ID` (rendered only when set; likewise github and facebook) |
+| `oidcProviders[].name` | `VAULT_OIDC_PROVIDERS` (comma-joined) |
+| `oidcProviders[].issuer` / `.clientID` / `.scopes` | `VAULT_OIDC_<NAME>_ISSUER` / `_CLIENT_ID` / `_SCOPES` |
+| `honeypotInstance.trapUsers` | `VAULT_HONEYPOT_TRAP_USERS` (honeypot ConfigMap, comma-joined) |
+| `honeypotInstance.webhookURL` | `VAULT_HONEYPOT_WEBHOOK` (honeypot ConfigMap) |
 
 Secrets are mapped via `secrets.keys.*`:
 
@@ -889,6 +925,20 @@ Secrets are mapped via `secrets.keys.*`:
 | `secrets.keys.hmacSecret` | `HMAC_SECRET_FILE` |
 | `secrets.keys.adminToken` | `ADMIN_TOKEN_FILE` |
 | `secrets.keys.redisPassword` | `REDIS_PASS_FILE` |
+| `secrets.keys.signingKey` | `SIGNING_KEY_FILE` |
+| `secrets.keys.pepper` | `VAULT_PEPPER_FILE` |
+| `secrets.keys.kmsRootKey` | `KMS_ROOT_KEY_FILE` |
+| `secrets.keys.recoveryPublicKey` | `VAULT_RECOVERY_PUBLIC_KEY_FILE` |
+| `secrets.keys.smtpUser` / `smtpPass` | `SMTP_USER_FILE` / `SMTP_PASS_FILE` |
+| `secrets.keys.sendgridApiKey` | `SENDGRID_API_KEY_FILE` |
+| `secrets.keys.oauthGoogleClientSecret` | `VAULT_OAUTH_GOOGLE_CLIENT_SECRET_FILE` (likewise github and facebook) |
+| `oidcProviders[].secretKey` | `VAULT_OIDC_<NAME>_CLIENT_SECRET_FILE` |
+
+Everything from `kmsRootKey` down is empty by default and renders no env var at
+all, so the Secret an existing release already created is still the whole set
+its pod asks for. Naming a key is what puts its `_FILE` variable in the pod;
+there is no bare path setting, because a path with nothing behind it is a
+capability that reads as configured and does nothing.
 
 `forceSecureCookies` defaults to `true`, because `tls.enabled` defaults to `false`:
 the chart expects TLS to terminate at an ingress or a tunnel. Outside the `dev`

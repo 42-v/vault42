@@ -104,6 +104,55 @@ spec:
             - name: VAULT_PEPPER_FILE
               value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.pepper }}"
             {{- end }}
+            {{- /*
+            Optional credentials, each gating a whole capability that is
+            otherwise off with nothing to show for it: without kmsRootKey the
+            KMS envelope-unwrap endpoint is never mounted, without
+            recoveryPublicKey account erasure escrows nothing and an erased
+            account is gone for good, without smtpUser/smtpPass an
+            authenticating relay refuses every message, and without
+            sendgridApiKey the SendGrid provider silently is not the sender.
+            Every one is empty by default, so the Secret an existing release
+            already created is still the whole set its pod asks for.
+            */}}
+            {{- if .Values.secrets.keys.kmsRootKey }}
+            - name: KMS_ROOT_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.kmsRootKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.recoveryPublicKey }}
+            - name: VAULT_RECOVERY_PUBLIC_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.recoveryPublicKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.smtpUser }}
+            - name: SMTP_USER_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.smtpUser }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.smtpPass }}
+            - name: SMTP_PASS_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.smtpPass }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.sendgridApiKey }}
+            - name: SENDGRID_API_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.sendgridApiKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthGoogleClientSecret }}
+            - name: VAULT_OAUTH_GOOGLE_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthGoogleClientSecret }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthGithubClientSecret }}
+            - name: VAULT_OAUTH_GITHUB_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthGithubClientSecret }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthFacebookClientSecret }}
+            - name: VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthFacebookClientSecret }}"
+            {{- end }}
+            {{- range .Values.oidcProviders }}
+            {{- if .secretKey }}
+            - name: VAULT_OIDC_{{ upper (replace "-" "_" .name) }}_CLIENT_SECRET_FILE
+              value: "{{ $.Values.secrets.mountPath }}/{{ .secretKey }}"
+            {{- end }}
+            {{- end }}
             {{- if and .Values.tls.enabled .Values.tls.certFile }}
             - name: VAULT_TLS_CERT_FILE
               value: {{ .Values.tls.certFile | quote }}
