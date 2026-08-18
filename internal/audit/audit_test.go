@@ -158,6 +158,8 @@ func TestIsCriticalEvent_Table(t *testing.T) {
 		{"password_reset", true},
 		{"token_revoke", true},
 		{"admin_action", true},
+		{"admin_authz_denied", true},
+		{"admin_session_rejected", true},
 		{"2fa_setup", false},
 		{"session_revoke", false},
 		{"login_success", false},

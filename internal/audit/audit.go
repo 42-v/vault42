@@ -227,12 +227,17 @@ type Logger struct {
 // process log is not evidence. The attacker also chooses how much traffic the
 // trap sees, so leaving the trigger droppable handed them the buffer pressure
 // that erases their own visit.
+//
+// AdminAuthzDenied and AdminSessionRejected are the trail a privilege-boundary
+// probe and a session-token replay leave behind (ASVS V16.3.2). The decision
+// is enforced regardless; losing the row under buffer pressure is how a
+// viewer floods the logger and then probes in silence.
 func isCriticalEvent(eventType string) bool {
 	if strings.HasPrefix(eventType, svcDocEventPrefix) {
 		return true
 	}
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger, AdminAuthzDenied, AdminSessionRejected:
 		return true
 	}
 	return false
