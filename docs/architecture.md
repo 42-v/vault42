@@ -70,7 +70,7 @@ All application code lives under `internal/`, which Go enforces as non-importabl
 by external modules. This is intentional -- the service is not a library.
 
 ```text
-cmd/vault42/main.go            Entry point: config, migrations, wiring, server start
+cmd/vault/main.go            Entry point: config, migrations, wiring, server start
 cmd/bridge/                  Honeypot bridge reverse proxy (standalone binary, stdlib only)
   main.go                    Entry point, config, graceful shutdown
   config.go                  Env var parsing (BRIDGE_* vars)
@@ -99,8 +99,11 @@ internal/
                              Confirmed (recent-password-confirmation gate)
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
-    dpop.go                  DPoP proof validation (RFC 9449). Experimental: binds nothing
-                             until issuance populates cnf.jkt
+    dpop.go                  DPoP proof validation (RFC 9449). When VAULT_DPOP_ENABLED,
+                             issuance stamps cnf.jkt on access and challenge tokens
+                             on login, refresh and 2FA verify; /client/token and the
+                             OAuth callback are not wrapped. Refresh tokens stay
+                             unbound and there is no DPoP-Nonce
   handler/
     auth.go                  Register, Login, Refresh, Logout, VerifyEmail, ConfirmPassword
     oauth.go                 OAuth2 Authorize + Callback (Google, GitHub, Facebook)
@@ -131,7 +134,7 @@ internal/
   jwt/                       Stdlib-only JWT implementation (RS256 sign/verify, ES256 verify, parsing, claims)
   redis/                     Stdlib-only Redis RESP2 client with connection pooling (PING, GET, SET, DEL, GETDEL, INCR, EXPIRE, EXISTS)
   crypto/
-    jwks.go                  JWKS serialization, RSA key loading from SIGNING_KEY_FILE
+    jwt.go                   JWKS serialization, PKCS#8 RSA loading (LoadSigningKeyPEM), KIDFromPublicKey
     argon2.go                HashPassword, VerifyPassword (Argon2id, constant-time, semaphore-limited to 4 concurrent ops)
     fingerprint.go           ComputeFingerprint (SHA256 over length-prefixed fields)
     totp.go                  TOTP generation/validation (RFC 6238, hand-rolled)
@@ -160,7 +163,7 @@ internal/
   kms/                       KEK envelope-unwrap oracle behind POST /kms/unwrap. Per-kid KEKs are derived from a KMS root secret (KMS_ROOT_KEY_FILE) via HKDF-SHA256 with a versioned, domain-separated info label, cryptographically separate from the master key. Wrap/Unwrap reuse the AES-256-GCM AEAD with kid as AAD; every unwrap failure collapses to one opaque error (oracle-resistant).
   metrics/                   Hand-rolled Prometheus text exposition format. Collector aggregates argon2 semaphore, login, and token counters. No external dependencies.
   oauth2/                    OAuth2/OIDC provider implementations (Google, GitHub, etc.)
-  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-audit, export-audit, etc.)
+  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-recovery, export-audit, etc.)
   seed/                      Declarative JSON seeding for clients and users (idempotent)
   httputil/                  Shared HTTP response helpers
   sanitize/                  Input sanitization (email, strings, URLs, locale)
@@ -275,9 +278,9 @@ POST /kms/unwrap                        mounted only when KMS_ROOT_KEY_FILE is s
   |
   v
 kmsUnwrapRL          RateLimit(30/min, per IP, FailClosed: true)
-  |                  Fail-closed, unlike the auth endpoints: a cache outage must not
-  |                  let the per-pod in-memory fallback multiply the key-release rate
-  |                  across replicas (audit L4).
+  |                  Fail-closed like login/register/reset, unlike the OAuth
+  |                  callback: a cache outage must not let the per-pod in-memory
+  |                  fallback multiply the key-release rate across replicas (audit L4).
   v
 authMw               Auth (or AuthDynamic under VAULT_KEY_ROTATION_DB). Resolves and
   |                  validates the client-credential token, puts claims in context.
@@ -287,7 +290,11 @@ RequireScope("kms:unwrap")
   v
 dpopWrap             Identity when VAULT_DPOP_ENABLED=false. When true, the DPoP
   |                  middleware runs INSIDE the auth wrappers so it sees resolved
-  |                  claims -- but binds nothing, because issuance never sets cnf.jkt.
+  |                  claims and enforces cnf.jkt. KMS tokens come from
+  |                  POST /client/token, which is not a DPoP issuance path, so
+  |                  they never carry cnf.jkt and a missing proof still passes.
+  |                  GET /auth/oauth2/callback/{provider} is also unwrapped: the
+  |                  provider redirects the browser with a GET.
   v
 KMSHandler.Unwrap    Re-checks claims for nil (defense in depth), then unwraps.
                      Every post-authorization failure collapses to one opaque
@@ -300,22 +307,30 @@ model: the `internal/kms` package doc and [Attack Cheatsheet §8](cheatsheet.md)
 Rate limiting middleware is instantiated per-endpoint group with different limits
 and key functions, then wraps the appropriate routes:
 
-| Rate Limit | Limit | Window | Key | Endpoints |
-|------------|-------|--------|-----|-----------|
-| `loginRL` | 5 | 15 min | IP | POST /auth/login |
-| `registerRL` | 3 | 1 hour | IP | POST /auth/register |
-| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh |
-| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm |
-| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/totp/verify |
-| `confirmRL` | 5 | 15 min | IP | POST /auth/confirm |
-| `clientTokenRL` | 10 | 1 min | IP | POST /client/token |
-| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap (**fail-closed**) |
+| Rate Limit | Limit | Window | Key | Endpoints | On cache outage |
+|------------|-------|--------|-----|-----------|-----------------|
+| `loginRL` | 5 | 15 min | IP | POST /auth/login | Closed |
+| `registerRL` | 3 | 1 hour | IP | POST /auth/register | Closed |
+| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh | In-memory fallback |
+| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm | Closed |
+| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/{totp,backup-code,email-otp}/verify and email-otp/resend | Closed |
+| `confirmRL` | 5 | 15 min | user ID | POST /auth/confirm (and the other confirmRL routes) | In-memory fallback |
+| `clientTokenRL` | 10 | 1 min | IP | POST /client/token | Closed |
+| `oauthCallbackRL` | 10 | 1 min | IP | GET /auth/oauth2/callback/{provider} | In-memory fallback |
+| `authorizeRL` | 10 | 1 min | IP | GET /auth/oauth2/authorize | In-memory fallback |
+| `oauthExchangeRL` | 10 | 1 min | IP | POST /auth/oauth2/exchange | In-memory fallback |
+| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap | Closed |
+| `mintRL` | 60 | 1 min | client_id | POST /mint | Closed |
 
-Rate limiting uses `cache.Increment()` with a sliding window. On cache failure,
-requests are **allowed through** (graceful degradation -- auth never fails because
-the cache is down). `kmsUnwrapRL` is the exception: it is configured `FailClosed: true`, so a
-cache outage rejects unwraps rather than falling back to a per-pod in-memory counter that
-would multiply the effective key-release rate by the replica count.
+Rate limiting uses `cache.Increment()` with a fixed window. On cache failure an
+ordinary limiter falls back to a per-process in-memory counter: the limit stays
+enforced per pod, it is not lifted. A limiter marked Closed rejects with
+`503 rate_limiter_unavailable` instead, because the per-pod fallback would
+multiply the budget by the replica count. Login, register, password reset,
+TOTP/backup/email-OTP verify, `POST /client/token`, account deletion,
+`POST /kms/unwrap` and `POST /mint` are Closed. The OAuth callback is not:
+it used to share `loginRL` and no longer does (`internal/server/server.go`).
+A cache outage here is a per-pod 10/min, not a 503, and not "allow through".
 
 See: `internal/server/server.go`, `internal/middleware/`
 
@@ -769,18 +784,33 @@ See: `internal/crypto/jwt.go`, `internal/service/token.go`
 ```text
 /.well-known/jwks.json  <--  Serves the current public key set
 
-On rotation (via CLI: vault42 rotate-jwks --admin-token <token>):
-  1. Generate new RSA-2048 key pair
-  2. Generate new kid (UUID)
-  3. Update TokenService signing key (mutex-protected)
-  4. Add new public key to the keys map
-  5. Old key remains in the map for validating existing tokens
-  6. /.well-known/jwks.json now returns both keys
+File-based keys (SIGNING_KEY_FILE; default):
+  Generate an RSA-2048 PKCS#8 PEM (`BEGIN PRIVATE KEY`) with
+  scripts/generate-secrets.sh or
+  `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`.
+  Point SIGNING_KEY_FILE at that path and restart. There is no live swap.
+
+  The kid the process advertises is KIDFromPublicKey: the first 16 hex
+  characters of SHA-256 over the PKIX DER of the public key, formatted
+  xxxxxxxx-xxxxxxxx. It is not a UUID you choose.
+
+  vault rotate-jwks is not this path. It writes PKCS#1
+  (`BEGIN RSA PRIVATE KEY`), prints a random UUID that LoadSigningKeyPEM
+  never reads, and a SIGNING_KEY_FILE pointed at that file fails at
+  startup with a parse error. Convert first
+  (`openssl pkcs8 -topk8 -nocrypt`) if you already have a PKCS#1 file,
+  then ignore the printed UUID and read the kid from
+  GET /.well-known/jwks.json after restart.
+
+DB-backed rotation (VAULT_KEY_ROTATION_DB=true):
+  POST /admin/keys/rotate, or the VAULT_KEY_ROTATION_INTERVAL scheduler.
+  The previously active key is retired and stays in JWKS until
+  VAULT_KEY_RETENTION_PERIOD. The CLI verb does not drive this path.
 ```
 
 The JWKS endpoint sets `Cache-Control: public, max-age=300` (5 minutes). During
-rotation, both the old and new keys are available, so tokens signed with the old
-key remain valid until they expire naturally.
+a DB-backed rotation, both the old and new keys are available, so tokens signed
+with the old key remain valid until they expire naturally.
 
 The `WellKnownHandler` uses a `sync.RWMutex` to safely update the key map while
 serving concurrent JWKS requests.
@@ -789,7 +819,7 @@ serving concurrent JWKS requests.
 
 At startup, key loading depends on configuration:
 
-- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive restarts. `kid` derived deterministically from SHA-256 of the public key modulus.
+- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM (`x509.ParsePKCS8PrivateKey` in `LoadSigningKeyPEM`). Shared across all pods for horizontal scaling. Tokens survive restarts. PKCS#1 (`BEGIN RSA PRIVATE KEY`), including the file `vault rotate-jwks` writes, is a startup parse failure. `kid` is `KIDFromPublicKey`: the first 16 hex characters of SHA-256 over the PKIX DER encoding of the public key, formatted `xxxxxxxx-xxxxxxxx`. Hashing the modulus alone is not what the process does.
 - **`SIGNING_KEY_FILE` not set (fallback):** ephemeral RSA-2048 key pair generated in memory. Tokens invalidated on restart. Suitable for single-pod deployments only.
 
 This mode is backward compatible and requires no additional configuration.
@@ -804,10 +834,12 @@ rotation without shared filesystem access.
   (configurable via `VAULT_KEY_REFRESH_INTERVAL`).
 - On rotation, the previously active key is marked **retired**. Retired keys
   remain in the JWKS response until their retention period expires (default:
-  48 hours via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
+  1 hour via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
   seamlessly.
-- Key management (rotate, list, revoke) is performed exclusively via the admin
-  gateway (`cmd/admin-gateway/`), not exposed on the main vault42 binary.
+- Live key management (rotate, list, revoke) is performed via the admin
+  gateway (`cmd/admin-gateway/`). `vault rotate-jwks` writes a PKCS#1
+  key file and a discarded UUID; it does not rotate the live store and
+  cannot be mounted as `SIGNING_KEY_FILE`.
 - Revoked keys are removed from JWKS immediately. Expired retired keys are
   cleaned up automatically during the refresh cycle.
 
@@ -950,7 +982,7 @@ exactly why they need a purge of their own. A sweeper deletes entries older than
 `VAULT_AUDIT_RETENTION_DAYS` at startup and every 6 hours. It is disabled by default:
 silently deleting security logs is not a safe default, so the horizon is an explicit
 operator choice. Because the log is append-only, this is the only sanctioned removal
-path (`vault cleanup-audit` runs the same purge on demand).
+path. `vault cleanup-audit` is retired and writes nothing.
 
 **Recovery-escrow retention** (`internal/service/recovery_retention.go`): the
 account-recovery escrow (`auth.account_recovery`) has the same shape as the audit log --
@@ -967,7 +999,7 @@ this is the only path that can remove an escrow record.
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:
 
-- Rate limiting counters (sliding window via `Increment`)
+- Rate limiting counters (fixed window via `Increment`)
 - Email verification tokens (`verify:<hash>` -> user ID, 24h TTL)
 - Password reset tokens (`reset:<hash>` -> user ID, 1h TTL)
 - TOTP replay prevention (`totp_used:<user>:<step>` -> "1", 90s TTL)
@@ -1013,7 +1045,6 @@ Four deployment profiles control default configuration values:
 |---------|-----------|-----|----------|----------|
 | Listen address | :8443 | :8443 | :8443 | :8443 |
 | TLS enabled | true | true | true | true |
-| Log level | warn | debug | info | debug |
 | Cache backend | redis | (inherited) | memory | redis |
 | DB max conns | 25 | 25 | 5 | 25 |
 | Auto-migrate | false | true | true | true |
@@ -1026,10 +1057,10 @@ Four deployment profiles control default configuration values:
 | Shutdown timeout | 15s | 5s | 5s | 15s |
 
 **Dev extends production** -- it starts from the production baseline and applies
-minimal overrides (debug logging, CORS allow-all, shorter refresh TTL, faster
-shutdown, auto-migration). TLS, rate limits, listen address, and cache backend
-are all inherited from production unless explicitly overridden via environment
-variables.
+minimal overrides (CORS allow-all, shorter refresh TTL, faster shutdown,
+auto-migration). TLS, rate limits, listen address, and cache backend are all
+inherited from production unless explicitly overridden via environment
+variables. There is no log-level control: `LOG_LEVEL` is read and ignored.
 
 **Embedded** is tuned for resource-constrained environments (e.g., Raspberry Pi 5)
 with in-memory cache, 5 DB connections, and auto-migration. Target memory
@@ -1043,8 +1074,10 @@ in `internal/config/secrets.go`:
 
 1. Reads `<ENV_KEY>_FILE` to get the file path
 2. Reads the file contents
-3. **Zeros the file** after reading (defense in depth)
-4. Trims whitespace and returns the value
+3. Trims whitespace and returns the value
+4. If `VAULT_SECRET_FILE_CONSUME=true` (exact string), zeros and removes the file. The default leaves the file intact.
+
+`LoadSecret` is the vault path. `BRIDGE_ADMIN_TOKEN_FILE` always overwrites the file with zeros and ignores the flag. The admin gateway's own `loadSecret` never consumes; its `MASTER_KEY_FILE` still goes through `LoadSecretBinary`, so consume applies there.
 
 Secrets are never passed as environment variables directly. This integrates with
 Kubernetes secrets mounted as files.

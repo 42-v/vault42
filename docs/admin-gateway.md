@@ -65,6 +65,8 @@ All configuration via environment variables:
 | `ADMIN_GW_TLS_CERT_FILE` | string | -- | Yes | Server TLS certificate path |
 | `ADMIN_GW_TLS_KEY_FILE` | string | -- | Yes | Server TLS private key path |
 | `ADMIN_GW_CLIENT_CA_FILE` | string | -- | Yes | Client CA certificate for mTLS verification |
+| `ADMIN_GW_CLIENT_CN_ALLOWLIST` | string | *(empty)* | No | Comma-separated identities allowed to complete the handshake, matched exactly against the leaf CN and its DNS, email and URI SANs. Empty pins nothing: any certificate this CA has signed is accepted, and startup logs a warning naming AR-9. |
+| `ADMIN_GW_CLIENT_CRL_FILE` | string | *(empty)* | No | Path to a PEM or DER CRL signed by the client CA. Re-read on every handshake. An unreadable path is fatal at boot. Empty checks nothing. |
 | `ADMIN_GW_SESSION_TTL` | duration | `1h` | No | Admin session lifetime |
 | `ADMIN_GW_MAX_FAILED_LOGINS` | int | `5` | No | Failed login attempts before lockout |
 | `ADMIN_GW_LOCKOUT_DURATION` | duration | `30m` | No | Account lockout duration |
@@ -79,6 +81,7 @@ All configuration via environment variables:
 | `DB_MAX_CONNS` | int | `5` | No | Max database connections |
 | `DB_ADMIN_PASSWORD_FILE` | string | -- | Yes | Path to `vault_admin` DB password |
 | `MASTER_KEY_FILE` | string | -- | Yes | Path to 32-byte AES-256 master key |
+| `VAULT_FIRST_BOOT_CREDENTIAL_FILE` | string | -- | Conditional | Path the first `super_admin` password is appended to. Required when stdout is not a terminal (every Kubernetes pod). See [First Boot](#first-boot). |
 
 ---
 
@@ -200,13 +203,13 @@ Migration `001_initial_schema.sql` creates (among other tables):
 
 ## First Boot
 
-On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The credentials are printed to stdout (one-time only):
+On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The password is delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log. The log records only that a password was written and where:
 
 ```text
-admin-gateway: FIRST BOOT -- created super_admin "admin" with password: <random>
+FIRST BOOT: super_admin "admin" created; its password was written to /run/first-boot/credentials and is not in this log.
 ```
 
-Change this password immediately after first login.
+Without a credential file and without a terminal, first boot refuses rather than storing the hash of a password nobody holds. Change this password immediately after first login. TOTP enrolment is required after that login.
 
 ---
 
@@ -325,7 +328,7 @@ Full rationale in [Security Decisions & Accepted Risks](security.md) (AR-6 throu
 - **Session timing oracle (AR-6)**: Invalid session tokens return slightly faster than valid ones
 - **Session token in sessionStorage (AR-7)**: Required for JS API calls; protected by CSP + 6-layer enforcement
 - **Global login rate limit (AR-8)**: Loopback-only means one IP; per-account lockout is the primary defense
-- **Client cert CN not validated (AR-9)**: Single-purpose CA is the trust boundary
+- **Client cert identity pinning is optional (AR-9)**: `ADMIN_GW_CLIENT_CN_ALLOWLIST` and `ADMIN_GW_CLIENT_CRL_FILE` exist and fail closed once set. Empty allowlist still accepts any certificate this CA has signed. An unreadable CRL path is fatal at boot.
 - **innerHTML for empty states (M5)**: Hardcoded strings only, no interpolated variables
 
 ---
@@ -372,6 +375,7 @@ docker run --rm \
   -e ADMIN_GW_TLS_CERT_FILE=/certs/server.crt \
   -e ADMIN_GW_TLS_KEY_FILE=/certs/server.key \
   -e ADMIN_GW_CLIENT_CA_FILE=/certs/ca.crt \
+  -e ADMIN_GW_CLIENT_CN_ALLOWLIST=admin-operator \
   -e MASTER_KEY_FILE=/secrets/master.key \
   -e DB_ADMIN_PASSWORD_FILE=/secrets/db-admin-password \
   -e DB_HOST=host.docker.internal \
@@ -391,6 +395,6 @@ ghcr.io/42-v/vault42-admin-gateway:latest
 
 ## CLI Admin Commands
 
-The main vault42 binary still provides CLI admin commands (rotate, list, revoke keys; manage clients; declarative seeding) via `--admin-*` flags. These require pod exec access (shell access to the running container), which provides equivalent security to the admin gateway's SSH tunnel. The CLI uses the DB-stored admin token hash for authentication.
+The main `vault` binary still provides CLI admin commands (`add-client`, `list-clients`, `revoke-all-sessions`, `rotate-admin-token`, `rotate-jwks`, `seed`, `cleanup-recovery`, `export-audit`) authenticated by `ADMIN_TOKEN_FILE` or `--admin-token`. These require pod exec access (shell access to the running container), which provides equivalent security to the admin gateway's SSH tunnel. Live key rotate/list/revoke is the admin gateway (`POST /admin/keys/...`). `vault rotate-jwks` writes a PKCS#1 PEM and a discarded UUID; it does not rotate the live store and cannot be mounted as `SIGNING_KEY_FILE` (`LoadSigningKeyPEM` is PKCS#8 only). File-based keys are produced by `scripts/generate-secrets.sh`. `cleanup-audit`, `revoke-client`, `rotate-client-secret`, `lock-user` and `unlock-user` are retired stubs that print an error and write nothing.
 
 Declarative seeding is also available at startup via the `VAULT_SEED_FILE` env var, which loads a JSON file and idempotently creates clients and users before the server starts. See `seed.example.json` for the file format. A seeded client may not carry a vault42 capability scope (`mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read`, `admin:write`): the seeder runs under `vault_app` and migration 023 reserves those for `POST /admin/clients`, so a seed file asking for one aborts startup naming the scope.

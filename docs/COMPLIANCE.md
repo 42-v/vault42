@@ -213,7 +213,7 @@ Twenty-one Not Applicable rows rested on three sentences that were false on the
 facts. The V3 rationale said vault42 "ships no browser-facing application of its
 own"; `internal/frontend` embeds the SPA into the binary, `Dockerfile:32` and
 `.goreleaser.yaml:26-29` put a real Vue build there before compiling, and
-`internal/server/server.go:820` serves it. The V5 rationale said vault42
+`internal/server/server.go:842` serves it. The V5 rationale said vault42
 "accepts no file uploads" and never "stores by client-supplied name";
 `internal/handler/blob.go:52` calls `r.FormFile("file")` and
 `PUT /user/blobs/named/{name}` stores under a caller-supplied name. The V1.3.7

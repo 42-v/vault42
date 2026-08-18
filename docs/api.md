@@ -7,7 +7,7 @@
 
 Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies.
 
-**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
+**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP-Nonce and refresh-token sender-binding, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
 
 Two rules from that contract that change how a client is written:
 
@@ -66,7 +66,7 @@ Authorization: Bearer <access_token>
 
 Access tokens are RS256-signed JWTs with a short TTL (typically 5-15 minutes). They are stateless and fingerprint-bound.
 
-Only the `Bearer` scheme is accepted. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set: RFC 9449 section 7.1 reserves it for sender-constrained tokens, and vault42 issues none.
+The `Bearer` scheme is accepted for any token that does not carry `cnf.jkt`. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set. When the flag is on, a token issued with a DPoP proof carries `cnf.jkt` and must be presented as `Authorization: DPoP <token>` with a matching proof. A token issued without a proof stays an ordinary bearer token. See `spec.md` section 0.6.2.
 
 ### 2FA Challenge Tokens
 
@@ -146,7 +146,7 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
 
 ```http
 HTTP/1.1 503 Service Unavailable
@@ -460,7 +460,7 @@ Authenticate a user with email and password. If the user has MFA enabled, return
 > **Honeypot mode:** When `VAULT_PROFILE=honeypot` and the email matches a configured trap user (`VAULT_HONEYPOT_TRAP_USERS`), the endpoint returns a fake 200 response with realistic-looking but unsigned JWT tokens. The attacker's request triggers a webhook alert. Subsequent requests with the fake token will fail silently on any real API call.
 
 **Authentication:** None
-**Rate limit:** 5 requests per 15 minutes (per IP)
+**Rate limit:** 5 requests per 15 minutes (per IP), fail-closed. A cache outage rejects with `503 rate_limiter_unavailable` rather than falling back to a per-pod counter.
 
 **Request body:**
 
@@ -1182,7 +1182,7 @@ Erase the authenticated user's account. **This is the most destructive endpoint 
 
 **What is erased:** the identity profile, all blobs, devices, linked social accounts, password history, refresh tokens, TOTP secrets, WebAuthn credentials and backup codes. The user row is scrubbed and soft-deleted (tombstoned) so that foreign keys stay intact and the account stops authenticating immediately.
 
-**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`cleanup-audit`, `cleanup-recovery`). The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
+**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`VAULT_AUDIT_RETENTION_DAYS`, `VAULT_RECOVERY_RETENTION_DAYS` / `vault cleanup-recovery`). `vault cleanup-audit` is retired and writes nothing. The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
 
 **Order matters:** escrow, then tombstone, then purge. The account stops authenticating before any PII is destroyed, so an interrupted erasure leaves an account that is dead but not yet fully purged -- never one that is still loginable but has already lost its second factors. Every step is idempotent; re-issuing the request finishes an interrupted erasure.
 
@@ -2556,6 +2556,7 @@ These endpoints are only available when OAuth2 providers are configured.
 Initiate an OAuth2 social login flow. Redirects the user to the provider's authorization page with a signed state parameter and PKCE challenge.
 
 **Authentication:** None
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter.
 
 **Query parameters:**
 
@@ -2589,7 +2590,10 @@ A first-time sign-in is auto-provisioned only when the provider proves the calle
 
 If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=true&challenge_token=...` instead of issuing full tokens.
 
+**DPoP:** this route is not wrapped in the DPoP middleware (`internal/server/server.go`). The identity provider redirects the browser with a GET, which cannot carry a `DPoP` proof, so the access or challenge token minted here never receives `cnf.jkt` even when `VAULT_DPOP_ENABLED` is on. `POST /auth/oauth2/exchange` returns that already-issued token. A later `POST /auth/2fa/*` verify *is* wrapped, so an MFA-completing federated login can still bind there. See `spec.md` section 0.6.2.
+
 **Authentication:** None (callback from provider)
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter rather than `503 rate_limiter_unavailable`. The callback used to share the login bucket (5 per 15 minutes, fail-closed). It does not any more. Reaching the handler already takes an HMAC-valid state, a matching `__Host-oauth_state` cookie and a single-use PKCE verifier, so this is not a guessing surface, and sharing `loginRL` let one office or VPN exit spend social login with five garbage login bodies.
 
 **Path parameters:**
 
@@ -2637,6 +2641,7 @@ curl -v "https://vault42.example.com/auth/oauth2/callback/google?state=...&code=
 Exchange a one-time code from the OAuth2 callback redirect for the access token. The code is valid for 60 seconds and can only be used once (atomic get-and-delete).
 
 **Authentication:** None
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter.
 
 **Request body:**
 
@@ -2740,7 +2745,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. `VAULT_DPOP_ENABLED=true` adds **no** requirement to this endpoint: the DPoP middleware requires a proof only from a token that carries a `cnf.jkt` confirmation claim, no vault42 issuance path populates that claim, so a request with no `DPoP` header is passed straight through (`internal/middleware/dpop.go:31-40`). A proof that *is* presented must parse, match the method and URI, match the access-token hash, and be single-use, but it is compared against no thumbprint, so it constrains nothing and can be omitted at will. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. `VAULT_DPOP_ENABLED` is experimental, unsupported and excluded from the stability contract; see `spec.md` section 0.6.2.
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. Those tokens are not DPoP-bound: `POST /client/token` is not wrapped in the DPoP middleware, so they never carry `cnf.jkt` and `VAULT_DPOP_ENABLED=true` adds no required proof here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. See `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2818,9 +2823,9 @@ Subject-assertion signing oracle. The caller names a subject, and vault42 signs 
 Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:613-620`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
-**Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:564-570`).
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:768`). The limiter sits inside `authMw` because `ClientRateLimitKey` reads the client id from claims that do not exist until auth has run.
 **Rate limit:** 60 per minute per authenticated `client_id`, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The limiter is mounted **inside** the auth middleware, so the key function reads the client id from the validated claims and buckets by `client_id`; its source-IP fallback is unreachable here, because a request carrying no claims is rejected by the auth middleware before it reaches the limiter. Plan capacity as 60/min per client, not per source address.
-**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`, and even then a request with no `DPoP` header passes straight through, because the middleware demands a proof only from a token carrying `cnf.jkt` and nothing in vault42 issues one. See `spec.md` section 0.6.2.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. Mint tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and a request with no `DPoP` header still passes through. See `spec.md` section 0.6.2.
 **Fingerprint:** not verified. `POST /mint` is a machine endpoint and carries no device binding.
 **Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
 
@@ -2961,7 +2966,8 @@ A namespaced JSON document store with an ownership axis: a registered service cl
 Mounted **only** when `VAULT_SVCDOC_ENABLED=true`; otherwise the four routes do not exist and `ServeMux` answers `404` in `text/plain`. Off by default because this is new surface reachable by every existing client-credentials holder, so enabling it is an explicit operator decision rather than a consequence of upgrading. The shared visibility tier is a second, separate switch (`VAULT_SVCDOC_SHARED_ENABLED`).
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying `svcdoc:read` (reads) or `svcdoc:write` (writes). Every handler additionally requires a non-empty `client_id` claim.
-**Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> handler (`internal/server/server.go:509-518`). No DPoP wrapper, no fingerprint verification.
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> DPoP wrapper -> handler (`internal/server/server.go:697-706`). No fingerprint verification: this is a machine endpoint.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. These tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and a request with no `DPoP` header still passes through. See `spec.md` section 0.6.2.
 **Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s, keyed by the authenticated `client_id`. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs inside the auth middleware, so the bucket is the client id read from the validated claims; the per-client key function's source-IP fallback is unreachable, because the auth middleware rejects a claimless request first.
 **Max body:** the `/service/documents` prefix is exempt from the global 8 KiB cap, so a 64 KiB document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of `VAULT_SVCDOC_MAX_SIZE` + 1 KiB.
 
@@ -3759,7 +3765,7 @@ The **Mounted when** column is the answer to "why does this endpoint 404 in prod
 | `GET` | `/user/blobs/named/{name}` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob by name |
 | `DELETE` | `/user/blobs/named/{name}` | Bearer + Confirm | 5/15min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob by name |
 | `GET` | `/auth/oauth2/authorize` | None | 10/min | >= 1 provider configured | Start a social login |
-| `GET` | `/auth/oauth2/callback/{provider}` | None | 5/15min, fail-closed | >= 1 provider configured | Provider redirect target |
+| `GET` | `/auth/oauth2/callback/{provider}` | None | 10/min | >= 1 provider configured | Provider redirect target |
 | `POST` | `/auth/oauth2/exchange` | None | 10/min | >= 1 provider configured | Exchange the one-time code for tokens |
 | `POST` | `/client/token` | Basic | 10/min | Always | Client-credentials grant |
 | `POST` | `/kms/unwrap` | Scope `kms:unwrap` | 30/min, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle |

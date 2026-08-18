@@ -10,7 +10,7 @@ Three mechanisms work together:
 
 1. **Environment variables** -- all settings are read from env vars at startup.
 2. **Profiles** -- preset defaults for production, dev, and embedded deployments. The profile is selected via `VAULT_PROFILE` and fills in any env vars you did not set.
-3. **`_FILE` convention for secrets** -- sensitive values are never placed directly in env vars. Instead, a `_FILE`-suffixed variable points to a file containing the secret. The file is read into memory; with `VAULT_SECRET_FILE_CONSUME=true` it is then zeroed and removed from disk (opt-in, off by default).
+3. **`_FILE` convention for secrets** -- sensitive values are never placed directly in env vars. Instead, a `_FILE`-suffixed variable points to a file containing the secret. The vault binary reads the file into memory; with `VAULT_SECRET_FILE_CONSUME=true` it is then zeroed and removed from disk (opt-in, off by default). The bridge does not honour that flag: see `BRIDGE_ADMIN_TOKEN_FILE`.
 
 The startup sequence is: read env vars, apply profile defaults for unset fields, load secrets from `_FILE` paths.
 
@@ -62,13 +62,14 @@ Note: In the dev profile, if you explicitly set an env var (e.g., `VAULT_REFRESH
 ## Fail-Closed Overrides (read this before production)
 
 `Config.Validate()` (`internal/config/config.go`) refuses to start a non-dev profile
-that has a security guarantee switched off. Four environment variables move a guard, and each
+that has a security guarantee switched off. Five environment variables move a guard, and each
 one is an audited, deliberate weakening. They are listed here together because an operator or
 auditor reviewing a deployment needs to find them in one place, not by grepping the source.
 
 | Variable | Default | What setting it does |
 |---|---|---|
 | `VAULT_ALLOW_PLAINTEXT` | `false` | **Permits a non-dev profile to serve plain HTTP.** Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off is a startup failure. Setting it serves credentials and tokens in cleartext to anything between the client and the process, and on its own leaves the `Secure` cookie flag off, because the flag tracks `VAULT_TLS_ENABLED` and `VAULT_FORCE_SECURE_COOKIES` rather than this variable. The only defensible use is a TLS-terminating proxy on the same host or pod network -- and in that case set `VAULT_FORCE_SECURE_COOKIES=true` instead, which keeps the guard intact. See [TLS and Cookies](#tls-and-cookies) for the full combination table. |
+| `VAULT_ALLOW_PLAINTEXT_DB` | `false` | **Permits a non-dev profile to use an unencrypted database link.** `DB_SSLMODE=disable`, `allow` or `prefer` do not guarantee TLS. The startup packet carries the role password and every later query carries every row, including TOTP secrets and password hashes. Without this override those three modes refuse to start outside `dev`. Set it only when Postgres is on the same pod or a private loopback, which is what the bundled chart postgres does. `prefer` is the one to watch: it asks for TLS and falls back to plaintext without an error. |
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | `false` | **Permits a non-dev profile to run with `VAULT_RATE_LIMIT_ENABLED=false`.** Rate limiting is the brute-force defence on login, registration, password reset, TOTP verify and the KMS unwrap oracle. Setting this removes it. Justified only when an upstream gateway enforces equivalent per-IP limits on those exact paths. |
 | `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | `false` | **Auto-trusts every RFC1918 range, IPv6 ULA and loopback as a proxy, and honours `X-Forwarded-For` from them** (`config.Load`, `internal/config/config.go`). On a flat network any pod can then forge a client IP, collapsing per-IP rate limiting and audit attribution. Startup refuses it outside the `embedded` profile. Prefer explicit `TRUSTED_PROXIES` + `REAL_IP_HEADER` everywhere else. |
 | `VAULT_STRICT_SESSION_LIMIT` | `false` | The inverse: **the concurrent-session cap fails open by default.** If the active-family count query errors, `VAULT_MAX_SESSIONS_PER_USER` is not enforced for that login (`AuthService.checkSessionLimit`). Setting this to `true` makes the check fail closed -- the login is refused and a risk-80 audit event is written. Enable it if the session cap is a control you rely on. |
@@ -92,10 +93,10 @@ has a matching failure mode: it destroys the on-disk secret after the first read
 | `VAULT_LOGO_URL` | string | *(none)* | No | URL to application logo for email templates. |
 | `VAULT_PRIMARY_COLOR` | string | `#00FF42` | No | Primary branding color hex code for email templates. |
 | `VAULT_AUTO_MIGRATE` | bool | `false` | No | Run database migrations automatically at startup. Profile defaults: `false` (production), `true` (dev, embedded). |
-| `VAULT_SHUTDOWN_TIMEOUT` | duration | `15s` | No | Maximum wait time for in-flight requests during graceful shutdown. **Profile-only** -- not loaded from env vars, set only by profile defaults (15s production, 5s dev/embedded). |
+| `VAULT_SHUTDOWN_TIMEOUT` | duration | `0` (profile sets) | No | Maximum wait time for in-flight requests during graceful shutdown. Read from the environment in every profile; an explicit value beats the profile default. Profile defaults: `15s` (production, honeypot), `5s` (dev, embedded). |
 | `VAULT_SERVE_FRONTEND` | bool | `false` | No | Serve the embedded Vue SPA from the Go binary. Default: `false` (secure by default). Honeypot profile enables this by default. |
 | `VAULT_EMAIL_TEMPLATES_DIR` | string | *(none)* | No | Directory containing custom HTML email templates to override embedded defaults. |
-| `VAULT_AUDIT_FLUSH_INTERVAL` | duration | `0` | No | Interval for flushing buffered audit log entries. `0` disables batching (immediate flush). **Profile-only** -- not loaded from env vars, set to `30s` in embedded profile. |
+| `VAULT_AUDIT_FLUSH_INTERVAL` | duration | `0` | No | Interval for flushing buffered audit log entries. `0` disables batching (immediate flush). Read from the environment in every profile. The embedded profile sets `30s` when this is left unset, so a Pi-class box is not doing a write per event. |
 | `VAULT_AUDIT_BUFFER_SIZE` | int | `1000` | No | Maximum number of audit entries buffered before new entries are dropped. Only relevant when `VAULT_AUDIT_FLUSH_INTERVAL > 0`. |
 
 ### TLS and Cookies
@@ -198,13 +199,16 @@ hop and the reason the first row of that pair is the documented answer.
 | `DB_NAME` | string | `vault` | No | PostgreSQL database name. |
 | `DB_SSLMODE` | string | `require` | No | PostgreSQL SSL mode. One of `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`; anything else refuses to start. `disable`, `allow` and `prefer` do not guarantee an encrypted connection, and the startup banner says so in a non-dev profile. In the dev profile, `DatabaseURL()` forces this to `disable` regardless of the configured value. |
 | `DB_MAX_CONNS` | int | `0` (profile sets) | No | Maximum database connections. Profile defaults: `25` (production/dev), `5` (embedded). |
+| `DB_STATEMENT_TIMEOUT` | duration | `10s` | No | Server-side ceiling on a single statement. Zero disables it. Without it a pathological query pins the whole pool and the process stops serving with no error anywhere. |
+| `DB_LOCK_TIMEOUT` | duration | `3s` | No | Server-side ceiling on waiting for a lock. Zero disables it. |
+| `VAULT_ALLOW_PLAINTEXT_DB` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to start with `DB_SSLMODE` set to `disable`, `allow` or `prefer`. Without it those modes refuse to start, because the role password and every row would travel in cleartext. Also documented under [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `DB_MIG_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_mig` role password. Used for schema migrations at startup. See [Secret Loading](#secret-loading-_file-convention). |
 | `DB_APP_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_app` role password. Used for all runtime queries. See [Secret Loading](#secret-loading-_file-convention). |
 
 The application uses two PostgreSQL roles with least-privilege separation:
 
 - **`vault_mig`** -- DDL privileges for migrations only. Connection is closed after migrations complete.
-- **`vault_app`** -- SELECT/INSERT/UPDATE on `auth` schema, INSERT/SELECT only on `audit` schema (append-only: no UPDATE, no DELETE). No TRUNCATE, no DDL. DELETE is held on the per-user and per-session tables for token lifecycle and the erasure cascade, and on `auth.signing_keys` for the key reap, where a trigger narrows it to retired keys past expiry. Two writes are narrowed further than their grant: it may not put a vault42 capability scope on a client row (migration 023), and it may not un-confirm an email address, re-arm `import_pending`, ban or disable an account (migration 024). On `auth.signing_keys` the UPDATE is column-level rather than narrowed by a guard: `status`, `retired_at` and `expires_at` only, because a signing key's identity and material are written by one statement, the upsert in `keystore.Import`, and migration 037 moved that behind `auth.import_signing_key` and took the raw privilege away. See [admin-gateway.md](admin-gateway.md#database-role-separation).
+- **`vault_app`** -- SELECT/INSERT/UPDATE on `auth` schema, INSERT/SELECT only on `audit` schema (append-only: no UPDATE, no DELETE). No TRUNCATE, no DDL. DELETE is held on the per-user and per-session tables for token lifecycle and the erasure cascade, and on `auth.signing_keys` for the key reap, where a trigger narrows it to retired keys past expiry. Two writes are narrowed further than their grant: it may not put a vault42 capability scope on a client row (migration 023), and it may not un-confirm an email address, re-arm `import_pending`, ban or disable an account (migration 024). See [admin-gateway.md](admin-gateway.md#database-role-separation).
 
 ### JWT / Token
 
@@ -223,22 +227,22 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `MASTER_KEY_FILE` | string | *(none)* | Yes | Path to file containing the AES-256 master key (exactly 32 bytes). Used for encrypting TOTP secrets at rest. See [Secret Loading](#secret-loading-_file-convention). |
-| `ADMIN_TOKEN_FILE` | string | *(none)* | Recommended | Path to a file holding the admin CLI token, either as its Argon2id hash (preferred) or as the plaintext token. On first boot the value seeds `admin_config.admin_token_hash`, the credential every CLI command (`add-client`, `rotate-jwks`, ...) is checked against. Without it, a token is generated on first boot and printed to stdout. See [Admin Token Provisioning](#admin-token-provisioning). |
+| `ADMIN_TOKEN_FILE` | string | *(none)* | Recommended | Path to a file holding the admin CLI token, either as its Argon2id hash (preferred) or as the plaintext token. On first boot the value seeds `admin_config.admin_token_hash`, the credential every CLI command (`add-client`, `rotate-jwks`, ...) is checked against. Without it, a token is generated on first boot and delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log. See [Admin Token Provisioning](#admin-token-provisioning). |
 | `VAULT_PEPPER_FILE` | string | *(none)* | Recommended | Path to file containing the server-side pepper added to password hashes before Argon2id. Must be at least 32 bytes in non-dev profiles (startup fails otherwise). |
 | `HMAC_SECRET_FILE` | string | *(none)* | Yes | Path to file containing the HMAC-SHA256 signing key. Must be at least 32 bytes in production/embedded profiles. Dev profile logs a warning for shorter keys. |
-| `SIGNING_KEY_FILE` | string | *(none)* | Conditional | Path to RSA-2048 private key (PKCS#8 PEM) for JWT signing. Shared across all pods for horizontal scaling. Without this, each pod generates an ephemeral key (single-pod only). Required for multi-pod deployments. Generated by `scripts/generate-secrets.sh`. |
+| `SIGNING_KEY_FILE` | string | *(none)* | Conditional | Path to RSA-2048 private key (PKCS#8 PEM, `BEGIN PRIVATE KEY`) for JWT signing. `LoadSigningKeyPEM` (`internal/crypto/jwt.go`) accepts PKCS#8 only; PKCS#1 (`BEGIN RSA PRIVATE KEY`) is a startup parse failure. The kid the process advertises is `KIDFromPublicKey` (first 16 hex characters of SHA-256 over the PKIX DER of the public key, formatted `xxxxxxxx-xxxxxxxx`), not a UUID you write down. Shared across all pods for horizontal scaling. Without this, each pod generates an ephemeral key (single-pod only). Required for multi-pod deployments. Generate with `scripts/generate-secrets.sh` (`openssl genpkey`). `vault rotate-jwks` writes PKCS#1 and prints a discarded UUID: pointing this variable at that output does not rotate the signing key. |
 | `VAULT_PASSWORD_MIN_LENGTH` | int | `15` | No | Minimum password length per NIST SP 800-63B Rev 4. No composition rules enforced. |
 | `VAULT_HIBP_CHECK` | bool | `true` | No | Enable Have I Been Pwned breach checking for passwords at registration and password change. |
 | `VAULT_MFA_REQUIRED` | bool | `true` | No | Force all users to set up two-factor authentication. Set to `false` to make 2FA optional. |
 | `VAULT_REGISTRATION_ENABLED` | bool | `true` | No | Enable public user registration via `POST /auth/register`. When `false`, the endpoint returns 403 `registration_disabled`. Use with `VAULT_SEED_FILE` for sealed deployments where all users are pre-provisioned. |
-| `VAULT_MAX_SESSIONS_PER_USER` | int | `10` | No | Maximum concurrent refresh token families per user. Oldest sessions are revoked when the limit is exceeded. |
-| `VAULT_MAX_SESSION_LIFETIME` | duration | `720h` | No | Absolute ceiling on the age of a refresh-token family, measured from its creation and independent of how often it is refreshed. Without it, rotation grants a fresh full TTL every time and a client that keeps refreshing holds a session forever. The default matches `VAULT_REMEMBER_ME_TTL`, so a session can live as long as the longest single token and no longer. NIST SP 800-63B-4 §2.2.3 requires that a definite overall reauthentication timeout SHALL be established, and says it SHOULD be no more than 24 hours at AAL2. This setting is what establishes the SHALL; the 720h default is a deliberate deviation from the SHOULD, because a general-purpose authentication server is not deployed only at AAL2 and a 24-hour default would force a daily re-login on every deployment that is not. Set `24h` if you need that conformance, which will log out remember-me users on schedule. §2.2.3 also puts the inactivity timeout at no more than 1 hour; vault42 has no inactivity timeout, which is the other half of the same deviation. `0` disables the bound. |
+| `VAULT_MAX_SESSIONS_PER_USER` | int | `10` | No | Maximum concurrent refresh token families per user. A new family that would exceed the cap is refused with `429 too_many_sessions`. Existing sessions are not evicted: the bound is a ceiling on new logins, not a least-recently-used replacement policy. |
+| `VAULT_MAX_SESSION_LIFETIME` | duration | `720h` | No | Absolute ceiling on the age of a refresh-token family, measured from its creation and independent of how often it is refreshed. Without it, rotation grants a fresh full TTL every time and a client that keeps refreshing holds a session forever. The default matches `VAULT_REMEMBER_ME_TTL`, so a session can live as long as the longest single token and no longer. NIST SP 800-63B-4 §2.2.3 puts AAL2 reauthentication at 12h; set `12h` if you need that conformance, which will log out remember-me users on schedule. `0` disables the bound. |
 | `VAULT_STRICT_SESSION_LIMIT` | bool | `false` | No | Make the concurrent-session check fail closed. By default, if the active-family count query errors the login is allowed through and the cap is not enforced for that request. When `true`, the login is refused with `too_many_sessions` and a risk-80 audit event is recorded. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `VAULT_RATE_LIMIT_ENABLED` | bool | `true` | No | Enable rate limiting on authentication endpoints. Defaults to `true`; in non-dev profiles startup refuses to run with it disabled unless `VAULT_ALLOW_RATE_LIMIT_DISABLED=true`. |
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to run with rate limiting disabled (e.g. when an upstream gateway handles it). Without it, disabling rate limiting fails startup. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `VAULT_ALLOW_PLAINTEXT` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to serve plain HTTP. Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off refuses to start (`Config.Validate`). Setting it serves credentials and tokens in cleartext, and on its own leaves the `Secure` cookie flag off. Behind a TLS-terminating proxy, set `VAULT_FORCE_SECURE_COOKIES=true` instead. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production) and [TLS and Cookies](#tls-and-cookies). |
 | `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | bool | `false` | No | **Fail-closed override.** Embedded profile only (startup fails elsewhere). When `TRUSTED_PROXIES` is empty, auto-populates it with `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `127.0.0.0/8` and `::1/128`; when `REAL_IP_HEADER` is empty, defaults it to `X-Forwarded-For`. Intended for a sibling reverse proxy on the same private network. Explicit `TRUSTED_PROXIES` / `REAL_IP_HEADER` always win. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
-| `VAULT_DPOP_ENABLED` | bool | `false` | No | **Experimental, not a working control.** Mounts the DPoP middleware on `/auth/login`, `/auth/refresh`, the 2FA verify endpoints and `POST /kms/unwrap`. Sender-constraining a token requires the access token to carry a `cnf.jkt` claim (RFC 9449 §6.1) and no vault42 issuance path sets one (see the `middleware.DPoP` doc comment), so a presented proof is validated for structure, `htm`/`htu`, `iat` freshness, `ath` and JTI single-use, but is never bound to a thumbprint the token committed to, and a request with no proof passes through. Do not rely on it for replay protection. |
+| `VAULT_DPOP_ENABLED` | bool | `false` | No | Sender-constrains access tokens issued with a DPoP proof (RFC 9449). When true, the DPoP middleware is mounted on `POST /auth/login`, `POST /auth/refresh`, the 2FA verify endpoints and every authenticated route (inside the auth middleware, so it can read `cnf.jkt`). A login, refresh or 2FA-challenge request that presents a valid `DPoP` proof has that proof's JWK thumbprint written into the issued access or challenge token as `cnf.jkt` (RFC 9449 §6.1). A later request presenting that token must use the `DPoP` authorization scheme and a matching proof; a missing or mismatched proof is `401`. A token issued without a proof stays an ordinary bearer token, so enabling the flag does not break existing clients. Two limits are real and are not closed by this flag: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. One issuance path is not wrapped: `GET /auth/oauth2/callback/{provider}` (the provider redirects the browser with a GET, which cannot carry a proof, so federated login never stamps `cnf.jkt`; `POST /auth/oauth2/exchange` returns that already-issued token). A later 2FA verify *is* wrapped, so an MFA-completing federated login can still bind there. `POST /client/token` **is** wrapped, so a client-credential token minted with a proof carries `cnf.jkt` like any other; that route was the last unwrapped issuance path and was closed during the 1.0.0 hardening. The default is off so a deployment that has not rolled out DPoP clients keeps working; turn it on when those clients can send proofs. |
 | `KMS_ROOT_KEY_FILE` | string | *(none)* | No | Path to a file containing the KMS root secret (at least 32 bytes). Per-kid KEKs are derived from it via HKDF-SHA256, kept cryptographically separate from the master key. When unset, the `POST /kms/unwrap` envelope-unwrap oracle is not mounted. See [Secret Loading](#secret-loading-_file-convention). |
 | `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. The setting to reach for behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading), because it keeps the last hop protected without disabling the startup guard. It also satisfies the certificate requirement when `VAULT_TLS_ENABLED` is left on, in which case the listener is plain HTTP. See [TLS and Cookies](#tls-and-cookies). |
 | `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). Also gates the `X-Vault-App` white-label tenant header: the slug is only honoured when the direct peer is on this list, so an outside caller cannot dress an auth email in another tenant's branding. Empty = white-label tenant selection is off and all auth emails use the global branding. See [API Reference -- White-Label Tenant Selection](api.md#white-label-tenant-selection). |
@@ -287,6 +291,7 @@ Cache degradation is graceful -- authentication never fails because the cache is
 | `SMTP_PORT` | string | `587` | No | SMTP server port. |
 | `SMTP_USER_FILE` | string | *(none)* | No | Path to file containing the SMTP username. See [Secret Loading](#secret-loading-_file-convention). |
 | `SMTP_PASS_FILE` | string | *(none)* | Conditional | Path to file containing the SMTP password. See [Secret Loading](#secret-loading-_file-convention). |
+| `VAULT_SMTP_ALLOW_PLAINTEXT` | bool | `false` | No | Permits delivery to an SMTP server that does not advertise STARTTLS. Every message carries a bearer secret, so a relay that cannot be upgraded is a failed send by default. Outside `dev` the opt-out is accepted only for a loopback `SMTP_HOST` (`localhost` or a loopback address); a remote host with this set refuses to start, because that would mail one-time codes across a network in cleartext. |
 | `VAULT_EMAIL_FROM` | string | *(none)* | Yes | Sender address for outgoing emails (e.g., `noreply@example.com`). |
 | `VAULT_EMAIL_FROM_NAME` | string | *(none)* | No | Global display name for the `From` line (e.g. `Acme Security`). Empty = the address alone. Per-app white-label branding can override it. |
 | `VAULT_EMAIL_FROM_ALLOWED_DOMAINS` | string | *(none)* | No | Comma-separated domain allowlist for per-app `From` **address** overrides. A per-app `from_address` whose domain is not listed falls back to `VAULT_EMAIL_FROM`. Empty (the default) disables address overrides entirely; display-name overrides still apply. This is the control that stops a tenant from sending auth mail as another tenant's domain, so leave it empty unless white-label sending is deliberately wanted. |
@@ -316,11 +321,14 @@ The bridge is a separate binary (`cmd/bridge/`) that sits in front of two Vault4
 | `BRIDGE_FLAG_TTL` | duration | `24h` | No | How long a flagged IP stays routed to honeypot. |
 | `BRIDGE_FLAG_THRESHOLD` | int | `100` | No | Cumulative score threshold to trigger flagging. |
 | `BRIDGE_WEBHOOK_URL` | string | *(none)* | No | Optional webhook URL for flag event notifications. |
-| `BRIDGE_ADMIN_TOKEN_FILE` | string | *(none)* | No | Path to file containing the admin API bearer token (`_FILE` convention). |
+| `BRIDGE_ADMIN_TOKEN_FILE` | string | *(none)* | No | Path to file containing the admin API bearer token. This is not the vault `_FILE` consume convention. `cmd/bridge/config.go` always overwrites the file with zeros after the first read and ignores `VAULT_SECRET_FILE_CONSUME`. The file is not deleted. On a writable mount the token is gone after the first start, so keep a copy elsewhere before pointing the bridge at it. A read-only mount (the usual Secret volume) leaves the file intact because the overwrite fails. |
 | `BRIDGE_REDIS_ADDR` | string | *(none)* | No | Optional Redis address for persistent flag storage. |
 | `BRIDGE_TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated CIDR ranges for proxy IP detection. |
 | `BRIDGE_REAL_IP_HEADER` | string | *(none)* | No | Header from trusted proxy containing real client IP (e.g., `CF-Connecting-IP`). |
 | `BRIDGE_LOG_LEVEL` | string | `info` | No | Log level (`info`, `debug`). |
+| `BRIDGE_MAX_BODY_BYTES` | int | `16777216` (16 MiB) | No | Cap on a proxied request body. The default sits above the vault's 10 MiB blob ceiling so this cap is not what rejects a legitimate upload; the vault re-applies its own, smaller, limit per route. Without it the bridge would stream whatever the client sent for as long as the read timeout allowed. |
+| `BRIDGE_MAX_INFLIGHT` | int | `512` | No | Cap on concurrently proxied requests. One goroutine and one upstream socket per request with nothing counting them is how a slow upstream turns a request flood into an unbounded connection table. Zero disables the cap. |
+| `BRIDGE_STRIP_HEADERS` | string | *(none)* | No | Extra request headers deleted before the request reaches an upstream, comma-separated. The bridge already strips the names the vault ships with (tenant slug, TLS fingerprint, real-IP, geo). Use this when you renamed one of those via `VAULT_TLS_FINGERPRINT_HEADER`, `REAL_IP_HEADER` or `GEO_IP_HEADER`, so a client cannot supply the value the upstream control is checking. |
 
 ### Admin Gateway
 
@@ -333,7 +341,9 @@ full variable set is reproduced here so this page remains the complete env-var r
 | `ADMIN_GW_LISTEN_ADDR` | string | `127.0.0.1:9443` | No | Bind address. Startup fails unless it is loopback (`127.0.0.1:`, `[::1]:` or `localhost:`), except in dev mode. |
 | `ADMIN_GW_TLS_CERT_FILE` | string | *(none)* | Yes | Server TLS certificate path. |
 | `ADMIN_GW_TLS_KEY_FILE` | string | *(none)* | Yes | Server TLS private key path. |
-| `ADMIN_GW_CLIENT_CA_FILE` | string | *(none)* | Yes | Client CA certificate for mTLS verification. Any certificate signed by this CA is accepted; CN and SANs are not checked (see [AR-9](security.md#ar-9-admin-client-certificate-cn-not-validated)). |
+| `ADMIN_GW_CLIENT_CA_FILE` | string | *(none)* | Yes | Client CA certificate for mTLS verification. The TLS stack requires a certificate signed by this CA. Which identities that CA may have issued are pinned separately, below. |
+| `ADMIN_GW_CLIENT_CN_ALLOWLIST` | string | *(empty)* | No | Comma-separated identities allowed to complete the mTLS handshake. Each entry is matched exactly against the leaf certificate's subject common name and its DNS, email and URI SANs. Empty pins nothing: any certificate this CA has ever signed is accepted, and the gateway logs a security warning naming [AR-9](security.md#ar-9-admin-client-certificate-identity-pinning-is-optional). Set this once more than one certificate has been issued from the CA, so a decommissioned operator or a cert minted for another component cannot reach `POST /admin/login`. |
+| `ADMIN_GW_CLIENT_CRL_FILE` | string | *(empty)* | No | Path to a PEM or DER certificate revocation list signed by the client CA. Every handshake is checked against it, and the list is re-read each time so a newly published revocation takes effect without a restart. An unreadable, unparseable, foreign-signed or expired list refuses the handshake. A path that cannot be read or parsed at boot is fatal: the process exits rather than coming up with revocation checking appearing configured and then rejecting every operator. Empty checks nothing. |
 | `ADMIN_GW_SESSION_TTL` | duration | `1h` | No | Admin session lifetime. |
 | `ADMIN_GW_MAX_FAILED_LOGINS` | int | `5` | No | Failed admin login attempts before account lockout. |
 | `ADMIN_GW_LOCKOUT_DURATION` | duration | `30m` | No | Admin account lockout duration. |
@@ -344,10 +354,13 @@ full variable set is reproduced here so this page remains the complete env-var r
 | `DB_ADMIN_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_admin` PostgreSQL role password. See [Secret Loading](#secret-loading-_file-convention). |
 
 The gateway also reads `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_SSLMODE`, `DB_MAX_CONNS` (default
-`5` here, not `25`), `MASTER_KEY_FILE`, `HMAC_SECRET_FILE`, `VAULT_PEPPER_FILE`,
-`VAULT_RECOVERY_PUBLIC_KEY_FILE`, `VAULT_SEED_FILE` and `VAULT_MAX_EMAIL_TEMPLATE_SIZE` with the
-same meanings as above. `VAULT_PEPPER_FILE` must be the same value the user-facing service uses,
-or admin-created user passwords will not verify.
+`5` here, not `25`), `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`, `MASTER_KEY_FILE`,
+`HMAC_SECRET_FILE`, `VAULT_PEPPER_FILE`, `VAULT_RECOVERY_PUBLIC_KEY_FILE`, `VAULT_SEED_FILE`,
+`VAULT_MAX_EMAIL_TEMPLATE_SIZE` and `VAULT_FIRST_BOOT_CREDENTIAL_FILE` with the same meanings
+as above. `VAULT_PEPPER_FILE` must be the same value the user-facing service uses, or
+admin-created user passwords will not verify. `ADMIN_GW_DEV_MODE` is an exact-match test
+(`true` only, not the boolean parser used by the vault binary). `ADMIN_GW_KILLSWITCH` accepts
+only `true`/`1`/`yes` and `false`/`0`/`no`, case-sensitive; any other spelling refuses to start.
 
 ### Offline Recovery Tool
 
@@ -362,7 +375,9 @@ or admin-created user passwords will not verify.
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `VAULT_METRICS_ENABLED` | bool | `false` | No | Enable the Prometheus-compatible `/metrics` endpoint. Exposes operational counters (argon2 semaphore, login, token). Protect with Kubernetes NetworkPolicy in production. |
+| `VAULT_METRICS_ENABLED` | bool | `false` | No | Enable the Prometheus-compatible `/metrics` endpoint on a dedicated listener, not on the public one. Exposes operational counters (argon2 semaphore, login, token). |
+| `VAULT_METRICS_ADDR` | string | `127.0.0.1:9090` | No | Bind address for that dedicated listener. The default is loopback so a scrape from another pod cannot reach it. The Helm chart sets this to `:<metrics.port>` so Prometheus can scrape, and expects `metrics.networkPolicy` to be the fence the loopback default was. Leave the default unless something outside the pod must scrape. |
+| `LOG_LEVEL` | string | *(ignored)* | No | **Read and ignored.** vault42 has no log-verbosity control. If this is set, startup logs one line saying so and every log line is still emitted. It is not refused, because co-located software often inherits `LOG_LEVEL` and a hard error would turn that into a boot loop. Setting it does not cut log exposure. |
 
 ### Blob Storage
 
@@ -425,20 +440,22 @@ bound nor the 1024-key bound is operator-tunable, and they are not in the table 
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `VAULT_SEED_FILE` | string | *(none)* | No | Path to a JSON file for declarative client and user seeding at startup. When set, the file is loaded and processed idempotently on the server path only, after the CLI check, so an admin subcommand such as `vault list-clients` does not create the declared clients and users as a side effect. To seed on demand, use the `vault seed` subcommand. Existing entries (matched by client name or user email) are skipped. Client secrets are generated and printed to stdout. See `seed.example.json` for the file format. |
+| `VAULT_SEED_FILE` | string | *(none)* | No | Path to a JSON file for declarative client and user seeding at startup. When set, the file is loaded and processed idempotently on the server path only, after the CLI check, so an admin subcommand such as `vault list-clients` does not create the declared clients and users as a side effect. To seed on demand, use the `vault seed` subcommand. Existing entries (matched by client name or user email) are skipped. Client secrets are generated and delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log. See `seed.example.json` for the file format. |
+| `VAULT_FIRST_BOOT_CREDENTIAL_FILE` | string | *(none)* | Conditional | Path a first-boot credential is appended to (`KEY=VALUE`, mode `0600`). Three things are minted exactly once with no second chance to show them: the admin CLI token (when `ADMIN_TOKEN_FILE` is unset), each seeded client secret, and the admin gateway's first `super_admin` password. They used to go to stdout, which under Kubernetes is the pod log. They now go here, or to stdout only when stdout is a terminal. With neither available the minting step refuses rather than storing the hash of a credential nobody holds. An existing path must already be a regular file no wider than `0600` (a symlink fails that test). A Kubernetes pod is not a terminal, so a seeded or first-boot install without this path fails at seed time. The Helm chart sets it to `firstBootCredential.path`. |
 
 ### Key Rotation
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `VAULT_KEY_ROTATION_DB` | bool | `false` | No | Enable database-backed signing key storage and rotation. When `false` (default), the existing file-based `SIGNING_KEY_FILE` behavior is used. |
+| `VAULT_KEY_ROTATION_INTERVAL` | duration | `720h` (30 days) | No | How old the active signing key may get before the scheduler rotates it. Only consulted when `VAULT_KEY_ROTATION_DB=true`. Zero or less disables the scheduler, which is how an operator who rotates through `POST /admin/keys/rotate` turns automatic rotation off. `vault rotate-jwks` writes a PKCS#1 key file and a discarded UUID; it does not drive this path and cannot be mounted as `SIGNING_KEY_FILE`. Distinct from `VAULT_KEY_REFRESH_INTERVAL` (how often a pod re-reads the store) and `VAULT_KEY_RETENTION_PERIOD` (how long a retired key lingers afterwards). |
 | `VAULT_KEY_RETENTION_PERIOD` | duration | `1h` | No | How long retired signing keys remain in JWKS after rotation. Tokens signed with retired keys are still validated during this window. |
-| `VAULT_AUDIT_RETENTION_DAYS` | int (days) | `0` (disabled) | No | Retention horizon for audit entries. A background sweeper runs at startup and every 6h, deleting entries older than this. Audit rows hold personal data (user ID, IP, user agent, fingerprint hash), so GDPR Art. 5(1)(e) caps how long they may be kept — an Operator processing personal data should set this. Left at `0`, nothing is ever purged: silently deleting security logs is not a safe default. `vault cleanup-audit --retention-days N` performs the same purge on demand. |
+| `VAULT_AUDIT_RETENTION_DAYS` | int (days) | `0` (disabled) | No | Retention horizon for audit entries. A background sweeper runs at startup and every 6h, deleting entries older than this. Audit rows hold personal data (user ID, IP, user agent, fingerprint hash), so GDPR Art. 5(1)(e) caps how long they may be kept — an Operator processing personal data should set this. Left at `0`, nothing is ever purged: silently deleting security logs is not a safe default. `vault cleanup-audit` is retired: it prints an error and writes nothing. No admin tier holds an audit-delete permission. The sweeper is the only sanctioned removal path. |
 | `VAULT_KEY_REFRESH_INTERVAL` | duration | `60s` | No | How often pods refresh signing keys from the database. Lower values provide faster rotation propagation at the cost of more DB queries. |
 
-When `VAULT_KEY_ROTATION_DB=true`, signing keys are stored encrypted (AES-256-GCM with master key) in PostgreSQL. On first boot, if `SIGNING_KEY_FILE` is present, the key is imported into the database; otherwise, a new RSA-2048 key is generated. All pods share the same keys via periodic database polling. Runtime key management (rotate, list, revoke) is performed via the admin gateway (`cmd/admin-gateway/`), which provides mTLS + RBAC + session authentication. CLI admin commands remain available via pod exec.
+When `VAULT_KEY_ROTATION_DB=true`, signing keys are stored encrypted (AES-256-GCM with master key) in PostgreSQL. On first boot, if `SIGNING_KEY_FILE` is present, the PKCS#8 PEM is imported into the database (`LoadSigningKeyPEM`); otherwise, a new RSA-2048 key is generated. A PKCS#1 file, including `vault rotate-jwks` output, fails that import at startup. All pods share the same keys via periodic database polling. Runtime key management (rotate, list, revoke) is performed via the admin gateway (`cmd/admin-gateway/`), which provides mTLS + RBAC + session authentication. CLI admin commands remain available via pod exec.
 
-Revocation is terminal. The kid is derived from the public key, so an import of the same PEM always addresses the same row; a revoked row is never reactivated by it. If `SIGNING_KEY_FILE` is still mounted when the key it holds is revoked, the next startup fails with `keystore: key is revoked` naming the kid instead of bringing the revoked key back as active. Rotate to a new key (which writes a new kid) rather than re-importing the revoked one. Revoking the only active key also leaves the deployment with nothing to sign with: pods stop issuing tokens and log `keystore: no active signing key` until a rotation supplies one. Rotate first, then revoke.
+Revocation is terminal. The kid is `KIDFromPublicKey` (SHA-256 of the PKIX DER of the public key, not the modulus alone), so an import of the same PKCS#8 PEM always addresses the same row; a revoked row is never reactivated by it. If `SIGNING_KEY_FILE` is still mounted when the key it holds is revoked, the next startup fails with `keystore: key is revoked` naming the kid instead of bringing the revoked key back as active. Rotate to a new key (which writes a new kid) rather than re-importing the revoked one. Revoking the only active key also leaves the deployment with nothing to sign with: pods stop issuing tokens and log `keystore: no active signing key` until a rotation supplies one. Rotate first, then revoke. `vault rotate-jwks` is not a rotation: it writes PKCS#1 the importer cannot parse.
 
 ### OAuth2
 
@@ -467,7 +484,7 @@ is skipped at startup.
 | `VAULT_OIDC_PROVIDERS` | string | *(none)* | No | Comma-separated provider names to enable (e.g. `okta,keycloak`). Each name maps to its own callback at `/auth/oauth2/callback/<name>`. |
 | `VAULT_OIDC_<NAME>_ISSUER` | string | *(none)* | Conditional | Issuer base URL; discovery uses `{issuer}/.well-known/openid-configuration`. |
 | `VAULT_OIDC_<NAME>_CLIENT_ID` | string | *(none)* | Conditional | OIDC client ID for `<NAME>`. |
-| `VAULT_OIDC_<NAME>_CLIENT_SECRET_FILE` | string | *(none)* | Conditional | Path to file containing the client secret (or inline via `VAULT_OIDC_<NAME>_CLIENT_SECRET`). |
+| `VAULT_OIDC_<NAME>_CLIENT_SECRET_FILE` | string | *(none)* | Conditional | Path to file containing the client secret. There is no inline `VAULT_OIDC_<NAME>_CLIENT_SECRET` variable; only the `_FILE` form is read. |
 | `VAULT_OIDC_<NAME>_SCOPES` | string | `openid email profile` | No | Space-separated scopes to request. |
 
 ### WebAuthn
@@ -480,6 +497,12 @@ WebAuthn/FIDO2 passkey configuration is derived from other settings rather than 
 
 If `VAULT_ORIGIN` is unset or unparseable, RP ID falls back to `localhost`.
 
+### IP intelligence
+
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `VAULT_IPINTEL_DATA` | string | *(none)* | No | Filesystem path to a replacement IP-intelligence blob. When set, readable and valid, that file is used instead of the blob compiled into the binary. An unreadable or structurally invalid override is ignored and the process falls back to the embedded table; it does not refuse to start. Empty uses the embedded blob. The table is what flags VPN, hosting and Tor addresses. Those addresses consume the login, register and password-reset buckets at triple weight so they meet the ordinary 429 sooner (`internal/server/server.go:420`). They are never answered 403. The OAuth callback is not weighted. A failed load of the embedded table leaves an empty one and the weight is inert. |
+
 ---
 
 ## Secret Loading (`_FILE` Convention)
@@ -489,12 +512,15 @@ All sensitive configuration values use the `_FILE` suffix convention. The env va
 1. Reads the env var (e.g., `MASTER_KEY_FILE=/run/secrets/master-key`).
 2. Reads the file at that path.
 3. Trims leading/trailing whitespace from the contents.
-4. If `VAULT_SECRET_FILE_CONSUME=true`, zeros **and removes** the file (defense in depth). By default the file is left intact: the canonical deployment mounts secrets read-only where zeroing is a no-op, and on a writable real keyfile an unconditional wipe would destroy the operator's secret on first read.
+4. If `VAULT_SECRET_FILE_CONSUME=true` (exact string), zeros **and removes** the file (defense in depth). By default the file is left intact: the canonical deployment mounts secrets read-only where zeroing is a no-op, and on a writable real keyfile an unconditional wipe would destroy the operator's secret on first read.
 5. Stores the value in memory only.
 
 This design ensures secrets never appear in environment variable listings (`/proc/*/environ`, `docker inspect`, Kubernetes `kubectl describe pod`, etc.).
 
-`VAULT_SECRET_FILE_CONSUME` (bool, default `false`): when `true`, every `_FILE` secret is zeroed and deleted from disk after it is read. Leave it unset when the same keyfile must survive a restart.
+`VAULT_SECRET_FILE_CONSUME` (bool, default `false`): when `true`, secrets the **vault** binary loads through `config.LoadSecret` / `LoadSecretBinary` (and `ADMIN_TOKEN_FILE` when the CLI reads it) are zeroed and deleted from disk after they are read. Leave it unset when the same keyfile must survive a restart. Two readers do not follow that convention:
+
+- `BRIDGE_ADMIN_TOKEN_FILE` is always overwritten with zeros after the first read (`cmd/bridge/config.go`). The flag is ignored. The file is not deleted. A writable token file is destroyed on first start; a read-only Secret mount leaves the file intact because the overwrite fails.
+- The admin gateway's own `loadSecret` (`DB_ADMIN_PASSWORD_FILE`, `VAULT_PEPPER_FILE`, `HMAC_SECRET_FILE`, `VAULT_RECOVERY_PUBLIC_KEY_FILE`) never consumes. Its `MASTER_KEY_FILE` still goes through `config.LoadSecretBinary`, so consume applies there: if vault and the gateway share that file and consume is on, whichever starts first wipes it.
 
 ### Variables with `_FILE` Variants
 
@@ -504,7 +530,7 @@ This design ensures secrets never appear in environment variable listings (`/pro
 | Admin Token | `ADMIN_TOKEN_FILE` | Admin CLI token, or its Argon2id hash |
 | Pepper | `VAULT_PEPPER_FILE` | Server-side secret added to password hashes |
 | HMAC Secret | `HMAC_SECRET_FILE` | HMAC-SHA256 signing key (min 32 bytes in production) |
-| Signing Key | `SIGNING_KEY_FILE` | RSA-2048 private key (PKCS#8 PEM) for JWT signing |
+| Signing Key | `SIGNING_KEY_FILE` | RSA-2048 private key (PKCS#8 PEM, `BEGIN PRIVATE KEY`) for JWT signing. `vault rotate-jwks` writes PKCS#1 and will not load. |
 | Recovery Public Key | `VAULT_RECOVERY_PUBLIC_KEY_FILE` | RSA **public** key (PEM) that account-erasure recovery records are encrypted to |
 | DB Migration Password | `DB_MIG_PASSWORD_FILE` | Password for the `vault_mig` PostgreSQL role |
 | DB App Password | `DB_APP_PASSWORD_FILE` | Password for the `vault_app` PostgreSQL role |
@@ -539,10 +565,12 @@ Rules that startup enforces. `Config.Validate` fails in every profile, including
 - Anything beginning with `$argon2id$` must be a complete PHC hash. A truncated hash can never verify and would lock the CLI out permanently.
 - A plaintext token must be at least 16 characters outside the `dev` profile. `dev` warns instead.
 
-With no `ADMIN_TOKEN_FILE` set, first boot generates a 256-bit token and prints it
-to stdout once. Under systemd that lands in the journal, and with several replicas
-only the pod that won the race prints anything, so provisioning the file is the
-better default for anything beyond a single container you are watching.
+With no `ADMIN_TOKEN_FILE` set, first boot generates a 256-bit token and delivers
+it through `VAULT_FIRST_BOOT_CREDENTIAL_FILE`, or to stdout only when stdout is a
+terminal. It is never written to the process log. Under Kubernetes stdout is not a
+terminal, so without that path first boot refuses rather than storing a hash nobody
+holds. Provisioning `ADMIN_TOKEN_FILE` is still the better default for anything
+beyond a single container you are watching.
 
 The file seeds the credential; it does not keep enforcing it. `vault rotate-admin-token`
 replaces the stored hash, and every later boot leaves that rotated hash alone rather
@@ -732,7 +760,7 @@ When deployed via the Helm chart (`charts/vault/`), environment variables are se
 credential, and a ConfigMap is stored unencrypted and is readable by anything
 holding `get configmaps` in the namespace -- a much wider set than the Secret
 readers an operator thinks about. The seed document renders into a Secret and is
-mounted read-only at `/etc/vault42/seed.json`. If a doc, a values comment or a
+mounted read-only at `/etc/vault/seed.json`. If a doc, a values comment or a
 runbook of yours still says the seed lives in a ConfigMap, it predates that
 change and the passwords it describes were in plaintext.
 
@@ -763,7 +791,14 @@ Key Helm values and their corresponding env vars:
 | `smtp.host` | `SMTP_HOST` |
 | `smtp.port` | `SMTP_PORT` |
 | `tlsFingerprintHeader` | `VAULT_TLS_FINGERPRINT_HEADER` |
-| `seed.enabled` | `VAULT_SEED_FILE` (set to `/etc/vault42/seed.json` when enabled) |
+| `seed.enabled` | `VAULT_SEED_FILE` (set to `/etc/vault/seed.json` when enabled) |
+| `firstBootCredential.path` | `VAULT_FIRST_BOOT_CREDENTIAL_FILE` |
+| `database.allowPlaintext` | `VAULT_ALLOW_PLAINTEXT_DB` |
+| `metrics.enabled` | `VAULT_METRICS_ENABLED` |
+| `metrics.port` | `VAULT_METRICS_ADDR` (`:<port>`) |
+| `keyRotation.enabled` | `VAULT_KEY_ROTATION_DB` |
+| `adminGateway.clientCNAllowlist` | `ADMIN_GW_CLIENT_CN_ALLOWLIST` |
+| `adminGateway.clientCRLFile` | `ADMIN_GW_CLIENT_CRL_FILE` |
 
 Secrets are mapped via `secrets.keys.*`:
 
@@ -824,4 +859,4 @@ Duration env vars use Go's standard `time.ParseDuration` format:
 | `168h` | 7 days |
 | `720h` | 30 days |
 
-Invalid duration strings are silently ignored and the default (or profile default) is used instead.
+There is no silent fallback. A value that cannot be parsed, or that is below the bound its consumer can honor, is a startup failure. The admin gateway and the bridge still fall back to their coded defaults on an unparseable duration or integer, because they do not share `internal/config`'s envcheck.

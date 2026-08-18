@@ -364,7 +364,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Test:** `tests/attack/dpop_mismatch_test.go` -- TestDPoPWrongKey
 
-**Status: this defense is not reachable.** The thumbprint comparison in `middleware.DPoP` only runs when the access token carries `cnf.jkt`, and no vault42 issuance path sets that claim (see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`). Every request therefore takes the unbound path: a presented proof is checked against method, URI and access-token hash but never against a thumbprint the token committed to, and a request with **no** proof passes through. Treat `VAULT_DPOP_ENABLED` as experimental. Nothing in this section may be cited as a live mitigation until issuance populates `cnf.jkt`.
+**Status: reachable on password login, refresh and 2FA verify.** `internal/service/token.go` stamps `cnf.jkt` on access and challenge tokens issued with a valid DPoP proof. `middleware.DPoP` then requires a matching proof under the `DPoP` authorization scheme. Two limits are real: refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. `POST /client/token` is not a DPoP issuance path, so machine tokens never carry `cnf.jkt`. `GET /auth/oauth2/callback/{provider}` is not wrapped either: federated login is a browser GET and never stamps `cnf.jkt`.
 
 ---
 
@@ -400,9 +400,9 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Attack:** Capture one authorized unwrap request (token plus body) and replay it to re-release the plaintext for as long as the access token lives.
 
-**Defense:** Incomplete, and accepted as such -- see [security.md](security.md) AR-10. What actually stands: a short access-token TTL, TLS, per-IP rate limiting that fails closed, and a synchronous audit record of every attempt. DPoP would close it by sender-constraining the token, but does not (§7.3). Do not deploy this endpoint on the assumption that replay is prevented.
+**Defense:** Incomplete, and accepted as such -- see [security.md](security.md) AR-10. What actually stands: a short access-token TTL, TLS, per-IP rate limiting that fails closed, and a synchronous audit record of every attempt. DPoP sender-constrains access tokens issued on login, refresh and 2FA verify (§7.3) but not the client-credential tokens this endpoint accepts, because `POST /client/token` is not a DPoP issuance path. Do not deploy this endpoint on the assumption that replay is prevented.
 
-**Test:** `internal/handler/kms_test.go` -- TestKMSUnwrap_DPoPRequiredWhenEnabled (covers the middleware wiring, not token binding)
+**Test:** `internal/handler/kms_test.go` -- TestKMSUnwrap_DPoPRequiredWhenEnabled (covers the middleware wiring for a token that already carries `cnf.jkt`)
 
 ### 8.5 Rate-Limit Amplification via Cache Outage
 
@@ -428,7 +428,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Attack:** Environment variables are visible in `/proc/self/environ`, `docker inspect`, crash dumps, and log aggregators.
 
-**Defense:** Secrets loaded via `_FILE` suffix convention -- env var points to a file path, not the secret itself. File is zeroed after reading.
+**Defense:** Secrets loaded via `_FILE` suffix convention -- env var points to a file path, not the secret itself. The vault binary zeros and removes the file only when `VAULT_SECRET_FILE_CONSUME=true`. The bridge always overwrites `BRIDGE_ADMIN_TOKEN_FILE` with zeros after read, regardless of that flag.
 
 **Test:** `tests/compliance/nist_800_63b_test.go` (secret loading tested indirectly)
 
@@ -452,7 +452,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Attack:** If Redis is shared or unprotected, inject malicious data into the rate limit or session cache.
 
-**Defense:** Dedicated Redis instance per environment. Graceful degradation -- auth never fails because cache is down. Cache only stores rate limit counters, not session data.
+**Defense:** Dedicated Redis instance per environment, not a shared cache other software can write. The cache holds more than rate-limit counters: email-verify and password-reset tokens, TOTP replay keys, OAuth PKCE verifiers, WebAuthn ceremony state and password-confirmation windows. Refresh-token session rows live in PostgreSQL, not here. Cache outage is not "auth always works": FailClosed limiters (login, register, reset, 2FA verify, `/client/token`, `/kms/unwrap`, `/mint`, account deletion) reject with `503 rate_limiter_unavailable`. Ordinary limiters, including the OAuth callback, fall back to a per-pod counter. Several of those short-lived tokens are themselves cache reads, so an outage still fails the flow that needed them.
 
 **Test:** Cache interface tests in `internal/cache/`
 
@@ -588,7 +588,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 | CSRF | `attack/csrf_test.go` | Covered |
 | Header injection (CRLF) | `attack/header_injection_test.go` | Covered |
 | DPoP mismatch (htm/htu) | `attack/dpop_mismatch_test.go` | Covered |
-| DPoP key substitution (`cnf.jkt`) | `attack/dpop_mismatch_test.go` | Not reachable -- issuance never sets `cnf.jkt` (§7.3) |
+| DPoP key substitution (`cnf.jkt`) | `attack/dpop_mismatch_test.go` | Covered on login/refresh/2FA-issued tokens. Client-credential and federated-callback tokens stay unbound (§7.3) |
 | KMS unwrap oracle uniformity | `kms/kms_test.go`, `handler/kms_test.go` | Covered |
 | KMS cross-kid envelope confusion | `kms/kms_test.go` | Covered |
 | KMS scope bypass (`kms:unwrap`) | `middleware/requirescope_test.go`, `handler/kms_test.go` | Covered |

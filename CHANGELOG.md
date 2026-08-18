@@ -24,6 +24,17 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 
 ### Security
 
+* **DPoP now sender-constrains access tokens.** `POST /auth/login`, `POST /auth/refresh` and
+  the 2FA challenge path stamp `cnf.jkt` when a valid DPoP proof is presented, and the
+  middleware enforces that binding under the `DPoP` authorization scheme. Refresh tokens
+  remain unbound and there is no `DPoP-Nonce`. `POST /client/token` and
+  `GET /auth/oauth2/callback/{provider}` are not DPoP issuance paths, so machine tokens
+  (`kms:unwrap`, `mint:token`) and federated-login tokens stay ordinary bearer tokens. The
+  flag still defaults to off.
+* **The admin gateway pins client identities and checks a CRL.** `ADMIN_GW_CLIENT_CN_ALLOWLIST`
+  matches the leaf CN and DNS/email/URI SANs exactly. `ADMIN_GW_CLIENT_CRL_FILE` is re-read
+  on every handshake; an unreadable path is fatal at boot. An empty allowlist still accepts
+  any certificate the client CA has signed and logs a warning (AR-9).
 * **No maximum session lifetime existed.** Refresh rotation issued a fresh full TTL every
   time and `auth.refresh_tokens` had no family-creation column, so a client that kept
   refreshing held a session forever. Migration 013 adds `family_created_at`, backfilled per

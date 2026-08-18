@@ -89,6 +89,11 @@ The gateway will not render without an explicit choice between two postures:
 
 Enabling the gateway with neither fails the render with a message saying so.
 
+mTLS still requires a client certificate signed by `adminGateway.tls`. Two extra pins are optional and fail closed once set:
+
+- `adminGateway.clientCNAllowlist` becomes `ADMIN_GW_CLIENT_CN_ALLOWLIST`. Empty accepts every certificate the client CA has signed and the gateway warns at startup (AR-9).
+- `adminGateway.clientCRLFile` becomes `ADMIN_GW_CLIENT_CRL_FILE`. An unreadable path is fatal at boot. Empty checks nothing.
+
 ## Upgrading
 
 **postgres and honeypot postgres now run as uid/gid 70.** The `fsGroup` was 999,
