@@ -11,6 +11,10 @@ keywords:
   - oauth2
   - totp
 home: https://github.com/42-v/vault42
+# The organisation's avatar. The repository carries no image asset of its own, so
+# this is the one icon URL that exists and resolves rather than a path invented to
+# quiet the linter. Verified 200 image/png.
+icon: https://github.com/42-v.png
 sources:
   - https://github.com/42-v/vault42
 maintainers:
