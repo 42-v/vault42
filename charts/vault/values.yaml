@@ -332,10 +332,20 @@ postgres:
     repository: postgres
     # -- PostgreSQL image tag
     tag: "17-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- PVC storage size
   storage: 1Gi
-  # -- Password for the vault_app role (set via init SQL)
-  appPassword: ""
+  # -- PostgreSQL resource requests/limits. This key used to be read by nothing:
+  # values-embedded.yaml and values-honeypot.yaml both set it and the template
+  # never referenced it, so two profiles configured a limit that never existed.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
 # ---- Mailpit (dev only) ----
 mailpit:
@@ -344,8 +354,20 @@ mailpit:
   image:
     # -- Mailpit image repository
     repository: axllent/mailpit
-    # -- Mailpit image tag
-    tag: latest
+    # -- Mailpit image tag. A version, not "latest": the tag records which
+    # release the digest below is, and a floating tag would let a rebuilt image
+    # replace a running pod on restart.
+    tag: "v1.30.7"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a"
+  # -- Mailpit resource requests/limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   ingress:
     # -- Expose Mailpit web UI via ingress
     enabled: false
