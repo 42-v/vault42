@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -277,7 +278,7 @@ func (s *Server) Start() error {
 		err = s.httpSrv.Serve(apiLn)
 	}
 
-	if err == http.ErrServerClosed {
+	if errors.Is(err, http.ErrServerClosed) {
 		// The drain is in progress, not finished. Wait for it, so that whatever
 		// the caller does next happens after the last handler has returned.
 		<-drained

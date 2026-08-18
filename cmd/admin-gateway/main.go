@@ -313,7 +313,7 @@ func main() {
 
 	go func() {
 		log.Printf("admin-gateway: listening on %s (mTLS, loopback-only)", cfg.ListenAddr)
-		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("admin-gateway: listen error: %v", err)
 		}
 	}()
