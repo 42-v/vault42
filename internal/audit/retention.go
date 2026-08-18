@@ -67,18 +67,48 @@ func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
 // only one replica may sweep at a time. A replica that does not get the lock
 // returns (0, nil) and tries again next tick — the work is idempotent, so there
 // is nothing to catch up on.
+// SweepMaxBatches bounds one tick.
+//
+// CleanupLocked deletes at most one batch per call, so a sweep loops. The loop
+// needs a ceiling for the same reason the postgres cache reaper has one: a tick
+// that keeps going until the table is empty is a tick with no end, and the
+// remainder is not urgent — the next tick picks it up. At the repository's
+// batch size this is 40 000 rows per tick, four times a day.
+const SweepMaxBatches = 20
+
 func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	if !r.Enabled() {
 		return 0, nil
 	}
-	deleted, acquired, err := r.repo.CleanupLocked(ctx, time.Now().Add(-r.period))
-	if err != nil {
-		return 0, err
+	var total int64
+	for i := 0; i < SweepMaxBatches; i++ {
+		deleted, acquired, err := r.repo.CleanupLocked(ctx, time.Now().Add(-r.period))
+		if err != nil {
+			return total, err
+		}
+		// Another replica holds the advisory lock. The work is idempotent, so
+		// there is nothing to catch up on: stop and try again next tick.
+		if !acquired {
+			return total, nil
+		}
+		total += deleted
+		// Nothing left past the horizon. Looping on the batch size instead
+		// would couple this loop to a constant in the repository package, and
+		// this package cannot import that one.
+		if deleted == 0 {
+			return total, nil
+		}
+		// Give the inserts waiting behind the exclusive lock a turn before
+		// taking it again, and honour a shutdown between batches.
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		case <-r.stopCh:
+			return total, nil
+		default:
+		}
 	}
-	if !acquired {
-		return 0, nil
-	}
-	return deleted, nil
+	return total, nil
 }
 
 // Start runs the sweeper until Stop is called. It sweeps once immediately: a

@@ -403,6 +403,19 @@ func (r *RefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID strin
 	return count, nil
 }
 
+// Batch bounds for DeleteExpired, the same shape the postgres cache reaper uses.
+//
+// The statement used to have no LIMIT, so on a table that had been allowed to
+// grow — nothing on the server path ran it; the only caller was the CLI — one
+// tick took a single transaction over every expired row, locking each one as
+// the scan reached it and holding all of them until commit. Batching keeps each
+// transaction short so a login rotating its own token waits milliseconds rather
+// than the length of the sweep.
+const (
+	refreshReapBatch      = 2000
+	refreshReapMaxBatches = 20
+)
+
 // DeleteExpired removes expired tokens that have been used or revoked. Returns the count of deleted rows.
 //
 // The reaper collects rows that are already spent, so it has no revocation to
@@ -410,14 +423,55 @@ func (r *RefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID strin
 // many rows, and a delete locks each one as the scan reaches it. Left to read
 // the table in physical order it disagreed with every scoped revocation here,
 // and a routine cleanup tick could take a user's logout down with 40P01.
+//
+// SKIP LOCKED lets two replicas sweep at once without either waiting on the
+// other; a row another sweeper is already deleting does not need deleting
+// twice.
 func (r *RefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
-	tag, err := r.db.Pool.Exec(ctx, `
-		DELETE FROM auth.refresh_tokens WHERE id IN (
-			SELECT id FROM auth.refresh_tokens
-			WHERE expires_at < NOW() AND (used = TRUE OR revoked = TRUE)
-			ORDER BY id FOR UPDATE)`)
-	if err != nil {
-		return 0, fmt.Errorf("delete expired tokens: %w", err)
+	var total int64
+	for i := 0; i < refreshReapMaxBatches; i++ {
+		tag, err := r.db.Pool.Exec(ctx, `
+			DELETE FROM auth.refresh_tokens WHERE id IN (
+				SELECT id FROM auth.refresh_tokens
+				WHERE expires_at < NOW() AND (used = TRUE OR revoked = TRUE)
+				ORDER BY id FOR UPDATE SKIP LOCKED
+				LIMIT $1)`, refreshReapBatch)
+		if err != nil {
+			return total, fmt.Errorf("delete expired tokens: %w", err)
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < refreshReapBatch {
+			break
+		}
 	}
-	return tag.RowsAffected(), nil
+	return total, nil
+}
+
+// DeleteExpiredUnused removes rows that expired without ever being used or
+// revoked.
+//
+// DeleteExpired cannot collect these: its predicate is "used OR revoked", so a
+// family whose owner simply stopped using it left rows behind forever. They are
+// as dead as the spent ones — an expired token authenticates nothing — and on
+// an instance with churn they are the majority.
+func (r *RefreshTokenRepo) DeleteExpiredUnused(ctx context.Context) (int64, error) {
+	var total int64
+	for i := 0; i < refreshReapMaxBatches; i++ {
+		tag, err := r.db.Pool.Exec(ctx, `
+			DELETE FROM auth.refresh_tokens WHERE id IN (
+				SELECT id FROM auth.refresh_tokens
+				WHERE expires_at < NOW() AND used = FALSE AND revoked = FALSE
+				ORDER BY id FOR UPDATE SKIP LOCKED
+				LIMIT $1)`, refreshReapBatch)
+		if err != nil {
+			return total, fmt.Errorf("delete expired unused tokens: %w", err)
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < refreshReapBatch {
+			break
+		}
+	}
+	return total, nil
 }

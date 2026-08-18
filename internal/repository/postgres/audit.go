@@ -177,8 +177,8 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 
 	interval := time.Since(olderThan)
 	if err := tx.QueryRow(ctx,
-		"SELECT audit.cleanup_old_entries($1::interval)",
-		fmt.Sprintf("%d seconds", int(interval.Seconds())),
+		"SELECT audit.cleanup_old_entries($1::interval, $2)",
+		fmt.Sprintf("%d seconds", int(interval.Seconds())), auditCleanupBatch,
 	).Scan(&deleted); err != nil {
 		return 0, true, fmt.Errorf("cleanup audit entries: %w", err)
 	}
@@ -187,6 +187,21 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 	}
 	return deleted, true, nil
 }
+
+// AuditCleanupBatch is how many rows one CleanupLocked call may delete, and
+// therefore how long one purge holds ACCESS EXCLUSIVE on audit.audit_log.
+//
+// The purge has to disable the append-only trigger to delete anything, which is
+// ALTER TABLE. Held over an unbounded DELETE, that blocks every audit insert
+// for the length of the whole purge — and a failed login is a critical event,
+// written synchronously on the request path even when the buffer is full. Two
+// thousand rows is the same batch the postgres cache reaper uses, and a caller
+// with more to purge calls again: a full sweep becomes many short exclusive
+// locks instead of one long one.
+const AuditCleanupBatch = 2000
+
+const auditCleanupBatch = AuditCleanupBatch
+
 
 // Cleanup removes audit entries older than the given time using the
 // audit.cleanup_old_entries() SECURITY DEFINER function.
