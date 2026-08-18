@@ -216,6 +216,7 @@ func (h *BlobHandler) DownloadNamed(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("X-Blob-Checksum", checksum)
+	attachmentDisposition(w, name)
 	if label != "" {
 		w.Header().Set("X-Blob-Label", sanitizeLabelForHeader(label))
 	}
@@ -311,6 +312,7 @@ func (h *BlobHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("X-Blob-Checksum", checksum)
+	attachmentDisposition(w, blobID)
 	if label != "" {
 		w.Header().Set("X-Blob-Label", sanitizeLabelForHeader(label))
 	}
@@ -376,6 +378,61 @@ func validRefName(name string) bool {
 		}
 	}
 	return true
+}
+
+// maxDispositionFilename bounds the filename parameter. The header is written
+// before the body, so a caller-sized filename is a caller-sized allocation on
+// every download, and no legitimate reference is anywhere near this long.
+const maxDispositionFilename = 128
+
+// dispositionFallbackName is what a reference with nothing usable in it becomes.
+// A filename parameter that is present and generic still tells a browser this is
+// a download; an absent one hands the decision back to the browser, which is the
+// gap the header closes.
+const dispositionFallbackName = "blob"
+
+// contentDispositionFilename reduces a blob reference to something that can only
+// be a filename parameter.
+//
+// It keeps [A-Za-z0-9._-] and drops everything else rather than escaping it.
+// Escaping would preserve more of the caller's string and would have to be right
+// about quoting rules in a header where being wrong turns a quote into a second
+// parameter; dropping cannot be wrong about anything. The charset is a superset
+// of validRefName's by exactly one character, the dot, because a filename
+// without an extension is a filename a user has to rename.
+//
+// The download paths cannot borrow the upload path's guarantee: validRefName
+// runs on UploadNamed, and DownloadNamed reads its name straight out of the
+// route. A reference that never matched a stored blob still reaches this
+// function on the way to a 404, and the id path's value is not charset-checked
+// anywhere at all.
+func contentDispositionFilename(ref string) string {
+	var b strings.Builder
+	for _, c := range ref {
+		if b.Len() == maxDispositionFilename {
+			break
+		}
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-', c == '.':
+			b.WriteRune(c)
+		}
+	}
+	if b.Len() == 0 {
+		return dispositionFallbackName
+	}
+	return b.String()
+}
+
+// attachmentDisposition marks a response as a download rather than a document.
+//
+// Content-Type: application/octet-stream and X-Content-Type-Options: nosniff
+// between them stop a browser guessing a type that contradicts the declared one.
+// Neither answers whether the declared one should be rendered, and a browser
+// navigated straight at a blob URL is asking exactly that. The attachment
+// disposition type is the answer, and it is the control ASVS V3.2.1 names by
+// example and V5.4.1 requires outright.
+func attachmentDisposition(w http.ResponseWriter, ref string) {
+	w.Header().Set("Content-Disposition", `attachment; filename="`+contentDispositionFilename(ref)+`"`)
 }
 
 // sanitizeLabelForHeader strips all control characters (U+0000–U+001F) from a

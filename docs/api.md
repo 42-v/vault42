@@ -1556,6 +1556,14 @@ Body: raw binary data
 | Max files per user | 50 | `VAULT_BLOB_MAX_PER_USER` |
 | Max total storage | 10 MB | `VAULT_BLOB_QUOTA_BYTES` |
 
+**Permitted file types and extensions:** there are none to permit, and that is a
+property of the feature rather than an omission. A blob is an opaque octet
+stream: vault42 never parses it, never sniffs it, never decides a type for it,
+and stores it encrypted, so there is no type for a policy to be about. Named
+blobs are addressed by a reference from the `[a-zA-Z0-9_-]+` charset, which
+excludes the dot, so a stored object has no extension either. Nothing is
+extracted or unpacked, so the unpacked size equals the stored size.
+
 **Success response (201 Created):**
 
 ```json
@@ -1649,6 +1657,37 @@ curl https://vault42.example.com/user/blobs \
 
 ---
 
+#### How stored objects are made safe to download
+
+vault42 does not scan uploads for malicious content, and would have nothing to
+scan: the bytes are encrypted at rest with a key the server holds and are never
+interpreted. What it does instead is make sure a stored object cannot act on
+retrieval.
+
+- **Every download is scoped to the caller's own pseudonym.** `Download` and
+  `DownloadNamed` resolve a blob by `(pseudonym, id)` and `(pseudonym, name)`,
+  so an object is only ever served to the account that stored it. There is no
+  sharing, no public URL and no cross-account read, so the case where one user's
+  upload is delivered to another user does not exist.
+- **`Content-Disposition: attachment`** is set on both download paths. A browser
+  navigated straight at a blob URL saves the bytes rather than rendering them,
+  so a stored HTML or SVG document cannot execute on vault42's origin.
+- **The filename is chosen by the server, not by the caller.** It is the blob's
+  own reference reduced to `[A-Za-z0-9._-]` and capped at 128 characters, with
+  everything else dropped. A reference left with nothing usable becomes `blob`.
+  Nothing a caller supplies can add a parameter to the header or a directory to
+  the path.
+- **`Content-Type: application/octet-stream` with `X-Content-Type-Options:
+  nosniff`** on every response. Together they stop a browser inferring a type
+  the response did not declare.
+- **`Content-Security-Policy: default-src 'none'`** on API paths, which leaves
+  nothing for a document served from one to load or execute.
+
+A blob whose content is malicious is therefore returned intact to the one
+account that uploaded it, as bytes, and no browser is asked to interpret it.
+
+---
+
 #### GET /user/blobs/{id}
 
 Download a decrypted blob. Returns raw binary data.
@@ -1667,6 +1706,7 @@ Download a decrypted blob. Returns raw binary data.
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | `application/octet-stream` |
+| `Content-Disposition` | `attachment; filename="<id>"` -- see [How stored objects are made safe to download](#how-stored-objects-are-made-safe-to-download) |
 | `Content-Length` | Size in bytes |
 | `X-Blob-Checksum` | SHA-256 checksum of original data |
 | `X-Blob-Label` | Label (if set) |
@@ -1799,6 +1839,7 @@ Download a named blob by its reference name. Returns raw binary data.
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | `application/octet-stream` |
+| `Content-Disposition` | `attachment; filename="<name>"` -- see [How stored objects are made safe to download](#how-stored-objects-are-made-safe-to-download) |
 | `Content-Length` | Size in bytes |
 | `X-Blob-Checksum` | SHA-256 checksum of original data |
 | `X-Blob-Label` | Label (same as name for named blobs) |
