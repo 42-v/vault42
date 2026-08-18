@@ -35,6 +35,11 @@ spec:
         {{- include "vault.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cloudflared
     spec:
+      # The last workload in this chart still mounting one, and the one holding
+      # the tunnel credential: whatever got into it got both a way out of the
+      # cluster and a token for the API server. cloudflared calls no Kubernetes
+      # API.
+      automountServiceAccountToken: false
       containers:
         - name: cloudflared
           image: "{{ .Values.cloudflared.image.repository }}:{{ .Values.cloudflared.image.tag }}"
