@@ -123,7 +123,15 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # package (decode/lookup/Default) and its wiring into internal/service/auth.go
 # (notifyNewCountry), the ratelimit weighting, and cmd/vault/main.go. A full
 # cov_run reports 11075.
-BASELINE_TOTAL_STATEMENTS = 11075
+# Raised from 11075 to 11917 by the 1.0.0 hardening pass, sixteen work streams
+# and 218 commits: +842 statements. The bulk is new production code rather than
+# a wider measurement — the service-document store and its repository and
+# handler, the admin-gateway client-certificate pinning and CRL check, the
+# scheduled signing-key rotation and keystore retention, the deferwork pool, the
+# DPoP binding package, the first-boot provisioner, the config cross-plane and
+# env checks, and the per-family session revocation work. The package set in
+# cov_run did not change. A full cov_run reports 11917.
+BASELINE_TOTAL_STATEMENTS = 11917
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -186,18 +194,41 @@ BASELINE_TOTAL_STATEMENTS = 11075
 # were relocated in place, not added, and the empty-embed fallback in
 # internal/ipintel/ipintel.go was covered by a test rather than excluded.
 BASELINE_MAX_ENTRIES = 50
+
+# The shape guard the statement floor cannot provide: a package dropped from the
+# run while enough statements remain elsewhere to clear the count.
+#
+# The four cmd/ binaries belong here and were missing. cov_run has measured cmd/
+# since the package set was widened (see scripts/lib/coverage-env.sh), and the
+# statement floor was raised to include it, but this tuple was left at the
+# internal/-only list it held beforehand. So cmd/recover could have fallen out of
+# the run entirely and only the floor would have noticed, which is the one check
+# a genuine deletion is expected to move.
+#
+# internal/repository is deliberately absent: repository.go declares interfaces
+# and nothing else, so it contributes no instrumented statement and listing it
+# would fail the check on a correct run. Its implementations live in
+# internal/repository/postgres, which is listed.
 BASELINE_PACKAGES = (
+    "cmd/admin-gateway",
+    "cmd/bridge",
+    "cmd/recover",
+    "cmd/vault",
     "internal/adminapi",
     "internal/audit",
     "internal/cache",
     "internal/cli",
     "internal/config",
     "internal/crypto",
+    "internal/deferwork",
+    "internal/dpop",
     "internal/email",
+    "internal/firstboot",
     "internal/frontend",
     "internal/handler",
     "internal/honeypot",
     "internal/httputil",
+    "internal/ipintel",
     "internal/jwt",
     "internal/keystore",
     "internal/kms",
