@@ -304,13 +304,17 @@ func bootEnv(t *testing.T, stub *pgStub, listen string) map[string]string {
 		"DB_HOST":               stub.host(),
 		"DB_PORT":               stub.port(),
 		"DB_SSLMODE":            "disable",
-		"DB_APP_PASSWORD_FILE":  secretFile(t, dir, "db_app", dbPassword),
-		"DB_MIG_PASSWORD_FILE":  secretFile(t, dir, "db_mig", dbPassword),
-		"HMAC_SECRET_FILE":      secretFile(t, dir, "hmac", strings.Repeat("h", 32)),
-		"VAULT_PEPPER_FILE":     secretFile(t, dir, "pepper", strings.Repeat("p", 32)),
-		"MASTER_KEY_FILE":       secretFile(t, dir, "master", strings.Repeat("m", 32)),
-		"CACHE_BACKEND":         "memory",
-		"VAULT_HIBP_CHECK":      "false",
+		// The stub database is on loopback, which is exactly the case the
+		// override exists for: Validate refuses an unencrypted DB_SSLMODE in a
+		// non-dev profile unless the operator says the link is private.
+		"VAULT_ALLOW_PLAINTEXT_DB": "true",
+		"DB_APP_PASSWORD_FILE":     secretFile(t, dir, "db_app", dbPassword),
+		"DB_MIG_PASSWORD_FILE":     secretFile(t, dir, "db_mig", dbPassword),
+		"HMAC_SECRET_FILE":         secretFile(t, dir, "hmac", strings.Repeat("h", 32)),
+		"VAULT_PEPPER_FILE":        secretFile(t, dir, "pepper", strings.Repeat("p", 32)),
+		"MASTER_KEY_FILE":          secretFile(t, dir, "master", strings.Repeat("m", 32)),
+		"CACHE_BACKEND":            "memory",
+		"VAULT_HIBP_CHECK":         "false",
 	}
 }
 
