@@ -20,12 +20,32 @@ type ctxKey struct{}
 // proof was checked for.
 var thumbprintKey ctxKey
 
-// WithThumbprint returns ctx carrying the RFC 7638 JWK thumbprint of the key
-// that signed the request's DPoP proof.
+// WithThumbprint returns ctx carrying the RFC 7638 JWK thumbprint the token
+// about to be issued must be bound to.
 //
-// It is called only from the DPoP middleware, and only after the proof's
-// signature, typ, htm, htu, iat, jti and ath have all been checked, so a
-// thumbprint in a context is always one the caller demonstrated possession of.
+// There are two callers, and the difference between them is the whole of RFC
+// 9449 §5.
+//
+//   - The DPoP middleware, on every request that carries a proof, and only after
+//     the proof's signature, typ, htm, htu, iat, jti and ath have all been
+//     checked. What it plants is a key the caller demonstrated possession of for
+//     this method, this URI and this instant. On a login that is the right
+//     source, because a login is where a binding is established.
+//
+//   - AuthService.issueRotatedPair, which overwrites it with the binding stored
+//     on the rotation family. A rotation must not take the value from the
+//     request: whoever holds the opaque refresh cookie reaches that path, so
+//     minting cnf.jkt from the current proof let a caller re-bind someone else's
+//     session to a key of their own. Overwriting rather than branching keeps
+//     fresh issuance and rotation on one code path while giving each the correct
+//     source, and an unbound family overwrites with "", so a presented proof
+//     cannot upgrade a family that never had a binding.
+//
+// The second caller plants a value this request proved nothing about, which is
+// sound only because the request that established it did, and because the
+// rotation is refused outright unless the proof on this request matches it
+// (AuthService.enforceDPoPBinding). A third caller would be asserting possession
+// of a key nobody demonstrated.
 func WithThumbprint(ctx context.Context, jkt string) context.Context {
 	return context.WithValue(ctx, thumbprintKey, jkt)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/dpop"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
@@ -674,8 +675,19 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			FamilyID:        pair.FamilyID,
 			DeviceID:        deviceID,
 			FingerprintHash: fp,
-			ExpiresAt:       pair.RefreshExpAt,
-			CreatedAt:       time.Now(),
+			// Read from the request for the same reason storeRefreshToken does:
+			// this is a login, so it is where a DPoP binding would be
+			// established. It is empty in practice — the provider callback is a
+			// browser redirect and dpopWrap is deliberately not on it, since a
+			// redirect cannot carry a proof header — so this family is a bearer
+			// family and the token issued beside it carries no cnf either.
+			// Taking the value from the same place issuance takes cnf.jkt is
+			// what keeps those two facts from disagreeing if the route ever
+			// gains the middleware: a token carrying cnf.jkt on a family that
+			// recorded no binding is the rotation hole in its original form.
+			DPoPJKT:   dpop.Thumbprint(r.Context()),
+			ExpiresAt: pair.RefreshExpAt,
+			CreatedAt: time.Now(),
 		}, sessionCap); err != nil {
 			if errors.Is(err, repository.ErrSessionLimitReached) {
 				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")

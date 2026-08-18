@@ -258,6 +258,21 @@ type RefreshToken struct {
 	// mismatch on POST /auth/refresh is reported as invalid_token, not as a
 	// fingerprint leak.
 	FingerprintHash string `json:"-"`
+	// DPoPJKT is the RFC 7638 JWK thumbprint of the DPoP key this rotation
+	// family is sender-constrained to (RFC 9449), or empty when the family
+	// is an ordinary bearer session — which is every client that does not
+	// speak DPoP. It is established by the validated proof presented at
+	// login, written on the family's first row and inherited unchanged by
+	// every rotation, so a refresh mints the access token's cnf.jkt from
+	// the family and never from whoever presented the cookie.
+	//
+	// Tagged json:"-" for the reason TokenHash and FingerprintHash are: it
+	// identifies one browser's key across every session that key opens, so
+	// encoding it on a session listing would publish which key an account
+	// holds and let two listings be correlated; and a rotation refused for
+	// a mismatched binding is reported as invalid_token, not as a binding
+	// leak, so nothing on the caller's side has a use for the value.
+	DPoPJKT string `json:"-"`
 	// ExpiresAt is when this refresh token stops being accepted, RFC3339
 	// UTC. A used or revoked token is rejected even before this instant.
 	ExpiresAt time.Time `json:"expires_at"`

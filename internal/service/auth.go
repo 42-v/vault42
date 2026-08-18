@@ -23,6 +23,7 @@ import (
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/deferwork"
+	"github.com/42-v/vault42/internal/dpop"
 	vaultemail "github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/httputil"
@@ -1261,6 +1262,11 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		return nil, ErrTokenInvalid
 	}
 
+	// Verify the family's DPoP binding before the presented token is spent.
+	if err := s.enforceDPoPBinding(ctx, stored, ip, ua, fp); err != nil {
+		return nil, err
+	}
+
 	// Atomically mark old token as used (CAS: only succeeds if not already used)
 	updated, err := s.tokens.MarkUsed(ctx, stored.ID)
 	if err != nil {
@@ -1277,32 +1283,9 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	// Issue new pair in same family — re-fetch the user to pick up the
 	// latest persisted Roles (refresh path must reflect role changes
 	// since the original login).
-	refreshUser, _ := s.users.GetByID(ctx, stored.UserID)
-	// Account state can change between login and refresh — a banned, disabled,
-	// deleted (or vanished) account must not mint new tokens. Revoke the whole
-	// family so the session is fully terminated, not just this rotation.
-	//
-	// A lock counts, and its absence here made the documented response to a
-	// suspected takeover ineffective. An operator locks the account; the attacker
-	// keeps rotating a refresh token they already hold; the session survives for
-	// the absolute session lifetime (720h by default, unbounded when
-	// VAULT_MAX_SESSION_LIFETIME is 0) rather than the remaining access-token TTL
-	// that docs/security.md AR-5 promised. Login has always rejected a lock, so
-	// locking stopped exactly the sessions that had not started yet.
-	refreshLocked := refreshUser != nil && refreshUser.LockedUntil != nil &&
-		time.Now().Before(*refreshUser.LockedUntil)
-	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled || refreshLocked {
-		s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
-		switch {
-		case refreshUser != nil && refreshUser.Banned:
-			return nil, ErrAccountBanned
-		case refreshUser != nil && refreshUser.Disabled:
-			return nil, ErrAccountDisabled
-		case refreshLocked:
-			return nil, ErrAccountLocked
-		default:
-			return nil, ErrTokenInvalid
-		}
+	refreshUser, err := s.accountStillHoldsSessions(ctx, stored)
+	if err != nil {
+		return nil, err
 	}
 	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
 	pair, err := s.issueRotatedPair(ctx, stored, refreshRoles, fp, familyOrigin, ip, ua)
@@ -1324,6 +1307,118 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	}, nil
 }
 
+// accountStillHoldsSessions re-reads the account behind a rotation and returns
+// it only while that account is allowed to hold a session. Otherwise it revokes
+// the whole family and returns the error the caller must surface.
+//
+// Account state can change between login and refresh — a banned, disabled,
+// deleted (or vanished) account must not mint new tokens. The family is revoked
+// so the session is fully terminated, not just this rotation.
+//
+// A lock counts, and its absence here made the documented response to a
+// suspected takeover ineffective. An operator locks the account; the attacker
+// keeps rotating a refresh token they already hold; the session survives for
+// the absolute session lifetime (720h by default, unbounded when
+// VAULT_MAX_SESSION_LIFETIME is 0) rather than the remaining access-token TTL
+// that docs/security.md AR-5 promised. Login has always rejected a lock, so
+// locking stopped exactly the sessions that had not started yet.
+//
+// It is a function of its own only because Refresh sits on gocyclo's ceiling and
+// the DPoP binding check had to go in front of MarkUsed. The logic is unchanged:
+// the early return is the De Morgan negation of the refusal condition it
+// replaced, and the switch below is the same switch.
+func (s *AuthService) accountStillHoldsSessions(ctx context.Context, stored *model.RefreshToken) (*model.User, error) {
+	// Re-fetched rather than carried from login, so the rotation reflects role
+	// changes made since (the returned user's Roles feed effectiveRoles).
+	user, _ := s.users.GetByID(ctx, stored.UserID)
+	locked := user != nil && user.LockedUntil != nil && time.Now().Before(*user.LockedUntil)
+	if user != nil && !user.Deleted && !user.Banned && !user.Disabled && !locked {
+		return user, nil
+	}
+
+	s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
+	switch {
+	case user != nil && user.Banned:
+		return nil, ErrAccountBanned
+	case user != nil && user.Disabled:
+		return nil, ErrAccountDisabled
+	case locked:
+		return nil, ErrAccountLocked
+	default:
+		return nil, ErrTokenInvalid
+	}
+}
+
+// enforceDPoPBinding refuses a rotation of a sender-constrained family unless
+// the request proves possession of the key the family was bound to (RFC 9449
+// §5). An unbound family — every client that does not speak DPoP — is returned
+// unconditionally, which is what keeps this a no-op for them.
+//
+// SECURITY INVARIANT (sender constraint survives rotation): the binding is read
+// from the stored row, never from the request. Minting cnf.jkt from the current
+// proof made rotation a laundering step: script in the page steals only the
+// opaque refresh cookie — which is sent automatically, so it need not even be
+// read — presents a proof over a keypair it generated and can export, and is
+// handed a validly bound access token. A credential that was supposed to expire
+// with the page becomes portable. The fingerprint check above is not a
+// counter-measure to that: it is IP, User-Agent and Accept-Language, which a
+// script running in the victim's browser matches by construction.
+//
+// WHY THIS RUNS BEFORE MarkUsed. It is a precondition of the rotation, in the
+// same position as the fingerprint check, and it cannot move below the CAS.
+// MarkUsed spends the presented token; a refusal after it would leave the
+// victim's own next refresh presenting a token already marked used, which is
+// replay, which burns the family. The refusal would then terminate the session
+// it was defending, report replay_detected to the legitimate user, and hand the
+// cookie holder a one-request session kill. Refusing first leaves the row
+// unspent and the victim's session running.
+//
+// WHY THE FAMILY IS NOT BURNED. Reuse detection revokes the family because a
+// token demonstrably used twice is a fact about the credential. A binding
+// mismatch is a fact about the caller, and the caller can be a legitimate client
+// whose key store was cleared. Burning here buys nothing — the rotation is
+// already refused and no attacker can rotate without the key however many times
+// they try — while it would convert a failed attack into a working denial of
+// service: an attacker holding only the cookie goes from "can do nothing" to
+// "can end the victim's session on demand with one request". So the answer is a
+// refusal that leaves the family intact and the audit trail loud.
+//
+// Both failures — no proof at all, and a proof over the wrong key — return the
+// same ErrTokenInvalid the caller already gets for an unknown or expired token.
+// ErrReplayDetected would have been a distinguishable outcome, telling a prober
+// that the cookie is real AND that the family is DPoP-bound. The audit log
+// records which of the two happened; it is not visible to the caller.
+func (s *AuthService) enforceDPoPBinding(ctx context.Context, stored *model.RefreshToken, ip, ua, fp string) error {
+	if stored.DPoPJKT == "" {
+		return nil
+	}
+	presented := dpop.Thumbprint(ctx)
+	// The emptiness arm is stated rather than inferred. SecureCompare already
+	// returns false for an empty presented value, because the stored binding is
+	// non-empty by the time we get here and the lengths therefore differ, so the
+	// arm is redundant today. It stays because "a bound family requires a proof"
+	// is the requirement (RFC 9449 §5) and belongs at the site that enforces it,
+	// not as an emergent property of how a crypto helper treats unequal lengths.
+	// A helper that ever grew a fast path for empty input would otherwise turn
+	// this silently into "no proof required" — one of the two failures under test.
+	if presented != "" && vaultcrypto.SecureCompare(stored.DPoPJKT, presented) {
+		return nil
+	}
+	// The presented thumbprint is deliberately not logged. It is chosen by the
+	// caller, and the expected value plus "was a proof presented at all" is what
+	// an operator needs to tell a client that lost its key from one that never
+	// had it. Risk sits above the fingerprint anomaly's 70 because this is a
+	// cryptographic mismatch rather than a heuristic one, and below replay's 90
+	// because a cleared key store reaches it too.
+	s.auditLog.Log(ctx, audit.DPoPBindingMismatch, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"expected":        stored.DPoPJKT,
+			"proof_presented": presented != "",
+			"family_id":       stored.FamilyID,
+		}, 85)
+	return ErrTokenInvalid
+}
+
 // issueRotatedPair mints the successor of a consumed refresh token and persists
 // it in the same family.
 //
@@ -1337,6 +1432,21 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 // of the absolute session lifetime while the loser was told replay_detected and
 // the operator read the same in the audit log.
 func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.RefreshToken, roles []string, fp string, familyOrigin time.Time, ip, ua string) (*TokenPair, error) {
+	// The rotated access token's cnf.jkt comes from the FAMILY, not from this
+	// request. IssueTokenPairWithAuth reads dpop.Thumbprint(ctx), which the DPoP
+	// middleware set to whatever key signed the proof on this call — correct for
+	// a fresh login, where that proof is what establishes the binding, and the
+	// hole for a rotation, where it let the cookie holder name the key. Replacing
+	// the value here gives issuance one code path and each caller the right
+	// source, and an unbound family overwrites it with "", which is exactly the
+	// "not sender-constrained" that makes issuance omit cnf. Without the
+	// overwrite an unbound family would be upgraded to whatever key the caller
+	// presented, which is the same laundering wearing different clothes.
+	//
+	// enforceDPoPBinding has already refused this rotation unless the two agree,
+	// so on a bound family the value below is also the key the caller just proved
+	// possession of.
+	ctx = dpop.WithThumbprint(ctx, stored.DPoPJKT)
 	pair, err := s.tokenSvc.IssueRotatedPair(
 		ctx, stored.UserID, roles, []string{"read", "write"},
 		stored.ClientID, fp, stored.FamilyID, familyOrigin,
@@ -1352,7 +1462,7 @@ func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.Refres
 	if err := s.tokens.Create(ctx, &model.RefreshToken{
 		ID: newID, UserID: stored.UserID, ClientID: stored.ClientID,
 		TokenHash: vaultcrypto.SHA256Hex(pair.RefreshToken), FamilyID: stored.FamilyID,
-		DeviceID: stored.DeviceID, FingerprintHash: fp,
+		DeviceID: stored.DeviceID, FingerprintHash: fp, DPoPJKT: stored.DPoPJKT,
 		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
 	}); err != nil {
 		if errors.Is(err, repository.ErrFamilyRevoked) {
@@ -2068,6 +2178,15 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 }
 
 // storeRefreshToken hashes and persists a refresh token in the database.
+//
+// This is a login, so it is where a DPoP binding is established: the thumbprint
+// on ctx is the one the middleware validated for this request, and the same
+// value issuance just wrote into the access token's cnf.jkt. Recording it on the
+// family's first row is what gives every later rotation something to check
+// against — without it the binding existed only inside one signed token and
+// rotation had no choice but to take the caller's word for it. An empty
+// thumbprint means no proof was presented and the family is an ordinary bearer
+// session, which is the majority of them.
 func (s *AuthService) storeRefreshToken(ctx context.Context, userID, clientID, deviceID, fp string, pair *TokenPair) error {
 	tokenHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
 	rtID, err := vaultcrypto.RandomUUID()
@@ -2083,7 +2202,7 @@ func (s *AuthService) storeRefreshToken(ctx context.Context, userID, clientID, d
 	err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{
 		ID: rtID, UserID: userID, ClientID: clientID,
 		TokenHash: tokenHash, FamilyID: pair.FamilyID,
-		DeviceID: deviceID, FingerprintHash: fp,
+		DeviceID: deviceID, FingerprintHash: fp, DPoPJKT: dpop.Thumbprint(ctx),
 		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
 	}, s.maxSessionsPerUser)
 	if errors.Is(err, repository.ErrSessionLimitReached) {
