@@ -31,12 +31,15 @@ import (
 // Two properties are asserted.
 //
 // Every submitted event must be accounted for. The equation is
-// batch-inserted + still-buffered + DroppedTotal == submitted, and the reason
-// synchronous inserts are absent from it is a genuine subtlety of this code:
-// DroppedTotal counts buffer-full OCCURRENCES, and a critical event that hits a
-// full buffer increments it and is then written synchronously anyway. Counting
-// both would double-count exactly those events. If Log ever starts losing an
-// entry outright, or starts counting one twice, this equation breaks.
+// batch-inserted + still-buffered + DroppedTotal + AfterCloseTotal == submitted.
+// Raw synchronous inserts are absent from it, which is a genuine subtlety of
+// this code: DroppedTotal counts buffer-full OCCURRENCES, and a critical event
+// that hits a full buffer increments it and is then written synchronously
+// anyway. Counting both would double-count exactly those events. AfterCloseTotal
+// is the other synchronous path — an event whose writer outlived Close — and it
+// is disjoint from DroppedTotal, because a closed logger never reaches the
+// buffer at all. If Log ever starts losing an entry outright, or starts counting
+// one twice, this equation breaks.
 //
 // And a critical event submitted before shutdown began must survive shutdown.
 // LoginFailure, PasswordChange, KMSUnwrap and the rest are the events an
@@ -216,14 +219,20 @@ func TestLogger_ConcurrentLogFlushCloseAccountsForEveryEvent(t *testing.T) {
 	_, batched := repo.counts()
 	buffered := auditBufferedCount(l)
 	dropped := int(l.DroppedTotal())
+	afterClose := int(l.AfterCloseTotal())
 
-	if got := batched + buffered + dropped; got != submitted {
-		t.Errorf("audit events went unaccounted for: batch-inserted %d + still-buffered %d + DroppedTotal %d = %d, want %d submitted",
-			batched, buffered, dropped, got, submitted)
+	if got := batched + buffered + dropped + afterClose; got != submitted {
+		t.Errorf("audit events went unaccounted for: batch-inserted %d + still-buffered %d + DroppedTotal %d + AfterCloseTotal %d = %d, want %d submitted",
+			batched, buffered, dropped, afterClose, got, submitted)
 	}
 	if dropped == 0 {
 		t.Error("the buffer never overflowed, so the overflow branch of the accounting was never exercised")
 	}
+	// afterClose is deliberately not asserted non-zero: whether any writer is
+	// still running when Close lands is a race this test creates but cannot
+	// guarantee, and an assertion on it would be flaky rather than strict. Its
+	// job here is to keep the equation exact when it does happen.
+	// TestLogger_LogAfterCloseIsWrittenSynchronously covers the branch itself.
 
 	var checked int
 	for _, seqs := range preCloseCritical {
@@ -239,20 +248,18 @@ func TestLogger_ConcurrentLogFlushCloseAccountsForEveryEvent(t *testing.T) {
 	}
 }
 
-// TestLogger_LogAfterCloseIsBufferedIntoADeadLogger pins what the batching
-// logger currently does with an event submitted after Close, which is neither
-// documented nor obviously intended. The entry is appended to the buffer, Log
-// reports success, DroppedTotal does not move, and the batch loop that would
-// have drained it has already exited. Nothing but an explicit further Flush
-// will ever write it.
+// TestLogger_LogAfterCloseIsWrittenSynchronously pins what the batching logger
+// does with an event submitted after Close.
 //
-// This is recorded here so that a change to it is a deliberate decision rather
-// than an accident, and so the accounting in the storm test above has a name
-// for where its residue lives. It is being pinned, not endorsed: a critical
-// event submitted during shutdown teardown disappearing without a dropped count
-// is a poor answer, and the right fix is a rejection or a synchronous write
-// rather than a silent append. That decision is not this test's to make.
-func TestLogger_LogAfterCloseIsBufferedIntoADeadLogger(t *testing.T) {
+// It used to append it to the buffer and return nil: the batch loop that would
+// have drained it had already exited, DroppedTotal did not move, and nothing but
+// an explicit further Flush would ever write it. The previous version of this
+// test pinned that behavior expressly without endorsing it, and said the right
+// answer was a rejection or a synchronous write rather than a silent append.
+// This is that decision taken: the entry goes straight to the store, the buffer
+// stays empty, and AfterCloseTotal counts it so the accounting above still
+// balances and an operator has a number for "something outlived the logger".
+func TestLogger_LogAfterCloseIsWrittenSynchronously(t *testing.T) {
 	repo := newConcurrentAuditRepo()
 	// A flush interval long enough that the batch loop never ticks, so the only
 	// writes are the ones this test asks for.
@@ -272,30 +279,31 @@ func TestLogger_LogAfterCloseIsBufferedIntoADeadLogger(t *testing.T) {
 
 	if err := l.Log(ctx, LoginFailure, "u", "", "203.0.113.9", "", "", "",
 		map[string]interface{}{"seq": 2}, 0); err != nil {
-		t.Fatalf("post-close Log reported an error, which is a behavior change: %v", err)
+		t.Fatalf("post-close Log: %v", err)
 	}
-	if got := repo.written(2); got != 0 {
-		t.Errorf("a post-close event reached the repository %d times; the batch loop is gone, so this test's premise has changed", got)
+	if got := repo.written(2); got != 1 {
+		t.Errorf("a post-close event reached the repository %d times, want 1: the batch loop is "+
+			"gone, so buffering it strands it", got)
 	}
 	if got := l.DroppedTotal(); got != 0 {
-		t.Errorf("DroppedTotal = %d after a post-close Log, want 0: the event is stranded, not counted as dropped", got)
+		t.Errorf("DroppedTotal = %d after a post-close Log, want 0: the event was written, not dropped", got)
 	}
-	if got := auditBufferedCount(l); got != 1 {
-		t.Errorf("post-close buffer holds %d entries, want 1: the event is appended to a logger whose batch loop has exited", got)
+	if got := l.AfterCloseTotal(); got != 1 {
+		t.Errorf("AfterCloseTotal = %d, want 1", got)
+	}
+	if got := auditBufferedCount(l); got != 0 {
+		t.Errorf("post-close buffer holds %d entries, want 0: nothing will ever drain it", got)
 	}
 
-	// Close is idempotent, so it will not drain what it stranded. Only a direct
-	// Flush does, which is the sole escape hatch a caller has today.
+	// Close stays idempotent, and there is now nothing stranded for a further
+	// Flush to find.
 	if err := l.Close(ctx); err != nil {
 		t.Fatalf("second Close: %v", err)
-	}
-	if got := repo.written(2); got != 0 {
-		t.Errorf("a second Close flushed the stranded event %d times; Close is documented as idempotent", got)
 	}
 	if err := l.Flush(ctx); err != nil {
 		t.Fatalf("post-close Flush: %v", err)
 	}
 	if got := repo.written(2); got != 1 {
-		t.Errorf("an explicit post-close Flush wrote the stranded event %d times, want 1", got)
+		t.Errorf("the post-close event was written %d times, want exactly 1", got)
 	}
 }

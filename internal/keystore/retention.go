@@ -115,7 +115,14 @@ func (r *Retention) Start(ctx context.Context) {
 	if !r.Enabled() {
 		return
 	}
-	r.started.Store(true)
+	// CompareAndSwap, not Store: a second Start would spawn a second loop
+	// sharing this one doneCh, and the second of the two to exit would close
+	// an already-closed channel. That panic is raised from a deferred call in
+	// a background goroutine, where no handler can catch it and it takes the
+	// process with it. Matches the four sibling sweepers.
+	if !r.started.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		defer close(r.doneCh)
 		ticker := time.NewTicker(SweepInterval)

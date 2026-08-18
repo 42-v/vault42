@@ -143,7 +143,13 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # carries because it cannot import it, plus the call sites in
 # internal/middleware, internal/adminapi and the four cmd/bridge files. A full
 # cov_run reports 11928, all 10 covered.
-BASELINE_TOTAL_STATEMENTS = 11928
+# Raised from 11928 to 11950 by the reviewfix pass: +22 statements from the five
+# correctness fixes. The lockout fail-closed latch and its two Increment error
+# checks (internal/service/auth.go), the two unbounded escapes in
+# enforceSessionLifetime, the post-Close synchronous write and isClosed poll in
+# internal/audit/audit.go, and the CompareAndSwap guard in the audit and keystore
+# sweepers. A full cov_run reports 11950, all 22 covered.
+BASELINE_TOTAL_STATEMENTS = 11950
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an

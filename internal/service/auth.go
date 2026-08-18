@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -182,6 +183,13 @@ type AuthService struct {
 	hibpEnabled        bool
 	hmacSecret         []byte
 	strictSessionLimit bool
+
+	// lockoutCounterRefusedAt is the last instant a lockout counter could not be
+	// written, in Unix nanoseconds. Zero means never.
+	//
+	// It is what lets isAccountLocked tell a counter that says "no failures" from
+	// one that was never allowed to exist. See noteLockoutCounterRefused.
+	lockoutCounterRefusedAt atomic.Int64
 }
 
 // SetStrictSessionLimit controls checkSessionLimit's behavior on a count-query
@@ -1713,29 +1721,70 @@ func (s *AuthService) isAccountLocked(ctx context.Context, userID, ip string) bo
 	if s.cache == nil {
 		return s.lockedByStoredCount(ctx, userID)
 	}
+	unwritable := s.lockoutCountersUnwritable()
 	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip))
-	if !ok {
+	if !ok || (perSource == 0 && unwritable) {
 		return s.lockedByStoredCount(ctx, userID)
 	}
 	if perSource >= lockoutThreshold {
 		return true
 	}
 	account, ok := s.cachedCount(ctx, accountLockoutKey(userID))
-	if !ok {
+	if !ok || (account == 0 && unwritable) {
 		return s.lockedByStoredCount(ctx, userID)
 	}
 	return account >= distributedLockoutThreshold
 }
 
+// noteLockoutCounterRefused records that a lockout counter could not be written.
+//
+// The entry cap is the case this exists for. At memoryMaxEntries the cache
+// refuses a new key, Increment returns ErrCacheFull and creates nothing, and the
+// read that follows is an ordinary miss — a clean answer of zero, not an error.
+// Nothing in that sequence looks like a failure, so before this the durable
+// fallback was never reached and a saturated cache switched account lockout off
+// entirely, on the profile where memory is the only backend and in production
+// during exactly the Redis outage that makes the cache the fallback.
+//
+// A timestamp rather than a boolean, because the condition heals. A counter
+// refused at T is missing only for the window it would have lived, so the
+// fallback stays on until lockoutDuration past the last refusal and then stops
+// on its own, with no reset path to forget to call.
+func (s *AuthService) noteLockoutCounterRefused() {
+	s.lockoutCounterRefusedAt.Store(time.Now().UnixNano())
+}
+
+// lockoutCountersUnwritable reports whether a counter reading zero might be a
+// counter that was never written.
+//
+// Gated on an actual refusal rather than applied to every zero on purpose. A
+// zero is what an account with no recent failures looks like, which is nearly
+// every login; treating all of them as unanswered would put a GetByID in front
+// of the whole login path to learn what the cache just answered correctly, which
+// is the cost cachedCount's contract is written to avoid.
+func (s *AuthService) lockoutCountersUnwritable() bool {
+	at := s.lockoutCounterRefusedAt.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) < lockoutDuration
+}
+
 // recordFailedAttempt advances both lockout counters for the user: the one for
 // the source that failed, and the account-wide one the distributed threshold
 // reads.
+//
+// The advance is best-effort, but a failure to advance is not. A counter that
+// could not be written is a counter whose later zero means nothing, so the
+// refusal is latched for isAccountLocked to read; discarding it is what let the
+// entry cap disable the lockout silently.
 func (s *AuthService) recordFailedAttempt(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration) // #nosec G104 -- best-effort lockout counter
-	s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration)    // #nosec G104 -- best-effort lockout counter
+	if _, err := s.cache.Increment(ctx, sourceLockoutKey(userID, ip), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
+	if _, err := s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
 }
 
 // clearLockout resets this source's lockout counter on successful login.
@@ -1925,19 +1974,31 @@ func (s *AuthService) CheckSessionLimit(ctx context.Context, userID string) erro
 // TTL is a sliding window and a continuously-refreshing client is never asked to
 // reauthenticate.
 //
-// Every branch that cannot prove the family is inside the bound fails closed. The
-// bound is off (zero origin, no error) only when it is not configured at all.
+// Every branch that cannot prove the family is inside the bound fails closed.
+//
+// The origin is looked up whether or not a bound is configured, because it is
+// two things at once: the instant the bound is measured from, and the
+// authentication instant a rotation puts in auth_time (see IssueRotatedPair).
+// Only the REFUSALS are gated on maxLifetime. Short-circuiting the whole
+// function when the bound was off meant a documented, supported setting
+// (VAULT_MAX_SESSION_LIFETIME=0) silently dropped auth_time from every token
+// after the login one — two independent features coupled by one early return.
+//
+// So with no bound configured, a store that cannot date a family costs that
+// deployment its auth_time claim and nothing else. Refusing there would turn an
+// unconfigured feature into a total rejection of refresh.
 func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.RefreshToken, ip, ua string) (time.Time, error) {
 	if s.tokenSvc == nil {
 		return time.Time{}, nil
 	}
 	maxLifetime := s.tokenSvc.MaxSessionLifetime()
-	if maxLifetime <= 0 {
-		return time.Time{}, nil
-	}
+	bounded := maxLifetime > 0
 
 	reader, ok := s.tokens.(familyOriginReader)
 	if !ok {
+		if !bounded {
+			return time.Time{}, nil
+		}
 		// A bound was configured against a store that cannot date a family.
 		// Refusing is the only outcome that is not a silent no-op.
 		log.Printf("auth: refresh token store cannot report family origin; absolute session lifetime unenforceable")
@@ -1948,13 +2009,16 @@ func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.
 
 	origin, err := reader.FamilyOrigin(ctx, stored.FamilyID)
 	if err != nil || origin.IsZero() {
+		if !bounded {
+			return time.Time{}, nil
+		}
 		log.Printf("auth: family origin lookup failed for family %s: %v", stored.FamilyID, err)
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{"reason": "session_age_unavailable", "cause": "lookup_failed"}, 80)
 		return time.Time{}, ErrSessionAgeUnknown
 	}
 
-	if !time.Now().Before(origin.Add(maxLifetime)) {
+	if bounded && !time.Now().Before(origin.Add(maxLifetime)) {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; rejecting regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
 			map[string]interface{}{

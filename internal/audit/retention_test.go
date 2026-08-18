@@ -175,3 +175,57 @@ func TestRetention_ReplicaThatLosesTheLockReportsNoWork(t *testing.T) {
 		t.Errorf("deleted = %d, want 0 — this replica swept nothing and must not claim another's rows", deleted)
 	}
 }
+
+// Four of the six background sweepers guard Start with CompareAndSwap, and
+// internal/service/refresh_retention.go spells out why: two loops would share
+// one doneCh, and the second to exit would close an already-closed channel — a
+// panic raised from a deferred call in a background goroutine, which no handler
+// can catch and which takes the process with it.
+//
+// This one used Store(true), which reports nothing and skips nothing. No caller
+// starts it twice today, so the panic is latent; the sweeper that is safe only
+// because of how its single caller happens to be written is the one that breaks
+// when a second caller arrives.
+//
+// The observable difference is asserted directly rather than by waiting for the
+// panic, which surfaces only if the second goroutine happens to exit before the
+// test binary does. A second loop calls Cleanup immediately, exactly as the
+// first did, so parking the first sweep inside the store makes a second entry
+// the signal.
+func TestRetention_StartingTwiceStartsOneLoop(t *testing.T) {
+	repo := &mocks.MockAuditRepo{}
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	repo.CleanupFn = func(context.Context, time.Time) (int64, error) {
+		entered <- struct{}{}
+		<-release
+		return 0, nil
+	}
+
+	r := NewRetention(repo, 30*24*time.Hour)
+	r.Start(context.Background())
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the sweeper did not sweep once immediately")
+	}
+
+	r.Start(context.Background())
+	select {
+	case <-entered:
+		close(release)
+		t.Fatal("a second Start started a second sweep loop: both share one doneCh, and the " +
+			"second to exit closes an already-closed channel")
+	case <-time.After(time.Second):
+	}
+
+	close(release)
+	r.Stop()
+
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Done is not closed, so Stop returned before the loop had exited")
+	}
+}

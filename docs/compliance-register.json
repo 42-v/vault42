@@ -233,7 +233,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:819 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:827 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -915,7 +915,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:811",
+        "internal/service/auth.go:819",
         "internal/handler/oauth.go:252"
       ],
       "tests": [
@@ -937,7 +937,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1718",
+        "internal/service/auth.go:1727",
         "internal/handler/data_export.go:18"
       ],
       "tests": [
@@ -977,7 +977,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:142",
-        "internal/service/auth.go:1789",
+        "internal/service/auth.go:1838",
         "internal/handler/oauth.go:657"
       ],
       "tests": [
@@ -1329,11 +1329,11 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:819",
+        "internal/server/server.go:827",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
-      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:653 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
+      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:660 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
       "accepted_risk": "CR-29"
     },
     {
@@ -2065,7 +2065,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105",
+        "internal/service/auth.go:106",
         "internal/server/server.go:410"
       ],
       "tests": [
@@ -2213,7 +2213,7 @@
       "requirement": "Verify that valid users cannot be deduced from failed authentication challenges, such as by basing on error messages, HTTP response codes, or different response times. Registration and forgot password functionality must also have this protection.",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:651",
+        "internal/service/auth.go:659",
         "internal/handler/auth.go:91"
       ],
       "tests": [
@@ -2508,7 +2508,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:811"
+        "internal/service/auth.go:819"
       ],
       "tests": [
         "TestASVSAuth_V6_6_2_EmailOTPBoundToOriginalRequest"
@@ -2526,7 +2526,7 @@
       "status": "Met",
       "evidence": [
         "internal/server/server.go:422",
-        "internal/server/server.go:559"
+        "internal/server/server.go:566"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2789,7 +2789,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:729"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated",
@@ -2811,7 +2811,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/service/auth.go:680"
+        "internal/service/auth.go:688"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
@@ -2873,7 +2873,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:744"
+        "internal/service/auth.go:752"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -2911,7 +2911,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:582"
+        "internal/server/server.go:589"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -3509,7 +3509,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:64",
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:729"
       ],
       "tests": [
         "TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet",
@@ -4493,7 +4493,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:522"
+        "internal/server/server.go:529"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4664,7 +4664,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:286",
+        "internal/audit/audit.go:303",
         "internal/audit/retention.go:84"
       ],
       "tests": [
@@ -4852,12 +4852,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:819"
+        "internal/server/server.go:827"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:819), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:827), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",
@@ -5035,7 +5035,7 @@
       "status": "Met",
       "evidence": [
         "migrations/001_initial_schema.sql:154",
-        "internal/audit/audit.go:210"
+        "internal/audit/audit.go:216"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -5094,7 +5094,7 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:117",
-        "internal/audit/audit.go:286"
+        "internal/audit/audit.go:303"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -5116,7 +5116,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:469"
+        "internal/service/auth.go:477"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -5181,7 +5181,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/recovery.go:14",
-        "internal/audit/audit.go:232"
+        "internal/audit/audit.go:238"
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse"
@@ -5285,7 +5285,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/ratelimit.go:285",
-        "internal/service/auth.go:1079"
+        "internal/service/auth.go:1087"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
@@ -5651,7 +5651,7 @@
       "requirement": "Rate Limiting (Throttling)",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:106"
       ],
       "tests": [
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
@@ -5838,7 +5838,7 @@
       "requirement": "Account Notifications",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:722"
+        "internal/service/auth.go:730"
       ],
       "tests": [
         "TestNIST63B4_4_6_SubscribersAreNotifiedOfLockout"
@@ -5888,7 +5888,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/service/auth.go:680"
+        "internal/service/auth.go:688"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
@@ -5903,7 +5903,7 @@
       "requirement": "Session Monitoring",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:709",
+        "internal/service/auth.go:717",
         "internal/handler/user.go:125"
       ],
       "tests": [
@@ -5981,7 +5981,7 @@
       "requirement": "Unsuccessful Logon Attempts",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:106"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
@@ -6196,7 +6196,7 @@
       "requirement": "Authentication Feedback",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:479"
+        "internal/service/auth.go:487"
       ],
       "tests": [
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
@@ -6560,7 +6560,7 @@
       "requirement": "Authentication Failures",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:105"
+        "internal/service/auth.go:106"
       ],
       "tests": [
         "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
@@ -6640,7 +6640,7 @@
       "requirement": "Data minimisation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:286",
+        "internal/audit/audit.go:303",
         "internal/httputil/safelog.go:26"
       ],
       "tests": [
@@ -6939,7 +6939,7 @@
       "requirement": "OAuth 2.0 Security BCP: refresh token replay detection",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:729"
       ],
       "tests": [
         "TestRFC9700_4_14_2_RefreshRotationReplay",
@@ -7034,7 +7034,7 @@
       "requirement": "OAuth 2.0: refreshing an access token",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:721"
+        "internal/service/auth.go:729"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated"

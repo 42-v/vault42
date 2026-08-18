@@ -541,7 +541,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.Handle("POST /auth/password/reset/confirm", passwordResetRL(http.HandlerFunc(passwordHandler.ResetConfirm)))
 
 	// Client credentials (public, uses Basic auth, rate limited)
-	mux.Handle("POST /client/token", clientTokenRL(http.HandlerFunc(clientHandler.Token)))
+	//
+	// dpopWrap for the same reason as the two routes above, and with more riding
+	// on it: POST /kms/unwrap and POST /mint are gated on scopes only a
+	// client-credentials token can hold, because every user issuance path
+	// hardcodes read/write. Left unwrapped, this route made the sender-constraint
+	// on both credential-release oracles unreachable — a presented proof was
+	// validated as a proof and then compared against an empty cnf.jkt.
+	mux.Handle("POST /client/token", clientTokenRL(dpopWrap(http.HandlerFunc(clientHandler.Token))))
 
 	// Well-known
 	mux.HandleFunc("GET /.well-known/jwks.json", wellKnownHandler.JWKS)
@@ -777,12 +784,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// widen the release rate under a Redis failure (audit L4).
 	//
 	// dpopWrap is applied INSIDE authMw+RequireScope so the DPoP middleware sees
-	// the resolved client claims. Note what it does NOT buy today: no issuance path
-	// populates cnf.jkt, so no token is sender-constrained and the thumbprint
-	// comparison never runs. A presented proof is validated against nothing. Replay
-	// protection on this oracle therefore rests entirely on the short access-token
-	// TTL, TLS, and the fail-closed per-IP rate limit above. Sender-constraint
-	// arrives when issuance binds cnf.jkt, not when VAULT_DPOP_ENABLED is set.
+	// the resolved client claims. What that buys depends on the token presented:
+	// a client-credentials token minted at POST /client/token with a proof carries
+	// cnf.jkt, and the thumbprint comparison in middleware.DPoP then refuses it to
+	// anyone who cannot prove the same key. A token minted without a proof stays an
+	// ordinary bearer token, so replay protection for that caller still rests on
+	// the short access-token TTL, TLS, and the fail-closed per-IP rate limit above.
+	// Which of the two a deployment gets is decided at issuance, not here.
 	if d.KMS != nil {
 		kmsHandler := handler.NewKMSHandler(d.KMS, d.AuditLog)
 		kmsUnwrapRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{

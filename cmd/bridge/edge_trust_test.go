@@ -402,6 +402,15 @@ func TestSafeLogValueNeutralizesRecordForgery(t *testing.T) {
 	if got := safeLogValue("1.2.3.4\u0085forged"); strings.Contains(got, "\u0085") {
 		t.Fatalf("safeLogValue kept NEL: %q", got)
 	}
+	// U+2028 and U+2029 split a record for a log shipper exactly as a newline
+	// does. httputil.SafeLogValue was widened to cover them in 27b1735; this
+	// copy was written afterwards and was not, so a bridge log line stayed
+	// splittable by an attacker-controlled value.
+	for name, sep := range map[string]string{"line separator": "\u2028", "paragraph separator": "\u2029"} {
+		if got := safeLogValue("1.2.3.4" + sep + "forged"); strings.Contains(got, sep) {
+			t.Errorf("safeLogValue kept the unicode %s: %q", name, got)
+		}
+	}
 	long := safeLogValue(strings.Repeat("a", 500))
 	if len(long) > 200 {
 		t.Fatalf("safeLogValue returned %d bytes, want it truncated", len(long))
