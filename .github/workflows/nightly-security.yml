@@ -30,6 +30,7 @@ jobs:
   govulncheck:
     name: Go Vulnerability Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -47,6 +48,7 @@ jobs:
   gosec:
     name: Static Security Analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -100,6 +102,7 @@ jobs:
   trivy-source:
     name: Trivy Source Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -115,6 +118,7 @@ jobs:
     name: Trivy Image Scan
     if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
       fail-fast: false
@@ -143,6 +147,7 @@ jobs:
     name: Attack Test Suite
     if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
