@@ -45,25 +45,38 @@ func (s *EmailOverrideStore) Branding(ctx context.Context, app string) (vaultema
 	}, true
 }
 
-// Template returns the per-app override for an email type, or ok=false when none
-// exists or it is disabled.
-func (s *EmailOverrideStore) Template(ctx context.Context, app, name string) (vaultemail.TemplateOverride, bool) {
+// Template returns the per-app override for an email type, compiled and ready
+// to execute, or ok=false when none exists, it is disabled, or it does not pass
+// validation.
+//
+// This is where a stored row becomes an executable template, so this is where
+// the admin write path's validation runs a second time. The admin API is not
+// the only way a row reaches email_templates — a restored backup, a direct
+// write by the vault_app role, or a row written before the validation existed
+// all land in the same table — and the send path used to compile whatever it
+// found there (ASVS V1.3.7).
+func (s *EmailOverrideStore) Template(ctx context.Context, app, name string) (*vaultemail.CompiledOverride, bool) {
 	if s == nil || s.templates == nil {
-		return vaultemail.TemplateOverride{}, false
+		return nil, false
 	}
 	t, err := s.templates.Get(ctx, app, name)
 	if err != nil {
 		log.Printf("email: template lookup for %q/%q failed: %v", app, name, err)
-		return vaultemail.TemplateOverride{}, false
+		return nil, false
 	}
 	if t == nil || !t.Enabled {
-		return vaultemail.TemplateOverride{}, false
+		return nil, false
 	}
-	return vaultemail.TemplateOverride{
+	compiled, err := vaultemail.CompileOverride(vaultemail.TemplateOverride{
 		Subject:     t.Subject,
 		HTMLContent: t.HTMLContent,
 		TextContent: t.TextContent,
-	}, true
+	})
+	if err != nil {
+		log.Printf("email: stored template %q/%q refused at load: %v", app, name, err)
+		return nil, false
+	}
+	return compiled, true
 }
 
 var _ vaultemail.OverrideStore = (*EmailOverrideStore)(nil)

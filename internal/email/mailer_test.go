@@ -42,12 +42,18 @@ func (s *staticStore) Branding(_ context.Context, app string) (Branding, bool) {
 	return Branding{}, false
 }
 
-func (s *staticStore) Template(_ context.Context, app, _ string) (TemplateOverride, bool) {
+// Template compiles through the same constructor the real store uses, so a
+// fake cannot hand the mailer a template the production path would refuse.
+func (s *staticStore) Template(_ context.Context, app, _ string) (*CompiledOverride, bool) {
 	s.tmplHit++
 	if app == s.app && s.tmplOK {
-		return s.tmpl, true
+		c, err := CompileOverride(s.tmpl)
+		if err != nil {
+			return nil, false
+		}
+		return c, true
 	}
-	return TemplateOverride{}, false
+	return nil, false
 }
 
 func testMailer(t *testing.T, sender Sender, store OverrideStore, defaults Branding, allowed []string) *Mailer {
@@ -187,11 +193,15 @@ func TestOverrideCache_ResetOnMaxEntries(t *testing.T) {
 	if len(c.templates) != maxCacheEntries {
 		t.Fatalf("template entries = %d, want %d", len(c.templates), maxCacheEntries)
 	}
-	c.putTemplate("overflow", TemplateVerification, cachedTemplate{ok: true, exp: exp})
+	compiled, err := CompileOverride(TemplateOverride{Subject: "S", HTMLContent: "<p>b</p>"})
+	if err != nil {
+		t.Fatalf("CompileOverride: %v", err)
+	}
+	c.putTemplate("overflow", TemplateVerification, cachedTemplate{compiled: compiled, exp: exp})
 	if len(c.templates) != 1 {
 		t.Errorf("template entries after overflow = %d, want 1 (map reset)", len(c.templates))
 	}
-	if e, ok := c.getTemplate("overflow", TemplateVerification); !ok || !e.ok {
+	if e, ok := c.getTemplate("overflow", TemplateVerification); !ok || e.compiled == nil {
 		t.Errorf("overflow template entry = %+v (ok=%v), want it stored after the reset", e, ok)
 	}
 }
