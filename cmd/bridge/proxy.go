@@ -419,8 +419,16 @@ func safeLogValue(v string) string {
 	if len(v) > maxLoggedLen {
 		v = v[:maxLoggedLen] + "..."
 	}
+	// The switch is written in the same shape and neutralizes the same runes as
+	// httputil.SafeLogValue, and tests/spec/safelog_parity_test.go fails when the
+	// two sets diverge. They did once: 27b1735 widened that one to cover U+2028
+	// and U+2029, which a log shipper splits records on as readily as a newline,
+	// and this copy was written afterwards without them. A second sanitiser that
+	// drifts from the first is how the original CWE-117 gap happened, and the copy
+	// exists only because this binary is stdlib-only.
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+		switch {
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == '\u2028', r == '\u2029':
 			return '_'
 		}
 		return r
