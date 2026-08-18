@@ -192,6 +192,34 @@ secrets:
   # -- Mount path for secret files
   mountPath: /run/secrets
 
+# ---- First-boot credentials ----
+# Three credentials are minted exactly once, on a boot, with no second chance to
+# show them: the admin token, each seeded client secret, and the admin gateway's
+# super_admin bootstrap password. They used to go to the process log, which in
+# every deployment this chart targets is scraped into an aggregator whose readers
+# are a wider set than the database the credential protects, and which keeps them
+# long after they are rotated.
+#
+# They now go to a 0600 file, or to stdout when stdout is a terminal, or nowhere
+# at all -- and "nowhere" means the boot step refuses rather than proceeding.
+# That is deliberate and it is why this has to be configured: a pod is not a
+# terminal, so without this path a seeded install fails at seed time.
+firstBootCredential:
+  # -- Path the credential file is written to. Must be a path inside the volume
+  # below, not the volume's own mount point: the writer refuses anything that
+  # already exists and is not a regular file no wider than 0600.
+  path: /run/first-boot/credentials
+  # -- Size of the memory-backed volume holding it.
+  sizeLimit: 1Mi
+  # -- PersistentVolumeClaim to hold the credential file instead of memory.
+  #
+  # Empty means a memory-backed emptyDir: the credential never touches a node's
+  # disk, and it does not survive the pod. That is the right default for a secret
+  # and the wrong one for an operator who has not read it yet, so if first-boot
+  # minting is how this deployment gets its credentials rather than a Secret
+  # created up front, name a claim here and read the file from it afterwards.
+  existingClaim: ""
+
 # ---- Database ----
 database:
   # -- PostgreSQL host

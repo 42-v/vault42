@@ -89,7 +89,18 @@ spec:
               value: {{ .Values.secrets.mountPath }}/{{ .Values.adminGateway.dbAdminPasswordKey }}
             - name: DB_MIG_PASSWORD_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.dbMigPassword }}
+            # EnsureFirstAdmin mints the super_admin bootstrap password on the
+            # first boot against an empty admin table, and it is the one
+            # credential in this deployment with no other way in: without it
+            # nobody can log into the admin plane at all. It used to be printed
+            # to the pod log. With no sink named here that step refuses and the
+            # gateway does not finish booting, which is the correct end of the
+            # trade -- a super_admin whose password only the log aggregator holds
+            # is worse than a gateway that says why it stopped.
+            - name: VAULT_FIRST_BOOT_CREDENTIAL_FILE
+              value: {{ .Values.firstBootCredential.path | quote }}
           volumeMounts:
+            {{- include "vault.firstBootCredentialMount" . | nindent 12 }}
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
               readOnly: true
@@ -101,6 +112,7 @@ spec:
           resources:
             {{- toYaml .Values.adminGateway.resources | nindent 12 }}
       volumes:
+        {{- include "vault.firstBootCredentialVolume" . | nindent 8 }}
         - name: secrets
           secret:
             secretName: {{ include "vault.secretName" . }}

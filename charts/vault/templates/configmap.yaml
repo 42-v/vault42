@@ -72,6 +72,12 @@ data:
   {{- if .Values.seed.enabled }}
   VAULT_SEED_FILE: "/etc/vault/seed.json"
   {{- end }}
+  # Set unconditionally. The paths that mint a credential are reached on a boot
+  # rather than by a flag -- seeding a client, and the admin-token init that runs
+  # whenever secrets.keys.adminToken is cleared -- so the sink has to exist before
+  # anything knows whether it will be needed. Without it those steps refuse, which
+  # is the point: refusing is what stops the credential reaching the log.
+  VAULT_FIRST_BOOT_CREDENTIAL_FILE: {{ .Values.firstBootCredential.path | quote }}
   {{- if .Values.smtp.host }}
   SMTP_HOST: {{ .Values.smtp.host | quote }}
   SMTP_PORT: {{ .Values.smtp.port | quote }}

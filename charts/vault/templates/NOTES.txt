@@ -1,5 +1,33 @@
 The Vault has been deployed.
 
+{{ if or .Values.seed.clients .Values.adminGateway.enabled -}}
+0. FIRST-BOOT CREDENTIALS. This release mints credentials that are shown once and
+   never again -- a seeded client secret per client{{ if .Values.adminGateway.enabled }}, the admin gateway's super_admin
+   bootstrap password{{ end }}, and the admin token when secrets.keys.adminToken is unset.
+   They are deliberately not in the pod log. They are written to
+   {{ .Values.firstBootCredential.path }} inside the pod, mode 0600.
+{{- if not .Values.firstBootCredential.existingClaim }}
+
+   That volume is memory-backed, so it is gone when the pod is. Read it before
+   anything restarts the pod, or set firstBootCredential.existingClaim to a
+   PersistentVolumeClaim and read it from there at your leisure.
+{{- end }}
+
+   The image is distroless, so it has no shell to `kubectl exec cat` with and no
+   tar for `kubectl cp`. Attach an ephemeral container that can see the
+   filesystem:
+
+     kubectl debug -n {{ .Release.Namespace }} -it deploy/{{ include "vault.fullname" . }} \
+       --image=busybox --target={{ .Chart.Name }} \
+       -- cat /proc/1/root{{ .Values.firstBootCredential.path }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+   This release runs {{ .Values.replicaCount }} replicas and each has its own copy of that volume.
+   Only the pod that won the race actually minted anything, so if the file is
+   absent, try the others -- or use a claim, which gives one place to look.
+{{- end }}
+
+{{ end -}}
 1. Get the application URL:
 {{- if .Values.ingress.enabled }}
 {{- range $host := .Values.ingress.hosts }}
