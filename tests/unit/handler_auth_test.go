@@ -74,7 +74,7 @@ func setupAuthHandler(t *testing.T) *authTestEnv {
 		"", 15, false, nil, // pepper="", minPwLength=15, hibpEnabled=false, hmacSecret=nil
 	)
 
-	h := handler.NewAuthHandler(authSvc, userRepo, nil, auditLogger, "", false)
+	h := handler.NewAuthHandler(authSvc, userRepo, nil, auditLogger, "", false, nil)
 	return &authTestEnv{
 		handler:   h,
 		userRepo:  userRepo,

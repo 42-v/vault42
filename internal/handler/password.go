@@ -253,6 +253,36 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Lift a forced password reset (migration 039): setting a new password through
+	// the reset link is the event the flag was waiting for, and it is the only way
+	// out of the state. Idempotent no-op for an account that never carried it --
+	// the column is a privileged write, so an unconditional UPDATE would put every
+	// ordinary reset through the guard for nothing.
+	//
+	// Fail closed, exactly as the import claim above does and for the same reason:
+	// reporting success while the flag stands tells the user they are finished
+	// when the next login will refuse them, mail them another link, and say
+	// nothing about why. The flag stays set, so the next login re-issues a link
+	// and the account is recoverable.
+	if user.MustResetPassword {
+		if err := h.users.ClearMustResetPassword(r.Context(), user.ID); err != nil {
+			log.Printf("password: failed to clear must_reset_password for user %s: %v", user.ID, err)
+			WriteError(w, http.StatusInternalServerError, "forced_reset_clear_failed")
+			return
+		}
+		// Its own audit row rather than a field on the one below. That row
+		// describes the reset; this one describes the account-state change the
+		// reset caused, which is what an operator reading the lifecycle of the
+		// flag is looking for -- set at import, lifted here.
+		if h.auditLog != nil {
+			h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+				r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+					"action": "forced_reset_completed",
+					"reason": "password_reset_confirmed",
+				}, 0)
+		}
+	}
+
 	// Audit log
 	if h.auditLog != nil {
 		action := "confirmed"

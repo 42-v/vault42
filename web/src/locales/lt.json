@@ -356,5 +356,6 @@
   "error.forbidden": "Neturite teisės to atlikti.",
   "error.code_already_used": "Šis kodas jau panaudotas. Prašome naudoti naują.",
   "error.password_recently_used": "Neseniai naudojote šį slaptažodį. Prašome pasirinkti kitą.",
-  "error.no_webauthn_credentials": "Šioje paskyroje neužregistruota jokių saugos raktų."
+  "error.no_webauthn_credentials": "Šioje paskyroje neužregistruota jokių saugos raktų.",
+  "error.password_reset_required": "Ši paskyra turi iš naujo nustatyti slaptažodį. Nusiuntėme jums nuorodą el. paštu."
 }

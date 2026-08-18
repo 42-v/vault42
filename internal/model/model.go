@@ -107,6 +107,18 @@ type User struct {
 	// that still join on the old identifier can find the vault42 account.
 	// Empty on native registrations.
 	LegacyID string `json:"legacy_id"`
+	// MustResetPassword is true while the account's stored password may not be
+	// used to sign in (migration 039). Login verifies no credential in that
+	// state: it mails a reset link out of band and refuses, and completing that
+	// reset clears the flag. An import carrying a hash vault42 cannot verify is
+	// the motivating case, but the flag is general and an operator may set it on
+	// any account. False means the password gate applies as usual.
+	//
+	// The refusal is masked as a wrong password, exactly as ImportPending is, so
+	// the state cannot be enumerated from an unauthenticated login. Only a
+	// caller that authenticated with client credentials carrying the
+	// login:status scope is told why.
+	MustResetPassword bool `json:"must_reset_password"`
 }
 
 // PasswordHistory tracks previous password hashes to prevent reuse.

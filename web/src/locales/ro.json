@@ -356,5 +356,6 @@
   "error.forbidden": "Nu aveți permisiunea să faceți acest lucru.",
   "error.code_already_used": "Acest cod a fost deja folosit. Vă rugăm să folosiți unul nou.",
   "error.password_recently_used": "Ați folosit recent această parolă. Vă rugăm să alegeți alta.",
-  "error.no_webauthn_credentials": "Nu există chei de securitate înregistrate pentru acest cont."
+  "error.no_webauthn_credentials": "Nu există chei de securitate înregistrate pentru acest cont.",
+  "error.password_reset_required": "Acest cont trebuie să își reseteze parola. Ți-am trimis prin e-mail un link de resetare."
 }

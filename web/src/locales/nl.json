@@ -356,5 +356,6 @@
   "error.forbidden": "U hebt daar geen toestemming voor.",
   "error.code_already_used": "Deze code is al gebruikt. Gebruik een nieuwe.",
   "error.password_recently_used": "U hebt dit wachtwoord onlangs gebruikt. Kies een ander wachtwoord.",
-  "error.no_webauthn_credentials": "Er zijn geen beveiligingssleutels geregistreerd op dit account."
+  "error.no_webauthn_credentials": "Er zijn geen beveiligingssleutels geregistreerd op dit account.",
+  "error.password_reset_required": "Dit account moet zijn wachtwoord opnieuw instellen. We hebben je een link gemaild."
 }

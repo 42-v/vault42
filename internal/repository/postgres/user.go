@@ -53,13 +53,13 @@ func (r *UserRepo) CreateImported(ctx context.Context, user *model.User) error {
 			(id, email, email_verified, password_hash, display_name, avatar_url, locale,
 			 mfa_required, created_at, updated_at, roles,
 			 disabled, banned, ban_reason,
-			 import_pending, imported_from, legacy_id)
-		VALUES ($1, $2, TRUE, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13, $14)
+			 import_pending, imported_from, legacy_id, must_reset_password)
+		VALUES ($1, $2, TRUE, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13, $14, $15)
 		ON CONFLICT (email) DO NOTHING`,
 		user.ID, user.Email, nullStr(user.DisplayName), nullStr(user.AvatarURL), user.Locale,
 		user.MFARequired, user.CreatedAt, user.UpdatedAt, roles,
 		user.Disabled, user.Banned, nullStr(user.BanReason),
-		nullStr(user.ImportedFrom), nullStr(user.LegacyID),
+		nullStr(user.ImportedFrom), nullStr(user.LegacyID), user.MustResetPassword,
 	)
 	if err != nil {
 		return fmt.Errorf("create imported user: %w", err)
@@ -77,13 +77,29 @@ func (r *UserRepo) ClearImportPending(ctx context.Context, id string) error {
 	return nil
 }
 
+// ClearMustResetPassword lifts a forced password reset (called once the user has
+// set a new password through the reset link).
+//
+// It is the only direction vault_app may move the column: migration 039 grants
+// the privilege for this statement and refuses the reverse from this role, so a
+// forced reset can be completed by the web server and imposed only by the admin
+// plane.
+func (r *UserRepo) ClearMustResetPassword(ctx context.Context, id string) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET must_reset_password=FALSE, updated_at=NOW() WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("clear must_reset_password: %w", err)
+	}
+	return nil
+}
+
 // GetByID retrieves a user by primary key. Returns nil, nil if not found.
 func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
 		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
 		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at,
-		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, '')
+		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, ''),
+		       must_reset_password
 		FROM auth.users WHERE id = $1`, id))
 }
 
@@ -93,7 +109,8 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, e
 		SELECT id, email, email_verified, COALESCE(password_hash, ''), display_name, avatar_url,
 		       locale, mfa_required, locked_until, failed_login_count, created_at, updated_at, roles,
 		       disabled, banned, COALESCE(ban_reason, ''), last_login_at, deleted, deleted_at,
-		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, '')
+		       import_pending, COALESCE(imported_from, ''), COALESCE(legacy_id::text, ''),
+		       must_reset_password
 		FROM auth.users WHERE email = $1`, email))
 }
 
@@ -223,6 +240,7 @@ func (r *UserRepo) scanUser(row pgx.Row) (*model.User, error) {
 		&u.Roles,
 		&u.Disabled, &u.Banned, &u.BanReason, &u.LastLoginAt, &u.Deleted, &u.DeletedAt,
 		&u.ImportPending, &u.ImportedFrom, &u.LegacyID,
+		&u.MustResetPassword,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

@@ -85,7 +85,7 @@ func auditCookiesDriveLogin(t *testing.T) *http.Cookie {
 	)
 
 	// secureCookies = true: the production posture behind TLS.
-	h := handler.NewAuthHandler(authSvc, users, mockCache, auditLog, "", true)
+	h := handler.NewAuthHandler(authSvc, users, mockCache, auditLog, "", true, nil)
 
 	bodyBytes, _ := json.Marshal(map[string]string{
 		"email":    "cookie-audit@example.com",

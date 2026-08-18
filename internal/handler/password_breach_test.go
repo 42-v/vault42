@@ -89,7 +89,7 @@ func TestSetPassword_BreachedPasswordIsRejectedOnEveryPath(t *testing.T) {
 			&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, newTestAuditLogger(),
 			service.NewHIBPClient(), c, nil, "https://vault.test", "TestVault", "", 15, true, nil,
 		)
-		h := NewAuthHandler(svc, users, c, newTestAuditLogger(), "", false)
+		h := NewAuthHandler(svc, users, c, newTestAuditLogger(), "", false, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/register", jsonBody(t, map[string]string{
 			"email": "newcomer@example.com", "password": breached,

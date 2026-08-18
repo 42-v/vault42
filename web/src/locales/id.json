@@ -356,5 +356,6 @@
   "error.forbidden": "Anda tidak memiliki izin untuk melakukan itu.",
   "error.code_already_used": "Kode ini sudah digunakan. Silakan gunakan kode baru.",
   "error.password_recently_used": "Anda baru saja menggunakan kata sandi ini. Silakan pilih yang lain.",
-  "error.no_webauthn_credentials": "Tidak ada kunci keamanan yang terdaftar pada akun ini."
+  "error.no_webauthn_credentials": "Tidak ada kunci keamanan yang terdaftar pada akun ini.",
+  "error.password_reset_required": "Akun ini harus mengatur ulang kata sandinya. Kami telah mengirimkan tautan pengaturan ulang melalui email."
 }

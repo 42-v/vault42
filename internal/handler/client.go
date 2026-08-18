@@ -45,14 +45,21 @@ const clientAuthFailureIDLimit = 128
 // The reason is recorded because the audit log is not visible to the caller.
 // Distinguishing an unknown client from a wrong secret is exactly what the 401
 // must not do and exactly what an investigator needs.
-func (h *ClientHandler) auditClientAuthFailure(r *http.Request, clientID, reason string) {
-	if h.auditLog == nil {
+//
+// It is a function rather than a method because POST /auth/login authenticates
+// client credentials too, optionally, to decide whether the caller may be told
+// why a login was refused. That path rejects with the same four reasons and must
+// leave the same trail: a guess against a first-party client secret is the same
+// attack whichever endpoint it is aimed at, and an investigator reading
+// client_auth rows should not have to know which one was used.
+func auditClientAuthFailure(auditLog *audit.Logger, r *http.Request, clientID, reason string) {
+	if auditLog == nil {
 		return
 	}
 	if len(clientID) > clientAuthFailureIDLimit {
 		clientID = clientID[:clientAuthFailureIDLimit]
 	}
-	h.auditLog.Log(r.Context(), audit.ClientAuth, "", clientID, middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+	auditLog.Log(r.Context(), audit.ClientAuth, "", clientID, middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 			"result": "failure",
 			"reason": reason,
@@ -65,7 +72,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 
 	clientID, clientSecret, ok := parseClientCredentials(r)
 	if !ok {
-		h.auditClientAuthFailure(r, "", "unparseable_credentials")
+		auditClientAuthFailure(h.auditLog, r, "", "unparseable_credentials")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -77,7 +84,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
-		h.auditClientAuthFailure(r, clientID, "unknown_client")
+		auditClientAuthFailure(h.auditLog, r, clientID, "unknown_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -88,7 +95,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
-		h.auditClientAuthFailure(r, client.ID, "inactive_client")
+		auditClientAuthFailure(h.auditLog, r, client.ID, "inactive_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -100,7 +107,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if verifyErr != nil || !valid {
-		h.auditClientAuthFailure(r, client.ID, "wrong_secret")
+		auditClientAuthFailure(h.auditLog, r, client.ID, "wrong_secret")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}

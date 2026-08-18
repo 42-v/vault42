@@ -356,5 +356,6 @@
   "error.forbidden": "Za to nimate dovoljenja.",
   "error.code_already_used": "Ta koda je že bila uporabljena. Uporabite novo.",
   "error.password_recently_used": "To geslo ste nedavno uporabili. Izberite drugo.",
-  "error.no_webauthn_credentials": "Za ta račun ni registriranih varnostnih ključev."
+  "error.no_webauthn_credentials": "Za ta račun ni registriranih varnostnih ključev.",
+  "error.password_reset_required": "Ta račun mora ponastaviti geslo. Po e-pošti smo vam poslali povezavo za ponastavitev."
 }

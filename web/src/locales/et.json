@@ -356,5 +356,6 @@
   "error.forbidden": "Teil ei ole selleks õigust.",
   "error.code_already_used": "Seda koodi on juba kasutatud. Palun kasutage uut.",
   "error.password_recently_used": "Olete seda parooli hiljuti kasutanud. Palun valige teine.",
-  "error.no_webauthn_credentials": "Selle konto jaoks pole ühtegi turvavõtit registreeritud."
+  "error.no_webauthn_credentials": "Selle konto jaoks pole ühtegi turvavõtit registreeritud.",
+  "error.password_reset_required": "See konto peab parooli lähtestama. Saatsime teile e-postiga lähtestamise lingi."
 }

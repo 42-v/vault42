@@ -356,5 +356,6 @@
   "error.forbidden": "Quý vị không có quyền thực hiện thao tác này.",
   "error.code_already_used": "Mã này đã được sử dụng. Vui lòng dùng mã mới.",
   "error.password_recently_used": "Quý vị vừa sử dụng mật khẩu này gần đây. Vui lòng chọn mật khẩu khác.",
-  "error.no_webauthn_credentials": "Không có khóa bảo mật nào được đăng ký cho tài khoản này."
+  "error.no_webauthn_credentials": "Không có khóa bảo mật nào được đăng ký cho tài khoản này.",
+  "error.password_reset_required": "Tài khoản này phải đặt lại mật khẩu. Chúng tôi đã gửi cho bạn liên kết đặt lại qua email."
 }

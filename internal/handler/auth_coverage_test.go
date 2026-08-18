@@ -286,7 +286,7 @@ func TestRefresh_ReplayDetected(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "replayed-token"})
@@ -340,7 +340,7 @@ func TestRefresh_ExpiredToken(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "expired-token"})
@@ -382,7 +382,7 @@ func TestRefresh_RevokedToken(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "revoked-token"})
@@ -427,7 +427,7 @@ func TestRefresh_SuccessfulRotation(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "valid-token"})
@@ -527,7 +527,7 @@ func TestVerifyEmail_VerifyRepoError(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token="+token, nil)
 	rec := httptest.NewRecorder()
@@ -560,7 +560,7 @@ func TestLogout_ServiceError(t *testing.T) {
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, &mocks.MockUserRepo{}, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	req = setAuthContext(req, "user-123")

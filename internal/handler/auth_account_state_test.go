@@ -55,7 +55,7 @@ func runRefreshGate(t *testing.T, user *model.User) refreshGateOutcome {
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "__Host-refresh_token", Value: "state-token"})

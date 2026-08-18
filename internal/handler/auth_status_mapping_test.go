@@ -65,7 +65,7 @@ func TestLogin_AccountStateMapsToTheRightStatus(t *testing.T) {
 				&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 				nil, &mocks.MockCache{}, nil, "https://vault.test", "TestVault", "", 15, false, nil,
 			)
-			h := NewAuthHandler(authSvc, users, &mocks.MockCache{}, auditLog, "", false)
+			h := NewAuthHandler(authSvc, users, &mocks.MockCache{}, auditLog, "", false, nil)
 
 			req := httptest.NewRequest(http.MethodPost, "/auth/login",
 				jsonBody(t, map[string]string{
@@ -116,7 +116,7 @@ func TestLogin_ImportPendingIsIndistinguishableFromABadPassword(t *testing.T) {
 		&mocks.MockPasswordHistoryRepo{}, tokenSvc, nil, auditLog,
 		nil, mockCache, &mocks.MockEmailSender{}, "https://vault.test", "TestVault", "", 15, false, nil,
 	)
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/login",
 		jsonBody(t, map[string]string{"email": "imported@example.com", "password": "anything"}))

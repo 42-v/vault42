@@ -54,6 +54,13 @@ func newTestAuditLogger() *audit.Logger {
 	return audit.NewLogger(&mocks.MockAuditRepo{}, 0)
 }
 
+// newTestAuditLoggerWithRepo creates an audit logger over a repo the caller can
+// inspect. The flush interval is zero, so a row is written straight through and
+// is observable as soon as the handler returns.
+func newTestAuditLoggerWithRepo(repo *mocks.MockAuditRepo) *audit.Logger {
+	return audit.NewLogger(repo, 0)
+}
+
 // setAuthContext sets VaultClaims on the request context for authenticated endpoints.
 func setAuthContext(req *http.Request, subject string) *http.Request {
 	claims := &vaultcrypto.VaultClaims{
@@ -260,7 +267,7 @@ func newTestAuthHandler(t *testing.T, users *mocks.MockUserRepo) (*AuthHandler, 
 		nil,   // hmacSecret
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 	return h, mockCache
 }
 
@@ -1498,7 +1505,7 @@ func TestVerifyEmail_Success(t *testing.T) {
 		"https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token="+token, nil)
 	req.RemoteAddr = "127.0.0.1:9999"
@@ -1541,7 +1548,7 @@ func TestVerifyEmail_InvalidToken(t *testing.T) {
 		"https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token=bad-token", nil)
 	rec := httptest.NewRecorder()

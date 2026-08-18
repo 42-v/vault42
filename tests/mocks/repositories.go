@@ -49,6 +49,7 @@ type MockUserRepo struct {
 	SetLastLoginFn         func(ctx context.Context, id string) error
 	CreateImportedFn       func(ctx context.Context, user *model.User) error
 	ClearImportPendingFn   func(ctx context.Context, id string) error
+	ClearMustResetPwFn     func(ctx context.Context, id string) error
 	SoftDeleteScrubFn      func(ctx context.Context, id, tombstoneEmail string) error
 }
 
@@ -76,6 +77,13 @@ func (m *MockUserRepo) CreateImported(ctx context.Context, user *model.User) err
 func (m *MockUserRepo) ClearImportPending(ctx context.Context, id string) error {
 	if m.ClearImportPendingFn != nil {
 		return m.ClearImportPendingFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) ClearMustResetPassword(ctx context.Context, id string) error {
+	if m.ClearMustResetPwFn != nil {
+		return m.ClearMustResetPwFn(ctx, id)
 	}
 	return nil
 }

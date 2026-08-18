@@ -356,5 +356,6 @@
   "error.forbidden": "Du har ikke tilladelse til det.",
   "error.code_already_used": "Denne kode er allerede brugt. Brug en ny.",
   "error.password_recently_used": "Du har brugt denne adgangskode for nylig. Vælg en anden.",
-  "error.no_webauthn_credentials": "Der er ikke registreret nogen sikkerhedsnøgler på denne konto."
+  "error.no_webauthn_credentials": "Der er ikke registreret nogen sikkerhedsnøgler på denne konto.",
+  "error.password_reset_required": "Denne konto skal nulstille sin adgangskode. Vi har sendt dig et nulstillingslink på mail."
 }
