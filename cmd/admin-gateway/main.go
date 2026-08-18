@@ -230,12 +230,7 @@ func main() {
 		// store is reported instead — the gateway's contract against a database
 		// whose schema is not ready is to log and keep serving, and a cascade
 		// running against that database fails loudly on its own.
-		if err := config.VerifyHMACPlaneAgreement(ctx, adminConfigRepo, cfg.HMACSecret); err != nil {
-			if errors.Is(err, config.ErrHMACPlaneMismatch) {
-				fatalAfterDrain(ctx, auditLogger, "admin-gateway: %v", err)
-			}
-			log.Printf("admin-gateway: WARNING: %v; erasure agreement with the vault plane is unverified", err)
-		}
+		verifyPlaneAgreement(ctx, adminConfigRepo, cfg.HMACSecret, auditLogger)
 
 		var recoveryPub *rsa.PublicKey
 		if len(cfg.RecoveryPublicKeyPEM) > 0 {
@@ -354,4 +349,24 @@ func main() {
 func fatalAfterDrain(ctx context.Context, auditLogger *audit.Logger, format string, v ...any) {
 	_ = auditLogger.Close(ctx)
 	log.Fatalf(format, v...) //nolint:gocritic // exitAfterDefer is intentional; we drained above
+}
+
+// verifyPlaneAgreement refuses to serve when this plane's HMAC_SECRET disagrees
+// with the one the vault plane already claimed.
+//
+// Fatal, not degraded. Refusing the whole gateway is the loud failure a silent
+// under-erasure was not, and it is also the earlier one: the cascade tombstones
+// the account and destroys its tokens BEFORE it reaches the pseudonym-keyed
+// stores, so a check that fired mid-erasure would abort a deletion it had
+// already half-performed. An unanswerable store is reported instead -- the
+// gateway's contract against a database whose schema is not ready is to log and
+// keep serving, and a cascade running against that database fails loudly on its
+// own.
+func verifyPlaneAgreement(ctx context.Context, store config.CrossPlaneConfigStore, secret []byte, auditLogger *audit.Logger) {
+	if err := config.VerifyHMACPlaneAgreement(ctx, store, secret); err != nil {
+		if errors.Is(err, config.ErrHMACPlaneMismatch) {
+			fatalAfterDrain(ctx, auditLogger, "admin-gateway: %v", err)
+		}
+		log.Printf("admin-gateway: WARNING: %v; erasure agreement with the vault plane is unverified", err)
+	}
 }

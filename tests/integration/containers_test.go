@@ -23,7 +23,7 @@ import (
 // It used to check nothing but SKIP_INTEGRATION and leave detection to
 // testcontainers, whose own auto-detection selects a socket on presence. On a
 // host with a wedged rootless podman socket that meant every test in this suite
-// dialled a daemon that never answered and the package ran to its timeout.
+// dialed a daemon that never answered and the package ran to its timeout.
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
 	testutil.RequireContainerRuntime(t)

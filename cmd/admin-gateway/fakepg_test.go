@@ -155,7 +155,7 @@ func (f *fakePostgres) accept() {
 // scriptRow makes the stub answer any statement containing match with a single
 // text column named "value" holding v.
 //
-// The stub still does not grow query-specific fixtures for behaviour; this is
+// The stub still does not grow query-specific fixtures for behavior; this is
 // the narrow exception the cross-plane HMAC check needs. That check reads back
 // what the OTHER plane recorded, so "the row already holds a different
 // fingerprint" is a state no error code and no empty result can express, and it
