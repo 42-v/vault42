@@ -89,7 +89,7 @@ onMounted(() => {
                 </div>
               </div>
               <button
-                class="text-xs text-vault42-error hover:text-red-400 transition-colors flex-shrink-0"
+                class="text-xs text-vault42-error hover:text-red-300 transition-colors flex-shrink-0"
                 @click="revokeSession(s.id)"
               >
                 {{ t('common.revoke') }}
@@ -158,7 +158,7 @@ onMounted(() => {
               </div>
 
               <button
-                class="text-xs text-vault42-error hover:text-red-400 transition-colors flex-shrink-0"
+                class="text-xs text-vault42-error hover:text-red-300 transition-colors flex-shrink-0"
                 @click="removeDevice(d.id)"
               >
                 {{ t('common.remove') }}

@@ -91,7 +91,7 @@ async function handleDelete(id: string) {
             <div class="w-full bg-vault42-surface rounded-full h-2">
               <div
                 class="h-2 rounded-full transition-all duration-300"
-                :class="quotaPercent > 90 ? 'bg-red-500' : 'bg-vault42-primary'"
+                :class="quotaPercent > 90 ? 'bg-vault42-error' : 'bg-vault42-accent'"
                 :style="{ width: quotaPercent + '%' }"
               ></div>
             </div>

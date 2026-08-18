@@ -132,7 +132,7 @@ describe('LanguageSwitcher', () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
 
-    const active = optionButtons(wrapper).filter(b => b.classes().includes('text-vault42-primary'))
+    const active = optionButtons(wrapper).filter(b => b.classes().includes('text-vault42-accent'))
     expect(active).toHaveLength(1)
     expect(active[0].text()).toContain('Nihongo')
   })

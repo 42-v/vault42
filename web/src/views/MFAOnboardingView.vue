@@ -28,14 +28,14 @@ function skip() {
 
       <div class="space-y-3">
         <button
-          class="w-full px-4 py-3 rounded-lg bg-vault42-primary text-black font-semibold hover:opacity-90 transition-opacity"
+          class="w-full px-4 py-3 rounded-lg bg-vault42-primary text-white font-semibold hover:bg-vault42-primary-hover transition-colors"
           @click="setupAuthenticator"
         >
           {{ t('mfaOnboarding.setupAuthenticator') }}
         </button>
 
         <button
-          class="w-full px-4 py-3 rounded-lg border border-vault42-primary/30 text-vault42-primary font-semibold hover:bg-vault42-primary/10 transition-colors"
+          class="w-full px-4 py-3 rounded-lg border border-vault42-primary/30 text-vault42-accent font-semibold hover:bg-vault42-primary/10 transition-colors"
           @click="setupWebAuthn"
         >
           {{ t('mfaOnboarding.setupSecurityKey') }}

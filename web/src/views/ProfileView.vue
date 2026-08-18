@@ -27,7 +27,7 @@ onMounted(() => fetchProfile())
           <!-- Identity card -->
           <div class="vault42-card flex items-start gap-5">
             <div class="w-14 h-14 rounded-full bg-vault42-primary/20 flex items-center justify-center flex-shrink-0">
-              <span class="text-xl font-bold text-vault42-primary">
+              <span class="text-xl font-bold text-vault42-accent">
                 {{ (profile.display_name || profile.email)[0].toUpperCase() }}
               </span>
             </div>
@@ -63,7 +63,7 @@ onMounted(() => fetchProfile())
                   <span v-if="profile.mfa_enabled" class="text-vault42-success">{{ t('common.enabled') }}</span>
                   <span v-else class="text-vault42-muted">
                     {{ t('common.disabled') }} &mdash;
-                    <router-link to="/2fa" class="text-vault42-primary hover:text-vault42-accent transition-colors">{{ t('profile.enable') }}</router-link>
+                    <router-link to="/2fa" class="text-vault42-accent hover:text-vault42-accent transition-colors">{{ t('profile.enable') }}</router-link>
                   </span>
                 </p>
               </div>
