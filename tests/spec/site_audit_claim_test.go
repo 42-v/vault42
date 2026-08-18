@@ -14,7 +14,7 @@
 // breath. docs/compliance-register.json carries CR-24 -- "The audit log is not
 // cryptographically chained and is not mirrored off-system" -- as an accepted
 // risk, with the reasoning that a chain whose signing key lives in the same
-// process is theatre against the only adversary a chain would address.
+// process is theater against the only adversary a chain would address.
 //
 // The gate is coupled to the register in both directions, which is the shape the
 // compliance gates in this repository already use. While CR-24 stands, the site
