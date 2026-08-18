@@ -28,6 +28,19 @@ before:
     - pnpm -C web build
     - bash -c 'rm -rf internal/frontend/dist && cp -r web/dist internal/frontend/dist'
 
+# CGO_ENABLED=0, -trimpath, -s -w and mod_timestamp were already set on all
+# three builds; -buildid= and -buildvcs=false are what actually close the gap to
+# bit-for-bit reproducibility. Go derives a build ID from the action graph, which
+# moves with the toolchain's cache state, and -buildvcs defaults to auto, which
+# stamps VCS state including a dirty-tree flag that differs between a clean CI
+# checkout and a local rebuild.
+#
+# Dropping the VCS stamp costs nothing here: main.Version, main.GitCommit and
+# main.BuildTime are stamped explicitly below.
+#
+# This claim covers the binaries and the archives only. The three Dockerfiles use
+# BuildKit cache mounts, so the images are not bit-reproducible and are not
+# advertised as such.
 builds:
   - id: vault
     main: ./cmd/vault
@@ -36,8 +49,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+      - -buildvcs=false
     ldflags:
       - -s -w
+      - -buildid=
       - -X main.Version={{ .Version }}
       - -X main.GitCommit={{ .FullCommit }}
       - -X main.BuildTime={{ .CommitDate }}
@@ -52,6 +67,7 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+      - -buildvcs=false
     # The three stamps below have to match variables declared in cmd/bridge
     # itself. cmd/bridge is deliberately stdlib-only and links nothing under
     # internal/, so they cannot be borrowed from a shared package: a -X naming a
@@ -62,6 +78,7 @@ builds:
     # tests/spec/version_stamp_test.go keeps the two sides in agreement.
     ldflags:
       - -s -w
+      - -buildid=
       - -X main.Version={{ .Version }}
       - -X main.GitCommit={{ .FullCommit }}
       - -X main.BuildTime={{ .CommitDate }}
@@ -76,8 +93,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+      - -buildvcs=false
     ldflags:
       - -s -w
+      - -buildid=
       - -X main.Version={{ .Version }}
       - -X main.GitCommit={{ .FullCommit }}
       - -X main.BuildTime={{ .CommitDate }}
