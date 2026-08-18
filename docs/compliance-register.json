@@ -180,16 +180,16 @@
       "cost_of_closing": "Nothing to build. Closing it means documenting the separate-hostname topology as the supported production shape and keeping VAULT_SERVE_FRONTEND for development and the honeypot profile."
     },
     "CR-30": {
-      "title": "Admin email HTML is validated by a regex denylist, not by a sanitisation library",
+      "title": "Admin email HTML is validated by a bespoke allowlist, not by a sanitisation library",
       "severity": "Low",
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitization library or framework feature. internal/email/templates.go:88 is a regex denylist. It blocks script, iframe, object, embed, base, link, svg and form tags, a meta only when that meta carries http-equiv, javascript: and data: URIs, css url(), on* event handlers, and the {{call and {{js template constructs. A denylist is the pattern the requirement exists to discourage, because it enumerates the badness it knows about. Filing this Not Applicable on \"no WYSIWYG editor and no untrusted HTML input\" skipped the fact that an HTML body does arrive in an HTTP request body and is stored and later compiled. An earlier version of this rationale also listed style among the blocked tags: it never was, and the pattern's own comment says a style block of inline CSS is allowed deliberately.",
-      "compensating_control": "The route requires rbac.EmailWrite, which is a super_admin-tier permission, so the population that can reach it is the population that could rewrite the mail wholesale anyway; the template is compiled with html/template, whose contextual auto-escaping means interpolated data cannot become markup; the output is an email body rendered by a mail client, not a page on vault42's origin, so there is no same-origin context to reach; every write is audited.",
-      "residual_risk": "A super_admin can put markup the denylist does not enumerate into an email body. The realistic outcome is a phishing-shaped mail, which the same principal could send by rewriting the copy.",
+      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitization library or framework feature. vault42 uses neither: it uses a validator written for this codebase, at internal/email/templates.go:249, and that is why this row is an accepted risk rather than Met. The validator has two stages. internal/email/templates.go:92 is a regex denylist over the template source, kept as a first gate because its errors name the construct. internal/email/template_guard.go:176 is the stage that holds the property: it renders the template with two canary data sets, requires the two bodies to be byte-identical once each render's own canaries are masked, and then walks the rendered document against an allowlist of the elements and attributes an HTML email may use. Until 2026-08-18 the denylist was the only stage, and it did not hold. It never named img, href or background, so the plainest exfiltration of all -- an image whose URL carries the live reset token, fetched the moment the recipient opens the mail -- passed it untouched. It also read the source rather than the rendered body, so a template action split any literal it did name: <scr{{\"ipt\"}}> contains no <script and html/template renders a working one. Filing this Not Applicable on \"no WYSIWYG editor and no untrusted HTML input\" skipped the fact that an HTML body does arrive in an HTTP request body and is stored and later compiled.",
+      "compensating_control": "The route requires rbac.EmailWrite, which is a super_admin-tier permission, so the population that can reach it is the population that could rewrite the mail wholesale anyway; the same validator runs at admin write time (internal/adminapi/email.go:277) and again wherever a stored override is loaded (internal/email/branding.go:70), so a row that reached the table another way is still refused before it renders; the output is an email body rendered by a mail client, not a page on vault42's origin, so there is no same-origin context to reach; every write is audited.",
+      "residual_risk": "The validator is bespoke, so a gap in it is a gap nobody else is fuzzing. Its failure mode is chosen to make that survivable: it is an allowlist walked over the rendered document, and anything it cannot confidently tokenise is refused, so a gap costs an operator a template rather than costing a user their second factor. Two things it deliberately does not stop: a template may carry a hardcoded remote image, which is an open-tracking pixel that reveals when and from which IP the mail was opened but carries no secret; and a template may still be written to phish, which the same principal could do by rewriting the copy.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
-      "cost_of_closing": "Replace the denylist with an allowlist sanitiser such as bluemonday, configured for an email-safe element set. The change is small; the reason it has not been made is that the denylist and the super_admin gate together already bound the realistic outcome."
+      "cost_of_closing": "Replace the bespoke walker with an allowlist sanitiser such as bluemonday, configured for an email-safe element set, and keep the two-canary differential render in front of it -- the differential is what defeats a template action splitting a construct, and no HTML sanitiser does that job because no HTML sanitiser sees the template. The reason it has not been made is that bluemonday would be a new module dependency on a security library that today has five direct ones."
     },
     "CR-34": {
       "title": "The Redis cache link has no TLS option",
@@ -432,11 +432,12 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/email/templates.go:88",
+        "internal/email/templates.go:249",
+        "internal/email/template_guard.go:176",
         "internal/adminapi/email.go:277"
       ],
       "tests": [],
-      "notes": "Accepted risk CR-30. There is no WYSIWYG editor, but there is untrusted-shaped HTML input: an admin email template body arrives in an HTTP request and is stored. It is validated before storage (internal/adminapi/email.go:277) against a regex denylist (internal/email/templates.go:88) blocking script, iframe, object, embed, base, link, svg and form tags, javascript: and data: URIs, css url() and on* handlers. A denylist is the pattern this requirement exists to discourage, so the honest classification is an accepted risk with the three compensating controls named, not Not Applicable. The previous reason also cited internal/adminapi/email.go:346, which is inside PreviewEmailTemplate rather than the storage path.",
+      "notes": "Accepted risk CR-30. There is no WYSIWYG editor, but there is untrusted-shaped HTML input: an admin email template body arrives in an HTTP request and is stored. It is validated before storage (internal/adminapi/email.go:277) by internal/email/templates.go:249, which runs a source-text denylist as a first gate and then internal/email/template_guard.go:176, a two-canary differential render followed by an element and attribute allowlist over the rendered body. The allowlist is written for this codebase rather than taken from a well-known sanitisation library, which is the gap this row records: the requirement names the library, not the property. Before 2026-08-18 the denylist was the only stage and it did not hold the property its own comment claimed -- see CR-30.",
       "accepted_risk": "CR-30"
     },
     {
@@ -491,12 +492,13 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/email/templates.go:88"
+        "internal/email/templates.go:92",
+        "internal/email/template_guard.go:116"
       ],
       "tests": [
         "TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates"
       ],
-      "notes": "No path accepts user-supplied SVG. The only surface on which SVG could arrive is an admin-authored email template, and the content validator rejects the svg tag along with the rest of the active-content families before the template is stored or previewed. TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates asserts the validator still names it.",
+      "notes": "No path accepts user-supplied SVG. The only surface on which SVG could arrive is an admin-authored email template. The source denylist names the svg tag along with the rest of the active-content families, and the element allowlist at internal/email/template_guard.go:116 omits svg, foreignObject and every other scriptable family, so the rendered body is refused even when the source spells the tag across a template action. TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates asserts the validator still names it.",
       "na_basis": "code-absence"
     },
     {
