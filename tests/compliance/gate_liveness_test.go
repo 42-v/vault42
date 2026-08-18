@@ -407,10 +407,3 @@ func hasCorpusFloor(fn *ast.FuncDecl) bool {
 	})
 	return found
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

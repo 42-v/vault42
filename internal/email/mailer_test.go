@@ -67,25 +67,25 @@ func testMailer(t *testing.T, sender Sender, store OverrideStore, defaults Brand
 }
 
 func TestMailer_SendGlobalBranding(t *testing.T) {
-	cap := &captureSender{}
-	m := testMailer(t, cap, nil, Branding{AppName: "Vault", FromName: "Vault"}, nil)
+	capture := &captureSender{}
+	m := testMailer(t, capture, nil, Branding{AppName: "Vault", FromName: "Vault"}, nil)
 
 	if err := m.Send(context.Background(), "", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if cap.calls != 1 || cap.to != "u@test.com" {
-		t.Fatalf("sender not invoked correctly: %+v", cap)
+	if capture.calls != 1 || capture.to != "u@test.com" {
+		t.Fatalf("sender not invoked correctly: %+v", capture)
 	}
-	if cap.subject == "" || cap.html == "" {
+	if capture.subject == "" || capture.html == "" {
 		t.Error("global template produced empty subject/html")
 	}
-	if cap.from.Name != "Vault" {
-		t.Errorf("From name = %q, want the default Vault", cap.from.Name)
+	if capture.from.Name != "Vault" {
+		t.Errorf("From name = %q, want the default Vault", capture.from.Name)
 	}
 }
 
 func TestMailer_SendPerAppOverride(t *testing.T) {
-	cap := &captureSender{}
+	capture := &captureSender{}
 	store := &staticStore{
 		app:      "acme",
 		branding: Branding{AppName: "Acme", FromName: "Acme Support", FromAddress: "no-reply@acme.test"},
@@ -93,21 +93,21 @@ func TestMailer_SendPerAppOverride(t *testing.T) {
 		tmpl:     TemplateOverride{Subject: "Acme: {{.AppName}} verify", HTMLContent: "<p>Code {{.Code}}</p>"},
 		tmplOK:   true,
 	}
-	m := testMailer(t, cap, store, Branding{AppName: "Vault"}, []string{"acme.test"})
+	m := testMailer(t, capture, store, Branding{AppName: "Vault"}, []string{"acme.test"})
 
 	err := m.Send(context.Background(), "acme", TemplateVerification, "u@acme.test", TemplateData{Code: "123456"})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if cap.subject != "Acme: Acme verify" {
-		t.Errorf("subject = %q, want the rendered override", cap.subject)
+	if capture.subject != "Acme: Acme verify" {
+		t.Errorf("subject = %q, want the rendered override", capture.subject)
 	}
-	if !contains(cap.html, "123456") {
-		t.Errorf("html = %q, want it to contain the rendered code 123456", cap.html)
+	if !contains(capture.html, "123456") {
+		t.Errorf("html = %q, want it to contain the rendered code 123456", capture.html)
 	}
 	// From address is on the allowlist, so it is honored.
-	if cap.from.Email != "no-reply@acme.test" || cap.from.Name != "Acme Support" {
-		t.Errorf("From = %+v, want the allowlisted acme address", cap.from)
+	if capture.from.Email != "no-reply@acme.test" || capture.from.Name != "Acme Support" {
+		t.Errorf("From = %+v, want the allowlisted acme address", capture.from)
 	}
 
 	// Second send for the same app is served from the cache (no new store hits).
@@ -132,18 +132,18 @@ func TestMailer_BadOverrideFallsBackToGlobal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cap := &captureSender{}
+			capture := &captureSender{}
 			store := &staticStore{app: "acme", tmpl: tt.tmpl, tmplOK: true}
-			m := testMailer(t, cap, store, Branding{AppName: "Vault"}, nil)
+			m := testMailer(t, capture, store, Branding{AppName: "Vault"}, nil)
 
 			if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
 				t.Fatalf("Send: %v", err)
 			}
 			wantSubject, wantHTML, _ := m.renderer.Render(TemplateVerification, TemplateData{AppName: "Vault", URL: "https://vault.test/v"})
-			if cap.subject != wantSubject {
-				t.Errorf("subject = %q, want the global %q", cap.subject, wantSubject)
+			if capture.subject != wantSubject {
+				t.Errorf("subject = %q, want the global %q", capture.subject, wantSubject)
 			}
-			if cap.html != wantHTML {
+			if capture.html != wantHTML {
 				t.Error("html did not fall back to the global render")
 			}
 		})
@@ -151,21 +151,21 @@ func TestMailer_BadOverrideFallsBackToGlobal(t *testing.T) {
 }
 
 func TestMailer_BrandingLogoAndColorOverlay(t *testing.T) {
-	cap := &captureSender{}
+	capture := &captureSender{}
 	store := &staticStore{
 		app:      "acme",
 		branding: Branding{AppName: "Acme", LogoURL: "https://cdn.acme.test/logo.png", PrimaryColor: "#123456"},
 		brandOK:  true,
 	}
-	m := testMailer(t, cap, store, Branding{AppName: "Vault"}, nil)
+	m := testMailer(t, capture, store, Branding{AppName: "Vault"}, nil)
 
 	if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://vault.test/v"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !contains(cap.html, "https://cdn.acme.test/logo.png") {
+	if !contains(capture.html, "https://cdn.acme.test/logo.png") {
 		t.Error("html missing the per-app logo URL")
 	}
-	if !contains(cap.html, "#123456") {
+	if !contains(capture.html, "#123456") {
 		t.Error("html missing the per-app primary color")
 	}
 }
@@ -208,7 +208,7 @@ func TestOverrideCache_ResetOnMaxEntries(t *testing.T) {
 }
 
 func TestMailer_FromAddressDomainNotAllowed(t *testing.T) {
-	cap := &captureSender{}
+	capture := &captureSender{}
 	store := &staticStore{
 		app:      "acme",
 		branding: Branding{AppName: "Acme", FromName: "Acme", FromAddress: "no-reply@evil.test"},
@@ -216,16 +216,16 @@ func TestMailer_FromAddressDomainNotAllowed(t *testing.T) {
 	}
 	// Allowlist does not include evil.test, so the address override is dropped
 	// but the display name still applies.
-	m := testMailer(t, cap, store, Branding{AppName: "Vault"}, []string{"acme.test"})
+	m := testMailer(t, capture, store, Branding{AppName: "Vault"}, []string{"acme.test"})
 
 	if err := m.Send(context.Background(), "acme", TemplateVerification, "u@test.com", TemplateData{URL: "https://x/y"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if cap.from.Email == "no-reply@evil.test" {
+	if capture.from.Email == "no-reply@evil.test" {
 		t.Error("off-allowlist From address was honored")
 	}
-	if cap.from.Name != "Acme" {
-		t.Errorf("From name = %q, want the display name to still apply", cap.from.Name)
+	if capture.from.Name != "Acme" {
+		t.Errorf("From name = %q, want the display name to still apply", capture.from.Name)
 	}
 }
 
@@ -240,8 +240,8 @@ func TestMailer_DisabledReturnsErrNoSender(t *testing.T) {
 }
 
 func TestMailer_WithStoreUpgrade(t *testing.T) {
-	cap := &captureSender{}
-	base := testMailer(t, cap, nil, Branding{AppName: "Vault"}, nil)
+	capture := &captureSender{}
+	base := testMailer(t, capture, nil, Branding{AppName: "Vault"}, nil)
 	store := &staticStore{app: "acme", branding: Branding{AppName: "Acme"}, brandOK: true}
 
 	upgraded := base.WithStore(store, Branding{AppName: "Vault"}, []string{"acme.test"})
