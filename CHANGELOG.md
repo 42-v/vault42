@@ -24,6 +24,29 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 
 ### Security
 
+* **A discovery document could name any host on the internet.** The four endpoints an OIDC
+  issuer's document supplies -- `authorization_endpoint`, `token_endpoint`,
+  `userinfo_endpoint` and `jwks_uri` -- are the only outbound destinations vault42 takes from
+  data rather than from configuration or a compiled-in literal, and the only check on them was
+  the scheme. A provider that was compromised, or self-hosted behind a proxy answering
+  wrongly, could name the host vault42 posts its client secret to, or the host whose keys every
+  `id_token` signature is checked against. `internal/outbound` now holds them to the issuer's
+  own domain, a loopback destination, or a host named in `VAULT_OUTBOUND_ALLOWED_HOSTS`, and
+  judges the addresses those hosts resolve to at dial time, connecting to the address it
+  judged rather than re-resolving the name. Link-local is refused outright: `169.254.0.0/16`
+  is where cloud instance metadata answers and no identity provider is there. The rule needs
+  no configuration and has no off switch. **Upgrade note:** a deployment whose OIDC issuer is
+  inside its own network -- a Keycloak or Authentik pod on a cluster address -- needs
+  `VAULT_OUTBOUND_ALLOW_PRIVATE=true`, which defaults on only in the `dev` profile. Without it
+  the first discovery fetch is refused, the refusal names the address and the variable, and
+  social login through that provider stops. Nothing else changes; the process still starts.
+* **Stored objects came back without a `Content-Disposition`.** Both blob download paths set
+  `Content-Type: application/octet-stream` and stopped, so a browser navigated straight at a
+  blob URL decided for itself whether to render the bytes. `nosniff` stops a browser guessing
+  a type that contradicts the declared one; it does not stop it rendering the one that was
+  declared. Both paths now send `attachment` with a server-chosen filename, reduced from the
+  blob's own reference to `[A-Za-z0-9._-]` and capped -- the download paths never run the
+  upload path's name validation, so the header cannot borrow that guarantee.
 * **DPoP now sender-constrains access tokens.** `POST /auth/login`, `POST /auth/refresh` and
   the 2FA challenge path stamp `cnf.jkt` when a valid DPoP proof is presented, and the
   middleware enforces that binding under the `DPoP` authorization scheme. Refresh tokens
