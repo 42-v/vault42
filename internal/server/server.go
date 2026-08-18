@@ -511,7 +511,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		// everyone behind it. It is limited like its two siblings instead, which is
 		// the budget the rest of the social-login flow already draws on.
 		oauthCallbackRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "oauthcallback", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		mux.Handle("GET /auth/oauth2/authorize", authorizeRL(http.HandlerFunc(oauthHandler.Authorize)))
 		mux.Handle("GET /auth/oauth2/callback/{provider}", oauthCallbackRL(http.HandlerFunc(oauthHandler.Callback)))
