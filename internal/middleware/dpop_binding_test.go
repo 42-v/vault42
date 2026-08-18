@@ -112,7 +112,7 @@ func TestARequestWithNoProofCarriesNoThumbprint(t *testing.T) {
 	memCache := cache.NewMemoryCache()
 	t.Cleanup(func() { _ = memCache.Close() })
 
-	var seen = "unset"
+	seen := "unset"
 	h := DPoP(memCache, "https://vault.test")(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = dpop.Thumbprint(r.Context())
 	}))

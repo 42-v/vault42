@@ -39,8 +39,10 @@ func TestSessionsListsFamiliesNotDevices(t *testing.T) {
 	devices := &mocks.MockDeviceRepo{
 		ListByUserFn: func(_ context.Context, userID string) ([]*model.Device, error) {
 			return []*model.Device{
-				{ID: "device-1", UserID: userID, FriendlyName: "Chrome on Linux", IP: "192.0.2.1",
-					UserAgent: "TestBrowser/1.0", LastSeenAt: &now, FirstSeenAt: now},
+				{
+					ID: "device-1", UserID: userID, FriendlyName: "Chrome on Linux", IP: "192.0.2.1",
+					UserAgent: "TestBrowser/1.0", LastSeenAt: &now, FirstSeenAt: now,
+				},
 				// A device with no live family. It used to list as an active
 				// session; it is not one.
 				{ID: "device-stale", UserID: userID, FriendlyName: "Old Phone", FirstSeenAt: now},
