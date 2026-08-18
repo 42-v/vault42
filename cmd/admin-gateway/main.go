@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -213,6 +214,29 @@ func main() {
 	// stays disabled (returns 503). The recovery public key is optional — absent
 	// means erasure proceeds but is not recoverable.
 	if len(cfg.HMACSecret) > 0 {
+		// The secret being present is not the same as it being the right one.
+		// Every store this cascade clears by subject — identity.profiles,
+		// objects.blobs, objects.service_documents — is keyed by a pseudonym
+		// HMAC'd under it, so a gateway configured with a different secret than
+		// the vault plane deletes by strings no row ever carried: zero rows
+		// cleared, no error, an AccountErased audit row, and the subject's data
+		// still in the database. An Article 17 request answered with nothing.
+		//
+		// Fatal, not degraded. Refusing the whole gateway is the loud failure a
+		// silent under-erasure was not, and it is also the earlier one: the
+		// cascade tombstones the account and destroys its tokens BEFORE it
+		// reaches the pseudonym-keyed stores, so a check that fired mid-erasure
+		// would abort a deletion it had already half-performed. An unanswerable
+		// store is reported instead — the gateway's contract against a database
+		// whose schema is not ready is to log and keep serving, and a cascade
+		// running against that database fails loudly on its own.
+		if err := config.VerifyHMACPlaneAgreement(ctx, adminConfigRepo, cfg.HMACSecret); err != nil {
+			if errors.Is(err, config.ErrHMACPlaneMismatch) {
+				fatalAfterDrain(ctx, auditLogger, "admin-gateway: %v", err)
+			}
+			log.Printf("admin-gateway: WARNING: %v; erasure agreement with the vault plane is unverified", err)
+		}
+
 		var recoveryPub *rsa.PublicKey
 		if len(cfg.RecoveryPublicKeyPEM) > 0 {
 			recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)

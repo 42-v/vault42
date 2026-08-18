@@ -167,6 +167,13 @@ func TestAdminConfigRepo_SurfacesDatabaseFailures(t *testing.T) {
 	if err := repo.Delete(ctx, "admin_token_hash"); err == nil {
 		t.Error("Delete reported success against an unreachable database")
 	}
+	// ClaimIfAbsent answers the cross-plane HMAC_SECRET check. Returning ("",
+	// nil) here would read as "the other plane recorded an empty fingerprint",
+	// a value no plane ever records, so the caller would report a disagreement
+	// that is really a database outage and refuse to start over it.
+	if _, err := repo.ClaimIfAbsent(ctx, "hmac_secret_fingerprint", "deadbeef"); err == nil {
+		t.Error("ClaimIfAbsent reported success against an unreachable database")
+	}
 }
 
 // The recovery escrow is the only copy of an erased account's details, and

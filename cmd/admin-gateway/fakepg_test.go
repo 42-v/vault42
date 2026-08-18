@@ -45,6 +45,7 @@ type fakePostgres struct {
 	statements []string
 	logins     []login
 	stopped    bool
+	scripted   map[string]string
 
 	wg sync.WaitGroup
 }
@@ -151,6 +152,78 @@ func (f *fakePostgres) accept() {
 	}
 }
 
+// scriptRow makes the stub answer any statement containing match with a single
+// text column named "value" holding v.
+//
+// The stub still does not grow query-specific fixtures for behaviour; this is
+// the narrow exception the cross-plane HMAC check needs. That check reads back
+// what the OTHER plane recorded, so "the row already holds a different
+// fingerprint" is a state no error code and no empty result can express, and it
+// is the state the gateway must refuse to start in.
+func (f *fakePostgres) scriptRow(match, v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.scripted == nil {
+		f.scripted = map[string]string{}
+	}
+	f.scripted[match] = v
+}
+
+// statement resolves sql to the answer the stub gives: a scripted single row
+// when one was registered, otherwise the two migration statements knownStatement
+// recognizes, otherwise nothing (which becomes SQLSTATE 42P01).
+func (f *fakePostgres) statement(sql string) (fields []pgproto3.FieldDescription, tag string, row []string, ok bool) {
+	f.mu.Lock()
+	for match, v := range f.scripted {
+		if strings.Contains(sql, match) {
+			f.mu.Unlock()
+			return []pgproto3.FieldDescription{{
+				Name:         []byte("value"),
+				DataTypeOID:  25, // text
+				DataTypeSize: -1,
+				TypeModifier: -1,
+				Format:       0,
+			}}, "SELECT 1", []string{v}, true
+		}
+	}
+	f.mu.Unlock()
+	fields, tag, ok = knownStatement(sql)
+	return fields, tag, nil, ok
+}
+
+// paramOIDs describes a statement's placeholders as text, one per $N up to the
+// highest N the SQL mentions. Every statement this stub answers binds strings,
+// and pgx sends text for an unspecified OID anyway.
+func paramOIDs(sql string) []uint32 {
+	highest := 0
+	for i := 0; i+1 < len(sql); i++ {
+		if sql[i] != '$' || sql[i+1] < '1' || sql[i+1] > '9' {
+			continue
+		}
+		n := 0
+		for j := i + 1; j < len(sql) && sql[j] >= '0' && sql[j] <= '9'; j++ {
+			n = n*10 + int(sql[j]-'0')
+		}
+		if n > highest {
+			highest = n
+		}
+	}
+	oids := make([]uint32, highest)
+	for i := range oids {
+		oids[i] = 25 // text
+	}
+	return oids
+}
+
+// dataRow encodes one all-text row.
+func dataRow(values []string) *pgproto3.DataRow {
+	out := make([][]byte, 0, len(values))
+	for _, v := range values {
+		out = append(out, []byte(v))
+	}
+	return &pgproto3.DataRow{Values: out}
+}
+
 func (f *fakePostgres) record(sql string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -234,7 +307,7 @@ func (f *fakePostgres) session(c net.Conn) {
 			f.record(m.Query)
 			prepared[m.Name] = m.Query
 			current = m.Query
-			if _, _, ok := knownStatement(m.Query); ok {
+			if _, _, _, ok := f.statement(m.Query); ok {
 				be.Send(&pgproto3.ParseComplete{})
 			} else {
 				be.Send(undefinedTable())
@@ -249,9 +322,12 @@ func (f *fakePostgres) session(c net.Conn) {
 				if sql, ok := prepared[m.Name]; ok {
 					current = sql
 				}
-				be.Send(&pgproto3.ParameterDescription{})
+				// The OIDs have to be declared or pgx refuses to bind: it
+				// compares the count it was given against the count described,
+				// and an empty description means "expected 0 arguments".
+				be.Send(&pgproto3.ParameterDescription{ParameterOIDs: paramOIDs(current)})
 			}
-			if fields, _, _ := knownStatement(current); fields != nil {
+			if fields, _, _, _ := f.statement(current); fields != nil {
 				be.Send(&pgproto3.RowDescription{Fields: fields})
 			} else {
 				be.Send(&pgproto3.NoData{})
@@ -270,7 +346,10 @@ func (f *fakePostgres) session(c net.Conn) {
 			if failed {
 				continue
 			}
-			_, tag, _ := knownStatement(current)
+			_, tag, row, _ := f.statement(current)
+			if row != nil {
+				be.Send(dataRow(row))
+			}
 			be.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
 
 		case *pgproto3.Sync:
@@ -363,7 +442,7 @@ func (f *fakePostgres) simpleQuery(be *pgproto3.Backend, sql string) {
 		return
 	}
 
-	fields, tag, ok := knownStatement(sql)
+	fields, tag, row, ok := f.statement(sql)
 	if !ok {
 		be.Send(undefinedTable())
 		be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
@@ -371,6 +450,9 @@ func (f *fakePostgres) simpleQuery(be *pgproto3.Backend, sql string) {
 	}
 	if fields != nil {
 		be.Send(&pgproto3.RowDescription{Fields: fields})
+	}
+	if row != nil {
+		be.Send(dataRow(row))
 	}
 	be.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
 	be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
