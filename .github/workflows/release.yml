@@ -426,26 +426,46 @@ jobs:
       # this cannot be a single globbed step: one glob would attest whichever
       # SBOM matched first to all four archives and quietly misdescribe three
       # of them. goos/goarch in .goreleaser.yaml decide this list.
+      #
+      # actions/attest rather than actions/attest-sbom. The latter is a
+      # composite whose first step is
+      # `echo "::warning::actions/attest-sbom has been deprecated, please use
+      # actions/attest instead"`, and it then calls this same action with these
+      # same inputs. Four deprecation warnings on every release, for nothing.
+      #
+      # NODE_OPTIONS is not decoration: both attest-sbom and
+      # attest-build-provenance set it on the inner action, because the
+      # attestation API's responses exceed Node's default header limit. Calling
+      # actions/attest directly means setting it here or inheriting a failure
+      # the wrappers were quietly preventing.
       - name: Attest SBOM (linux_amd64)
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
         with:
           subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz
           sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz.spdx.sbom.json
 
       - name: Attest SBOM (linux_arm64)
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
         with:
           subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz
           sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz.spdx.sbom.json
 
       - name: Attest SBOM (darwin_amd64)
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
         with:
           subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz
           sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz.spdx.sbom.json
 
       - name: Attest SBOM (darwin_arm64)
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
         with:
           subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz
           sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz.spdx.sbom.json
