@@ -63,6 +63,26 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+      # `./...` stops at a module boundary, so this job scanned the root module
+      # and nothing else. tests/browser is a second module, and nothing in any
+      # workflow ever looked at it: that is how its golang.org/x/sys sat on
+      # v0.34.0, twelve minor versions behind the root module's and carrying
+      # GO-2026-5024, without a single scan noticing.
+      - name: Run govulncheck (nested modules)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dirs < <(find . -mindepth 2 -name go.mod \
+            -not -path '*/node_modules/*' -not -path '*/vendor/*' -printf '%h\n')
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "no nested modules in the tree; nothing beyond the root scan to do"
+            exit 0
+          fi
+          for dir in "${dirs[@]}"; do
+            echo "==> govulncheck in $dir"
+            ( cd "$dir" && govulncheck ./... )
+          done
+
   gosec:
     name: Static Security Analysis
     runs-on: ubuntu-latest
