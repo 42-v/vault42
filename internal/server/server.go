@@ -316,25 +316,25 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Auth-sensitive limiters fail closed on cache outage (audit L4): the per-pod
 	// in-memory fallback would multiply the effective limit across replicas.
 	loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
+		Name: "login", Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.LoginRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	registerRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
+		Name: "register", Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	refreshRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		Name: "refresh", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	passwordResetRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
+		Name: "pwreset", Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
 	totpRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		Name: "totp", Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	verifyEmailRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
+		Name: "verifyemail", Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	confirmRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey,
+		Name: "pwconfirm", Limit: 5, Window: 15 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey,
 	}, rlEnabled)
 	// FailClosed because this route verifies a client secret with Argon2, which
 	// makes it a guessing surface exactly like login. Without it a cache outage
@@ -342,12 +342,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// the replica count (three by chart default, ten at the HPA ceiling) while
 	// the pods stay in rotation, since a degraded cache still reports ready.
 	clientTokenRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		Name: "clienttoken", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 	// Account erasure is irreversible (recoverable only via the offline key); cap
 	// it tightly and fail closed so a cache outage cannot widen the limit.
 	accountDeleteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+		Name: "acctdelete", Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
 
 	// ===== Public endpoints (no auth) =====
@@ -395,13 +395,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	if len(d.OAuthProviders) > 0 {
 		oauthHandler := handler.NewOAuthHandler(d.OAuthProviders, d.HMACSecret, d.Cache, cfg.Origin, d.Users, d.Social, d.Tokens, d.AuthSvc, d.TokenSvc, d.MFASvc, d.AuditLog, secureCookies)
 		oauthExchangeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "oauthexchange", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		// Authorize writes an unauthenticated per-request oauth_state cache entry;
 		// rate-limit it like its siblings to avoid cache-fill eviction pressure
 		// on shared lockout/OTP/reset state (audit M2).
 		authorizeRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "oauthauthorize", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		mux.Handle("GET /auth/oauth2/authorize", authorizeRL(http.HandlerFunc(oauthHandler.Authorize)))
 		mux.Handle("GET /auth/oauth2/callback/{provider}", loginRL(http.HandlerFunc(oauthHandler.Callback)))
@@ -491,10 +491,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		identitySvc = service.NewIdentityService(d.Identity, d.MasterKey, d.HMACSecret)
 		identityHandler := handler.NewIdentityHandler(identitySvc, d.AuditLog)
 		identityReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "identityread", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		identityWriteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "identitywrite", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		mux.Handle("GET /user/identity", identityReadRL(authed(identityHandler.Get)))
 		mux.Handle("PUT /user/identity", identityWriteRL(authed(identityHandler.Put)))
@@ -514,10 +514,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		})
 		blobHandler := handler.NewBlobHandler(blobSvc, d.AuditLog, cfg.BlobMinSize, cfg.BlobMaxSize)
 		blobUploadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "blobupload", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		blobReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+			Name: "blobread", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		mux.Handle("POST /user/blobs", blobUploadRL(authed(blobHandler.Upload)))
 		mux.Handle("GET /user/blobs", blobReadRL(authed(blobHandler.List)))
@@ -565,10 +565,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		// reaches this bucket, which is the right order anyway: refusing a bad token
 		// is cheap, and what needs bounding is the authenticated work behind it.
 		svcDocWriteRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
+			Name: "svcdocwrite", Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
 		}, rlEnabled)
 		svcDocReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 300, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
+			Name: "svcdocread", Limit: 300, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
 		}, rlEnabled)
 		docWrite := func(h http.HandlerFunc) http.Handler {
 			return authMw(svcDocWriteRL(middleware.RequireScope("svcdoc:write")(h)))
@@ -586,7 +586,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// held for the requesting user. Reuses the existing services/repositories.
 	dataExportHandler := handler.NewDataExportHandler(d.Users, d.Devices, d.Social, d.AuditEvents, identitySvc, blobSvc, svcDocSvc, d.AuditLog)
 	dataExportRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-		Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
+		Name: "dataexport", Limit: 5, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
 	mux.Handle("GET /user/data-export", dataExportRL(authed(dataExportHandler.Export)))
 
@@ -615,7 +615,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	if d.KMS != nil {
 		kmsHandler := handler.NewKMSHandler(d.KMS, d.AuditLog)
 		kmsUnwrapRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
+			Name: "kmsunwrap", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 		}, rlEnabled)
 		mux.Handle("POST /kms/unwrap", kmsUnwrapRL(authMw(middleware.RequireScope("kms:unwrap")(dpopWrap(http.HandlerFunc(kmsHandler.Unwrap))))))
 	}
@@ -628,7 +628,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	if d.Mint != nil {
 		mintHandler := handler.NewMintHandler(d.Mint, d.AuditLog)
 		mintRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
-			Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey, FailClosed: true,
+			Name: "mint", Limit: 60, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey, FailClosed: true,
 		}, rlEnabled)
 		// Inside authMw for the same reason as the document routes: mintRL is keyed
 		// by client and the claims that carry the client id do not exist until
