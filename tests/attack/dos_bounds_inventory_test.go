@@ -198,7 +198,7 @@ func TestDoS_RefreshTokenReaperIsOnTheServerPath(t *testing.T) {
 }
 
 // TestDoS_MailDrainRunsBeforeTheCacheCloses pins the shutdown ORDER, which is
-// the half of the mail-pool fix that a refactor can silently undo. Defers run
+// the half of the deferred-work fix that a refactor can silently undo. Defers run
 // last-in-first-out, so the drain has to be registered AFTER the cache close to
 // run before it: a deferred verification send writes its token to the cache and
 // then mails the link, and a closed cache turns that into a link that never
