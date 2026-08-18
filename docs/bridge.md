@@ -31,7 +31,11 @@
     └────────────┘  └──────────────┘
 ```
 
-The bridge sits in front of two fully isolated Vault42 instances. Both run the same binary with the same `VAULT_ORIGIN`, producing identical response shapes and timing (including Argon2id dummy burns for anti-enumeration). The attacker never knows they've been switched.
+The bridge sits in front of two isolated Vault42 instances. Both run the same binary with the same
+`VAULT_ORIGIN`, producing identical response shapes and timing (including Argon2id dummy burns for
+anti-enumeration). What that buys is described precisely below: the switch is invisible in the shape
+of a response, and it is **not** invisible to an attacker who inspects signing key material. The two
+instances deliberately do not share a Secret, so they do not share a signing key.
 
 ## Quick Start
 
@@ -183,13 +187,31 @@ External → Bridge:         ALLOW (port 8080)
 External → Vaults:         BLOCKED (only bridge can reach them)
 ```
 
-## Transparent Switching Guarantees
+## What Switching Does And Does Not Conceal
 
-- Both Vaults share the same `VAULT_ORIGIN` → identical cookies
-- Both run the same binary → identical response shapes, timing
+Concealed:
+
+- Both Vaults share the same `VAULT_ORIGIN`, so cookie names, domains and attributes are identical
+- Both run the same binary, so response shapes, status codes and error bodies are identical
 - Argon2id dummy burns on user-not-found prevent timing leaks
-- Attacker's refresh token is invalid on honeypot (different DB) → looks like normal session expiry
-- Bridge adds no detectable headers to proxied requests
+- The attacker's refresh token is invalid on the honeypot (different DB), which presents as an
+  ordinary rejected session rather than as a distinct error
+- The bridge adds no headers to the response an attacker sees
+
+Not concealed, deliberately:
+
+- **Signing key material.** `vault.honeypotSecretName` refuses to resolve to the production Secret,
+  so the honeypot holds its own master key, HMAC secret, pepper and signing key: the same key names
+  with different values. The honeypot therefore serves a different `/.well-known/jwks.json`, with a
+  different `kid` and a different modulus. An attacker who fetched JWKS before the switch and fetches
+  it again after can see that it changed, and an access token minted by the real vault fails on the
+  honeypot as an unknown `kid` rather than as an expiry.
+- This is the correct trade and not a defect to fix. Sharing key material to make the decoy
+  indistinguishable would mean handing the production signing key to the component whose entire
+  purpose is to be broken into, which is exactly the finding that separated the two Secrets in the
+  first place. The deception is designed to survive a casual attacker and an automated one; it is not
+  designed to survive an attacker who diffs key sets, and claiming otherwise would be the kind of
+  guarantee an operator would plan around.
 
 ## Cloudflare Tunnel Setup
 
