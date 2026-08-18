@@ -145,7 +145,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"GDPR|Art. 32|internal/crypto/aes.go":                                              {},
 	"GDPR|Art. 5(1)(c)|internal/audit/audit.go":                                        {},
 	"GDPR|Art. 5(1)(c)|internal/httputil/safelog.go":                                   {},
-	"GDPR|Arts. 33, 34|internal/honeypot/honeypot.go":                                  {},
 	"IETF RFC / OpenID Connect|OIDC Core 1.0 s3.1.3.7|internal/oauth2/oidc_idtoken.go": {},
 	"IETF RFC / OpenID Connect|RFC 7636|internal/handler/oauth.go":                     {},
 	"IETF RFC / OpenID Connect|RFC 8725 s3.1|internal/crypto/jwt.go":                   {},

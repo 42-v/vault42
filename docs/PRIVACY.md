@@ -478,37 +478,57 @@ applies.
 
 **What Vault42 provides, stated precisely.** Vault42 records security-relevant events to the
 append-only audit log and tags each one with an integer severity in the `risk_score` column
-(`migrations/001_initial_schema.sql:163`), assigned by the call site that writes the event
-(`audit.Logger.Log`) -- for example 100 for a login attempt against a configured honeypot trap
-user (`AuthService.Login`), 100 for a non-loopback request reaching the admin gateway
-(`adminapi.LocalOnly`), 80 for a concurrent-session check that failed closed
-(`AuthService.checkSessionLimit`), 20 for a rejected KMS unwrap (`handler.KMSHandler.audit`).
+(`migrations/001_initial_schema.sql:163`). The score is a property of the event class, taken from
+one table (`internal/audit/severity.go`) on one five-band scale -- routine 0, notable 25,
+elevated 50, serious 75, critical 100 -- rather than a number the call site chooses. It used to
+be the latter, which meant the same class carried four different numbers and no threshold over
+the column meant anything.
 
-**Vault42 does not evaluate that score.** There is no threshold, no scoring engine, no anomaly
-detection and no alert derived from it. The value exists so a human reviewing the log can triage
-it: the admin dashboard colour-codes and sorts on it
-(`internal/adminapi/static/admin.js`), and it is returned by `GET /admin/audit`. The audit query
-filter (`repository.AuditFilter`) supports user, event type and time range, so filtering *by*
-risk score is done by the reviewer or by an external log pipeline, not by Vault42.
+**Vault42 now evaluates it, in one narrow way.** `internal/alert` keeps a count per event class
+for each subject and for each masked source network over a short window, and raises one alert
+when a class crosses the count its rule sets, then stays quiet for a cooldown. The alert is a
+line in Vault42's own process log prefixed `SECURITY ALERT`, plus an increment of
+`vault_security_alerts_total` on `GET /metrics`. It is not a profiling or scoring engine: no
+decision about a person is taken from it, nothing is blocked or refused because of it, and it
+produces no record about a data subject beyond what the audit log already holds. The line carries
+the user id or asserted subject, the **masked** source network (last octet or lower 64 bits
+zeroed, `httputil.ObfuscatedIP`), the event class, the count and the window -- never the full
+address, never an email, never metadata.
 
-The only automated reactions Vault42 performs are narrow, and none of them is breach detection:
-lockout after 5 failed logins from one source against one account, 20 from one source against
-any account, and 50 against one account from all sources (`lockoutThreshold`,
-`ipLockoutThreshold` and `distributedLockoutThreshold`, `internal/service/auth.go`); the honeypot
-webhook, which fires on a login attempt against a name in `VAULT_HONEYPOT_TRAP_USERS`, only when
-`VAULT_HONEYPOT_WEBHOOK` names an http or https URL, and only in the honeypot profile, since the
-alerter is not built at all in any other (`cmd/vault/main.go`); and the admin gateway killswitch,
-which audits a non-loopback request and crashes the pod, outside the dev profile where it answers
-403 instead.
+Eight event classes are marked as ones whose alert would start an Art. 33 assessment:
+`honeypot_trigger`, `fingerprint_anomaly`, `dpop_binding_mismatch`, `kms_unwrap`, `token_minted`,
+`data_export`, `svcdoc_get` and `account_erased`. Each is unauthorised access to, disclosure of,
+or destruction of personal data. `login_failure` is deliberately not among them: a login that
+failed disclosed nothing.
 
-**Detection is therefore the Operator's responsibility.** An Operator processing personal data
-should ship the audit log to its own monitoring and set the alerting rules there. Vault42 gives
-that pipeline a durable, append-only, severity-tagged record; it does not watch it.
+The audit query filter (`repository.AuditFilter`) supports user, event type, time range and a
+minimum severity, so a reviewer can ask `GET /admin/audit?min_risk_score=75` for everything
+serious or worse. The admin dashboard also colour-codes and sorts on the score
+(`internal/adminapi/static/admin.js`).
+
+The other automated reactions Vault42 performs are narrow: lockout after 5 failed logins from one
+source against one account, 20 from one source against any account, and 50 against one account
+from all sources (`lockoutThreshold`, `ipLockoutThreshold` and `distributedLockoutThreshold`,
+`internal/service/auth.go`); the honeypot webhook, which fires on a login attempt against a name
+in `VAULT_HONEYPOT_TRAP_USERS`, only when `VAULT_HONEYPOT_WEBHOOK` names an http or https URL,
+and only in the honeypot profile, since the alerter is not built at all in any other
+(`cmd/vault/main.go`); and the admin gateway killswitch, which audits a non-loopback request and
+crashes the pod, outside the dev profile where it answers 403 instead.
+
+**Assessment and notification remain the Operator's responsibility.** Vault42 detects and
+records; deciding whether a detected event is a notifiable breach, notifying the supervisory
+authority, communicating to data subjects and keeping the Art. 33(5) register are acts only a
+controller can perform. What changed is that "becoming aware" no longer depends on somebody
+opening the audit view: an Operator routes `SECURITY ALERT` from Vault42's process log, or alerts
+on `vault_security_alerts_total`, and the 72 hours start when the alert does. Vault42 does not
+ship the alert anywhere itself -- it has no destination to ship to that the deployment has not
+already configured for its logs.
 
 The procedure:
 
-1. **Detect.** Sources are the Operator's own monitoring and alerting over the exported audit log
-   and infrastructure telemetry, the honeypot webhook where configured, and external reports
+1. **Detect.** Sources are Vault42's own `SECURITY ALERT` records and
+   `vault_security_alerts_total`, the Operator's monitoring over the exported audit log and
+   infrastructure telemetry, the honeypot webhook where configured, and external reports
    (including reports received under the process in `SECURITY.md`).
 2. **Contain.** Take immediate containment steps (e.g. revoke affected sessions and refresh
    tokens, rotate signing keys, lock or disable affected accounts, rotate compromised secrets).

@@ -615,6 +615,17 @@ func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 			filter.Until = &t
 		}
 	}
+	// min_risk_score selects on the internal/audit severity scale: 0 routine,
+	// 25 notable, 50 elevated, 75 serious, 100 critical. A value that does not
+	// parse, or one below the scale, leaves the predicate off rather than
+	// landing on some other threshold -- the same shape as since and until
+	// above, and for the same reason: a filter that silently becomes a
+	// different filter gives a wrong answer rather than no answer.
+	if v := q.Get("min_risk_score"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.MinRiskScore = n
+		}
+	}
 
 	entries, err := h.auditRepo.Query(r.Context(), filter)
 	if err != nil {

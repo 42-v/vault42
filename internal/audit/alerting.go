@@ -90,6 +90,14 @@ var alertRules = map[string]alert.Rule{
 		Name: "trap-credential-used", Threshold: 1, Window: shortWindow,
 		Cooldown: alertCooldown, Severity: SeverityCritical, Breach: true,
 	},
+	// A WebAuthn sign counter went backwards: the credential's private key
+	// answered from two places. There is no benign version of this, and no
+	// second one to wait for. Containment already revoked every session; the
+	// alert is how anybody finds out it happened.
+	AuthenticatorCloned: {
+		Name: "authenticator-cloned", Threshold: 1, Window: shortWindow,
+		Cooldown: alertCooldown, Severity: SeverityCritical, Breach: true,
+	},
 	// The envelope-unwrap oracle. A burst is a caller walking key ids.
 	KMSUnwrap: {
 		Name: "key-release-burst", Threshold: 20, Window: shortWindow,

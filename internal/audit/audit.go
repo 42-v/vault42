@@ -100,6 +100,18 @@ const (
 	AdminAction = "admin_action"
 	// DataExport records a user exporting their personal data (GDPR Articles 15/20).
 	DataExport = "data_export"
+	// AuthenticatorCloned records a WebAuthn sign-counter regression: the
+	// credential's private key answered from two places, which is the one signal
+	// that says a hardware authenticator has been copied rather than a session
+	// stolen. It is emitted by the containment path, which revokes every refresh
+	// family for the user and refuses the assertion.
+	//
+	// It is its own class rather than a token_revoke carrying a reason, which is
+	// what it used to be. A revoke on logout and a revoke because a key is in two
+	// places are the same action and nothing like the same event, and once the
+	// severity is a property of the class the two cannot share one: the logout is
+	// routine and this is the most severe thing WebAuthn can report.
+	AuthenticatorCloned = "authenticator_cloned"
 	// HoneypotTrigger records a trap credential being used in honeypot mode.
 	HoneypotTrigger = "honeypot_trigger"
 	// HoneypotAlert records a webhook dispatch in honeypot mode.
@@ -273,12 +285,17 @@ func (l *Logger) QuarantinedTotal() int64 {
 // probe and a session-token replay leave behind (ASVS V16.3.2). The decision
 // is enforced regardless; losing the row under buffer pressure is how a
 // viewer floods the logger and then probes in silence.
+//
+// AuthenticatorCloned inherits the guarantee from token_revoke, which is what
+// the containment path used to file it as. It is the only durable record that a
+// credential private key answered from two places, and the process log beside
+// it is not evidence.
 func isCriticalEvent(eventType string) bool {
 	if strings.HasPrefix(eventType, svcDocEventPrefix) {
 		return true
 	}
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger, AdminAuthzDenied, AdminSessionRejected:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger, AdminAuthzDenied, AdminSessionRejected, AuthenticatorCloned:
 		return true
 	}
 	return false

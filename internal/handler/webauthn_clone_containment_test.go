@@ -117,7 +117,7 @@ func TestWebAuthnVerifyFinish_SuccessfulCloneContainmentIsRecordedInTheTrail(t *
 		t.Errorf("RevokeAllTokensForUser called for %q, want user-1", revokedFor)
 	}
 
-	entry := f.trail.only(t, audit.TokenRevoke)
+	entry := f.trail.only(t, audit.AuthenticatorCloned)
 	wantMeta(t, entry, "reason", "cloned_authenticator")
 	wantMeta(t, entry, "method", "webauthn")
 	wantMeta(t, entry, "outcome", "revoked")
@@ -153,7 +153,7 @@ func TestWebAuthnVerifyFinish_FailedCloneContainmentIsRecordedAndStillRefuses(t 
 	// Fail-closed first: the refusal must not depend on the revoke landing.
 	wantCloneRefusal(t, f.recorder)
 
-	entry := f.trail.only(t, audit.TokenRevoke)
+	entry := f.trail.only(t, audit.AuthenticatorCloned)
 	wantMeta(t, entry, "reason", "cloned_authenticator")
 	wantMeta(t, entry, "outcome", "revoke_failed")
 

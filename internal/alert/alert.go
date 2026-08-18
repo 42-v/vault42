@@ -19,7 +19,7 @@
 //     event — the subject and the event type — reach the audit log from callers,
 //     and POST /mint files rows under a subject vault42 never authenticated. An
 //     operator reads an alert in a terminal, and a terminal acts on what it is
-//     sent, so every caller-influenced field is neutralised and length-bounded
+//     sent, so every caller-influenced field is neutralized and length-bounded
 //     here rather than in each sink. The source is a masked network, never an
 //     address: the audit row already holds the whole one and docs/PRIVACY.md
 //     inventories it as the place that does.
@@ -69,8 +69,8 @@ const RuleSaturated = "detector-saturated"
 // whose length the attacker picks.
 const maxKeyLen = 96
 
-// Alert is one raised detection. Every string field is already neutralised and
-// length-bounded, so a sink may render it without sanitising it again.
+// Alert is one raised detection. Every string field is already neutralized and
+// length-bounded, so a sink may render it without sanitizing it again.
 type Alert struct {
 	// Rule is the detection that fired, from Rule.Name, or RuleSaturated.
 	Rule string
@@ -87,7 +87,7 @@ type Alert struct {
 	Window time.Duration
 	// Severity is the event class's score on the internal/audit scale.
 	Severity int
-	// Breach marks a detection whose subject matter is unauthorised access to,
+	// Breach marks a detection whose subject matter is unauthorized access to,
 	// disclosure of, or destruction of personal data — the classes that would
 	// start a GDPR Art. 33 assessment. It is a routing hint, not a legal
 	// conclusion: whether a notifiable breach occurred is an assessment a
@@ -126,7 +126,7 @@ type Rule struct {
 // valid reports whether a rule can raise anything sensible. A malformed rule is
 // ignored rather than corrected: a threshold of zero would fire on every event,
 // which is the amplifier this package exists to prevent, and silently rewriting
-// it to one would hide the mistake behind exactly that behaviour.
+// it to one would hide the mistake behind exactly that behavior.
 func (r Rule) valid() bool {
 	return r.Name != "" && r.Threshold > 0 && r.Window > 0
 }
@@ -158,13 +158,13 @@ type LogSink struct{}
 
 // Deliver writes the alert as one line with a fixed, greppable prefix.
 func (LogSink) Deliver(_ context.Context, a Alert) {
-	// #nosec G706 -- every string field was neutralised and bounded by safeField
+	// #nosec G706 -- every string field was neutralized and bounded by safeField
 	// before the Alert was constructed; see the package comment.
 	log.Printf("SECURITY ALERT: rule=%s event_type=%s %s=%s count=%d window=%s severity=%d breach=%t",
 		a.Rule, a.EventType, a.Scope, a.Key, a.Count, a.Window, a.Severity, a.Breach)
 }
 
-// safeField neutralises and bounds a caller-influenced string.
+// safeField neutralizes and bounds a caller-influenced string.
 //
 // SafeLogValue is the tree's existing answer to a value that will be printed: it
 // replaces every character that can end a record or drive a terminal. Space is

@@ -133,6 +133,43 @@ microk8s kubectl -n vault42 get pods
 microk8s kubectl -n vault42 logs deploy/vault42
 ```
 
+## Routing security alerts
+
+vault42 raises an alert when a run of security events crosses a detection
+threshold -- a burst of failed logins against one account or from one network, a
+trap credential being used, a run of key releases, personal data leaving in
+bulk. It does not open an outbound connection to do it. Each alert is one line
+on the pod's stdout with a fixed prefix, and one increment of a counter:
+
+```
+SECURITY ALERT: rule=credential-stuffing event_type=login_failure source=203.0.113.0 count=25 window=5m0s severity=25 breach=false
+```
+
+**Wire one of these two before going live, or nothing is watching.** Either is
+enough on its own.
+
+- **Log pipeline.** Route records matching `SECURITY ALERT: ` out of the vault42
+  container log. `breach=true` marks the classes whose alert starts a GDPR
+  Art. 33 assessment (`docs/PRIVACY.md` section 7.1); route those separately if
+  you process personal data. `SECURITY WARNING` on the same stream is a
+  different signal -- a control running degraded, emitted at startup -- and is
+  also worth routing.
+- **Metrics.** `vault_security_alerts_total` on `GET /metrics` counts every
+  alert raised. Any non-zero rate is a detection that fired. The metrics
+  listener binds to `127.0.0.1:9090` by default; see `VAULT_METRICS_ADDR` in
+  `docs/config.md` before pointing Prometheus at it.
+
+The thresholds and windows are not configurable. They are per event class and
+live in `internal/audit/alerting.go` with the argument for each; the setting an
+operator would reach for -- quieter -- is the one that reopens the gap this
+exists to close. Alerts are deduplicated per subject and per source network with
+a cooldown, so a sustained attack produces a report rather than a flood, and the
+counters are per replica: a fleet is slower to reach a threshold than one pod,
+never blind to it.
+
+Nothing here blocks a request. A detection cannot fail a login, and the audit
+write happens before the alert is evaluated.
+
 ## Resource Usage
 
 ### Production

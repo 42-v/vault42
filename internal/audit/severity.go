@@ -146,6 +146,7 @@ var severityByEvent = map[string]int{
 	// No legitimate traffic reaches these. A trap credential has no user, and a
 	// non-loopback connection to the admin gateway is not a misconfiguration
 	// anybody has to guess about.
+	AuthenticatorCloned:      SeverityCritical,
 	HoneypotTrigger:          SeverityCritical,
 	AdminKillswitchTriggered: SeverityCritical,
 }

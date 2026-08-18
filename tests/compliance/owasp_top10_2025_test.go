@@ -775,28 +775,21 @@ func TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned(t *testing.T) {
 
 // --- A09:2025 Security Logging and Alerting Failures ---
 
-// A09 was renamed in the 2025 edition to add "Alerting", and that rename is
-// what moves vault42 from Met to an accepted risk: nothing in the tree reads a
-// risk score and raises anything. The logging half is real and is pinned here;
-// the alerting half is carried as CR-15 with a named revisit condition.
+// A09 was renamed in the 2025 edition to add "Alerting", and that rename is what
+// moved vault42 off Met: every security event reached an append-only store and
+// nothing raised anything from any of them.
 //
-// This test fails when the gap closes, which is the signal to move the register
-// row rather than let it drift.
-func TestOWASP_A09_2025_RiskScoreIsStillWriteOnly(t *testing.T) {
-	filterSrc := readProductionSource(t, "internal/repository/repository.go")
-	idx := strings.Index(filterSrc, "type AuditFilter struct")
-	if idx < 0 {
-		t.Skip("A09:2025: AuditFilter has moved; re-derive CR-15 against the new query surface")
-	}
-	filter := filterSrc[idx:]
-	if end := strings.Index(filter, "\n}"); end > 0 {
-		filter = filter[:end]
-	}
-
-	if strings.Contains(strings.ToLower(filter), "risk") {
-		t.Fatal("A09:2025: AuditFilter can now select on risk score. CR-15 is closed: move the register row to Met and delete this test.")
-	}
-}
+// The tripwire that used to live here, TestOWASP_A09_2025_RiskScoreIsStillWriteOnly,
+// asserted that repository.AuditFilter contained no field mentioning risk, and
+// said in its own failure message that closing CR-15 meant moving the row and
+// deleting it. It has fired. It is replaced rather than deleted, because it was
+// the suite's only assertion about what risk_score is for, and the replacement
+// is in tests/compliance/alerting_test.go:
+//
+//   - TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten
+//   - TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile
+//
+// The logging half of A09 is unchanged and is pinned below.
 
 // The logging half of A09 is genuinely strong and is what the register cites.
 func TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore(t *testing.T) {

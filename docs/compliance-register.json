@@ -119,18 +119,6 @@
       "revisit_when": "Any deployment claims AAL2 conformance to a third party rather than self-assessing, in which case the default must move to 24 hours and an inactivity timeout must ship. Also revisit if a customer contract specifies an idle policy.",
       "cost_of_closing": "For the default: one constant, plus a documented migration note because shortening it logs every existing session out. For inactivity: a last_activity_at column on auth.refresh_tokens, a write on every refresh, and a check before rotation."
     },
-    "CR-15": {
-      "title": "Security events are logged but nothing alerts on them",
-      "severity": "Medium",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-10",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "risk_score is a hardcoded per-event severity tag, not a computed score, and the code says so at internal/adminapi/handler.go:569-571. Nothing reads it for a decision: AuditFilter supports user, event type and time window only, there is no WHERE risk_score clause anywhere, and no threshold constant exists. The honeypot Alerter is the only outbound channel, it is a concrete struct with an inlined HTTP client rather than a dispatcher, and internal/server/server.go:187-188 installs it only in the honeypot profile, so in production it is never wired at all.",
-      "compensating_control": "Every security-relevant event is recorded in an append-only store with the metadata needed to investigate, and the admin gateway exposes a filtered review interface. Detection is operator-driven rather than automated.",
-      "residual_risk": "A slow credential-stuffing campaign or a data-access anomaly is visible in the audit trail but raises nothing, so time-to-detection depends on an operator looking.",
-      "revisit_when": "Before any deployment where vault42 is the controller rather than the processor, or where an Art. 33 72-hour clock could plausibly start without an operator noticing.",
-      "cost_of_closing": "A risk-score predicate on AuditFilter, a threshold constant, an extracted Dispatcher interface from the honeypot alerter, and removal of the profile gate on the risk path."
-    },
     "CR-17": {
       "title": "No allowlist is enforced at the outbound HTTP client layer",
       "severity": "Low",
@@ -987,7 +975,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:424",
+        "internal/server/server.go:418",
         "internal/middleware/ratelimit.go:266"
       ],
       "tests": [
@@ -1297,7 +1285,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:504",
+        "internal/server/server.go:498",
         "internal/handler/auth.go:298"
       ],
       "tests": [],
@@ -1317,7 +1305,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:889",
+        "internal/server/server.go:883",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
@@ -1444,7 +1432,7 @@
       "requirement": "Verify that all application components (including load balancers, firewalls, and application servers) determine boundaries of incoming HTTP messages using the appropriate mechanism for the HTTP version to prevent HTTP request smuggling. In HTTP/1.x, if a Transfer-Encoding header field is present, the Content-Length header must be ignored per RFC 2616. When using HTTP/2 or HTTP/3, if a Content-Length header field is present, the receiver must ensure that it is consistent with the length of the DATA frames.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:159"
+        "internal/server/server.go:153"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -1753,7 +1741,7 @@
       "status": "Met",
       "evidence": [
         "docs/spec.md",
-        "internal/server/server.go:424"
+        "internal/server/server.go:418"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2054,7 +2042,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:118",
-        "internal/server/server.go:424"
+        "internal/server/server.go:418"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
@@ -2120,7 +2108,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:504",
+        "internal/server/server.go:498",
         "docs/api.md"
       ],
       "tests": [
@@ -2513,8 +2501,8 @@
       "requirement": "Verify that a code based out-of-band authentication mechanism is protected against brute force attacks by using rate limiting. Consider also using a code with at least 64 bits of entropy.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:436",
-        "internal/server/server.go:573"
+        "internal/server/server.go:430",
+        "internal/server/server.go:567"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2821,7 +2809,7 @@
       "evidence": [
         "internal/service/token.go:190",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:353"
+        "cmd/vault/main.go:389"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -2899,7 +2887,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:596"
+        "internal/server/server.go:590"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -2936,7 +2924,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:387"
+        "internal/server/server.go:381"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -3407,8 +3395,8 @@
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:280",
-        "internal/server/server.go:686",
+        "internal/middleware/auth.go:278",
+        "internal/server/server.go:680",
         "internal/crypto/jwt.go:47"
       ],
       "tests": [
@@ -3554,7 +3542,7 @@
       "evidence": [
         "internal/service/token.go:190",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:353"
+        "cmd/vault/main.go:389"
       ],
       "tests": [
         "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
@@ -4095,7 +4083,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:224",
+        "internal/server/server.go:218",
         "cmd/admin-gateway/main.go:230",
         "internal/redis/pool.go:191"
       ],
@@ -4118,7 +4106,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:162"
+        "internal/server/server.go:156"
       ],
       "tests": [
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
@@ -4406,7 +4394,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/secrets.go:18",
-        "cmd/vault/main.go:336"
+        "cmd/vault/main.go:372"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4484,7 +4472,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:536"
+        "internal/server/server.go:530"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4504,7 +4492,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:323"
+        "internal/server/server.go:317"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4524,8 +4512,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:308",
-        "internal/server/server.go:309"
+        "internal/server/server.go:302",
+        "internal/server/server.go:303"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4550,7 +4538,7 @@
       "status": "Met",
       "evidence": [
         "docs/PRIVACY.md",
-        "internal/audit/audit.go:117"
+        "internal/audit/audit.go:130"
       ],
       "tests": [
         "TestASVS_V14_1_1_TheDataInventoryExistsAndIsEnforced"
@@ -4593,7 +4581,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:323"
+        "internal/server/server.go:317"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
@@ -4655,7 +4643,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:295",
+        "internal/audit/audit.go:318",
         "internal/audit/retention.go:84"
       ],
       "tests": [
@@ -4843,7 +4831,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:889"
+        "internal/server/server.go:883"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4985,12 +4973,12 @@
       "status": "Met",
       "evidence": [
         "docs/PRIVACY.md",
-        "internal/audit/audit.go:24"
+        "internal/audit/audit.go:25"
       ],
       "tests": [
         "TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories"
       ],
-      "notes": "The 40-constant event catalogue, its storage, retention and access control are documented."
+      "notes": "The 51-constant event catalogue, its storage, retention and access control are documented."
     },
     {
       "standard": "OWASP ASVS",
@@ -5005,7 +4993,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:225"
+        "internal/audit/audit.go:238"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5026,7 +5014,7 @@
       "status": "Met",
       "evidence": [
         "migrations/001_initial_schema.sql:154",
-        "internal/audit/audit.go:219"
+        "internal/audit/audit.go:232"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -5084,8 +5072,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:117",
-        "internal/audit/audit.go:295"
+        "internal/audit/audit.go:130",
+        "internal/audit/audit.go:318"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -5151,7 +5139,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:24",
+        "internal/audit/audit.go:25",
         "internal/honeypot/honeypot.go:75"
       ],
       "tests": [
@@ -5173,7 +5161,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/recovery.go:14",
-        "internal/audit/audit.go:241"
+        "internal/audit/audit.go:259"
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse"
@@ -5701,7 +5689,7 @@
       "status": "Met",
       "evidence": [
         "internal/oauth2/oidc.go:97",
-        "internal/server/server.go:224"
+        "internal/server/server.go:218"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned",
@@ -6017,12 +6005,12 @@
       "requirement": "Event Logging",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:24"
+        "internal/audit/audit.go:25"
       ],
       "tests": [
         "TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories"
       ],
-      "notes": "40 event types covering every selected category."
+      "notes": "51 event types covering every selected category."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6032,7 +6020,7 @@
       "requirement": "Content of Audit Records",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:225"
+        "internal/audit/audit.go:238"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -6061,15 +6049,19 @@
       "revision_date": "2025-08-27",
       "requirement_id": "AU-6",
       "requirement": "Audit Record Review, Analysis, and Reporting",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-15",
+      "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:597"
+        "internal/repository/repository.go:370",
+        "internal/repository/postgres/audit.go:100",
+        "internal/adminapi/handler.go:624",
+        "internal/audit/alerting.go:49",
+        "internal/alert/detector.go:121"
       ],
       "tests": [
-        "TestOWASP_A09_2025_RiskScoreIsStillWriteOnly"
+        "TestNIST80053_AU_6_TheSeveritySignalIsSelectable",
+        "TestNIST80053_AU_6_ACorrelatedRunRaisesOneAlertAndAQuietOneRaisesNone"
       ],
-      "notes": "Records are reviewable through the admin gateway with filtering by user, event type and time window: the handler builds a repository.AuditFilter from the query string (internal/adminapi/handler.go:597). There is no automated analysis or correlation: risk_score is a hardcoded per-event severity tag that nothing reads, AuditFilter cannot select on it, and no threshold raises an alert."
+      "notes": "Review and analysis are separate clauses and are met by separate mechanisms. Review: repository.AuditFilter now carries MinRiskScore and the query builder emits a risk_score >= predicate, surfaced to an operator as the min_risk_score parameter on GET /admin/audit, alongside the existing user, event-type and time-window filters. The threshold means one thing because the score is now derived from one severity table keyed by event class (internal/audit/severity.go) rather than passed at each call site, where it had been seven incomparable literals. Analysis: internal/alert keeps a windowed count per (rule, subject) and per (rule, source network) and raises one alert when a rule's threshold is crossed, then a cooldown, so a run of failed logins is reported as a run and a single failure is not reported at all. alertRules names the classes watched and the count each needs. Reporting: every alert is a SECURITY ALERT process-log record and increments vault_security_alerts_total."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6128,7 +6120,7 @@
       "requirement": "Audit Record Generation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:219"
+        "internal/audit/audit.go:232"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -6220,7 +6212,7 @@
       "requirement": "Re-authentication",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:387"
+        "internal/server/server.go:381"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -6297,7 +6289,7 @@
       "requirement": "Transmission Confidentiality and Integrity",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:163"
+        "internal/server/server.go:157"
       ],
       "tests": [
         "TestNIST80053_SC_8_TransmissionProtectionCoversEveryConfiguredEndpoint",
@@ -6581,16 +6573,18 @@
       "revision_date": "2025",
       "requirement_id": "A09:2025",
       "requirement": "Security Logging and Alerting Failures",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-15",
+      "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:219"
+        "cmd/vault/main.go:188",
+        "internal/alert/alert.go:160",
+        "internal/audit/audit.go:397"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore",
-        "TestOWASP_A09_2025_RiskScoreIsStillWriteOnly"
+        "TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile",
+        "TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten"
       ],
-      "notes": "The 2025 edition renamed this category to add \"Alerting\", and that rename is what moves vault42 off Met. Logging is comprehensive and tamper-evident; nothing raises an alert. The honeypot webhook is the only outbound channel and is installed only in the honeypot profile."
+      "notes": "The 2025 edition renamed this category to add \"Alerting\", and that rename is what had moved vault42 off Met: logging was comprehensive and nothing raised an alert. cmd/vault/main.go now installs an alert.Detector on the audit logger unconditionally, on every profile, and tests/spec fails the build if that call moves inside a branch -- honeypot.Alerter was gated on config.ProfileHoneypot exactly that way and was therefore never constructed in production. Delivery is alert.LogSink, one structured record per alert on the SECURITY ALERT prefix, which is the channel a cluster log pipeline already routes and the one the shipped chart can use: its NetworkPolicy admits no 443 egress, so a webhook default would not have worked. alert.Sink is the seam a webhook or mailer plugs into. risk_score is no longer write-only: it is derived from the event class, selectable through AuditFilter.MinRiskScore, and carried into the alert."
     },
     {
       "standard": "OWASP Top 10",
@@ -6632,7 +6626,7 @@
       "requirement": "Data minimisation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:295",
+        "internal/audit/audit.go:318",
         "internal/httputil/safelog.go:26"
       ],
       "tests": [
@@ -6823,15 +6817,17 @@
       "revision_date": "2016-04-27",
       "requirement_id": "Arts. 33, 34",
       "requirement": "Notification of a personal data breach",
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-15",
+      "status": "Met",
       "evidence": [
-        "internal/honeypot/honeypot.go:75"
+        "internal/audit/alerting.go:49",
+        "internal/audit/alerting.go:200",
+        "docs/PRIVACY.md"
       ],
       "tests": [
-        "TestOWASP_A09_2025_RiskScoreIsStillWriteOnly"
+        "TestGDPR_Arts_33_34_BreachIndicativeEventClassesRaiseAlerts",
+        "TestGDPR_Arts_33_34_TheAlertSaysWhetherItStartsAClock"
       ],
-      "notes": "The 72-hour procedure and the processor-to-controller duty under Art. 33(2) are documented, but no code path raises an alert from the audit trail. Detection therefore depends on the operator reviewing the admin audit view."
+      "notes": "Art. 33's clock runs from awareness, and Art. 33(2) makes a processor's duty run from the same moment, so the obligation is unachievable while nothing distinguishes a breach-indicative event from an ordinary one and \"aware\" means whenever an operator next opens the audit view. alertRules marks eight classes as breach-relevant -- honeypot_trigger, fingerprint_anomaly, dpop_binding_mismatch, kms_unwrap, token_minted, data_export, svcdoc_get and account_erased -- each of which is unauthorised access to, disclosure of, or destruction of personal data, and each raises an alert carrying Breach=true that an operator can route separately. login_failure is deliberately not marked: a login that failed disclosed nothing, and a flag every rule carries routes nothing. What is met here is detection and record. The assessment, the notification to the supervisory authority, the communication to data subjects under Art. 34 and the Art. 33(5) register of breaches remain procedure, documented in docs/PRIVACY.md; no code can perform them. The gap this closes is the one that made the 72 hours unachievable."
     },
     {
       "standard": "GDPR",
@@ -7123,7 +7119,7 @@
       "requirement": "Unrestricted Resource Consumption",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:188",
+        "internal/server/server.go:182",
         "internal/service/blob.go:280",
         "internal/service/blob.go:283"
       ],
@@ -7160,9 +7156,9 @@
       "requirement": "Unrestricted Access to Sensitive Business Flows",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:332",
-        "internal/server/server.go:335",
-        "internal/server/server.go:341"
+        "internal/server/server.go:326",
+        "internal/server/server.go:329",
+        "internal/server/server.go:335"
       ],
       "tests": [
         "TestAPITop10_API6_2023_BulkAbusableFlowsAreThrottledAndSwitchable",
@@ -7673,14 +7669,15 @@
     }
   ],
   "retired_risks": {
+    "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk.",
     "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
+    "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
+    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
     "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:820) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
-    "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:171, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made.",
-    "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice.",
-    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:576). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34.",
-    "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second."
+    "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice."
   }
 }
