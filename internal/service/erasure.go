@@ -335,8 +335,13 @@ func (s *ErasureService) recoveryPseudonym(userID string) string {
 }
 
 // svcDocPseudonym must derive exactly what DocumentService.SubjectPseudonym
-// derives. A divergence would not fail loudly: the delete would match no rows and
-// the erasure would report success while the documents survived.
+// derives, canonicalisation included. A divergence would not fail loudly: the
+// delete would match no rows and the erasure would report success while the
+// documents survived.
+//
+// The fold is what makes this cascade reach a document a service filed under a
+// differently-cased spelling of the same user id. Without it those rows sat in a
+// namespace the erasure never addressed, and Art. 17 was answered with a lie.
 func (s *ErasureService) svcDocPseudonym(userID string) string {
-	return vaultcrypto.HMACSign([]byte(userID+":svcdoc"), s.hmacSecret)
+	return vaultcrypto.HMACSign([]byte(CanonicalSubject(userID)+":svcdoc"), s.hmacSecret)
 }
