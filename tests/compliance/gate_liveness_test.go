@@ -30,7 +30,7 @@ import (
 //     possibly assert all of them.
 //
 // A false negative in a gate is invisible by construction: nothing goes red, so
-// nobody looks. The only defence is to check the gates the way the gates check
+// nobody looks. The only defense is to check the gates the way the gates check
 // the code. That is what this file is.
 // =============================================================================
 

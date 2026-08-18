@@ -52,7 +52,7 @@ func TestUpdateProfile_ReportsEnrolledMFA(t *testing.T) {
 		t.Errorf("display_name = %q, want New Name", got.DisplayName)
 	}
 	if !got.MFAEnabled {
-		t.Error("mfa_enabled = false for a user with a verified TOTP secret — the client would offer to enrol a factor they already have")
+		t.Error("mfa_enabled = false for a user with a verified TOTP secret — the client would offer to enroll a factor they already have")
 	}
 	if len(got.MFAMethods) != 1 || got.MFAMethods[0] != "totp" {
 		t.Errorf("mfa_methods = %v, want [totp]", got.MFAMethods)

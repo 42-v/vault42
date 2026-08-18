@@ -104,7 +104,7 @@ func TestMailer_SendPerAppOverride(t *testing.T) {
 	if !contains(cap.html, "123456") {
 		t.Errorf("html = %q, want it to contain the rendered code 123456", cap.html)
 	}
-	// From address is on the allowlist, so it is honoured.
+	// From address is on the allowlist, so it is honored.
 	if cap.from.Email != "no-reply@acme.test" || cap.from.Name != "Acme Support" {
 		t.Errorf("From = %+v, want the allowlisted acme address", cap.from)
 	}
@@ -221,7 +221,7 @@ func TestMailer_FromAddressDomainNotAllowed(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	if cap.from.Email == "no-reply@evil.test" {
-		t.Error("off-allowlist From address was honoured")
+		t.Error("off-allowlist From address was honored")
 	}
 	if cap.from.Name != "Acme" {
 		t.Errorf("From name = %q, want the display name to still apply", cap.from.Name)

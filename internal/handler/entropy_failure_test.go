@@ -89,11 +89,11 @@ func TestResetRequest_TokenEntropyFailureMintsNoLink(t *testing.T) {
 	}
 }
 
-// TOTP setup writes a secret the user then enrols in their authenticator. Every
+// TOTP setup writes a secret the user then enrolls in their authenticator. Every
 // piece of it comes from the CSPRNG: the shared secret itself, the GCM nonce that
 // encrypts it at rest, and the row ID. A generator that failed silently would hand
 // back a predictable secret — an all-zero or repeating one — and the user would
-// enrol it, believing they now have a second factor that anyone can compute.
+// enroll it, believing they now have a second factor that anyone can compute.
 func TestTOTPSetup_EntropyFailureStoresNothing(t *testing.T) {
 	cases := []struct {
 		name   string

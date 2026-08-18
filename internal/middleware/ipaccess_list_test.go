@@ -45,7 +45,7 @@ func TestIPBlocklist_AddAndRemove(t *testing.T) {
 			t.Error("a bare IPv4 address was not blocked")
 		}
 		if blockedThrough(t, "198.51.100.8") {
-			t.Error("blocking one host also blocked its neighbour")
+			t.Error("blocking one host also blocked its neighbor")
 		}
 	})
 

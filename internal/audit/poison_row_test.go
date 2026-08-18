@@ -13,7 +13,7 @@ import (
 	"github.com/42-v/vault42/internal/repository"
 )
 
-// poisonAuditRepo models the real audit table's two relevant behaviours: one
+// poisonAuditRepo models the real audit table's two relevant behaviors: one
 // row can be permanently unwritable, and a batch is one transaction.
 //
 // audit.audit_log.user_id is UUID (migrations/001_initial_schema.sql:156) while

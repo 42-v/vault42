@@ -79,7 +79,7 @@ func TestNew_RejectsMalformedConnString(t *testing.T) {
 }
 
 // The TOTP secret is the MFA seed. A write that fails must say so — a silent
-// failure here enrols a user in TOTP whose secret was never stored, locking them
+// failure here enrolls a user in TOTP whose secret was never stored, locking them
 // out of their own account at the next login.
 func TestTOTPRepo_SurfacesDatabaseFailures(t *testing.T) {
 	repo := NewTOTPRepo(deadPool(t))

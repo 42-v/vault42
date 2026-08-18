@@ -26,7 +26,7 @@ func NewIdentityHandler(svc *service.IdentityService, auditLog *audit.Logger) *I
 
 // logConsent records a consent decision in the audit trail. The trail is what
 // answers "prove this user opted in" (Art. 7(1)) and "prove withdrawal was
-// honoured" (Art. 7(3)); the profile only holds the current state.
+// honored" (Art. 7(3)); the profile only holds the current state.
 func (h *IdentityHandler) logConsent(r *http.Request, userID string, granted bool, source string) {
 	if h.auditLog == nil {
 		return

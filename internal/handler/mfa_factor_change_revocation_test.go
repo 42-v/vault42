@@ -19,7 +19,7 @@ import (
 
 // Rotating a second factor is the containment step the product documents for a
 // suspected compromise: delete the key that may have been cloned, disable and
-// re-enrol the authenticator, print a fresh set of backup codes. Every one of
+// re-enroll the authenticator, print a fresh set of backup codes. Every one of
 // those routes used to return 200 without touching the refresh-token store, so
 // the family the attacker was rotating survived the response that told the
 // victim they had fixed it, and kept rotating for the absolute session lifetime

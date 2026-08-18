@@ -51,7 +51,7 @@ func TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered(t *te
 		MinBlobSize: 1, MaxBlobSize: 4096, MaxBlobsPerUser: 10, QuotaBytes: 1 << 20,
 	})
 
-	// The repository contract the real Postgres implementation honours: a row is
+	// The repository contract the real Postgres implementation honors: a row is
 	// returned only when the pseudonym matches too.
 	repo.CreateFn = func(_ context.Context, b *model.Blob) error {
 		stored[b.ID] = b

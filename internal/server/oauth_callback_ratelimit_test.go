@@ -19,7 +19,7 @@ import (
 //
 // The callback is not a guessing surface. Reaching its body already takes an
 // HMAC-valid state, a matching __Host-oauth_state cookie, an unconsumed
-// server-side PKCE verifier and a code the identity provider will honour, so
+// server-side PKCE verifier and a code the identity provider will honor, so
 // there is nothing in it to brute-force and nothing that budget was protecting.
 // Spending it had two costs. A user on a VPN got one login-or-callback per
 // quarter hour across both endpoints — one mistyped password and their social

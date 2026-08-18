@@ -274,7 +274,7 @@ func TestRotateJWKS_KeyGenerationFailureWritesNothing(t *testing.T) {
 	c, _, _, _, _ := newTestCLI()
 	out := t.TempDir() + "/signing-key.pem"
 
-	// crypto/rsa only honours a replaced crypto/rand.Reader when this GODEBUG
+	// crypto/rsa only honors a replaced crypto/rand.Reader when this GODEBUG
 	// knob is set; without it key generation draws from the internal DRBG and
 	// the failure cannot be injected at all.
 	t.Setenv("GODEBUG", "cryptocustomrand=1")

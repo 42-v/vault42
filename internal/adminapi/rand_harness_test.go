@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Several tests in this package drive entropy behaviour by replacing
+// Several tests in this package drive entropy behavior by replacing
 // crypto/rand.Reader, which is a package-level global.
 //
 // Doing that per test is a data race and -race fails the package because of it.

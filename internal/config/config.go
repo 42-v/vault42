@@ -578,12 +578,12 @@ func Load() (*Config, error) {
 	// VAULT_EMBEDDED_TRUSTED_UPSTREAM=true, vault42 is running behind a
 	// sibling proxy on the same private network (typical Hermod/k8s pod
 	// pattern). Auto-trust RFC1918 ranges so X-Forwarded-For from that
-	// upstream is honoured for ClientIP() — required for per-attacker
+	// upstream is honored for ClientIP() — required for per-attacker
 	// rate-limit + audit attribution. Explicit TRUSTED_PROXIES /
 	// REAL_IP_HEADER env values always win; this only fills the gaps.
 	if c.EmbeddedTrustedUpstream {
 		// Fail closed: this shortcut auto-trusts whole RFC1918 + loopback ranges
-		// and blindly honours X-Forwarded-For, collapsing per-IP rate-limit and
+		// and blindly honors X-Forwarded-For, collapsing per-IP rate-limit and
 		// audit attribution on a flat network. Only the embedded sidecar profile
 		// may use it; anywhere else, set TRUSTED_PROXIES/REAL_IP_HEADER explicitly
 		// (audit M7).

@@ -8,7 +8,7 @@ import (
 	"github.com/42-v/vault42/internal/repository"
 )
 
-// recoveryRetentionLockKey is the advisory-lock key the escrow prune serialises
+// recoveryRetentionLockKey is the advisory-lock key the escrow prune serializes
 // on. Arbitrary but fixed, and distinct from the audit sweeper's key: the two
 // sweeps touch different tables and must not block each other.
 const recoveryRetentionLockKey int64 = 4243

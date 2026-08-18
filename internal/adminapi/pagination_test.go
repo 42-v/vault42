@@ -59,7 +59,7 @@ func TestParsePagination_ClampsCallerControlledLimits(t *testing.T) {
 		wantOffset int
 	}{
 		{"absent falls back to the default", "", defaultListLimit, 0},
-		{"explicit values are honoured", "?limit=10&offset=5", 10, 5},
+		{"explicit values are honored", "?limit=10&offset=5", 10, 5},
 		{"an oversized limit is clamped, not trusted", "?limit=100000", maxListLimit, 0},
 		{"zero falls back rather than returning an empty page", "?limit=0", defaultListLimit, 0},
 		{"a negative limit falls back", "?limit=-1", defaultListLimit, 0},

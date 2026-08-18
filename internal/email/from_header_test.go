@@ -11,7 +11,7 @@ import (
 // display name is what a mail client actually shows the recipient, so a forged one is a
 // phishing mail sent from our own infrastructure, over our own DKIM signature.
 //
-// A name that sanitises down to nothing must leave the bare address rather than an empty
+// A name that sanitizes down to nothing must leave the bare address rather than an empty
 // display name that brackets it strangely.
 func TestFormatFromHeader(t *testing.T) {
 	cases := []struct {
@@ -21,7 +21,7 @@ func TestFormatFromHeader(t *testing.T) {
 		want    string
 	}{
 		{"no display name leaves the bare address", "", "noreply@vault.example", "noreply@vault.example"},
-		{"a name that sanitises to nothing leaves the bare address", "\r\n", "noreply@vault.example", "noreply@vault.example"},
+		{"a name that sanitizes to nothing leaves the bare address", "\r\n", "noreply@vault.example", "noreply@vault.example"},
 		{"a plain name is quoted properly", "BeOn3", "noreply@vault.example", `"BeOn3" <noreply@vault.example>`},
 	}
 

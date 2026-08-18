@@ -37,7 +37,7 @@ import (
 // The irony is that the controls the requirements ask for are already
 // implemented — a body cap, a decompression-bomb bound, a filename charset, a
 // header sanitiser. Filing them as "no such feature exists" gave away four
-// working defences and buried the two that are missing.
+// working defenses and buried the two that are missing.
 //
 // These tests drive the real handler and the real service.
 // =============================================================================
@@ -244,13 +244,13 @@ func TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated(t *testing.T) {
 	}
 }
 
-// --- V5.4.2 — names served in response headers are sanitised ---
+// --- V5.4.2 — names served in response headers are sanitized ---
 
 // "Verify that file names served (e.g., in HTTP response header fields or email
 // attachments) are encoded or sanitized (e.g., following RFC 6266) to preserve
 // document structure and prevent injection attacks."
 //
-// The requirement offers encoding or sanitisation. vault42 sanitises: the label
+// The requirement offers encoding or sanitisation. vault42 sanitizes: the label
 // is stripped of U+0000-U+001F before it is set as X-Blob-Label, which is what
 // closes response-header injection. Non-ASCII is passed through un-encoded
 // rather than RFC 8187 encoded; that is a fidelity limitation, recorded in the
@@ -316,7 +316,7 @@ func TestASVS_V5_4_2_ServedLabelsCannotForgeResponseHeaders(t *testing.T) {
 	// handler precisely because the boundary check above fires first, which is
 	// why it is asserted structurally rather than driven.
 	if !strings.Contains(blobSrc, "sanitizeLabelForHeader(label)") {
-		t.Error("V5.4.2: the download paths no longer sanitise the label before setting X-Blob-Label")
+		t.Error("V5.4.2: the download paths no longer sanitize the label before setting X-Blob-Label")
 	}
 	if !strings.Contains(blobSrc, "if r < 0x20") {
 		t.Error("V5.4.2: sanitizeLabelForHeader no longer drops U+0000-U+001F, which is the class " +

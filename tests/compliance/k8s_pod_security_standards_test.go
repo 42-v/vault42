@@ -27,7 +27,7 @@ import (
 //     binds the node's loopback. That is a real deviation and is recorded as
 //     one rather than being called compliance;
 //   - the bundled PostgreSQL and Mailpit are development conveniences, both
-//     disabled by default and both labelled "dev only" in values.yaml. They do
+//     disabled by default and both labeled "dev only" in values.yaml. They do
 //     not meet restricted, and the register says so rather than quietly scoping
 //     them out.
 //
@@ -266,7 +266,7 @@ func TestK8sPSS_Restricted_TheDeviationsAreExactlyTheOnesRecorded(t *testing.T) 
 
 	// 2 and 3. The bundled datastore and mail catcher are development
 	//    conveniences. They are excluded from the claim, and what makes that
-	//    honest is that they are off by default and labelled as such.
+	//    honest is that they are off by default and labeled as such.
 	values := readChartFile(t, "values.yaml")
 	for _, dev := range []struct{ marker, label string }{
 		{"# ---- PostgreSQL (dev/embedded only) ----", "postgres"},

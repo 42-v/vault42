@@ -578,7 +578,7 @@ func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
 // cleanupRecovery purges account-recovery escrow records past a horizon. It is
 // the on-demand half of VAULT_RECOVERY_RETENTION_DAYS, and the only supported
 // way to remove an escrow record: the table is append-only and both application
-// roles have DELETE revoked, so an Operator honouring a later erasure of the
+// roles have DELETE revoked, so an Operator honoring a later erasure of the
 // escrow itself has nothing else to reach for.
 func (c *CLI) cleanupRecovery(ctx context.Context, args []string) bool {
 	daysStr := getFlag(args, "--retention-days")

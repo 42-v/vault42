@@ -15,18 +15,18 @@ import (
 )
 
 // capturingAuditRepo keeps the entries written through it, and records whether
-// the context each write arrived on had already been cancelled.
+// the context each write arrived on had already been canceled.
 type capturingAuditRepo struct {
-	mu        sync.Mutex
-	entries   []*model.AuditEntry
-	cancelled []bool
+	mu       sync.Mutex
+	entries  []*model.AuditEntry
+	canceled []bool
 }
 
 func (c *capturingAuditRepo) Insert(ctx context.Context, e *model.AuditEntry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = append(c.entries, e)
-	c.cancelled = append(c.cancelled, ctx.Err() != nil)
+	c.canceled = append(c.canceled, ctx.Err() != nil)
 	return nil
 }
 
@@ -54,7 +54,7 @@ func (c *capturingAuditRepo) CleanupLocked(context.Context, time.Time) (int64, b
 func (c *capturingAuditRepo) snapshot() ([]*model.AuditEntry, []bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.entries, c.cancelled
+	return c.entries, c.canceled
 }
 
 // withScopelessClaims puts an authenticated caller carrying no scopes on the
@@ -137,13 +137,13 @@ func TestRequireScopeRefusalSurvivesRequestCancellation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
-	entries, cancelled := repo.snapshot()
+	entries, canceled := repo.snapshot()
 	if len(entries) != 1 {
 		t.Fatalf("%d audit entries written, want 1: a prober erased their own record by dropping "+
 			"the connection", len(entries))
 	}
-	if cancelled[0] {
-		t.Error("the audit write ran on the cancelled request context, so a store that honours " +
+	if canceled[0] {
+		t.Error("the audit write ran on the canceled request context, so a store that honors " +
 			"cancellation would have discarded it")
 	}
 }

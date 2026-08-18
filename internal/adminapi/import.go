@@ -30,7 +30,7 @@ type importUser struct {
 	// consent: a migrated flag may be a default the user was never shown (this is
 	// exactly the case for BeOn3, whose column defaults to true and whose consent
 	// checkbox ships pre-ticked). The value is preserved so the operator can run a
-	// re-permission campaign against it; it does not by itself authorise sending.
+	// re-permission campaign against it; it does not by itself authorize sending.
 	MarketingEmails *bool `json:"marketing_emails,omitempty"`
 }
 

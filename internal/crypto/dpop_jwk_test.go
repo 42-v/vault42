@@ -59,7 +59,7 @@ func TestParseJWKHeader_RejectsMalformedHeaders(t *testing.T) {
 		raw  interface{}
 	}{
 		{"not an object at all", "just-a-string"},
-		{"an object that cannot be marshalled", map[string]interface{}{"kty": make(chan int)}},
+		{"an object that cannot be marshaled", map[string]interface{}{"kty": make(chan int)}},
 		{"an object whose fields are the wrong types", map[string]interface{}{"kty": 42, "crv": true}},
 		{"an empty object", map[string]interface{}{}},
 	}

@@ -84,16 +84,16 @@ func TestRetention_StartSweepsImmediately(t *testing.T) {
 	}
 }
 
-// A cancelled context must end the loop — otherwise the sweeper outlives
+// A canceled context must end the loop — otherwise the sweeper outlives
 // shutdown and keeps issuing deletes against a closing pool.
 //
 // This deliberately does NOT call Stop. The loop parks in a select over stopCh,
 // ctx.Done and the ticker; Go chooses at random among the cases that are ready, so
-// cancelling the context *and* closing stopCh would leave the exit path a coin
+// canceling the context *and* closing stopCh would leave the exit path a coin
 // flip — and with it, which of the two return statements the coverage profile
 // records. That is not a cosmetic problem: it made the suite's own coverage total
 // vary by a statement between identical runs, so the number CI published could
-// disagree with the number in the docs. Cancelling alone leaves exactly one ready
+// disagree with the number in the docs. Canceling alone leaves exactly one ready
 // case, which is what makes this test assert the thing it claims to.
 func TestRetention_StopsOnContextCancel(t *testing.T) {
 	swept := make(chan struct{}, 1)
@@ -112,7 +112,7 @@ func TestRetention_StopsOnContextCancel(t *testing.T) {
 	r.Start(ctx)
 
 	// Wait for the immediate sweep, so the loop is known to have reached the select
-	// before the context is cancelled under it.
+	// before the context is canceled under it.
 	select {
 	case <-swept:
 	case <-time.After(2 * time.Second):
@@ -124,7 +124,7 @@ func TestRetention_StopsOnContextCancel(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("sweeper did not exit when its context was cancelled — it would outlive shutdown")
+		t.Fatal("sweeper did not exit when its context was canceled — it would outlive shutdown")
 	}
 }
 

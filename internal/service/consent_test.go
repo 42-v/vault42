@@ -125,7 +125,7 @@ func TestReconcileMarketingConsent_UnchangedValueKeepsProvenance(t *testing.T) {
 // A client that omits marketing_emails (a partial-update client, or one whose
 // form has no checkbox) must not blank the stored record. PUT is a full replace,
 // so without this a save from any such client would destroy a recorded
-// withdrawal — and the controller could no longer show it had been honoured.
+// withdrawal — and the controller could no longer show it had been honored.
 func TestReconcileMarketingConsent_OmittedFieldPreservesWithdrawal(t *testing.T) {
 	prior := &ConsentRecord{Granted: false, Source: ConsentSourceUnsubscribe, At: time.Now().UTC()}
 

@@ -15,7 +15,7 @@ import (
 )
 
 // The profile response tells the user whether their account has a second factor and which
-// ones. A client uses it to decide whether to nag them to enrol one, and a user uses it to
+// ones. A client uses it to decide whether to nag them to enroll one, and a user uses it to
 // confirm the key they just registered actually took.
 //
 // The MFA service was never wired in these tests, so the branch that reads the real status

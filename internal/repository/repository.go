@@ -315,7 +315,7 @@ type AuditRepository interface {
 	// Cleanup removes audit entries older than the given time using the
 	// SECURITY DEFINER function that temporarily disables append-only triggers.
 	Cleanup(ctx context.Context, olderThan time.Time) (int64, error)
-	// CleanupLocked is Cleanup serialised across replicas by a Postgres advisory
+	// CleanupLocked is Cleanup serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the audit table.
 	//
@@ -546,7 +546,7 @@ type AccountRecoveryPruner interface {
 	// Prune removes recovery records written before olderThan and returns how
 	// many rows went.
 	Prune(ctx context.Context, olderThan time.Time) (int64, error)
-	// PruneLocked is Prune serialised across replicas by a Postgres advisory
+	// PruneLocked is Prune serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
 	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)

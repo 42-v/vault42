@@ -473,7 +473,7 @@ type DataExportAuditEvent struct {
 }
 
 // DataExportResponse is the aggregate returned by GET /user/data-export. It
-// fulfils the data subject's right of access and right to data portability
+// fulfills the data subject's right of access and right to data portability
 // (GDPR Articles 15 and 20) by returning every category of personal data the
 // service holds for the requesting user in a structured, machine-readable form.
 type DataExportResponse struct {

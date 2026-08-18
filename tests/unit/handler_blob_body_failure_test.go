@@ -29,7 +29,7 @@ func (blobClientTornBody) Close() error { return nil }
 // deletes the existing blob before it stores the new bytes. So a body that fails to
 // read is not a harmless no-op. If the read error were ignored, the handler would go
 // on with an empty payload and the user's stored document would be replaced by, or
-// deleted in favour of, nothing.
+// deleted in favor of, nothing.
 //
 // The upload has to stop where it is: 413, nothing written, and the blob that is
 // already there left alone.

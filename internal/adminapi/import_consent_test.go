@@ -91,7 +91,7 @@ func TestImportUsers_MarketingFlagIsNotAffirmativeConsent(t *testing.T) {
 		t.Errorf("origin = %q, want %q", got.Origin, "beon3")
 	}
 	if got.Affirmative() {
-		t.Error("an imported flag must never by itself authorise sending")
+		t.Error("an imported flag must never by itself authorize sending")
 	}
 }
 

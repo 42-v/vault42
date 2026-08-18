@@ -112,7 +112,7 @@ func TestRecoveryPruneLocked(t *testing.T) {
 			t.Fatalf("a losing sweeper must not error: %v", err)
 		}
 		if acquired {
-			t.Error("two replicas swept at once, the advisory lock is not serialising them")
+			t.Error("two replicas swept at once, the advisory lock is not serializing them")
 		}
 		if deleted != 0 {
 			t.Errorf("a skipped sweep must delete nothing, deleted = %d", deleted)

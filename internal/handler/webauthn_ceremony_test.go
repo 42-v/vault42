@@ -349,7 +349,7 @@ func newWanfidoAuthService(t *testing.T, tokens *mocks.MockRefreshTokenRepo, c *
 // The credential ID and public key are the only things that will ever
 // authenticate this user again, so taking them from anywhere but the verified
 // attestation (the request body carries an attacker-controlled "id" field too)
-// would let a caller enrol a key they do not hold.
+// would let a caller enroll a key they do not hold.
 func TestWebAuthnRegisterFinish_PersistsAttestedCredentialBoundToTokenSubject(t *testing.T) {
 	wan := newWanfidoWebAuthn(t)
 	auth := newWanfidoAuthenticator(t, "attested-credential-id")

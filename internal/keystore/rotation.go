@@ -28,7 +28,7 @@ const RotationCheckInterval = time.Hour
 // design specified and the number the shipped code never implemented.
 const DefaultRotationInterval = 720 * time.Hour
 
-// signingKeyRotationLockKey is the advisory-lock key rotation serialises on.
+// signingKeyRotationLockKey is the advisory-lock key rotation serializes on.
 // Arbitrary but fixed, and distinct from the audit sweeper's 4242 and the escrow
 // prune's 4243: those touch different tables and must not block this.
 const signingKeyRotationLockKey int64 = 4244
@@ -175,7 +175,7 @@ func (r *Rotation) Stop() {
 // RotateIfOlderThan rotates the active signing key when it is older than maxAge
 // and returns the new kid, or "" when nothing was due.
 //
-// Serialised across replicas by a session-scoped advisory lock. Rotation is not
+// Serialized across replicas by a session-scoped advisory lock. Rotation is not
 // idempotent the way a sweep is: two replicas deciding simultaneously would each
 // generate a key, each retire whatever was active when it looked, and the
 // deployment would come out of one due date with two rotations and a key retired
