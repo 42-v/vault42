@@ -2111,7 +2111,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -2174,7 +2174,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy"
@@ -5434,7 +5434,7 @@
       "requirement": "AAL2: Permitted Authenticator Types",
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",

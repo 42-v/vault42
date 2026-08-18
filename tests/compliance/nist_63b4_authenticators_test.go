@@ -85,7 +85,17 @@ func emailOTPServiceWithCaptureCache(t *testing.T, captured *capturedOTPSet, hma
 // requirement (§2.2.2): reaching AAL2 requires two distinct authentication
 // factors. It drives the shipped combination rules (service.AALForMethods,
 // §5.2.4): a single factor never reaches AAL2, a memorized secret plus a second
-// factor does, and a phishing-resistant authenticator reaches AAL3.
+// factor does, and a user-verified WebAuthn assertion does so on its own.
+//
+// It also holds the ceiling. AALForMethods returned AAL3 for that last case
+// until 1.0.0 and this test required it to, which put the level into the acr
+// claim of every token issued on the WebAuthn path while docs/COMPLIANCE.md
+// recorded AAL3 as claimed nowhere and the register carried §3.2.4 (Attestation)
+// as Not Applicable. §2.2.4 requires an AAL3 authenticator to be hardware-based
+// and the verifier to have established that it is; this service accepts "none"
+// attestation and stores no AAGUID, so it cannot. The assertion below is now
+// that nothing reaches AAL3, and it fails if a mapping ever returns it without
+// the attestation evidence landing first.
 func TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors(t *testing.T) {
 	if got := service.AALForMethods([]string{service.MethodPassword}, false); got != service.AAL1 {
 		t.Fatalf("§2.2.2: password alone reached AAL%d, want AAL1; a single factor must not satisfy AAL2", got)
@@ -100,11 +110,11 @@ func TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors(t *testing.T) {
 		t.Fatalf("§2.2.2: password+email-OTP reached AAL%d, want AAL2", got)
 	}
 	// §5.1.7 / §5.2.4: a WebAuthn assertion is a multi-factor cryptographic
-	// device only when the authenticator verified the user. With UV clear it
-	// proves possession of a key and nothing else, so it is one factor and
-	// cannot reach AAL2 on its own, let alone AAL3.
-	if got := service.AALForMethods([]string{service.MethodWebAuthn}, true); got != service.AAL3 {
-		t.Fatalf("§2.2.2: user-verified WebAuthn reached AAL%d, want AAL3 (phishing-resistant MFA)", got)
+	// authenticator only when the authenticator verified the user. With UV clear
+	// it proves possession of a key and nothing else, so it is one factor and
+	// cannot reach AAL2 on its own.
+	if got := service.AALForMethods([]string{service.MethodWebAuthn}, true); got != service.AAL2 {
+		t.Fatalf("§2.2.2: user-verified WebAuthn reached AAL%d, want AAL2 (multi-factor cryptographic authenticator)", got)
 	}
 	if got := service.AALForMethods([]string{service.MethodWebAuthn}, false); got != service.AAL1 {
 		t.Fatalf("§2.2.2: WebAuthn without user verification reached AAL%d, want AAL1; possession alone is one factor", got)
@@ -114,6 +124,42 @@ func TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors(t *testing.T) {
 	}
 	if got := service.AALForMethods(nil, false); got == service.AAL2 || got == service.AAL3 {
 		t.Fatalf("§2.2.2: an empty factor set reached AAL%d, must be below AAL2", got)
+	}
+
+	// §2.2.4 / §3.2.4: the ceiling. No combination may reach AAL3, because
+	// nothing in the tree establishes that the authenticator is hardware-based —
+	// registration requests "none" attestation and no AAGUID or attestation
+	// statement is stored. Exhaustive over every method and both UV values rather
+	// than over the combinations the mapping happens to branch on today, so a new
+	// branch cannot slip past it.
+	methods := []string{
+		service.MethodPassword, service.MethodTOTP, service.MethodEmailOTP,
+		service.MethodBackupCode, service.MethodWebAuthn, service.MethodFederated,
+	}
+	if len(methods) < 6 {
+		t.Fatalf("§2.2.4: only %d methods enumerated; the sweep below would be vacuous", len(methods))
+	}
+	combos := 0
+	for mask := 0; mask < 1<<len(methods); mask++ {
+		var set []string
+		for i, m := range methods {
+			if mask&(1<<i) != 0 {
+				set = append(set, m)
+			}
+		}
+		for _, uv := range []bool{false, true} {
+			combos++
+			if got := service.AALForMethods(set, uv); got == service.AAL3 {
+				t.Fatalf("§2.2.4: AALForMethods(%v, uv=%v) returned AAL3. vault42 claims no AAL3 "+
+					"anywhere and cannot support one: it accepts \"none\" attestation and stores no "+
+					"AAGUID, so a synced software passkey is indistinguishable from a hardware "+
+					"authenticator. Persist and verify attestation before lifting this ceiling, and "+
+					"move the register row for 63B-4 §3.2.4 off Not Applicable in the same change.", set, uv)
+			}
+		}
+	}
+	if combos < 128 {
+		t.Fatalf("§2.2.4: only %d combinations were evaluated; the ceiling sweep is not exhaustive", combos)
 	}
 }
 

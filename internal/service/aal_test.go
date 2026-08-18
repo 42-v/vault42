@@ -12,6 +12,14 @@ import (
 // discoverable-credential assertion without user verification proves possession
 // of a key and nothing else — it is single-factor — so the old mapping asserted
 // the highest assurance level NIST defines over one factor.
+//
+// The two user-verified cases expected AAL3 until 1.0.0, and that expectation
+// moved with the mapping rather than the mapping drifting under a passing test.
+// AAL3 needs a hardware authenticator the verifier has established as one (SP
+// 800-63B-4 §2.2.4, §5.2.4). This service accepts "none" attestation and stores
+// no AAGUID, so a passkey synced through a consumer cloud account is
+// indistinguishable here from a security key: AAL2 is what the evidence
+// supports, and it is what the acr claim now carries.
 func TestAALForMethods(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -28,8 +36,8 @@ func TestAALForMethods(t *testing.T) {
 		{"totp without a first factor stays AAL1", []string{MethodTOTP}, false, AAL1},
 		{"unverified webauthn alone is AAL1", []string{MethodWebAuthn}, false, AAL1},
 		{"unverified webauthn plus password is AAL2", []string{MethodPassword, MethodWebAuthn}, false, AAL2},
-		{"user-verified webauthn is AAL3", []string{MethodWebAuthn}, true, AAL3},
-		{"user-verified webauthn wins over password+totp", []string{MethodPassword, MethodTOTP, MethodWebAuthn}, true, AAL3},
+		{"user-verified webauthn is AAL2", []string{MethodWebAuthn}, true, AAL2},
+		{"user-verified webauthn does not exceed password+totp", []string{MethodPassword, MethodTOTP, MethodWebAuthn}, true, AAL2},
 		{"user verification without webauthn is ignored", []string{MethodPassword}, true, AAL1},
 		{"unknown methods ignored", []string{"carrier-pigeon"}, false, AAL1},
 	}
@@ -54,7 +62,7 @@ func TestAuthContextClaims(t *testing.T) {
 		{"password only", []string{MethodPassword}, false, "urn:vault42:aal:1", []string{"pwd"}},
 		{"password + totp", []string{MethodPassword, MethodTOTP}, false, "urn:vault42:aal:2", []string{"pwd", "otp", "mfa"}},
 		{"password + email otp", []string{MethodPassword, MethodEmailOTP}, false, "urn:vault42:aal:2", []string{"pwd", "otp", "mfa"}},
-		{"verified webauthn", []string{MethodWebAuthn}, true, "urn:vault42:aal:3", []string{"hwk", "user", "mfa"}},
+		{"verified webauthn", []string{MethodWebAuthn}, true, "urn:vault42:aal:2", []string{"hwk", "user", "mfa"}},
 		{"unverified webauthn", []string{MethodWebAuthn}, false, "urn:vault42:aal:1", []string{"hwk"}},
 		{"federated + totp", []string{MethodFederated, MethodTOTP}, false, "urn:vault42:aal:2", []string{"otp", "mfa"}},
 	}
