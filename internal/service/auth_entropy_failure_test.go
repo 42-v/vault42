@@ -129,7 +129,7 @@ func TestSendVerificationEmailEntropyFailureStoresNothing(t *testing.T) {
 
 	serviceAuthStarveEntropy(t, 0)
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if stored.Load() {
 		t.Error("a verification token was cached despite the generator failing")

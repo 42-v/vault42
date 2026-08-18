@@ -423,7 +423,7 @@ func TestSendVerificationEmail_URLContainsOrigin(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedText, "https://vault.test/verify-email?token=") {
 		t.Errorf("email should contain origin URL, got %q", capturedText)
@@ -442,7 +442,7 @@ func TestSendVerificationEmail_TokenIs64HexChars(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	// Key is "verify:" + SHA256 hex of the token (64 hex chars)
 	if !strings.HasPrefix(cachedKey, "verify:") {
@@ -466,7 +466,7 @@ func TestSendVerificationEmail_CacheTTLIs24Hours(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if cachedTTL != 24*time.Hour {
 		t.Errorf("cache TTL should be 24 hours, got %v", cachedTTL)
@@ -485,7 +485,7 @@ func TestSendVerificationEmail_CacheStoresUserID(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-xyz-789", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-xyz-789", "", "")
 
 	if cachedValue != "user-xyz-789" {
 		t.Errorf("cached value should be user ID 'user-xyz-789', got %q", cachedValue)
@@ -505,7 +505,7 @@ func TestSendVerificationEmail_RedirectEncoded(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "/settings/profile")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "/settings/profile")
 
 	// The redirect should be URL-encoded
 	if !strings.Contains(capturedText, "redirect=") {
@@ -530,7 +530,7 @@ func TestSendVerificationEmail_HTMLAndTextBothContainURL(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedHTML, "verify-email?token=") {
 		t.Error("HTML body should contain verification URL")

@@ -32,7 +32,7 @@ func TestAnUndeliveredVerificationMailIsAudited(t *testing.T) {
 		origin:      "https://vault.test",
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if len(entries) != 1 {
 		t.Fatalf("audit records written = %d, want 1", len(entries))
@@ -65,7 +65,7 @@ func TestAnUndeliveredVerificationMailWithoutAnAuditSinkDoesNotCrash(t *testing.
 		origin:      "https://vault.test",
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 }
 
 // SendSignupVerification is the single entry point both signup paths use, and a

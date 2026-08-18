@@ -25,6 +25,7 @@ import (
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/ipintel"
+	"github.com/42-v/vault42/internal/mailqueue"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -323,12 +324,12 @@ func (s *AuthService) notifyNewCountry(userID, emailAddr, ip, app string) {
 	if sent, _ := s.cache.SetIfNotExists(ctx, notifyKey, "1", newLocationNotifyWindow); !sent {
 		return
 	}
-	go func() { // #nosec G118 -- intentional: email send outlives the triggering request
+	mailqueue.Go(func(ctx context.Context) {
 		// Email is best-effort; pass ONLY the country, never the IP.
-		_ = s.emailMailer().Send(context.Background(), app, vaultemail.TemplateNewLocation, emailAddr, vaultemail.TemplateData{
+		_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateNewLocation, emailAddr, vaultemail.TemplateData{
 			Country: cc,
 		})
-	}()
+	})
 }
 
 // SetMetrics configures the metrics collector for login/token counters.
@@ -494,14 +495,12 @@ func (s *AuthService) SendSignupVerification(ctx context.Context, to, userID, re
 		return
 	}
 	app := vaultemail.AppFromContext(ctx)
-	go s.sendVerificationEmail(to, userID, app, redirectTo) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
+	mailqueue.Go(func(ctx context.Context) { s.sendVerificationEmail(ctx, to, userID, app, redirectTo) })
 }
 
 // sendVerificationEmail generates a verification token, stores it, and sends the
 // email. app is the white-label tenant slug (may be empty for global branding).
-func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) {
-	ctx := context.Background()
-
+func (s *AuthService) sendVerificationEmail(ctx context.Context, to, userID, app, redirectTo string) {
 	token, err := vaultcrypto.RandomHex(32)
 	if err != nil {
 		log.Printf("auth: failed to generate verification token: %v", err)
@@ -565,8 +564,7 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
 	if s.cache == nil || s.emailSender == nil {
 		return
 	}
-	go func() { // #nosec G118 -- intentional: email send outlives the HTTP request
-		ctx := context.Background()
+	mailqueue.Go(func(ctx context.Context) {
 		// Fail closed on a cache error: an unthrottled send is worse than a claim
 		// link the user re-requests, and the claim token needs this same cache to
 		// be stored at all.
@@ -597,7 +595,7 @@ func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
 		}); err != nil {
 			log.Printf("auth: failed to send import claim email to %s: %v", maskEmail(emailAddr), err)
 		}
-	}()
+	})
 }
 
 // LoginInput is the login request payload.
@@ -934,7 +932,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
-			go s.sendEmailOTP(user.ID, user.Email, app) // #nosec G118 -- intentional: email OTP send outlives HTTP request
+			mailqueue.Go(func(context.Context) { s.sendEmailOTP(user.ID, user.Email, app) })
 			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
@@ -1171,12 +1169,12 @@ func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, 
 	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {
 		lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
 		if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
-			go func() { // #nosec G118 -- intentional: email send outlives HTTP request
+			mailqueue.Go(func(ctx context.Context) {
 				// Email is best-effort.
-				_ = s.emailMailer().Send(context.Background(), app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
+				_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
 					IP: ip,
 				})
-			}()
+			})
 		}
 	}
 }

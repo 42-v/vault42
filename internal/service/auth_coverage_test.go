@@ -58,7 +58,7 @@ func TestSendVerificationEmailSuccess(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "/dashboard")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "/dashboard")
 
 	if cachedKey == "" || !strings.HasPrefix(cachedKey, "verify:") {
 		t.Errorf("cache key should start with 'verify:', got %q", cachedKey)
@@ -85,7 +85,7 @@ func TestSendVerificationEmailCacheError(t *testing.T) {
 	}
 
 	// Should not panic; cache error is logged and email is not sent
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if emailSent {
 		t.Error("email should NOT be sent when cache fails")
@@ -103,7 +103,7 @@ func TestSendVerificationEmailSendError(t *testing.T) {
 	}
 
 	// Should not panic; email error is logged
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 }
 
 func TestSendVerificationEmailNoRedirect(t *testing.T) {
@@ -119,7 +119,7 @@ func TestSendVerificationEmailNoRedirect(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if strings.Contains(capturedHTML, "&redirect=") {
 		t.Error("verify URL should not include redirect param when redirectTo is empty")
@@ -139,7 +139,7 @@ func TestSendVerificationEmailWithRedirect(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "/settings")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "/settings")
 
 	if !strings.Contains(capturedText, "redirect=") {
 		t.Error("verify URL should include redirect param when redirectTo is set")
@@ -159,7 +159,7 @@ func TestSendVerificationEmailSubjectIncludesAppName(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedSubject, "TestVault") {
 		t.Errorf("subject should include app name 'TestVault', got %q", capturedSubject)
@@ -179,7 +179,7 @@ func TestSendVerificationEmailTokenInURL(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedText, "https://vault.test/verify-email?token=") {
 		t.Errorf("email text should contain verify URL with token, got %q", capturedText)
