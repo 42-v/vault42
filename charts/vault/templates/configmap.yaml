@@ -26,6 +26,9 @@ data:
   DB_PORT: {{ .Values.database.port | quote }}
   DB_NAME: {{ .Values.database.name | quote }}
   DB_SSLMODE: {{ .Values.database.sslmode | quote }}
+  {{- if .Values.database.allowPlaintext }}
+  VAULT_ALLOW_PLAINTEXT_DB: {{ .Values.database.allowPlaintext | quote }}
+  {{- end }}
   DB_MAX_CONNS: {{ .Values.database.maxConns | quote }}
   VAULT_RATE_LIMIT_ENABLED: {{ .Values.rateLimitEnabled | quote }}
   CACHE_BACKEND: {{ .Values.cache.backend | quote }}

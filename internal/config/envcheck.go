@@ -45,6 +45,7 @@ import (
 var boolEnvVars = []string{
 	"CORS_ALLOW_ALL",
 	"VAULT_ALLOW_PLAINTEXT",
+	"VAULT_ALLOW_PLAINTEXT_DB",
 	"VAULT_ALLOW_RATE_LIMIT_DISABLED",
 	"VAULT_AUTO_MIGRATE",
 	"VAULT_DPOP_ENABLED",
@@ -70,15 +71,16 @@ var boolEnvVars = []string{
 // what an operator meant, and every consumer here reads a negative as "already
 // in the past": a negative token TTL signs tokens that are expired on issue.
 var durationEnvVars = map[string]time.Duration{
-	"VAULT_ACCESS_TOKEN_TTL":     0,
-	"VAULT_AUDIT_FLUSH_INTERVAL": 0,
-	"VAULT_KEY_RETENTION_PERIOD": 0,
-	"VAULT_MAX_SESSION_LIFETIME": 0,
-	"VAULT_MINT_MAX_TTL":         0,
-	"VAULT_MINT_TOKEN_TTL":       0,
-	"VAULT_REFRESH_TOKEN_TTL":    0,
-	"VAULT_REMEMBER_ME_TTL":      0,
-	"VAULT_SHUTDOWN_TIMEOUT":     0,
+	"VAULT_ACCESS_TOKEN_TTL":      0,
+	"VAULT_AUDIT_FLUSH_INTERVAL":  0,
+	"VAULT_KEY_RETENTION_PERIOD":  0,
+	"VAULT_KEY_ROTATION_INTERVAL": 0,
+	"VAULT_MAX_SESSION_LIFETIME":  0,
+	"VAULT_MINT_MAX_TTL":          0,
+	"VAULT_MINT_TOKEN_TTL":        0,
+	"VAULT_REFRESH_TOKEN_TTL":     0,
+	"VAULT_REMEMBER_ME_TTL":       0,
+	"VAULT_SHUTDOWN_TIMEOUT":      0,
 
 	// keystore.StartRefreshLoop hands this to time.NewTicker, which panics on a
 	// non-positive interval, in a goroutine started after the listener is up.
@@ -121,6 +123,17 @@ var enumEnvVars = map[string][]string{
 // encrypted. "prefer" is absent on purpose: it asks for TLS and falls back to
 // plaintext without an error when the server does not offer it.
 var encryptedSSLModes = []string{"require", "verify-ca", "verify-full"}
+
+// unencryptedSSLModes are the DB_SSLMODE values that positively do not
+// guarantee encryption, as opposed to merely not being on the encrypted list.
+// Validate refuses to start on one of these outside the dev profile unless
+// VAULT_ALLOW_PLAINTEXT_DB says the link is private.
+//
+// It is the complement of encryptedSSLModes over the DB_SSLMODE enum and not
+// derived from it, because the two lists answer different questions and the
+// derived form would sweep in a value that is neither — an empty string, which
+// means "the profile decides" everywhere else in this file.
+var unencryptedSSLModes = []string{"disable", "allow", "prefer"}
 
 // cidrEnvVars is every comma-separated list of addresses or ranges.
 // middleware.SetTrustedProxies and parseCIDRList drop an entry they cannot

@@ -863,7 +863,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		hasMethods := status != nil && len(status.Methods) > 0
 		if hasMethods {
 			// Issue a short-lived challenge token instead of real tokens
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp, MethodPassword)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -877,7 +877,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
 			go s.sendEmailOTP(user.ID, user.Email, app) // #nosec G118 -- intentional: email OTP send outlives HTTP request
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp, MethodPassword)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -910,7 +910,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// A single-step login completed on the memorized secret alone, so the token
 	// says AAL1 and names the one factor it saw (OIDC Core §2).
 	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
-		user.ID, jwtRoles, []string{"read", "write"},
+		ctx, user.ID, jwtRoles, []string{"read", "write"},
 		input.ClientID, fp, "", input.RememberMe,
 		NewAuthContext(time.Now(), []string{MethodPassword}, false),
 	)
@@ -1014,7 +1014,7 @@ func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip
 			if hasMethods {
 				methods = status.Methods
 			}
-			challengePair, err := s.tokenSvc.IssueChallengeToken(sub, fp, MethodPassword)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, sub, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
@@ -1257,7 +1257,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 // the operator read the same in the audit log.
 func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.RefreshToken, roles []string, fp string, familyOrigin time.Time, ip, ua string) (*TokenPair, error) {
 	pair, err := s.tokenSvc.IssueRotatedPair(
-		stored.UserID, roles, []string{"read", "write"},
+		ctx, stored.UserID, roles, []string{"read", "write"},
 		stored.ClientID, fp, stored.FamilyID, familyOrigin,
 	)
 	if err != nil {
@@ -1385,7 +1385,7 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 	mfaRoles := s.effectiveRoles(ctx, mfaUser.Roles)
 	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
-		userID, mfaRoles, []string{"read", "write"},
+		ctx, userID, mfaRoles, []string{"read", "write"},
 		"", fingerprint, "", false,
 		NewAuthContext(time.Now(), completion.methods(), completion.UserVerified),
 	)

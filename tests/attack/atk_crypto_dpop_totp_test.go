@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"math/big"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -94,15 +95,18 @@ func atkECJWK(pub *ecdsa.PublicKey, crv string) map[string]any {
 	}
 }
 
-// Confirming the premise rather than reporting it as new: AR-10 and three doc
-// comments already state that nothing sets cnf.jkt, so no token is
-// sender-constrained and the thumbprint ValidateDPoPProof computes is discarded
-// by every caller.
+// The tripwire this replaces asserted the opposite: that NOTHING assigned
+// cnf.jkt, which was true and was the whole defect. ValidateDPoPProof computed a
+// thumbprint that every caller discarded, so the middleware's comparison was
+// unreachable and a well-formed proof for any key passed — a proof of possession
+// of nothing. Its own comment said "if issuance ever starts binding tokens, this
+// test fails and the register entry needs rewriting", and issuance now does.
 //
-// The check is a source scan for an assignment to a Confirmation field
-// anywhere outside the middleware that reads it. If issuance ever starts
-// binding tokens, this test fails and the register entry needs rewriting.
-func TestDPoPAttack_ConfirmNothingIsSenderConstrained(t *testing.T) {
+// Inverted rather than deleted, because the invariant is worth keeping in the
+// other direction: a refactor that drops the assignment silently returns the
+// feature to being decorative, and nothing else in the tree would notice. The
+// scan is the same one, over the same three packages, reading the opposite way.
+func TestDPoPAttack_TokenIssuanceBindsTheProvenKey(t *testing.T) {
 	roots := []string{
 		filepath.Join("..", "..", "internal", "service"),
 		filepath.Join("..", "..", "internal", "handler"),
@@ -149,13 +153,16 @@ func TestDPoPAttack_ConfirmNothingIsSenderConstrained(t *testing.T) {
 		}
 	}
 
-	if len(assignments) > 0 {
-		t.Errorf("cnf.jkt is now assigned in %v, so tokens may be sender-constrained and "+
-			"so AR-10 and the middleware.DPoP doc comment need updating", assignments)
-		return
+	if len(assignments) == 0 {
+		t.Fatal("no issuance path assigns cnf.jkt: ValidateDPoPProof's thumbprint is computed and " +
+			"discarded, no token is sender-constrained, and the middleware's thumbprint comparison " +
+			"is unreachable, so a well-formed proof for any key passes")
 	}
-	t.Log("confirmed: no issuance path assigns cnf.jkt, so ValidateDPoPProof's thumbprint " +
-		"is computed and discarded. Matches AR-10; not reported as a new finding.")
+	if !slices.Contains(assignments, "token.go") {
+		t.Errorf("cnf.jkt is assigned in %v but not in internal/service/token.go, which is where every "+
+			"access, refresh and 2FA-challenge token is minted; a binding written anywhere else does "+
+			"not cover the tokens the middleware checks", assignments)
+	}
 }
 
 // Key substitution. A proof signed with one key but advertising another's JWK

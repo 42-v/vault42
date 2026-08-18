@@ -166,6 +166,7 @@ type MockRefreshTokenRepo struct {
 	DeleteAllForUserFn    func(ctx context.Context, userID string) error
 	RevokeAllFn           func(ctx context.Context) error
 	CountActiveFamiliesFn func(ctx context.Context, userID string) (int, error)
+	ListActiveFamiliesFn  func(ctx context.Context, userID string) ([]*repository.ActiveFamily, error)
 	DeleteExpiredFn       func(ctx context.Context) (int64, error)
 }
 
@@ -247,6 +248,13 @@ func (m *MockRefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID s
 		return m.CountActiveFamiliesFn(ctx, userID)
 	}
 	return 0, nil
+}
+
+func (m *MockRefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string) ([]*repository.ActiveFamily, error) {
+	if m.ListActiveFamiliesFn != nil {
+		return m.ListActiveFamiliesFn(ctx, userID)
+	}
+	return nil, nil
 }
 
 func (m *MockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {

@@ -272,6 +272,13 @@ func main() {
 		ClientCAs:  clientCAPool,
 	}
 
+	// Peer identity pinning and revocation (AR-9). ClientCAs above answers only
+	// "did our CA sign this"; without the policy below, every certificate that CA
+	// ever issued reaches POST /admin/login.
+	if policy := newClientIdentityPolicy(ctx, auditLogger, cfg, clientCA); policy.enabled() {
+		tlsCfg.VerifyConnection = policy.verifyConnection
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           router,

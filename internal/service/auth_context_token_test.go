@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"slices"
@@ -27,7 +28,7 @@ func TestAccessTokenCarriesTheAuthenticationContext(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0)
 	auth := NewAuthContext(at, []string{MethodPassword, MethodWebAuthn}, true)
 
-	pair, err := svc.IssueTokenPairWithAuth("user-1", []string{"user"}, []string{"read"}, "", "fp", "", false, auth)
+	pair, err := svc.IssueTokenPairWithAuth(context.Background(), "user-1", []string{"user"}, []string{"read"}, "", "fp", "", false, auth)
 	if err != nil {
 		t.Fatalf("IssueTokenPairWithAuth: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestRotatedTokenCarriesTheOriginalAuthTime(t *testing.T) {
 	svc := NewTokenService(key, kid, "https://vault.test", "vault42", time.Hour, 24*time.Hour, 0)
 
 	origin := time.Now().Add(-3 * time.Hour).Truncate(time.Second)
-	pair, err := svc.IssueRotatedPair("user-1", []string{"user"}, []string{"read"}, "", "fp", "family-1", origin)
+	pair, err := svc.IssueRotatedPair(context.Background(), "user-1", []string{"user"}, []string{"read"}, "", "fp", "family-1", origin)
 	if err != nil {
 		t.Fatalf("IssueRotatedPair: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestTokenWithoutAnAuthenticationEventOmitsAuthTime(t *testing.T) {
 	kid := "ccddeeff-33445566"
 	svc := NewTokenService(key, kid, "https://vault.test", "vault42", time.Hour, 24*time.Hour, 0)
 
-	pair, err := svc.IssueTokenPair("client-1", nil, []string{"kms:unwrap"}, "client-1", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "client-1", nil, []string{"kms:unwrap"}, "client-1", "", "", false)
 	if err != nil {
 		t.Fatalf("IssueTokenPair: %v", err)
 	}

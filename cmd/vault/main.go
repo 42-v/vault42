@@ -542,6 +542,27 @@ func main() {
 		keyRetention.Start(ctx)
 		defer keyRetention.Stop()
 
+		// Scheduled rotation. Nothing rotated the signing key before this: the
+		// draft spec called for every 30 days, the shipped spec redefined rotation
+		// as an admin endpoint plus a CLI command, and a default install therefore
+		// signed every token it ever issued under one key. Below the CLI check for
+		// the same reason as the three sweepers above it — the first check runs
+		// immediately, so above it every `vault list-clients` would be a chance to
+		// rotate the signing key as a side effect of listing clients.
+		//
+		// Stop is deferred above the pool's Close and blocks until the loop has
+		// exited, so a rotation cannot still be inside its transaction when the
+		// pool goes.
+		keyRotation := keystore.NewRotation(ks, config.KeyRotationInterval())
+		if keyRotation.Enabled() {
+			keyRotation.Start(ctx)
+			defer keyRotation.Stop()
+			log.Printf("keystore rotation: rotating the signing key once it is older than %s", config.KeyRotationInterval())
+		} else {
+			log.Printf("WARNING: VAULT_KEY_ROTATION_INTERVAL is not positive; the signing key will never rotate on its own, " +
+				"so every token this deployment issues stays verifiable under one private key for the life of the install")
+		}
+
 		// A retention period shorter than the access token TTL strands tokens on
 		// every rotation: the key stops verifying while tokens it signed are still
 		// inside their lifetime. That was survivable while the row lingered, since

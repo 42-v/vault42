@@ -1,6 +1,7 @@
 package honeypot_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -52,7 +53,7 @@ func realAccessToken(t *testing.T) string {
 	// The argument list is the one internal/service.Login uses for a successful
 	// password login: default roles, read+write scopes, no client id, the
 	// request fingerprint, a new family, no remember-me.
-	pair, err := svc.IssueTokenPair(
+	pair, err := svc.IssueTokenPair(context.Background(),
 		paritySubject, []string{"user"}, []string{"read", "write"},
 		"", parityFingerprint, "", false,
 	)

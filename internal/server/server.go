@@ -343,14 +343,21 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		wellKnownHandler = handler.NewWellKnownHandler(d.Keys, cfg.Origin)
 	}
 
-	// Auth middleware — use dynamic key provider when keystore is active, static map otherwise
+	// Auth middleware — use dynamic key provider when keystore is active, static map otherwise.
+	//
+	// WithDPoPScheme is what lets a sender-constrained token be presented the way
+	// RFC 9449 §7.1 requires, under the DPoP authorization scheme rather than
+	// Bearer. It had no production caller at all, so the scheme was rejected
+	// unconditionally and the flag changed nothing; with issuance now binding
+	// cnf.jkt, refusing the scheme would make a bound token unusable.
+	dpopScheme := middleware.WithDPoPScheme(cfg.DPoPEnabled)
 	var authMw, challengeMw func(http.Handler) http.Handler
 	if d.KeyStore != nil {
-		authMw = middleware.AuthDynamic(d.KeyStore.KeyProvider(), cfg.Origin, cfg.Origin)
-		challengeMw = middleware.AuthChallengeDynamic(d.KeyStore.KeyProvider(), cfg.Origin, cfg.Origin)
+		authMw = middleware.AuthDynamic(d.KeyStore.KeyProvider(), cfg.Origin, cfg.Origin, dpopScheme)
+		challengeMw = middleware.AuthChallengeDynamic(d.KeyStore.KeyProvider(), cfg.Origin, cfg.Origin, dpopScheme)
 	} else {
-		authMw = middleware.Auth(d.Keys, cfg.Origin, cfg.Origin)
-		challengeMw = middleware.AuthChallenge(d.Keys, cfg.Origin, cfg.Origin)
+		authMw = middleware.Auth(d.Keys, cfg.Origin, cfg.Origin, dpopScheme)
+		challengeMw = middleware.AuthChallenge(d.Keys, cfg.Origin, cfg.Origin, dpopScheme)
 	}
 	fingerprintMw := middleware.Fingerprint(false)
 
@@ -371,9 +378,15 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		return h
 	}
 
-	// Wrap handler with auth + fingerprint
+	// Wrap handler with auth + fingerprint.
+	//
+	// dpopWrap goes INSIDE authMw on every authenticated route, not just on the
+	// two oracles. The sender-constraint check reads cnf.jkt off the resolved
+	// claims, so a route that skips it accepts a bound token as an ordinary
+	// bearer token — and one such route is enough to make the binding decorative,
+	// because a stolen token is simply replayed there instead.
 	authed := func(h http.HandlerFunc) http.Handler {
-		return authMw(fingerprintMw(h))
+		return authMw(fingerprintMw(dpopWrap(h)))
 	}
 	// 2FA verify endpoints accept challenge tokens (+ DPoP when enabled)
 	authedChallenge := func(h http.HandlerFunc) http.Handler {
@@ -381,7 +394,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	}
 	// Sensitive endpoints require auth + recent password confirmation
 	confirmed := func(h http.HandlerFunc) http.Handler {
-		return authMw(fingerprintMw(confirmMw(h)))
+		return authMw(fingerprintMw(dpopWrap(confirmMw(h))))
 	}
 
 	// Rate limiting middleware factories
@@ -507,7 +520,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// ===== Authenticated endpoints =====
 	mux.Handle("POST /auth/logout", authed(authHandler.Logout))
-	mux.Handle("POST /auth/confirm", authMw(fingerprintMw(confirmRL(http.HandlerFunc(authHandler.ConfirmPassword)))))
+	mux.Handle("POST /auth/confirm", authMw(fingerprintMw(dpopWrap(confirmRL(http.HandlerFunc(authHandler.ConfirmPassword))))))
 
 	// User profile & sessions
 	mux.Handle("GET /user/profile", authed(userHandler.Profile))
@@ -532,11 +545,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		erasureSvc.SetServiceDocs(d.ServiceDocs)
 		erasureSvc.SetLoginCountries(d.LoginCountries)
 		accountHandler := handler.NewAccountHandler(erasureSvc, d.Users, d.AuditLog, d.Pepper)
-		mux.Handle("DELETE /user/account", authMw(fingerprintMw(accountDeleteRL(http.HandlerFunc(accountHandler.Delete)))))
+		mux.Handle("DELETE /user/account", authMw(fingerprintMw(dpopWrap(accountDeleteRL(http.HandlerFunc(accountHandler.Delete))))))
 	}
 
 	// Password change (authenticated, rate limited, already requires current password)
-	mux.Handle("POST /user/password", authMw(fingerprintMw(confirmRL(http.HandlerFunc(passwordHandler.ChangePassword)))))
+	mux.Handle("POST /user/password", authMw(fingerprintMw(dpopWrap(confirmRL(http.HandlerFunc(passwordHandler.ChangePassword))))))
 
 	// 2FA — Status
 	mux.Handle("GET /auth/2fa/status", authed(mfaHandler.Status))
@@ -596,7 +609,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		}, rlEnabled)
 		mux.Handle("GET /user/identity", identityReadRL(authed(identityHandler.Get)))
 		mux.Handle("PUT /user/identity", identityWriteRL(authed(identityHandler.Put)))
-		mux.Handle("DELETE /user/identity", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(identityHandler.Delete))))))
+		mux.Handle("DELETE /user/identity", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(identityHandler.Delete)))))))
 		// Withdrawal must be no harder than granting (Art. 7(3)), so this carries
 		// the read rate limit and no confirmation step — unlike identity deletion.
 		mux.Handle("POST /user/marketing/unsubscribe", identityReadRL(authed(identityHandler.Unsubscribe)))
@@ -620,10 +633,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		mux.Handle("POST /user/blobs", blobUploadRL(authed(blobHandler.Upload)))
 		mux.Handle("GET /user/blobs", blobReadRL(authed(blobHandler.List)))
 		mux.Handle("GET /user/blobs/{id}", blobReadRL(authed(blobHandler.Download)))
-		mux.Handle("DELETE /user/blobs/{id}", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(blobHandler.Delete))))))
+		mux.Handle("DELETE /user/blobs/{id}", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(blobHandler.Delete)))))))
 		mux.Handle("PUT /user/blobs/named/{name}", blobUploadRL(authed(blobHandler.UploadNamed)))
 		mux.Handle("GET /user/blobs/named/{name}", blobReadRL(authed(blobHandler.DownloadNamed)))
-		mux.Handle("DELETE /user/blobs/named/{name}", authMw(fingerprintMw(confirmMw(confirmRL(http.HandlerFunc(blobHandler.DeleteNamed))))))
+		mux.Handle("DELETE /user/blobs/named/{name}", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(blobHandler.DeleteNamed)))))))
 	}
 
 	// Service-scoped JSON document store. Off by default: unlike blobs this is new
@@ -669,10 +682,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 			Limit: 300, Window: time.Minute, KeyFunc: handler.ClientRateLimitKey,
 		}, rlEnabled)
 		docWrite := func(h http.HandlerFunc) http.Handler {
-			return authMw(svcDocWriteRL(middleware.RequireScope("svcdoc:write")(h)))
+			return authMw(svcDocWriteRL(middleware.RequireScope("svcdoc:write")(dpopWrap(h))))
 		}
 		docRead := func(h http.HandlerFunc) http.Handler {
-			return authMw(svcDocReadRL(middleware.RequireScope("svcdoc:read")(h)))
+			return authMw(svcDocReadRL(middleware.RequireScope("svcdoc:read")(dpopWrap(h))))
 		}
 		mux.Handle("PUT /service/documents/{subject}/{key}", docWrite(svcDocHandler.Put))
 		mux.Handle("GET /service/documents/{subject}/{key}", docRead(svcDocHandler.Get))
@@ -692,7 +705,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// stored OAuth tokens without erasing the whole account.
 	socialHandler := handler.NewSocialHandler(d.Social, d.AuditLog)
 	mux.Handle("GET /user/social", authed(socialHandler.List))
-	mux.Handle("DELETE /user/social/{id}", authMw(fingerprintMw(confirmRL(http.HandlerFunc(socialHandler.Unlink)))))
+	mux.Handle("DELETE /user/social/{id}", authMw(fingerprintMw(dpopWrap(confirmRL(http.HandlerFunc(socialHandler.Unlink))))))
 
 	// KMS envelope-unwrap oracle (POST /kms/unwrap) — only mounted when a KMS
 	// root key is configured. Requires an authenticated client-credential token

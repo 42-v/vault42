@@ -598,7 +598,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			// The first factor here is the upstream provider's assertion, not a
 			// password. It travels on the challenge so the completed login
 			// does not claim a memorized secret vault42 never verified.
-			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp, service.MethodFederated)
+			challengeToken, err := h.tokenSvc.IssueChallengeToken(r.Context(), userID, fp, service.MethodFederated)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, "internal_error")
 				return
@@ -626,7 +626,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// assertion from another issuer", and inventing one would name a check this
 	// server did not make.
 	pair, err := h.tokenSvc.IssueTokenPairWithAuth(
-		userID, []string{"user"}, []string{"read", "write"},
+		r.Context(), userID, []string{"user"}, []string{"read", "write"},
 		"", fp, "", false,
 		service.NewAuthContext(time.Now(), []string{service.MethodFederated}, false),
 	)

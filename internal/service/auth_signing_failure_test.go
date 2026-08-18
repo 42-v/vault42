@@ -107,7 +107,7 @@ func TestTokenService_IssueTokenPairNilSigningKey(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 	svc.UpdateSigningKey(nil, testKID2)
 
-	_, err := svc.IssueTokenPair("user-1", []string{"user"}, []string{"read"}, "", "", "", false)
+	_, err := svc.IssueTokenPair(context.Background(), "user-1", []string{"user"}, []string{"read"}, "", "", "", false)
 	if err == nil {
 		t.Fatal("expected a signing error with a nil private key")
 	}

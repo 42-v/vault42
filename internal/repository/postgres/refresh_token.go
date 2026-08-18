@@ -403,6 +403,58 @@ func (r *RefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID strin
 	return count, nil
 }
 
+// ListActiveFamilies returns one row per active token family for a user, newest
+// first.
+//
+// The WHERE clause is countActiveFamiliesSQL's, verbatim, so the listing and the
+// concurrent-session cap cannot disagree about what a live session is: a session
+// counted against the cap is a session the user can see and end.
+//
+// DISTINCT ON collapses each family to its newest live generation, which is the
+// one carrying the current device binding and expiry. family_created_at comes
+// from the same row and is the family's birth date — migration 013 makes it
+// immutable across rotations, so it is the age the absolute session lifetime is
+// measured from, not the age of the latest refresh.
+//
+// device_id and client_id are nullable, and NULL is exactly the case this listing
+// exists to surface: findOrCreateDevice is non-critical and both the password and
+// the OAuth path store a family with no device when it fails. Those are coalesced
+// to the empty string rather than dropped.
+func (r *RefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string) ([]*repository.ActiveFamily, error) {
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT family_id, device_id, client_id, family_created_at, created_at, expires_at
+		FROM (
+			SELECT DISTINCT ON (family_id)
+			       family_id::text                     AS family_id,
+			       COALESCE(device_id::text, '')       AS device_id,
+			       COALESCE(client_id::text, '')       AS client_id,
+			       COALESCE(family_created_at, created_at) AS family_created_at,
+			       created_at,
+			       expires_at
+			FROM auth.refresh_tokens
+			WHERE user_id = $1 AND revoked = FALSE AND used = FALSE AND expires_at > NOW()
+			ORDER BY family_id, created_at DESC
+		) newest
+		ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list active families: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*repository.ActiveFamily
+	for rows.Next() {
+		var f repository.ActiveFamily
+		if err := rows.Scan(&f.FamilyID, &f.DeviceID, &f.ClientID, &f.CreatedAt, &f.LastUsedAt, &f.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan active family: %w", err)
+		}
+		out = append(out, &f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active families: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteExpired removes expired tokens that have been used or revoked. Returns the count of deleted rows.
 //
 // The reaper collects rows that are already spent, so it has no revocation to

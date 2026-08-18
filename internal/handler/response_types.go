@@ -113,30 +113,43 @@ type UpdateProfileInput struct {
 
 // SessionInfo represents a single session in the sessions list.
 type SessionInfo struct {
-	// ID is the device UUID this session is bound to. DELETE
+	// ID is the refresh-token family UUID: the session itself. DELETE
 	// /user/sessions/{id} addresses it.
+	//
+	// It used to be the device UUID, which made a family carrying no device
+	// invisible and unrevocable and collapsed two families sharing one
+	// fingerprint into a single row. The device id moved to DeviceID.
 	ID string `json:"id"`
+	// DeviceID is the device this session is bound to, or "" when device
+	// resolution failed at login. Empty is a session with no device
+	// metadata, never a session that does not exist.
+	DeviceID string `json:"device_id"`
 	// FriendlyName is the stored device label. Login invents one from the
 	// User-Agent (for example "Chrome on Windows"; "Unknown Device" if the
 	// header is empty or unrecognized). PATCH /user/devices/{id} replaces
-	// it. Empty only on a row that skipped the current login path and was
-	// never renamed.
+	// it. Empty when the session carries no device.
 	FriendlyName string `json:"friendly_name"`
-	// IP is the remote address last recorded on the device.
+	// IP is the remote address last recorded on the device. Empty when the
+	// session carries no device.
 	IP string `json:"ip"`
 	// UserAgent is the User-Agent last recorded on the device. Empty if
-	// the client sent none.
+	// the client sent none, or the session carries no device.
 	UserAgent string `json:"user_agent"`
 	// Trusted is the remembered-device flag. Current issuance never sets it,
 	// so callers should treat false as the only observed value.
 	Trusted bool `json:"trusted"`
-	// LastSeenAt is the most recent activity on this session, RFC3339 UTC.
-	// Nil only if the device row has never been refreshed, which login
-	// does not produce.
+	// LastSeenAt is when this session was last refreshed, RFC3339 UTC.
 	LastSeenAt *time.Time `json:"last_seen_at"`
-	// FirstSeenAt is when this device was first bound to the account,
-	// RFC3339 UTC.
+	// FirstSeenAt is when the device was first bound to the account, or the
+	// session's own start when it carries no device, RFC3339 UTC.
 	FirstSeenAt time.Time `json:"first_seen_at"`
+	// CreatedAt is when this session began, RFC3339 UTC. It is the family's
+	// birth date, which a rotation cannot move, so it is the age the
+	// absolute session lifetime is measured against.
+	CreatedAt time.Time `json:"created_at"`
+	// ExpiresAt is when this session's current refresh token stops being
+	// accepted, RFC3339 UTC.
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // SessionsResponse is returned by GET /user/sessions.

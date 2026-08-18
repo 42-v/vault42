@@ -146,6 +146,10 @@ func (m *mockRefreshTokenRepo) CountActiveFamilies(_ context.Context, _ string) 
 	return 0, nil
 }
 
+func (m *mockRefreshTokenRepo) ListActiveFamilies(_ context.Context, _ string) ([]*repository.ActiveFamily, error) {
+	return nil, nil
+}
+
 func (m *mockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
 	if m.DeleteExpiredFn != nil {
 		return m.DeleteExpiredFn(ctx)

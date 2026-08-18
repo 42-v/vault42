@@ -7,6 +7,7 @@ import (
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/middleware"
+	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/sanitize"
 	"github.com/42-v/vault42/internal/service"
@@ -159,6 +160,21 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // Sessions handles GET /user/sessions.
+//
+// It lists refresh-token FAMILIES, not devices. A device is a fingerprint, and
+// the two are not the same thing in either direction. findOrCreateDevice is
+// explicitly non-critical — its errors are logged and do not fail the auth flow —
+// and it returns "" when the lookup and the insert both fail, so both the
+// password path and the OAuth path can store a family with an empty device_id.
+// Listing devices made such a family invisible here and unreachable by the
+// per-session revoke: a live, refreshable session that only "sign out everywhere"
+// could end. The inverse held too — two families sharing one fingerprint showed
+// as one row, so revoking "a session" killed both, and a device carrying no live
+// family still listed as an active session.
+//
+// Device metadata is joined on when the family has one, and its absence is not an
+// error: a session with no label is still a session the owner must be able to see
+// and end.
 func (h *UserHandler) Sessions(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
 	if claims == nil {
@@ -166,29 +182,57 @@ func (h *UserHandler) Sessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devices, err := h.devices.ListByUser(r.Context(), claims.Subject)
+	families, err := h.tokens.ListActiveFamilies(r.Context(), claims.Subject)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
-	sessions := make([]SessionInfo, 0, len(devices))
-	for _, d := range devices {
-		sessions = append(sessions, SessionInfo{
-			ID:           d.ID,
-			FriendlyName: d.FriendlyName,
-			IP:           d.IP,
-			UserAgent:    d.UserAgent,
-			Trusted:      d.Trusted,
-			LastSeenAt:   d.LastSeenAt,
-			FirstSeenAt:  d.FirstSeenAt,
-		})
+	// A device lookup failure costs labels, never sessions. Failing the request
+	// here would leave the owner unable to see a live session because a cosmetic
+	// join could not be read.
+	byDevice := map[string]*model.Device{}
+	if devices, devErr := h.devices.ListByUser(r.Context(), claims.Subject); devErr == nil {
+		for _, d := range devices {
+			byDevice[d.ID] = d
+		}
+	}
+
+	sessions := make([]SessionInfo, 0, len(families))
+	for _, f := range families {
+		lastUsed := f.LastUsedAt
+		info := SessionInfo{
+			ID:          f.FamilyID,
+			DeviceID:    f.DeviceID,
+			CreatedAt:   f.CreatedAt,
+			ExpiresAt:   f.ExpiresAt,
+			FirstSeenAt: f.CreatedAt,
+			LastSeenAt:  &lastUsed,
+		}
+		if d, ok := byDevice[f.DeviceID]; ok {
+			info.FriendlyName = d.FriendlyName
+			info.IP = d.IP
+			info.UserAgent = d.UserAgent
+			info.Trusted = d.Trusted
+			info.FirstSeenAt = d.FirstSeenAt
+		}
+		sessions = append(sessions, info)
 	}
 
 	WriteJSON(w, http.StatusOK, SessionsResponse{Sessions: sessions, Total: len(sessions)})
 }
 
 // RevokeSession handles DELETE /user/sessions/{id}.
+//
+// The id is a refresh-token family id, which is what Sessions now lists.
+// Ownership is established by finding the family among the caller's own active
+// families rather than by trusting the path value, so one user cannot end
+// another's session, and an id belonging to nobody is a 404 rather than an
+// existence oracle.
+//
+// A device id is still accepted, for one release, because a client that cached an
+// id from the previous listing must not be met with a 404 on upgrade. That path
+// is unchanged: it revokes the device's tokens and deletes the device row.
 func (h *UserHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
 	if claims == nil {
@@ -199,6 +243,29 @@ func (h *UserHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	if sessionID == "" {
 		WriteError(w, http.StatusBadRequest, "missing_session_id")
+		return
+	}
+
+	families, err := h.tokens.ListActiveFamilies(r.Context(), claims.Subject)
+	if err != nil {
+		// Never fall through to the device alias on a read failure: that would
+		// answer "revoked" without having established that the caller holds the
+		// session named.
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	for _, f := range families {
+		if f.FamilyID != sessionID {
+			continue
+		}
+		if err := h.tokens.RevokeFamily(r.Context(), sessionID); err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		// The device row outlives the session on purpose: it is the record of a
+		// known fingerprint, and other live families may still be bound to it.
+		h.logSessionRevoke(r, claims.Subject, f.DeviceID, "session")
+		WriteJSON(w, http.StatusOK, StatusResponse{Status: "revoked"})
 		return
 	}
 

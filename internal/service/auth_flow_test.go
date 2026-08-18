@@ -549,7 +549,7 @@ func TestTokenService_IssueTokenPairUniqueJTIs(t *testing.T) {
 
 	jtis := make(map[string]bool)
 	for i := 0; i < 10; i++ {
-		pair, err := svc.IssueTokenPair("user-1", []string{"user"}, nil, "client", "fp", "", false)
+		pair, err := svc.IssueTokenPair(context.Background(), "user-1", []string{"user"}, nil, "client", "fp", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -573,7 +573,7 @@ func TestTokenService_IssueTokenPairUniqueJTIs(t *testing.T) {
 func TestTokenService_IssueTokenPairEmptyRolesAndScopes(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,11 +596,11 @@ func TestTokenService_IssueTokenPairEmptyRolesAndScopes(t *testing.T) {
 func TestTokenService_ChallengeTokenUniquePerCall(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 
-	token1, err := svc.IssueChallengeToken("user-1", "fp")
+	token1, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token2, err := svc.IssueChallengeToken("user-1", "fp")
+	token2, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +622,7 @@ func TestTokenService_UpdateSigningKeyConcurrentSafe(t *testing.T) {
 	}()
 
 	for i := 0; i < 100; i++ {
-		_, err := svc.IssueChallengeToken("user-1", "fp")
+		_, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 		if err != nil {
 			t.Fatalf("concurrent token issuance should not fail: %v", err)
 		}
@@ -635,7 +635,7 @@ func TestTokenService_IssueTokenPairAccessTokenTTL(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		5*time.Minute, 1*time.Hour, 7*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +651,7 @@ func TestTokenService_IssueTokenPairRefreshTTLNormal(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		15*time.Minute, 7*24*time.Hour, 30*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +667,7 @@ func TestTokenService_IssueTokenPairRefreshTTLRememberMe(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		15*time.Minute, 7*24*time.Hour, 30*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", true)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +681,7 @@ func TestTokenService_IssueTokenPairRefreshTTLRememberMe(t *testing.T) {
 func TestTokenService_IssueTokenPairFingerprintInClaims(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "sha256-fingerprint-value", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "sha256-fingerprint-value", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
