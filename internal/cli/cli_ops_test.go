@@ -153,6 +153,7 @@ func TestCLI_RotateAdminToken(t *testing.T) {
 	c, _, _, _, admin := newTestCLI()
 
 	t.Run("success stores the new hash", func(t *testing.T) {
+		firstBootSink(t)
 		var storedKey string
 		admin.SetFn = func(_ context.Context, key, _ string) error { storedKey = key; return nil }
 		if !c.rotateAdminToken(ctx) {
@@ -164,6 +165,7 @@ func TestCLI_RotateAdminToken(t *testing.T) {
 	})
 
 	t.Run("store error is handled", func(t *testing.T) {
+		firstBootSink(t)
 		admin.SetFn = func(context.Context, string, string) error { return errors.New("db down") }
 		c.rotateAdminToken(ctx)
 	})
@@ -187,9 +189,16 @@ func TestCLI_RotateJWKS(t *testing.T) {
 		}
 	})
 
-	t.Run("prints to stdout when no --output", func(t *testing.T) {
-		if !c.rotateJWKS(nil) {
-			t.Error("expected handled=true")
+	// The stdout path is retired: a PKCS#1 private key printed by a Job lands in
+	// the pod log. The command now refuses and names the flag instead.
+	t.Run("refuses to run without --output", func(t *testing.T) {
+		stderr := captureStderr(t, func() {
+			if !c.rotateJWKS(nil) {
+				t.Error("expected handled=true")
+			}
+		})
+		if !strings.Contains(stderr, "--output") {
+			t.Errorf("stderr does not name the required flag: %q", stderr)
 		}
 	})
 }
@@ -199,6 +208,7 @@ func TestCLI_AddClient(t *testing.T) {
 	c, clients, _, _, _ := newTestCLI()
 
 	t.Run("creates a client", func(t *testing.T) {
+		firstBootSink(t)
 		created := false
 		clients.CreateFn = func(context.Context, *model.Client) error { created = true; return nil }
 		c.addClient(ctx, []string{"--name", "frontend", "--role", "frontend", "--scopes", "user:read,user:write"})

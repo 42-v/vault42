@@ -183,12 +183,21 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 		UpdatedAt:  now,
 	}
 
+	// Delivered before the row is created: only the Argon2id hash is stored, so
+	// a secret that could not be handed over leaves a client nobody can
+	// authenticate as and no command can repair.
+	dest, err := firstboot.Deliver("VAULT_CLIENT_SECRET_"+name, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
+
 	if err := c.clients.Create(ctx, client); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
 
-	fmt.Printf("Client created:\n  ID: %s\n  Secret: %s\n  (secret shown ONCE — save it now)\n", clientID, secret)
+	fmt.Printf("Client created:\n  ID: %s\n  Secret written to: %s (not shown here, and not shown again)\n", clientID, dest)
 	return true
 }
 
@@ -288,16 +297,35 @@ func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
+	// Delivered before the hash is installed, for the same reason as
+	// InitAdminToken: a rotation the operator cannot receive locks every
+	// administrative subcommand out of the deployment.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", newToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	fmt.Printf("New admin token: %s\n(shown ONCE — save it now)\n", newToken)
+	fmt.Printf("Admin token rotated; the new token was written to %s and is not shown here.\n", dest)
 	return true
 }
 
+// rotateJWKS mints a signing key. --output is required: without it the command
+// wrote a PKCS#1 RSA private key to stdout, and that key signs every access
+// token the deployment issues. Run from a Job or an init container — which is
+// how key rotation is actually driven — stdout is the pod log, so the private
+// half of the signing key ended up in the aggregator alongside the tokens it
+// signs. There is no safe way to print it, only a safe file to put it in, which
+// is what --output already was.
 func (c *CLI) rotateJWKS(args []string) bool {
 	output := getFlag(args, "--output")
+	if output == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: rotate-jwks requires --output <path>: the private key is written to that file at mode 0600 and is never printed.")
+		return true
+	}
 
 	// Generate new RSA-2048 key pair
 	privateKey, err := vaultcrypto.GenerateRSAKeyPair()
@@ -321,15 +349,11 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	}
 	pemBytes := pem.EncodeToMemory(pemBlock)
 
-	if output != "" {
-		if err := os.WriteFile(output, pemBytes, 0o600); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
-			return true
-		}
-		fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
-	} else {
-		fmt.Printf("kid: %s\n%s", kid, pemBytes)
+	if err := os.WriteFile(output, pemBytes, 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
+		return true
 	}
+	fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
 
 	fmt.Fprintln(os.Stderr, "NOTE: Vault generates JWKS keys in memory at startup. To use this key,")
 	fmt.Fprintln(os.Stderr, "configure the key file path and restart the service.")
