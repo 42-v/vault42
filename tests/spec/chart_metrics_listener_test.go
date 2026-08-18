@@ -157,10 +157,57 @@ func TestTheScrapeChainResolvesEndToEnd(t *testing.T) {
 	}
 }
 
-// TestTheMetricsPortIsFencedByPolicy checks the mitigation that only became
-// possible once the port was distinct from the public one.
-func TestTheMetricsPortIsFencedByPolicy(t *testing.T) {
-	docs := renderWithMetrics(t)
+// The metrics rule and the peers it admits.
+//
+// The previous version of this gate asserted only that some rule mentions port
+// 9090, and passed on a rule that fences nothing: the template emits `from` only
+// under `{{- with .Values.metrics.networkPolicy.from }}`, and the shipped default
+// is `from: []`, so the rendered rule carries ports and no peer list — which in
+// NetworkPolicy semantics selects every source. A test named "is fenced by
+// policy" that passes on an unfenced policy is worse than no test, because the
+// name is what the next reader believes.
+//
+// So both postures are pinned, and neither is described as something it is not.
+// The default is deliberate and documented in values.yaml; what must not happen
+// is the configured peer list silently failing to reach the rendered rule.
+func TestTheMetricsRuleCarriesTheConfiguredPeers(t *testing.T) {
+	docs := renderWithMetrics(t,
+		"--set-json", `metrics.networkPolicy.from=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"monitoring"}}}]`)
+
+	rule := metricsIngressRule(t, docs)
+	peers, ok := rule["from"].([]any)
+	if !ok || len(peers) == 0 {
+		t.Fatalf("metrics.networkPolicy.from was set and the rendered rule admits every source: %v", rule)
+	}
+	selector := mapAt(mapAt(peers[0].(map[string]any), "namespaceSelector"), "matchLabels")
+	if got, _ := selector["kubernetes.io/metadata.name"].(string); got != "monitoring" {
+		t.Errorf("the rendered peer selects namespace %q, want \"monitoring\"; the configured "+
+			"peer list did not reach the rule", got)
+	}
+}
+
+// The shipped default, stated rather than implied. metrics.enabled is false by
+// default so nothing is exposed out of the box, but values-dev.yaml turns it on,
+// and an operator who enables metrics without naming peers gets a port reachable
+// from every pod the cluster lets connect. That is the documented trade in
+// values.yaml; this pins that the rendered output really is that trade, so the
+// day someone believes it is fenced, the belief is checkable.
+func TestTheMetricsRuleWithNoPeersAdmitsEverySource(t *testing.T) {
+	rule := metricsIngressRule(t, renderWithMetrics(t))
+
+	if peers, ok := rule["from"]; ok {
+		t.Errorf("the default render carries a peer list %v. If the chart now fences the metrics "+
+			"port by default that is an improvement, but values.yaml and this test both describe "+
+			"the opposite and must be updated together.", peers)
+	}
+}
+
+// metricsIngressRule returns the vault NetworkPolicy ingress rule that admits the
+// metrics port, failing when there is none. A missing rule means a policy in
+// force drops every scrape — the mitigation that only became expressible once
+// the port was distinct from the public one.
+func metricsIngressRule(t *testing.T, docs []map[string]any) map[string]any {
+	t.Helper()
 
 	var policy map[string]any
 	for _, doc := range docs {
@@ -173,27 +220,27 @@ func TestTheMetricsPortIsFencedByPolicy(t *testing.T) {
 		}
 	}
 	if policy == nil {
-		t.Skip("no vault NetworkPolicy in this profile")
+		t.Fatal("no vault NetworkPolicy in the rendered output, although networkPolicy.enabled " +
+			"was set for this render; the template stopped emitting it and this gate would " +
+			"otherwise have skipped silently")
 	}
 
 	rules, _ := mapAt(policy, "spec")["ingress"].([]any)
-	var admitted bool
 	for _, entry := range rules {
 		rule, _ := entry.(map[string]any)
 		ports, _ := rule["ports"].([]any)
 		for _, p := range ports {
 			port, _ := p.(map[string]any)
 			if got, ok := intAt(port, "port"); ok && got == 9090 {
-				admitted = true
+				return rule
 			}
 		}
 	}
-	if !admitted {
-		t.Error("the vault NetworkPolicy does not admit the metrics port, so with a policy " +
-			"in force every scrape is dropped. This rule is the one the old in-code comment " +
-			"asked for and could not have: while /metrics was a path on the public port, a " +
-			"NetworkPolicy had no way to express it.")
-	}
+	t.Fatal("the vault NetworkPolicy does not admit the metrics port, so with a policy " +
+		"in force every scrape is dropped. This rule is the one the old in-code comment " +
+		"asked for and could not have: while /metrics was a path on the public port, a " +
+		"NetworkPolicy had no way to express it.")
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +249,7 @@ func TestTheMetricsPortIsFencedByPolicy(t *testing.T) {
 
 // renderWithMetrics renders the chart with metrics and the ServiceMonitor on,
 // which is the configuration this whole chain exists for.
-func renderWithMetrics(t *testing.T) []map[string]any {
+func renderWithMetrics(t *testing.T, extra ...string) []map[string]any {
 	t.Helper()
 	helm, err := exec.LookPath("helm")
 	if err != nil {
@@ -217,6 +264,7 @@ func renderWithMetrics(t *testing.T) []map[string]any {
 		"--set", "metrics.serviceMonitor.enabled=true",
 		"--set", "networkPolicy.enabled=true",
 	)
+	cmd.Args = append(cmd.Args, extra...)
 	cmd.Dir = repoRoot(t)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

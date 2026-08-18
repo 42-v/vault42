@@ -718,19 +718,33 @@ func (c *Config) checkMintAudience() error {
 // effect is a weaker deployment rather than an open door, and a deployment
 // already running this way must not stop booting on upgrade.
 func (c *Config) warnOnDegradedControls() {
-	// A proxy header nobody is trusted to set is a header that is never read.
-	// ClientIP returns the peer address when TrustedProxies is empty, so every
-	// client behind the ingress shares one rate-limit bucket, one lockout counter
-	// and one address in the audit log, and the operator's evidence that
-	// per-client attribution works is the variable they set. The effect is lost
-	// attribution, not a lost gate.
+	// An empty TRUSTED_PROXIES makes ClientIP return the peer address, which
+	// behind an ingress is the controller's pod IP for every request in the
+	// deployment. Every client then shares one rate-limit bucket, one lockout
+	// counter and one address in the audit log.
+	//
+	// The lockout consequence is the sharp one, and it is why this warns on the
+	// setting itself rather than only on the two headers that depend on it. The
+	// per-source lockout is keyed on (account, source): with one source for the
+	// whole deployment it collapses back to an account-wide lock at the low
+	// threshold, which is the five-request, no-credential denial of service
+	// against any account whose email is known that the two-threshold scheme was
+	// built to remove — while the account-wide threshold above it becomes
+	// unreachable, because there is never a second source to reach it with.
+	//
+	// The shipped chart defaults to empty and sets neither header, so keying this
+	// off the headers meant the one deployment that most needed the warning was
+	// the one deployment that never got it. It stays a warning rather than a
+	// hard failure because the effect is a weaker deployment, not an open door,
+	// and a cluster already running this way must not stop booting on upgrade.
 	if len(c.TrustedProxies) == 0 {
+		log.Printf("SECURITY WARNING: TRUSTED_PROXIES is empty, so every client is attributed to the address of the hop in front of vault42; behind an ingress that is one address for the whole deployment, which collapses per-source rate limiting and per-source account lockout into a single shared counter")
 		for _, h := range []struct{ name, value string }{
 			{"REAL_IP_HEADER", c.RealIPHeader},
 			{"VAULT_TLS_FINGERPRINT_HEADER", c.TLSFingerprintHeader},
 		} {
 			if h.value != "" {
-				log.Printf("SECURITY WARNING: %s is set but TRUSTED_PROXIES is empty; the header is never read and every client is attributed to the address of the hop in front of vault42", h.name)
+				log.Printf("SECURITY WARNING: %s is set but TRUSTED_PROXIES is empty, so the header is never read", h.name)
 			}
 		}
 	}

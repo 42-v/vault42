@@ -125,3 +125,119 @@ func TestFailOpenRegisterHasNoStaleEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestRateLimitersAreNamespaced is the gate ratelimit.go's namespace() cites as
+// the reason its fallback is safe.
+//
+// namespace() keys an unnamed limiter on its own budget — "<limit>/<window ms>" —
+// which keeps a one-hour window from reading a one-minute window's counter but
+// still lets two unnamed limiters with identical budgets share one. The argument
+// that this is fine is that every production limiter carries a Name. Until this
+// test existed that argument rested on nothing, and the comment asserting it
+// named a test that had never been written, which is worse than no comment: the
+// next reader sees "asserts it" and stops looking.
+//
+// Both halves matter. A limiter added without a Name inherits its budget's key,
+// and a Name copied from a sibling during a copy-paste collides outright — which
+// is the 15-way collision this field was introduced to end.
+func TestRateLimitersAreNamespaced(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "internal", "server", "server.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing server.go: %v", err)
+	}
+	src := readFileString(t, path)
+
+	names := map[string]string{} // limiter name -> variable that claimed it
+	var checked int
+	ast.Inspect(file, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		varName, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		lit, ok := rateLimitConfigLiteral(as.Rhs[0], fset, src)
+		if !ok {
+			return true
+		}
+		checked++
+
+		name, found := compositeStringField(lit, "Name")
+		if !found || name == "" {
+			t.Errorf("internal/server/server.go:%d builds the limiter %q without a Name. "+
+				"namespace() then keys it on its budget, so it shares a counter with any other "+
+				"unnamed limiter of the same limit and window: one route's traffic spends "+
+				"another route's budget. Give it a short, stable Name.",
+				fset.Position(as.Pos()).Line, varName.Name)
+			return true
+		}
+		if prev, dup := names[name]; dup {
+			t.Errorf("internal/server/server.go:%d gives the limiter %q the Name %q, which %q "+
+				"already uses. They share one cache key and therefore one counter, which is the "+
+				"collision the Name field exists to prevent.",
+				fset.Position(as.Pos()).Line, varName.Name, name, prev)
+			return true
+		}
+		names[name] = varName.Name
+		return true
+	})
+
+	if checked == 0 {
+		t.Fatal("no rate limiter was found in server.go; the construction style changed and this " +
+			"gate has stopped seeing what it guards")
+	}
+}
+
+// rateLimitConfigLiteral returns the composite literal behind a
+// middleware.RateLimitConfig{...} assignment, however it is wrapped.
+func rateLimitConfigLiteral(rhs ast.Expr, fset *token.FileSet, src string) (*ast.CompositeLit, bool) {
+	start := fset.Position(rhs.Pos()).Offset
+	end := fset.Position(rhs.End()).Offset
+	if start < 0 || end > len(src) || start >= end {
+		return nil, false
+	}
+	if !strings.Contains(src[start:end], "middleware.RateLimitConfig{") {
+		return nil, false
+	}
+	var found *ast.CompositeLit
+	ast.Inspect(rhs, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok || found != nil {
+			return true
+		}
+		sel, ok := cl.Type.(*ast.SelectorExpr)
+		if ok && sel.Sel.Name == "RateLimitConfig" {
+			found = cl
+		}
+		return true
+	})
+	return found, found != nil
+}
+
+// compositeStringField reads a string-literal field out of a composite literal.
+// The second return distinguishes "absent" from "present and empty", because
+// those are different mistakes and deserve different messages.
+func compositeStringField(lit *ast.CompositeLit, field string) (string, bool) {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != field {
+			continue
+		}
+		bl, ok := kv.Value.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return "", true
+		}
+		return strings.Trim(bl.Value, `"`), true
+	}
+	return "", false
+}

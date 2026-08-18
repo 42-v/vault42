@@ -500,6 +500,10 @@ func main() {
 			vaultcrypto.Argon2RejectedCount,
 			vaultcrypto.Argon2MaxConcurrent,
 		)
+		metricsCollector.SetArgon2Queue(
+			vaultcrypto.Argon2WaitingCount,
+			vaultcrypto.Argon2WaitNanos,
+		)
 		authSvc.SetMetrics(metricsCollector)
 		// The address is announced by the server when the listener binds. Saying
 		// "at GET /metrics" alone would now be misleading: the collector is not

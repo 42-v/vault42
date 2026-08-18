@@ -489,7 +489,11 @@ func pinnedServerExprs(t *testing.T, root string) (secureCookie, listener string
 			if listener != "" || node.Cond == nil {
 				return true
 			}
-			if strings.Contains(nodeText(t, fset, node.Body), "ListenAndServeTLS") {
+			// "ServeTLS" rather than "ListenAndServeTLS": the server binds its
+			// listener itself now and hands it to ServeTLS, and the substring
+			// matches either spelling. The property is which condition selects
+			// the TLS listener, not which of the two calls is used to serve it.
+			if strings.Contains(nodeText(t, fset, node.Body), "ServeTLS") {
 				listener = exprText(t, fset, node.Cond)
 			}
 		}
@@ -501,7 +505,7 @@ func pinnedServerExprs(t *testing.T, root string) (secureCookie, listener string
 			"has nothing to report on", path, configDoc)
 	}
 	if listener == "" {
-		t.Fatalf("%s no longer guards ListenAndServeTLS with an if; the listener column in %s "+
+		t.Fatalf("%s no longer guards a ServeTLS call with an if; the listener column in %s "+
 			"has nothing to report on", path, configDoc)
 	}
 	return secureCookie, listener

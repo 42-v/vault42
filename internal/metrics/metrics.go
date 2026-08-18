@@ -17,6 +17,17 @@ type Collector struct {
 	argon2Rejected      func() int64
 	argon2MaxConcurrent func() int
 
+	// Queue depth and cumulative wait, set separately by SetArgon2Queue.
+	//
+	// They are the early-warning half of the argon2 signal: active and rejected
+	// only move once the semaphore is full and work is being refused, whereas
+	// these rise as soon as callers start queueing, which is when logins start
+	// getting slower. The commit that added the counters in internal/crypto
+	// wrote that the mean wait "is the number an alert should be written
+	// against", and then no collector read either of them.
+	argon2Waiting   func() int64
+	argon2WaitNanos func() int64
+
 	// Auth counters
 	loginAttempts   atomic.Int64
 	loginSuccess    atomic.Int64
@@ -90,6 +101,24 @@ func NewCollector(argon2Active, argon2Rejected func() int64, argon2MaxConcurrent
 	}
 }
 
+// SetArgon2Queue wires the queue-depth accessors.
+//
+// Separate from NewCollector so that adding a signal does not rewrite every
+// caller that never had one, and nil-tolerant so a collector built without it
+// reports zero rather than panicking on the scrape.
+func (c *Collector) SetArgon2Queue(waiting, waitNanos func() int64) {
+	c.argon2Waiting = waiting
+	c.argon2WaitNanos = waitNanos
+}
+
+// gaugeOrZero reads an optional accessor.
+func gaugeOrZero(f func() int64) int64 {
+	if f == nil {
+		return 0
+	}
+	return f()
+}
+
 // RecordLoginAttempt increments the login attempts counter.
 func (c *Collector) RecordLoginAttempt() { c.loginAttempts.Add(1) }
 
@@ -139,6 +168,14 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_argon2_rejected_total Total argon2id requests rejected due to semaphore saturation.\n")
 		fmt.Fprintf(w, "# TYPE vault_argon2_rejected_total counter\n")
 		fmt.Fprintf(w, "vault_argon2_rejected_total %d\n", c.argon2Rejected())
+
+		fmt.Fprintf(w, "# HELP vault_argon2_waiting Callers currently queued for an argon2id semaphore slot.\n")
+		fmt.Fprintf(w, "# TYPE vault_argon2_waiting gauge\n")
+		fmt.Fprintf(w, "vault_argon2_waiting %d\n", gaugeOrZero(c.argon2Waiting))
+
+		fmt.Fprintf(w, "# HELP vault_argon2_wait_nanoseconds_total Cumulative time callers have spent queued for an argon2id semaphore slot.\n")
+		fmt.Fprintf(w, "# TYPE vault_argon2_wait_nanoseconds_total counter\n")
+		fmt.Fprintf(w, "vault_argon2_wait_nanoseconds_total %d\n", gaugeOrZero(c.argon2WaitNanos))
 
 		// Auth metrics
 		fmt.Fprintf(w, "# HELP vault_login_attempts_total Total login attempts.\n")

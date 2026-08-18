@@ -251,15 +251,30 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	s.startMetrics()
+	// The API listener is bound before the metrics one, and the order is the
+	// control rather than a style choice.
+	//
+	// A bind failure on the metrics port is deliberately non-fatal, so that
+	// losing a scrape never costs the service. Started first, that leniency runs
+	// the other way: VAULT_METRICS_ADDR naming the API port — ":8080" is the
+	// documented public port and a plausible typo — meant the collector won the
+	// race, the API's own bind then failed fatally, and for the width of the
+	// crash loop the port the Ingress routes to served an unauthenticated
+	// collector instead of the authentication service. Binding the API first
+	// makes that same typo cost only the scrape it was always allowed to cost.
+	apiLn, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("server: %w", err)
+	}
+
+	s.startMetrics(cfg.ListenAddr)
 
 	log.Printf("The Vault listening on %s (profile=%s)", cfg.ListenAddr, cfg.Profile)
 
-	var err error
 	if cfg.TLSEnabled && cfg.TLSCertFile != "" {
-		err = s.httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		err = s.httpSrv.ServeTLS(apiLn, cfg.TLSCertFile, cfg.TLSKeyFile)
 	} else {
-		err = s.httpSrv.ListenAndServe()
+		err = s.httpSrv.Serve(apiLn)
 	}
 
 	if err == http.ErrServerClosed {
@@ -278,11 +293,20 @@ func (s *Server) Start() error {
 // start because Prometheus's port is busy turns an observability problem into an
 // outage. The deployment loses its scrape and keeps serving, which is the right
 // way round.
-func (s *Server) startMetrics() {
+func (s *Server) startMetrics(apiAddr string) {
 	if s.deps.Metrics == nil {
 		return
 	}
 	addr := metricsAddr()
+	// Named the same as the API, the collector would be publishing on the port
+	// the Ingress routes to. Refusing by name as well as by bind failure is what
+	// turns a puzzling "address already in use" into a sentence that says which
+	// variable is wrong.
+	if sameListenAddress(addr, apiAddr) {
+		log.Printf("WARNING: metrics listener not started, %s names the API listen address %s; "+
+			"set %s to a different port", metricsAddrEnv, apiAddr, metricsAddrEnv)
+		return
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("WARNING: metrics listener not started, %s is unavailable: %v", addr, err)
@@ -292,11 +316,16 @@ func (s *Server) startMetrics() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", s.deps.Metrics.Handler())
 	s.metricsSrv = &http.Server{
-		Handler:        mux,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		IdleTimeout:    60 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+		Handler: mux,
+		// Five seconds, matching the vault, bridge and admin-gateway listeners.
+		// Left unset, Go falls back to ReadTimeout, so a slowloris header trickle
+		// got twice as long here as anywhere else — on the one listener of the
+		// four that has no authentication in front of it.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	log.Printf("metrics listening on %s", addr)
 	// Serve returns ErrServerClosed on the shutdown path and nothing actionable
@@ -306,6 +335,24 @@ func (s *Server) startMetrics() {
 }
 
 // metricsAddr resolves where the collector listens.
+// sameListenAddress reports whether two listen addresses would contend for the
+// same port. A bare ":9090" and an explicit "0.0.0.0:9090" are the same
+// listener, and either collides with a loopback-only bind on that port, so the
+// port alone decides — which is conservative in the only direction that matters:
+// it refuses a metrics address that might have been fine rather than serving the
+// collector where the API belongs.
+func sameListenAddress(a, b string) bool {
+	_, portA, err := net.SplitHostPort(a)
+	if err != nil {
+		return false
+	}
+	_, portB, err := net.SplitHostPort(b)
+	if err != nil {
+		return false
+	}
+	return portA == portB
+}
+
 func metricsAddr() string {
 	if addr := os.Getenv(metricsAddrEnv); addr != "" {
 		return addr

@@ -71,7 +71,25 @@ func DPoP(c cache.Cache, origin string) func(http.Handler) http.Handler {
 			// When the token has cnf.jkt (DPoP binding), fail closed on cache errors
 			// to prevent replay attacks against DPoP-bound tokens.
 			tokenRequiresDPoP := claims != nil && claims.Confirmation != nil && claims.Confirmation.JKT != ""
-			if jti != "" {
+
+			// The entry is only written where it protects something. On a token
+			// endpoint (claims == nil) the proof is about to bind a token being
+			// minted, and against a bound token it is the replay control itself.
+			// A request that carries a proof while holding an *unbound* token is
+			// neither: the thumbprint comparison below never runs for it, so the
+			// entry it would write guards nothing and its only effect is to occupy
+			// a cache slot for dpopReplayTTL.
+			//
+			// That distinction is load-bearing rather than tidy. Completing the
+			// binding put this middleware on every authenticated route, and most of
+			// those carry no rate limiter, so an ordinary unbound token could write
+			// one 10-minute entry per request until the shared cache hit its cap —
+			// at which point admission refuses new keys and every fail-closed
+			// limiter in the deployment starts answering 503, login included. The
+			// two arms kept here are both reachable only through rate-limited
+			// routes.
+			protectsSomething := claims == nil || tokenRequiresDPoP
+			if jti != "" && protectsSomething {
 				if c == nil {
 					if tokenRequiresDPoP {
 						log.Printf("DPoP: JTI replay prevention unavailable (cache nil), failing closed")
