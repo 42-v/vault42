@@ -34,8 +34,21 @@ func SafeLogValue(s string) string {
 // "invalid_ip" for unparseable input. This satisfies CWE-359 / GDPR
 // pseudonymization requirements while preserving /24 (or /64) granularity for
 // rate-limit and abuse-pattern correlation.
+//
+// A "host:port" pair is accepted and masked as its host, because that is the
+// shape of r.RemoteAddr and a caller who has only that should not have to
+// remember to split it first. Rejecting it would be the worse failure of the
+// two: the address would be replaced by "invalid_ip" rather than by its
+// network, so the line would lose its diagnostic without anything reporting a
+// problem.
 func ObfuscatedIP(s string) string {
-	ip := net.ParseIP(strings.TrimSpace(s))
+	s = strings.TrimSpace(s)
+	ip := net.ParseIP(s)
+	if ip == nil {
+		if host, _, err := net.SplitHostPort(s); err == nil {
+			ip = net.ParseIP(host)
+		}
+	}
 	if ip == nil {
 		return "invalid_ip"
 	}

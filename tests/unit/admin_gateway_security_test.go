@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -640,6 +641,56 @@ func TestAdminGateway_RejectProxyHeaders(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 without proxy headers, got %d", rec.Code)
+	}
+}
+
+// The refusal above writes a log line naming the peer, and that peer is
+// r.RemoteAddr: a host:port pair, which is the one form of address a caller is
+// most likely to hand to a masking helper without splitting it first.
+//
+// docs/PRIVACY.md section 3.3 says no client address reaches the process log in
+// full. This is the admin gateway's instance of that claim, and it is asserted
+// here rather than assumed because the gateway is the plane an Operator is most
+// likely to be tailing.
+func TestAdminGateway_ProxyHeaderRefusalLogsOnlyTheNetwork(t *testing.T) {
+	const (
+		peer   = "203.0.113.201:44310"
+		full   = "203.0.113.201"
+		masked = "203.0.113.0"
+	)
+
+	handler := adminapi.RejectProxyHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	req.RemoteAddr = peer
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; the refusal did not run so there is no log line", rec.Code)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "rejected request with proxy header") {
+		t.Fatalf("log = %q, want the refusal line", out)
+	}
+	if strings.Contains(out, full) {
+		t.Errorf("log = %q, which carries the full peer address %s", out, full)
+	}
+	if !strings.Contains(out, masked) {
+		t.Errorf("log = %q, want the masked network %s", out, masked)
 	}
 }
 
