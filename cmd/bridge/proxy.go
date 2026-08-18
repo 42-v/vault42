@@ -226,7 +226,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Already flagged — route to honeypot
 	if b.flags.IsFlagged(ip) {
 		if b.cfg.LogLevel == "debug" {
-			log.Printf("bridge: routing flagged %s to honeypot", safeLogValue(ip)) // #nosec G706 -- sanitised
+			log.Printf("bridge: routing flagged %s to honeypot", safeLogValue(ip)) // #nosec G706 -- sanitized
 		}
 		b.setProxyHeaders(r, ip)
 		b.honeypotProxy.ServeHTTP(w, r)
@@ -260,7 +260,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reason = "auto:rate_exceeded"
 			}
 			b.flags.Flag(ip, reason, total)
-			log.Printf("bridge: auto-flagged %s score=%d reason=%s", safeLogValue(ip), total, reason) // #nosec G706 -- IP sanitised, reason is a constant
+			log.Printf("bridge: auto-flagged %s score=%d reason=%s", safeLogValue(ip), total, reason) // #nosec G706 -- IP sanitized, reason is a constant
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -327,7 +327,7 @@ func (b *Bridge) inspectLoginResponse(resp *http.Response) error {
 		total := b.scores.Add(ip, failScore)
 		if total >= b.cfg.FlagThreshold {
 			b.flags.Flag(ip, "auto:login_failures", total)
-			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", safeLogValue(ip), count, total) // #nosec G706 -- IP sanitised
+			log.Printf("bridge: auto-flagged %s login_failures=%d score=%d", safeLogValue(ip), count, total) // #nosec G706 -- IP sanitized
 
 			if b.webhook != nil {
 				b.webhook.Send(map[string]interface{}{
@@ -384,7 +384,7 @@ func coercedSubresource(r *http.Request) bool {
 	}
 }
 
-// safeLogValue neutralises a value before it reaches a log record.
+// safeLogValue neutralizes a value before it reaches a log record.
 //
 // cmd/bridge is deliberately stdlib-only and cannot import the vault's
 // httputil.SafeLogValue, so it carries its own. Client addresses reach

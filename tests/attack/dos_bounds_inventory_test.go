@@ -16,7 +16,7 @@ import (
 //
 // This is the same idea pointed the other way. Each entry names a bound that
 // now exists and must keep existing. A source-text assertion is coarse, so
-// every one of them is paired with a behavioural test elsewhere in this package
+// every one of them is paired with a behavioral test elsewhere in this package
 // or beside the code; what this catches is a silent deletion during a refactor,
 // which is exactly how the numbers in the argon2 comment went stale once
 // already.
@@ -162,7 +162,7 @@ func TestDoS_SourceContracts(t *testing.T) {
 		},
 		{
 			"cmd/bridge/proxy.go", "webhookWorkers = 8",
-			"the webhook pool bound the mail queue is modelled on",
+			"the webhook pool bound the deferred-work queue is modeled on",
 		},
 		{
 			"cmd/bridge/decoy.go", "maxReasonPathLen",

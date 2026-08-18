@@ -133,7 +133,7 @@ func TestRefreshRetentionStopsOnContextCancel(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("a cancelled context did not stop the sweep loop")
+		t.Fatal("a canceled context did not stop the sweep loop")
 	}
 	r.Stop()
 }

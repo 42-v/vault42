@@ -90,7 +90,7 @@ func TestCloseReportsAnExpiredDrain(t *testing.T) {
 		t.Fatalf("Close = %v, want the drain deadline to be reported", err)
 	}
 
-	// The job's context is cancelled, so a send still running stops touching
+	// The job's context is canceled, so a send still running stops touching
 	// state the caller is about to tear down.
 	jc, _ := jobCtx.Load().(context.Context)
 	if jc == nil {
@@ -99,7 +99,7 @@ func TestCloseReportsAnExpiredDrain(t *testing.T) {
 	select {
 	case <-jc.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("the job's context was not cancelled after the drain expired")
+		t.Fatal("the job's context was not canceled after the drain expired")
 	}
 	close(blocked)
 }

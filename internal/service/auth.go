@@ -106,7 +106,7 @@ type familyOriginReader interface {
 // minutes, 50 failures across all sources locks the account itself, and 20
 // failures from one address locks that address.
 //
-// The per-source key is what makes lockout a defence rather than a weapon. The
+// The per-source key is what makes lockout a defense rather than a weapon. The
 // counter used to be keyed on the user id alone, so five wrong passwords from
 // one address denied logins to any account whose email the caller knew, for
 // fifteen minutes, at a cost of five HTTP requests and no credential. MFA verify

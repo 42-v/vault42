@@ -20,7 +20,7 @@ import (
 // an outage.
 
 // TestDoS_MemoryCacheRefusesNewKeysAtTheCap is the regression. The exact cap is
-// a production constant, so the assertion is on the behaviour at whatever it is
+// a production constant, so the assertion is on the behavior at whatever it is
 // rather than on the number.
 func TestDoS_MemoryCacheRefusesNewKeysAtTheCap(t *testing.T) {
 	mc := cache.NewMemoryCache()

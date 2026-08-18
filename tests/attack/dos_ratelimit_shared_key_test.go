@@ -21,7 +21,7 @@ import (
 // KMS unwrap and register as well, and thirty-one unauthenticated requests
 // bought an hour of 429s for everyone behind that address.
 //
-// These tests assert the FIXED behaviour: each limiter carries a Name that
+// These tests assert the FIXED behavior: each limiter carries a Name that
 // namespaces its counter, so exhausting one leaves the others untouched and a
 // short window expires on its own schedule.
 
@@ -49,7 +49,7 @@ func TestDoS_ExhaustingOneIPLimiterLeavesSiblingsIntact(t *testing.T) {
 	t.Cleanup(func() { _ = mc.Close() })
 
 	ok := dosOKHandler()
-	// Analogues of refresh (30/min) and password reset (3/hour), scaled so the
+	// Analogs of refresh (30/min) and password reset (3/hour), scaled so the
 	// assertion runs in a unit test.
 	refresh := middleware.RateLimit(mc, middleware.RateLimitConfig{
 		Name: "refresh", Limit: 3, Window: 200 * time.Millisecond, KeyFunc: middleware.IPRateLimitKey,

@@ -35,7 +35,7 @@ const (
 	DefaultQueueDepth = 1024
 )
 
-// Job is a unit of deferred work. It is handed a context that is cancelled when
+// Job is a unit of deferred work. It is handed a context that is canceled when
 // the dispatcher is closing, so a job that outlives the drain deadline can stop
 // rather than write into torn-down state.
 type Job func(ctx context.Context)
@@ -45,7 +45,7 @@ type Dispatcher struct {
 	queue chan Job
 	wg    sync.WaitGroup
 
-	// ctx is cancelled by Close, and every job receives it.
+	// ctx is canceled by Close, and every job receives it.
 	ctx    context.Context
 	cancel context.CancelFunc
 

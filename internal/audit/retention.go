@@ -48,7 +48,7 @@ func NewRetention(repo repository.AuditRepository, period time.Duration) *Retent
 }
 
 // Done is closed once the sweep loop has exited, whether it ended via Stop or via
-// its context being cancelled. Without it there is no way to know the sweeper has
+// its context being canceled. Without it there is no way to know the sweeper has
 // actually stopped: Stop and cancel both only *request* an exit, and a caller that
 // closes the database pool on their return can still race a sweep that is mid-DELETE.
 //
@@ -59,14 +59,6 @@ func (r *Retention) Done() <-chan struct{} { return r.doneCh }
 // Enabled reports whether a retention horizon is configured.
 func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
 
-// Sweep deletes every audit entry older than the retention horizon and returns
-// how many rows went.
-//
-// Serialised across replicas: the underlying cleanup takes an ACCESS EXCLUSIVE
-// lock on the audit table (it disables the append-only trigger to delete), so
-// only one replica may sweep at a time. A replica that does not get the lock
-// returns (0, nil) and tries again next tick — the work is idempotent, so there
-// is nothing to catch up on.
 // SweepMaxBatches bounds one tick.
 //
 // CleanupLocked deletes at most one batch per call, so a sweep loops. The loop
@@ -76,6 +68,19 @@ func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
 // batch size this is 40 000 rows per tick, four times a day.
 const SweepMaxBatches = 20
 
+// Sweep deletes every audit entry older than the retention horizon and returns
+// how many rows went.
+//
+// Serialized across replicas: the underlying cleanup takes an ACCESS EXCLUSIVE
+// lock on the audit table (it disables the append-only trigger to delete), so
+// only one replica may sweep at a time. A replica that does not get the lock
+// returns what it has and tries again next tick — the work is idempotent, so
+// there is nothing to catch up on.
+//
+// It loops, because one call deletes at most repository.AuditCleanupBatch rows.
+// Holding that exclusive lock over an unbounded DELETE blocked every audit
+// insert for the length of the whole purge, and a failed login is a critical
+// event written synchronously on the request path even when the buffer is full.
 func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	if !r.Enabled() {
 		return 0, nil
@@ -98,7 +103,7 @@ func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 			return total, nil
 		}
 		// Give the inserts waiting behind the exclusive lock a turn before
-		// taking it again, and honour a shutdown between batches.
+		// taking it again, and honor a shutdown between batches.
 		select {
 		case <-ctx.Done():
 			return total, ctx.Err()

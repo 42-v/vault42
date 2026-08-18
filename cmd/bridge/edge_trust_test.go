@@ -35,10 +35,10 @@ func upstreamEcho(t *testing.T) (*httptest.Server, func() http.Header) {
 
 func testBridge(t *testing.T, mutate func(*Config)) (*Bridge, func() http.Header) {
 	t.Helper()
-	real, headers := upstreamEcho(t)
+	realUp, headers := upstreamEcho(t)
 	honeypot, _ := upstreamEcho(t)
 	cfg := &Config{
-		RealUpstream:       real.URL,
+		RealUpstream:       realUp.URL,
 		HoneypotUpstream:   honeypot.URL,
 		RateThreshold:      60,
 		RateWindow:         time.Minute,
@@ -137,7 +137,7 @@ func TestBridgeRealIPBranchValidatesLikeTheXFFBranch(t *testing.T) {
 		want   string
 	}{
 		{"junk is refused and the peer is used", "not-an-ip", "10.0.0.1"},
-		{"a valid address is honoured", "203.0.113.9", "203.0.113.9"},
+		{"a valid address is honored", "203.0.113.9", "203.0.113.9"},
 		{"the rightmost element wins", "1.2.3.4, 203.0.113.9", "203.0.113.9"},
 		{"a trusted hop is skipped", "203.0.113.9, 10.0.0.7", "203.0.113.9"},
 		{"junk after a real hop does not resurrect the client value", "203.0.113.9, bogus", "10.0.0.1"},
@@ -376,15 +376,15 @@ func TestBridgeUpstreamTransportIsBounded(t *testing.T) {
 	}
 }
 
-// TestSafeLogValueNeutralisesRecordForgery covers the log sanitiser: an address
+// TestSafeLogValueNeutralizesRecordForgery covers the log sanitiser: an address
 // arriving in a header the operator declared trusted used to reach log.Printf
 // raw, and a U+0085 in it forged a whole record.
-func TestSafeLogValueNeutralisesRecordForgery(t *testing.T) {
+func TestSafeLogValueNeutralizesRecordForgery(t *testing.T) {
 	got := safeLogValue("203.0.113.1\n2026/01/01 forged: admin login")
 	if strings.ContainsAny(got, "\n\r") {
 		t.Fatalf("safeLogValue kept a line break: %q", got)
 	}
-	if got := safeLogValue("1.2.3.4forged"); strings.Contains(got, "") {
+	if got := safeLogValue("1.2.3.4\u0085forged"); strings.Contains(got, "\u0085") {
 		t.Fatalf("safeLogValue kept NEL: %q", got)
 	}
 	long := safeLogValue(strings.Repeat("a", 500))

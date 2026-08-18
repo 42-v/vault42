@@ -48,7 +48,7 @@ func TestHIBPSemaphoreBoundsConcurrency(t *testing.T) {
 	}
 }
 
-// TestHIBPFailsOpenWhenSaturated pins the behaviour the fail-open contract
+// TestHIBPFailsOpenWhenSaturated pins the behavior the fail-open contract
 // already promises: a check that cannot run answers "not breached", exactly as
 // an unreachable HIBP does. Shedding must not become a way to block signups.
 func TestHIBPFailsOpenWhenSaturated(t *testing.T) {

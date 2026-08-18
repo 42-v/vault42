@@ -56,9 +56,9 @@ func lockoutSvc(t *testing.T, email, userID string) *AuthService {
 // test that drives many failures through the real Login path.
 func shrinkLoginThrottle(t *testing.T) {
 	t.Helper()
-	base, max := loginThrottleBase, loginThrottleMax
+	prevBase, prevMax := loginThrottleBase, loginThrottleMax
 	loginThrottleBase, loginThrottleMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { loginThrottleBase, loginThrottleMax = base, max })
+	t.Cleanup(func() { loginThrottleBase, loginThrottleMax = prevBase, prevMax })
 }
 
 func loginFrom(t *testing.T, svc *AuthService, email, password, ip string) error {
@@ -222,12 +222,12 @@ func TestThrottleStopsAtTheContextDeadline(t *testing.T) {
 		svc.cache.Increment(ctx, key, lockoutDuration) // #nosec G104 -- test setup
 	}
 
-	cancelled, cancel := context.WithCancel(ctx)
+	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	start := time.Now()
-	svc.throttleLogin(cancelled, "known@example.com")
+	svc.throttleLogin(canceled, "known@example.com")
 	if elapsed := time.Since(start); elapsed > loginThrottleBase {
-		t.Fatalf("throttle slept %v on a cancelled context; it must return at once", elapsed)
+		t.Fatalf("throttle slept %v on a canceled context; it must return at once", elapsed)
 	}
 }
 
