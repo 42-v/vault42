@@ -3,6 +3,8 @@ package honeypot
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -351,18 +353,16 @@ func TestMintedTrapKIDDoesNotGenerateTheKey(t *testing.T) {
 // misrepresent the attack: the operator would see one credential presentation
 // where there had been a thousand, and the budget would have turned a bound on
 // the channel into a lie about the traffic.
-func TestRaiseHoneypotAlert_ReportsHowManyItSuppressed(t *testing.T) {
+func TestTakeAlertSlot_ReportsHowManyItSuppressed(t *testing.T) {
 	buf := captureLog(t)
-
-	var mu sync.Mutex
-	var entries []*model.AuditEntry
-	alerter := NewAlerter("", nil, apAuditSpyLocked(&mu, &entries))
 
 	// An empty bucket with no time elapsed against it: every call is refused.
 	budget := &alertBudget{last: time.Now()}
 	var suppressed atomic.Int64
 	for i := 0; i < 3; i++ {
-		raiseHoneypotAlert(alerter, budget, &suppressed, Event{EventType: EventCredentialPresented})
+		if takeAlertSlot(budget, &suppressed) {
+			t.Fatalf("call %d took a slot from an empty budget", i)
+		}
 	}
 	if got := suppressed.Load(); got != 3 {
 		t.Fatalf("suppressed = %d, want 3 refusals recorded", got)
@@ -373,9 +373,9 @@ func TestRaiseHoneypotAlert_ReportsHowManyItSuppressed(t *testing.T) {
 
 	// Enough time passes for a slot to come back.
 	budget.last = time.Now().Add(-2 * webhookRefillInterval)
-	raiseHoneypotAlert(alerter, budget, &suppressed, Event{EventType: EventCredentialPresented})
-
-	awaitEntries(t, &mu, &entries, 1)
+	if !takeAlertSlot(budget, &suppressed) {
+		t.Fatal("the budget refused a slot after a refill interval had passed")
+	}
 	if got := buf.String(); !strings.Contains(got, "3 request alerts were suppressed") {
 		t.Errorf("log = %q, want the suppressed count carried into the next dispatch", got)
 	}
@@ -383,3 +383,236 @@ func TestRaiseHoneypotAlert_ReportsHowManyItSuppressed(t *testing.T) {
 		t.Errorf("suppressed = %d after the count was reported, want it reset", got)
 	}
 }
+
+// The alert carries what the caller actually sent, with the credential-like
+// fields masked. Event.RequestBody existed and was never assigned anywhere in
+// the tree, and RedactBody -- the function written to fill it -- had no caller;
+// capturing what an attacker posted is most of what a deception surface is for.
+func TestLoggingMiddleware_TheAlertCarriesTheRedactedRequestBody(t *testing.T) {
+	posted := make(chan Event, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e Event
+		if err := json.NewDecoder(r.Body).Decode(&e); err == nil {
+			posted <- e
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var seen string
+	handler := LoggingMiddleware(NewAlerter(srv.URL, nil, nil))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seen = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const sent = `{"email":"victim@example.com","password":"hunter2","token":"abc"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(sent))
+	req.Header.Set("Authorization", "Bearer stolen")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	// The handler behind the trap must still read every byte the caller sent.
+	// A middleware that consumes the body to inspect it and does not put it back
+	// makes the trap answer differently from the real vault, which is a tell an
+	// attacker gets for the price of one request.
+	if seen != sent {
+		t.Errorf("the handler read %q, want the whole body %q", seen, sent)
+	}
+
+	select {
+	case e := <-posted:
+		if strings.Contains(e.RequestBody, "hunter2") || strings.Contains(e.RequestBody, "abc") {
+			t.Errorf("the alert carries unredacted secrets: %q", e.RequestBody)
+		}
+		if !strings.Contains(e.RequestBody, "victim@example.com") {
+			t.Errorf("the alert dropped the part worth reading: %q", e.RequestBody)
+		}
+		if !strings.Contains(e.RequestBody, "[REDACTED]") {
+			t.Errorf("RequestBody = %q, want the password-like fields masked", e.RequestBody)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no webhook dispatch within 2s")
+	}
+}
+
+// The capture is bounded. The caller chooses the length, and an unbounded copy
+// on the alerting path is a way to spend the honeypot's memory from off-host --
+// and to put an arbitrarily large string in front of whoever reads the alert.
+// The handler must still see the whole body: only the copy is truncated.
+func TestLoggingMiddleware_TheCapturedBodyIsBounded(t *testing.T) {
+	posted := make(chan Event, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e Event
+		if err := json.NewDecoder(r.Body).Decode(&e); err == nil {
+			posted <- e
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var seenLen int
+	handler := LoggingMiddleware(NewAlerter(srv.URL, nil, nil))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		seenLen = len(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	sent := strings.Repeat("A", maxCapturedBody*3)
+	req := httptest.NewRequest(http.MethodPost, "/user/blobs", strings.NewReader(sent))
+	req.Header.Set("Authorization", "Bearer stolen")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if seenLen != len(sent) {
+		t.Errorf("the handler read %d bytes, want all %d: the capture must put back what it took",
+			seenLen, len(sent))
+	}
+
+	select {
+	case e := <-posted:
+		if len(e.RequestBody) > len(sent) {
+			t.Errorf("the alert carries %d bytes for a %d-byte body", len(e.RequestBody), len(sent))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no webhook dispatch within 2s")
+	}
+
+	// How many bytes the capture actually reads is asserted in TestCaptureBody:
+	// a truncated body is not valid JSON, so RedactBody answers "[non-JSON body]"
+	// whether the bound held or not, and this test cannot see the difference.
+}
+
+// A request with no body at all must not acquire one, and must not cost a
+// capture. Most scan traffic is a bare GET.
+func TestLoggingMiddleware_ABodylessRequestCapturesNothing(t *testing.T) {
+	posted := make(chan Event, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var e Event
+		if err := json.NewDecoder(r.Body).Decode(&e); err == nil {
+			posted <- e
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	handler := LoggingMiddleware(NewAlerter(srv.URL, nil, nil))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/user/profile", nil)
+	req.Header.Set("Authorization", "Bearer stolen")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	select {
+	case e := <-posted:
+		if e.RequestBody != "" {
+			t.Errorf("RequestBody = %q for a request that carried none", e.RequestBody)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no webhook dispatch within 2s")
+	}
+}
+
+// failingBody yields a prefix and then fails, the shape a client that
+// disconnects mid-upload produces.
+type failingBody struct {
+	prefix string
+	done   bool
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, errors.New("connection reset")
+	}
+	b.done = true
+	return copy(p, b.prefix), nil
+}
+
+func (b *failingBody) Close() error { return nil }
+
+// captureBody's job is to leave the request as it found it. These are the cases
+// the middleware tests cannot reach: a request built without a body at all, and
+// a body that fails partway through.
+func TestCaptureBody(t *testing.T) {
+	t.Run("a request with no body", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/user/profile", nil)
+		r.Body = nil
+		if got := captureBody(r); got != "" {
+			t.Errorf("captureBody = %q, want empty", got)
+		}
+		if r.Body != nil {
+			t.Error("captureBody gave a body to a request that had none")
+		}
+	})
+
+	t.Run("http.NoBody", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/user/profile", nil)
+		r.Body = http.NoBody
+		if got := captureBody(r); got != "" {
+			t.Errorf("captureBody = %q, want empty", got)
+		}
+	})
+
+	t.Run("a body that fails after yielding bytes", func(t *testing.T) {
+		buf := captureLog(t)
+		r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+		r.Body = &failingBody{prefix: `{"password":"hunter2"}`}
+
+		got := captureBody(r)
+		if !strings.Contains(got, "[REDACTED]") {
+			t.Errorf("captureBody = %q, want the bytes that did arrive, redacted", got)
+		}
+		if !strings.Contains(buf.String(), "reading request body for the alert") {
+			t.Errorf("log = %q, want the read failure reported", buf.String())
+		}
+	})
+
+	t.Run("reads no more than the cap", func(t *testing.T) {
+		body := &countingBody{remaining: maxCapturedBody * 3}
+		r := httptest.NewRequest(http.MethodPost, "/user/blobs", nil)
+		r.Body = body
+
+		captureBody(r)
+
+		if body.read > maxCapturedBody {
+			t.Errorf("captureBody read %d bytes, want no more than %d. The caller chooses the "+
+				"length, so an unbounded copy is a way to spend this process's memory from "+
+				"off-host.", body.read, maxCapturedBody)
+		}
+		if body.read == 0 {
+			t.Error("captureBody read nothing; the bound must truncate the copy, not remove it")
+		}
+	})
+
+	t.Run("a body that fails before yielding anything", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+		r.Body = &failingBody{prefix: "", done: true}
+		if got := captureBody(r); got != "" {
+			t.Errorf("captureBody = %q, want empty when nothing was read", got)
+		}
+	})
+}
+
+// countingBody reports how many bytes were taken from it, so the capture's bound
+// is asserted against the read rather than against what survived redaction.
+type countingBody struct {
+	remaining int
+	read      int
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	if b.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > b.remaining {
+		n = b.remaining
+	}
+	for i := 0; i < n; i++ {
+		p[i] = 'A'
+	}
+	b.remaining -= n
+	b.read += n
+	return n, nil
+}
+
+func (b *countingBody) Close() error { return nil }

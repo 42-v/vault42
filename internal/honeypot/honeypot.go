@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -290,6 +291,53 @@ const (
 // length, so the decode is bounded rather than trusted.
 const maxJWTHeaderSegment = 1024
 
+// maxCapturedBody bounds what an alert copies out of a request body.
+//
+// The caller chooses the length, so an unbounded copy would be a way to spend
+// this process's memory from off-host and to put an arbitrarily long string in
+// front of whoever reads the alert. Four kilobytes is half the global body cap
+// and comfortably more than any credential-bearing request the real vault
+// accepts, so a truncated capture means the caller was not sending a login.
+const maxCapturedBody = 4096
+
+// captureBody copies the front of a request body for the alert and puts back
+// exactly what it took.
+//
+// Putting it back is the part that matters. A middleware that consumes the body
+// to inspect it and does not restore it makes the trap answer differently from
+// the real vault on every request with a body, which is a tell an attacker buys
+// for the price of one POST. The handler behind this reads the same bytes in the
+// same order it would have read; only the copy in the alert is truncated.
+//
+// The global body cap is applied outside this middleware, so what is read here
+// is already bounded by it, and the bytes handed back are not counted twice: the
+// limit reader upstream has already delivered them.
+func captureBody(r *http.Request) string {
+	if r.Body == nil || r.Body == http.NoBody {
+		return ""
+	}
+
+	captured, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedBody))
+	if len(captured) == 0 {
+		// Nothing was taken, so there is nothing to put back. An error with no
+		// bytes is the handler's to surface on its own read, not this one's.
+		return ""
+	}
+	if err != nil {
+		log.Printf("honeypot: reading request body for the alert: %v", err)
+	}
+
+	r.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(captured), r.Body), Closer: r.Body}
+	return RedactBody(string(captured))
+}
+
+// readCloser rejoins a replayed prefix to the rest of a body while leaving Close
+// with the original, so the server still closes what it opened.
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
 // credentialAlert classifies one request and reports the alert it deserves, if
 // any. It reads only the request, so the decision is made before the handler
 // runs and cannot be changed by what the handler does to r.
@@ -375,15 +423,25 @@ func LoggingMiddleware(alerter *Alerter) func(http.Handler) http.Handler {
 			// means a flood that the budget refuses costs no allocation at all.
 			eventType, credentialRisk, alertable := credentialAlert(r)
 			risk := requestRisk(r.UserAgent(), credentialRisk)
-			if alertable && alerter != nil {
-				raiseHoneypotAlert(alerter, budget, &suppressed, Event{
-					Timestamp: start,
-					EventType: eventType,
-					IP:        r.RemoteAddr,
-					UserAgent: r.UserAgent(),
-					Headers:   CollectHeaders(r),
-					RiskScore: risk,
-				})
+			if alertable && alerter != nil && takeAlertSlot(budget, &suppressed) {
+				// The slot is spent before anything is copied, so a flood the
+				// budget refuses costs neither a header map nor a body read.
+				event := Event{
+					Timestamp:   start,
+					EventType:   eventType,
+					IP:          r.RemoteAddr,
+					UserAgent:   r.UserAgent(),
+					Headers:     CollectHeaders(r),
+					RequestBody: captureBody(r),
+					RiskScore:   risk,
+				}
+				// Deferred for the reason the trap login path defers its own:
+				// this runs inside the request, and Alert opens a connection to
+				// the operator's endpoint with a five-second timeout. Inline,
+				// that timeout is latency on the attacker's own connection --
+				// which makes the alert timeable, and holds a goroutine and a
+				// socket for every request they choose to send.
+				deferwork.Go(func(ctx context.Context) { alerter.Alert(ctx, event) })
 			}
 
 			next.ServeHTTP(rw, r)
@@ -413,25 +471,26 @@ func requestRisk(userAgent string, credentialRisk int) int {
 	return risk
 }
 
-// raiseHoneypotAlert spends a slot from the budget and dispatches the alert.
+// takeAlertSlot reports whether this request may raise an alert, spending a slot
+// from the budget when it may and counting it when it may not.
 //
-// The dispatch is deferred for the reason the trap login path defers its own:
-// this middleware runs inside the request, so a synchronous Alert would spend
-// its five-second webhook timeout on the attacker's own connection. That is
-// latency the attacker can measure, which turns "did that raise an alert" into a
-// question they can ask by stopwatch, and a goroutine plus an outbound socket
-// they can hold open by asking it repeatedly.
-func raiseHoneypotAlert(alerter *Alerter, budget *alertBudget, suppressed *atomic.Int64, event Event) {
+// A refusal is counted rather than dropped, and the count is carried into the
+// next alert that does get through, so a flood is reported as a number. Silently
+// swallowing them would make the alert channel misrepresent the attack: the
+// operator would see one credential presentation where there had been a
+// thousand, and the bound on the channel would have become a lie about the
+// traffic.
+func takeAlertSlot(budget *alertBudget, suppressed *atomic.Int64) bool {
 	if !budget.take(time.Now()) {
 		if suppressed.Add(1) == 1 {
 			log.Print("honeypot: request alert budget exhausted, further alerts suppressed until it refills")
 		}
-		return
+		return false
 	}
 	if n := suppressed.Swap(0); n > 0 {
 		log.Printf("honeypot: %d request alerts were suppressed since the last dispatch", n)
 	}
-	deferwork.Go(func(ctx context.Context) { alerter.Alert(ctx, event) })
+	return true
 }
 
 type responseWriter struct {
