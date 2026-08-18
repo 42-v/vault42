@@ -14,10 +14,10 @@ fail on the Go 1.26 toolchain because it terminates the process instead, and the
 template compile in `email/preview.go`. The rest are defensive branches that cannot execute
 given inputs the surrounding code has already validated, and each is recorded in a reviewed
 exclusion set with the source line frozen and a justification a reviewer can check. The
-hardening work in this release added statements of its own, so that set stands at 52 entries
+hardening work in this release added statements of its own, so that set stands at 51 entries
 rather than the 39 it started from. So the claim is **100.00% of reachable statements**,
 CI-gated on `covered + excluded == total`, with the entry count held as a ratchet in
-`scripts/cov-gaps.py` that a 53rd entry fails on its own.
+`scripts/cov-gaps.py` that a 52nd entry fails on its own.
 
 1.0.0 is also the semver commitment, which made this the last cheap moment to fix the API
 shape. Everything under Public API below is breaking-after-1.0.0 and free before it.

@@ -3387,7 +3387,7 @@
       "tests": [
         "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
       ],
-      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:280 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
+      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:267 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
     },
     {
       "standard": "OWASP ASVS",
@@ -3684,13 +3684,13 @@
       "requirement": "Verify that the OpenID Provider only allows values 'code', 'ciba', 'id_token', or 'id_token code' for response mode. Note that 'code' is preferred over 'id_token code' (the OIDC Hybrid flow), and 'token' (any Implicit flow) must not be used.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/wellknown.go:53",
-        "internal/handler/wellknown.go:76"
+        "internal/handler/wellknown.go:55",
+        "internal/handler/wellknown.go:78"
       ],
       "tests": [
         "TestASVS_AbsentEndpointsAreActuallyAbsent"
       ],
-      "notes": "This requirement constrains the response types an OpenID Provider offers. vault42 occupies the relying party role, not the provider role: it publishes a deliberately minimal discovery document carrying its issuer, JWKS URI and access-token signing algorithm, and internal/handler/wellknown.go:66 explains in a comment which fields are omitted and why, rather than faking them. Response types are chosen at an authorization endpoint, and vault42 acts as a client at the one it uses, which belongs to the upstream provider. TestASVS_AbsentEndpointsAreActuallyAbsent asserts the discovery document advertises nothing it does not implement.",
+      "notes": "This requirement constrains the response types an OpenID Provider offers. vault42 occupies the relying party role, not the provider role: it publishes a deliberately minimal discovery document carrying its issuer, JWKS URI and access-token signing algorithm, and internal/handler/wellknown.go:71 explains in a comment which fields are omitted and why, rather than faking them. Response types are chosen at an authorization endpoint, and vault42 acts as a client at the one it uses, which belongs to the upstream provider. TestASVS_AbsentEndpointsAreActuallyAbsent asserts the discovery document advertises nothing it does not implement.",
       "na_basis": "role"
     },
     {

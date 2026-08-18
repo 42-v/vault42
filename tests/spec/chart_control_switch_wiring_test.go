@@ -457,9 +457,20 @@ func TestTheChartRefusesAMintAudienceThatWillNotBoot(t *testing.T) {
 // Values files and templates only. README.md is prose about the chart, and the
 // sentence saying there is no extraEnv is the documentation of this decision,
 // not a breach of it.
+// minChartFilesScanned is the floor on TestTheChartOffersNoRawEnvironmentPassthrough's
+// corpus. That gate proves a negative -- it passes by finding no escape hatch --
+// and a walk that reads nothing finds nothing either, so a moved directory or a
+// renamed suffix would retire it silently. This is the failure
+// tests/compliance/gate_liveness_test.go exists to catch, and it caught this one.
+// The chart carries well over ten files; the floor only has to be high enough
+// that an empty or truncated read cannot pass.
+const minChartFilesScanned = 10
+
 func TestTheChartOffersNoRawEnvironmentPassthrough(t *testing.T) {
 	root := repoRoot(t)
 	hatches := regexp.MustCompile(`(?i)\bextra_?env|\benv_?vars\b|\badditional_?env`)
+
+	scanned := 0
 
 	for _, dir := range []string{filepath.Join(root, chartDir), filepath.Join(root, chartDir, "templates")} {
 		entries, err := os.ReadDir(dir)
@@ -482,7 +493,15 @@ func TestTheChartOffersNoRawEnvironmentPassthrough(t *testing.T) {
 					"reason in chartUnexposedSettings into a claim the chart does not keep.",
 					filepath.Join(chartDir, name), match)
 			}
+			scanned++
 		}
+	}
+
+	if scanned < minChartFilesScanned {
+		t.Fatalf("scanned only %d chart files, want at least %d. This gate passes by finding no "+
+			"escape hatch, so a corpus this small means it proved nothing: check that %s and its "+
+			"templates directory are still where commentSyntaxFor can read them.",
+			scanned, minChartFilesScanned, chartDir)
 	}
 }
 

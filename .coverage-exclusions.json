@@ -13,15 +13,16 @@
     "bucket C: unreachable, because a check earlier in the same call path",
     "already excluded the input that would trigger it.",
     "",
-    "Rules. The set stands at 50 entries and cov-gaps.py holds that number as a",
-    "ratchet (BASELINE_MAX_ENTRIES = 50), so a 51st entry fails the gate on its",
+    "Rules. The set stands at 51 entries and cov-gaps.py holds that number as a",
+    "ratchet (BASELINE_MAX_ENTRIES = 51), so a 52nd entry fails the gate on its",
     "own. The count may only go down from here, and \"from here\" is meant",
     "literally rather than rhetorically: this file did not exist before 1.0.0.",
     "It was created with 40 entries and no ratchet at all in 46b9a07, the first",
     "commit of the pull request that publishes it; the ratchet arrived four",
-    "commits later at 38, and was raised to 46, then 48, then 50 as the work",
-    "landed, each raise itemised with its arithmetic in scripts/cov-gaps.py. A",
-    "number raised three times inside the branch that publishes it is not yet a",
+    "commits later at 38, and was raised to 46, then 48, then 50, then 52 as",
+    "work landed, and lowered to 51 when a statement it held was covered;",
+    "each movement is itemised with its arithmetic in scripts/cov-gaps.py. A",
+    "number moved four times inside the branch that publishes it is not yet a",
     "ratchet. So this is a commitment binding from 1.0.0 forward, not a property",
     "already held, and it is stated that way on purpose.",
     "",
@@ -42,10 +43,13 @@
     "it here: six statements that qualified were deleted rather than excluded",
     "(the Nil branch in redis exec, the dead crypto/rand.Read error checks in",
     "crypto/argon2.go and crypto/recovery.go, and the duplicate template compile",
-    "in email/preview.go). Two more entries were retired by testing them: the",
-    "key generation failure in keystore.Rotate, which a swapped reader does reach",
-    "under GODEBUG=cryptocustomrand=1, and the document ID failure in",
-    "servicedoc.Put, which reads through io.ReadFull and not crypto/rand.Read.",
+    "in email/preview.go). Three more entries were retired by testing them:",
+    "the key generation failure in keystore.Rotate, which a swapped reader",
+    "does reach under GODEBUG=cryptocustomrand=1; the document ID failure in",
+    "servicedoc.Put, which reads through io.ReadFull and not crypto/rand.Read;",
+    "and the modulus fallback in crypto.KIDFromPublicKey, which an RSA public",
+    "key carrying a nil modulus reaches, because x509.MarshalPKIXPublicKey",
+    "refuses that key rather than the type.",
     "",
     "confirmed=false means the entry was identified by elimination against a",
     "container-free profile, not measured: the DB-backed suites could not run",
@@ -144,7 +148,7 @@
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "bucket C. keystore.New has exactly one error return, `if len(masterKey) != 32`, and no other statement in it can fail: the rest is a copy and a struct literal. main.go:301 is the same length check on the same slice, six lines above the call, and it ends in log.Fatal, which calls os.Exit. Control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between, so the constructor cannot return a non-nil error here. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+      "justification": "Bucket B, and the twin of the keystore guard at cmd/admin-gateway/main.go:169. keystore.New has exactly one error return, the len(masterKey) != 32 check at internal/keystore/keystore.go:141, and no other statement in it can fail: the rest is a copy and a struct literal. cmd/vault/main.go:302 is that same length check on that same slice, eight lines above the call, and it ends in log.Fatal, which calls os.Exit; control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between. That is why the error cannot happen. The bucket is B rather than C because even a reachable failure could not be recorded here: log.Fatalf ends the process before the testing package writes the profile, so covering the reaction would need main split into a run() error whose only caller besides main would be the test. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
     },
     {
       "package": "cmd/vault",
@@ -164,7 +168,7 @@
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:412: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
+      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:436: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
     },
     {
       "package": "internal/adminapi",
@@ -258,23 +262,13 @@
     },
     {
       "package": "internal/crypto",
-      "file": "internal/crypto/jwt.go",
-      "line": 131,
-      "occurrence": 1,
-      "source": "\t\tder = pub.N.Bytes()",
-      "bucket": "C",
-      "confirmed": true,
-      "justification": "Bucket C. x509.MarshalPKIXPublicKey returns an error only for a key type it does not recognise, and KIDFromPublicKey takes *rsa.PublicKey, which it does. The fallback exists to keep the function total rather than to introduce an error return no caller could act on, and the comment above it says so. Reaching it would need the standard library to stop understanding RSA public keys."
-    },
-    {
-      "package": "internal/crypto",
       "file": "internal/crypto/recovery.go",
       "line": 211,
       "occurrence": 1,
       "source": "\t\treturn nil, errors.New(\"recovery: wrapped key too large\")",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Self-documented gosec G115 guard: an RSA-OAEP ciphertext is exactly the modulus size, so exceeding math.MaxUint32 would need a 34-gigabit RSA key."
+      "justification": "Bucket C. wrappedKey is the rsa.EncryptOAEP ciphertext produced at internal/crypto/recovery.go:203, so its length is exactly pub.Size(), the modulus in bytes. The guard is there because that length is then narrowed to a uint32 length prefix at internal/crypto/recovery.go:216, which is the gosec G115 the #nosec on that line refers to. Tripping it needs a modulus above 4 GiB, a roughly 34-gigabit RSA key, and no test can supply one: rsa.GenerateKey at that size does not terminate, and hand-building an rsa.PublicKey around a 4 GiB modulus would still have to complete a modular exponentiation over it before the length is taken."
     },
     {
       "package": "internal/email",
@@ -494,7 +488,7 @@
       "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",
       "confirmed": true,
-      "justification": "checkRoles' self-documented defence-in-depth re-check. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (internal/seed/seed.go:110) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return above it means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
+      "justification": "checkRoles' second, defence-in-depth role filter. Reaching it needs a role that the loop above accepted, meaning !seed.ReservedAdminRoles[r], and that seed.FilterUserRoles then dropped. FilterUserRoles (internal/seed/seed.go:110) drops exactly the roles for which ReservedAdminRoles[r] is true, so the two predicates are the same map lookup on the same slice and the lengths cannot differ. The early return at internal/service/mint.go:382 means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
     },
     {
       "package": "internal/service",

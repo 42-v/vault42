@@ -1,6 +1,7 @@
 package attack
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestNearMissPasswordHashIsRefused(t *testing.T) {
 		t.Fatalf("the right password was refused (ok=%v err=%v)", ok, err)
 	}
 
-	nearMiss := encoded[:len(encoded)-1] + flipBase64Char(encoded[len(encoded)-1])
+	nearMiss := flipLastHashByte(t, encoded)
 	ok, err := vaultcrypto.VerifyPassword(password, nearMiss)
 	if err != nil {
 		t.Fatalf("verifying against a near-miss hash errored: %v", err)
@@ -93,9 +94,35 @@ func flipHexDigit(c byte) string {
 	return "0"
 }
 
-func flipBase64Char(c byte) string {
-	if c == 'A' {
-		return "B"
+// flipLastHashByte returns encoded with the final byte of its key material
+// flipped, which is the case a prefix comparison would accept.
+//
+// It decodes and re-encodes rather than substituting the final base64
+// character, which is what this test used to do and which made it flaky at
+// about one run in sixteen. 43 base64 characters carry the 32-byte key, so the
+// last character holds four significant bits and two that decode to nothing,
+// and Go's decoder is non-strict about them. Replacing it with 'A' produced a
+// byte-identical hash whenever the original was 'A' through 'D' -- 4 of 64,
+// measured at 6.21% over 20000 samples -- and VerifyPassword rightly returned
+// true, failing a test that had proven nothing about the comparison. The
+// 'A'-becomes-'B' special case made it worse: both sit in that same group, so
+// a hash ending in 'A' failed every time.
+//
+// tests/compliance/asvs_crypto_test.go carried the same defect and is fixed the
+// same way; this is the attack-suite copy.
+func flipLastHashByte(t *testing.T, encoded string) string {
+	t.Helper()
+	idx := strings.LastIndex(encoded, "$")
+	if idx < 0 || idx+1 >= len(encoded) {
+		t.Fatalf("stored hash has no final segment: %q", encoded)
 	}
-	return "A"
+	key, err := base64.RawStdEncoding.DecodeString(encoded[idx+1:])
+	if err != nil {
+		t.Fatalf("stored hash segment is not raw base64: %v", err)
+	}
+	if len(key) == 0 {
+		t.Fatalf("stored hash carries no key material: %q", encoded)
+	}
+	key[len(key)-1] ^= 0x01
+	return encoded[:idx+1] + base64.RawStdEncoding.EncodeToString(key)
 }

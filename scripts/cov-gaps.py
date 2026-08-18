@@ -150,7 +150,44 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # enforceSessionLifetime, the post-Close synchronous write and isClosed poll in
 # internal/audit/audit.go, and the CompareAndSwap guard in the audit and keystore
 # sweepers. A full cov_run reports 11950, all 22 covered.
-BASELINE_TOTAL_STATEMENTS = 12220
+# Raised from 12220 to 12783 by re-measuring the merged 1.0.0 tree, and this note
+# has to start by admitting that the number it replaces does not add up: the
+# itemisation above stops at 11950 while the constant was standing at 12220, so
+# 270 statements entered the floor without an account. That is the failure this
+# comment block exists to prevent, so what follows is written against the last
+# figure actually on record rather than against 12220.
+#
+# 11928 is that figure -- the hard/integration profile the 11918 -> 11928 entry
+# was measured from. A cov_run on this tree reports 12783, and diffing the two
+# profiles by package puts all 855 statements in code rather than in a wider
+# measurement; the cov_run package set is unchanged.
+#
+#   +295  internal/email        the template-override store, its compile and
+#                               validate path, and the branding renderer
+#   +103  cmd/admin-gateway     client-certificate pinning, the CRL check and
+#                               the session-reaper wiring
+#    +85  internal/service
+#    +63  internal/outbound     new package
+#    +63  internal/alert        new package: the severity detector and log sink
+#    +48  internal/adminapi
+#    +45  internal/honeypot     the alert path and the captured request body
+#    +41  internal/handler
+#    +33  internal/audit
+#    +27  internal/firstboot
+#    +22  internal/metrics      the breach-check shed counter and its gate
+#    +15  internal/server
+#    +13  internal/repository/postgres
+#    +11  internal/config
+#     +9  internal/cli, +9 cmd/bridge, +7 cmd/vault, +6 internal/oauth2,
+#         +4 internal/migrate, +2 internal/keystore
+#     -6  internal/crypto       dead branches deleted
+#    -40  internal/middleware   three exported controls deleted in a0ac1c8
+#
+# internal/alert and internal/outbound are added to BASELINE_PACKAGES below in
+# the same review. A package the shape guard does not name can fall out of the
+# run entirely and only the floor would notice, which is the one check a genuine
+# deletion is expected to move.
+BASELINE_TOTAL_STATEMENTS = 12783
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -204,7 +241,9 @@ BASELINE_TOTAL_STATEMENTS = 12220
 # make room is exactly the pressure this constant exists to resist.
 # Raised from 48 to 50 by the AR-18 geo/VPN feature: +2 entries for the ipintel
 # fail-open branch in cmd/vault/main.go (the WARNING log line and the
-# ipintel.NewEmpty() substitution at cmd/vault/main.go:412-413).
+# ipintel.NewEmpty() substitution). The two statements are named rather than
+# numbered on purpose: they have moved twice since this note was written, and
+# the exclusion set holds their authoritative anchors.
 # ipintel.Default() returns an error only when the embedded blob fails to decode
 # (a build-time defect) and its VAULT_IPINTEL_DATA override is fail-open, so
 # neither statement is reachable at runtime; they mirror the embedded-asset
@@ -212,7 +251,26 @@ BASELINE_TOTAL_STATEMENTS = 12220
 # cmd/vault fatal branches the feature shifted (keystore init, honeypot key gen,
 # honeypot rotation warning) were relocated in place, not added, and the empty-embed fallback in
 # internal/ipintel/ipintel.go was covered by a test rather than excluded.
-BASELINE_MAX_ENTRIES = 52
+# Raised from 50 to 52 by the first-boot credential sink, and the arithmetic is
+# written here now because it was not written then: the constant moved to 52
+# while the itemisation stopped at 50, which is the one thing this comment block
+# exists to prevent. The two entries are internal/firstboot/firstboot.go:226 and
+# :227, the os.File.Stat error on the descriptor the function opened four lines
+# above and has not closed. Both statements arrived with the file; neither
+# existed when 50 was measured, so it is a like-for-like move rather than a
+# loosened bar, and the pair is named in the set with the argument that fstat
+# fails only with EBADF or EFAULT and this call site can produce neither.
+# Lowered from 52 to 51 by covering internal/crypto/jwt.go:131, the modulus
+# fallback in KIDFromPublicKey. Its exclusion argued that reaching it "would need
+# the standard library to stop understanding RSA public keys", and that is not
+# so: x509.MarshalPKIXPublicKey understands *rsa.PublicKey perfectly well and
+# still refuses one whose modulus is nil, which is a value a caller can build.
+# TestJWTEdge_KIDFallbackRunsForAKeyWithNoModulus in internal/crypto now executes
+# the fallback and asserts what it does next -- pub.N.Bytes() panics on that same
+# nil modulus -- which is the behaviour the keystore exclusion for
+# internal/keystore/keystore.go:197 already rested on and nothing executed. The
+# ratchet drops with the entry, in the same review as the test that retired it.
+BASELINE_MAX_ENTRIES = 51
 
 # The shape guard the statement floor cannot provide: a package dropped from the
 # run while enough statements remain elsewhere to clear the count.
@@ -234,6 +292,7 @@ BASELINE_PACKAGES = (
     "cmd/recover",
     "cmd/vault",
     "internal/adminapi",
+    "internal/alert",
     "internal/audit",
     "internal/cache",
     "internal/cli",
@@ -256,6 +315,7 @@ BASELINE_PACKAGES = (
     "internal/migrate",
     "internal/model",
     "internal/oauth2",
+    "internal/outbound",
     "internal/rbac",
     "internal/redis",
     "internal/repository/postgres",
@@ -469,9 +529,9 @@ def check_sources(entries):
 # What this can prove is that the cited line still holds something: a citation
 # resolving to a blank line, a comment or a bare delimiter is one that used to
 # point at code and now points at where the code was. What it cannot prove is
-# that the line holds the RIGHT code -- entry #10 cited a fail-open branch at
-# cmd/vault/main.go:363 after that line had become an unrelated email-provider
-# log line, which is a real statement and the wrong one. Proving that would mean
+# that the line holds the RIGHT code -- the ipintel fail-open entry once cited a
+# line in cmd/vault/main.go that had since become an unrelated email-provider log
+# line, which is a real statement and the wrong one. Proving that would mean
 # freezing the cited text the way `source` freezes the anchor, at the cost of a
 # re-review every time any cited line moves. The mechanical class is the one
 # that drifts silently; the semantic class fails a reading of the justification,
@@ -599,11 +659,17 @@ def check_citations(doc):
     index = index_tree()
 
     # This script's own prose is checked alongside the document's. The published
-    # arithmetic for the 48 -> 50 raise cited cmd/vault/main.go:363-364 for statements
-    # had moved to 412-413, so the exclusion set's justification and the ratchet's
-    # justification drifted in the same way at the same time. A gate that read one
-    # and not the other would have reported the set clean while the reason for its
-    # size still pointed at the wrong lines.
+    # arithmetic for the 48 -> 50 raise cited the ipintel pair by a pair of line
+    # numbers it had already moved off, and the exclusion set's justification for
+    # the same pair cited the same stale line, so both drifted in the same way at
+    # the same time. A gate that read one and not the other would have reported
+    # the set clean while the reason for its size still pointed at the wrong lines.
+    #
+    # Neither of those two references names a line any more. A number written into
+    # a narrative about a line that moved is a citation this gate must resolve
+    # against today's tree, and it goes stale the next time the file is touched --
+    # which is what happened to both of them. The rule for prose about history is
+    # to name the statement, not the line it used to sit on.
     try:
         with open(os.path.abspath(__file__)) as fh:
             own_prose = fh.read()
