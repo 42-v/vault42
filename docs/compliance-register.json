@@ -1036,12 +1036,14 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:142",
-        "internal/service/auth.go:1777"
+        "internal/service/auth.go:1789",
+        "internal/handler/oauth.go:657"
       ],
       "tests": [
-        "TestASVS_V2_3_4_ConcurrentSessionCapIsLocked"
+        "TestASVS_V2_3_4_ConcurrentSessionCapIsLocked",
+        "TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister"
       ],
-      "notes": "The concurrent-session cap is enforced as one unit of work. storeRefreshToken issues the new-family insert through RefreshTokenRepository.CreateWithinCap, which counts the user's active token families and inserts under a single per-user advisory lock, so simultaneous logins cannot each read the same free slot and overshoot the cap. A count-only pre-check still fails fast, and a login that loses the race is refused with the same too-many-sessions outcome."
+      "notes": "The concurrent-session cap is enforced as one unit of work on the paths that go through AuthService.storeRefreshToken: the new-family insert is issued through RefreshTokenRepository.CreateWithinCap, which counts the user's active families and inserts under a single per-user advisory lock, so simultaneous logins cannot each read the same free slot and overshoot the cap. A count-only pre-check still fails fast, and a login that loses the race is refused with the same too-many-sessions outcome. The path this row previously did not name is the social-login callback: internal/handler/oauth.go:641 calls CheckSessionLimit, a soft pre-check, and then inserts at :657 through the plain Create rather than CreateWithinCap, so two OAuth callbacks racing could each pass the pre-check and both insert. Two independent reviewers found the same gap; the evidence now names the path that was short rather than the two that were always fine. TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister enumerates every family-creating insert and requires this row to name any that does not use the capped insert, so the next one cannot be discovered by a reviewer instead of by CI."
     },
     {
       "standard": "OWASP ASVS",
@@ -2885,8 +2887,8 @@
       "status": "Met",
       "evidence": [
         "internal/service/token.go:173",
-        "migrations/013_session_lifetime.sql",
-        "cmd/vault/main.go:317"
+        "migrations/013_session_lifetime.sql:35",
+        "cmd/vault/main.go:353"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -3617,13 +3619,14 @@
       "status": "Met",
       "evidence": [
         "internal/service/token.go:173",
-        "cmd/vault/main.go:317"
+        "migrations/013_session_lifetime.sql:35",
+        "cmd/vault/main.go:353"
       ],
       "tests": [
-        "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
-        "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
+        "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
+        "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented"
       ],
-      "notes": "Sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin so the deadline cannot be reset by rotation or by pruning a spent row."
+      "notes": "Met: sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin (family_created_at, NOT NULL with a default) so the deadline cannot be reset by rotation or by pruning a spent row; TokenService clamps a rotated pair to origin plus the configured maximum and AuthService.enforceSessionLifetime refuses a family past it; cmd/vault/main.go:353 configures the bound. The test that used to back this row could never fail: it searched migrations/001_initial_schema.sql for a column that landed in 013_session_lifetime.sql. Its replacement reads every migration."
     },
     {
       "standard": "OWASP ASVS",

@@ -98,6 +98,10 @@ func TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims(t *testing.T) {
 // and vault42 does neither. What it has instead is a single-use token consumed
 // atomically, which bounds the damage without satisfying the requirement.
 func TestASVS_V3_5_3_StateChangingGETMatchesWhatTheRegisterClaims(t *testing.T) {
+	if files := productionGoFiles(t); len(files) < 100 {
+		t.Fatalf("V3.5.3: only %d production files parsed; the Sec-Fetch sweep below would pass vacuously", len(files))
+	}
+
 	routes := readCodeOnly(t, "internal/server/server.go")
 	mutatingGET := strings.Contains(routes, `"GET /auth/verify-email"`)
 
@@ -305,4 +309,85 @@ func TestASVS_V1_3_7_AdminTemplateOverridesAreValidatedBeforeCompilation(t *test
 			t.Errorf("V1.3.7: the template route is no longer gated by rbac.EmailWrite: %s", route)
 		}
 	}
+}
+
+// --- ASVS V2.3.4 — the capped insert has to cover every path ---
+
+// The concurrent-session cap was Met on the strength of CreateWithinCap, the
+// advisory-locked insert. Three paths create a refresh family, and one of them,
+// the social-login callback, did not use it: it called CheckSessionLimit, a
+// count-only pre-check, and then inserted through the plain Create. Two
+// reviewers found that independently. No test did.
+//
+// The fix for one path does not stop the fourth path arriving, so this asserts
+// the property rather than the instance: every insert that creates a family
+// either goes through the capped insert, or the register row names the file it
+// is in. A path the register does not name fails the build.
+func TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister(t *testing.T) {
+	repo := readCodeOnly(t, "internal/repository/postgres/refresh_token.go")
+	if !strings.Contains(repo, "func (r *RefreshTokenRepo) CreateWithinCap(") {
+		t.Fatal("V2.3.4: CreateWithinCap is gone. It is the advisory-locked insert the whole row " +
+			"rests on; without it the cap is a count followed by a race.")
+	}
+	if !strings.Contains(repo, "pg_advisory_xact_lock") && !strings.Contains(repo, "advisory") {
+		t.Error("V2.3.4: CreateWithinCap no longer takes a per-user advisory lock, so two logins can " +
+			"each count the same free slot and both insert")
+	}
+
+	// Every file that builds a model.RefreshToken inserts one. Rotation
+	// legitimately uses the plain Create, because it extends a family that
+	// already exists rather than creating one, so the discriminator is not the
+	// call but the file: a file that inserts refresh tokens and never reaches
+	// CreateWithinCap at all has no capped path, and whatever it inserts is a
+	// new family by construction.
+	//
+	// That is a heuristic, and it is stated as one. It is the heuristic that
+	// would have caught internal/handler/oauth.go, which is the path two
+	// reviewers found and no test did.
+	type site struct{ file, call string }
+	var uncapped []site
+
+	for _, pf := range productionGoFiles(t) {
+		code := readCodeOnly(t, pf.path)
+		if !strings.Contains(code, "model.RefreshToken{") {
+			continue
+		}
+		if strings.Contains(code, "CreateWithinCap(") {
+			continue
+		}
+		for _, call := range []string{"tokens.Create(", "refreshRepo.Create(", "h.tokens.Create("} {
+			if strings.Contains(code, call) {
+				uncapped = append(uncapped, site{pf.path, call})
+			}
+		}
+	}
+
+	notes := registerRowNotes(t, "OWASP ASVS", "V2.3.4")
+	for _, s := range uncapped {
+		if !strings.Contains(notes, s.file) {
+			t.Errorf("V2.3.4: %s inserts a refresh-token family through %s rather than "+
+				"CreateWithinCap, and the register row does not name it. The row claims the cap is "+
+				"enforced as one unit of work; a path outside the advisory lock is a path where two "+
+				"logins can each pass the pre-check and both insert. Name it in the row or move it "+
+				"onto the capped insert.", s.file, s.call)
+		}
+	}
+	if len(uncapped) == 0 {
+		t.Logf("V2.3.4: every family-creating insert goes through CreateWithinCap")
+	} else {
+		t.Logf("V2.3.4: %d uncapped family-creating insert(s), each named by the register row", len(uncapped))
+	}
+}
+
+// registerRowNotes returns one row's notes, failing if the row is gone.
+func registerRowNotes(t *testing.T, standard, requirementID string) string {
+	t.Helper()
+	reg := loadRegister(t)
+	for _, r := range reg.Requirements {
+		if r.Standard == standard && r.RequirementID == requirementID {
+			return r.Notes
+		}
+	}
+	t.Fatalf("register row %s %s no longer exists; this gate has no subject", standard, requirementID)
+	return ""
 }

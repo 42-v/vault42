@@ -273,6 +273,10 @@ func TestAPITop10_API9_2023_EveryMountedRouteAppearsInThePublishedReference(t *t
 // responses more than one's own users'. Each answer is bounded before it is
 // believed.
 func TestAPITop10_API10_2023_ThirdPartyResponsesAreValidatedBeforeUse(t *testing.T) {
+	if files := productionGoFiles(t); len(files) < 100 {
+		t.Fatalf("API10: only %d production files parsed; the InsecureSkipVerify sweep below would pass vacuously", len(files))
+	}
+
 	// The OIDC discovery document is pinned to the configured issuer, so a
 	// hostile or hijacked provider cannot re-point the endpoints vault42 then
 	// calls.

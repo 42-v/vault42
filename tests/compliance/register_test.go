@@ -202,6 +202,12 @@ func TestComplianceRegister_NamedTestsAreNotUnconditionallySkipped(t *testing.T)
 	if err != nil {
 		t.Fatalf("read tests/compliance: %v", err)
 	}
+	// A directory listing that comes back short means the walk, not the suite,
+	// changed. Every assertion below is inside the loop, so an empty listing
+	// would report success for a scan that never ran.
+	if len(entries) < 20 {
+		t.Fatalf("only %d entries in tests/compliance; the listing is broken and this gate would pass vacuously", len(entries))
+	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
 			continue

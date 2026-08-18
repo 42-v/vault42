@@ -1,6 +1,8 @@
 package compliance
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -203,12 +205,33 @@ func TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValu
 
 	// The inactivity half has no mechanism at all: no column records last
 	// activity and no decision consults one.
-	schema := readProductionSource(t, "migrations/001_initial_schema.sql")
-	for _, column := range []string{"last_activity_at", "last_used_at", "idle_expires_at"} {
-		if strings.Contains(schema, column) {
-			t.Fatalf("2.2.3: %s now exists, so an inactivity timeout is possible. Narrow CR-14 and replace this assertion.", column)
+	//
+	// This reads every migration rather than 001 alone. The version that read
+	// only 001 could not have seen an inactivity column arriving in a later
+	// migration, which is exactly how the sibling tripwire on family_created_at
+	// sat green through a release while the column it watched for existed in
+	// 013_session_lifetime.sql.
+	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "migrations"))
+	if err != nil {
+		t.Fatalf("2.2.3: read migrations/: %v", err)
+	}
+	scanned := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		scanned++
+		schema := readProductionSource(t, "migrations/"+entry.Name())
+		for _, column := range []string{"last_activity_at", "last_used_at", "idle_expires_at"} {
+			if strings.Contains(schema, column) {
+				t.Fatalf("2.2.3: %s now exists, in migrations/%s, so an inactivity timeout is possible. Narrow CR-14 and replace this assertion.", column, entry.Name())
+			}
 		}
 	}
+	if scanned < 5 {
+		t.Fatalf("2.2.3: only %d migration files scanned; the absence assertion above is vacuous", scanned)
+	}
+	t.Logf("2.2.3: no inactivity column across %d migrations (CR-14)", scanned)
 }
 
 // --- 4.6 Account Notifications ---
