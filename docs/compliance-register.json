@@ -233,7 +233,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:772 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:819 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:431) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -1329,7 +1329,7 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:772",
+        "internal/server/server.go:819",
         "charts/vault/templates/frontend.yaml:1"
       ],
       "tests": [],
@@ -2911,7 +2911,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:535"
+        "internal/server/server.go:582"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -4533,13 +4533,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:279",
-        "internal/server/server.go:280"
+        "internal/server/server.go:294",
+        "internal/server/server.go:295"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:279-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
+      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:294-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
     },
     {
       "standard": "OWASP ASVS",
@@ -4852,12 +4852,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:772"
+        "internal/server/server.go:819"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:772), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:819), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",
