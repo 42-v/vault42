@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestRevocationDeleteIsVisibleToSubsequentGets(t *testing.T) {
 			<-start
 			<-deleted
 			_, err := c.Get(ctx, key)
-			if err != ErrNotFound {
+			if !errors.Is(err, ErrNotFound) {
 				t.Errorf("Get after Delete returned %v, want ErrNotFound; a revoked session is still readable", err)
 			}
 		}()
@@ -93,7 +94,7 @@ func TestIncrementDoesNotRestoreADeletedCounter(t *testing.T) {
 		wg.Wait()
 
 		got, err := c.Get(ctx, key)
-		if err == ErrNotFound {
+		if errors.Is(err, ErrNotFound) {
 			continue
 		}
 		if err != nil {

@@ -59,7 +59,7 @@ func TestPoolStartupTimeoutsAreAcceptedByTheServer(t *testing.T) {
 	}
 }
 
-// TestStatementTimeoutActuallyCancelsALongQuery is the behavioural half. The
+// TestStatementTimeoutActuallyCancelsALongQuery is the behavioral half. The
 // setting being present says the server parsed it; this says the server acts on
 // it, which is the whole point: without it, MaxConns pathological queries pin
 // the pool until MaxConnLifetime an hour later and the service stops serving
@@ -97,7 +97,7 @@ func TestStatementTimeoutActuallyCancelsALongQuery(t *testing.T) {
 		t.Fatalf("query failed with %v, want a statement-timeout cancellation", err)
 	}
 	if elapsed > 5*time.Second {
-		t.Errorf("the query was cancelled after %v, far past the 250ms ceiling", elapsed)
+		t.Errorf("the query was canceled after %v, far past the 250ms ceiling", elapsed)
 	}
 }
 

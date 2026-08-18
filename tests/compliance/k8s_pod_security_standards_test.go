@@ -277,7 +277,7 @@ func TestK8sPSS_Restricted_ThereAreNoDeviationsLeft(t *testing.T) {
 
 	// The three formerly-excluded workloads are covered by
 	// pssRestrictedWorkloads above. What is asserted here is that they are
-	// still labelled for what they are: a hardened dev database is still a dev
+	// still labeled for what they are: a hardened dev database is still a dev
 	// database, and the deployment guide tells operators not to run it.
 	for _, dev := range []struct{ marker, label string }{
 		{"# ---- PostgreSQL (dev/embedded only) ----", "postgres"},

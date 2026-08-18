@@ -3,6 +3,7 @@ package fuzz
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func FuzzServiceDocumentJSON(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		err := service.ValidateDocumentStructure(raw)
 		if err != nil {
-			if err != service.ErrSvcDocInvalidDocument && err != service.ErrSvcDocTooLarge {
+			if !errors.Is(err, service.ErrSvcDocInvalidDocument) && !errors.Is(err, service.ErrSvcDocTooLarge) {
 				t.Fatalf("unexpected error %v (want ErrSvcDocInvalidDocument or ErrSvcDocTooLarge)", err)
 			}
 			return
@@ -74,7 +75,7 @@ func FuzzMintSubject(f *testing.F) {
 	f.Fuzz(func(t *testing.T, subject string) {
 		err := service.ValidateMintSubject(subject)
 		if err != nil {
-			if err != service.ErrMintSubjectInvalid {
+			if !errors.Is(err, service.ErrMintSubjectInvalid) {
 				t.Fatalf("unexpected error %v", err)
 			}
 			return

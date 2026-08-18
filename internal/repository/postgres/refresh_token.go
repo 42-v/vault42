@@ -483,7 +483,7 @@ func (r *RefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string
 // across a LIMIT hides the ordering from the check that exists to enforce it.
 //
 // In particular there is no SKIP LOCKED. The ORDER BY id FOR UPDATE is what
-// serialises this scan against a concurrent scoped revocation, in a consistent
+// serializes this scan against a concurrent scoped revocation, in a consistent
 // lock order, instead of deadlocking with it; skipping a locked row means the
 // reaper never queues behind that revocation at all. That is a different
 // property, it is not the one this statement was written to have, and
