@@ -164,7 +164,7 @@ func TestSeedUser(t *testing.T) {
 
 func TestRunAdmins(t *testing.T) {
 	ctx := context.Background()
-	sf := &SeedFile{Admins: []AdminSeed{{Username: "root", Password: "correct-horse-battery", Role: "super_admin"}}}
+	sf := &File{Admins: []AdminSeed{{Username: "root", Password: "correct-horse-battery", Role: "super_admin"}}}
 
 	t.Run("creates a new admin", func(t *testing.T) {
 		created := false
@@ -253,7 +253,7 @@ func TestRunAdmins(t *testing.T) {
 
 func TestRun_PropagatesErrors(t *testing.T) {
 	ctx := context.Background()
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "x", Role: "frontend"}}}
+	sf := &File{Clients: []ClientSeed{{Name: "x", Role: "frontend"}}}
 	deps := Deps{Clients: &seedClientRepo{getByName: func(context.Context, string) (*model.Client, error) { return nil, errors.New("db") }}}
 	if err := Run(ctx, sf, deps, ""); err == nil {
 		t.Error("Run should propagate a client seed error")
@@ -264,19 +264,19 @@ func TestValidate_Errors(t *testing.T) {
 	long := "correct-horse-battery-staple"
 	cases := []struct {
 		name string
-		sf   SeedFile
+		sf   File
 	}{
-		{"client missing name", SeedFile{Clients: []ClientSeed{{Role: "frontend"}}}},
-		{"client missing role", SeedFile{Clients: []ClientSeed{{Name: "a"}}}},
-		{"duplicate client name", SeedFile{Clients: []ClientSeed{{Name: "a", Role: "r"}, {Name: "a", Role: "r"}}}},
-		{"user missing email", SeedFile{Users: []UserSeed{{Password: long}}}},
-		{"user invalid email", SeedFile{Users: []UserSeed{{Email: "nope", Password: long}}}},
-		{"user missing password", SeedFile{Users: []UserSeed{{Email: "u@test.com"}}}},
-		{"user short password", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: "short"}}}},
-		{"duplicate email", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: long}, {Email: "u@test.com", Password: long}}}},
-		{"user with reserved admin role", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: long, Roles: []string{"super_admin"}}}}},
-		{"admin missing username", SeedFile{Admins: []AdminSeed{{Password: long}}}},
-		{"admin missing password", SeedFile{Admins: []AdminSeed{{Username: "root"}}}},
+		{"client missing name", File{Clients: []ClientSeed{{Role: "frontend"}}}},
+		{"client missing role", File{Clients: []ClientSeed{{Name: "a"}}}},
+		{"duplicate client name", File{Clients: []ClientSeed{{Name: "a", Role: "r"}, {Name: "a", Role: "r"}}}},
+		{"user missing email", File{Users: []UserSeed{{Password: long}}}},
+		{"user invalid email", File{Users: []UserSeed{{Email: "nope", Password: long}}}},
+		{"user missing password", File{Users: []UserSeed{{Email: "u@test.com"}}}},
+		{"user short password", File{Users: []UserSeed{{Email: "u@test.com", Password: "short"}}}},
+		{"duplicate email", File{Users: []UserSeed{{Email: "u@test.com", Password: long}, {Email: "u@test.com", Password: long}}}},
+		{"user with reserved admin role", File{Users: []UserSeed{{Email: "u@test.com", Password: long, Roles: []string{"super_admin"}}}}},
+		{"admin missing username", File{Admins: []AdminSeed{{Password: long}}}},
+		{"admin missing password", File{Admins: []AdminSeed{{Username: "root"}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestValidate_Errors(t *testing.T) {
 	}
 
 	t.Run("valid file passes", func(t *testing.T) {
-		sf := SeedFile{
+		sf := File{
 			Clients: []ClientSeed{{Name: "frontend", Role: "frontend"}},
 			Users:   []UserSeed{{Email: "u@test.com", Password: long}},
 			Admins:  []AdminSeed{{Username: "root", Password: long, Role: "super_admin"}},

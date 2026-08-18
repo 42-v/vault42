@@ -365,9 +365,9 @@ type Config struct {
 	// (VAULT_KEY_REFRESH_INTERVAL). Default: 60s.
 	KeyRefreshInterval time.Duration
 
-	// SeedFile is the path to a JSON seed file for declarative user and client
+	// File is the path to a JSON seed file for declarative user and client
 	// creation at startup (VAULT_SEED_FILE). Empty = no seeding.
-	SeedFile string
+	File string
 }
 
 // Load reads configuration from environment variables and secret files,
@@ -483,7 +483,7 @@ func Load() (*Config, error) {
 
 		KeyRefreshInterval: envDuration("VAULT_KEY_REFRESH_INTERVAL", 60*time.Second),
 
-		SeedFile: os.Getenv("VAULT_SEED_FILE"),
+		File: os.Getenv("VAULT_SEED_FILE"),
 	}
 
 	// Load honeypot trap users from comma-separated list

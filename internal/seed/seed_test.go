@@ -124,21 +124,21 @@ func TestLoad_MissingFile(t *testing.T) {
 }
 
 func TestValidate_ClientNameRequired(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{{Role: "frontend"}}}
+	sf := &File{Clients: []ClientSeed{{Role: "frontend"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty client name")
 	}
 }
 
 func TestValidate_ClientRoleRequired(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "web"}}}
+	sf := &File{Clients: []ClientSeed{{Name: "web"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty client role")
 	}
 }
 
 func TestValidate_DuplicateClientName(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{
+	sf := &File{Clients: []ClientSeed{
 		{Name: "web", Role: "frontend"},
 		{Name: "web", Role: "service"},
 	}}
@@ -148,35 +148,35 @@ func TestValidate_DuplicateClientName(t *testing.T) {
 }
 
 func TestValidate_UserEmailRequired(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Password: "TestPassword12345!"}}}
+	sf := &File{Users: []UserSeed{{Password: "TestPassword12345!"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty user email")
 	}
 }
 
 func TestValidate_UserEmailInvalid(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "notanemail", Password: "TestPassword12345!"}}}
+	sf := &File{Users: []UserSeed{{Email: "notanemail", Password: "TestPassword12345!"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for invalid email")
 	}
 }
 
 func TestValidate_UserPasswordRequired(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "a@b.com"}}}
+	sf := &File{Users: []UserSeed{{Email: "a@b.com"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty password")
 	}
 }
 
 func TestValidate_UserPasswordTooShort(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "a@b.com", Password: "short"}}}
+	sf := &File{Users: []UserSeed{{Email: "a@b.com", Password: "short"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for short password")
 	}
 }
 
 func TestValidate_DuplicateEmail(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{
+	sf := &File{Users: []UserSeed{
 		{Email: "a@b.com", Password: "TestPassword12345!"},
 		{Email: "a@b.com", Password: "AnotherPassword12345!"},
 	}}
@@ -190,7 +190,7 @@ func TestRun_NewClients(t *testing.T) {
 	clients := newMockClientRepo()
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{
 			{Name: "web", Role: "frontend", Scopes: []string{"user:read"}},
 			{Name: "api", Role: "service", Scopes: []string{"user:read", "audit:read"}},
@@ -217,7 +217,7 @@ func TestRun_ExistingClient(t *testing.T) {
 	clients := newMockClientRepo()
 	clients.clients["web"] = &model.Client{ID: "existing-id", Name: "web"}
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
@@ -234,7 +234,7 @@ func TestRun_ExistingClient(t *testing.T) {
 func TestRun_NewUsers(t *testing.T) {
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{
 			{Email: "dev@test.com", Password: "TestPassword12345!", DisplayName: "Dev", Locale: "sk"},
 		},
@@ -267,7 +267,7 @@ func TestRun_ExistingUser(t *testing.T) {
 	users := newMockUserRepo()
 	users.users["dev@test.com"] = &model.User{ID: "existing-id", Email: "dev@test.com"}
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "dev@test.com", Password: "TestPassword12345!"}},
 	}
 
@@ -284,7 +284,7 @@ func TestRun_ExistingUser(t *testing.T) {
 func TestRun_UserDefaultLocale(t *testing.T) {
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!"}},
 	}
 
@@ -302,7 +302,7 @@ func TestRun_UserEmailVerifiedExplicitFalse(t *testing.T) {
 	users := newMockUserRepo()
 
 	f := false
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!", EmailVerified: &f}},
 	}
 
@@ -324,7 +324,7 @@ func TestRun_UserPasswordPeppered(t *testing.T) {
 	const pepper = "audit-2026-04-25-test-pepper"
 	const password = "TestPassword12345!"
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "peppered@test.com", Password: password, DisplayName: "P"}},
 	}
 
@@ -367,7 +367,7 @@ func TestRun_UserPasswordNoPepperBackcompat(t *testing.T) {
 	users := newMockUserRepo()
 	const password = "TestPassword12345!"
 
-	sf := &SeedFile{Users: []UserSeed{{Email: "nopepper@test.com", Password: password}}}
+	sf := &File{Users: []UserSeed{{Email: "nopepper@test.com", Password: password}}}
 	err := Run(context.Background(), sf,
 		Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
@@ -387,7 +387,7 @@ func TestRun_UserPasswordNoPepperBackcompat(t *testing.T) {
 func TestRun_ClientRepoError(t *testing.T) {
 	clients := &errorClientRepo{err: errors.New("db down")}
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
@@ -575,21 +575,21 @@ func TestLoad_Table(t *testing.T) {
 func TestRunAdmins_Table(t *testing.T) {
 	tests := []struct {
 		name    string
-		sf      *SeedFile
+		sf      *File
 		setup   func(*mockAdminUserRepo)
 		wantErr string
 	}{
 		{
 			name: "empty admins ok",
-			sf:   &SeedFile{},
+			sf:   &File{},
 		},
 		{
 			name: "seed new admin",
-			sf:   &SeedFile{Admins: []AdminSeed{{Username: "adm", Password: "123456789012345", Role: "viewer"}}},
+			sf:   &File{Admins: []AdminSeed{{Username: "adm", Password: "123456789012345", Role: "viewer"}}},
 		},
 		{
 			name: "skip existing admin",
-			sf:   &SeedFile{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "operator"}}},
+			sf:   &File{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "operator"}}},
 			setup: func(m *mockAdminUserRepo) {
 				m.users["ex"] = &model.AdminUser{ID: "1", Username: "ex"}
 			},

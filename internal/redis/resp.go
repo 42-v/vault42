@@ -78,7 +78,7 @@ func readReply(r *bufio.Reader) (reply, error) {
 
 	case respError:
 		// -ERR message\r\n → error
-		return reply{}, &RedisError{Msg: string(line[1:])}
+		return reply{}, &ServerError{Msg: string(line[1:])}
 
 	case respInt:
 		// :42\r\n → 42

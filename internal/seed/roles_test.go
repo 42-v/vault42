@@ -19,7 +19,7 @@ func TestValidateRejectsAdminRolesOnUsers(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			emailVerified := true
-			sf := &SeedFile{
+			sf := &File{
 				Users: []UserSeed{{
 					Email:         "evil@example.com",
 					Password:      "fifteenCharsExactly!!",
@@ -44,7 +44,7 @@ func TestValidateRejectsAdminRolesOnUsers(t *testing.T) {
 // uses these strings (viewer / operator / arbitrary tenant-defined).
 func TestValidateAcceptsNonReservedUserRoles(t *testing.T) {
 	emailVerified := true
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{
 			Email:         "ok@example.com",
 			Password:      "fifteenCharsExactly!!",
@@ -91,7 +91,7 @@ func TestFilterUserRolesEmpty(t *testing.T) {
 // per-user roles work so Hermod can cleanly distinguish operator from
 // admin without conflating "admin" with the gateway tier).
 func TestValidateAcceptsOperatorAdminRole(t *testing.T) {
-	sf := &SeedFile{
+	sf := &File{
 		Admins: []AdminSeed{{
 			Username: "ops",
 			Password: "fifteenCharsExactly!!",

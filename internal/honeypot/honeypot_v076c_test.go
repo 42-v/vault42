@@ -20,7 +20,7 @@ func testAuditLog() *audit.Logger {
 // and the early return when webhookURL is empty.
 func TestAlert_AuditOnlyNoWebhook(t *testing.T) {
 	a := NewAlerter("", []string{"trap@x.test"}, testAuditLog())
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.9",
 		Email:     "trap@x.test",
@@ -39,7 +39,7 @@ func TestAlert_AuditAndWebhookDispatch(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAlerter(srv.URL, nil, testAuditLog())
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "scan_detected",
 		IP:        "10.0.0.10",
 		UserAgent: "nmap",

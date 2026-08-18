@@ -43,7 +43,7 @@ func floodAlerter(a *Alerter) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a.Alert(context.Background(), HoneypotEvent{
+			a.Alert(context.Background(), Event{
 				EventType: "trap_login",
 				IP:        "203.0.113.9",
 				UserAgent: "curl/8.5.0",
@@ -145,7 +145,7 @@ func TestTheNumberOfSuppressedAlertsIsReportedWhenTheChannelRecovers(t *testing.
 	}
 
 	rewindAlertBudget(a, time.Minute)
-	a.Alert(context.Background(), HoneypotEvent{EventType: "trap_login", IP: "203.0.113.9"})
+	a.Alert(context.Background(), Event{EventType: "trap_login", IP: "203.0.113.9"})
 
 	want := fmt.Sprintf("honeypot: %d webhook alerts were suppressed since the last dispatch", wantSuppressed)
 	if !strings.Contains(buf.String(), want) {

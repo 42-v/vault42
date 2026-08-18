@@ -20,7 +20,7 @@ func TestCycleReservedRoleRejection_AllPositions(t *testing.T) {
 		for _, where := range []string{"first", "middle", "last", "only"} {
 			t.Run(reserved+"_"+where, func(t *testing.T) {
 				roles := buildRolesWith(reserved, where)
-				sf := &SeedFile{Users: []UserSeed{{
+				sf := &File{Users: []UserSeed{{
 					Email: "x@l.l", Password: "fifteenCharsExactly!!", DisplayName: "X",
 					Locale: "en", EmailVerified: &emailVerified, Roles: roles,
 				}}}
@@ -52,7 +52,7 @@ func TestCycleReservedRoleRejection_PerUserIndex(t *testing.T) {
 					EmailVerified: &emailVerified, Roles: roles,
 				}
 			}
-			err := validate(&SeedFile{Users: users})
+			err := validate(&File{Users: users})
 			if err == nil {
 				t.Fatalf("validate accepted reserved role at users[%d]", badIdx)
 			}
@@ -140,7 +140,7 @@ func TestCycleValidate_BulkSeed(t *testing.T) {
 		tier := rbac.ValidRoles[i%len(rbac.ValidRoles)]
 		admins[i] = AdminSeed{Username: "a" + itoa(i), Password: "fifteenCharsExactly!!", Role: string(tier)}
 	}
-	if err := validate(&SeedFile{Users: users, Admins: admins}); err != nil {
+	if err := validate(&File{Users: users, Admins: admins}); err != nil {
 		t.Fatalf("bulk seed rejected: %v", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestCycleValidate_InvalidAdminRoles(t *testing.T) {
 	bad := []string{"vieer", "Admin", "ADMIN", "user", "tenant-x", "", "  admin  "}
 	for _, role := range bad {
 		t.Run("admin_role="+role, func(t *testing.T) {
-			err := validate(&SeedFile{Admins: []AdminSeed{{
+			err := validate(&File{Admins: []AdminSeed{{
 				Username: "a", Password: "fifteenCharsExactly!!", Role: role,
 			}}})
 			if err == nil {

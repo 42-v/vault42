@@ -942,7 +942,7 @@ func TestNilError(t *testing.T) {
 }
 
 func TestRedisError(t *testing.T) {
-	err := &RedisError{Msg: "ERR bad command"}
+	err := &ServerError{Msg: "ERR bad command"}
 	if err.Error() != "redis: ERR bad command" {
 		t.Errorf("expected 'redis: ERR bad command', got %q", err.Error())
 	}

@@ -19,9 +19,9 @@ import (
 	"github.com/42-v/vault42/internal/repository"
 )
 
-// SeedFile is the top-level structure of a seed JSON file.
+// File is the top-level structure of a seed JSON file.
 // See seed.example.json in the repository root for the expected format.
-type SeedFile struct {
+type File struct {
 	Clients []ClientSeed `json:"clients"`
 	Users   []UserSeed   `json:"users"`
 	Admins  []AdminSeed  `json:"admins,omitempty"`
@@ -135,13 +135,13 @@ type Deps struct {
 }
 
 // Load reads and validates a seed file from the given path.
-func Load(path string) (*SeedFile, error) {
+func Load(path string) (*File, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path from trusted env var or CLI flag, not user input
 	if err != nil {
 		return nil, fmt.Errorf("read seed file: %w", err)
 	}
 
-	var sf SeedFile
+	var sf File
 	if err := json.Unmarshal(data, &sf); err != nil {
 		return nil, fmt.Errorf("parse seed file: %w", err)
 	}
@@ -154,7 +154,7 @@ func Load(path string) (*SeedFile, error) {
 }
 
 // validate checks that all required fields are present and valid.
-func validate(sf *SeedFile) error {
+func validate(sf *File) error {
 	seen := make(map[string]bool)
 	for i, c := range sf.Clients {
 		if c.Name == "" {
@@ -252,7 +252,7 @@ func adminTierNames() string {
 //
 // Client secrets are never peppered. They are full-entropy random tokens where
 // a pepper adds nothing.
-func Run(ctx context.Context, sf *SeedFile, deps Deps, pepper string) error {
+func Run(ctx context.Context, sf *File, deps Deps, pepper string) error {
 	for _, cs := range sf.Clients {
 		if err := seedClient(ctx, cs, deps.Clients); err != nil {
 			return fmt.Errorf("seed client %q: %w", cs.Name, err)
@@ -329,7 +329,7 @@ func seedClient(ctx context.Context, cs ClientSeed, clients repository.ClientRep
 // pepper is the optional HMAC-pepper applied to admin password hashes; empty
 // means no pepper (back-compat). Must match the value used by the admin
 // gateway login flow, otherwise admins cannot authenticate.
-func RunAdmins(ctx context.Context, sf *SeedFile, admins repository.AdminUserRepository, pepper string) error {
+func RunAdmins(ctx context.Context, sf *File, admins repository.AdminUserRepository, pepper string) error {
 	for _, as := range sf.Admins {
 		if err := seedAdmin(ctx, as, admins, pepper); err != nil {
 			return fmt.Errorf("seed admin %q: %w", as.Username, err)

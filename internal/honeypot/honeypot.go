@@ -68,8 +68,8 @@ func (b *alertBudget) take(now time.Time) bool {
 	return true
 }
 
-// HoneypotEvent contains details about a suspicious activity detected in honeypot mode.
-type HoneypotEvent struct {
+// Event contains details about a suspicious activity detected in honeypot mode.
+type Event struct {
 	Timestamp   time.Time         `json:"timestamp"`
 	EventType   string            `json:"event_type"`
 	IP          string            `json:"ip"`
@@ -128,7 +128,7 @@ func (a *Alerter) IsTrapUser(identifier string) bool {
 
 // Alert sends a JSON POST to the webhook URL with attack details and logs an audit event.
 // Webhook dispatch is best-effort — errors are logged but do not propagate.
-func (a *Alerter) Alert(ctx context.Context, event HoneypotEvent) {
+func (a *Alerter) Alert(ctx context.Context, event Event) {
 	// Audit log the trigger
 	if a.auditLog != nil {
 		a.auditLog.Log(ctx, audit.HoneypotTrigger, "", "", event.IP, event.UserAgent, "", "", // #nosec G104 -- audit is best-effort

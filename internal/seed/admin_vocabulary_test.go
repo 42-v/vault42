@@ -23,7 +23,7 @@ import (
 // they need to be told which role is wrong and which ones are not, and the run
 // has already half-applied.
 func TestValidateRejectsAnAdminRoleTheRBACPackageDefinesNoTierFor(t *testing.T) {
-	err := validate(&SeedFile{Admins: []AdminSeed{{
+	err := validate(&File{Admins: []AdminSeed{{
 		Username: "root",
 		Password: "fifteenCharsExactly!!",
 		Role:     "admin",
@@ -55,7 +55,7 @@ func TestValidateRejectsAnAdminRoleTheRBACPackageDefinesNoTierFor(t *testing.T) 
 func TestTheAdminSeedVocabularyIsExactlyTheRBACTiers(t *testing.T) {
 	for _, r := range rbac.ValidRoles {
 		t.Run("accepts "+string(r), func(t *testing.T) {
-			err := validate(&SeedFile{Admins: []AdminSeed{{
+			err := validate(&File{Admins: []AdminSeed{{
 				Username: "a", Password: "fifteenCharsExactly!!", Role: string(r),
 			}}})
 			if err != nil {
@@ -73,7 +73,7 @@ func TestTheAdminSeedVocabularyIsExactlyTheRBACTiers(t *testing.T) {
 			if rbac.IsValidRole(name) {
 				t.Fatalf("test fixture is wrong: rbac.IsValidRole(%q) is true", name)
 			}
-			err := validate(&SeedFile{Admins: []AdminSeed{{
+			err := validate(&File{Admins: []AdminSeed{{
 				Username: "a", Password: "fifteenCharsExactly!!", Role: name,
 			}}})
 			if err == nil {

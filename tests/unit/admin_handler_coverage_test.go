@@ -575,7 +575,7 @@ func TestAdminHandler_RevokeAdmin_OtherID(t *testing.T) {
 
 func TestSeed_RunAdminsCreatesAndSkips(t *testing.T) {
 	admins := newMockAdminUserRepo()
-	sf := &seed.SeedFile{
+	sf := &seed.File{
 		Admins: []seed.AdminSeed{
 			{Username: "seeded-1", Password: "SeedingAdminLongerThan15Chars!", Role: string(rbac.RoleSuperAdmin)},
 			{Username: "seeded-2", Password: "AnotherLongEnoughPassword!2", Role: string(rbac.RoleViewer)},
