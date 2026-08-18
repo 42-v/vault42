@@ -205,14 +205,16 @@ which is not wrapped in the DPoP middleware (`internal/server/server.go`), so th
 carry `cnf.jkt` and a captured token can be replayed within its (short) TTL to re-release
 the plaintext.
 
-**DPoP is a working control on the user paths and does not close this.**
+**DPoP is a working control on password login, refresh and 2FA verify, and does not close this.**
 `VAULT_DPOP_ENABLED=true` stamps `cnf.jkt` on access and challenge tokens issued from
 `POST /auth/login`, `POST /auth/refresh` and the 2FA challenge path
 (`internal/service/token.go`) and enforces that binding under the `DPoP` authorization
 scheme (`internal/middleware/dpop.go`). Two limits of that control are also real:
 refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. Neither of those, nor
-the missing DPoP wrap on `POST /client/token`, is closed by turning the flag on. Do not
-record `VAULT_DPOP_ENABLED` as a mitigation for this risk.
+the missing DPoP wrap on `POST /client/token`, nor the missing wrap on
+`GET /auth/oauth2/callback/{provider}` (a browser GET, so federated login never stamps
+`cnf.jkt`), is closed by turning the flag on. Do not record `VAULT_DPOP_ENABLED` as a
+mitigation for this risk.
 
 **Why this is accepted:**
 

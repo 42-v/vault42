@@ -40,8 +40,9 @@ validates a presented proof and, on `POST /auth/login`, `POST /auth/refresh` and
 challenge path, stamps `cnf.jkt` onto the issued access or challenge token. A bound token
 must then be presented under the `DPoP` authorization scheme with a matching proof. Two
 limits are real: refresh tokens are not sender-bound, and there is no `DPoP-Nonce`.
-`POST /client/token` is not a DPoP issuance path, so machine tokens (`kms:unwrap`,
-`mint:token`) stay ordinary bearer tokens. See [docs/security.md](docs/security.md) AR-10.
+`POST /client/token` and `GET /auth/oauth2/callback/{provider}` are not DPoP issuance
+paths, so machine tokens (`kms:unwrap`, `mint:token`) and federated-login tokens stay
+ordinary bearer tokens. See [docs/security.md](docs/security.md) AR-10.
 
 ## Architecture
 

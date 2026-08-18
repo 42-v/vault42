@@ -238,8 +238,8 @@ or the session they belong to. The following periods apply:
 - **Audit log:** retained for security and accountability, then purged. The retention horizon is
   **operator-set** via `VAULT_AUDIT_RETENTION_DAYS`; a background sweeper runs every 6 hours (and
   once at startup) and removes entries older than the horizon. Because the audit log is
-  append-only, this is the only sanctioned removal path; `vault cleanup-audit` performs the same
-  purge on demand. **The sweeper is disabled by default** (`VAULT_AUDIT_RETENTION_DAYS=0`):
+  append-only, this is the only sanctioned removal path. `vault cleanup-audit` is retired
+  and writes nothing. **The sweeper is disabled by default** (`VAULT_AUDIT_RETENTION_DAYS=0`):
   silently deleting security logs is not a safe default, so an Operator processing personal data
   under Art. 5(1)(e) must set a horizon explicitly. Audit entries are deliberately exempt from the
   account-erasure cascade (Art. 17(3)(b)/(e)), which is precisely why they need a time-based

@@ -70,7 +70,7 @@ All application code lives under `internal/`, which Go enforces as non-importabl
 by external modules. This is intentional -- the service is not a library.
 
 ```text
-cmd/vault42/main.go            Entry point: config, migrations, wiring, server start
+cmd/vault/main.go            Entry point: config, migrations, wiring, server start
 cmd/bridge/                  Honeypot bridge reverse proxy (standalone binary, stdlib only)
   main.go                    Entry point, config, graceful shutdown
   config.go                  Env var parsing (BRIDGE_* vars)
@@ -100,8 +100,10 @@ internal/
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
     dpop.go                  DPoP proof validation (RFC 9449). When VAULT_DPOP_ENABLED,
-                             issuance stamps cnf.jkt on access and challenge tokens;
-                             refresh tokens stay unbound and there is no DPoP-Nonce
+                             issuance stamps cnf.jkt on access and challenge tokens
+                             on login, refresh and 2FA verify; /client/token and the
+                             OAuth callback are not wrapped. Refresh tokens stay
+                             unbound and there is no DPoP-Nonce
   handler/
     auth.go                  Register, Login, Refresh, Logout, VerifyEmail, ConfirmPassword
     oauth.go                 OAuth2 Authorize + Callback (Google, GitHub, Facebook)
@@ -161,7 +163,7 @@ internal/
   kms/                       KEK envelope-unwrap oracle behind POST /kms/unwrap. Per-kid KEKs are derived from a KMS root secret (KMS_ROOT_KEY_FILE) via HKDF-SHA256 with a versioned, domain-separated info label, cryptographically separate from the master key. Wrap/Unwrap reuse the AES-256-GCM AEAD with kid as AAD; every unwrap failure collapses to one opaque error (oracle-resistant).
   metrics/                   Hand-rolled Prometheus text exposition format. Collector aggregates argon2 semaphore, login, and token counters. No external dependencies.
   oauth2/                    OAuth2/OIDC provider implementations (Google, GitHub, etc.)
-  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-audit, export-audit, etc.)
+  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-recovery, export-audit, etc.)
   seed/                      Declarative JSON seeding for clients and users (idempotent)
   httputil/                  Shared HTTP response helpers
   sanitize/                  Input sanitization (email, strings, URLs, locale)
@@ -280,6 +282,8 @@ dpopWrap             Identity when VAULT_DPOP_ENABLED=false. When true, the DPoP
   |                  claims and enforces cnf.jkt. KMS tokens come from
   |                  POST /client/token, which is not a DPoP issuance path, so
   |                  they never carry cnf.jkt and a missing proof still passes.
+  |                  GET /auth/oauth2/callback/{provider} is also unwrapped: the
+  |                  provider redirects the browser with a GET.
   v
 KMSHandler.Unwrap    Re-checks claims for nil (defense in depth), then unwraps.
                      Every post-authorization failure collapses to one opaque
@@ -761,18 +765,21 @@ See: `internal/crypto/jwt.go`, `internal/service/token.go`
 ```text
 /.well-known/jwks.json  <--  Serves the current public key set
 
-On rotation (via CLI: vault42 rotate-jwks --admin-token <token>):
+File-based rotation (CLI: vault rotate-jwks --admin-token <token> --output <path>):
   1. Generate new RSA-2048 key pair
   2. Generate new kid (UUID)
-  3. Update TokenService signing key (mutex-protected)
-  4. Add new public key to the keys map
-  5. Old key remains in the map for validating existing tokens
-  6. /.well-known/jwks.json now returns both keys
+  3. Write the private key to --output (mode 0600, O_EXCL). It is never printed.
+  4. Point SIGNING_KEY_FILE at that path and restart. There is no live swap.
+
+DB-backed rotation (VAULT_KEY_ROTATION_DB=true):
+  POST /admin/keys/rotate, or the VAULT_KEY_ROTATION_INTERVAL scheduler.
+  The previously active key is retired and stays in JWKS until
+  VAULT_KEY_RETENTION_PERIOD. The CLI verb does not drive this path.
 ```
 
 The JWKS endpoint sets `Cache-Control: public, max-age=300` (5 minutes). During
-rotation, both the old and new keys are available, so tokens signed with the old
-key remain valid until they expire naturally.
+a DB-backed rotation, both the old and new keys are available, so tokens signed
+with the old key remain valid until they expire naturally.
 
 The `WellKnownHandler` uses a `sync.RWMutex` to safely update the key map while
 serving concurrent JWKS requests.
@@ -796,10 +803,11 @@ rotation without shared filesystem access.
   (configurable via `VAULT_KEY_REFRESH_INTERVAL`).
 - On rotation, the previously active key is marked **retired**. Retired keys
   remain in the JWKS response until their retention period expires (default:
-  48 hours via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
+  1 hour via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
   seamlessly.
-- Key management (rotate, list, revoke) is performed exclusively via the admin
-  gateway (`cmd/admin-gateway/`), not exposed on the main vault42 binary.
+- Live key management (rotate, list, revoke) is performed via the admin
+  gateway (`cmd/admin-gateway/`). `vault rotate-jwks` writes a key file and
+  does not rotate the live store.
 - Revoked keys are removed from JWKS immediately. Expired retired keys are
   cleaned up automatically during the refresh cycle.
 
@@ -942,7 +950,7 @@ exactly why they need a purge of their own. A sweeper deletes entries older than
 `VAULT_AUDIT_RETENTION_DAYS` at startup and every 6 hours. It is disabled by default:
 silently deleting security logs is not a safe default, so the horizon is an explicit
 operator choice. Because the log is append-only, this is the only sanctioned removal
-path (`vault cleanup-audit` runs the same purge on demand).
+path. `vault cleanup-audit` is retired and writes nothing.
 
 **Recovery-escrow retention** (`internal/service/recovery_retention.go`): the
 account-recovery escrow (`auth.account_recovery`) has the same shape as the audit log --

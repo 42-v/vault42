@@ -1182,7 +1182,7 @@ Erase the authenticated user's account. **This is the most destructive endpoint 
 
 **What is erased:** the identity profile, all blobs, devices, linked social accounts, password history, refresh tokens, TOTP secrets, WebAuthn credentials and backup codes. The user row is scrubbed and soft-deleted (tombstoned) so that foreign keys stay intact and the account stops authenticating immediately.
 
-**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`cleanup-audit`, `cleanup-recovery`). The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
+**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`VAULT_AUDIT_RETENTION_DAYS`, `VAULT_RECOVERY_RETENTION_DAYS` / `vault cleanup-recovery`). `vault cleanup-audit` is retired and writes nothing. The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
 
 **Order matters:** escrow, then tombstone, then purge. The account stops authenticating before any PII is destroyed, so an interrupted erasure leaves an account that is dead but not yet fully purged -- never one that is still loginable but has already lost its second factors. Every step is idempotent; re-issuing the request finishes an interrupted erasure.
 
@@ -2588,6 +2588,8 @@ Handle the OAuth2 callback from the identity provider. Validates the state param
 A first-time sign-in is auto-provisioned only when the provider proves the caller owns the address. A provider that publishes no per-address verification signal (Facebook) or an OIDC issuer that answers `email_verified:false` cannot prove ownership: the asserted address is attacker-supplied, so creating an account on it would squat a stranger's mailbox and the create-vs-refuse outcome would reveal whether the address is registered. For such providers a first-time callback (no existing linked identity) is refused with a neutral redirect to `{origin}/oauth/callback#error=verification_required`, identical whether or not the address is registered; no account is created and no mail is sent. An identity already linked by `(provider, provider_user_id)` still signs in normally.
 
 If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=true&challenge_token=...` instead of issuing full tokens.
+
+**DPoP:** this route is not wrapped in the DPoP middleware (`internal/server/server.go`). The identity provider redirects the browser with a GET, which cannot carry a `DPoP` proof, so the access or challenge token minted here never receives `cnf.jkt` even when `VAULT_DPOP_ENABLED` is on. `POST /auth/oauth2/exchange` returns that already-issued token. A later `POST /auth/2fa/*` verify *is* wrapped, so an MFA-completing federated login can still bind there. See `spec.md` section 0.6.2.
 
 **Authentication:** None (callback from provider)
 

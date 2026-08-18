@@ -144,6 +144,7 @@ no importable Go API and none is promised. DPoP sender-constraint of access toke
 login, refresh and the 2FA challenge path is a shipped control gated by `VAULT_DPOP_ENABLED`
 (see [docs/security.md](docs/security.md) AR-10). Two limits of that control are documented
 there rather than promised: refresh tokens are not sender-bound, and there is no `DPoP-Nonce`.
+`POST /client/token` and `GET /auth/oauth2/callback/{provider}` are not DPoP issuance paths.
 The honeypot bridge's scoring heuristics are tuning, not contract.
 
 **Client package versions.** The release workflow packs both NuGet packages with the release

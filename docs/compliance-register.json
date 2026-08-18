@@ -3516,7 +3516,7 @@
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated",
         "TestRFC9700_4_14_2_RefreshRotationReplay"
       ],
-      "notes": "Rotation with a single-statement compare-and-set and family revocation on replay. Refresh tokens are not sender-constrained: they are opaque values with no jkt column. DPoP now stamps cnf.jkt on access and challenge tokens, which is outside this requirement. Rotation is the ASVS-permitted alternative for refresh replay and is what is claimed here."
+      "notes": "ASVS L1 permits rotation in place of sender-constrained refresh credentials. Login starts a family; AuthService.Refresh invalidates the presented value before minting the next (compare-and-set plus family revoke on reuse). DPoP stamps cnf.jkt on access and challenge credentials only. Refresh credentials stay unbound. Rotation is the claim here."
     },
     {
       "standard": "OWASP ASVS",

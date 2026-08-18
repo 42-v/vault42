@@ -113,7 +113,7 @@ Operational properties worth knowing before you enable it:
 
 `VAULT_DPOP_ENABLED` is a working sender-constraint for access tokens issued with a DPoP proof. Turning it on mounts the DPoP middleware on login, refresh, the 2FA verify endpoints and every authenticated route. A login, refresh or 2FA-challenge request that presents a valid `DPoP` proof has that proof's JWK thumbprint written into the issued access or challenge token as `cnf.jkt` (RFC 9449 §6.1, `internal/service/token.go`). A later request presenting that token must use the `DPoP` authorization scheme and a matching proof (`internal/middleware/dpop.go`). A token issued without a proof stays an ordinary bearer token, so enabling the flag does not break existing clients.
 
-Two limits are real: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. `POST /client/token` is not a DPoP issuance path, so client-credential tokens used by `/kms/unwrap` and `/mint` stay unbound. Enable it when user-facing clients can send proofs. Leaving it at the default (`false`) leaves that control off.
+Two limits are real: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. Two issuance paths are not wrapped. `POST /client/token` is not a DPoP issuance path, so client-credential tokens used by `/kms/unwrap` and `/mint` stay unbound. `GET /auth/oauth2/callback/{provider}` is not wrapped either: the provider redirects the browser with a GET, which cannot carry a proof, so federated login never stamps `cnf.jkt`. Enable it when password-login and refresh clients can send proofs. Leaving it at the default (`false`) leaves that control off.
 
 ### 4. Install the Helm Chart
 
@@ -337,9 +337,10 @@ full before upgrading; the notes below are the deployment-affecting parts.
   [config.md](config.md#fail-closed-overrides-read-this-before-production). 1.0.0 is a good
   moment to remove them.
 - **`VAULT_DPOP_ENABLED` is a working control.** Default remains `false` so existing
-  Bearer clients keep working. Turn it on when user-facing clients can send DPoP proofs;
+  Bearer clients keep working. Turn it on when password-login and refresh clients can send DPoP proofs;
   see [DPoP](#dpop) above. Do not count it as a mitigation for `/kms/unwrap` or `/mint`:
-  those tokens come from `POST /client/token`, which does not stamp `cnf.jkt`.
+  those tokens come from `POST /client/token`, which does not stamp `cnf.jkt`. Federated
+  login via `GET /auth/oauth2/callback/{provider}` is likewise unbound.
 
 **What does not change.** Route paths, the JWT claim set and the error-code vocabulary are the
 1.0.0 stability contract, so a 0.9.x client keeps working. Root paths are v1; there is no

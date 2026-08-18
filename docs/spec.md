@@ -185,9 +185,16 @@ Two more facts about what the flag does not do, so they are not mistaken for bug
   (including those that carry `kms:unwrap` or `mint:token`) never receive `cnf.jkt`. A
   statement that the flag adds a required proof to `POST /kms/unwrap` or `POST /mint` is a
   defect: both accept a bare `Bearer` request from those tokens with the flag on.
+- `GET /auth/oauth2/callback/{provider}` is not wrapped either (`internal/server/server.go`).
+  The identity provider redirects the browser with a GET, which cannot carry a `DPoP`
+  proof, so federated login never stamps `cnf.jkt` on the access or challenge token it
+  mints. `POST /auth/oauth2/exchange` returns that already-issued token. A later
+  `POST /auth/2fa/*` verify *is* wrapped, so an MFA-completing federated login can still
+  bind there if the client sends a proof on that request.
 
-Operators who have user-facing clients that can send proofs SHOULD turn the flag on.
-Leaving it at the default (`false`) leaves the control off.
+Operators whose password-login and refresh clients can send proofs SHOULD turn the flag on.
+Leaving it at the default (`false`) leaves the control off. Federated login stays unbound
+regardless, because the callback is a browser GET.
 
 ### 0.7 Deprecation
 
@@ -762,7 +769,7 @@ Clients are registered via CLI commands, the admin gateway API, or declarative s
 **CLI:**
 
 ```bash
-vault42 add-client --admin-token <token> --name "frontend" --role "frontend" --scopes "user:read,user:write"
+vault add-client --admin-token <token> --name "frontend" --role "frontend" --scopes "user:read,user:write"
 ```
 
 **Declarative seeding (JSON):**
@@ -810,7 +817,7 @@ All commands require `--admin-token`:
 | `rotate-admin-token` | Rotate the admin token itself |
 | `rotate-jwks` | Rotate the JWKS signing key |
 | `seed` | Declarative client + user creation from JSON file |
-| `cleanup-audit` | Delete audit entries older than N days |
+| `cleanup-audit` | Retired: prints an error and writes nothing. Audit retention is `VAULT_AUDIT_RETENTION_DAYS`. |
 | `cleanup-recovery` | Delete account-recovery escrow records older than N days |
 | `export-audit` | Export audit log entries as JSONL to stdout |
 
@@ -2507,7 +2514,7 @@ The following features match the original planning specification:
 |----------------|---------------------|--------|
 | Docker Compose deployment | Helm chart (Kubernetes) | More robust for all environments; single chart for prod/dev/embedded |
 | Raw K8s manifests (`k8s/deployment.yaml`, etc.) | Helm templates with values overlays | Better parameterization and environment management |
-| `docker exec vault42 add-client` | `kubectl exec deploy/vault42-vault42-auth -- /app/vault42 add-client` | Kubernetes is the deployment target |
+| `docker exec vault42 add-client` | `kubectl exec deploy/vault42 -- /app/vault add-client` | The image entrypoint is `/app/vault` (`Dockerfile`); Helm `NOTES.txt` prints this form. The binary name the CLI prints is `vault`, not `vault42`. |
 | TLS 1.2 minimum | TLS 1.3 minimum | Stricter; Go 1.24 defaults |
 | Three OAuth2 providers (Google, Facebook, GitHub) | Three providers (Google, GitHub, Facebook) | All three providers implemented with PKCE S256 |
 | OAuth2 state as simple HMAC | HMAC-signed state with provider name + nonce + expiry + PKCE | More robust; PKCE verifier stored in cache |
@@ -2530,7 +2537,7 @@ The following features match the original planning specification:
 | Fingerprint separator collision prevention not specified | Length-prefixed fields (4-byte big-endian length + data) | Prevents crafted field values from producing identical hashes |
 | Password confirmation for sensitive ops not in spec | `POST /auth/confirm` + `Confirmed` middleware with 5-minute window | Added for TOTP setup/disable, WebAuthn register/delete, backup code generation |
 | MFA challenge flow not detailed in spec | 2FA challenge token (5-min JWT with `token_type: "2fa_challenge"`) | Implemented as a distinct token type with separate middleware |
-| `rotate-jwks` listed as CLI command | Signing key update method exists (`TokenService.UpdateSigningKey`) | CLI command references this; not a standalone CLI subcommand in the implemented code |
+| `rotate-jwks` listed as CLI command | `vault rotate-jwks --admin-token <token> --output <path>` writes a new RSA-2048 key (mode 0600, `O_EXCL`) and prints the kid. It does not rotate the live keystore. Live rotation is `POST /admin/keys/rotate` or `VAULT_KEY_ROTATION_INTERVAL`. | SpecV0 implied an in-process rotate; the verb is offline key generation (`internal/cli/cli.go`). |
 | DPoP middleware listed in SpecV0 | Validator, wiring and issuance exist behind `VAULT_DPOP_ENABLED`. Access and challenge tokens issued with a proof carry `cnf.jkt`. Refresh tokens stay unbound; there is no `DPoP-Nonce` | Shipped control; the two remaining limits are excluded from the stability contract (section 0.6.2) |
 | Argon2id parameter bounds checking not specified | Parser rejects iterations > 10, parallelism > 4, memory > 128 MiB | Prevents DoS via crafted hashes |
 
@@ -2541,7 +2548,7 @@ wrong -- they denied features that ship -- so every row below cites what was che
 
 | Feature | Status |
 |---------|--------|
-| **DPoP (Demonstration of Proof-of-Possession)** | **Shipped.** `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths when a valid proof is presented, and enforced by a constant-time thumbprint comparison under the `DPoP` authorization scheme. Refresh tokens remain unbound and there is no `DPoP-Nonce`; those two limits are excluded from the stability contract. Not advertised in discovery. `POST /client/token` is not a DPoP issuance path. Section 0.6.2. |
+| **DPoP (Demonstration of Proof-of-Possession)** | **Shipped.** `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths when a valid proof is presented, and enforced by a constant-time thumbprint comparison under the `DPoP` authorization scheme. Refresh tokens remain unbound and there is no `DPoP-Nonce`; those two limits are excluded from the stability contract. Not advertised in discovery. `POST /client/token` and `GET /auth/oauth2/callback/{provider}` are not DPoP issuance paths. Section 0.6.2. |
 | **Facebook OAuth** | Fully implemented. `FacebookProvider` in `internal/oauth2/facebook.go`, PKCE S256 enforced, Vue login button added. |
 | **Honeypot Bridge** | Fully implemented. `cmd/bridge/` is a standalone reverse proxy (stdlib only) that routes between real and honeypot Vault42 instances. Score-based detection (UA patterns, rate tracking, login failures, decoy page hits), admin API, Redis persistence, and fake login pages for scanner paths. Helm chart support via `bridge.enabled`. See [Bridge Deployment Guide](bridge.md). |
 | **OIDC auto-discovery for providers** | **Implemented, and a headline feature.** `internal/oauth2/oidc.go` fetches and caches `{issuer}/.well-known/openid-configuration`, and `internal/config/config.go` registers arbitrary providers from `VAULT_OIDC_PROVIDERS` plus `VAULT_OIDC_<NAME>_{ISSUER,CLIENT_ID,SCOPES}`. Google and GitHub remain hardcoded because they predate it. Section 2.11. |
@@ -2559,7 +2566,7 @@ wrong -- they denied features that ship -- so every row below cites what was che
 | **Risk scoring (adaptive)** | Not implemented. `risk_score` is hardcoded per event type (0, 10, 20, 30, 70, 90) and is nonetheless **public** on `GET /admin/audit`, so section 0.6.1 excludes it from the stability contract: values are not comparable between event types and may change without a major bump. Clients MUST NOT threshold or rank on it. |
 | **Progressive login delays** | Not implemented. Rate limiting is fixed-window and fails closed on the authentication endpoints, and account lockout is absolute. Backoff has no public API surface -- it changes latency and `Retry-After` values, both already in the contract -- so adding it later is compatible. |
 | **Row Level Security** | Not implemented |
-| **Audit log retention/cleanup** | Implemented via `cleanup-audit` CLI command using SECURITY DEFINER PostgreSQL function |
+| **Audit log retention/cleanup** | Implemented as `VAULT_AUDIT_RETENTION_DAYS`, swept in-process via `audit.cleanup_old_entries()` (SECURITY DEFINER). `vault cleanup-audit` is a retired stub and writes nothing. |
 | **Account lock email notification** | Implemented: `TemplateAccountLocked` sent once per lockout window via cache dedup |
 | **Init container unlock pattern** | Not implemented. Master key delivered via `_FILE` convention. |
 | **SealedSecrets / External Secrets Operator** | Not in Helm chart templates. Secrets managed via standard K8s secrets. |

@@ -24,8 +24,9 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
 * **DPoP now sender-constrains access tokens.** `POST /auth/login`, `POST /auth/refresh` and
   the 2FA challenge path stamp `cnf.jkt` when a valid DPoP proof is presented, and the
   middleware enforces that binding under the `DPoP` authorization scheme. Refresh tokens
-  remain unbound and there is no `DPoP-Nonce`. `POST /client/token` is not a DPoP issuance
-  path, so machine tokens (`kms:unwrap`, `mint:token`) stay ordinary bearer tokens. The
+  remain unbound and there is no `DPoP-Nonce`. `POST /client/token` and
+  `GET /auth/oauth2/callback/{provider}` are not DPoP issuance paths, so machine tokens
+  (`kms:unwrap`, `mint:token`) and federated-login tokens stay ordinary bearer tokens. The
   flag still defaults to off.
 * **The admin gateway pins client identities and checks a CRL.** `ADMIN_GW_CLIENT_CN_ALLOWLIST`
   matches the leaf CN and DNS/email/URI SANs exactly. `ADMIN_GW_CLIENT_CRL_FILE` is re-read
