@@ -107,11 +107,13 @@ Operational properties worth knowing before you enable it:
 - **Per-kid KEKs are derived, not stored.** One root secret produces every KEK via HKDF-SHA256 under a versioned, domain-separated label, cryptographically separate from `MASTER_KEY_FILE`. You do not provision a secret per kid.
 - **Losing the root secret is unrecoverable.** Every envelope wrapped under it becomes permanently unopenable. Back it up the way you back up the master key, which is to say offline.
 - **Rotating it invalidates every existing envelope.** There is no dual-root overlap window. Re-wrap with `vault kms wrap` before swapping the root.
-- **The endpoint is a key-release oracle**, so it ships with a fail-closed per-IP rate limit (30/min) and a synchronous audit record per attempt. A Redis outage rejects unwraps rather than degrading to a per-pod counter. Read [security.md](security.md) AR-10 before exposing it: the authorizing token is a plain Bearer token and is not sender-constrained.
+- **The endpoint is a key-release oracle**, so it ships with a fail-closed per-IP rate limit (30/min) and a synchronous audit record per attempt. A Redis outage rejects unwraps rather than degrading to a per-pod counter. Read [security.md](security.md) AR-10 before exposing it: the authorizing token comes from `POST /client/token`, which is not a DPoP issuance path, so it is a plain Bearer token even when `VAULT_DPOP_ENABLED` is on.
 
 ### DPoP
 
-`VAULT_DPOP_ENABLED` is **experimental and is not a deployment control.** Turning it on mounts the DPoP middleware, but no token-issuance path emits the `cnf.jkt` confirmation claim that binds a token to a key (see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`), so nothing is sender-constrained: a presented proof is checked for shape, method, URI, freshness and single-use JTI, and a request with no proof passes through untouched. Do not enable it expecting replay protection, and do not record it as a mitigation in a threat model. Leave it at its default (`false`) for 1.0.0.
+`VAULT_DPOP_ENABLED` is a working sender-constraint for access tokens issued with a DPoP proof. Turning it on mounts the DPoP middleware on login, refresh, the 2FA verify endpoints and every authenticated route. A login, refresh or 2FA-challenge request that presents a valid `DPoP` proof has that proof's JWK thumbprint written into the issued access or challenge token as `cnf.jkt` (RFC 9449 §6.1, `internal/service/token.go`). A later request presenting that token must use the `DPoP` authorization scheme and a matching proof (`internal/middleware/dpop.go`). A token issued without a proof stays an ordinary bearer token, so enabling the flag does not break existing clients.
+
+Two limits are real: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. `POST /client/token` is not a DPoP issuance path, so client-credential tokens used by `/kms/unwrap` and `/mint` stay unbound. Enable it when user-facing clients can send proofs. Leaving it at the default (`false`) leaves that control off.
 
 ### 4. Install the Helm Chart
 
@@ -334,8 +336,10 @@ full before upgrading; the notes below are the deployment-affecting parts.
   are now documented together in
   [config.md](config.md#fail-closed-overrides-read-this-before-production). 1.0.0 is a good
   moment to remove them.
-- **`VAULT_DPOP_ENABLED` should be `false`.** It is experimental and binds nothing; see
-  [DPoP](#dpop) above.
+- **`VAULT_DPOP_ENABLED` is a working control.** Default remains `false` so existing
+  Bearer clients keep working. Turn it on when user-facing clients can send DPoP proofs;
+  see [DPoP](#dpop) above. Do not count it as a mitigation for `/kms/unwrap` or `/mint`:
+  those tokens come from `POST /client/token`, which does not stamp `cnf.jkt`.
 
 **What does not change.** Route paths, the JWT claim set and the error-code vocabulary are the
 1.0.0 stability contract, so a 0.9.x client keeps working. Root paths are v1; there is no

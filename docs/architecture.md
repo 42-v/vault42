@@ -99,8 +99,9 @@ internal/
                              Confirmed (recent-password-confirmation gate)
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
-    dpop.go                  DPoP proof validation (RFC 9449). Experimental: binds nothing
-                             until issuance populates cnf.jkt
+    dpop.go                  DPoP proof validation (RFC 9449). When VAULT_DPOP_ENABLED,
+                             issuance stamps cnf.jkt on access and challenge tokens;
+                             refresh tokens stay unbound and there is no DPoP-Nonce
   handler/
     auth.go                  Register, Login, Refresh, Logout, VerifyEmail, ConfirmPassword
     oauth.go                 OAuth2 Authorize + Callback (Google, GitHub, Facebook)
@@ -276,7 +277,9 @@ RequireScope("kms:unwrap")
   v
 dpopWrap             Identity when VAULT_DPOP_ENABLED=false. When true, the DPoP
   |                  middleware runs INSIDE the auth wrappers so it sees resolved
-  |                  claims -- but binds nothing, because issuance never sets cnf.jkt.
+  |                  claims and enforces cnf.jkt. KMS tokens come from
+  |                  POST /client/token, which is not a DPoP issuance path, so
+  |                  they never carry cnf.jkt and a missing proof still passes.
   v
 KMSHandler.Unwrap    Re-checks claims for nil (defense in depth), then unwraps.
                      Every post-authorization failure collapses to one opaque

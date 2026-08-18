@@ -142,6 +142,9 @@ curl -X DELETE https://bridge/bridge/flag \
 | `BRIDGE_TRUSTED_PROXIES` | -- | CIDR list for proxy IP detection |
 | `BRIDGE_REAL_IP_HEADER` | -- | Header from proxy (e.g. `CF-Connecting-IP`) |
 | `BRIDGE_LOG_LEVEL` | `info` | Log level (`info`, `debug`) |
+| `BRIDGE_MAX_BODY_BYTES` | `16777216` (16 MiB) | Cap on a proxied request body |
+| `BRIDGE_MAX_INFLIGHT` | `512` | Cap on concurrently proxied requests. Zero disables the cap. |
+| `BRIDGE_STRIP_HEADERS` | -- | Extra headers stripped before the request reaches an upstream, comma-separated. Use when you renamed `VAULT_TLS_FINGERPRINT_HEADER`, `REAL_IP_HEADER` or `GEO_IP_HEADER`. |
 
 ## State Persistence
 

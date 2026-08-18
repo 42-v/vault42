@@ -358,7 +358,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Test:** `tests/attack/dpop_mismatch_test.go` -- TestDPoPWrongKey
 
-**Status: this defense is not reachable.** The thumbprint comparison in `middleware.DPoP` only runs when the access token carries `cnf.jkt`, and no vault42 issuance path sets that claim (see the `middleware.DPoP` doc comment, `internal/middleware/dpop.go`). Every request therefore takes the unbound path: a presented proof is checked against method, URI and access-token hash but never against a thumbprint the token committed to, and a request with **no** proof passes through. Treat `VAULT_DPOP_ENABLED` as experimental. Nothing in this section may be cited as a live mitigation until issuance populates `cnf.jkt`.
+**Status: reachable on the user paths.** `internal/service/token.go` stamps `cnf.jkt` on access and challenge tokens issued with a valid DPoP proof. `middleware.DPoP` then requires a matching proof under the `DPoP` authorization scheme. Two limits are real: refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. `POST /client/token` is not a DPoP issuance path, so machine tokens never carry `cnf.jkt`.
 
 ---
 
@@ -394,9 +394,9 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Attack:** Capture one authorized unwrap request (token plus body) and replay it to re-release the plaintext for as long as the access token lives.
 
-**Defense:** Incomplete, and accepted as such -- see [security.md](security.md) AR-10. What actually stands: a short access-token TTL, TLS, per-IP rate limiting that fails closed, and a synchronous audit record of every attempt. DPoP would close it by sender-constraining the token, but does not (§7.3). Do not deploy this endpoint on the assumption that replay is prevented.
+**Defense:** Incomplete, and accepted as such -- see [security.md](security.md) AR-10. What actually stands: a short access-token TTL, TLS, per-IP rate limiting that fails closed, and a synchronous audit record of every attempt. DPoP sender-constrains user access tokens (§7.3) but not the client-credential tokens this endpoint accepts, because `POST /client/token` is not a DPoP issuance path. Do not deploy this endpoint on the assumption that replay is prevented.
 
-**Test:** `internal/handler/kms_test.go` -- TestKMSUnwrap_DPoPRequiredWhenEnabled (covers the middleware wiring, not token binding)
+**Test:** `internal/handler/kms_test.go` -- TestKMSUnwrap_DPoPRequiredWhenEnabled (covers the middleware wiring for a token that already carries `cnf.jkt`)
 
 ### 8.5 Rate-Limit Amplification via Cache Outage
 
@@ -582,7 +582,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 | CSRF | `attack/csrf_test.go` | Covered |
 | Header injection (CRLF) | `attack/header_injection_test.go` | Covered |
 | DPoP mismatch (htm/htu) | `attack/dpop_mismatch_test.go` | Covered |
-| DPoP key substitution (`cnf.jkt`) | `attack/dpop_mismatch_test.go` | Not reachable -- issuance never sets `cnf.jkt` (§7.3) |
+| DPoP key substitution (`cnf.jkt`) | `attack/dpop_mismatch_test.go` | Covered on user-issued tokens. Client-credential tokens stay unbound (§7.3) |
 | KMS unwrap oracle uniformity | `kms/kms_test.go`, `handler/kms_test.go` | Covered |
 | KMS cross-kid envelope confusion | `kms/kms_test.go` | Covered |
 | KMS scope bypass (`kms:unwrap`) | `middleware/requirescope_test.go`, `handler/kms_test.go` | Covered |

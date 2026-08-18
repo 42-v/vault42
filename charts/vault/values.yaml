@@ -606,7 +606,9 @@ adminGateway:
   clientCNAllowlist: ""
   # -- Path to a PEM or DER certificate revocation list signed by the client CA.
   # Checked on every handshake; an unreadable, unparseable, foreign-signed or
-  # expired list refuses the handshake. Empty checks nothing.
+  # expired list refuses the handshake. A path that cannot be read or parsed at
+  # boot is fatal: the gateway exits rather than coming up with revocation
+  # appearing configured. Empty checks nothing.
   clientCRLFile: ""
   # -- Session token TTL
   sessionTTL: "1h"

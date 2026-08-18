@@ -35,11 +35,13 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 - **Client credentials**: service-to-service auth grant
 - **Device tracking**: session management with fingerprint verification
 
-DPoP (RFC 9449) is present but **experimental and not a working control**: `VAULT_DPOP_ENABLED`
-mounts middleware that validates a presented proof's structure, method, URI, freshness and
-single-use JTI, but no issuance path emits the `cnf.jkt` claim that would bind a token to a key,
-so nothing is sender-constrained and a request with no proof passes through. Do not count it as
-replay protection. See [docs/security.md](docs/security.md) AR-10.
+DPoP (RFC 9449) is a working, opt-in control: `VAULT_DPOP_ENABLED` mounts middleware that
+validates a presented proof and, on `POST /auth/login`, `POST /auth/refresh` and the 2FA
+challenge path, stamps `cnf.jkt` onto the issued access or challenge token. A bound token
+must then be presented under the `DPoP` authorization scheme with a matching proof. Two
+limits are real: refresh tokens are not sender-bound, and there is no `DPoP-Nonce`.
+`POST /client/token` is not a DPoP issuance path, so machine tokens (`kms:unwrap`,
+`mint:token`) stay ordinary bearer tokens. See [docs/security.md](docs/security.md) AR-10.
 
 ## Architecture
 

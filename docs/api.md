@@ -7,7 +7,7 @@
 
 Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies.
 
-**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
+**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP-Nonce and refresh-token sender-binding, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
 
 Two rules from that contract that change how a client is written:
 
@@ -66,7 +66,7 @@ Authorization: Bearer <access_token>
 
 Access tokens are RS256-signed JWTs with a short TTL (typically 5-15 minutes). They are stateless and fingerprint-bound.
 
-Only the `Bearer` scheme is accepted. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set: RFC 9449 section 7.1 reserves it for sender-constrained tokens, and vault42 issues none.
+The `Bearer` scheme is accepted for any token that does not carry `cnf.jkt`. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set. When the flag is on, a token issued with a DPoP proof carries `cnf.jkt` and must be presented as `Authorization: DPoP <token>` with a matching proof. A token issued without a proof stays an ordinary bearer token. See `spec.md` section 0.6.2.
 
 ### 2FA Challenge Tokens
 
@@ -2740,7 +2740,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. `VAULT_DPOP_ENABLED=true` adds **no** requirement to this endpoint: the DPoP middleware requires a proof only from a token that carries a `cnf.jkt` confirmation claim, no vault42 issuance path populates that claim, so a request with no `DPoP` header is passed straight through (`internal/middleware/dpop.go:31-40`). A proof that *is* presented must parse, match the method and URI, match the access-token hash, and be single-use, but it is compared against no thumbprint, so it constrains nothing and can be omitted at will. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. `VAULT_DPOP_ENABLED` is experimental, unsupported and excluded from the stability contract; see `spec.md` section 0.6.2.
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. Those tokens are not DPoP-bound: `POST /client/token` is not wrapped in the DPoP middleware, so they never carry `cnf.jkt` and `VAULT_DPOP_ENABLED=true` adds no required proof here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. See `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2820,7 +2820,7 @@ Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not ex
 **Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
 **Middleware chain (outermost first):** rate limit -> `authMw` -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:564-570`).
 **Rate limit:** 60 per minute per authenticated `client_id`, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The limiter is mounted **inside** the auth middleware, so the key function reads the client id from the validated claims and buckets by `client_id`; its source-IP fallback is unreachable here, because a request carrying no claims is rejected by the auth middleware before it reaches the limiter. Plan capacity as 60/min per client, not per source address.
-**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`, and even then a request with no `DPoP` header passes straight through, because the middleware demands a proof only from a token carrying `cnf.jkt` and nothing in vault42 issues one. See `spec.md` section 0.6.2.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. Mint tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and a request with no `DPoP` header still passes through. See `spec.md` section 0.6.2.
 **Fingerprint:** not verified. `POST /mint` is a machine endpoint and carries no device binding.
 **Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
 

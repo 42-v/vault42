@@ -137,7 +137,7 @@ release, including a patch.
 | Surface | Why it is excluded |
 |---------|--------------------|
 | `risk_score` on `GET /admin/audit` | An opaque severity tag, not a measurement. Section 0.6.1. |
-| `VAULT_DPOP_ENABLED` and everything it gates | Experimental and unsupported. Section 0.6.2. |
+| `VAULT_DPOP_ENABLED` remaining limits | Refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. Section 0.6.2. |
 | Admin gateway HTML pages (`GET /admin/`, `/admin/login`, `/admin/ui/*`, `/admin/static/*`) | A user interface, not an API. |
 | The `GET /metrics` exposition body | The endpoint, its gate and its content type are stable; the metric names, labels and cardinality track the code. |
 | `GET /admin/metrics` | Mounted and permission-gated with nothing behind it; answers `501 not_implemented`. Section 21.10. |
@@ -162,35 +162,32 @@ accounts; `device_id` identifies the same device without being a cross-account c
 
 #### 0.6.2 DPoP
 
-`VAULT_DPOP_ENABLED` gates an RFC 9449 proof validator (`internal/crypto/dpop.go`,
-`internal/middleware/dpop.go`) that is complete and correct. **Nothing in vault42 issues a
-DPoP-bound token.** The `cnf.jkt` confirmation claim is declared in `internal/crypto/jwt.go` and
-never populated, so a presented proof is validated against nothing and the flag buys no
-sender-constraint in either position. It is a dark launch, not a feature.
+`VAULT_DPOP_ENABLED` gates a working RFC 9449 sender-constraint
+(`internal/crypto/dpop.go`, `internal/middleware/dpop.go`, `internal/service/token.go`).
+When the flag is on and a token endpoint receives a valid `DPoP` proof, issuance writes
+that proof's JWK thumbprint into the access or challenge token as `cnf.jkt` (RFC 9449 §6.1).
+A later request presenting that token must use the `DPoP` authorization scheme
+(`WithDPoPScheme` is passed from `internal/server/server.go` when the flag is on) and a
+matching proof. A token issued without a proof stays an ordinary bearer token, so enabling
+the flag does not break existing clients.
 
-At 1.0.0, therefore:
+At 1.0.0, two limits are real and are not covered by sections 0.3 or 0.4:
 
-- the discovery document MUST NOT advertise DPoP support, and does not
-  (`internal/handler/wellknown.go`);
-- the `DPoP` authentication scheme on the `Authorization` header MUST be rejected while no token is
-  sender-constrained, and it is, unconditionally. `internal/middleware/auth.go` accepts only
-  `Bearer` unless `WithDPoPScheme(true)` is passed, and `internal/server/server.go:240-248` never
-  passes it, flag or no flag. RFC 9449 section 7.1 reserves that scheme for sender-constrained
-  tokens, and silently degrading it to `Bearer` is the exact confusion the separate scheme exists
-  to prevent. A caller that sends `Authorization: DPoP <token>` gets `401 invalid_authorization` on
-  every deployment, including one with the flag on;
-- **the flag makes no DPoP proof mandatory anywhere.** `internal/middleware/dpop.go:31-40` passes a
-  request carrying no `DPoP` header straight through, because it demands a proof only from a token
-  whose `cnf.jkt` is set, and nothing sets one. A proof that *is* presented is validated in full
-  (`typ`, `alg`, `jwk`, `htm`, `htu`, `iat`, single-use `jti`, `ath`) and then compared against no
-  thumbprint, so it constrains nothing and can be dropped at will. Any statement that the flag adds
-  a required proof to `POST /kms/unwrap` or `POST /mint` is a defect: both accept a bare `Bearer`
-  request with the flag on;
-- operators SHOULD leave the flag off.
+- **refresh tokens are not sender-bound.** They are opaque random values stored as a SHA-256
+  hash. Rotation with a DPoP proof binds the *next* access token; the refresh token itself
+  can still be presented by anyone who holds it.
+- **there is no `DPoP-Nonce`.** Proof freshness is `iat` plus single-use `jti` only.
 
-DPoP issuance -- a proof-carrying `POST /auth/login` that binds `cnf.jkt` into the token, plus the
-KMS client integration -- has its own request and token surface and belongs to a later release.
-Nothing about the flag's present behaviour is covered by sections 0.3 or 0.4.
+Two more facts about what the flag does not do, so they are not mistaken for bugs:
+
+- the discovery document does not advertise DPoP support (`internal/handler/wellknown.go`);
+- `POST /client/token` is not wrapped in the DPoP middleware, so client-credential tokens
+  (including those that carry `kms:unwrap` or `mint:token`) never receive `cnf.jkt`. A
+  statement that the flag adds a required proof to `POST /kms/unwrap` or `POST /mint` is a
+  defect: both accept a bare `Bearer` request from those tokens with the flag on.
+
+Operators who have user-facing clients that can send proofs SHOULD turn the flag on.
+Leaving it at the default (`false`) leaves the control off.
 
 ### 0.7 Deprecation
 
@@ -510,8 +507,10 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
   - `client_id` -- requesting client (if applicable)
   - `fingerprint` -- SHA256 hash of device fingerprint
   - `token_type` -- `"Bearer"` or `"2fa_challenge"`
-  - `cnf.jkt` -- declared for DPoP binding and **never populated**. No code path assigns it, so it is
-    absent from every token vault42 issues. Section 0.6.2.
+  - `cnf.jkt` -- RFC 9449 confirmation thumbprint. Set on an access or challenge token when
+    the issuing request presented a valid DPoP proof (`internal/service/token.go`). Absent on
+    a token issued without a proof, on every refresh token, and on every token from
+    `POST /client/token`. Section 0.6.2.
 - **Max size:** 8KB enforced at parse time
 - **Dangerous headers rejected:** `jku`, `x5u`, `x5c`, `jwk` -- rejected at parse time
 - **`kid` validation:** UUID format only (hex + dashes, max 64 chars), prevents path traversal
@@ -769,15 +768,15 @@ vault42 add-client --admin-token <token> --name "frontend" --role "frontend" --s
 **Declarative seeding (JSON):**
 
 ```text
-VAULT_SEED_FILE=/etc/vault42/seed.json
+VAULT_SEED_FILE=/etc/vault/seed.json
 ```
 
-Or via CLI: `vault42 seed --admin-token <token> --file seed.json`
+Or via CLI: `vault seed --admin-token <token> --file seed.json`
 
-Seed files define clients and users declaratively. Seeding is idempotent -- existing entries (matched by client name) are skipped. Client secrets are always generated (never in the seed file) and printed to stdout. See `seed.example.json` for the file format.
+Seed files define clients and users declaratively. Seeding is idempotent -- existing entries (matched by client name) are skipped. Client secrets are always generated (never in the seed file) and delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log. See `seed.example.json` for the file format.
 
 - Generates UUID `client_id` and high-entropy random secret (64 hex chars)
-- Secret displayed once, only the Argon2id hash is stored
+- Secret delivered once, only the Argon2id hash is stored
 - Secret cannot be retrieved later
 
 **Source:** `internal/cli/cli.go` (addClient), `internal/seed/seed.go` (declarative seeding)
@@ -817,7 +816,7 @@ All commands require `--admin-token`:
 
 **Admin token lifecycle:**
 
-1. Taken from `ADMIN_TOKEN_FILE` on first boot when that is set, as either the token or its Argon2id hash. Otherwise generated (256-bit random) and displayed once to stdout.
+1. Taken from `ADMIN_TOKEN_FILE` on first boot when that is set, as either the token or its Argon2id hash. Otherwise generated (256-bit random) and delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log.
 2. Stored as Argon2id hash in `auth.admin_config` table
 3. Verified with `VerifyPassword` (Argon2id) on every CLI command
 4. Replaced by `rotate-admin-token`, after which `ADMIN_TOKEN_FILE` no longer applies and later boots keep the rotated hash
@@ -832,7 +831,7 @@ A KEK envelope-unwrap oracle: a caller presents a wrapped-key envelope and vault
 
 - **Key derivation:** per-`kid` KEKs are derived from a single KMS root secret (`KMS_ROOT_KEY_FILE`, >= 32 bytes) via HKDF-SHA256 with a versioned, domain-separated info label (`vault42/kms/kek/v1/<kid>`). This keeps the KMS keyspace cryptographically separate from the master key that encrypts TOTP/identity/blob at rest, and supports rotation without provisioning a new secret per kid.
 - **Envelope format:** `nonce || AES-256-GCM ciphertext`, with `kid` bound as GCM AAD, base64 (std) on the wire. Reuses `internal/crypto` AEAD; no new crypto.
-- **Authorization:** requires a client-credential access token carrying the `kms:unwrap` scope (`middleware.RequireScope`). `VAULT_DPOP_ENABLED=true` adds nothing here: the DPoP middleware demands a proof only from a token carrying `cnf.jkt`, nothing issues one, so a request with no `DPoP` header passes through and a proof that is presented is compared against no thumbprint. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. Section 0.6.2.
+- **Authorization:** requires a client-credential access token carrying the `kms:unwrap` scope (`middleware.RequireScope`). Those tokens come from `POST /client/token`, which is not a DPoP issuance path, so they never carry `cnf.jkt` and `VAULT_DPOP_ENABLED=true` adds no required proof here. Replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. Section 0.6.2.
 - **Oracle resistance:** every failure mode (empty kid, malformed envelope, bad base64, tampered ciphertext, wrong KEK) collapses to a single opaque `400 unwrap_failed` with a byte-identical body and audit outcome. No branch reveals which check failed.
 - **Rate limiting:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading to a weaker per-pod limiter).
 - **Audit:** every attempt is written synchronously (never dropped under buffer pressure), recording `kid` and outcome only. Key material is never logged, and KEKs plus the root secret are wiped after use.
@@ -1737,7 +1736,7 @@ worse:
 | `VAULT_MAX_SESSIONS_PER_USER` | `10` | Max concurrent refresh families |
 | `VAULT_STRICT_SESSION_LIMIT` | `false` | Fail closed when the session-count query errors (section 3.2) |
 | `VAULT_REGISTRATION_ENABLED` | `true` | When false, `POST /auth/register` answers `403 registration_disabled` |
-| `VAULT_DPOP_ENABLED` | `false` | **Experimental and unsupported.** Enables the RFC 9449 proof validator and the `DPoP` auth scheme. Binds nothing; section 0.6.2 |
+| `VAULT_DPOP_ENABLED` | `false` | Sender-constrains access tokens issued with a DPoP proof. Refresh tokens stay unbound; there is no `DPoP-Nonce`. Section 0.6.2 |
 | `VAULT_FORCE_SECURE_COOKIES` | `false` | Force Secure flag on cookies regardless of TLS state |
 | `VAULT_TLS_FINGERPRINT_HEADER` | (optional) | Header the TLS-terminating proxy puts a JA4 fingerprint in (section 5.1) |
 | `VAULT_PEPPER_FILE` | (optional) | Server-side password pepper (`_FILE` convention) |
@@ -2339,7 +2338,7 @@ parameters, endpoint semantics and error codes -- under section 0.4. Each retrac
 | `grant_types_supported: ["authorization_code", ...]` | There is no authorization-code token endpoint on this server. |
 | `scopes_supported: ["openid", ...]` | No `id_token` is ever issued to a relying party. |
 | `response_types_supported`, `subject_types_supported`, `code_challenge_methods_supported` | Meaningful only for the authorization-code flow that does not exist. |
-| `dpop_signing_alg_values_supported` | Advertised unconditionally, including with `VAULT_DPOP_ENABLED` off, for a mechanism that binds nothing. Section 0.6.2. |
+| `dpop_signing_alg_values_supported` | Advertised unconditionally, including with `VAULT_DPOP_ENABLED` off, and DPoP is opt-in. Discovery still omits it so a vanilla install does not claim a control that is off. Section 0.6.2. |
 
 Keys are omitted rather than faked. Once `POST /client/token` reads `grant_type` and reports RFC 6749
 error codes, `token_endpoint`, `grant_types_supported` and `token_endpoint_auth_methods_supported`
@@ -2522,7 +2521,7 @@ The following features match the original planning specification:
 | Backup codes stored as Argon2id hashes (spec said this) | Implemented with HMAC-SHA256 (not Argon2id) | 10 codes, 16 hex chars each (64-bit entropy), HMAC-SHA256 hashed |
 | `auth.cache` table | Added; not in SpecV0 schema | PostgreSQL cache backend needs storage |
 | `auth.admin_config` table | Added; not in SpecV0 schema | Admin token hash and key-value config storage |
-| No declarative seeding | `internal/seed/` package: JSON-based idempotent client + user seeding via `VAULT_SEED_FILE` env var or `vault42 seed` CLI command | Enables repeatable dev/staging deployments |
+| No declarative seeding | `internal/seed/` package: JSON-based idempotent client + user seeding via `VAULT_SEED_FILE` env var or `vault seed` CLI command | Enables repeatable dev/staging deployments |
 | `failed_login_count` column on `users` | Added; not in SpecV0 schema | Tracks failed login attempts for lockout |
 | `used_at` column on `backup_codes` | Added; not in SpecV0 schema | Tracks when backup codes were consumed |
 | Audit schema: separate `vault_app` grant with explicit `REVOKE UPDATE, DELETE` | Implemented as designed, plus database triggers | Both role-level and trigger-level enforcement |
@@ -2532,7 +2531,7 @@ The following features match the original planning specification:
 | Password confirmation for sensitive ops not in spec | `POST /auth/confirm` + `Confirmed` middleware with 5-minute window | Added for TOTP setup/disable, WebAuthn register/delete, backup code generation |
 | MFA challenge flow not detailed in spec | 2FA challenge token (5-min JWT with `token_type: "2fa_challenge"`) | Implemented as a distinct token type with separate middleware |
 | `rotate-jwks` listed as CLI command | Signing key update method exists (`TokenService.UpdateSigningKey`) | CLI command references this; not a standalone CLI subcommand in the implemented code |
-| DPoP middleware listed in SpecV0 | Validator and wiring exist behind `VAULT_DPOP_ENABLED`; issuance does not, so the flag binds nothing | Dark launch, labelled experimental and excluded from the stability contract (section 0.6.2) |
+| DPoP middleware listed in SpecV0 | Validator, wiring and issuance exist behind `VAULT_DPOP_ENABLED`. Access and challenge tokens issued with a proof carry `cnf.jkt`. Refresh tokens stay unbound; there is no `DPoP-Nonce` | Shipped control; the two remaining limits are excluded from the stability contract (section 0.6.2) |
 | Argon2id parameter bounds checking not specified | Parser rejects iterations > 10, parallelism > 4, memory > 128 MiB | Prevents DoS via crafted hashes |
 
 ### Deferred to Future Versions
@@ -2542,7 +2541,7 @@ wrong -- they denied features that ship -- so every row below cites what was che
 
 | Feature | Status |
 |---------|--------|
-| **DPoP (Demonstration of Proof-of-Possession)** | **Inert, experimental, excluded from the stability contract.** The crypto (`internal/crypto/dpop.go`) and middleware (`internal/middleware/dpop.go`) are complete and correct, and the route wiring is real. Nothing issues a DPoP-bound token: `cnf.jkt` is declared in `internal/crypto/jwt.go` and never assigned, so the thumbprint check has nothing to compare against and the flag buys no sender-constraint in either position. Not advertised in discovery; the `DPoP` auth scheme is rejected unless `VAULT_DPOP_ENABLED` is set. Section 0.6.2. |
+| **DPoP (Demonstration of Proof-of-Possession)** | **Shipped.** `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths when a valid proof is presented, and enforced by a constant-time thumbprint comparison under the `DPoP` authorization scheme. Refresh tokens remain unbound and there is no `DPoP-Nonce`; those two limits are excluded from the stability contract. Not advertised in discovery. `POST /client/token` is not a DPoP issuance path. Section 0.6.2. |
 | **Facebook OAuth** | Fully implemented. `FacebookProvider` in `internal/oauth2/facebook.go`, PKCE S256 enforced, Vue login button added. |
 | **Honeypot Bridge** | Fully implemented. `cmd/bridge/` is a standalone reverse proxy (stdlib only) that routes between real and honeypot Vault42 instances. Score-based detection (UA patterns, rate tracking, login failures, decoy page hits), admin API, Redis persistence, and fake login pages for scanner paths. Helm chart support via `bridge.enabled`. See [Bridge Deployment Guide](bridge.md). |
 | **OIDC auto-discovery for providers** | **Implemented, and a headline feature.** `internal/oauth2/oidc.go` fetches and caches `{issuer}/.well-known/openid-configuration`, and `internal/config/config.go` registers arbitrary providers from `VAULT_OIDC_PROVIDERS` plus `VAULT_OIDC_<NAME>_{ISSUER,CLIENT_ID,SCOPES}`. Google and GitHub remain hardcoded because they predate it. Section 2.11. |
