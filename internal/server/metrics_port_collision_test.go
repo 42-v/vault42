@@ -54,8 +54,15 @@ func TestTheMetricsListenerRefusesTheAPIPortUnderAnySpelling(t *testing.T) {
 	if sameListenAddress("127.0.0.1:9090", ":8080") {
 		t.Error("sameListenAddress refused a metrics address on a different port")
 	}
+	// Both sides are parsed, so both sides need the negative case. An
+	// unparseable API address is the one that matters in practice: it means the
+	// listener never bound, and reporting a collision against it would blame the
+	// metrics variable for someone else's typo.
 	if sameListenAddress("not-an-address", ":8080") {
-		t.Error("sameListenAddress treated an unparseable address as a collision")
+		t.Error("sameListenAddress treated an unparseable metrics address as a collision")
+	}
+	if sameListenAddress(":9090", "not-an-address") {
+		t.Error("sameListenAddress treated an unparseable API address as a collision")
 	}
 }
 

@@ -69,7 +69,7 @@
     {
       "package": "cmd/admin-gateway",
       "file": "cmd/admin-gateway/main.go",
-      "line": 175,
+      "line": 169,
       "occurrence": 1,
       "source": "\t\tfatalAfterDrain(ctx, auditLogger, \"admin-gateway: keystore init: %v\", err)",
       "bucket": "B",
@@ -79,7 +79,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 64,
+      "line": 65,
       "occurrence": 1,
       "source": "\t\tlog.Fatalf(\"bridge: config error: %v\", err)",
       "bucket": "B",
@@ -89,7 +89,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 69,
+      "line": 70,
       "occurrence": 1,
       "source": "\t\tlog.Fatalf(\"bridge: initialization error: %v\", err)",
       "bucket": "B",
@@ -99,7 +99,7 @@
     {
       "package": "cmd/bridge",
       "file": "cmd/bridge/main.go",
-      "line": 96,
+      "line": 97,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"bridge: listen error: %v\", err)",
       "bucket": "B",
@@ -129,7 +129,7 @@
     {
       "package": "cmd/recover",
       "file": "cmd/recover/main.go",
-      "line": 570,
+      "line": 584,
       "occurrence": 2,
       "source": "\t\treturn nil, 0, err",
       "bucket": "B",
@@ -139,7 +139,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 298,
+      "line": 291,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
@@ -149,7 +149,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 412,
+      "line": 405,
       "occurrence": 1,
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
@@ -159,7 +159,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 413,
+      "line": 406,
       "occurrence": 1,
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
@@ -489,7 +489,7 @@
     {
       "package": "internal/service",
       "file": "internal/service/mint.go",
-      "line": 392,
+      "line": 393,
       "occurrence": 1,
       "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",
@@ -549,7 +549,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 480,
+      "line": 473,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -559,7 +559,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 489,
+      "line": 482,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",

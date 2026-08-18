@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -210,5 +211,35 @@ func TestResetConfirm_ClearsTheLockoutOnEverySource(t *testing.T) {
 	}
 	if err := f.login(newPassword, deskIP); err != nil {
 		t.Errorf("still locked out from the second source %s after a completed reset: %v", deskIP, err)
+	}
+}
+
+// lockoutClearFailsCache is a cache that answers everything except the
+// generation advance, which is the write ClearAccountLockout needs to retire the
+// per-source counters.
+type lockoutClearFailsCache struct {
+	cache.Cache
+}
+
+func (c lockoutClearFailsCache) Increment(context.Context, string, time.Duration) (int64, error) {
+	return 0, errors.New("cache refused the counter")
+}
+
+// A reset whose lockout clear fails must still reset the password.
+//
+// The clear is best-effort by design: the user has proven ownership of the
+// mailbox and chosen a new credential, and refusing to store it because a cache
+// write failed would turn a degraded cache into an account nobody can recover.
+// The failure is logged rather than swallowed, so an operator can see that these
+// users are still serving out their lockout.
+func TestResetConfirm_SucceedsWhenTheLockoutClearFails(t *testing.T) {
+	f := newResetLockoutFixture(t, "the-old-passphrase-42")
+	f.h.cache = lockoutClearFailsCache{Cache: f.cache}
+
+	rec := f.resetPassword(t, "an-entirely-new-passphrase-42", "203.0.113.99")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset-confirm status = %d with a cache that refuses the generation advance, "+
+			"want 200: the credential is stored and the clear is best-effort", rec.Code)
 	}
 }

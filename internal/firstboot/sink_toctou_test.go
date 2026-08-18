@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -122,5 +123,77 @@ func TestOpenCredentialFileDoesNotLoseTheSymlinkSwapRace(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("the credential was written through a swapped symlink: %q", got)
+	}
+}
+
+// fakeFileInfo is an os.FileInfo whose mode and Stat_t the test chooses, so the
+// refusals checkCredentialSink makes on the descriptor can be exercised without
+// building a filesystem that produces each shape. Two of them cannot be built at
+// all on a Linux test host: a non-regular file cannot survive the O_NOFOLLOW
+// open (a directory fails with EISDIR first), and Sys() always returns a
+// *syscall.Stat_t, so the arm that tolerates a platform where it does not is
+// unreachable through the real call path.
+type fakeFileInfo struct {
+	os.FileInfo
+	mode os.FileMode
+	sys  any
+}
+
+func (f fakeFileInfo) Mode() os.FileMode { return f.mode }
+func (f fakeFileInfo) Sys() any          { return f.sys }
+
+// checkCredentialSink is the half of the open that runs against the descriptor,
+// and each of its refusals is a different way the credential would end up
+// readable by someone other than this process.
+func TestCheckCredentialSinkRefusals(t *testing.T) {
+	const path = "/run/first-boot/creds.env"
+	self := uint32(os.Getuid()) // #nosec G115 -- a uid fits a uint32 by definition
+
+	for _, c := range []struct {
+		name string
+		fi   os.FileInfo
+		want string
+	}{
+		{
+			name: "not a regular file",
+			fi:   fakeFileInfo{mode: os.ModeDir | 0o600, sys: &syscall.Stat_t{Uid: self, Nlink: 1}},
+			want: "is not a regular file",
+		},
+		{
+			name: "readable by others",
+			fi:   fakeFileInfo{mode: 0o644, sys: &syscall.Stat_t{Uid: self, Nlink: 1}},
+			want: "chmod 600 it",
+		},
+		{
+			name: "owned by another account",
+			fi:   fakeFileInfo{mode: 0o600, sys: &syscall.Stat_t{Uid: self + 1, Nlink: 1}},
+			want: "chown it",
+		},
+		{
+			name: "reachable through a second name",
+			fi:   fakeFileInfo{mode: 0o600, sys: &syscall.Stat_t{Uid: self, Nlink: 2}},
+			want: "hard links",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkCredentialSink(path, c.fi)
+			if err == nil {
+				t.Fatalf("checkCredentialSink accepted a sink that is %s", c.name)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error does not tell the operator what to do about it: %v", err)
+			}
+		})
+	}
+}
+
+// A platform whose FileInfo.Sys() is not a *syscall.Stat_t cannot be asked about
+// ownership or link count, and the mode checks above have already run. Accepting
+// is the only honest answer; refusing every sink on such a platform would be a
+// refusal about the platform rather than about the file.
+func TestCheckCredentialSinkToleratesAnUnknownStatShape(t *testing.T) {
+	fi := fakeFileInfo{mode: 0o600, sys: "not a Stat_t"}
+	if err := checkCredentialSink("/run/first-boot/creds.env", fi); err != nil {
+		t.Errorf("checkCredentialSink refused a private regular file for want of a Stat_t: %v", err)
 	}
 }
