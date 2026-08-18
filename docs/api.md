@@ -3790,6 +3790,8 @@ Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md`
 | `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
 | `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
 | `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
+| `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
 | `GET` | `/admin/sessions` | Session | `sessions:list` | Always | List active refresh families |
 | `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |

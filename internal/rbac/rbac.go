@@ -77,6 +77,24 @@ const (
 	// by the failed-login lockout.
 	// Route: POST /admin/users/{id}/unlock. Tier: operator.
 	UsersUnlock Permission = "users:unlock"
+	// UsersReset grants imposing and lifting a forced password reset on an end
+	// user account (auth.users.must_reset_password, migration 039). While the
+	// state holds, the account's stored password will not sign it in and the
+	// account holder is mailed a reset link instead.
+	//
+	// It sits at operator for the reason UsersLock does: it is reversible
+	// containment. Nothing is destroyed, no privilege is granted, and the
+	// account recovers by completing the reset it has already been mailed.
+	//
+	// One permission covers both directions rather than the two UsersLock and
+	// UsersUnlock use. The pair is one lever with one blast radius, and
+	// splitting it would only mean something if an admin were meant to impose
+	// the state without being able to lift it, which is the opposite of what a
+	// reversible control is for. Both halves of the lock pair sit at the same
+	// tier anyway, so that split buys nothing this does not.
+	// Routes: POST /admin/users/{id}/password-reset-required,
+	// DELETE /admin/users/{id}/password-reset-required. Tier: operator.
+	UsersReset Permission = "users:reset"
 	// UsersDelete grants erasure of an account and the identity, blob and
 	// session records that hang off it. This is the GDPR erasure path, it is
 	// not reversible, and it is why the role that holds it is the highest one.
@@ -314,6 +332,7 @@ var operatorPerms = map[Permission]bool{
 	KeysRotate:     true,
 	UsersLock:      true,
 	UsersUnlock:    true,
+	UsersReset:     true,
 	SessionsRevoke: true,
 	ClientsList:    true,
 	ClientsRead:    true,
@@ -387,7 +406,7 @@ func PermissionsForRole(role Role) []Permission {
 	var perms []Permission
 	all := []Permission{
 		KeysList, KeysRotate, KeysRevoke, AuditRead,
-		UsersList, UsersRead, UsersLock, UsersUnlock, UsersDelete, UsersImport,
+		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersDelete, UsersImport,
 		SessionsList, SessionsRevoke,
 		ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigRead, ConfigWrite, MetricsRead,

@@ -81,19 +81,20 @@ type mockUserRepo struct {
 	UnlockFn    func(ctx context.Context, id string) error
 }
 
-func (m *mockUserRepo) Create(context.Context, *model.User) error               { return nil }
-func (m *mockUserRepo) GetByID(context.Context, string) (*model.User, error)    { return nil, nil }
-func (m *mockUserRepo) GetByEmail(context.Context, string) (*model.User, error) { return nil, nil }
-func (m *mockUserRepo) Update(context.Context, *model.User) error               { return nil }
-func (m *mockUserRepo) UpdatePassword(context.Context, string, string) error    { return nil }
-func (m *mockUserRepo) IncrementFailedLogin(context.Context, string) error      { return nil }
-func (m *mockUserRepo) ResetFailedLogin(context.Context, string) error          { return nil }
-func (m *mockUserRepo) VerifyEmail(context.Context, string) error               { return nil }
-func (m *mockUserRepo) SetLastLogin(context.Context, string) error              { return nil }
-func (m *mockUserRepo) CreateImported(context.Context, *model.User) error       { return nil }
-func (m *mockUserRepo) ClearImportPending(context.Context, string) error        { return nil }
-func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error    { return nil }
-func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error   { return nil }
+func (m *mockUserRepo) Create(context.Context, *model.User) error                { return nil }
+func (m *mockUserRepo) GetByID(context.Context, string) (*model.User, error)     { return nil, nil }
+func (m *mockUserRepo) GetByEmail(context.Context, string) (*model.User, error)  { return nil, nil }
+func (m *mockUserRepo) Update(context.Context, *model.User) error                { return nil }
+func (m *mockUserRepo) UpdatePassword(context.Context, string, string) error     { return nil }
+func (m *mockUserRepo) IncrementFailedLogin(context.Context, string) error       { return nil }
+func (m *mockUserRepo) ResetFailedLogin(context.Context, string) error           { return nil }
+func (m *mockUserRepo) VerifyEmail(context.Context, string) error                { return nil }
+func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
+func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
+func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
+func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error     { return nil }
+func (m *mockUserRepo) SetMustResetPassword(context.Context, string, bool) error { return nil }
+func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 func (m *mockUserRepo) LockUntil(ctx context.Context, id string, until time.Time) error {
 	if m.LockUntilFn != nil {
 		return m.LockUntilFn(ctx, id, until)

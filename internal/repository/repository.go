@@ -85,9 +85,19 @@ type UserRepository interface {
 	// ClearImportPending marks an imported account as claimed after reset.
 	ClearImportPending(ctx context.Context, id string) error
 	// ClearMustResetPassword lifts a forced password reset once the account has
-	// set a new password. Setting the flag is an admin-plane write (migration
-	// 039), so this interface carries only the direction the web server takes.
+	// set a new password. It is the web server's statement: it stamps updated_at
+	// alongside the flag, which vault_app may write and vault_admin may not.
 	ClearMustResetPassword(ctx context.Context, id string) error
+	// SetMustResetPassword moves a forced password reset in either direction. It
+	// is the admin plane's statement, naming must_reset_password alone because
+	// that is the only column of the three the gateway's role holds here that
+	// this write needs; see the implementation for why the two directions do not
+	// share one method with the clear above.
+	//
+	// Imposing the state is the admin plane's alone whatever the call site:
+	// migration 039's trigger refuses the FALSE->TRUE transition from any other
+	// role, so a web-server caller compiles and is then refused by the database.
+	SetMustResetPassword(ctx context.Context, id string, required bool) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential

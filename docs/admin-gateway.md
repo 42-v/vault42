@@ -48,7 +48,7 @@ Three roles with strict hierarchy (hardcoded in `internal/rbac/`):
 | Role | Inherits | Additional Permissions |
 |------|----------|----------------------|
 | `viewer` | -- | List/read keys, audit, users, sessions, clients, config, metrics |
-| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, revoke sessions, create/revoke/rotate clients, write config |
+| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, force/withdraw a password reset, revoke sessions, create/revoke/rotate clients, write config |
 | `super_admin` | `operator` | Manage/create/revoke admin accounts |
 
 22 permissions total. Permission checks are Go code -- not database queries -- so SQL injection cannot escalate privileges.
@@ -117,6 +117,8 @@ All endpoints are prefixed with `/admin/`.
 | `GET` | `/admin/users/{id}` | Session + RBAC | `users:read` | Get user details |
 | `POST` | `/admin/users/{id}/lock` | Session + RBAC | `users:lock` | Lock user account |
 | `POST` | `/admin/users/{id}/unlock` | Session + RBAC | `users:unlock` | Unlock user account |
+| `POST` | `/admin/users/{id}/require-password-reset` | Session + RBAC | `users:reset` | Force a password reset and revoke the account's live sessions |
+| `POST` | `/admin/users/{id}/clear-password-reset` | Session + RBAC | `users:reset` | Withdraw a forced password reset |
 
 ### Session Management
 

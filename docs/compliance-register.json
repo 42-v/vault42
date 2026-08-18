@@ -3053,7 +3053,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/router.go:141",
+        "internal/adminapi/router.go:149",
         "internal/adminapi/middleware.go:189"
       ],
       "tests": [
@@ -4655,7 +4655,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:286",
+        "internal/audit/audit.go:295",
         "internal/audit/retention.go:84"
       ],
       "tests": [
@@ -5005,7 +5005,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:216"
+        "internal/audit/audit.go:225"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5026,7 +5026,7 @@
       "status": "Met",
       "evidence": [
         "migrations/001_initial_schema.sql:154",
-        "internal/audit/audit.go:210"
+        "internal/audit/audit.go:219"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -5085,7 +5085,7 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:117",
-        "internal/audit/audit.go:286"
+        "internal/audit/audit.go:295"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -5172,7 +5172,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/recovery.go:14",
-        "internal/audit/audit.go:232"
+        "internal/audit/audit.go:241"
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse"
@@ -6031,7 +6031,7 @@
       "requirement": "Content of Audit Records",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:216"
+        "internal/audit/audit.go:225"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -6127,7 +6127,7 @@
       "requirement": "Audit Record Generation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:210"
+        "internal/audit/audit.go:219"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -6451,7 +6451,7 @@
       "requirement": "Broken Access Control",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/router.go:141"
+        "internal/adminapi/router.go:149"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated",
@@ -6583,7 +6583,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-15",
       "evidence": [
-        "internal/audit/audit.go:210"
+        "internal/audit/audit.go:219"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore",
@@ -6631,7 +6631,7 @@
       "requirement": "Data minimisation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:286",
+        "internal/audit/audit.go:295",
         "internal/httputil/safelog.go:26"
       ],
       "tests": [
@@ -7142,14 +7142,14 @@
       "status": "Met",
       "evidence": [
         "internal/adminapi/router.go:37",
-        "internal/rbac/rbac.go:338"
+        "internal/rbac/rbac.go:357"
       ],
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer",
         "TestASVS_V4_1_1_RequireScopeEnforcesExactScope",
         "TestASVS_V4_1_3_ViewerHoldsNoMutatingPermission"
       ],
-      "notes": "Met: the admin plane's authorization model is internal/rbac, three strictly hierarchical roles and 29 permission constants hardcoded in Go so SQL injection cannot mint one, and 36 admin endpoints are permission-gated in adminapi.NewRouter. The gate is parsed out of the router rather than sampled, so a new mutating route wired without a permission fails the build. On the user plane, scope enforcement is exact-match rather than prefix."
+      "notes": "Met: the admin plane's authorization model is internal/rbac, three strictly hierarchical roles and 30 permission constants hardcoded in Go so SQL injection cannot mint one, and 38 admin endpoints are permission-gated in adminapi.NewRouter. The gate is parsed out of the router rather than sampled, so a new mutating route wired without a permission fails the build. On the user plane, scope enforcement is exact-match rather than prefix."
     },
     {
       "standard": "OWASP API Top 10",
