@@ -142,8 +142,13 @@ ships in the next release from `main`, and upgrading to it is the mitigation.
 ## Versioning and compatibility
 
 Vault42 follows [semantic versioning](https://semver.org/) from 1.0.0 onward. The version number
-also encodes the statement-coverage figure, which is why 1.0.0 is the first release that can
-claim a fully covered tree.
+also encodes the statement-coverage figure, which is why 1.0.0 could only be cut once that
+figure reached 100.00% of *reachable* statements. Raw statement coverage is lower, and
+deliberately so: the statements outside the numerator are frozen one by one in
+`.coverage-exclusions.json` with the source line and a justification, and the release gate
+asserts `covered + excluded == total` so the set cannot grow or rot unnoticed. Read
+[docs/test-coverage.md](docs/test-coverage.md) for the measured figure rather than inferring one
+from the version.
 
 **The public surface, where a breaking change costs a major bump:**
 
