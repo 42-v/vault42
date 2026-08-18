@@ -172,6 +172,31 @@ func TestTOTPDisable_AFailedRevokeIsReportedNotSwallowed(t *testing.T) {
 	}
 }
 
+// An enrolment whose containment failed must not hand back the new secret as
+// though the account were now clean. The secret is already stored, so a retry
+// is the caller's next move and it costs them nothing.
+func TestTOTPSetup_AFailedRevokeIsReportedNotSwallowed(t *testing.T) {
+	logs := captureLog(t)
+	p := &factorChangeProbe{failErr: errors.New("tokens db down")}
+	h := newRevokingTOTPHandler(t, p, &mocks.MockTOTPRepo{
+		GetByUserIDFn: func(context.Context, string) (*model.TOTPSecret, error) { return nil, nil },
+		CreateFn:      func(context.Context, *model.TOTPSecret) error { return nil },
+	})
+
+	rec := httptest.NewRecorder()
+	h.Setup(rec, setAuthContext(httptest.NewRequest(http.MethodPost, "/auth/2fa/totp/setup", nil), "user-1"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "otpauth://") {
+		t.Error("the enrolment secret was handed out after containment failed")
+	}
+	if !strings.Contains(logs.String(), "tokens db down") {
+		t.Errorf("the revoke error never reached the log; captured: %s", logs.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Backup codes
 // ---------------------------------------------------------------------------
@@ -249,6 +274,36 @@ func TestWebAuthnRegisterFinish_RevokesTheSubjectsSessions(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	p.wantRevoked(t, "user-1", "WebAuthn registration")
+}
+
+// The credential is written before the revoke, so a failure here is a torn
+// state either way. Reporting it is what tells the caller the enrolment did not
+// come with the clean slate it implies.
+func TestWebAuthnRegisterFinish_AFailedRevokeIsReportedNotSwallowed(t *testing.T) {
+	logs := captureLog(t)
+	p := &factorChangeProbe{failErr: errors.New("tokens db down")}
+	wan := newWanfidoWebAuthn(t)
+	auth := newWanfidoAuthenticator(t, "uncontained-enrolment")
+	sessions := newWanfidoSessionCache()
+	challenge := wanfidoRegistrationSession(t, wan, sessions, "user-1")
+
+	credRepo := &mocks.MockWebAuthnRepo{
+		ListByUserFn:        func(context.Context, string) ([]*model.WebAuthnCredential, error) { return nil, nil },
+		GetByCredentialIDFn: func(context.Context, []byte) (*model.WebAuthnCredential, error) { return nil, nil },
+		CreateFn:            func(context.Context, *model.WebAuthnCredential) error { return nil },
+	}
+	h := NewWebAuthnHandler(credRepo, newWanfidoUserRepo(), sessions, wan, p.authService(t), false)
+	h.SetAuditLog(newTestAuditLogger())
+
+	rec := httptest.NewRecorder()
+	h.RegisterFinish(rec, setAuthContext(auth.attestationRequest(t, challenge, 7), "user-1"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "tokens db down") {
+		t.Errorf("the revoke error never reached the log; captured: %s", logs.String())
+	}
 }
 
 // Deleting a credential is the response to a key that may have been cloned or
