@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -119,12 +120,26 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 
 	pseudo := s.Pseudonym(userID)
 
-	// For named blobs, delete existing before quota check so replacement doesn't double-count.
-	var rh string
+	// The row a named upload would replace is LOADED here, not deleted.
+	//
+	// It used to be deleted at this point, so that the quota below would not
+	// charge a replacement twice. The effect was that a replacement the quota
+	// then refused had already destroyed the blob it was replacing: an oversized
+	// backup came back as "409 quota_exceeded" and the previous backup was gone,
+	// with no second copy anywhere and nothing in the response saying so. The
+	// discount that delete existed to provide is arithmetic, and arithmetic does
+	// not have to happen before the decision it feeds.
+	var (
+		rh       string
+		existing *model.Blob
+	)
 	if refName != "" {
 		rh = s.refHash(refName, pseudo)
-		// Best-effort delete — ignore "not found" (first upload for this name).
-		_ = s.repo.DeleteByRefAndPseudonym(ctx, rh, pseudo)
+		var getErr error
+		existing, getErr = s.repo.GetByRefAndPseudonym(ctx, rh, pseudo)
+		if getErr != nil {
+			return nil, fmt.Errorf("blob replace lookup: %w", getErr)
+		}
 	}
 
 	// Check quota before processing
@@ -132,7 +147,15 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 	if err != nil {
 		return nil, fmt.Errorf("blob quota check: %w", err)
 	}
-	if quota.UsedCount >= s.config.MaxBlobsPerUser {
+	// A replacement already holds one slot and one copy of the bytes, so both
+	// are discounted before the incoming object is charged. This is what the
+	// pre-emptive delete was buying, without the data loss.
+	usedCount, usedBytes := quota.UsedCount, quota.UsedBytes
+	if existing != nil {
+		usedCount--
+		usedBytes -= existing.StoredBytes
+	}
+	if usedCount >= s.config.MaxBlobsPerUser {
 		return nil, ErrQuotaExceeded
 	}
 
@@ -151,7 +174,7 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 
 	// Check byte quota (using compressed+encrypted estimate: compressed size + AES overhead ~28 bytes)
 	estimatedStored := compressed.Len() + 28
-	if quota.UsedBytes+estimatedStored > s.config.QuotaBytes {
+	if usedBytes+estimatedStored > s.config.QuotaBytes {
 		return nil, ErrQuotaExceeded
 	}
 
@@ -202,11 +225,43 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 		CreatedAt:   time.Now(),
 	}
 
+	// The replaced row goes now, one step before the insert that supersedes it.
+	// Everything that can refuse this upload — both quotas, compression,
+	// entropy, both encryptions — has already run, so the only failure left
+	// after this line is the insert itself, and that one is compensated below.
+	if rh != "" {
+		// Best-effort delete — ignore "not found" (first upload for this name).
+		_ = s.repo.DeleteByRefAndPseudonym(ctx, rh, pseudo)
+	}
+
 	if err := s.repo.Create(ctx, blob); err != nil {
+		s.restoreReplaced(ctx, existing)
 		return nil, fmt.Errorf("blob store: %w", err)
 	}
 
 	return blob, nil
+}
+
+// restoreReplaced puts back the row a replacement deleted when the replacement
+// itself could not be written.
+//
+// Without it the last remaining window is real: the old blob is gone, the new
+// one never landed, and the caller is told only that their upload failed. The
+// row is still in memory because the quota discount needed it, so putting it
+// back costs one insert.
+//
+// If that insert fails too the object is genuinely lost, and this is the only
+// place that can say so — the caller's error describes the upload, not the
+// destruction of what it was replacing.
+func (s *BlobService) restoreReplaced(ctx context.Context, existing *model.Blob) {
+	if existing == nil {
+		return
+	}
+	if err := s.repo.Create(ctx, existing); err != nil {
+		log.Printf("ERROR: blob: FAILED to restore the replaced blob after the replacement write "+
+			"failed; the stored object is gone: id=%s pseudonym=%s: %v",
+			existing.ID, existing.PseudonymID, err)
+	}
 }
 
 // Download retrieves, decrypts, and decompresses a blob by ID.
