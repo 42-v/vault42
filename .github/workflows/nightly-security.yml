@@ -148,13 +148,31 @@ jobs:
         with:
           persist-credentials: false
 
+      # Two gaps this closes.
+      #
+      # `scanners` was unset, so this step ran Trivy's default (vuln only) while
+      # every document describing the security posture claimed misconfiguration
+      # and secret coverage. The chart templates and the Dockerfiles were never
+      # scanned by CI at all.
+      #
+      # TRIVY_FILE_PATTERNS is not cosmetic either. Trivy's file detection
+      # recognises `Dockerfile` and `Dockerfile.bridge` but not
+      # `Dockerfile.goreleaser.bridge` or `Dockerfile.goreleaser.admin-gateway`,
+      # so it silently found 11 config files where the tree has 13 and reported
+      # clean on the two it never opened. The action exposes no file-patterns
+      # input; Trivy reads every flag from a TRIVY_-prefixed environment
+      # variable, which is what this uses.
       - name: Run Trivy (filesystem)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_FILE_PATTERNS: dockerfile:Dockerfile.goreleaser.admin-gateway,dockerfile:Dockerfile.goreleaser.bridge
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: 1
+          trivyignores: .trivyignore.yaml
 
   trivy-image:
     name: Trivy Image Scan
