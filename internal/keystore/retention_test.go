@@ -265,3 +265,39 @@ func TestASweeperOverAKeyStoreThatWasNeverBuiltIsInert(t *testing.T) {
 	}
 	r.Stop()
 }
+
+// The same guard as TestStartingTheSchedulerTwiceStartsOneLoop in
+// rotation_test.go, for the reaper that did not have it. This one used
+// Store(true) where its four siblings use CompareAndSwap, so a second Start
+// started a second loop, and the second of the two to exit closed an
+// already-closed doneCh: a panic from a deferred call in a background
+// goroutine, which no handler can catch.
+//
+// Parking the first sweep inside CleanupExpired is what makes the extra loop
+// observable without waiting for that panic to land.
+func TestStartingTheKeyReaperTwiceStartsOneLoop(t *testing.T) {
+	reaper := newStubReaper()
+	reaper.block = make(chan struct{})
+	r := NewRetention(reaper)
+
+	r.Start(context.Background())
+	reaper.awaitEntry(t)
+
+	r.Start(context.Background())
+	select {
+	case <-reaper.entered:
+		close(reaper.block)
+		t.Fatal("a second Start started a second reap loop: both share one doneCh, and the " +
+			"second to exit closes an already-closed channel")
+	case <-time.After(time.Second):
+	}
+
+	close(reaper.block)
+	r.Stop()
+
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Done is not closed, so Stop returned before the loop had exited")
+	}
+}
