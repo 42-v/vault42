@@ -144,8 +144,44 @@ type RefreshTokenRepository interface {
 	RevokeAll(ctx context.Context) error
 	// CountActiveFamilies returns the number of distinct active (non-revoked, non-expired) token families for a user.
 	CountActiveFamilies(ctx context.Context, userID string) (int, error)
+	// ListActiveFamilies returns one row per active token family for a user,
+	// newest first. It is the listing counterpart of CountActiveFamilies and
+	// shares its definition of "active", so a session the cap counts is a
+	// session the user can see and end.
+	ListActiveFamilies(ctx context.Context, userID string) ([]*ActiveFamily, error)
 	// DeleteExpired removes expired tokens that have already been used or revoked.
 	DeleteExpired(ctx context.Context) (int64, error)
+}
+
+// ActiveFamily is one live refresh-token family: the unit a user's session
+// actually is.
+//
+// GET /user/sessions used to list devices instead. A device is a fingerprint,
+// not a session: findOrCreateDevice is explicitly non-critical and returns ""
+// when its lookup and insert both fail, so a family can be stored with no device
+// at all — live, refreshable, and invisible to the only page that lists sessions.
+// Two families can also share one fingerprint, and a device can outlive every
+// family it ever carried.
+type ActiveFamily struct {
+	// FamilyID identifies the session. It is what DELETE /user/sessions/{id}
+	// addresses.
+	FamilyID string
+	// DeviceID is the device the newest live generation was bound to, or empty
+	// when device resolution failed at login. Empty is a session with no device
+	// metadata, never a session that does not exist.
+	DeviceID string
+	// ClientID is the service client that requested the session, when one was
+	// named at login.
+	ClientID string
+	// CreatedAt is the family's birth date (family_created_at), which the
+	// absolute session lifetime is measured from and which a rotation cannot
+	// move.
+	CreatedAt time.Time
+	// LastUsedAt is when the newest live generation was issued, i.e. the last
+	// time this session was refreshed.
+	LastUsedAt time.Time
+	// ExpiresAt is when the newest live generation stops being accepted.
+	ExpiresAt time.Time
 }
 
 // DeviceRepository manages device fingerprint persistence.

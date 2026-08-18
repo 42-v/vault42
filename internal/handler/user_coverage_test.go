@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
 )
@@ -110,14 +111,17 @@ func TestProfile_AllFields(t *testing.T) {
 // Sessions edge cases
 // ---------------------------------------------------------------------------
 
+// The listing's own read is the one that must fail loudly: it is the source of
+// the sessions themselves, where the device join is only their labels (see
+// TestSessionsSurvivesADeviceLookupFailure).
 func TestSessions_RepoError(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		ListByUserFn: func(ctx context.Context, userID string) ([]*model.Device, error) {
+	tokens := &mocks.MockRefreshTokenRepo{
+		ListActiveFamiliesFn: func(context.Context, string) ([]*repository.ActiveFamily, error) {
 			return nil, errors.New("db error")
 		},
 	}
 
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
+	h := NewUserHandler(&mocks.MockUserRepo{}, &mocks.MockDeviceRepo{}, tokens, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/user/sessions", nil)
 	req = setAuthContext(req, "user-123")
