@@ -39,8 +39,10 @@ import (
 // with where each half of its security context comes from.
 type pssWorkload struct {
 	template string
-	// inheritsValues is true when the workload takes .Values.podSecurityContext
-	// and .Values.securityContext rather than declaring its own.
+	// inheritsValues records how the workload got its context when this list was
+	// written. It is not what the assertion keys on -- resolveSecurityContext
+	// follows .Values and _helpers.tpl alike -- but it says which shape a reader
+	// should expect to find.
 	inheritsValues bool
 	note           string
 }
@@ -120,32 +122,66 @@ func TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile(t *testing.T) {
 				w.template, w.note)
 		}
 
-		if w.inheritsValues {
-			if !strings.Contains(src, ".Values.podSecurityContext") {
-				t.Errorf("PSS restricted: %s no longer applies .Values.podSecurityContext, so the "+
-					"shared runAsNonRoot and seccompProfile do not reach it (%s)", w.template, w.note)
-			}
-			if !strings.Contains(src, ".Values.securityContext") {
-				t.Errorf("PSS restricted: %s no longer applies .Values.securityContext, so the "+
-					"shared allowPrivilegeEscalation and capability drop do not reach it (%s)",
-					w.template, w.note)
-			}
-			continue
-		}
+		podSrc, ctrSrc := resolveSecurityContext(t, src, values)
 
 		for control, why := range restrictedPodControls {
-			if !strings.Contains(src, control) {
-				t.Errorf("PSS restricted: %s declares its own security context and does not set %q "+
-					"-- %s (%s)", w.template, control, why, w.note)
+			if !strings.Contains(podSrc, control) {
+				t.Errorf("PSS restricted: nothing reaching %s sets %q -- %s (%s)",
+					w.template, control, why, w.note)
 			}
 		}
 		for control, why := range restrictedContainerControls {
-			if !strings.Contains(src, control) {
-				t.Errorf("PSS restricted: %s declares its own security context and does not set %q "+
-					"-- %s (%s)", w.template, control, why, w.note)
+			if !strings.Contains(ctrSrc, control) {
+				t.Errorf("PSS restricted: nothing reaching %s sets %q -- %s (%s)",
+					w.template, control, why, w.note)
 			}
 		}
 	}
+}
+
+// resolveSecurityContext returns the text a workload's pod and container
+// security contexts really come from.
+//
+// A chart can supply them three ways and all three are legitimate: inline in the
+// template, through .Values, or through a named helper in _helpers.tpl. An
+// assertion that only understands one of the three does not check the property,
+// it checks the spelling -- and it fails the day a chart is refactored, which is
+// the worst moment for a security gate to cry wolf.
+func resolveSecurityContext(t *testing.T, template, values string) (pod, container string) {
+	t.Helper()
+
+	pod, container = template, template
+	if strings.Contains(template, ".Values.podSecurityContext") {
+		pod += "\n" + values
+	}
+	if strings.Contains(template, ".Values.securityContext") {
+		container += "\n" + values
+	}
+	if strings.Contains(template, `include "vault.podSecurityContext"`) {
+		pod += "\n" + chartHelper(t, "vault.podSecurityContext")
+	}
+	if strings.Contains(template, `include "vault.containerSecurityContext"`) {
+		container += "\n" + chartHelper(t, "vault.containerSecurityContext")
+	}
+	return pod, container
+}
+
+// chartHelper returns the body of one define block in _helpers.tpl, or "" when
+// the chart has no such helper.
+func chartHelper(t *testing.T, name string) string {
+	t.Helper()
+	src := readChartFile(t, "templates/_helpers.tpl")
+	start := strings.Index(src, `define "`+name+`"`)
+	if start < 0 {
+		t.Errorf("PSS restricted: a template includes %q, which _helpers.tpl does not define. "+
+			"Helm would fail to render; this says so with the control that goes missing.", name)
+		return ""
+	}
+	end := strings.Index(src[start:], "{{- end }}")
+	if end < 0 {
+		return src[start:]
+	}
+	return src[start : start+end]
 }
 
 // TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege is the
@@ -250,6 +286,42 @@ func TestK8sPSS_Restricted_TheDeviationsAreExactlyTheOnesRecorded(t *testing.T) 
 		if !strings.Contains(src, ".enabled }}") {
 			t.Errorf("PSS restricted: charts/vault/templates/%s is no longer gated on an enabled "+
 				"flag, so it may render in a default install", template)
+		}
+	}
+}
+
+// TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded is the closure
+// tripwire on the scope of the claim.
+//
+// postgres, honeypot-postgres and mailpit are excluded from the PSS claim
+// because they do not meet the profile and are dev-only and off by default.
+// That is an honest exclusion only while it is true. The day one of them is
+// hardened, the register should stop excluding it rather than keep a permanent
+// carve-out that quietly understates the chart.
+func TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+
+	for _, template := range []string{"postgres.yaml", "honeypot-postgres.yaml", "mailpit.yaml"} {
+		src := readChartFile(t, "templates/"+template)
+		pod, ctr := resolveSecurityContext(t, src, values)
+
+		hardened := true
+		for control := range restrictedPodControls {
+			if !strings.Contains(pod, control) {
+				hardened = false
+			}
+		}
+		for control := range restrictedContainerControls {
+			if !strings.Contains(ctr, control) {
+				hardened = false
+			}
+		}
+		if hardened {
+			t.Errorf("PSS restricted: charts/vault/templates/%s now satisfies the profile. The "+
+				"register excludes it by name from the Kubernetes PSS claim on the basis that it "+
+				"does not. Drop the exclusion from the PSS rows and from meta.scope.out_of_scope, "+
+				"and delete this entry -- an exclusion kept past its reason understates the chart "+
+				"and reads, to anyone who checks, like a claim nobody maintains.", template)
 		}
 	}
 }

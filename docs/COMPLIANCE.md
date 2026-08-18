@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **404 requirements in scope across 9 standards: 329 Met, 29 Accepted Risk,
+> **404 requirements in scope across 9 standards: 332 Met, 26 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -104,22 +104,23 @@ The per-AAL reauthentication timeouts live under section 2, beneath each
 assurance level, not under section 5. Anything citing §5.2.1, §5.2.2 or §5.2.3
 for those timeouts is citing sections that do not exist.
 
-One requirement got **stricter** and vault42 does **not** meet it. Rev 4
-§3.1.1.2 raises the single-factor password floor from 8 characters to 15.
+One requirement got **stricter** and vault42 now meets it, after a correction.
+Rev 4 §3.1.1.2 raises the single-factor password floor from 8 characters to 15.
 Through 1.0.0 this paragraph said 15 "is the minimum vault42 has enforced since
-0.4", and `README.md` said the same. It is not. 15 is the shipped **default**
-(`internal/config/config.go:403`); the enforced floor -- the value below which a
-non-dev deployment refuses to start -- is **8**
-(`passwordMinLengthFloor`, `internal/config/config.go:772`, checked at `:605`),
-and the dev profile is exempt from it entirely. A production deployment may
-legally set `VAULT_PASSWORD_MIN_LENGTH=8`.
+0.4", and `README.md` said the same. That was false: 15 was the shipped
+**default** and the enforced floor was **8**, with the dev profile exempt from
+any floor at all. The row was downgraded to an accepted risk, CR-31, rather than
+the claim being softened.
 
-That row is now an accepted risk, **CR-31**, rather than Met. ASVS V6.2.1, whose
-text requires 8 and recommends 15, remains genuinely Met.
+The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:804`),
+a non-dev profile refuses to start below it (`:622`), and dev carries a lower
+floor of 8 (`:812`) rather than none -- 8 being the figure §3.1.1.1 requires a
+verifier to accept, so no profile now takes a four-character password. The row
+is Met and CR-31 is closed.
 `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` reads both
-numbers out of `config.go` and fails if this document, `README.md` or the
-register state anything else -- and flips the row back to Met the day the floor
-reaches 15.
+numbers out of `config.go` and asserts this document, `README.md` and the
+register state them, so the prose cannot outlive the constant in either
+direction.
 
 One requirement got **harder**: Rev 4 §2.2.3 states that *"a definite
 reauthentication overall timeout SHALL be established, which SHOULD be no more
@@ -189,18 +190,18 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 205 | 16 | 42 | 263 |
-| NIST SP 800-63B-4 | 26 | 3 | 2 | 31 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 206 | 15 | 42 | 263 |
+| NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 9 | 1 | 0 | 10 |
-| NIST SP 800-218 (SSDF v1.1) | 16 | 1 | 0 | 17 |
+| NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 9 | 1 | 0 | 10 |
-| **Total** | **329** | **29** | **46** | **404** |
+| **Total** | **332** | **26** | **46** | **404** |
 
-The 29 Accepted Risk rows collapse to **17 distinct accepted risks**: several
+The 26 Accepted Risk rows collapse to **14 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -279,12 +280,9 @@ neither namespace.
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
 | **CR-25** | Low | DPoP proofs are validated thoroughly but no token is sender-constrained, because no issuance path sets `cnf.jkt`. Separately, the decrypted blob plaintext and label are not zeroed (`internal/service/blob.go:243,267,307`). The signing-key PEM **is** zeroed; this row used to say otherwise. | RFC 9449 / RFC 9700, sender-constrained access tokens |
 | **CR-26** | Low | Neither blob download path sets `Content-Disposition`, so nothing tells a browser that a blob navigated to directly is a download rather than a document. `nosniff` and owner-scoped reads bound it. | ASVS V3.2.1, V5.1.1, V5.4.1 |
-| **CR-27** | Low | Neither Content-Security-Policy declares `object-src 'none'` or `base-uri 'none'`, which V3.4.3 names as the minimum. `default-src` does not cover `base-uri`. A two-token fix, and the one item here that should not survive to 1.1. | ASVS V3.4.3 |
 | **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
 | **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
 | **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
-| **CR-31** | Medium | The 15-character password minimum is the shipped **default**; the enforced floor is 8 outside dev, and the dev profile has no floor. This document said "the minimum vault42 has enforced since 0.4". It was not. | 800-63B-4 §3.1.1.2 |
-| **CR-32** | Low | Dependency versions are pinned and scanned nightly, but nothing updates them: there is no dependabot or Renovate configuration. A scanner reports a vulnerable dependency; it does not raise the pull request that fixes it. | SSDF PO.3.2 |
 | **CR-33** | Low | The admin gateway sets `hostNetwork: true`, which the Pod Security Standards forbid at baseline. It is load-bearing: `LocalOnly` means the node's loopback, and inside a pod namespace loopback is the pod's. Every other restricted control is met. | Kubernetes PSS host namespaces |
 
 ### The three standards added in 1.0.0
@@ -330,6 +328,21 @@ of the list:
 - **OWASP Top 10:2021.** The register carries the 2025 edition. Adding 2021
   alongside it would recreate the two-editions-at-once confusion the ASVS
   4.0.3 -> 5.0.0 migration already cost this project.
+
+### Closed since this document was first written
+
+Three accepted risks closed on the merge that integrated the code work, and in
+each case the test written to fail *on closure* is what forced the row to move
+rather than a person remembering to.
+
+| ID | What closed it | The test that fired |
+|---|---|---|
+| **CR-27** | Both policies now declare `object-src 'none'` and `base-uri 'none'` (`internal/middleware/security_headers.go:18-19`). | `TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims` |
+| **CR-31** | `passwordMinLengthFloor` is now **15**, not 8, and the dev profile no longer has *no* floor -- it has a lower one of 8, which is itself the figure §3.1.1.1 requires a verifier to accept. | `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` |
+| **CR-32** | `.github/dependabot.yml` exists and covers gomod, npm and github-actions. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
+
+Full text for each, including what was accepted while it was open, is in
+`retired_risks` in the register.
 
 ---
 

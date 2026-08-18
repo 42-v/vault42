@@ -198,12 +198,31 @@ func TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay(t *testing.T)
 			"package default would be refused by its own validator", shipped, floor)
 	}
 
-	// The floor is only a floor outside dev. That exemption is deliberate and
-	// documented, and it is part of what the docs have to say.
-	if !strings.Contains(src, "c.Profile != ProfileDev && c.PasswordMinLength < passwordMinLengthFloor") {
-		t.Error("3.1.1.2: the floor check no longer has the shape the register describes " +
-			"(non-dev profiles only). If the dev exemption is gone that is an improvement, but " +
-			"the register row says otherwise and must be updated.")
+	// Every profile has a floor; dev's is merely lower. That distinction is the
+	// one the register row turns on, so it is asserted rather than assumed: the
+	// original defect was a dev profile with no floor at all, which accepted a
+	// four-character password.
+	if !strings.Contains(src, "if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor") {
+		t.Error("3.1.1.2: the floor check no longer resolves a per-profile floor through " +
+			"passwordFloorFor. If the shape changed, read what it does now and update the register " +
+			"row to match; the row's claim is that no profile is exempt from having a floor.")
+	}
+	devMatch := regexp.MustCompile(`devPasswordMinLengthFloor\s*=\s*(\d+)`).FindStringSubmatch(src)
+	if devMatch == nil {
+		t.Error("3.1.1.2: devPasswordMinLengthFloor is gone. Either dev now shares the published " +
+			"floor, which is stricter and the row should say so, or dev has no floor at all, which " +
+			"is the defect this constant replaced.")
+	} else {
+		dev, convErr := strconv.Atoi(devMatch[1])
+		if convErr != nil || dev < 8 {
+			t.Errorf("3.1.1.2: the dev floor is %q. Section 3.1.1.1 requires a verifier to accept "+
+				"memorized secrets of at least 8 characters, so a build below that is not "+
+				"exercising the password path the deployment profiles run.", devMatch[1])
+		}
+		if dev > floor {
+			t.Errorf("3.1.1.2: the dev floor (%d) is above the published floor (%d), which inverts "+
+				"the relationship the register describes", dev, floor)
+		}
 	}
 
 	// Now the documents. Each has to state the enforced floor, not just the
@@ -249,7 +268,7 @@ func TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay(t *testing.T)
 		t.Fatal("3.1.1.2: the NIST SP 800-63B-4 3.1.1.2 row is gone from the register")
 	}
 
-	t.Logf("3.1.1.2: shipped default %d, enforced floor %d (dev exempt)", shipped, floor)
+	t.Logf("3.1.1.2: shipped default %d, enforced floor %d, dev floor %s", shipped, floor, devFloorLabel(devMatch))
 }
 
 // --- ASVS V1.3.7 — template injection ---
@@ -269,16 +288,42 @@ func TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay(t *testing.T)
 // permission achieves is structural, in an email body, which they could already
 // rewrite wholesale.
 func TestASVS_V1_3_7_AdminTemplateOverridesAreValidatedBeforeCompilation(t *testing.T) {
-	mailer := readCodeOnly(t, "internal/email/mailer.go")
-	if !strings.Contains(mailer, "template.New") || !strings.Contains(mailer, ".Parse(") {
-		t.Fatal("V1.3.7: internal/email/mailer.go no longer compiles a template from a string. " +
-			"If overrides are gone this requirement's applicability changed; update the register " +
-			"row rather than deleting this test.")
+	// The parse moved out of internal/email/mailer.go and into
+	// email.CompileOverride, and it got stronger on the way: validation used to
+	// run on the admin write path, so a row that reached the table by any other
+	// route was compiled unvalidated on every send. It now runs wherever a
+	// stored override is loaded.
+	branding := readCodeOnly(t, "internal/email/branding.go")
+	if !strings.Contains(branding, "func CompileOverride(ov TemplateOverride)") {
+		t.Fatal("V1.3.7: email.CompileOverride is gone. It is the only constructor for a " +
+			"CompiledOverride, which is what makes possession of one proof that the content was " +
+			"validated. If overrides are gone this requirement's applicability changed; update the " +
+			"register row rather than deleting this test.")
+	}
+	if !strings.Contains(branding, "template.New") || !strings.Contains(branding, ".Parse(") {
+		t.Fatal("V1.3.7: nothing parses an admin-supplied string into a template any more")
+	}
+
+	// Validation before the parse, not after it and not somewhere else. The
+	// order is the requirement: "any untrusted input being included dynamically
+	// during template creation must be sanitized or strictly validated".
+	validateAt := strings.Index(branding, "validateTemplate([]byte(ov.HTMLContent))")
+	parseAt := strings.Index(branding, `template.New("subject")`)
+	if validateAt < 0 {
+		t.Error("V1.3.7: CompileOverride no longer validates the HTML body before compiling it")
+	}
+	if !strings.Contains(branding, "validateTemplate([]byte(ov.Subject))") {
+		t.Error("V1.3.7: CompileOverride no longer validates the subject line, which is compiled as " +
+			"a template of its own")
+	}
+	if validateAt >= 0 && parseAt >= 0 && validateAt > parseAt {
+		t.Error("V1.3.7: validation now runs after the parse. An unvalidated admin-supplied string " +
+			"reaching html/template is the thing this row claims cannot happen.")
 	}
 
 	// html/template, not text/template. This is the difference between a
 	// structural injection and an unescaped one.
-	for _, rel := range []string{"internal/email/mailer.go", "internal/email/templates.go"} {
+	for _, rel := range []string{"internal/email/branding.go", "internal/email/templates.go"} {
 		src := readProductionSource(t, rel)
 		if !strings.Contains(src, `"html/template"`) {
 			t.Errorf("V1.3.7: %s no longer imports html/template", rel)
@@ -289,14 +334,17 @@ func TestASVS_V1_3_7_AdminTemplateOverridesAreValidatedBeforeCompilation(t *test
 		}
 	}
 
-	// Validated on both paths that reach compileOverride: storage and preview.
-	if !strings.Contains(readCodeOnly(t, "internal/adminapi/email.go"), "email.ValidateTemplateContent(req.Subject, req.HTMLContent)") {
-		t.Error("V1.3.7: the storage path no longer validates template content before writing it. " +
-			"A stored override is compiled on every send, so an unvalidated one is compiled " +
-			"forever rather than once.")
+	// Both paths that can produce a compiled override reach it through the
+	// validating constructor: the load path and the admin write path.
+	if !strings.Contains(readCodeOnly(t, "internal/service/email_overrides.go"), "vaultemail.CompileOverride(") {
+		t.Error("V1.3.7: the override load path no longer compiles through CompileOverride, so a " +
+			"stored template that never passed the admin write path is compiled unvalidated on " +
+			"every send")
 	}
-	if !strings.Contains(readCodeOnly(t, "internal/email/preview.go"), "ValidateTemplateContent(subject, htmlContent)") {
-		t.Error("V1.3.7: the preview path no longer validates template content before compiling it")
+	if !strings.Contains(readCodeOnly(t, "internal/adminapi/email.go"), "email.ValidateTemplateContent(req.Subject, req.HTMLContent)") {
+		t.Error("V1.3.7: the admin write path no longer validates before storing. The load path " +
+			"catches it now, but rejecting at the boundary is what gives the operator an error " +
+			"instead of a silently dead template.")
 	}
 
 	// And the route is gated by a permission the lower roles do not hold.
@@ -390,4 +438,12 @@ func registerRowNotes(t *testing.T, standard, requirementID string) string {
 	}
 	t.Fatalf("register row %s %s no longer exists; this gate has no subject", standard, requirementID)
 	return ""
+}
+
+// devFloorLabel renders the dev floor for the log line, or says it is absent.
+func devFloorLabel(m []string) string {
+	if m == nil {
+		return "absent"
+	}
+	return m[1]
 }

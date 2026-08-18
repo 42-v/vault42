@@ -170,32 +170,55 @@ func TestSSDF_800_218_GovernanceArtifactsExist(t *testing.T) {
 	}
 }
 
-// TestSSDF_800_218_DependencyUpdateAutomationIsAbsent is the row the register
-// does not claim, asserted so the claim cannot drift into existence quietly.
+// TestSSDF_800_218_DependencyUpdateAutomationIsAutomated replaces the assertion
+// that this practice was not performed.
 //
-// PO.3.2 asks that the toolchain be configured to improve security, and an
-// automated dependency-update tool is the practice this repository does not
-// have: there is no dependabot configuration and no Renovate configuration.
-// Scheduled scanning finds a vulnerable dependency; it does not update one. The
-// register records that difference rather than letting the nightly scan stand
-// in for it.
-func TestSSDF_800_218_DependencyUpdateAutomationIsAbsent(t *testing.T) {
+// PO.3.2 asks that the toolchain be configured to improve the security of the
+// software it produces, and an automated dependency-update tool was the one
+// piece missing: nightly govulncheck and Trivy report a vulnerable dependency,
+// and neither raises the pull request that fixes it. The register carried that
+// distinction as CR-32 rather than letting the scanners stand in for an
+// updater, and the test written to fail the day a configuration appeared is
+// what moved the row.
+//
+// It now asserts the configuration exists and covers the ecosystems this
+// repository actually has. A dependabot file that watches only GitHub Actions
+// would satisfy "a file exists" while leaving the Go and pnpm dependency trees
+// exactly as unmanaged as before.
+func TestSSDF_800_218_DependencyUpdateAutomationIsAutomated(t *testing.T) {
 	root := repoRoot(t)
 
-	present := []string{}
+	var config string
 	for _, candidate := range []string{
 		".github/dependabot.yml", ".github/dependabot.yaml",
 		"renovate.json", ".renovaterc", ".renovaterc.json", ".github/renovate.json",
 	} {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(candidate))); err == nil {
-			present = append(present, candidate)
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(candidate)))
+		if err == nil {
+			config = string(raw)
+			t.Logf("SSDF PO.3.2: dependency updates configured by %s", candidate)
+			break
 		}
 	}
+	if config == "" {
+		t.Fatal("SSDF PO.3.2: no dependency-update configuration exists. The register carries this " +
+			"practice as Met on the strength of one; a scheduled scan is not an updater, because it " +
+			"reports a vulnerable dependency and does not raise the pull request that fixes it.")
+	}
 
-	if len(present) > 0 {
-		t.Errorf("SSDF PO.3.2: %v now exists. The register carries this practice as not performed, "+
-			"with the reasoning that a scheduled scan reports a vulnerable dependency and does not "+
-			"update it. Move the row and delete this assertion.", present)
+	// The ecosystems the repository has, each with what goes unmanaged without
+	// it. github-actions matters here specifically: every third-party action is
+	// pinned to a commit SHA, which is the right thing and also the thing that
+	// makes a human upgrade unlikely to happen by hand.
+	for _, ecosystem := range []struct{ token, why string }{
+		{"gomod", "the Go module graph, which is where govulncheck's findings live"},
+		{"npm", "the pnpm workspace behind web/ and packages/"},
+		{"github-actions", "the SHA-pinned third-party actions, which nobody bumps by hand"},
+	} {
+		if !strings.Contains(config, ecosystem.token) {
+			t.Errorf("SSDF PO.3.2: the dependency-update configuration does not cover %q, so %s is "+
+				"still updated only when somebody notices", ecosystem.token, ecosystem.why)
+		}
 	}
 }
 
