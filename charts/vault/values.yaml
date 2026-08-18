@@ -438,6 +438,14 @@ honeypotInstance:
   postgres:
     # -- Honeypot PostgreSQL PVC storage size
     storage: 1Gi
+    # -- Honeypot PostgreSQL resource requests/limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 # ---- Admin Gateway ----
 # Local-only mTLS admin gateway with RBAC for operator access.
