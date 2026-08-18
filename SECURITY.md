@@ -65,14 +65,17 @@ welcome.
 
 ## Verifying releases
 
-Every release is signed with keyless cosign (Sigstore, OIDC identity, no long-lived key).
-Nothing is trustworthy that you have not checked, so check it. Four artifact classes ship:
+Every release is signed with keyless cosign (Sigstore, OIDC identity, no long-lived key), and
+every published artifact additionally carries a SLSA provenance attestation assembled and signed
+by GitHub's attestation service and logged to Rekor. Nothing is trustworthy that you have not
+checked, so check it. Five artifact classes ship:
 
 | Artifact | Where | Signature |
 |---|---|---|
-| `vault42`, `vault42-admin-gateway`, `vault42-bridge` images | `ghcr.io/42-v/…:<version>` | cosign keyless, plus buildx SLSA provenance and SBOM attestations |
-| Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest |
-| Binaries and per-archive SBOMs | GitHub release assets | covered by the checksum file |
+| `vault42`, `vault42-admin-gateway`, `vault42-bridge` images | `ghcr.io/42-v/…:<version>` | cosign keyless, plus a signed provenance attestation stored beside the image in GHCR |
+| Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest, plus a signed provenance attestation stored beside it |
+| Release archives | GitHub release assets | listed in the checksum file, plus a signed provenance attestation whose offline bundle ships as `vault42_<version>.intoto.jsonl` |
+| Per-archive SBOMs, SPDX and CycloneDX | GitHub release assets | each SPDX document carries its own attestation naming the archive it describes |
 | `vault42_<version>_SHA256SUMS` | GitHub release assets | detached cosign signature (`.sig`) plus its Fulcio certificate (`.pem`) |
 
 ```bash
@@ -98,14 +101,28 @@ cosign verify-blob "vault42_${VERSION}_SHA256SUMS" \
   --certificate-oidc-issuer "$ISSUER"
 sha256sum -c "vault42_${VERSION}_SHA256SUMS" --ignore-missing
 
-# SBOM and SLSA provenance for the images ride along as buildx attestations.
+# SLSA provenance: which workflow, at which commit, built this.
+gh attestation verify "oci://ghcr.io/42-v/vault42:$VERSION" --repo 42-v/vault42
+gh attestation verify "vault42_${VERSION}_linux_amd64.tar.gz" --repo 42-v/vault42
+
+# The same check offline, from the archive and the shipped bundle alone.
+gh attestation verify "vault42_${VERSION}_linux_amd64.tar.gz" \
+  --bundle "vault42_${VERSION}.intoto.jsonl" --repo 42-v/vault42
+
+# BuildKit also embeds its own provenance predicate and SBOM in each image index.
 docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .SBOM }}'
 docker buildx imagetools inspect "ghcr.io/42-v/vault42:$VERSION" --format '{{ json .Provenance }}'
 ```
 
 Verify the checksum file's signature **before** trusting `sha256sum -c`: an attacker who can
-replace a binary can replace an unsigned checksum file alongside it. Each release archive also
-ships its own `.sbom.json` next to it.
+replace a binary can replace an unsigned checksum file alongside it. Each release archive ships
+two SBOMs next to it, `.spdx.sbom.json` and `.cdx.sbom.json`.
+
+Prefer `gh attestation verify` over the `docker buildx imagetools` output. What BuildKit embeds
+is an unsigned predicate produced by the same process that ran the build, with nothing
+countersigning it and no transparency-log entry, so it describes a build without establishing
+who performed it. The attestation `gh` reads is signed under the release workflow's OIDC
+identity and logged to Rekor, which is the difference between reading a claim and checking one.
 
 A `cosign verify` that fails, or a certificate identity that is not
 `.github/workflows/release.yml` in this repository at a `v*` tag, means the artifact did not
@@ -125,8 +142,13 @@ ships in the next release from `main`, and upgrading to it is the mitigation.
 ## Versioning and compatibility
 
 Vault42 follows [semantic versioning](https://semver.org/) from 1.0.0 onward. The version number
-also encodes the statement-coverage figure, which is why 1.0.0 is the first release that can
-claim a fully covered tree.
+also encodes the statement-coverage figure, which is why 1.0.0 could only be cut once that
+figure reached 100.00% of *reachable* statements. Raw statement coverage is lower, and
+deliberately so: the statements outside the numerator are frozen one by one in
+`.coverage-exclusions.json` with the source line and a justification, and the release gate
+asserts `covered + excluded == total` so the set cannot grow or rot unnoticed. Read
+[docs/test-coverage.md](docs/test-coverage.md) for the measured figure rather than inferring one
+from the version.
 
 **The public surface, where a breaking change costs a major bump:**
 
@@ -140,9 +162,16 @@ claim a fully covered tree.
 | Client packages | `@vault42/vue`, `Vault42.AspNetCore`, `Vault42.Blazor`. |
 
 **Not covered, and explicitly not stable:** every Go package lives under `internal/`, so there is
-no importable Go API and none is promised. `VAULT_DPOP_ENABLED` is experimental (see
-[docs/security.md](docs/security.md) AR-10) and may change or be removed in a minor release. The
-honeypot bridge's scoring heuristics are tuning, not contract.
+no importable Go API and none is promised. The honeypot bridge's scoring heuristics are tuning,
+not contract.
+
+`VAULT_DPOP_ENABLED` is covered by the environment-variable row above rather than carved out of
+it: issuance stamps `cnf.jkt` and every authenticated route enforces it, so a deployment can
+depend on the flag meaning what it says. What it does not reach is worth knowing before you
+report it. Refresh tokens are not sender-bound, so redeeming a stolen one is not a DPoP bypass;
+and there is no `DPoP-Nonce`, so proof freshness comes from the proof's own `iat` and the
+single-use JTI cache, not from a value the server chose. Both are stated in
+[README.md](README.md).
 
 **Client package versions.** The release workflow packs both NuGet packages with the release
 version, so `Vault42.AspNetCore` and `Vault42.Blazor` on nuget.org always match the server
