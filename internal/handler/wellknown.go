@@ -3,14 +3,18 @@ package handler
 import (
 	"crypto/rsa"
 	"net/http"
-	"sync"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
 // WellKnownHandler handles /.well-known/* endpoints.
 type WellKnownHandler struct {
-	mu          sync.RWMutex
+	// keys is the static key set, written once by NewWellKnownHandler and never
+	// again. It carried a sync.RWMutex for as long as UpdateKeys existed to write
+	// it during rotation; UpdateKeys had no caller, because rotation reaches this
+	// handler through keyProvider instead -- cmd/vault's SetOnKeyChange callback
+	// says so in as many words. A lock over a field with no writer reads as
+	// evidence of concurrent mutation that does not happen.
 	keys        map[string]*rsa.PublicKey
 	keyProvider func() map[string]*rsa.PublicKey // dynamic provider (keystore mode)
 	issuer      string
@@ -33,9 +37,7 @@ func (h *WellKnownHandler) JWKS(w http.ResponseWriter, r *http.Request) {
 	if h.keyProvider != nil {
 		keys = h.keyProvider()
 	} else {
-		h.mu.RLock()
 		keys = h.keys
-		h.mu.RUnlock()
 	}
 
 	jwksJSON, err := vaultcrypto.SerializeJWKSJSON(keys)
@@ -80,11 +82,4 @@ func (h *WellKnownHandler) OpenIDConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	WriteJSON(w, http.StatusOK, discovery)
-}
-
-// UpdateKeys replaces the JWKS key set (called during rotation).
-func (h *WellKnownHandler) UpdateKeys(keys map[string]*rsa.PublicKey) {
-	h.mu.Lock()
-	h.keys = keys
-	h.mu.Unlock()
 }

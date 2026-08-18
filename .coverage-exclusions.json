@@ -349,7 +349,7 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/wellknown.go",
-      "line": 43,
+      "line": 45,
       "occurrence": 1,
       "source": "\t\tWriteError(w, http.StatusInternalServerError, \"internal_error\")",
       "bucket": "C",
@@ -359,7 +359,7 @@
     {
       "package": "internal/handler",
       "file": "internal/handler/wellknown.go",
-      "line": 44,
+      "line": 46,
       "occurrence": 1,
       "source": "\t\treturn",
       "bucket": "C",

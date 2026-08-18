@@ -21,6 +21,22 @@ data:
   {{- end }}
   VAULT_PASSWORD_MIN_LENGTH: {{ .Values.passwordMinLength | quote }}
   VAULT_HIBP_CHECK: {{ .Values.hibpCheck | quote }}
+  # Authentication controls. Each of these is a switch the binary reads from the
+  # environment, so one the chart cannot set is one that holds its compiled
+  # default in every install while the pod reports healthy. That is how DPoP came
+  # to be recorded as Met and shipped inert. Rendered unconditionally, at the
+  # binary's own default, so adding them changes nothing for an existing release
+  # and turning one off is expressible rather than silently impossible.
+  VAULT_MFA_REQUIRED: {{ .Values.mfaRequired | quote }}
+  VAULT_REGISTRATION_ENABLED: {{ .Values.registrationEnabled | quote }}
+  VAULT_DPOP_ENABLED: {{ .Values.dpop.enabled | quote }}
+  VAULT_STRICT_SESSION_LIMIT: {{ .Values.strictSessionLimit | quote }}
+  {{- if .Values.outboundAllowPrivate }}
+  # Rendered only when true, unlike the four above. Its default is the one
+  # setting here that the profile decides -- false in production, true in dev --
+  # so pinning a value would quietly change what a dev release does.
+  VAULT_OUTBOUND_ALLOW_PRIVATE: {{ .Values.outboundAllowPrivate | quote }}
+  {{- end }}
   VAULT_EMAIL_FROM: {{ .Values.emailFrom | quote }}
   DB_HOST: {{ .Values.database.host | quote }}
   DB_PORT: {{ .Values.database.port | quote }}

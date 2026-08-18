@@ -358,3 +358,51 @@ func TestSecurityAlertCounterIsItsOwnSeriesAndIsExposed(t *testing.T) {
 			"untyped and rate() over it is refused")
 	}
 }
+
+// The breach-check shed counter reaches the scrape, and a collector that was
+// never given it scrapes clean rather than panicking.
+//
+// This counter is the one that separates two deployments an operator cannot
+// otherwise tell apart: one where nobody has chosen a breached password, and one
+// where the concurrency cap has been shedding every check and accepting them all.
+// The breach check fails open, so silence means both.
+func TestCollectorReportsHIBPShed(t *testing.T) {
+	newCollector := func() *Collector {
+		return NewCollector(
+			func() int64 { return 0 },
+			func() int64 { return 0 },
+			func() int { return 0 },
+		)
+	}
+
+	t.Run("unwired collectors scrape zero", func(t *testing.T) {
+		body := scrape(t, newCollector())
+		if !strings.Contains(body, "vault_hibp_shed_total 0") {
+			t.Errorf("an unwired collector did not report vault_hibp_shed_total 0:\n%s", body)
+		}
+	})
+
+	t.Run("the wired accessor is read", func(t *testing.T) {
+		c := newCollector()
+		c.SetHIBPShed(func() uint64 { return 17 })
+
+		body := scrape(t, c)
+		if !strings.Contains(body, "vault_hibp_shed_total 17") {
+			t.Errorf("the shed accessor did not reach the scrape:\n%s", body)
+		}
+		if !strings.Contains(body, "# TYPE vault_hibp_shed_total counter") {
+			t.Errorf("vault_hibp_shed_total is exposed without a counter TYPE line:\n%s", body)
+		}
+	})
+}
+
+// scrape runs the collector's handler and returns the exposition body.
+func scrape(t *testing.T, c *Collector) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scrape status = %d, want 200", rec.Code)
+	}
+	return rec.Body.String()
+}

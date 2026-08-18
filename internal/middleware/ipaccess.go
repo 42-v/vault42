@@ -12,7 +12,8 @@ import (
 )
 
 // ipBlockMu serializes copy-on-write mutations to the IP blocklist.
-// Reads are lock-free via atomic.Pointer; only AddToIPBlocklist/RemoveFromIPBlocklist acquire this.
+// Reads are lock-free via atomic.Pointer; only AddToIPBlocklist/RemoveFromIPBlocklist
+// acquire this, and neither has a caller -- see the note above AddToIPBlocklist.
 var ipBlockMu sync.Mutex
 
 // IP access control state — atomic pointers for concurrent-safe reads.
@@ -44,6 +45,26 @@ func SetIPAccessLists(ipAllow, ipBlock, geoAllow, geoBlock []string, geoHeader s
 
 	geoIPHeader.Store(strings.TrimSpace(geoHeader))
 }
+
+// AddToIPBlocklist and RemoveFromIPBlocklist have no caller, and the reason is
+// worth writing down rather than fixing by wiring them up.
+//
+// They mutate a package global in one process. The blocklist they mutate is read
+// by IPAccess, which internal/server mounts in the vault binary, and the chart
+// runs three replicas of it. The admin plane that would order a ban during an
+// incident is a different binary again -- internal/adminapi is mounted only by
+// cmd/admin-gateway, which never installs IPAccess at all. So calling these from
+// the admin surface would ban an address in a process that does no IP filtering,
+// and calling them inside a vault pod would ban it on one replica out of three
+// while the other two kept serving. Both look, from the operator's side, exactly
+// like a ban that worked, which during an incident is worse than a call that
+// plainly does not exist.
+//
+// A blocklist that changes at runtime needs state the fleet shares. Until it has
+// that, IP_BLOCKLIST plus a rollout is the mechanism that actually covers every
+// replica, and it is the one docs/config.md documents. These two are kept
+// because the copy-on-write discipline they implement is correct and is what
+// such an implementation would be built on -- not because anything reaches them.
 
 // AddToIPBlocklist adds one or more CIDRs/IPs to the blocklist at runtime.
 // Safe for concurrent use — uses copy-on-write with a serializing mutex.

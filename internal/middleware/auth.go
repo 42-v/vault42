@@ -157,17 +157,6 @@ func GetClaims(ctx context.Context) *vaultcrypto.VaultClaims {
 	return claims
 }
 
-// RequireAuth is a handler wrapper that rejects unauthenticated requests.
-func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if GetClaims(r.Context()) == nil {
-			httputil.WriteBearerError(w, http.StatusUnauthorized, "unauthorized", httputil.BearerChallenge{})
-			return
-		}
-		next.ServeHTTP(w, r)
-	}
-}
-
 // ScopeOption configures RequireScope.
 type ScopeOption func(*scopeOptions)
 

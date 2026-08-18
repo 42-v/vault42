@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"bytes"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/hex"
@@ -731,19 +730,6 @@ func TestSHA256Base64URL_Format(t *testing.T) {
 	}
 	if len(h) != 43 { // 32 bytes base64url-encoded without padding = 43 chars
 		t.Fatalf("SHA256Base64URL should be 43 chars, got %d", len(h))
-	}
-}
-
-// TestSHA256Bytes_NilInput tests SHA256 of nil.
-func TestSHA256Bytes_NilInput(t *testing.T) {
-	h := SHA256Bytes(nil)
-	if len(h) != 32 {
-		t.Fatalf("SHA256 of nil should be 32 bytes, got %d", len(h))
-	}
-	// Should match SHA256 of empty string
-	hEmpty := SHA256Bytes([]byte{})
-	if !bytes.Equal(h, hEmpty) {
-		t.Fatal("SHA256(nil) should equal SHA256(empty)")
 	}
 }
 

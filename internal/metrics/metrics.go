@@ -27,6 +27,7 @@ type Collector struct {
 	// against", and then no collector read either of them.
 	argon2Waiting   func() int64
 	argon2WaitNanos func() int64
+	hibpShed        func() uint64
 
 	// Auth counters
 	loginAttempts   atomic.Int64
@@ -114,6 +115,18 @@ func NewCollector(argon2Active, argon2Rejected func() int64, argon2MaxConcurrent
 	}
 }
 
+// SetHIBPShed wires the breach-check shed counter.
+//
+// Separate from NewCollector for the reason SetArgon2Queue is, and nil-tolerant
+// for the same one: a collector built without it reports zero rather than
+// panicking on the scrape.
+//
+// This number matters more than most. The breach check fails open, so a shed
+// call is a breached password that was accepted, and from outside the process a
+// deployment shedding every call looks exactly like one where no user has ever
+// chosen a breached password. Only the counter separates them.
+func (c *Collector) SetHIBPShed(shed func() uint64) { c.hibpShed = shed }
+
 // SetArgon2Queue wires the queue-depth accessors.
 //
 // Separate from NewCollector so that adding a signal does not rewrite every
@@ -122,6 +135,14 @@ func NewCollector(argon2Active, argon2Rejected func() int64, argon2MaxConcurrent
 func (c *Collector) SetArgon2Queue(waiting, waitNanos func() int64) {
 	c.argon2Waiting = waiting
 	c.argon2WaitNanos = waitNanos
+}
+
+// counterOrZero reads an optional unsigned accessor.
+func counterOrZero(f func() uint64) uint64 {
+	if f == nil {
+		return 0
+	}
+	return f()
 }
 
 // gaugeOrZero reads an optional accessor.
@@ -189,6 +210,10 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_argon2_wait_nanoseconds_total Cumulative time callers have spent queued for an argon2id semaphore slot.\n")
 		fmt.Fprintf(w, "# TYPE vault_argon2_wait_nanoseconds_total counter\n")
 		fmt.Fprintf(w, "vault_argon2_wait_nanoseconds_total %d\n", gaugeOrZero(c.argon2WaitNanos))
+
+		fmt.Fprintf(w, "# HELP vault_hibp_shed_total Breach checks skipped because the concurrency cap was full. The check fails open, so each one is a password accepted without being checked.\n")
+		fmt.Fprintf(w, "# TYPE vault_hibp_shed_total counter\n")
+		fmt.Fprintf(w, "vault_hibp_shed_total %d\n", counterOrZero(c.hibpShed))
 
 		// Auth metrics
 		fmt.Fprintf(w, "# HELP vault_login_attempts_total Total login attempts.\n")

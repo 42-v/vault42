@@ -155,7 +155,7 @@ func TestJWTConfusion_EmbeddedJWK(t *testing.T) {
 		"jwk": map[string]string{
 			"kty": "RSA",
 			"n":   base64.RawURLEncoding.EncodeToString(attackerKey.N.Bytes()),
-			"e":   base64.RawURLEncoding.EncodeToString(vaultcrypto.SHA256Bytes([]byte{1, 0, 1})),
+			"e":   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
 		},
 	}, claims, attackerKey)
 	if err != nil {

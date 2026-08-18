@@ -80,6 +80,14 @@ preserved so the Operator can run a re-permission campaign against it, but it do
 authorise sending. `IdentityService.MarketingAllowed` is the only sanctioned gate for a campaign
 sender and fails closed on everything except the two affirmative sources.
 
+vault42 itself sends no marketing email. It ships no campaign sender, and nothing
+in the service reads the marketing preference to decide whether to send anything:
+every message it sends -- address verification, password reset, the account-locked
+notice, the new-country notice -- is transactional and is authorised by the user's
+own action rather than by consent. The preference is stored, exported under
+Art. 15 and erased under Art. 17 like any other profile field; acting on it is the
+Operator's, in a system that is not this one.
+
 ---
 
 ## 3. Data Inventory

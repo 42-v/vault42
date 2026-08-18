@@ -323,6 +323,25 @@ func (s *IdentityService) upsertCAS(ctx context.Context, userID string, data *Id
 // MarketingAllowed reports whether marketing email may be sent to a user, and is
 // the only thing a campaign sender should consult. It fails closed: no profile,
 // no consent record, or a non-affirmative (imported/legacy) record all mean no.
+//
+// It has no caller, and that is the correct state rather than a gap. vault42
+// sends no marketing email: there is no campaign sender in this repository, and
+// internal/service cannot be imported by one outside it. Every message this
+// service sends is transactional -- verification, reset, lockout, new-country --
+// and none of them consults a marketing preference, because consent is not what
+// authorizes them.
+//
+// What it exists for is to be the one place the Art. 7 rule is written
+// executably. The stored preference is a bool, and a bool invites the reading
+// that true means consent; it does not, because an imported true is a value the
+// user was never shown (Recital 32, and Planet49 C-673/17 on pre-ticked boxes).
+// Any sender built later that reads MarketingEmails directly will get that
+// wrong, and it will get it wrong silently. Keeping the rule stated once, tested
+// by the compliance suite, is what makes "read this, not the field" an
+// instruction with something behind it.
+//
+// Deleting it would not remove a control, because nothing runs it. It would
+// remove the definition, and leave the field.
 func (s *IdentityService) MarketingAllowed(ctx context.Context, userID string) (bool, error) {
 	data, _, err := s.Get(ctx, userID)
 	if err != nil {

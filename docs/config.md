@@ -243,7 +243,7 @@ Access tokens are RS256-signed JWTs with fingerprint binding. Refresh tokens are
 | `VAULT_ALLOW_RATE_LIMIT_DISABLED` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to run with rate limiting disabled (e.g. when an upstream gateway handles it). Without it, disabling rate limiting fails startup. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
 | `VAULT_ALLOW_PLAINTEXT` | bool | `false` | No | **Fail-closed override.** Permits a non-dev profile to serve plain HTTP. Without it, `VAULT_TLS_ENABLED=false` with `VAULT_FORCE_SECURE_COOKIES` also off refuses to start (`Config.Validate`). Setting it serves credentials and tokens in cleartext, and on its own leaves the `Secure` cookie flag off. Behind a TLS-terminating proxy, set `VAULT_FORCE_SECURE_COOKIES=true` instead. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production) and [TLS and Cookies](#tls-and-cookies). |
 | `VAULT_EMBEDDED_TRUSTED_UPSTREAM` | bool | `false` | No | **Fail-closed override.** Embedded profile only (startup fails elsewhere). When `TRUSTED_PROXIES` is empty, auto-populates it with `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `127.0.0.0/8` and `::1/128`; when `REAL_IP_HEADER` is empty, defaults it to `X-Forwarded-For`. Intended for a sibling reverse proxy on the same private network. Explicit `TRUSTED_PROXIES` / `REAL_IP_HEADER` always win. See [Fail-Closed Overrides](#fail-closed-overrides-read-this-before-production). |
-| `VAULT_DPOP_ENABLED` | bool | `false` | No | Sender-constrains access tokens issued with a DPoP proof (RFC 9449). When true, the DPoP middleware is mounted on `POST /auth/login`, `POST /auth/refresh`, the 2FA verify endpoints and every authenticated route (inside the auth middleware, so it can read `cnf.jkt`). A login, refresh or 2FA-challenge request that presents a valid `DPoP` proof has that proof's JWK thumbprint written into the issued access or challenge token as `cnf.jkt` (RFC 9449 §6.1). A later request presenting that token must use the `DPoP` authorization scheme and a matching proof; a missing or mismatched proof is `401`. A token issued without a proof stays an ordinary bearer token, so enabling the flag does not break existing clients. Two limits are real and are not closed by this flag: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. One issuance path is not wrapped: `GET /auth/oauth2/callback/{provider}` (the provider redirects the browser with a GET, which cannot carry a proof, so federated login never stamps `cnf.jkt`; `POST /auth/oauth2/exchange` returns that already-issued token). A later 2FA verify *is* wrapped, so an MFA-completing federated login can still bind there. `POST /client/token` **is** wrapped, so a client-credential token minted with a proof carries `cnf.jkt` like any other; that route was the last unwrapped issuance path and was closed during the 1.0.0 hardening. The default is off so a deployment that has not rolled out DPoP clients keeps working; turn it on when those clients can send proofs. |
+| `VAULT_DPOP_ENABLED` | bool | `false` | No | Sender-constrains access tokens issued with a DPoP proof (RFC 9449). When true, the DPoP middleware is mounted on `POST /auth/login`, `POST /auth/refresh`, the 2FA verify endpoints and every authenticated route (inside the auth middleware, so it can read `cnf.jkt`). A login, refresh or 2FA-challenge request that presents a valid `DPoP` proof has that proof's JWK thumbprint written into the issued access or challenge token as `cnf.jkt` (RFC 9449 §6.1). A later request presenting that token must use the `DPoP` authorization scheme and a matching proof; a missing or mismatched proof is `401`. A token issued without a proof stays an ordinary bearer token, so enabling the flag does not break existing clients. Two limits are real and are not closed by this flag: refresh tokens are opaque and are not sender-bound, and the server neither issues nor requires a `DPoP-Nonce`. One issuance path is not wrapped: `GET /auth/oauth2/callback/{provider}` (the provider redirects the browser with a GET, which cannot carry a proof, so federated login never stamps `cnf.jkt`; `POST /auth/oauth2/exchange` returns that already-issued token). A later 2FA verify *is* wrapped, so an MFA-completing federated login can still bind there. `POST /client/token` **is** wrapped, so a client-credential token minted with a proof carries `cnf.jkt` like any other; that route was the last unwrapped issuance path and was closed during the 1.0.0 hardening. The default is off so a deployment that has not rolled out DPoP clients keeps working; turn it on when those clients can send proofs. The Helm chart exposes this as `dpop.enabled`, defaulting to `false`; before that value existed no chart install could reach this switch at all. |
 | `KMS_ROOT_KEY_FILE` | string | *(none)* | No | Path to a file containing the KMS root secret (at least 32 bytes). Per-kid KEKs are derived from it via HKDF-SHA256, kept cryptographically separate from the master key. When unset, the `POST /kms/unwrap` envelope-unwrap oracle is not mounted. See [Secret Loading](#secret-loading-_file-convention). |
 | `VAULT_FORCE_SECURE_COOKIES` | bool | `false` | No | Force the `Secure` flag on cookies even when TLS is not enabled locally. The setting to reach for behind a TLS-terminating proxy (e.g., Cloudflare Tunnel, nginx with TLS offloading), because it keeps the last hop protected without disabling the startup guard. It also satisfies the certificate requirement when `VAULT_TLS_ENABLED` is left on, in which case the listener is plain HTTP. See [TLS and Cookies](#tls-and-cookies). |
 | `TRUSTED_PROXIES` | string | *(none)* | No | Comma-separated list of CIDR ranges or IPs trusted to set `X-Forwarded-For` (e.g., `10.0.0.0/8,172.16.0.0/12`). Also gates the `X-Vault-App` white-label tenant header: the slug is only honoured when the direct peer is on this list, so an outside caller cannot dress an auth email in another tenant's branding. Empty = white-label tenant selection is off and all auth emails use the global branding. See [API Reference -- White-Label Tenant Selection](api.md#white-label-tenant-selection). |
@@ -262,7 +262,7 @@ Optional IP-based access control and geographic restrictions. All lists are empt
 | `GEO_ALLOWLIST` | string | *(none)* | No | Comma-separated country codes. When set, only matching countries are allowed. Requires `GEO_IP_HEADER`. |
 | `GEO_BLOCKLIST` | string | *(none)* | No | Comma-separated country codes. Matching countries are denied (403). Requires `GEO_IP_HEADER`. Use `T1` for Tor exit nodes (Cloudflare). |
 
-The IP blocklist supports runtime updates via `AddToIPBlocklist()` / `RemoveFromIPBlocklist()`: atomic copy-on-write, zero read contention.
+The blocklist is published as an atomic pointer, so reads on the request path take no lock. `AddToIPBlocklist()` / `RemoveFromIPBlocklist()` implement copy-on-write mutation of it, but **nothing calls them and a deployment cannot reach them**: the list is a package global in one process, the chart runs three vault replicas, and the admin plane is a separate binary that never mounts the IP filter. Changing the blocklist means changing `IP_BLOCKLIST` and rolling the deployment, which is the only mechanism that reaches every replica.
 
 **Evaluation order:** IP allowlist → IP blocklist → Geo allowlist → Geo blocklist. Health endpoints (`/healthz`, `/readyz`) bypass all checks.
 
@@ -859,6 +859,11 @@ Key Helm values and their corresponding env vars:
 | `keyRotation.enabled` | `VAULT_KEY_ROTATION_DB` |
 | `adminGateway.clientCNAllowlist` | `ADMIN_GW_CLIENT_CN_ALLOWLIST` |
 | `adminGateway.clientCRLFile` | `ADMIN_GW_CLIENT_CRL_FILE` |
+| `mfaRequired` | `VAULT_MFA_REQUIRED` |
+| `registrationEnabled` | `VAULT_REGISTRATION_ENABLED` |
+| `dpop.enabled` | `VAULT_DPOP_ENABLED` |
+| `strictSessionLimit` | `VAULT_STRICT_SESSION_LIMIT` |
+| `outboundAllowPrivate` | `VAULT_OUTBOUND_ALLOW_PRIVATE` (rendered only when `true`) |
 
 Secrets are mapped via `secrets.keys.*`:
 
@@ -878,6 +883,24 @@ error. That combination sends the `__Host-refresh_token` cookie without `Secure`
 which a browser discards, and `Config.Validate` refuses to start on it, so the
 install would reach the operator as a `CrashLoopBackOff` rather than as a
 message. See [TLS and Cookies](#tls-and-cookies).
+
+### A switch the chart cannot set is a control that is off
+
+The five rows above ending at `outboundAllowPrivate` were added because they were
+missing. Each is a boolean the binary reads from the environment, and the chart
+had no way to put a value in that environment, so on every Helm install the
+control held its compiled default however the deployment was configured. DPoP is
+the case that made this visible: `VAULT_DPOP_ENABLED` defaults to `false`, the
+compliance register records the sender-constrained access token requirement as
+Met, and the chart -- the only way this project is deployed -- could not turn it
+on. The metrics listener had failed the same way one release earlier.
+
+`tests/spec/chart_control_switch_wiring_test.go` is the gate for that class. It
+reads the boolean list out of `internal/config/envcheck.go` rather than
+repeating it, so a switch added there and not here fails on the commit that adds
+it. A switch the chart deliberately does not offer goes in
+`chartUnexposedSwitches` with the reason, and that set is a ratchet: it may
+shrink and may not grow.
 
 See `charts/vault/values.yaml` for production defaults and `charts/vault/values-dev.yaml` for the dev overlay.
 

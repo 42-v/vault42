@@ -93,3 +93,95 @@ func TestTheArgon2ExemptionListHasNoStaleEntries(t *testing.T) {
 		}
 	}
 }
+
+// hibpAccessorsNotScraped is the same list for internal/service's HIBP client.
+// It is empty, and an entry needs the same kind of reason: not "nobody wired it
+// yet" but "this is not a runtime signal".
+var hibpAccessorsNotScraped = map[string]string{}
+
+// TestEveryHIBPSignalReachesTheCollector is the Argon2 gate one package over.
+//
+// HIBPClient.ShedCount had exactly the defect the Argon2 gate was written for,
+// and the gate could not see it because it only ever looked at internal/crypto.
+// The field the counter sits behind says so itself: "Each one is a breached
+// password that was accepted, so it is a number an operator has to be able to
+// read, not a log line." A log line was all there was.
+func TestEveryHIBPSignalReachesTheCollector(t *testing.T) {
+	root := repoRoot(t)
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, "internal", "service", "hibp.go"), nil, 0)
+	if err != nil {
+		t.Fatalf("parsing hibp.go: %v", err)
+	}
+
+	var accessors []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || !fn.Name.IsExported() {
+			return true
+		}
+		if !isHIBPClientReceiver(fn) {
+			return true
+		}
+		// A bare signal read: no arguments, one result, and no error to handle.
+		if fn.Type.Params != nil && len(fn.Type.Params.List) != 0 {
+			return true
+		}
+		if fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+			return true
+		}
+		if ident, ok := fn.Type.Results.List[0].Type.(*ast.Ident); !ok || ident.Name == "error" {
+			return true
+		}
+		accessors = append(accessors, fn.Name.Name)
+		return true
+	})
+
+	if len(accessors) == 0 {
+		t.Fatal("no bare signal accessor was found on *HIBPClient in internal/service/hibp.go; " +
+			"the shape changed and this gate has stopped seeing what it guards")
+	}
+
+	wiring := commentFreeSource(t, filepath.Join(root, "cmd", "vault", "main.go"))
+	for _, name := range accessors {
+		if reason, exempt := hibpAccessorsNotScraped[name]; exempt {
+			if reason == "" {
+				t.Errorf("%q is exempted from the metrics wiring with no reason given", name)
+			}
+			continue
+		}
+		if !containsIdentifier(wiring, "hibpClient."+name) {
+			t.Errorf("internal/service exports HIBPClient.%s and cmd/vault/main.go never passes "+
+				"it to the metrics collector. The number is counted on the request path and "+
+				"read by nobody, which for a fail-open control means the operator cannot tell "+
+				"a working breach check from one that has been shedding every call. Wire it, "+
+				"or add %q to hibpAccessorsNotScraped with the reason it is not a runtime "+
+				"signal.", name, name)
+		}
+	}
+}
+
+// isHIBPClientReceiver reports whether fn is a method on *HIBPClient.
+func isHIBPClientReceiver(fn *ast.FuncDecl) bool {
+	if len(fn.Recv.List) == 0 {
+		return false
+	}
+	star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	return ok && ident.Name == "HIBPClient"
+}
+
+// TestTheHIBPExemptionListHasNoStaleEntries mirrors the Argon2 one.
+func TestTheHIBPExemptionListHasNoStaleEntries(t *testing.T) {
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), "internal", "service", "hibp.go"))
+	for name := range hibpAccessorsNotScraped {
+		if !strings.Contains(src, ") "+name+"(") {
+			t.Errorf("hibpAccessorsNotScraped names %q, which internal/service no longer "+
+				"exports on HIBPClient. Remove the entry.", name)
+		}
+	}
+}

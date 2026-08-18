@@ -100,21 +100,6 @@ func TestBearerChallenge_InsufficientScope(t *testing.T) {
 	})
 }
 
-func TestBearerChallenge_RequireAuth(t *testing.T) {
-	handler := RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/me", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-	assertChallenge(t, rec, "", "")
-}
-
 // assertChallenge checks the WWW-Authenticate header shape: the Bearer scheme,
 // a realm, the expected §3.1 error code (or none), and the required scope when
 // one applies.
