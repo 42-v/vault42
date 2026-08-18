@@ -39,6 +39,12 @@ type Config struct {
 	// Default: 5, an order of magnitude below the vault server's pool because
 	// this is a single-operator admin plane, not a request-serving path.
 	DBMaxConns int
+	// DBStatementTimeout is the server-side ceiling on a single statement
+	// (DB_STATEMENT_TIMEOUT). Default 10s; zero disables it.
+	DBStatementTimeout time.Duration
+	// DBLockTimeout is the server-side ceiling on waiting for a lock
+	// (DB_LOCK_TIMEOUT). Default 3s; zero disables it.
+	DBLockTimeout time.Duration
 	// DBPassword is the vault_admin role password (DB_ADMIN_PASSWORD_FILE).
 	// vault_admin is a separate, more privileged role than the vault_app role
 	// the server uses, which is why the admin gateway is a separate binary on
@@ -92,11 +98,13 @@ func LoadConfig() (*Config, error) {
 		MaxFailed:  envInt("ADMIN_GW_MAX_FAILED_LOGINS", 5),
 		LockoutDur: envDuration("ADMIN_GW_LOCKOUT_DURATION", 30*time.Minute),
 
-		DBHost:     envOr("DB_HOST", "localhost"),
-		DBPort:     envOr("DB_PORT", "5432"),
-		DBName:     envOr("DB_NAME", "vault"),
-		DBSSLMode:  envOr("DB_SSLMODE", "require"),
-		DBMaxConns: envInt("DB_MAX_CONNS", 5),
+		DBHost:             envOr("DB_HOST", "localhost"),
+		DBPort:             envOr("DB_PORT", "5432"),
+		DBName:             envOr("DB_NAME", "vault"),
+		DBSSLMode:          envOr("DB_SSLMODE", "require"),
+		DBMaxConns:         envInt("DB_MAX_CONNS", 5),
+		DBStatementTimeout: envDuration("DB_STATEMENT_TIMEOUT", 10*time.Second),
+		DBLockTimeout:      envDuration("DB_LOCK_TIMEOUT", 3*time.Second),
 
 		AutoMigrate:     envBool("ADMIN_GW_AUTO_MIGRATE"),
 		ShutdownTimeout: envDuration("ADMIN_GW_SHUTDOWN_TIMEOUT", 15*time.Second),

@@ -48,7 +48,7 @@ func NewRetention(repo repository.AuditRepository, period time.Duration) *Retent
 }
 
 // Done is closed once the sweep loop has exited, whether it ended via Stop or via
-// its context being cancelled. Without it there is no way to know the sweeper has
+// its context being canceled. Without it there is no way to know the sweeper has
 // actually stopped: Stop and cancel both only *request* an exit, and a caller that
 // closes the database pool on their return can still race a sweep that is mid-DELETE.
 //
@@ -59,26 +59,60 @@ func (r *Retention) Done() <-chan struct{} { return r.doneCh }
 // Enabled reports whether a retention horizon is configured.
 func (r *Retention) Enabled() bool { return r != nil && r.period > 0 }
 
+// SweepMaxBatches bounds one tick.
+//
+// CleanupLocked deletes at most one batch per call, so a sweep loops. The loop
+// needs a ceiling for the same reason the postgres cache reaper has one: a tick
+// that keeps going until the table is empty is a tick with no end, and the
+// remainder is not urgent — the next tick picks it up. At the repository's
+// batch size this is 40 000 rows per tick, four times a day.
+const SweepMaxBatches = 20
+
 // Sweep deletes every audit entry older than the retention horizon and returns
 // how many rows went.
 //
-// Serialised across replicas: the underlying cleanup takes an ACCESS EXCLUSIVE
+// Serialized across replicas: the underlying cleanup takes an ACCESS EXCLUSIVE
 // lock on the audit table (it disables the append-only trigger to delete), so
 // only one replica may sweep at a time. A replica that does not get the lock
-// returns (0, nil) and tries again next tick — the work is idempotent, so there
-// is nothing to catch up on.
+// returns what it has and tries again next tick — the work is idempotent, so
+// there is nothing to catch up on.
+//
+// It loops, because one call deletes at most repository.AuditCleanupBatch rows.
+// Holding that exclusive lock over an unbounded DELETE blocked every audit
+// insert for the length of the whole purge, and a failed login is a critical
+// event written synchronously on the request path even when the buffer is full.
 func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	if !r.Enabled() {
 		return 0, nil
 	}
-	deleted, acquired, err := r.repo.CleanupLocked(ctx, time.Now().Add(-r.period))
-	if err != nil {
-		return 0, err
+	var total int64
+	for i := 0; i < SweepMaxBatches; i++ {
+		deleted, acquired, err := r.repo.CleanupLocked(ctx, time.Now().Add(-r.period))
+		if err != nil {
+			return total, err
+		}
+		// Another replica holds the advisory lock. The work is idempotent, so
+		// there is nothing to catch up on: stop and try again next tick.
+		if !acquired {
+			return total, nil
+		}
+		total += deleted
+		// A short batch means the horizon is clear. Stop rather than spend
+		// another round trip and another ACCESS EXCLUSIVE lock proving it.
+		if deleted < repository.AuditCleanupBatch {
+			return total, nil
+		}
+		// Give the inserts waiting behind the exclusive lock a turn before
+		// taking it again, and honor a shutdown between batches.
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		case <-r.stopCh:
+			return total, nil
+		default:
+		}
 	}
-	if !acquired {
-		return 0, nil
-	}
-	return deleted, nil
+	return total, nil
 }
 
 // Start runs the sweeper until Stop is called. It sweeps once immediately: a

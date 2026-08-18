@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/42-v/vault42/internal/cache"
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
 )
@@ -27,7 +28,12 @@ import (
 // to complete, which is why CompleteMFALogin (and only it, on the MFA path)
 // calls clearLockout.
 func TestLoginDoesNotResetTheMFALockoutOnTheFirstFactor(t *testing.T) {
-	ctx := context.Background()
+	// The source address travels on the context, the way middleware.ClientIPContext
+	// puts it there in production: RecordMFAFailure is told the address by its
+	// handler, and MFAVerifyLocked reads it from the context, so both have to
+	// agree on which source they are talking about.
+	const srcIP = "1.2.3.4"
+	ctx := httputil.WithClientIP(context.Background(), srcIP)
 	hash := validPasswordHash(t)
 
 	mem := cache.NewMemoryCache()
@@ -63,7 +69,7 @@ func TestLoginDoesNotResetTheMFALockoutOnTheFirstFactor(t *testing.T) {
 
 	// Attacker burns all but one of the allowed second-factor guesses.
 	for i := 0; i < lockoutThreshold-1; i++ {
-		svc.RecordMFAFailure(ctx, "user-1", "1.2.3.4", "TestAgent")
+		svc.RecordMFAFailure(ctx, "user-1", srcIP, "TestAgent")
 	}
 	if svc.MFAVerifyLocked(ctx, "user-1") {
 		t.Fatalf("account locked before the threshold (%d-1 failures)", lockoutThreshold)
@@ -72,7 +78,7 @@ func TestLoginDoesNotResetTheMFALockoutOnTheFirstFactor(t *testing.T) {
 	// Correct password, second factor still owed. This must NOT reset the counter.
 	res, err := svc.Login(ctx, LoginInput{
 		Email: "mfa@example.com", Password: "correct-horse-battery-staple",
-	}, "1.2.3.4", "TestAgent")
+	}, srcIP, "TestAgent")
 	if err != nil {
 		t.Fatalf("first-factor login should succeed with a challenge, got %v", err)
 	}
@@ -83,7 +89,7 @@ func TestLoginDoesNotResetTheMFALockoutOnTheFirstFactor(t *testing.T) {
 	// One more failed second-factor attempt must now trip the lockout. If the
 	// first-factor login zeroed the counter, this is only the first failure and
 	// the account stays open, so the attacker guesses on unthrottled.
-	svc.RecordMFAFailure(ctx, "user-1", "1.2.3.4", "TestAgent")
+	svc.RecordMFAFailure(ctx, "user-1", srcIP, "TestAgent")
 	if !svc.MFAVerifyLocked(ctx, "user-1") {
 		t.Fatalf("H2 bypass: a first-factor login reset the shared MFA lockout counter, so %d "+
 			"second-factor failures did not lock the account; an attacker holding the password "+

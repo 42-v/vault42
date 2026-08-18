@@ -177,8 +177,8 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 
 	interval := time.Since(olderThan)
 	if err := tx.QueryRow(ctx,
-		"SELECT audit.cleanup_old_entries($1::interval)",
-		fmt.Sprintf("%d seconds", int(interval.Seconds())),
+		"SELECT audit.cleanup_old_entries($1::interval, $2)",
+		fmt.Sprintf("%d seconds", int(interval.Seconds())), auditCleanupBatch,
 	).Scan(&deleted); err != nil {
 		return 0, true, fmt.Errorf("cleanup audit entries: %w", err)
 	}
@@ -187,6 +187,10 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 	}
 	return deleted, true, nil
 }
+
+// auditCleanupBatch is the shared bound, declared on the repository interface so
+// the sweeper that loops over this call agrees with it.
+const auditCleanupBatch = repository.AuditCleanupBatch
 
 // Cleanup removes audit entries older than the given time using the
 // audit.cleanup_old_entries() SECURITY DEFINER function.

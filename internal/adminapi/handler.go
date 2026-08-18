@@ -46,6 +46,12 @@ type Handler struct {
 // enabling the /admin/email-branding and /admin/email-templates endpoints.
 // Optional (nil → those handlers return 503). maxTemplateSize caps custom
 // template body size in bytes; <= 0 disables the size check.
+// uuidPattern is the 8-4-4-4-12 hex shape of a user id. Compiled once at
+// package init rather than on every admin user search: regexp.MustCompile
+// builds an automaton, and building it per request puts that work on the
+// request path for nothing.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func (h *Handler) SetEmailRepos(branding repository.EmailBrandingRepository, templates repository.EmailTemplateRepository, maxTemplateSize int) {
 	h.emailBranding = branding
 	h.emailTemplates = templates
@@ -211,8 +217,6 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	var users []userSummary
 
-	// UUID pattern: 8-4-4-4-12 hex digits
-	uuidPattern := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	if uuidPattern.MatchString(q) {
 		user, err := h.users.GetByID(r.Context(), q)
 		if err != nil {

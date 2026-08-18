@@ -45,7 +45,7 @@ func TestLockoutFallsBackToTheDatabaseWhenTheCacheErrors(t *testing.T) {
 				return "", errors.New("redis: connection refused")
 			}
 
-			if got := svc.isAccountLocked(context.Background(), "user-1"); got != tc.wantLocked {
+			if got := svc.isAccountLocked(context.Background(), "user-1", "203.0.113.9"); got != tc.wantLocked {
 				t.Errorf("isAccountLocked = %v, want %v. A failing cache answered without "+
 					"consulting users.FailedLoginCount, so during a cache outage the lockout "+
 					"does not hold even though the database recorded %d failures.",
@@ -70,7 +70,7 @@ func TestLockoutTreatsAnAbsentKeyAsUnlocked(t *testing.T) {
 	})
 	o.cache.GetFn = func(context.Context, string) (string, error) { return "", nil }
 
-	if svc.isAccountLocked(context.Background(), "user-1") {
+	if svc.isAccountLocked(context.Background(), "user-1", "203.0.113.9") {
 		t.Error("an account with no lockout counter was reported locked")
 	}
 	if dbReads != 0 {
@@ -89,7 +89,7 @@ func TestLockoutStillReadsTheCacheWhenItWorks(t *testing.T) {
 	})
 	o.cache.GetFn = func(context.Context, string) (string, error) { return "9", nil }
 
-	if !svc.isAccountLocked(context.Background(), "user-1") {
+	if !svc.isAccountLocked(context.Background(), "user-1", "203.0.113.9") {
 		t.Error("a cache counter above the threshold did not lock the account, so the cache is " +
 			"no longer the authority when it can answer")
 	}

@@ -282,8 +282,26 @@ type AuditRepository interface {
 	// CleanupLocked is Cleanup serialised across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the audit table.
+	//
+	// It deletes at most AuditCleanupBatch rows per call, so a caller with a
+	// backlog loops. A full batch means there is more; anything less means the
+	// horizon is clear.
 	CleanupLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
+
+// AuditCleanupBatch is how many rows one CleanupLocked call may delete, and
+// therefore how long one call holds ACCESS EXCLUSIVE on the audit table.
+//
+// The purge has to disable the append-only trigger to delete anything, which is
+// ALTER TABLE. Held over an unbounded DELETE that blocks every audit insert for
+// the length of the whole purge — and a failed login is a critical event,
+// written synchronously on the request path even when the buffer is full. Two
+// thousand rows is the batch the postgres cache reaper already uses.
+//
+// It lives on the interface rather than in either implementation because both
+// the implementation and the sweeper that loops over it have to agree on it,
+// and internal/audit cannot import internal/repository/postgres.
+const AuditCleanupBatch = 2000
 
 // AuditFilter specifies criteria for querying audit log entries.
 type AuditFilter struct {

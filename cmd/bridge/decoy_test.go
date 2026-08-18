@@ -62,7 +62,7 @@ func TestDecoyServesHTMLOnGET(t *testing.T) {
 	req.RemoteAddr = "10.0.0.1:12345"
 	w := httptest.NewRecorder()
 
-	dh.ServeDecoy(w, req, "10.0.0.1", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.1", "wp-login.html", false)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -82,7 +82,7 @@ func TestDecoyReturnsFakeCredentialsOnPOST(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/wp-login.php", nil)
 	w := httptest.NewRecorder()
 
-	dh.ServeDecoy(w, req, "10.0.0.2", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.2", "wp-login.html", false)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -146,7 +146,7 @@ func TestNewDecoyHandlerKeepsGoingWhenAPageDoesNotLoad(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/wp-admin", nil)
 	w := httptest.NewRecorder()
-	dh.ServeDecoy(w, req, "10.0.0.7", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.7", "wp-login.html", false)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
@@ -178,7 +178,7 @@ func TestDecoyPagesLookLikeTheirTargets(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, "/probe", nil)
 			w := httptest.NewRecorder()
-			dh.ServeDecoy(w, req, "10.0.0.1", tt.tmpl)
+			dh.ServeDecoy(w, req, "10.0.0.1", tt.tmpl, false)
 
 			body := w.Body.String()
 			if !strings.Contains(body, tt.needle) {
@@ -210,7 +210,7 @@ func TestDecoyUnknownTemplateStillFlags(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/wp-admin", nil)
 	w := httptest.NewRecorder()
-	dh.ServeDecoy(w, req, "10.0.0.3", "no-such-template.html")
+	dh.ServeDecoy(w, req, "10.0.0.3", "no-such-template.html", false)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
@@ -252,7 +252,7 @@ func TestDecoyTolerantOfAClientThatHangsUp(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/wp-admin", nil)
 	w := &brokenResponseWriter{}
-	dh.ServeDecoy(w, req, "10.0.0.4", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.4", "wp-login.html", false)
 
 	if w.writes == 0 {
 		t.Error("the template never attempted a write")
@@ -275,7 +275,7 @@ func TestDecoyPostAnswersLikeAFailedLogin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/wp-login.php", strings.NewReader("log=admin&pwd=admin"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
-	dh.ServeDecoy(w, req, "10.0.0.5", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.5", "wp-login.html", false)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
@@ -306,7 +306,7 @@ func TestDecoyRecordsTheRequestedPathAsTheReason(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/wp-admin/setup-config.php?step=1", nil)
 	w := httptest.NewRecorder()
-	dh.ServeDecoy(w, req, "10.0.0.6", "wp-login.html")
+	dh.ServeDecoy(w, req, "10.0.0.6", "wp-login.html", false)
 
 	entries := fs.List()
 	if len(entries) != 1 {
@@ -344,7 +344,7 @@ func TestDecoyWebhookCarriesTheEvidence(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/phpmyadmin/index.php", nil)
 	req.Header.Set("User-Agent", "sqlmap/1.7.2")
 	w := httptest.NewRecorder()
-	dh.ServeDecoy(w, req, "203.0.113.44", "phpmyadmin.html")
+	dh.ServeDecoy(w, req, "203.0.113.44", "phpmyadmin.html", false)
 
 	select {
 	case doc := <-payloads:
@@ -394,7 +394,7 @@ func TestDecoyHandlerConcurrentUse(t *testing.T) {
 
 			req := httptest.NewRequest(method, fmt.Sprintf("/trap/%d", w), nil)
 			rec := httptest.NewRecorder()
-			dh.ServeDecoy(rec, req, ip, tmpl)
+			dh.ServeDecoy(rec, req, ip, tmpl, false)
 
 			wantCode := http.StatusOK
 			if method == http.MethodPost {
@@ -448,7 +448,7 @@ func TestDecoyHitLogNeutralizesAnAttackerChosenPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.test/x", nil)
 	req.URL.Path = hostile
 
-	dh.ServeDecoy(httptest.NewRecorder(), req, "203.0.113.7", "wp-login.html")
+	dh.ServeDecoy(httptest.NewRecorder(), req, "203.0.113.7", "wp-login.html", false)
 
 	line := buf.String()
 	for _, bad := range []string{"\x1b", "\n\nbridge", "\x1b[2J"} {

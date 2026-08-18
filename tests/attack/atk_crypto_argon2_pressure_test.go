@@ -169,14 +169,19 @@ func TestArgon2Attack_MeasureQueueingUnderFlood(t *testing.T) {
 
 	// The finding was that this degradation had no signal at all: the semaphore
 	// queues rather than sheds, so a login just gets slower, and the only counter
-	// exported was rejections, which stay at zero until the queue is deep enough
-	// to burn the whole acquire timeout. Roughly 558 concurrent operations, long
-	// after users have noticed.
+	// exported was rejections, which stayed at zero until the queue was deep
+	// enough to burn the whole acquire timeout — roughly 420 concurrent
+	// operations at a measured 47.7ms hash, long after users have noticed.
 	//
-	// The fix is not to shed earlier. Rejecting a legitimate login to keep a
-	// latency number down is worse than serving it slowly. The fix is that the
-	// degradation is now measurable while it is happening, so what this asserts
-	// is the existence of a signal that moves, not the absence of queueing.
+	// Shedding a legitimate login to keep a latency number down would still be
+	// worse than serving it slowly, and below argon2MaxQueueDepth that is
+	// exactly what still happens: the queue holds and the login is served. What
+	// changed is the tail. Past that depth the wait was futile — the caller sat
+	// for the full acquire timeout and was rejected anyway — so it is now
+	// rejected immediately instead, and the rejection counter moves at a depth
+	// an operator can alert on.
+	//
+	// What this asserts either way is the existence of a signal that moves.
 	if last.rejected == 0 && last.wait > 500*time.Millisecond {
 		if vaultcrypto.Argon2WaitNanos() <= 0 {
 			t.Errorf("at %d concurrent operations a legitimate login waits %v with "+

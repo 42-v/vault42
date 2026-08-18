@@ -43,7 +43,7 @@ func TestRecordFailedIP_DBFallbackError(t *testing.T) {
 // only in the cache). It must not panic on a nil cache.
 func TestClearLockout_NilCache(t *testing.T) {
 	s := &AuthService{} // cache nil
-	s.clearLockout(context.Background(), "user-1")
+	s.clearLockout(context.Background(), "user-1", "")
 }
 
 // A failed second-factor attempt is recorded to the audit log with a

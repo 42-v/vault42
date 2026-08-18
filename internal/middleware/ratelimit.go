@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -128,12 +129,61 @@ type RateLimitConfig struct {
 	// Weight func can never widen a bucket. Used to raise scrutiny on VPN/hosting/
 	// anonymising IPs (see IPIntelWeight) without denying them.
 	Weight func(r *http.Request) int
+	// Name namespaces this limiter's counter in the cache.
+	//
+	// Without it every limiter sharing a KeyFunc shared one counter AND one
+	// expiry, because Increment stamps a TTL on the first write of a key and
+	// preserves it afterwards (memory.go, redis.go incrWithExpireScript,
+	// postgres.go). Ten limiters passed IPRateLimitKey, so a single request to
+	// password reset (3/hour) stamped a one-hour TTL on rl:ip:<addr>, thirty
+	// requests to refresh (30/minute) then filled that shared counter, and for
+	// the rest of the hour refresh, client-token, TOTP, OAuth, KMS unwrap,
+	// register and reset all answered 429 for everyone behind that address.
+	// Thirty-one unauthenticated requests bought an hour of denial for a whole
+	// NAT, and a user who reset their password and then opened an app that
+	// refreshes on a timer did it to themselves by accident.
+	//
+	// Use a short, stable identifier per limiter. It becomes part of the cache
+	// key, so changing it resets that limiter's live counters exactly once.
+	Name string
 }
+
+// namespace is the cache-key segment that keeps this limiter's counter separate
+// from every other limiter's.
+//
+// An unnamed limiter falls back to its own budget rather than to a shared key:
+// a counter with a one-hour window must never be the counter a one-minute
+// window reads. That still lets two unnamed limiters with identical budgets
+// collide, which is why the production limiters are named and
+// TestRateLimitersAreNamespaced asserts it.
+func (cfg RateLimitConfig) namespace() string {
+	if cfg.Name != "" {
+		return cfg.Name
+	}
+	return strconv.Itoa(cfg.Limit) + "/" + strconv.FormatInt(int64(cfg.Window/time.Millisecond), 10)
+}
+
+// localRLMaxEntries caps the in-memory fallback map.
+//
+// The fallback is reached only during a cache outage and is keyed by client IP,
+// so a v6 source presents an unbounded number of distinct keys and each one
+// lives for the limiter's whole window — an hour, for the account-deletion
+// limiter. Uncapped that is an OOM during the outage the fallback exists to
+// survive.
+//
+// At the cap increment reports the key as over any configured limit rather than
+// admitting it. Admitting everything at the cap would turn a degraded control
+// into no control; rejecting is the same 429 an over-budget caller already
+// gets. 100k entries is ~15 MiB at the ~150 B an entry plus map overhead costs.
+const localRLMaxEntries = 100_000
 
 // localRateLimiter provides in-memory fallback rate limiting when the cache backend is unavailable.
 type localRateLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*localRLEntry
+	// atCap latches once the map has filled, so the operator sees the degraded
+	// control once rather than once per request.
+	atCap bool
 }
 
 type localRLEntry struct {
@@ -148,11 +198,27 @@ func (l *localRateLimiter) increment(key string, window time.Duration) int64 {
 	now := time.Now()
 	e, ok := l.entries[key]
 	if !ok || now.After(e.windowEnd) {
+		if !ok && len(l.entries) >= localRLMaxEntries {
+			if !l.atCap {
+				l.atCap = true
+				log.Printf("WARNING: in-memory rate limiter at %d entries; new keys are rejected until the sweep frees space", localRLMaxEntries)
+			}
+			// Over any configured limit, so the caller answers 429.
+			return math.MaxInt64
+		}
 		l.entries[key] = &localRLEntry{count: 1, windowEnd: now.Add(window)}
 		return 1
 	}
 	e.count++
 	return e.count
+}
+
+// localEntryCount reports the fallback map size. Used by the eviction test and
+// by callers that want to see the cap being approached.
+func (l *localRateLimiter) localEntryCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
 }
 
 // evictOnce guards the eviction goroutine so only one is started per process.
@@ -201,6 +267,8 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 	local := &localRateLimiter{entries: make(map[string]*localRLEntry)}
 	addLimiter(local)
 	var fallbackWarned atomic.Bool
+	// Resolved once: the namespace is a property of the limiter, not of a request.
+	prefix := "rl:" + cfg.namespace() + ":"
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +277,7 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 				return
 			}
 
-			key := fmt.Sprintf("rl:%s", cfg.KeyFunc(r))
+			key := prefix + cfg.KeyFunc(r)
 			ctx := r.Context()
 
 			count, err := c.Increment(ctx, key, cfg.Window)
@@ -339,6 +407,9 @@ func normalizeIP(v string) string {
 // is attacker-supplied.
 func lastRealIP(value string) string {
 	parts := strings.Split(value, ",")
+	if len(parts) > maxXFFHops {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		if strings.TrimSpace(parts[i]) == "" {
 			continue
@@ -347,6 +418,11 @@ func lastRealIP(value string) string {
 	}
 	return ""
 }
+
+// maxXFFHops caps the right-to-left walk over X-Forwarded-For. Thirty-two is
+// more hops than any real path has and bounds a header-sized walk to a
+// constant.
+const maxXFFHops = 32
 
 // ClientIP extracts the client IP from a request, respecting X-Forwarded-For
 // only when the direct connection comes from a trusted proxy.
@@ -391,14 +467,28 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	xff := r.Header.Get("X-Forwarded-For")
+	// Every field line, not just the first. Header.Get returns the FIRST line
+	// only, so a peer that appends X-Forwarded-For as a separate line rather
+	// than comma-joining it left this walk reading the client's own line and
+	// dropping the real appended hop, which is leftmost trust reopened. nginx,
+	// ALB and Cloudflare comma-join; not every proxy does.
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 	if xff == "" {
 		return remoteIP
 	}
 
 	// Parse all IPs from XFF, walk from right to left,
-	// return the first (rightmost) IP that is NOT a trusted proxy
+	// return the first (rightmost) IP that is NOT a trusted proxy.
+	//
+	// Capped at maxXFFHops. MaxHeaderBytes is 1 MiB, so "203.0.113.1, "
+	// repeated is ~70k hops, each one a ParseIP plus a walk of the trusted
+	// proxy list, on top of the 1 MiB allocation — per request, before the
+	// handler runs. No real deployment has more than a handful of hops.
 	parts := strings.Split(xff, ",")
+	truncated := len(parts) > maxXFFHops
+	if truncated {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		ip := normalizeIP(parts[i])
 		if ip == "" {
@@ -409,9 +499,19 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	// All XFF entries are trusted proxies — use the leftmost
-	if first := normalizeIP(parts[0]); first != "" {
-		return first
+	// All XFF entries are trusted proxies — use the leftmost, which is the
+	// closest thing to the origin the header offers.
+	//
+	// Not when the header was truncated, though: parts[0] is then whatever
+	// happened to land at the cap boundary, not the leftmost the client sent,
+	// and a caller who pads their header past maxXFFHops would get to choose
+	// which of their own entries becomes the bucket key. Fall back to the peer,
+	// which is the answer for an untrusted header everywhere else in this
+	// function.
+	if !truncated {
+		if first := normalizeIP(parts[0]); first != "" {
+			return first
+		}
 	}
 	return remoteIP
 }
@@ -469,4 +569,18 @@ func CheckAccountLockout(ctx context.Context, c cache.Cache, userID string, thre
 		return false, nil //nolint:nilerr // intentional fail-open per docs/spec.md cache invariants
 	}
 	return count > int64(threshold), nil
+}
+
+// ClientIPContext stores the resolved client address on the request context.
+//
+// The service layer only ever receives a context, so without this the account
+// lockout could not tell one source from another and had to key solely on the
+// user id — which made five failed logins from any single address a fifteen
+// minute denial of service against any account whose email the caller knew.
+// Resolving the address once, here, also guarantees the lockout and the rate
+// limiter agree on what "the client" is.
+func ClientIPContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(httputil.WithClientIP(r.Context(), ClientIP(r))))
+	})
 }
