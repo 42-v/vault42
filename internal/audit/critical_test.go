@@ -20,6 +20,7 @@ func TestIsCriticalEvent(t *testing.T) {
 	critical := []string{
 		LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap,
 		TokenMinted, SvcDocPut, SvcDocGet, SvcDocDelete,
+		AdminAuthzDenied, AdminSessionRejected,
 	}
 	for _, ev := range critical {
 		if !isCriticalEvent(ev) {
@@ -125,7 +126,7 @@ func TestKMSUnwrapSynchronousWhenBufferFull(t *testing.T) {
 // critical. The same flood that fills the buffer is exactly when a caller
 // would hide a mint or a svcdoc mutation.
 func TestMintAndSvcDocSurviveBufferPressure(t *testing.T) {
-	events := []string{TokenMinted, SvcDocPut, SvcDocGet, SvcDocDelete}
+	events := []string{TokenMinted, SvcDocPut, SvcDocGet, SvcDocDelete, AdminAuthzDenied, AdminSessionRejected}
 	for _, ev := range events {
 		t.Run(ev, func(t *testing.T) {
 			repo := &mockAuditRepo{}

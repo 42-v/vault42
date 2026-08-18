@@ -130,9 +130,13 @@ func SessionAuth(sessions repository.AdminSessionRepository, admins repository.A
 			// token and session validity failures only; the account_locked and
 			// 2fa_required policy gates below apply to an already-valid session
 			// and keep their own handling.
-			reject := func(reason string) {
+			// actorID is the admin the looked-up session belongs to, or empty
+			// when the token never resolved to a row. A canceled request
+			// context must not erase the row: the client that is probing can
+			// drop the connection the instant the gateway starts handling it.
+			reject := func(reason, actorID string) {
 				if auditLog != nil {
-					_ = auditLog.Log(r.Context(), audit.AdminSessionRejected, "", "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+					_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminSessionRejected, actorID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 						"reason": reason,
 						"method": r.Method,
 						"path":   r.URL.Path,
@@ -143,42 +147,42 @@ func SessionAuth(sessions repository.AdminSessionRepository, admins repository.A
 
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
-				reject("missing_authorization")
+				reject("missing_authorization", "")
 				return
 			}
 
 			parts := strings.SplitN(auth, " ", 2)
 			if len(parts) != 2 || parts[0] != "Bearer" {
-				reject("invalid_authorization")
+				reject("invalid_authorization", "")
 				return
 			}
 
 			token := parts[1]
 			if len(token) == 0 || len(token) > 256 {
-				reject("invalid_token")
+				reject("invalid_token", "")
 				return
 			}
 
 			hash := hashSessionToken(token)
 			session, err := sessions.GetByTokenHash(r.Context(), hash)
 			if err != nil || session == nil {
-				reject("invalid_session")
+				reject("invalid_session", "")
 				return
 			}
 
 			if session.Revoked {
-				reject("session_revoked")
+				reject("session_revoked", session.AdminID)
 				return
 			}
 
 			if time.Now().After(session.ExpiresAt) {
-				reject("session_expired")
+				reject("session_expired", session.AdminID)
 				return
 			}
 
 			admin, err := admins.GetByID(r.Context(), session.AdminID)
 			if err != nil || admin == nil {
-				reject("admin_not_found")
+				reject("admin_not_found", session.AdminID)
 				return
 			}
 
@@ -226,7 +230,7 @@ func RBACCheck(perm rbac.Permission, auditLog *audit.Logger) func(http.Handler) 
 
 			if !rbac.HasPermission(rbac.Role(admin.Role), perm) {
 				if auditLog != nil {
-					_ = auditLog.Log(r.Context(), audit.AdminAuthzDenied, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+					_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminAuthzDenied, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 						"role":       admin.Role,
 						"permission": string(perm),
 						"method":     r.Method,
