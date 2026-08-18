@@ -7,6 +7,10 @@ on:
 permissions:
   pull-requests: read
 
+concurrency:
+  group: commitlint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   commitlint:
     name: Validate Conventional Commits
