@@ -110,6 +110,13 @@ func (h *BackupCodeHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		"count":  backupCodeCount,
 	})
 
+	// Before the codes are handed out: a set issued while containment failed is
+	// a set the caller believes is the only one that works.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "backup codes", "regenerated"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, BackupCodesResponse{
 		Codes:   codes,
 		Warning: "Save these codes. They will not be shown again.",

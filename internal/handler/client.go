@@ -105,9 +105,11 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse requested scopes
+	// Parse requested scopes. PostFormValue for the same reason the credentials
+	// use it: the grant is a body-only request, so a proxy that inspects bodies
+	// sees the whole of it and no component can be smuggled past in the URL.
 	var requestedScopes []string
-	if scopeStr := r.FormValue("scope"); scopeStr != "" {
+	if scopeStr := r.PostFormValue("scope"); scopeStr != "" {
 		requestedScopes = strings.Split(scopeStr, " ")
 	}
 
@@ -160,9 +162,23 @@ func parseClientCredentials(r *http.Request) (clientID, clientSecret string, ok 
 		}
 	}
 
-	// Try request body
-	clientID = r.FormValue("client_id")
-	clientSecret = r.FormValue("client_secret")
+	// Try request body.
+	//
+	// PostFormValue, not FormValue: FormValue calls ParseForm, which merges the
+	// URL query into r.Form, so it answers with the query value whenever the body
+	// omits the key. That made
+	// POST /client/token?client_id=..&client_secret=.. authenticate, which RFC
+	// 6749 2.3.1 forbids ("MUST NOT be included in the request URI") because a
+	// URL is retained by every component on the path that a body is not: the
+	// TLS-terminating ingress access log, any CDN or WAF, Referer on a later
+	// navigation, shell history, APM traces. The credential this endpoint takes
+	// gates kms:unwrap, mint:token and the service-document store and is
+	// long-lived, so the exposure is neither small nor short. vault42's own
+	// logger drops the query (internal/middleware/logger.go), which is exactly
+	// why the server has to refuse the parameter rather than rely on scrubbing:
+	// the leak lands outside vault42.
+	clientID = r.PostFormValue("client_id")
+	clientSecret = r.PostFormValue("client_secret")
 	if clientID != "" && clientSecret != "" {
 		return clientID, clientSecret, true
 	}
