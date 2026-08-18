@@ -36,7 +36,7 @@ func Fingerprint(softMode bool) func(http.Handler) http.Handler {
 
 			if !vaultcrypto.CompareFingerprints(fp, claims.Fingerprint) {
 				if softMode {
-					log.Printf("fingerprint check: mismatch user=%s ip=%s", httputil.SafeLogValue(claims.Subject), httputil.SafeLogValue(ClientIP(r))) // #nosec G706 -- sanitized via SafeLogValue
+					log.Printf("fingerprint check: mismatch user=%s ip=%s", httputil.SafeLogValue(claims.Subject), httputil.ObfuscatedIP(ClientIP(r))) // #nosec G706 -- subject sanitized via SafeLogValue; address masked to a network
 					next.ServeHTTP(w, r)
 					return
 				}

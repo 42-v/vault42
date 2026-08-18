@@ -114,7 +114,7 @@ func (dh *DecoyHandler) ServeDecoy(w http.ResponseWriter, r *http.Request, ip st
 	// %q escapes control bytes, which stops an escape sequence clearing the
 	// terminal of whoever is reading these logs during the scan that wrote them,
 	// and stops a newline forging a whole record.
-	log.Printf("bridge: decoy hit from %s path=%q coerced=%t", safeLogValue(ip), path, coerced) // #nosec G706 -- IP sanitized, path quoted and truncated
+	log.Printf("bridge: decoy hit from %s path=%q coerced=%t", obfuscatedIP(ip), path, coerced) // #nosec G706 -- masked network, path quoted and truncated
 
 	if dh.webhook != nil && !coerced {
 		dh.webhook.Send(map[string]interface{}{

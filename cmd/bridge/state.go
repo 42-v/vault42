@@ -80,7 +80,7 @@ func (fs *FlagStore) Flag(ip, reason string, score int) {
 	if fs.redis != nil {
 		val := encodeFlagValue(reason, score, now)
 		if err := fs.redis.Set("bridge:flag:"+ip, val, fs.ttl); err != nil {
-			log.Printf("bridge: redis SET failed for %s: %v", ip, err) // #nosec G706 -- IP is validated before flag
+			log.Printf("bridge: redis SET failed for %s: %v", obfuscatedIP(ip), err) // #nosec G706 -- masked network, never a full address
 		}
 	}
 }
@@ -97,7 +97,7 @@ func (fs *FlagStore) Unflag(ip string) bool {
 
 	if fs.redis != nil {
 		if err := fs.redis.Del("bridge:flag:" + ip); err != nil {
-			log.Printf("bridge: redis DEL failed for %s: %v", ip, err)
+			log.Printf("bridge: redis DEL failed for %s: %v", obfuscatedIP(ip), err)
 		}
 	}
 	return true

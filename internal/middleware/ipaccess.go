@@ -203,7 +203,7 @@ func denyByCIDR(w http.ResponseWriter, reqID, clientIP string, allowCIDRs, block
 
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
-		log.Printf("ip_access: deny req=%s ip=%q reason=unparseable_ip", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+		log.Printf("ip_access: deny req=%s ip=%s reason=unparseable_ip", reqID, httputil.ObfuscatedIP(clientIP)) // #nosec G706 -- ObfuscatedIP renders an unparseable value as the constant "invalid_ip"
 		httputil.WriteError(w, http.StatusForbidden, "access_denied")
 		return true
 	}
@@ -218,7 +218,7 @@ func denyByCIDR(w http.ResponseWriter, reqID, clientIP string, allowCIDRs, block
 			}
 		}
 		if !allowed {
-			log.Printf("ip_access: deny req=%s ip=%s reason=ip_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			log.Printf("ip_access: deny req=%s ip=%s reason=ip_not_in_allowlist", reqID, httputil.ObfuscatedIP(clientIP)) // #nosec G706 -- ObfuscatedIP emits a masked network, never a full address
 			httputil.WriteError(w, http.StatusForbidden, "access_denied")
 			return true
 		}
@@ -227,7 +227,7 @@ func denyByCIDR(w http.ResponseWriter, reqID, clientIP string, allowCIDRs, block
 	// Blocklist: reject if IP matches
 	for _, cidr := range blockCIDRs {
 		if cidr.Contains(ip) {
-			log.Printf("ip_access: deny req=%s ip=%s reason=ip_in_blocklist", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			log.Printf("ip_access: deny req=%s ip=%s reason=ip_in_blocklist", reqID, httputil.ObfuscatedIP(clientIP)) // #nosec G706 -- ObfuscatedIP emits a masked network, never a full address
 			httputil.WriteError(w, http.StatusForbidden, "access_denied")
 			return true
 		}
@@ -270,7 +270,7 @@ func denyByGeo(w http.ResponseWriter, r *http.Request, reqID, clientIP string, g
 	// quietly turn a blocklist into an allowlist of one.
 	if country == "" {
 		if len(geoAllow) > 0 {
-			log.Printf("ip_access: deny req=%s ip=%s reason=geo_country_unknown", reqID, httputil.SafeLogValue(clientIP)) // #nosec G706 -- sanitized via SafeLogValue
+			log.Printf("ip_access: deny req=%s ip=%s reason=geo_country_unknown", reqID, httputil.ObfuscatedIP(clientIP)) // #nosec G706 -- ObfuscatedIP emits a masked network, never a full address
 			httputil.WriteError(w, http.StatusForbidden, "access_denied")
 			return true
 		}
@@ -278,12 +278,12 @@ func denyByGeo(w http.ResponseWriter, r *http.Request, reqID, clientIP string, g
 	}
 
 	if len(geoAllow) > 0 && !geoAllow[country] {
-		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_not_in_allowlist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
+		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_not_in_allowlist", reqID, httputil.ObfuscatedIP(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- masked network; country sanitized via SafeLogValue
 		httputil.WriteError(w, http.StatusForbidden, "access_denied")
 		return true
 	}
 	if len(geoBlock) > 0 && geoBlock[country] {
-		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_in_blocklist", reqID, httputil.SafeLogValue(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- sanitized via SafeLogValue
+		log.Printf("ip_access: deny req=%s ip=%s country=%s reason=geo_in_blocklist", reqID, httputil.ObfuscatedIP(clientIP), httputil.SafeLogValue(country)) // #nosec G706 -- masked network; country sanitized via SafeLogValue
 		httputil.WriteError(w, http.StatusForbidden, "access_denied")
 		return true
 	}

@@ -45,7 +45,9 @@ func (stubServiceDocRepo) ListSharedForSubject(context.Context, string, string) 
 func (stubServiceDocRepo) ListAllForSubject(context.Context, string) ([]*repository.ServiceDocument, error) {
 	return nil, nil
 }
+
 func (stubServiceDocRepo) CountForOwner(context.Context, string, string) (int, error) { return 0, nil }
+
 func (stubServiceDocRepo) SumBytesForSubjectAndClient(context.Context, string, string) (int, error) {
 	return 0, nil
 }

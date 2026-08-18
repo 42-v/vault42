@@ -41,6 +41,7 @@ func (rlStubProvider) AuthURL(_, _, _ string) string { return "https://idp.test/
 func (rlStubProvider) Exchange(context.Context, string, string) (*oauth2.TokenResponse, error) {
 	return nil, nil
 }
+
 func (rlStubProvider) UserInfo(context.Context, string) (*oauth2.UserInfo, error) { return nil, nil }
 
 // rateLimitedMux builds the real route table with rate limiting on and one

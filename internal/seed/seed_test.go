@@ -443,10 +443,12 @@ func (m *errorClientRepo) Create(context.Context, *model.Client) error { return 
 func (m *errorClientRepo) GetByName(context.Context, string) (*model.Client, error) {
 	return nil, m.err
 }
+
 func (m *errorClientRepo) GetByID(context.Context, string) (*model.Client, error) { return nil, nil }
-func (m *errorClientRepo) List(context.Context) ([]*model.Client, error)          { return nil, nil }
-func (m *errorClientRepo) Update(context.Context, *model.Client) error            { return nil }
-func (m *errorClientRepo) Deactivate(context.Context, string) error               { return nil }
+
+func (m *errorClientRepo) List(context.Context) ([]*model.Client, error) { return nil, nil }
+func (m *errorClientRepo) Update(context.Context, *model.Client) error   { return nil }
+func (m *errorClientRepo) Deactivate(context.Context, string) error      { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -521,11 +523,16 @@ func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error   { 
 func (m *mockAdminUserRepo) IncrementFailedLogin(context.Context, string) (int, error) {
 	return 0, nil
 }
-func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error             { return nil }
-func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error         { return nil }
+
+func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error { return nil }
+
+func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error { return nil }
+
 func (m *mockAdminUserRepo) UpdateLastTOTPCounter(context.Context, string, int64) error { return nil }
-func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error              { return nil }
-func (m *mockAdminUserRepo) Revoke(context.Context, string) error                       { return nil }
+
+func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error { return nil }
+
+func (m *mockAdminUserRepo) Revoke(context.Context, string) error { return nil }
 
 // TestLoad_Table covers happy and all error paths in Load/validate.
 func TestLoad_Table(t *testing.T) {
