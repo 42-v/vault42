@@ -31,10 +31,6 @@
       "AR-nn": "docs/security.md. The engineering accepted-risk log, AR-1 through AR-18.",
       "CR-nn": "this register, the accepted_risks map below. Compliance-scoped.",
       "why": "Both documents once numbered their risks AR-nn from the same sequence, and four numbers meant different things in the two files: AR-14, AR-15, AR-17 and AR-18. A reader who followed a cross-reference landed on an unrelated risk, and docs/COMPLIANCE.md asserted the closure of AR-16 while docs/security.md AR-16 was open. The register's identifiers were renumbered to CR-nn so the namespaces cannot collide again. Go source and tests/attack cite AR-nn and always mean docs/security.md."
-    },
-    "retired_risks": {
-      "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
-      "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration."
     }
   },
   "standards": [
@@ -579,7 +575,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:491"
+        "internal/config/config.go:493"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -1014,7 +1010,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:277",
+        "internal/server/server.go:279",
         "internal/middleware/ratelimit.go:172"
       ],
       "tests": [
@@ -1059,7 +1055,7 @@
       "status": "Not Applicable",
       "evidence": [],
       "tests": [],
-      "notes": "Safe text rendering is a property of the client-side rendering code in web/src, which the declared scope assesses separately. The Go server emits JSON and never composes HTML for a browser to render as a document; the one server-rendered surface, the email templates, is covered by V1.3.1 and V1.3.7. The previous reason claimed vault42 ships no browser-facing application at all, which is untrue and was doing work it could not support.",
+      "notes": "Safe text rendering is a property of the client-side rendering code in web/src, which the declared scope assesses separately. The Go server emits JSON; the one server-rendered markup surface, the admin email templates, is classified under V1.3.1 and V1.3.7 rather than here. The reason this row used to give was a claim about the shipped binary rather than about scope, and it was false.",
       "na_basis": "scope-exclusion"
     },
     {
@@ -1360,7 +1356,7 @@
       "status": "Not Applicable",
       "evidence": [],
       "tests": [],
-      "notes": "postMessage is a browser API. Its use, and any origin check on it, lives in web/src, which the declared scope assesses separately. The Go server has no part in it. The previous reason claimed vault42 ships no browser-facing application at all.",
+      "notes": "postMessage is a browser API. Its use, and any origin check on it, live in web/src, which the declared scope assesses separately. The reason this row used to give was a claim about the shipped binary rather than about scope, and it was false.",
       "na_basis": "scope-exclusion"
     },
     {
@@ -1778,7 +1774,7 @@
       "status": "Met",
       "evidence": [
         "docs/spec.md",
-        "internal/server/server.go:277"
+        "internal/server/server.go:279"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2079,7 +2075,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/auth.go:105",
-        "internal/server/server.go:277"
+        "internal/server/server.go:279"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
@@ -2144,7 +2140,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:307",
+        "internal/server/server.go:309",
         "docs/api.md"
       ],
       "tests": [
@@ -2573,7 +2569,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "cmd/admin-gateway/main.go:249",
+        "cmd/admin-gateway/main.go:251",
         "cmd/admin-gateway/main.go:263"
       ],
       "tests": [
@@ -2685,7 +2681,7 @@
       "accepted_risk": "CR-14",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:437"
+        "internal/config/config.go:438"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue"
@@ -2884,7 +2880,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:735"
+        "internal/service/auth.go:744"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -3101,7 +3097,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/identity.go:178",
-        "internal/service/blob.go:50"
+        "internal/service/blob.go:67"
       ],
       "tests": [
         "TestASVSAuth_V8_2_2_BlobAccessDeniedWithoutPermission"
@@ -3448,7 +3444,7 @@
       "requirement": "Verify that the authorization server validates redirect URIs based on a client-specific allowlist of pre-registered URIs using exact string comparison.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/oauth.go:66",
+        "internal/handler/oauth.go:68",
         "internal/handler/oauth.go:126"
       ],
       "tests": [
@@ -3738,7 +3734,7 @@
       "tests": [
         "TestASVS_AbsentEndpointsAreActuallyAbsent"
       ],
-      "notes": "This requirement constrains the response types an OpenID Provider offers. vault42 occupies the relying party role, not the provider role: it publishes a deliberately minimal discovery document carrying its issuer, JWKS URI and access-token signing algorithm, and internal/handler/wellknown.go:66 explains in a comment which fields are omitted and why, rather than faking them. With no authorization endpoint of its own there is no response type for the requirement to constrain. TestASVS_AbsentEndpointsAreActuallyAbsent asserts the discovery document advertises nothing it does not implement.",
+      "notes": "This requirement constrains the response types an OpenID Provider offers. vault42 occupies the relying party role, not the provider role: it publishes a deliberately minimal discovery document carrying its issuer, JWKS URI and access-token signing algorithm, and internal/handler/wellknown.go:66 explains in a comment which fields are omitted and why, rather than faking them. Response types are chosen at an authorization endpoint, and vault42 acts as a client at the one it uses, which belongs to the upstream provider. TestASVS_AbsentEndpointsAreActuallyAbsent asserts the discovery document advertises nothing it does not implement.",
       "na_basis": "role"
     },
     {
@@ -4252,7 +4248,7 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:311"
+        "internal/config/config.go:314"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
@@ -4336,7 +4332,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "migrations/001_initial_schema.sql:355",
+        "migrations/001_initial_schema.sql:357",
         "migrations/002_revoke_vault_app_admin_select.sql"
       ],
       "tests": [
@@ -4523,7 +4519,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:307"
+        "internal/server/server.go:309"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4611,7 +4607,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:307"
+        "internal/server/server.go:309"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
@@ -4673,7 +4669,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:282",
+        "internal/audit/audit.go:286",
         "internal/audit/retention.go:70"
       ],
       "tests": [
@@ -4695,7 +4691,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/auth.go:307"
+        "internal/handler/auth.go:308"
       ],
       "tests": [
         "TestASVS_V3_3_1_LogoutInvalidatesRefreshToken"
@@ -4969,7 +4965,7 @@
       "status": "Not Applicable",
       "evidence": [],
       "tests": [],
-      "notes": "Prototype pollution is a defect class of JavaScript objects. Go has no prototype chain, so the requirement addresses a language construct the server-side code does not have; for the browser application it is assessed separately under the declared scope.",
+      "notes": "Prototype pollution is a defect class of JavaScript objects, and Go objects have no prototype chain, so the requirement addresses a language construct the server-side code does not use. For the browser application it is assessed separately under the declared scope.",
       "na_basis": "scope-exclusion"
     },
     {
@@ -5103,7 +5099,7 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:117",
-        "internal/audit/audit.go:282"
+        "internal/audit/audit.go:286"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -5146,7 +5142,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/middleware.go:206",
+        "internal/adminapi/middleware.go:208",
         "internal/adminapi/auth.go:107"
       ],
       "tests": [
@@ -6200,7 +6196,7 @@
       "requirement": "Authentication Feedback",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:478"
+        "internal/service/auth.go:479"
       ],
       "tests": [
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
@@ -6434,7 +6430,7 @@
       "requirement": "Provenance",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:82"
+        ".github/workflows/release.yml:84"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -6497,7 +6493,7 @@
       "requirement": "Software Supply Chain Failures",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:82"
+        ".github/workflows/release.yml:84"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance",
@@ -6644,7 +6640,7 @@
       "requirement": "Data minimisation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:282",
+        "internal/audit/audit.go:286",
         "internal/httputil/safelog.go:26"
       ],
       "tests": [
@@ -7074,5 +7070,9 @@
       ],
       "notes": ""
     }
-  ]
+  ],
+  "retired_risks": {
+    "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
+    "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration."
+  }
 }

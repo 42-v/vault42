@@ -63,8 +63,13 @@ type registerFile struct {
 		CompensatingControl string `json:"compensating_control"`
 		ResidualRisk        string `json:"residual_risk"`
 		RevisitWhen         string `json:"revisit_when"`
+		CostOfClosing       string `json:"cost_of_closing"`
 		SecurityMd          string `json:"security_md"`
 	} `json:"accepted_risks"`
+	// RetiredRisks records register identifiers that have closed. A reference to
+	// one has to resolve to something, or "CR-16 has since closed" is a dangling
+	// pointer wearing a status report's clothes.
+	RetiredRisks map[string]string `json:"retired_risks"`
 	Requirements []struct {
 		Standard      string   `json:"standard"`
 		Revision      string   `json:"revision"`
@@ -76,6 +81,10 @@ type registerFile struct {
 		Tests         []string `json:"tests"`
 		Notes         string   `json:"notes"`
 		AcceptedRisk  string   `json:"accepted_risk"`
+		// NABasis names the kind of reason a Not Applicable row rests on. See
+		// naBases in register_gates_test.go: leaving it unstated is how a claim
+		// about the code came to read like a claim about scope.
+		NABasis string `json:"na_basis"`
 	} `json:"requirements"`
 }
 

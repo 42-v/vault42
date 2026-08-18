@@ -464,7 +464,7 @@ Living document. Every attack vector here MUST have a corresponding test in `tes
 
 **Defense:** When `GEO_IP_HEADER` is configured but the header is absent (not behind the proxy), geo checks are skipped -- the request is still subject to IP allowlist/blocklist. For strict enforcement, combine geo-fencing with an IP allowlist restricted to the proxy's CIDR ranges.
 
-**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessGeoNoHeaderSkipsCheck, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessGeoNoHeaderIsDeniedUnderAnAllowlist, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
 
 ### 9.7 IP Blocklist Evasion via IPv4/IPv6 Duality
 
