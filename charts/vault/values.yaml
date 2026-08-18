@@ -145,14 +145,21 @@ blob:
   quotaBytes: "10485760"
 
 # ---- Seed ----
-# Declarative seeding of clients and users at startup. Data is stored in a
-# ConfigMap and mounted as /etc/vault/seed.json. Seeding is idempotent.
+# Declarative seeding of clients and users at startup. seed.users carries a
+# cleartext password per user, so the rendered data is a Secret mounted as
+# /etc/vault/seed.json, never a ConfigMap. Seeding is idempotent.
 seed:
   # -- Enable declarative seeding from JSON
   enabled: false
+  # -- Name of an existing Secret holding seed.json. Set it to keep seed
+  # credentials out of the values file and out of `helm get values` entirely;
+  # the chart then renders no seed object of its own.
+  existingSecret: ""
   # -- Client definitions to seed
   clients: []
-  # -- User definitions to seed
+  # -- User definitions to seed. Each entry's password is a real credential:
+  # anything that can read this values file, the release's stored values, or the
+  # rendered manifest can read it.
   users: []
 
 # ---- Secrets ----
