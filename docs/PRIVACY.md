@@ -189,6 +189,37 @@ recovery key).
 Administrator/operator accounts (used to run the service rather than to consume it) are out of
 the end-user scope of this policy and are addressed in the operational documentation.
 
+### 3.3 Operational logs
+
+The five stores above are the only places vault42 keeps personal data deliberately, and each one
+carries a retention period. The process log is not one of them: it is diagnostic output whose
+lifetime belongs to the Operator's log pipeline rather than to this service, so it is held to a
+stricter rule than the stores instead of a retention of its own.
+
+**A client IP address is never written to the process log in full.** Every log line that names one
+renders it through `httputil.ObfuscatedIP`, which keeps the IPv4 /24 or the IPv6 /64 and discards
+the rest, so a reader can still tell which network a refusal, an auto-flag or a fingerprint
+mismatch came from without the log becoming a second copy of the audit store. The full address is
+held only where §3.2 inventories it -- the audit log (P4) and the device record (P3) -- and the
+request id printed beside the masked network is the link to that record. A value that does not
+parse as an address is rendered as the constant `invalid_ip` rather than echoed back.
+
+The same rule covers the other identifiers that reach a log line: email addresses are masked
+before they are logged, blob reference names and labels are scrubbed from audit metadata (§3.1),
+and user ids appear only as the pseudonymous subject. `tests/compliance` asserts the masking
+helpers under ASVS V16.4.1, and `internal/middleware` and `cmd/bridge` each carry a test that
+fails if a full address reaches a log line.
+
+**The bridge (`cmd/bridge`), where deployed, holds whole addresses outside the log, and that is
+deliberate.** It is an optional deception proxy whose function is to decide that a client address
+is hostile and route it to a honeypot, so it keeps the address it flagged: in its in-memory flag
+store and, when Redis is configured, under `bridge:flag:<ip>` for the flag TTL (default 24 hours,
+`BRIDGE_FLAG_TTL`), after which it expires without further action. It discloses the address on the
+token-authenticated `GET /bridge/flags` and in the webhook body sent to the endpoint the Operator
+configures; the Operator is responsible for the retention applied by whatever receives that
+webhook. The lawful basis is Art. 6(1)(f), legitimate interest in resisting automated abuse. The
+bridge's own process log follows the masking rule above.
+
 ---
 
 ## 4. Retention Periods

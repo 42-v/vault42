@@ -81,6 +81,13 @@ func TestObfuscatedIP(t *testing.T) {
 		{"ipv6", "2001:db8::cafe:1", "2001:db8::"},
 		{"ipv6 full", "2001:db8:1:2:3:4:5:6", "2001:db8:1:2::"},
 		{"ipv4 mapped", "::ffff:192.0.2.1", "192.0.2.0"},
+		// A caller with only r.RemoteAddr in hand has a host:port pair. Before
+		// this was handled it fell through to "invalid_ip", so the one function
+		// whose job is to keep a full address out of a log line silently threw
+		// away the address instead of masking it, and nothing said so.
+		{"ipv4 with port", "203.0.113.42:5555", "203.0.113.0"},
+		{"ipv6 with port", "[2001:db8::cafe:1]:5555", "2001:db8::"},
+		{"host is not an address", "not-an-ip:99", "invalid_ip"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
