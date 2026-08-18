@@ -86,13 +86,25 @@ func poolConfig(connString string, opts Options) (*pgxpool.Config, error) {
 	// instant, and the whole pool reconnects in lockstep once an hour, forever.
 	config.MaxConnLifetimeJitter = config.MaxConnLifetime / 5
 
-	if config.ConnConfig.RuntimeParams == nil {
-		config.ConnConfig.RuntimeParams = map[string]string{}
-	}
-	setTimeoutParam(config.ConnConfig.RuntimeParams, "statement_timeout", opts.StatementTimeout)
-	setTimeoutParam(config.ConnConfig.RuntimeParams, "lock_timeout", opts.LockTimeout)
-	setTimeoutParam(config.ConnConfig.RuntimeParams, "idle_in_transaction_session_timeout", idleInTransactionTimeout)
+	config.ConnConfig.RuntimeParams = withTimeouts(config.ConnConfig.RuntimeParams, opts)
 	return config, nil
+}
+
+// withTimeouts writes the server-side ceilings into params, creating the map if
+// the caller had none, and returns it.
+//
+// ParseConfig always populates RuntimeParams today, so the nil branch is
+// defensive — but writing into a nil map panics, and a pool that panics at
+// startup because a dependency changed shape is a worse failure than one that
+// allocates a map.
+func withTimeouts(params map[string]string, opts Options) map[string]string {
+	if params == nil {
+		params = map[string]string{}
+	}
+	setTimeoutParam(params, "statement_timeout", opts.StatementTimeout)
+	setTimeoutParam(params, "lock_timeout", opts.LockTimeout)
+	setTimeoutParam(params, "idle_in_transaction_session_timeout", idleInTransactionTimeout)
+	return params
 }
 
 // setTimeoutParam writes a Postgres timeout runtime parameter in milliseconds.

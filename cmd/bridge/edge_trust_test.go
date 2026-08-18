@@ -241,6 +241,21 @@ func TestBridgeDoesNotFlagACoercedBrowser(t *testing.T) {
 		t.Fatal("a cross-site navigation to a decoy was not flagged; only forced subresource " +
 			"loads are meant to be exempt")
 	}
+
+	// no-cors with a document destination is not a shape a browser produces for
+	// a subresource, so it does not earn the exemption either.
+	odd := httptest.NewRequest(http.MethodGet, "/wp-admin/", nil)
+	odd.RemoteAddr = "198.51.100.6:5000"
+	odd.Header.Set("User-Agent", "Mozilla/5.0")
+	odd.Header.Set("Sec-Fetch-Site", "cross-site")
+	odd.Header.Set("Sec-Fetch-Mode", "no-cors")
+	odd.Header.Set("Sec-Fetch-Dest", "document")
+	b.ServeHTTP(httptest.NewRecorder(), odd)
+
+	if !b.flags.IsFlagged("198.51.100.6") {
+		t.Fatal("no-cors with a document destination was exempted; the exemption is for " +
+			"subresource destinations only")
+	}
 }
 
 // TestBridgeTruncatesTheDecoyReason is the F-20 regression: a 1 MB request line

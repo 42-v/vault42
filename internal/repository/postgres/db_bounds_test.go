@@ -83,6 +83,20 @@ func TestPoolConfigIgnoresAnOutOfRangeMaxConns(t *testing.T) {
 	}
 }
 
+// TestWithTimeoutsAllocatesWhenTheCallerHasNoMap covers the defensive branch:
+// pgx populates RuntimeParams today, and writing into a nil map panics, so a
+// pool that starts at all is better than one that panics because a dependency
+// changed shape.
+func TestWithTimeoutsAllocatesWhenTheCallerHasNoMap(t *testing.T) {
+	got := withTimeouts(nil, Options{StatementTimeout: 2 * time.Second})
+	if got == nil {
+		t.Fatal("withTimeouts(nil, ...) returned nil")
+	}
+	if got["statement_timeout"] != "2000" {
+		t.Fatalf("statement_timeout = %q, want \"2000\"", got["statement_timeout"])
+	}
+}
+
 func TestPoolConfigRejectsAnUnparseableDSN(t *testing.T) {
 	if _, err := poolConfig("://not a dsn", Options{}); err == nil {
 		t.Fatal("poolConfig accepted an unparseable connection string")

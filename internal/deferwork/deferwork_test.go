@@ -176,3 +176,26 @@ func TestPackageLevelPoolIsBounded(t *testing.T) {
 		t.Fatalf("the package pool dropped %d jobs during a single-job test", got)
 	}
 }
+
+// TestPackageCloseDrainsTheDefaultPool covers the wrapper cmd/vault calls on
+// shutdown. The default dispatcher is swapped for the duration so closing it
+// here does not shut the pool the rest of this binary is using.
+func TestPackageCloseDrainsTheDefaultPool(t *testing.T) {
+	prev := defaultDispatcher
+	defaultDispatcher = New(2, 8)
+	t.Cleanup(func() { defaultDispatcher = prev })
+
+	var ran atomic.Int64
+	for i := 0; i < 3; i++ {
+		Go(func(context.Context) { ran.Add(1) })
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := ran.Load(); got != 3 {
+		t.Fatalf("the package drain ran %d of 3 jobs", got)
+	}
+}

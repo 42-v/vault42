@@ -3,6 +3,7 @@ package middleware
 import (
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,5 +67,26 @@ func TestLocalRateLimiterReusesExpiredSlot(t *testing.T) {
 	}
 	if got := l.localEntryCount(); got != 1 {
 		t.Fatalf("entries = %d, want 1", got)
+	}
+}
+
+// TestLastRealIPCapsTheHopWalk covers the real-IP header's own hop cap. The
+// header is comma-joined by some proxies, so it carries the same unbounded walk
+// X-Forwarded-For does: 1 MiB of header is ~70k ParseIP calls per request.
+func TestLastRealIPCapsTheHopWalk(t *testing.T) {
+	parts := make([]string, maxXFFHops*4)
+	for i := range parts {
+		parts[i] = "10.0.0.2"
+	}
+	// The only address that would survive the walk sits past the cap.
+	parts[0] = "203.0.113.50"
+
+	if got := lastRealIP(strings.Join(parts, ",")); got != "10.0.0.2" {
+		t.Fatalf("lastRealIP = %q, want the rightmost in-budget hop; the walk is not capped", got)
+	}
+
+	// A realistic header still resolves.
+	if got := lastRealIP("203.0.113.50, 10.0.0.2"); got != "10.0.0.2" {
+		t.Fatalf("lastRealIP on a two-hop header = %q, want 10.0.0.2", got)
 	}
 }

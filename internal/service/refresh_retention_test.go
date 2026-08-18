@@ -120,6 +120,31 @@ func TestRefreshRetentionStartStopIsDrainable(t *testing.T) {
 	}
 }
 
+// TestRefreshRetentionLogsASweepFailure covers the loop's error arm: a sweep
+// that fails must not stop the sweeper, or one transient database blip retires
+// the reaper until the next restart.
+func TestRefreshRetentionLogsASweepFailure(t *testing.T) {
+	tried := make(chan struct{}, 1)
+	repo := &mocks.MockRefreshTokenRepo{
+		DeleteExpiredFn: func(context.Context) (int64, error) {
+			select {
+			case tried <- struct{}{}:
+			default:
+			}
+			return 0, errors.New("db down")
+		},
+	}
+	r := NewRefreshTokenRetention(repo)
+	r.Start(context.Background())
+	defer r.Stop()
+
+	select {
+	case <-tried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sweeper never attempted a sweep")
+	}
+}
+
 // TestRefreshRetentionStopsOnContextCancel covers the other exit.
 func TestRefreshRetentionStopsOnContextCancel(t *testing.T) {
 	repo := &mocks.MockRefreshTokenRepo{
