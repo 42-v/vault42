@@ -19,15 +19,44 @@ spec:
         app: mailpit
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # The image declares no USER, so it defaulted to root, and it was pulled
+      # from a tag the registry can move under a running pod. 65534 is nobody,
+      # which exists in the image; mailpit is a static binary that owns nothing
+      # on disk, so any non-root uid serves. It keeps messages in memory unless
+      # MP_DATABASE names a file, which is why /tmp is the only writable path it
+      # is given.
+      securityContext:
+        {{- include "vault.podSecurityContext" (dict "uid" 65534 "gid" 65534) | nindent 8 }}
       containers:
         - name: mailpit
-          image: "{{ .Values.mailpit.image.repository | default "axllent/mailpit" }}:{{ .Values.mailpit.image.tag | default "latest" }}"
+          image: "{{ include "vault.image" (dict "image" .Values.mailpit.image "repository" "axllent/mailpit") }}"
+          securityContext:
+            {{- include "vault.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
           ports:
             - containerPort: 1025
               name: smtp
             - containerPort: 8025
               name: web
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml (.Values.mailpit.resources | default dict) | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: web
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
