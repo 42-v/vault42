@@ -439,7 +439,7 @@ func TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive(t *testing.T) {
 	}
 }
 
-// The behavioural half, on the byte comparison that ships. VerifyPassword ends in
+// The behavioral half, on the byte comparison that ships. VerifyPassword ends in
 // subtle.ConstantTimeCompare over the derived key, and a hash differing only in
 // its final byte is the case a prefix comparison would accept.
 func TestASVS_V6_5_1_PasswordVerificationRefusesANearMissHash(t *testing.T) {

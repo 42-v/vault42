@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,37 +144,12 @@ func TestNIST_NoForcedPasswordExpiration(t *testing.T) {
 	// Scan all User fields for anything suggesting password expiry
 	for i := 0; i < userType.NumField(); i++ {
 		name := userType.Field(i).Name
-		lower := toLower(name)
-		if contains(lower, "passwordexpir") || contains(lower, "passwordmaxage") || contains(lower, "pwexpir") {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "passwordexpir") || strings.Contains(lower, "passwordmaxage") ||
+			strings.Contains(lower, "pwexpir") {
 			t.Fatalf("model.User field %q suggests password expiration — NIST violation", name)
 		}
 	}
-}
-
-// toLower is a simple ASCII lowercase helper to avoid importing strings.
-func toLower(s string) string {
-	b := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
-}
-
-// contains checks if s contains substr (ASCII, case-insensitive already handled by caller).
-func contains(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Section 7.1: Token Not in URL / Response Body ---

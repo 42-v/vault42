@@ -133,31 +133,42 @@ func TestEmailTemplateXSSInjection(t *testing.T) {
 		data     email.TemplateData
 	}{
 		{"script_in_appname", email.TemplateVerification, "AppName", `<script>alert('xss')</script>`, email.TemplateData{
-			AppName: `<script>alert('xss')</script>`, URL: "https://vault.test/verify?token=abc"}},
+			AppName: `<script>alert('xss')</script>`, URL: "https://vault.test/verify?token=abc",
+		}},
 		{"uppercase_script_in_appname", email.TemplateVerification, "AppName", `<SCRIPT>alert(1)</SCRIPT>`, email.TemplateData{
-			AppName: `<SCRIPT>alert(1)</SCRIPT>`, URL: "https://vault.test/verify?token=abc"}},
+			AppName: `<SCRIPT>alert(1)</SCRIPT>`, URL: "https://vault.test/verify?token=abc",
+		}},
 		{"img_onerror_in_appname", email.TemplateVerification, "AppName", `<img src=x onerror=alert(1)>`, email.TemplateData{
-			AppName: `<img src=x onerror=alert(1)>`, URL: "https://vault.test/verify?token=abc"}},
+			AppName: `<img src=x onerror=alert(1)>`, URL: "https://vault.test/verify?token=abc",
+		}},
 		{"svg_onload_in_appname", email.TemplateVerification, "AppName", `<svg onload=alert(1)>`, email.TemplateData{
-			AppName: `<svg onload=alert(1)>`, URL: "https://vault.test/verify?token=abc"}},
+			AppName: `<svg onload=alert(1)>`, URL: "https://vault.test/verify?token=abc",
+		}},
 		{"base_hijack_in_appname", email.TemplateVerification, "AppName", `<base href="https://evil.test/">`, email.TemplateData{
-			AppName: `<base href="https://evil.test/">`, URL: "https://vault.test/verify?token=abc"}},
+			AppName: `<base href="https://evil.test/">`, URL: "https://vault.test/verify?token=abc",
+		}},
 		{"javascript_url", email.TemplateVerification, "URL", "javascript:alert(document.cookie)", email.TemplateData{
-			AppName: "TestVault", URL: "javascript:alert(document.cookie)"}},
+			AppName: "TestVault", URL: "javascript:alert(document.cookie)",
+		}},
 		{"data_uri_in_url", email.TemplatePasswordReset, "URL", "data:text/html,<script>alert('xss')</script>", email.TemplateData{
-			AppName: "TestVault", URL: "data:text/html,<script>alert('xss')</script>"}},
+			AppName: "TestVault", URL: "data:text/html,<script>alert('xss')</script>",
+		}},
 		{"script_in_code", email.TemplateEmailOTP, "Code", `<script>alert('otp')</script>`, email.TemplateData{
 			AppName: "TestVault", URL: "https://vault.test/verify?token=abc",
-			Code: `<script>alert('otp')</script>`}},
+			Code: `<script>alert('otp')</script>`,
+		}},
 		{"iframe_in_device", email.TemplateNewDevice, "Device", `<iframe src=javascript:alert(1)>`, email.TemplateData{
 			AppName: "TestVault", URL: "https://vault.test/verify?token=abc",
-			Device: `<iframe src=javascript:alert(1)>`}},
+			Device: `<iframe src=javascript:alert(1)>`,
+		}},
 		{"script_in_country", email.TemplateNewLocation, "Country", `<script>alert(1)</script>`, email.TemplateData{
 			AppName: "TestVault", URL: "https://vault.test/verify?token=abc",
-			Country: `<script>alert(1)</script>`}},
+			Country: `<script>alert(1)</script>`,
+		}},
 		{"onerror_in_ip", email.TemplateAccountLocked, "IP", `<img src=x onerror=alert(1)>`, email.TemplateData{
 			AppName: "TestVault", URL: "https://vault.test/verify?token=abc",
-			IP: `<img src=x onerror=alert(1)>`}},
+			IP: `<img src=x onerror=alert(1)>`,
+		}},
 	}
 
 	for _, tc := range payloads {
@@ -241,11 +252,14 @@ func TestEmailTemplateXSSInjectionThroughAnOperatorOverride(t *testing.T) {
 		data    email.TemplateData
 	}{
 		{"script_in_appname", `<script>alert(1)</script>`, email.TemplateData{
-			AppName: `<script>alert(1)</script>`, URL: "https://vault.test/v", Code: "123456"}},
+			AppName: `<script>alert(1)</script>`, URL: "https://vault.test/v", Code: "123456",
+		}},
 		{"javascript_url", "javascript:alert(1)", email.TemplateData{
-			AppName: "Acme", URL: "javascript:alert(1)", Code: "123456"}},
+			AppName: "Acme", URL: "javascript:alert(1)", Code: "123456",
+		}},
 		{"onerror_in_code", `<img src=x onerror=alert(1)>`, email.TemplateData{
-			AppName: "Acme", URL: "https://vault.test/v", Code: `<img src=x onerror=alert(1)>`}},
+			AppName: "Acme", URL: "https://vault.test/v", Code: `<img src=x onerror=alert(1)>`,
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mailer, sent := mailerUnderTest(t, store)
@@ -295,7 +309,7 @@ func TestEmailTemplateValidation(t *testing.T) {
 
 // TestEmailTemplateDefaults verifies the branding a deployment configures
 // actually reaches the delivered body. It used to assert len(html) != 0 after
-// setting a brand colour, which held for any output at all.
+// setting a brand color, which held for any output at all.
 func TestEmailTemplateDefaults(t *testing.T) {
 	renderer, err := email.NewTemplateRenderer("")
 	if err != nil {
@@ -310,7 +324,7 @@ func TestEmailTemplateDefaults(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	if !strings.Contains(sent.html, "#00FF42") {
-		t.Errorf("the configured brand colour is absent from the delivered body:\n%s", sent.html)
+		t.Errorf("the configured brand color is absent from the delivered body:\n%s", sent.html)
 	}
 	if !strings.Contains(sent.html, "The Vault") {
 		t.Errorf("the configured app name is absent from the delivered body:\n%s", sent.html)

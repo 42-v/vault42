@@ -43,6 +43,7 @@ func (f *fakeAdminUsers) Create(context.Context, *model.AdminUser) error { retur
 func (f *fakeAdminUsers) GetByID(_ context.Context, id string) (*model.AdminUser, error) {
 	return f.byID[id], nil
 }
+
 func (f *fakeAdminUsers) GetByUsername(context.Context, string) (*model.AdminUser, error) {
 	return nil, nil
 }
@@ -67,12 +68,15 @@ func (f *fakeAdminSessions) Create(_ context.Context, s *model.AdminSession) err
 	f.byHash[s.TokenHash] = s
 	return nil
 }
+
 func (f *fakeAdminSessions) GetByTokenHash(_ context.Context, hash string) (*model.AdminSession, error) {
 	return f.byHash[hash], nil
 }
+
 func (f *fakeAdminSessions) ListByAdmin(context.Context, string) ([]*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (f *fakeAdminSessions) ListActive(context.Context) ([]*model.AdminSession, error) {
 	return nil, nil
 }
@@ -381,7 +385,7 @@ func TestAdminAuth_RevokedSessionIsRefused(t *testing.T) {
 // TestAdminListKeys_NoPrivateKeyMaterial verifies that ListKeys never returns
 // private key material. It reads the response the wired router produces for an
 // authenticated caller rather than a literal the test wrote itself; the previous
-// version marshalled a map it had just constructed and checked that map for
+// version marshaled a map it had just constructed and checked that map for
 // fields it had not put in it, which no change to the handler could fail.
 func TestAdminListKeys_NoPrivateKeyMaterial(t *testing.T) {
 	router := adminRouterUnderTest(t)

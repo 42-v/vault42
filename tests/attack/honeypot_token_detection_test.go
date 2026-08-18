@@ -877,13 +877,13 @@ func TestATrapRefreshTokenIsTheShapeARealOneIs(t *testing.T) {
 		t.Fatalf("trap login: %v", err)
 	}
 
-	real, err := vaultcrypto.RandomToken(32)
+	genuine, err := vaultcrypto.RandomToken(32)
 	if err != nil {
 		t.Fatalf("mint a real refresh token to compare against: %v", err)
 	}
-	if len(res.RefreshToken) != len(real) {
+	if len(res.RefreshToken) != len(genuine) {
 		t.Fatalf("the trap refresh token is %d characters against a real one's %d",
-			len(res.RefreshToken), len(real))
+			len(res.RefreshToken), len(genuine))
 	}
 	for _, c := range res.RefreshToken {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
