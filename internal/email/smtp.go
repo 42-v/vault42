@@ -103,7 +103,7 @@ func (s *SMTPSender) deliver(addr, envelopeFrom, to string, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("email: smtp connect %s: %w", addr, err)
 	}
-	defer c.Close() // #nosec G104 -- Quit below is the ordered close; this is the abort path
+	defer func() { _ = c.Close() }() // #nosec G104 -- Quit below is the ordered close; this is the abort path
 
 	// Extension sends EHLO on first use, so a server that refuses EHLO reports
 	// no capabilities and is treated as offering no STARTTLS — the fail-closed

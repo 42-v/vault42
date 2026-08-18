@@ -361,6 +361,14 @@ func TestAPITop10_API10_2023_ThirdPartyResponsesAreValidatedBeforeUse(t *testing
 // renaming a receiver or reordering the operands does not read as the control
 // being deleted. What it will not accept is the comparison disappearing, or
 // surviving in a function that has no way to say no.
+// boundCheckOps are the binary operators that can express a ceiling test on a
+// config field. Arithmetic and logical operators appear in the same
+// expressions and are deliberately not bound checks.
+var boundCheckOps = map[token.Token]bool{
+	token.LSS: true, token.LEQ: true, token.GTR: true, token.GEQ: true,
+	token.EQL: true, token.NEQ: true,
+}
+
 func quotaCeilingIsEnforced(t *testing.T, rel, field string) (compared, refuses bool) {
 	t.Helper()
 
@@ -387,9 +395,7 @@ func quotaCeilingIsEnforced(t *testing.T, rel, field string) (compared, refuses 
 			if !ok {
 				return true
 			}
-			switch bin.Op {
-			case token.LSS, token.LEQ, token.GTR, token.GEQ, token.EQL, token.NEQ:
-			default:
+			if !boundCheckOps[bin.Op] {
 				return true
 			}
 			if mentionsConfigField(bin.X, field) || mentionsConfigField(bin.Y, field) {
