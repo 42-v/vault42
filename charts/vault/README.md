@@ -83,6 +83,12 @@ honeypot holds no data worth keeping by design, but it is a change, not a no-op.
 upgrading; Helm will not, because the object changed kind. Set
 `seed.existingSecret` to keep the credentials out of the values file entirely.
 
+**`postgres.enabled: true` starts working.** The bundled postgres never got past
+`initdb` in any profile: its init script's second here-document ended with an
+indented `EOSQL` against a `<<-` that strips tabs and not spaces, so it was never
+terminated, and bash parses the whole file before running any of it. The container
+exited 2 under the entrypoint's `set -e`. `vault_app` was therefore never created.
+
 **`postgres.appPassword` is gone.** No template ever read it.
 
 **mailpit and cloudflared are pinned by digest.** `mailpit.image.digest` and
