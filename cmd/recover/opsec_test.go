@@ -14,7 +14,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"strings"
 	"testing"
@@ -259,4 +263,133 @@ func TestRun_NoPermissionWarningForAKeyOnlyItsOwnerCanRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Wiping the key buffer
+// ---------------------------------------------------------------------------
+
+// zero is the only thing in this tool that can wipe key material. The parsed
+// key's big.Ints cannot be overwritten and neither can a Go string, so the PEM
+// buffer - the copy holding the key in its directly usable on-disk encoding - is
+// the whole of what is wipeable, and this is what wipes it.
+//
+// It had no test of any kind: `zero(` appeared in no test file in the package.
+func TestZero_OverwritesEveryByte(t *testing.T) {
+	buf := []byte("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n-----END PRIVATE KEY-----\n")
+	// Without this the assertion below would pass on a buffer that was already
+	// zero, which is the one input that cannot tell a wipe from a no-op.
+	if bytes.IndexFunc(buf, func(r rune) bool { return r != 0 }) < 0 {
+		t.Fatal("the fixture is already all zeroes, so nothing below proves anything")
+	}
+
+	// An alias onto the same backing array. zero has to overwrite in place: a
+	// version that reassigned a fresh slice would leave the original bytes -
+	// the ones a core dump or a swapped-out page would carry - exactly where
+	// they were, and would look identical to its caller.
+	alias := buf[:]
+
+	zero(buf)
+
+	for i, b := range alias {
+		if b != 0 {
+			t.Fatalf("byte %d of the wiped buffer is %#x, want 0x00; the key survives in %q", i, b, alias)
+		}
+	}
+}
+
+// The buffers this is called on come from io.ReadAll, which returns an empty
+// non-nil slice for an empty file. Neither shape may panic: the tool would be
+// dying on a zero-length key file instead of reporting one.
+func TestZero_EmptyAndNilBuffersAreNoOps(t *testing.T) {
+	for name, buf := range map[string][]byte{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("zero(%s) panicked: %v", name, r)
+				}
+			}()
+			zero(buf)
+		})
+	}
+}
+
+// The call site, which is what the mutation deleted. Replacing `zero(keyPEM)`
+// in loadRecoveryKey with `_ = keyPEM` left the whole suite green, and the tool
+// then carried the recovery key in its on-disk encoding, in a live heap buffer,
+// for the rest of the run.
+//
+// There is no seam that lets a test observe the buffer after loadRecoveryKey
+// returns: it is a local, and the parsed key holds none of those bytes. So this
+// asserts on the source instead, which is honest about what it can and cannot
+// see. It checks that the buffer readKeyFile produced is passed to zero, and
+// that the call is a statement of the function body rather than one nested
+// inside a branch, because a wipe that only runs when the parse succeeds is not
+// the property main.go documents.
+func TestLoadRecoveryKey_WipesThePEMBufferItRead(t *testing.T) {
+	const src = "main.go"
+	file, err := parser.ParseFile(token.NewFileSet(), src, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", src, err)
+	}
+
+	body := funcBody(t, file, "loadRecoveryKey")
+
+	// The name the PEM bytes arrive under, taken from the source rather than
+	// assumed, so renaming the variable cannot silently disarm the check below.
+	pemVar := ""
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) == 0 {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "readKeyFile" {
+			if ident, ok := assign.Lhs[0].(*ast.Ident); ok {
+				pemVar = ident.Name
+			}
+		}
+		return true
+	})
+	if pemVar == "" {
+		t.Fatal("loadRecoveryKey no longer assigns the result of readKeyFile, so this test cannot " +
+			"tell which buffer holds the key")
+	}
+
+	for _, stmt := range body.List {
+		expr, ok := stmt.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := expr.X.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok || fn.Name != "zero" || len(call.Args) != 1 {
+			continue
+		}
+		if arg, ok := call.Args[0].(*ast.Ident); ok && arg.Name == pemVar {
+			return
+		}
+	}
+
+	t.Errorf("loadRecoveryKey never calls zero(%s) at the top level of its body: the PEM buffer "+
+		"holding the recovery key in its on-disk encoding is left intact for the rest of the run, "+
+		"where a core dump or a swapped-out page carries a directly usable private key file", pemVar)
+}
+
+func funcBody(t *testing.T, file *ast.File, name string) *ast.BlockStmt {
+	t.Helper()
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Recv == nil && fn.Name.Name == name && fn.Body != nil {
+			return fn.Body
+		}
+	}
+	t.Fatalf("no func %s in the parsed source", name)
+	return nil
 }
