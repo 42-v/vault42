@@ -73,6 +73,42 @@ spec:
         - port: {{ .Values.smtp.port | int }}
           protocol: TCP
     {{- end }}
+    # Outbound HTTPS.
+    #
+    # Without this rule a default install runs with hibpCheck: true and no route
+    # to api.pwnedpasswords.com, so the breach check fails open on every password
+    # set and says nothing: HIBPClient.IsBreached returns false when the API is
+    # unreachable, by design, because an HIBP outage must not stop a user
+    # changing their password. A permanently unreachable API is indistinguishable
+    # from a permanent outage, so the control was on in configuration and absent
+    # in fact.
+    #
+    # The same rule carries the two other outbound calls the vault makes when
+    # they are configured: the OIDC/OAuth providers in internal/oauth2 and the
+    # SendGrid API. All three are 443, none is knowable as an in-cluster
+    # selector, and a hostname is not something a NetworkPolicy can express.
+    #
+    # httpsEgress.cidrs narrows it. Empty means any destination on 443, which is
+    # what "the breach check works out of the box" costs; a cluster that can
+    # enumerate its egress addresses should list them, and one that wants neither
+    # should set enabled: false and hibpCheck: false together, so that the
+    # configuration says what the network does.
+    {{- if .Values.networkPolicy.httpsEgress.enabled }}
+    {{- with .Values.networkPolicy.httpsEgress.cidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- else }}
+    - ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- end }}
 ---
 # PostgreSQL: only accept from vault
 apiVersion: networking.k8s.io/v1
