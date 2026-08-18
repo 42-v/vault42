@@ -26,6 +26,22 @@ on:
 permissions:
   contents: read
 
+# This is a reusable workflow, called by both ci.yml and release.yml as well as
+# run on its own cron, and inside a called workflow `github.workflow`,
+# `github.ref` and `github.event_name` all resolve to the CALLER's. A group
+# keyed on `github.ref` alone would therefore make a pull request's security
+# run cancel a release's. All three keys are in the group so the three callers
+# never collide.
+#
+# Cancellation is on for the nightly, which should never queue behind its own
+# previous run, and for pull requests, where a force-push makes the run it
+# replaces worthless. It is off for a tag push: a release's security gate must
+# not be cancelled by anything.
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'schedule' || github.event_name == 'pull_request' }}
+
 jobs:
   govulncheck:
     name: Go Vulnerability Check
