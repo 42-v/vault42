@@ -112,7 +112,12 @@ func TestAlertDetectorIsInstalledOnEveryProfile(t *testing.T) {
 // that cannot reach an operator. A dispatcher installed on every profile and
 // pointed at nothing is the same gap with a longer call graph.
 func TestTheInstalledSinkIsNotANoOp(t *testing.T) {
-	src := readFileString(t, filepath.Join(repoRoot(t), alertWiringSource))
+	// Comment-blanked, not read raw: a commented-out installation still contains
+	// SetDetector, and strings.Index would find that one first. The slice below
+	// would then be a sentence about the wiring rather than the wiring, and the
+	// LogSink assertion would be made against prose. Blanking preserves offsets
+	// and line breaks, so the "one expression, one line" slice is unaffected.
+	src := commentFreeSource(t, filepath.Join(repoRoot(t), alertWiringSource))
 
 	idx := strings.Index(src, detectorInstaller)
 	if idx < 0 {
