@@ -675,3 +675,90 @@ func sortedKeys(m map[string]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// --- Gate 6: a row without a reason is a row nobody re-read -----------------
+
+// thinNotesBaseline freezes the rows that carry no substantive reason.
+//
+// The register's own promise is that every requirement was "classified against
+// source at a cited file:line", and the existing gates enforce that for Not
+// Applicable rows only -- an N/A with no reason is indistinguishable from "not
+// assessed". A *Met* row was allowed to say nothing at all, and 44 of them do.
+// GDPR Art. 17, the right to erasure, was one of them: it carried an empty
+// notes field while the erasure tombstone was leaving password_hash on the row.
+// The empty field did not cause that, but it is why nobody looked.
+//
+// Writing 44 rationales in the same change that discovered the problem is how a
+// register acquires errors rather than losing them, so they are frozen. The set
+// is a ratchet: a new row must carry a reason, and an entry that gains one must
+// be deleted from this list.
+var thinNotesBaseline = map[string]struct{}{
+	"GDPR|Art. 30":      {},
+	"GDPR|Art. 32":      {},
+	"GDPR|Art. 5(1)(c)": {},
+	"GDPR|Art. 5(1)(e)": {},
+	"GDPR|Art. 7":       {},
+	"IETF RFC / OpenID Connect|OIDC Core 1.0 s3.1.3.7": {},
+	"IETF RFC / OpenID Connect|RFC 7636":               {},
+	"IETF RFC / OpenID Connect|RFC 8725 s3.1":          {},
+	"IETF RFC / OpenID Connect|RFC 9700 s2.1.1":        {},
+	"IETF RFC / OpenID Connect|RFC 9700 s4.14.2":       {},
+	"IETF RFC / OpenID Connect|RFC 9700 s4.3.2":        {},
+	"IETF RFC / OpenID Connect|RFC 9700 s4.5.3":        {},
+	"NIST SP 800-53|AC-2":                              {},
+	"NIST SP 800-53|AC-3":                              {},
+	"NIST SP 800-53|AC-6":                              {},
+	"NIST SP 800-53|AC-7":                              {},
+	"NIST SP 800-53|AU-11":                             {},
+	"NIST SP 800-53|AU-12":                             {},
+	"NIST SP 800-53|AU-3":                              {},
+	"NIST SP 800-53|AU-8":                              {},
+	"NIST SP 800-53|CM-6":                              {},
+	"NIST SP 800-53|IA-5":                              {},
+	"NIST SP 800-53|SA-11":                             {},
+	"NIST SP 800-53|SC-12":                             {},
+	"NIST SP 800-53|SC-13":                             {},
+	"NIST SP 800-53|SC-23":                             {},
+	"NIST SP 800-53|SC-28":                             {},
+	"NIST SP 800-53|SC-5":                              {},
+	"NIST SP 800-53|SC-8":                              {},
+	"NIST SP 800-53|SI-10":                             {},
+	"NIST SP 800-53|SI-11":                             {},
+	"NIST SP 800-53|SR-11":                             {},
+	"NIST SP 800-53|SR-3":                              {},
+	"NIST SP 800-53|SR-4":                              {},
+	"NIST SP 800-63B-4|2.4.3":                          {},
+	"NIST SP 800-63B-4|7":                              {},
+	"OWASP ASVS|V10.4.6":                               {},
+	"OWASP ASVS|V11.3.2":                               {},
+	"OWASP ASVS|V11.4.3":                               {},
+	"OWASP Top 10|A01:2025":                            {},
+	"OWASP Top 10|A02:2025":                            {},
+	"OWASP Top 10|A04:2025":                            {},
+	"OWASP Top 10|A06:2025":                            {},
+	"OWASP Top 10|A08:2025":                            {},
+}
+
+func TestComplianceRegister_EveryRowCarriesASubstantiveReason(t *testing.T) {
+	reg := loadRegister(t)
+
+	for _, r := range reg.Requirements {
+		key := r.Standard + "|" + r.RequirementID
+		thin := len(strings.Fields(r.Notes)) < 5
+
+		if _, frozen := thinNotesBaseline[key]; frozen {
+			if !thin {
+				t.Errorf("%s now carries a reason and is still in thinNotesBaseline. Delete the "+
+					"entry: the list may only shrink.", key)
+			}
+			continue
+		}
+		if thin {
+			t.Errorf("%s is %s and says nothing about why: %q. A status without an argument is a "+
+				"vote. The evidence and the test say where the control is; the notes are the only "+
+				"place that says what it does and why it is enough.",
+				key, r.Status, r.Notes)
+		}
+	}
+	t.Logf("%d rows frozen without a substantive reason; the list may only shrink", len(thinNotesBaseline))
+}

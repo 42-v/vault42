@@ -2,6 +2,8 @@ package compliance
 
 import (
 	"context"
+	"go/ast"
+	"go/token"
 	"regexp"
 	"strings"
 	"testing"
@@ -185,18 +187,48 @@ func TestAPITop10_API4_2023_EveryConsumableResourceHasACeiling(t *testing.T) {
 	}
 
 	// Storage quotas, which are what bound accumulation over time.
-	blob := readCodeOnly(t, "internal/service/blob.go")
-	for _, guard := range []string{
-		"quota.UsedCount >= s.config.MaxBlobsPerUser",
-		"quota.UsedBytes+estimatedStored > s.config.QuotaBytes",
+	//
+	// Read structurally, against the config fields, rather than by matching the
+	// expression's text. The first version of this assertion matched
+	// "quota.UsedCount >= s.config.MaxBlobsPerUser" verbatim and broke when the
+	// admin-plane work fixed a quota TOCTOU by taking a lock and hoisting the
+	// values into locals -- a strictly better implementation of the same
+	// control. A gate that fails on a correct refactor teaches people to edit
+	// the gate, which is how a gate stops meaning anything.
+	//
+	// The property is: each configured ceiling is compared against something,
+	// and the comparison refuses. Neither half is enough on its own. A ceiling
+	// that is read and never compared is a setting; a comparison that does not
+	// refuse is a log line.
+	for _, ceiling := range []struct{ field, why string }{
+		{"MaxBlobsPerUser", "the per-user object count"},
+		{"QuotaBytes", "the per-user stored-byte total"},
 	} {
-		if !strings.Contains(blob, guard) {
-			t.Errorf("API4: the blob service no longer enforces %q. A rate limit bounds a burst; "+
-				"only a quota bounds a caller who uploads slowly and forever.", guard)
+		compared, refuses := quotaCeilingIsEnforced(t, "internal/service/blob.go", ceiling.field)
+		if !compared {
+			t.Errorf("API4: %s is never compared against anything in internal/service/blob.go, so "+
+				"%s is a configuration field the code reads and does not enforce. A rate limit "+
+				"bounds a burst; only a quota bounds a caller who uploads slowly and forever.",
+				ceiling.field, ceiling.why)
+			continue
+		}
+		if !refuses {
+			t.Errorf("API4: %s is compared, but no branch containing that comparison returns "+
+				"ErrQuotaExceeded. A ceiling that is measured and not enforced reads like a control "+
+				"and is not one.", ceiling.field)
 		}
 	}
 	if !strings.Contains(readCodeOnly(t, "internal/service/servicedoc.go"), "QuotaBytesPerSubject") {
 		t.Error("API4: the service-document store no longer carries a per-subject byte quota")
+	}
+
+	// Negative control. The two assertions above are satisfied by a scan that
+	// says yes to everything, so the detector is asked about a field that does
+	// not exist. If this reports enforcement, the checks above passed for the
+	// wrong reason.
+	if compared, _ := quotaCeilingIsEnforced(t, "internal/service/blob.go", "MaxBlobsPerFictionalUser"); compared {
+		t.Error("API4: the quota detector reports a comparison against a field that does not exist, " +
+			"so its verdict on the real fields means nothing")
 	}
 }
 
@@ -320,4 +352,82 @@ func TestAPITop10_API10_2023_ThirdPartyResponsesAreValidatedBeforeUse(t *testing
 			t.Errorf("API10: %s disables certificate verification on an outbound client", pf.path)
 		}
 	}
+}
+
+// quotaCeilingIsEnforced reports whether a config field is compared anywhere in
+// a file, and whether the function holding that comparison refuses on it.
+//
+// It walks the AST rather than the text so that hoisting a value into a local,
+// renaming a receiver or reordering the operands does not read as the control
+// being deleted. What it will not accept is the comparison disappearing, or
+// surviving in a function that has no way to say no.
+func quotaCeilingIsEnforced(t *testing.T, rel, field string) (compared, refuses bool) {
+	t.Helper()
+
+	var target parsedFile
+	for _, pf := range productionGoFiles(t) {
+		if pf.path == rel {
+			target = pf
+			break
+		}
+	}
+	if target.file == nil {
+		t.Fatalf("API4: %s is not in the production scan; the gate has no subject", rel)
+	}
+
+	ast.Inspect(target.file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+
+		var comparedHere bool
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			bin, ok := inner.(*ast.BinaryExpr)
+			if !ok {
+				return true
+			}
+			switch bin.Op {
+			case token.LSS, token.LEQ, token.GTR, token.GEQ, token.EQL, token.NEQ:
+			default:
+				return true
+			}
+			if mentionsConfigField(bin.X, field) || mentionsConfigField(bin.Y, field) {
+				comparedHere = true
+			}
+			return true
+		})
+		if !comparedHere {
+			return true
+		}
+		compared = true
+
+		// The refusal: somewhere in the same function, the quota error is
+		// returned. Scoped to the function rather than the file so that a
+		// comparison in one place and a refusal in another does not read as
+		// enforcement.
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			ident, ok := inner.(*ast.Ident)
+			if ok && ident.Name == "ErrQuotaExceeded" {
+				refuses = true
+			}
+			return true
+		})
+		return true
+	})
+	return compared, refuses
+}
+
+// mentionsConfigField reports whether an expression reads the named field off a
+// config struct, however the struct is reached.
+func mentionsConfigField(e ast.Expr, field string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if ok && sel.Sel != nil && sel.Sel.Name == field {
+			found = true
+		}
+		return true
+	})
+	return found
 }
