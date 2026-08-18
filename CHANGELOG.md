@@ -43,6 +43,18 @@ shape. Everything under Public API below is breaking-after-1.0.0 and free before
   (default 720h) bounds total family age independently of activity, and the reissued expiry
   is clamped to the deadline so the last rotation before it cannot walk out with a full
   window.
+* **No inactivity timeout existed either.** The absolute bound above ends a session that is
+  in constant use; nothing ended one that had stopped being used, so a stolen refresh cookie
+  stayed rotatable for the whole 7-day TTL. `VAULT_INACTIVITY_TIMEOUT` (default 1h, the
+  NIST SP 800-63B-4 §2.2.3 AAL2 figure) terminates a family that has gone that long without
+  rotating, revoking it and forcing a full login rather than a step-up. **It needs no new
+  column and no migration**: a family only advances by rotating, and the row a client
+  presents is always its family's newest generation, so its `created_at` already is the
+  instant the session last did something — the same value `GET /user/sessions` publishes as
+  `last_used_at`. Nothing is stamped per request. Issuance also clamps the refresh expiry to
+  the window, so the cookie max-age tells the truth and a timed-out family stops holding a
+  slot in `VAULT_MAX_SESSIONS_PER_USER`. **Upgrade impact:** any session idle longer than the
+  window, including "remember me", is logged out once. See `docs/UPGRADING.md`.
 * **`GET /admin/clients/{id}` returned the argon2id client secret hash.** It serialized
   `*model.Client` directly. Tests already proved the session-token and password hashes did
   not leak; nobody had written the equivalent for clients. All 22 serialized model structs now
