@@ -276,7 +276,7 @@ func TestEveryAuthenticatedRouteCarriesTheDPoPWrapper(t *testing.T) {
 		return true
 	})
 
-	// The floor. A classifier that recognises nothing reports no violations,
+	// The floor. A classifier that recognizes nothing reports no violations,
 	// which is the same "ok" as a correctly wired mux.
 	if authenticated < 20 {
 		t.Fatalf("only %d authenticated route registrations were classified in %s; the vault mounts "+

@@ -63,8 +63,10 @@ func renderChart(t *testing.T, sets ...string) []byte {
 	if err != nil {
 		t.Skip("helm is not on PATH, so the rendered NetworkPolicy cannot be produced")
 	}
-	args := []string{"template", "release", chartDir, "--namespace", "vault",
-		"--set", "adminGateway.tls.secretName=admin-tls"}
+	args := []string{
+		"template", "release", chartDir, "--namespace", "vault",
+		"--set", "adminGateway.tls.secretName=admin-tls",
+	}
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
@@ -115,7 +117,7 @@ func TestChartBreachCheckIsReachableWhereverItIsEnabled(t *testing.T) {
 	allowed, policies := vaultEgressAllows443(t, renderChart(t))
 	if policies < 1 {
 		t.Fatal("the default render contains no NetworkPolicy selecting the vault component. " +
-			"Either the chart stopped shipping one or this gate no longer recognises it; " +
+			"Either the chart stopped shipping one or this gate no longer recognizes it; " +
 			"every assertion below would pass by finding nothing.")
 	}
 	if !allowed {
@@ -153,6 +155,6 @@ func TestChartBreachCheckIsReachableWhereverItIsEnabled(t *testing.T) {
 	rendered := string(renderChart(t, "hibpCheck=false"))
 	if !strings.Contains(rendered, `VAULT_HIBP_CHECK: "false"`) {
 		t.Error("hibpCheck=false does not reach VAULT_HIBP_CHECK in the rendered ConfigMap, so " +
-			"the operator's switch and the process's behaviour are two different things")
+			"the operator's switch and the process's behavior are two different things")
 	}
 }

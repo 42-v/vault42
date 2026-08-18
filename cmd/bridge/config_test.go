@@ -223,7 +223,7 @@ func TestLoadConfigReadsEveryOverride(t *testing.T) {
 // rather than by parsing.
 //
 // What was dangerous was the silence. This test used to pin the fallback and
-// stop there, which read as coverage of the whole behaviour while the only thing
+// stop there, which read as coverage of the whole behavior while the only thing
 // an operator could act on — being told the value they set is not the value in
 // force — was absent and unasserted. Both halves are asserted now.
 func TestLoadConfigIgnoresUnparseableNumbers(t *testing.T) {

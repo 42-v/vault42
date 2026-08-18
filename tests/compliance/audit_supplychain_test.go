@@ -468,29 +468,45 @@ var claimsForbiddenInReleaseNotes = []struct {
 	standard string
 	why      string
 }{
-	{regexp.MustCompile(`(?i)SLSA[ _-]*(build[ _-]*)?level[ _-]*[0-9]`), "SLSA",
+	{
+		regexp.MustCompile(`(?i)SLSA[ _-]*(build[ _-]*)?level[ _-]*[0-9]`), "SLSA",
 		"a SLSA level describes the build platform, and the register assesses this repository. " +
 			"Describe the mechanism -- signed provenance, GitHub's attestation service, Rekor -- " +
-			"which `gh attestation verify` checks, or land a SLSA standard block with rows."},
-	{regexp.MustCompile(`(?i)\bAAL[ _-]?3\b`), "NIST SP 800-63B-4",
+			"which `gh attestation verify` checks, or land a SLSA standard block with rows.",
+	},
+	{
+		regexp.MustCompile(`(?i)\bAAL[ _-]?3\b`), "NIST SP 800-63B-4",
 		"AAL3 needs a hardware authenticator the verifier has established as one; registration " +
-			"accepts \"none\" attestation and stores no AAGUID. See service.AALForMethods."},
-	{regexp.MustCompile(`(?i)FIPS[ _-]*140`), "FIPS 140",
-		"no cryptographic module in this tree has been validated, and the register says so."},
-	{regexp.MustCompile(`(?i)PCI[ _-]*DSS`), "PCI-DSS",
+			"accepts \"none\" attestation and stores no AAGUID. See service.AALForMethods.",
+	},
+	{
+		regexp.MustCompile(`(?i)FIPS[ _-]*140`), "FIPS 140",
+		"no cryptographic module in this tree has been validated, and the register says so.",
+	},
+	{
+		regexp.MustCompile(`(?i)PCI[ _-]*DSS`), "PCI-DSS",
 		"vault42 stores, processes and transmits no cardholder data and has never been in a " +
-			"CDE assessment."},
-	{regexp.MustCompile(`(?i)SOC[ _-]*2\b`), "SOC 2",
-		"SOC 2 attests an organisation, not a codebase."},
-	{regexp.MustCompile(`(?i)ISO/?[ _-]*(IEC[ _-]*)?27001`), "ISO/IEC 27001",
-		"ISO 27001 attests an organisation, not a codebase."},
-	{regexp.MustCompile(`(?i)CIS[ _-]+Kubernetes`), "CIS Kubernetes Benchmark",
+			"CDE assessment.",
+	},
+	{
+		regexp.MustCompile(`(?i)SOC[ _-]*2\b`), "SOC 2",
+		"SOC 2 attests an organization, not a codebase.",
+	},
+	{
+		regexp.MustCompile(`(?i)ISO/?[ _-]*(IEC[ _-]*)?27001`), "ISO/IEC 27001",
+		"ISO 27001 attests an organization, not a codebase.",
+	},
+	{
+		regexp.MustCompile(`(?i)CIS[ _-]+Kubernetes`), "CIS Kubernetes Benchmark",
 		"the benchmark is overwhelmingly control-plane, etcd, kubelet and node configuration " +
 			"that a chart does not own. PSS-restricted is the workload-scoped standard, and it " +
-			"is what is claimed."},
-	{regexp.MustCompile(`(?i)FIDO2[ _-]+L[12]\b`), "FIDO2",
+			"is what is claimed.",
+	},
+	{
+		regexp.MustCompile(`(?i)FIDO2[ _-]+L[12]\b`), "FIDO2",
 		"FIDO Alliance L1/L2 certify authenticators. There is no such certification for a " +
-			"relying party; W3C WebAuthn RP conformance is what the register claims."},
+			"relying party; W3C WebAuthn RP conformance is what the register claims.",
+	},
 }
 
 func TestSupplyChain_TheReleaseNotesClaimNoStandardTheRegisterOmits(t *testing.T) {

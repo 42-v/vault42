@@ -36,7 +36,7 @@ if a future release ever does change it.
 was actually running needs no new key. An installation built from 0.9.9's `NOTES.txt`, which
 listed five of them, was already broken before the upgrade.
 
-**Schema.** v0.9.9 shipped 12 migrations; this release ships 38, so an upgrade applies 26 in
+**Schema.** v0.9.9 shipped 12 migrations; this release ships 39, so an upgrade applies 27 in
 one go (033 is deliberately absent — the runner sorts filenames and skips what is applied, so gaps
 are harmless). Take the backup first.
 

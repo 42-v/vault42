@@ -39,7 +39,7 @@ import (
 //
 // vault42 never asks an upstream provider how it authenticated the user, so the
 // fallback is not a branch — it is the only path. A provider assertion is
-// modelled as MethodFederated, which AALForMethods treats as a first factor and
+// modeled as MethodFederated, which AALForMethods treats as a first factor and
 // never as a possession factor, so a federated-only session is stamped at the
 // floor. Anything above the floor has to be earned by a second factor vault42
 // verified itself, which is the property that makes ignoring the upstream acr

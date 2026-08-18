@@ -33,7 +33,7 @@ func TestTheRequestLogCannotBeForgedThroughTheRequestPath(t *testing.T) {
 		"NUL truncates the record for a shipper": {"%00", "\x00"},
 		"ESC drives the reader's terminal":       {"%1b", "\x1b"},
 		"backspace rewrites the line as drawn":   {"%08", "\x08"},
-		"U+0085 NEL splits a record":             {"%c2%85", ""},
+		"U+0085 NEL splits a record":             {"%c2%85", "\u0085"},
 		"U+2028 splits a record for a shipper":   {"%e2%80%a8", " "},
 	}
 

@@ -389,7 +389,7 @@ func complianceTestFunctions(t *testing.T) []complianceTestFn {
 		}
 
 		// Two passes: the suite's own integer constants first, because a floor
-		// written against one is only recognisable as a floor once they are known.
+		// written against one is only recognizable as a floor once they are known.
 		type parsedTestFile struct {
 			name   string
 			fset   *token.FileSet
@@ -652,8 +652,10 @@ func goCommentTestNames(t *testing.T) (map[string]struct{}, []commentMention) {
 		parsed, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if parseErr != nil {
 			// A file that does not compile is a different gate's problem, so it
-			// contributes nothing rather than failing the walk.
-			return nil
+			// contributes nothing rather than failing the walk. Returning the
+			// error would make every gate in this file red whenever any file in
+			// the tree is mid-edit, which trains people to ignore them.
+			return nil //nolint:nilerr // an unparseable file is another gate's failure, not this one's
 		}
 		files++
 
@@ -831,9 +833,9 @@ func hasCorpusFloor(fn *ast.FuncDecl, intConsts map[string]struct{}) bool {
 }
 
 // suiteConsts collects the package-level constants a suite declares with a
-// literal value: the integers, so a floor written against one is recognised as a
+// literal value: the integers, so a floor written against one is recognized as a
 // floor, and the strings, so a migration opened through a named constant is
-// recognised as a migration.
+// recognized as a migration.
 func suiteConsts(files []*ast.File) (ints map[string]struct{}, strs map[string]string) {
 	ints, strs = map[string]struct{}{}, map[string]string{}
 	for _, file := range files {
@@ -855,7 +857,10 @@ func suiteConsts(files []*ast.File) (ints map[string]struct{}, strs map[string]s
 					if !ok {
 						continue
 					}
-					switch lit.Kind {
+					// token.Token has ninety-odd members and this walk cares
+					// about two of them, so the default is the whole point
+					// rather than an oversight.
+					switch lit.Kind { //nolint:exhaustive // only INT and STRING constants can be a floor or a corpus root
 					case token.INT:
 						ints[name.Name] = struct{}{}
 					case token.STRING:
@@ -873,7 +878,7 @@ func suiteConsts(files []*ast.File) (ints map[string]struct{}, strs map[string]s
 // migrationReads reports which migration files a test names, and whether it
 // reads the whole migrations directory instead.
 //
-// It matches the value, not the call: a migration is recognised whether it
+// It matches the value, not the call: a migration is recognized whether it
 // arrives as "migrations/013_session_lifetime.sql", as the last argument of a
 // filepath.Join, or through a package-level string constant. A directory read
 // short-circuits the whole question, because a test that walks migrations/

@@ -918,7 +918,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			return nil, err
 		}
 		s.sendImportClaimLink(user.ID, user.Email, app)
-		s.recordLoginFailure(ctx, user, ip, ua, app, "import_claim_required", 20)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "import_claim_required")
 		return nil, ErrInvalidCredentials
 	}
 
@@ -949,7 +949,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			return nil, err
 		}
 		s.sendForcedResetLink(user.ID, user.Email, app)
-		s.recordLoginFailure(ctx, user, ip, ua, app, "password_reset_required", 20)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "password_reset_required")
 		if input.DiscloseStatus {
 			return nil, ErrPasswordResetRequired
 		}
@@ -962,7 +962,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, err // 503 — propagate before recording failure (consistent with dummy hash path)
 	}
 	if err != nil || !valid {
-		s.recordLoginFailure(ctx, user, ip, ua, app, "wrong_password", 20)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "wrong_password")
 		return nil, ErrInvalidCredentials
 	}
 
@@ -999,7 +999,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// it indefinitely without ever locking out, writing no audit rows and
 	// leaving vault_login_failed_total flat.
 	if !user.EmailVerified {
-		s.recordLoginFailure(ctx, user, ip, ua, app, "email_not_verified", 20)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "email_not_verified")
 		return nil, ErrInvalidCredentials
 	}
 
@@ -1279,7 +1279,19 @@ func (s *AuthService) trapCookieMaxAge(rememberMe bool) int {
 // drift apart into distinguishable side effects — lockout advances at the same
 // rate and trips at the same threshold whatever the reason was. Only the audit
 // reason differs, and the audit log is not visible to the caller.
-func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, ip, ua, app, reason string, riskScore int) {
+// loginFailureRiskScore is the score every login failure carries into the audit
+// log.
+//
+// It was a parameter, and every one of the four call sites passed 20 -- the
+// parameter offered a choice nobody made. It is a constant until something reads
+// the field: an adversarial review established that risk_score is written and no
+// code anywhere consumes it, so a varying number would have been a varying
+// number nothing acts on. When alerting lands (register rows AU-6 and A09:2025,
+// both open), this is where a real score belongs, and making it a parameter
+// again is the smaller half of that change.
+const loginFailureRiskScore = 20
+
+func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, ip, ua, app, reason string) {
 	// Failed-login counter is best-effort; lockout is enforced by isAccountLocked.
 	_ = s.users.IncrementFailedLogin(ctx, user.ID)
 	s.recordFailedAttempt(ctx, user.ID, ip)
@@ -1288,7 +1300,7 @@ func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, 
 		s.metrics.RecordLoginFailed()
 	}
 	s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"reason": reason}, riskScore)
+		map[string]interface{}{"reason": reason}, loginFailureRiskScore)
 
 	// Send lock notification email once per lockout window
 	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {

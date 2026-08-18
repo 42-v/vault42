@@ -737,7 +737,7 @@ func dropsAllCapabilities(containerSC map[string]any) bool {
 // CAP_SYS_ADMIN.
 func capabilitiesAddedBack(containerSC map[string]any) []string {
 	add, _ := mapAt(containerSC, "capabilities")["add"].([]any)
-	var beyond []string
+	beyond := make([]string, 0, len(add))
 	for _, entry := range add {
 		name, _ := entry.(string)
 		if strings.EqualFold(name, "NET_BIND_SERVICE") {

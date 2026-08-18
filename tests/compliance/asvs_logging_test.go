@@ -520,23 +520,23 @@ func rawRequestValue(n ast.Node) string {
 // while fmt.Sprintf("%s", r.UserAgent()) contains the same read and is not.
 func unsanitisedRequestReads(arg ast.Expr) []string {
 	var found []string
-	var walk func(n ast.Node, sanitised bool)
-	walk = func(n ast.Node, sanitised bool) {
+	var walk func(n ast.Node, sanitized bool)
+	walk = func(n ast.Node, sanitized bool) {
 		if n == nil {
 			return
 		}
 		if call, ok := n.(*ast.CallExpr); ok {
 			if _, clean := logSanitisers[callName(call)]; clean {
-				sanitised = true
+				sanitized = true
 			}
 		}
-		if !sanitised {
+		if !sanitized {
 			if why := rawRequestValue(n); why != "" {
 				found = append(found, why)
 			}
 		}
 		for _, child := range astChildren(n) {
-			walk(child, sanitised)
+			walk(child, sanitized)
 		}
 	}
 	walk(arg, false)
@@ -544,7 +544,7 @@ func unsanitisedRequestReads(arg ast.Expr) []string {
 }
 
 // astChildren returns a node's child expressions. ast.Inspect cannot be used
-// here because the sanitised flag has to travel down one branch only.
+// here because the sanitized flag has to travel down one branch only.
 func astChildren(n ast.Node) []ast.Node {
 	var out []ast.Node
 	ast.Inspect(n, func(c ast.Node) bool {

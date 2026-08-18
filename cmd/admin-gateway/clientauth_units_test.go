@@ -29,10 +29,10 @@ func TestAnUnknownAllowKindMatchesNothing(t *testing.T) {
 	e := allowEntry{kind: allowKind("mystery"), value: "admin-operator", raw: "mystery:admin-operator"}
 
 	if e.matches(leaf, true) {
-		t.Error("an entry of an unrecognised kind matched a certificate")
+		t.Error("an entry of an unrecognized kind matched a certificate")
 	}
 	if e.matches(leaf, false) {
-		t.Error("an entry of an unrecognised kind matched a certificate with no SANs")
+		t.Error("an entry of an unrecognized kind matched a certificate with no SANs")
 	}
 }
 
