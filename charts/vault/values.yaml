@@ -8,6 +8,8 @@ image:
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default: Chart appVersion)
   tag: ""
+  # -- Pin the image by digest. Set, it wins over the tag above.
+  digest: ""
 
 # -- Image pull secrets for private registries
 imagePullSecrets: []
@@ -38,13 +40,21 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# -- Container security context
+# -- Container security context. The values here are the same restricted profile
+# the vault.containerSecurityContext helper renders for the bundled
+# infrastructure workloads; they live in values because these are the product's
+# own containers and an operator may have to tune them for a specific cluster.
+# Anything removed from this map is removed from every product workload at once.
 securityContext:
   allowPrivilegeEscalation: false
+  privileged: false
   readOnlyRootFilesystem: true
+  runAsNonRoot: true
   capabilities:
     drop:
       - ALL
+  seccompProfile:
+    type: RuntimeDefault
 
 # -- Vault profile: production | embedded | dev
 profile: production
@@ -284,6 +294,19 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
+# -- Startup probe configuration. autoMigrate is on by default, so the first
+# boot against a new or upgraded database runs the schema migration before the
+# server answers anything. Without a startup probe the liveness probe's
+# initialDelaySeconds is what has to cover that migration, and a slow one on a
+# large database gets the pod killed part-way through it. failureThreshold x
+# periodSeconds is the budget: five minutes here.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 5
+  failureThreshold: 60
+
 autoscaling:
   # -- Enable HPA
   enabled: false
@@ -417,6 +440,8 @@ bridge:
     tag: ""
     # -- Bridge image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Bridge listen address
   listenAddr: ":8080"
   # -- Requests per window before scoring
@@ -488,6 +513,8 @@ adminGateway:
     tag: ""
     # -- Image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Bind the gateway to the node's loopback via the host network namespace.
   # Off by default. hostNetwork is forbidden by both the baseline and the
   # restricted Pod Security Standards profiles, so shipping it on meant the

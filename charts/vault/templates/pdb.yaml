@@ -14,4 +14,27 @@ spec:
       # Subset match: scope to the vault component so the budget does not also
       # count the bridge and honeypot pods (see networkpolicy.yaml).
       app.kubernetes.io/component: vault
+{{- if and .Values.frontend.enabled (gt (int (.Values.frontend.replicaCount | default 1)) 1) }}
+---
+# The frontend is the second workload in this chart that can run more than one
+# replica, and it was the second workload with no budget: a node drain could take
+# every copy of the UI at once while the vault behind it stayed protected.
+#
+# Gated on replicaCount, deliberately. A budget over a single-replica Deployment
+# has no non-disruptive eviction to allow, so it does not protect the pod -- it
+# blocks node drains until someone deletes the budget by hand.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "vault.fullname" . }}-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
 {{- end }}

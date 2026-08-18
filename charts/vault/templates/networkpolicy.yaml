@@ -121,6 +121,73 @@ spec:
         - port: 6379
           protocol: TCP
 {{- end }}
+{{- if .Values.frontend.enabled }}
+---
+# Frontend: ingress on its own port, egress to DNS only.
+# It serves files off its own image and never calls the vault -- the browser does
+# that directly -- so a frontend reaching anything else in the namespace is a
+# frontend doing something it was not built to do. No `from`: the client is an
+# ingress controller whose namespace this chart cannot know.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 3000
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+{{- if .Values.mailpit.enabled }}
+---
+# Mailpit: ingress on SMTP and its web UI, egress to DNS only.
+# It is a development mail sink that must never deliver anywhere, so the absence
+# of any outbound rule but DNS is the point of this policy rather than an
+# oversight in it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-mailpit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mailpit
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 1025
+          protocol: TCP
+        - port: 8025
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
 {{- if .Values.bridge.enabled }}
 ---
 # Bridge: allow ingress on 8080, egress to real vault + honeypot vault + redis + DNS

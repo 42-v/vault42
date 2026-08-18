@@ -18,9 +18,22 @@ The Vault has been deployed.
   curl http://localhost:8080/healthz
 
 3. Register a client:
+  ADMIN_TOKEN=$(kubectl get secret -n {{ .Release.Namespace }} {{ include "vault.secretName" . }} \
+    -o jsonpath='{.data.{{ .Values.secrets.keys.adminToken }}}' | base64 -d)
   kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "vault.fullname" . }} -- \
-    /vault add-client --admin-token "$(cat /run/secrets/{{ .Values.secrets.keys.adminToken }})" \
+    /app/vault add-client --admin-token "$ADMIN_TOKEN" \
     --name "frontend" --role "frontend" --scopes "user:read,user:write"
+
+  The binary is /app/vault; the path printed here used to be /vault, which is
+  where it is built, not where the image puts it. The token is read on your own
+  machine because the previous form expanded $(cat /run/secrets/...) there too,
+  against a file that only exists in the pod, and the image is distroless, so
+  there is no shell in the pod to expand it in either.
+
+  --admin-token puts the token in the argument list of the process it starts,
+  readable from /proc/<pid>/cmdline by anything sharing that pod's PID namespace
+  for as long as the command runs, and left in your shell history by the line
+  above. Prefer the admin gateway for anything routine.
 
 4. JWKS endpoint:
   /.well-known/jwks.json
