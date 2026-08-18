@@ -147,11 +147,28 @@ func MustDeliver(label, value string) (string, error) {
 	if err == nil {
 		return dest, nil
 	}
+	return "", Refuse(err)
+}
+
+// Refuse is MustDeliver's second half on its own, for a caller that has
+// something to undo first.
+//
+// InitAdminToken is the one: it has to claim admin_token_hash before it knows
+// whether it is the replica that mints, so by the time delivery can fail the
+// hash is already in the database. Exiting from inside MustDeliver would skip
+// every deferred cleanup -- os.Exit does not run them -- and leave exactly the
+// state that has no way back: a stored hash of a token nobody holds, in a row
+// whose presence makes the next boot skip minting forever.
+//
+// So the caller releases the claim, then calls this. Like MustDeliver, it does
+// not return in production; the error it returns is for a test that has replaced
+// the exit, and returning it keeps the caller's own error shape intact.
+func Refuse(err error) error {
 	log.Printf("REFUSING TO START: a first-boot credential was generated and could not be "+
 		"delivered: %v. Nothing was stored, so fixing the sink and starting again mints a "+
 		"fresh one; starting anyway would serve with no credential in force.", err)
 	exitProcess(1)
-	return "", err
+	return err
 }
 
 // openSink resolves where this process is allowed to put a credential. The

@@ -213,12 +213,20 @@ func TestCLI_InitAdminToken(t *testing.T) {
 	t.Run("generates when unset", func(t *testing.T) {
 		firstBootSink(t)
 		admin.GetFn = func(context.Context, string) (string, error) { return "", nil }
-		set := false
-		admin.SetFn = func(context.Context, string, string) error { set = true; return nil }
+		claimed := false
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, value string) (string, error) {
+			claimed = true
+			return value, nil
+		}
+		admin.SetFn = func(context.Context, string, string) error {
+			t.Error("the hash must be written by the atomic claim, not by a second statement " +
+				"that three booting replicas each reach with an empty read")
+			return nil
+		}
 		if err := c.InitAdminToken(ctx); err != nil {
 			t.Fatalf("InitAdminToken: %v", err)
 		}
-		if !set {
+		if !claimed {
 			t.Error("InitAdminToken did not store a token when unset")
 		}
 	})

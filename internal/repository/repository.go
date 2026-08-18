@@ -392,6 +392,16 @@ type AdminConfigRepository interface {
 	Get(ctx context.Context, key string) (string, error)
 	// Set creates or updates a configuration key-value pair.
 	Set(ctx context.Context, key, value string) error
+	// ClaimIfAbsent records value under key when the key holds nothing yet, and
+	// returns whatever the key holds afterwards. The loser of a race gets the
+	// incumbent value, never its own.
+	//
+	// On the interface rather than only on the Postgres type because Get
+	// followed by Set is not the same operation and the difference is only
+	// visible when two processes boot together, which is the shipped
+	// configuration: replicaCount 3, each running the first-boot paths. A caller
+	// that cannot reach this one writes the read-then-write it makes a mistake.
+	ClaimIfAbsent(ctx context.Context, key, value string) (string, error)
 	// Delete removes a configuration entry by key.
 	Delete(ctx context.Context, key string) error
 }

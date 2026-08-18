@@ -138,6 +138,17 @@ func (s *storingAdminConfig) Set(_ context.Context, key, value string) error {
 	return nil
 }
 
+func (s *storingAdminConfig) ClaimIfAbsent(_ context.Context, key, value string) (string, error) {
+	if s.setErr != nil {
+		return "", s.setErr
+	}
+	if existing, ok := s.values[key]; ok {
+		return existing, nil
+	}
+	s.values[key] = value
+	return value, nil
+}
+
 func (s *storingAdminConfig) Delete(_ context.Context, key string) error {
 	delete(s.values, key)
 	return nil

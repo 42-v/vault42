@@ -159,10 +159,20 @@ func (m *mockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error)
 
 // mockAdminConfigRepo implements repository.AdminConfigRepository for tests.
 type mockAdminConfigRepo struct {
-	ListFn   func(ctx context.Context) (map[string]string, error)
-	GetFn    func(ctx context.Context, key string) (string, error)
-	SetFn    func(ctx context.Context, key, value string) error
-	DeleteFn func(ctx context.Context, key string) error
+	ListFn          func(ctx context.Context) (map[string]string, error)
+	GetFn           func(ctx context.Context, key string) (string, error)
+	SetFn           func(ctx context.Context, key, value string) error
+	ClaimIfAbsentFn func(ctx context.Context, key, value string) (string, error)
+	DeleteFn        func(ctx context.Context, key string) error
+}
+
+// ClaimIfAbsent defaults to winning the claim, which is what a single process
+// against an empty table sees.
+func (m *mockAdminConfigRepo) ClaimIfAbsent(ctx context.Context, key, value string) (string, error) {
+	if m.ClaimIfAbsentFn != nil {
+		return m.ClaimIfAbsentFn(ctx, key, value)
+	}
+	return value, nil
 }
 
 func (m *mockAdminConfigRepo) List(ctx context.Context) (map[string]string, error) {
@@ -446,10 +456,10 @@ func TestInitAdminToken(t *testing.T) {
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil // no existing token
 		}
-		admin.SetFn = func(_ context.Context, key, value string) error {
+		admin.ClaimIfAbsentFn = func(_ context.Context, key, value string) (string, error) {
 			storedKey = key
 			storedValue = value
-			return nil
+			return value, nil
 		}
 
 		out := captureStdout(t, func() {
@@ -477,28 +487,54 @@ func TestInitAdminToken(t *testing.T) {
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "existing-hash-value", nil
 		}
-		setCalled := false
-		admin.SetFn = func(_ context.Context, _, _ string) error {
-			setCalled = true
-			return nil
+		claimCalled := false
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, value string) (string, error) {
+			claimCalled = true
+			return value, nil
 		}
 
 		if err := c.InitAdminToken(context.Background()); err != nil {
 			t.Fatalf("InitAdminToken: %v", err)
 		}
-		if setCalled {
-			t.Error("Set should not be called when token already exists")
+		if claimCalled {
+			t.Error("the claim should not be attempted when a token already exists")
 		}
 	})
 
-	t.Run("repo Set error", func(t *testing.T) {
+	// The losing replica of a first-boot race. ClaimIfAbsent hands it the
+	// incumbent hash, and it must deliver nothing: a second credential in a
+	// second pod's sink authenticates as nothing and is indistinguishable from
+	// the one that works.
+	t.Run("a lost claim delivers nothing", func(t *testing.T) {
+		sink := firstBootSink(t)
+		c, _, _, _, admin := newTestCLI()
+		admin.GetFn = func(_ context.Context, _ string) (string, error) { return "", nil }
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, _ string) (string, error) {
+			return "$argon2id$incumbent-from-another-replica", nil
+		}
+
+		out := captureStdout(t, func() {
+			if err := c.InitAdminToken(context.Background()); err != nil {
+				t.Fatalf("InitAdminToken: %v", err)
+			}
+		})
+
+		if body, err := os.ReadFile(sink); err == nil && strings.Contains(string(body), "VAULT_ADMIN_TOKEN=") {
+			t.Errorf("the losing replica delivered a credential that is not in force: %q", body)
+		}
+		if !strings.Contains(out, "another replica") {
+			t.Errorf("the losing replica said nothing about why it minted no token: %q", out)
+		}
+	})
+
+	t.Run("repo claim error", func(t *testing.T) {
 		firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil
 		}
-		admin.SetFn = func(_ context.Context, _, _ string) error {
-			return errors.New("write failed")
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, _ string) (string, error) {
+			return "", errors.New("write failed")
 		}
 
 		// Capture stdout to prevent output leaking
