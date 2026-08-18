@@ -3,10 +3,12 @@ import { onMounted, ref, reactive } from 'vue'
 import { useIdentity, VaultAuthGuard, useT } from '@vault42/vue'
 import type { IdentityData } from '@vault42/vue'
 import { friendlyError } from '../errorMessages'
+import { useModalFocus } from '../composables/useModalFocus'
 
 const { identity, isLoading, isSaving, error, fetchIdentity, saveIdentity, deleteIdentity } = useIdentity()
 const { t } = useT()
 const showDeleteConfirm = ref(false)
+const { dialogRef } = useModalFocus(showDeleteConfirm, () => { showDeleteConfirm.value = false })
 const saveSuccess = ref(false)
 
 const form = reactive<IdentityData>({
@@ -95,8 +97,8 @@ async function handleDelete() {
         </div>
 
         <template v-else>
-          <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
-          <div v-if="saveSuccess" class="vault42-alert-success mb-4">{{ t('identity.savedSuccess') }}</div>
+          <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
+          <div v-if="saveSuccess" class="vault42-alert-success mb-4" role="status">{{ t('identity.savedSuccess') }}</div>
 
           <form class="space-y-6" @submit.prevent="handleSave">
             <div class="vault42-card space-y-4">
@@ -133,7 +135,7 @@ async function handleDelete() {
             <div class="vault42-card space-y-4">
               <div class="flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-vault42-muted uppercase tracking-wider">{{ t('identity.billingAddress') }}</h3>
-                <button type="button" class="text-sm text-vault42-primary hover:text-vault42-accent transition-colors" @click="showBilling = !showBilling">
+                <button type="button" class="text-sm text-vault42-accent hover:text-vault42-text transition-colors" @click="showBilling = !showBilling">
                   {{ showBilling ? t('identity.hideBilling') : t('identity.addBilling') }}
                 </button>
               </div>
@@ -179,8 +181,8 @@ async function handleDelete() {
           <!-- Delete confirmation -->
           <Teleport to="body">
             <div v-if="showDeleteConfirm" class="vault42-modal-overlay" @click.self="showDeleteConfirm = false">
-              <div class="vault42-modal" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold mb-2">{{ t('identity.deleteTitle') }}</h3>
+              <div ref="dialogRef" class="vault42-modal" role="dialog" aria-modal="true" aria-labelledby="identity-delete-dialog-title">
+                <h3 id="identity-delete-dialog-title" class="text-lg font-semibold mb-2">{{ t('identity.deleteTitle') }}</h3>
                 <p class="text-sm text-vault42-muted mb-4">{{ t('identity.deleteConfirm') }}</p>
                 <div class="flex gap-3">
                   <button class="vault42-btn-danger" @click="handleDelete">{{ t('common.delete') }}</button>

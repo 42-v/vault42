@@ -213,7 +213,7 @@ describe('App Navigation', () => {
     })
 
     const identityLink = wrapper.findAll('a').find(a => a.text() === 'Identity')
-    expect(identityLink?.classes().some(c => c.includes('text-vault42-primary'))).toBe(true)
+    expect(identityLink?.classes().some(c => c.includes('text-vault42-accent'))).toBe(true)
   })
 
   it('does not highlight non-active routes', async () => {

@@ -48,7 +48,7 @@ function isActive(path: string): boolean {
           <!-- Logo -->
           <router-link to="/" class="flex items-center gap-2 group" @click="closeMobile">
             <span class="text-xl">&#x1f510;</span>
-            <span class="text-lg font-bold text-vault42-text group-hover:text-vault42-primary transition-colors">{{ t('brand.name') }}</span>
+            <span class="text-lg font-bold text-vault42-text group-hover:text-vault42-accent transition-colors">{{ t('brand.name') }}</span>
           </router-link>
 
           <!-- Desktop nav -->
@@ -61,7 +61,7 @@ function isActive(path: string): boolean {
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
                   isActive(link.to)
-                    ? 'bg-vault42-primary/15 text-vault42-primary font-medium'
+                    ? 'bg-vault42-primary/15 text-vault42-accent font-medium'
                     : 'text-vault42-muted hover:text-vault42-text hover:bg-vault42-border/50'
                 ]"
               >
@@ -83,7 +83,7 @@ function isActive(path: string): boolean {
                 to="/login"
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
-                  isActive('/login') ? 'text-vault42-primary' : 'text-vault42-muted hover:text-vault42-text'
+                  isActive('/login') ? 'text-vault42-accent' : 'text-vault42-muted hover:text-vault42-text'
                 ]"
               >
                 {{ t('common.signIn') }}
@@ -126,7 +126,7 @@ function isActive(path: string): boolean {
               :to="link.to"
               :class="[
                 'block px-3 py-2 rounded-lg text-sm transition-colors',
-                isActive(link.to) ? 'bg-vault42-primary/15 text-vault42-primary' : 'text-vault42-text hover:bg-vault42-border/50'
+                isActive(link.to) ? 'bg-vault42-primary/15 text-vault42-accent' : 'text-vault42-text hover:bg-vault42-border/50'
               ]"
               @click="closeMobile"
             >
@@ -141,7 +141,7 @@ function isActive(path: string): boolean {
           </template>
           <template v-else>
             <router-link to="/login" class="block px-3 py-2 rounded-lg text-sm text-vault42-text hover:bg-vault42-border/50" @click="closeMobile">{{ t('common.signIn') }}</router-link>
-            <router-link v-if="registrationEnabled" to="/register" class="block px-3 py-2 rounded-lg text-sm text-vault42-primary hover:bg-vault42-primary/10" @click="closeMobile">{{ t('common.createAccount') }}</router-link>
+            <router-link v-if="registrationEnabled" to="/register" class="block px-3 py-2 rounded-lg text-sm text-vault42-accent hover:bg-vault42-primary/10" @click="closeMobile">{{ t('common.createAccount') }}</router-link>
           </template>
         </div>
       </div>

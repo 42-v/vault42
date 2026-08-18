@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { use2FA, useWebAuthn, useConfirm, VaultAuthGuard, useT } from '@vault42/vue'
 import QRCode from 'qrcode'
 import { friendlyError } from '../errorMessages'
+import { useModalFocus } from '../composables/useModalFocus'
 
 const { totpSetup, backupCodes, mfaStatus, isLoading, error, isVerified, setupTOTP, verifyTOTP, disableTOTP, generateBackupCodes, fetchMFAStatus } = use2FA()
 const {
@@ -19,6 +20,8 @@ const { t } = useT()
 
 const code = ref('')
 const codesCopied = ref(false)
+const copyFailed = ref(false)
+const backupCodesRef = ref<HTMLElement | null>(null)
 const qrDataUrl = ref('')
 const confirmPassword = ref('')
 const showConfirmDialog = ref(false)
@@ -79,6 +82,8 @@ function cancelConfirm() {
   confirmPassword.value = ''
 }
 
+const { dialogRef } = useModalFocus(showConfirmDialog, cancelConfirm)
+
 async function handleVerify() {
   if (code.value.length !== 6) return
   await verifyTOTP(code.value)
@@ -128,9 +133,40 @@ async function handleGenerateBackupCodes() {
   })
 }
 
-function copyBackupCodes() {
-  const text = backupCodes.value.join('\n')
-  navigator.clipboard.writeText(text)
+/**
+ * Selects the rendered codes so they can still be copied by hand.
+ *
+ * The only fallback that works when the Clipboard API is unavailable, which is
+ * exactly when the user needs one.
+ */
+function selectBackupCodes() {
+  const node = backupCodesRef.value
+  const selection = window.getSelection?.()
+  if (!node || !selection) return
+
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+async function copyBackupCodes() {
+  copyFailed.value = false
+
+  try {
+    await navigator.clipboard.writeText(backupCodes.value.join('\n'))
+  } catch {
+    // writeText rejects in a non-secure context, when the document is not
+    // focused, and when clipboard permission is denied; on an insecure origin
+    // `navigator.clipboard` is not even defined. The promise used to be dropped
+    // on the floor and "Copied!" shown unconditionally, so a user could believe
+    // their recovery codes were saved with nothing on the clipboard — on the one
+    // path that exists to stop them being locked out of the account.
+    copyFailed.value = true
+    selectBackupCodes()
+    return
+  }
+
   codesCopied.value = true
   setTimeout(() => { codesCopied.value = false }, 2000)
 }
@@ -145,26 +181,32 @@ function copyBackupCodes() {
           <p class="text-sm text-vault42-muted mt-1">{{ t('twoFactor.subtitle') }}</p>
         </div>
 
-        <div v-if="error" class="vault42-alert-error">{{ friendlyError(error.code) }}</div>
+        <div v-if="error" class="vault42-alert-error" role="alert">{{ friendlyError(error.code) }}</div>
 
         <!-- Confirmation Dialog -->
         <Teleport to="body">
           <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-            <div class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+            <div ref="dialogRef" class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
               <h3 id="confirm-dialog-title" class="text-lg font-semibold">{{ t('twoFactor.confirmPassword') }}</h3>
               <p class="text-sm text-vault42-muted">
                 {{ t('twoFactor.confirmPasswordDesc') }}
               </p>
-              <div v-if="confirmError" class="vault42-alert-error text-sm">
+              <div v-if="confirmError" class="vault42-alert-error text-sm" role="alert">
                 {{ friendlyError(confirmError.code) }}
               </div>
-              <input
-                v-model="confirmPassword"
-                type="password"
-                :placeholder="t('twoFactor.enterPassword')"
-                class="vault42-input w-full"
-                @keyup.enter="handleConfirm"
-              />
+              <div>
+                <label for="confirm-password" class="vault42-label">{{ t('twoFactor.enterPassword') }}</label>
+                <input
+                  id="confirm-password"
+                  v-model="confirmPassword"
+                  type="password"
+                  autocomplete="current-password"
+                  :aria-invalid="confirmError ? 'true' : undefined"
+                  :placeholder="t('twoFactor.enterPassword')"
+                  class="vault42-input w-full"
+                  @keyup.enter="handleConfirm"
+                />
+              </div>
               <div class="flex gap-3 justify-end">
                 <button class="vault42-btn-outline vault42-btn-sm" @click="cancelConfirm">{{ t('common.cancel') }}</button>
                 <button
@@ -184,7 +226,7 @@ function copyBackupCodes() {
         <div class="vault42-card">
           <div class="flex items-start gap-4">
             <div class="w-10 h-10 rounded-lg bg-vault42-primary/15 flex items-center justify-center flex-shrink-0">
-              <svg class="w-5 h-5 text-vault42-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-vault42-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
               </svg>
             </div>
@@ -210,7 +252,7 @@ function copyBackupCodes() {
                     </div>
                     <button
                       :disabled="credentialLoading"
-                      class="text-xs text-vault42-error hover:text-red-400 transition-colors"
+                      class="text-xs text-vault42-error hover:text-red-300 transition-colors"
                       @click="handleDeleteCredential(cred.id)"
                     >
                       {{ t('common.remove') }}
@@ -218,7 +260,7 @@ function copyBackupCodes() {
                   </div>
                 </div>
 
-                <div v-if="webauthnError" class="vault42-alert-error text-xs mb-3">{{ friendlyError(webauthnError.code) }}</div>
+                <div v-if="webauthnError" class="vault42-alert-error text-xs mb-3" role="alert">{{ friendlyError(webauthnError.code) }}</div>
                 <button
                   :disabled="webauthnLoading"
                   :class="credentials.length > 0 ? 'vault42-btn-outline vault42-btn-sm' : 'vault42-btn vault42-btn-sm'"
@@ -236,7 +278,7 @@ function copyBackupCodes() {
         <div v-if="!totpSetup && !isVerified && !mfaStatus?.totp_enabled" class="vault42-card">
           <div class="flex items-start gap-4">
             <div class="w-10 h-10 rounded-lg bg-vault42-primary/15 flex items-center justify-center flex-shrink-0">
-              <svg class="w-5 h-5 text-vault42-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-5 h-5 text-vault42-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
             </div>
@@ -317,7 +359,7 @@ function copyBackupCodes() {
               </div>
             </div>
             <button
-              class="text-xs text-vault42-error hover:text-red-400 transition-colors"
+              class="text-xs text-vault42-error hover:text-red-300 transition-colors"
               @click="handleDisableTOTP"
             >
               {{ t('twoFactor.totp.disable') }}
@@ -357,11 +399,16 @@ function copyBackupCodes() {
               <p class="text-xs text-yellow-500/80 mt-0.5">{{ t('twoFactor.backup.storeOffline') }}</p>
             </div>
             <div class="flex justify-end mb-2">
-              <button class="text-xs text-vault42-primary hover:text-vault42-accent transition-colors" @click="copyBackupCodes">
-                {{ codesCopied ? t('twoFactor.backup.copied') : t('twoFactor.backup.copyAll') }}
+              <button
+                class="text-xs transition-colors"
+                :class="copyFailed ? 'text-vault42-error' : 'text-vault42-accent hover:text-vault42-text'"
+                aria-live="polite"
+                @click="copyBackupCodes"
+              >
+                {{ copyFailed ? t('common.error') : codesCopied ? t('twoFactor.backup.copied') : t('twoFactor.backup.copyAll') }}
               </button>
             </div>
-            <div class="grid grid-cols-2 gap-2">
+            <div ref="backupCodesRef" class="grid grid-cols-2 gap-2">
               <code
                 v-for="c in backupCodes"
                 :key="c"

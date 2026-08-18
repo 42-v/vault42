@@ -122,7 +122,7 @@ async function handleRegister() {
       <h2>{{ t('register.header', 'Create Account') }}</h2>
     </slot>
 
-    <div v-if="error" class="vault42-register-form__error">
+    <div v-if="error" class="vault42-register-form__error" role="alert">
       <slot name="error" :error="error">
         <p>{{ error.code ? friendlyError(error.code) : t('register.failed', 'Registration failed') }}</p>
       </slot>
@@ -158,7 +158,7 @@ async function handleRegister() {
           :minlength="minPasswordLength"
           required
         />
-        <p v-if="passwordTooShort" class="vault42-register-form__hint vault42-register-form__hint--error">
+        <p v-if="passwordTooShort" class="vault42-register-form__hint vault42-register-form__hint--error" aria-live="polite">
           {{ t('register.minChars', `Minimum ${minPasswordLength} characters`, { count: minPasswordLength }) }}
         </p>
       </div>
@@ -171,7 +171,7 @@ async function handleRegister() {
           autocomplete="new-password"
           required
         />
-        <p v-if="passwordMismatch" class="vault42-register-form__hint vault42-register-form__hint--error">
+        <p v-if="passwordMismatch" class="vault42-register-form__hint vault42-register-form__hint--error" aria-live="polite">
           {{ t('register.passwordsDoNotMatch', 'Passwords do not match') }}
         </p>
       </div>

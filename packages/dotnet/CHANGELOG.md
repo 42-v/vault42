@@ -27,7 +27,6 @@ statement about SDK stability, it was drift.
   section 0. A breaking change to a route, field, error code, status code or environment variable
   now costs a major bump.
 
-
 ## 0.2.0 — 2026-04-25
 
 Security re-audit ship. **Breaking** for net8 consumers; defense-in-depth + dependency uplift for everyone else. The audit findings this release closes are itemised under **Security** below.

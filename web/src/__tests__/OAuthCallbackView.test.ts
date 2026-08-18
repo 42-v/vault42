@@ -130,7 +130,28 @@ describe('OAuthCallbackView', () => {
       expect(mockExchangeCode).not.toHaveBeenCalled()
       expect(mockAccessToken.value).toBeNull()
       expect(mockReplace).not.toHaveBeenCalled()
-      expect(errorText(wrapper)).toBe('invalid_state')
+      expect(errorText(wrapper)).toBe('This request is no longer valid. Please start again.')
+    })
+
+    it('never renders text from the fragment as the error message', async () => {
+      // result.error comes out of window.location.hash, so anyone can craft it.
+      // Rendered verbatim it read as an official message from the vault inside
+      // the vault's own error card: a working phishing surface, and against the
+      // rule errorMessages.ts states for itself ("The code string is
+      // server-controlled and must never reach the rendered message").
+      const attack = 'Your account is locked. Call +1-555-0100 to restore access.'
+      mockParseCallback.mockReturnValue({ error: attack })
+      const wrapper = await mountAt('/oauth/callback#error=' + encodeURIComponent(attack))
+
+      expect(wrapper.text()).not.toContain('555-0100')
+      expect(errorText(wrapper)).toBe('Something went wrong. Please try again.')
+    })
+
+    it('translates a known provider error code', async () => {
+      mockParseCallback.mockReturnValue({ error: 'oauth_failed' })
+      const wrapper = await mountAt('/oauth/callback#error=oauth_failed')
+
+      expect(errorText(wrapper)).toBe('Social sign-in failed. Please try again.')
     })
 
     it('aborts a fragment that carries a state but no code', async () => {

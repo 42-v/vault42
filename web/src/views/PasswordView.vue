@@ -45,7 +45,7 @@ async function handleChange() {
           <p class="text-sm text-vault42-muted mt-1">{{ t('password.subtitle') }}</p>
         </div>
 
-        <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
+        <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
 
         <form class="vault42-card space-y-5" @submit.prevent="handleChange">
           <div>
@@ -98,7 +98,7 @@ async function handleChange() {
               required
               class="vault42-input"
             />
-            <p v-if="confirmPassword && newPassword !== confirmPassword" class="text-vault42-error text-xs mt-1">
+            <p v-if="confirmPassword && newPassword !== confirmPassword" class="text-vault42-error text-xs mt-1" aria-live="polite">
               {{ t('password.passwordsDoNotMatch') }}
             </p>
           </div>
