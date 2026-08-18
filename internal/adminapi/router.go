@@ -62,8 +62,20 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("POST /admin/users/{id}/unlock", withPerm(sessionAuth, rbac.UsersUnlock, api.UnlockUser))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
-	// Session management
-	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.SessionsList, api.ListSessions))
+	// Session management.
+	//
+	// The two routes read and write different things, so they are gated
+	// differently. GET /admin/sessions lists ADMIN sessions: the live roster of
+	// who can administer the deployment, with each one's source IP and user
+	// agent. rbac.go keeps admins:manage at super_admin because that roster is
+	// reconnaissance for an attacker holding a lower-tier admin session, and
+	// this route hands over the same thing, so it takes the same permission.
+	// sessions:list stays viewer-tier and describes visibility into user
+	// sessions, which this route does not provide.
+	//
+	// POST /admin/sessions/revoke-all is the global USER refresh-token nuke and
+	// keeps sessions:revoke, the permission written for exactly that.
+	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.AdminsManage, api.ListSessions))
 	mux.Handle("POST /admin/sessions/revoke-all", withPerm(sessionAuth, rbac.SessionsRevoke, api.RevokeAllSessions))
 
 	// Audit log

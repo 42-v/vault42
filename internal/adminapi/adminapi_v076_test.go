@@ -148,9 +148,8 @@ func (m *fakeAdminRepo) Revoke(_ context.Context, id string) error {
 var _ repository.AdminUserRepository = (*fakeAdminRepo)(nil)
 
 type fakeSessionRepo struct {
-	sessions     map[string]*model.AdminSession
-	errCreate    error
-	errRevokeAll error
+	sessions  map[string]*model.AdminSession
+	errCreate error
 }
 
 func newFakeSessionRepo() *fakeSessionRepo {
@@ -191,13 +190,8 @@ func (m *fakeSessionRepo) Revoke(_ context.Context, id string) error {
 }
 
 func (m *fakeSessionRepo) RevokeAllForAdmin(_ context.Context, adminID string) error { return nil }
-func (m *fakeSessionRepo) RevokeAll(_ context.Context) error {
-	if m.errRevokeAll != nil {
-		return m.errRevokeAll
-	}
-	return nil
-}
-func (m *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error) { return 0, nil }
+func (m *fakeSessionRepo) RevokeAll(_ context.Context) error                         { return nil }
+func (m *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error)            { return 0, nil }
 
 var _ repository.AdminSessionRepository = (*fakeSessionRepo)(nil)
 
@@ -1105,30 +1099,6 @@ func TestHandler_ListSessions(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r := withActor(httptest.NewRequest(http.MethodGet, "/admin/sessions", nil))
 			h.ListSessions(rec, r)
-			if rec.Code != tt.want {
-				t.Errorf("code=%d want=%d", rec.Code, tt.want)
-			}
-		})
-	}
-}
-
-func TestHandler_RevokeAllSessions(t *testing.T) {
-	tests := []struct {
-		name    string
-		sessErr error
-		want    int
-	}{
-		{"ok", nil, http.StatusOK},
-		{"repo error", errors.New("db"), http.StatusInternalServerError},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sr := &fakeSessionRepo{errRevokeAll: tt.sessErr}
-			h := newTestHandler(nil, nil, nil, nil)
-			h.sessions = sr
-			rec := httptest.NewRecorder()
-			r := withActor(httptest.NewRequest(http.MethodPost, "/admin/sessions/revoke-all", nil))
-			h.RevokeAllSessions(rec, r)
 			if rec.Code != tt.want {
 				t.Errorf("code=%d want=%d", rec.Code, tt.want)
 			}

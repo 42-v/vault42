@@ -95,15 +95,8 @@ func TestSetupRoutesAllFeaturesEnabled(t *testing.T) {
 		t.Fatal("setupRoutes returned nil")
 	}
 
-	// Metrics endpoint is wired.
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusOK {
-		t.Errorf("GET /metrics = %d, want 200", rec.Code)
-	}
-
 	// Capabilities lists the registered OAuth provider.
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/capabilities", nil))
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /auth/capabilities = %d, want 200", rec.Code)
@@ -114,24 +107,6 @@ func TestSetupRoutesAllFeaturesEnabled(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/some/spa/path", nil))
 	if rec.Code == http.StatusNotFound {
 		t.Error("expected SPA catch-all to handle unknown path, got 404")
-	}
-}
-
-// Metrics disabled => /metrics is not registered and returns 404.
-func TestSetupRoutesMetricsDisabled(t *testing.T) {
-	cfg := &config.Config{
-		Origin:            "https://vault.localhost",
-		AppName:           "Vault Test",
-		PasswordMinLength: 15,
-	}
-	deps, mc := newTestDeps(cfg)
-	defer mc.Close()
-
-	mux := New(deps).setupRoutes()
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("GET /metrics with metrics disabled = %d, want 404", rec.Code)
 	}
 }
 

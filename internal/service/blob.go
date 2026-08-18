@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/42-v/vault42/internal/config"
@@ -34,12 +37,61 @@ type BlobConfig struct {
 	QuotaBytes      int // total storage quota per user in bytes
 }
 
+// blobLockStripes is how many in-process mutexes the blob write path spreads
+// owners over. Same shape and same reasoning as the document store's table
+// (svcDocLockStripes): a fixed array rather than a map keyed by a value the
+// caller influences, because such a map grows for every owner ever written and
+// never shrinks. Two pseudonyms landing on one stripe wait for each other
+// needlessly, which costs throughput and cannot cost correctness.
+const blobLockStripes = 64
+
 // BlobService manages encrypted blob storage.
 type BlobService struct {
 	repo       repository.BlobRepository
 	masterKey  []byte
 	hmacSecret []byte
 	config     BlobConfig
+	// writeLocks serializes the quota decision and the write it authorizes, per
+	// owner, within this process. An array of mutexes rather than a pointer to
+	// one, so the zero value works and nothing has to be initialized; the
+	// service is only ever used through a pointer, so the array is never copied.
+	writeLocks [blobLockStripes]sync.Mutex
+}
+
+// blobLockStripe maps an owner pseudonym onto one of the write stripes. What
+// must never happen is one pseudonym mapping to two stripes, and a pure
+// function of the pseudonym cannot.
+func blobLockStripe(pseudonym string) uint32 {
+	h := fnv.New32a()
+	// Hash.Write is documented never to return an error.
+	_, _ = h.Write([]byte(pseudonym))
+	return h.Sum32() % blobLockStripes
+}
+
+// serializePseudonymWrite runs the quota decision and the write that depends on
+// it as one section per owner.
+//
+// Splitting them is the whole bug. GetQuota and Create were separated by
+// compression and encryption with no transaction, no SELECT ... FOR UPDATE, no
+// advisory lock and no aggregate constraint on objects.blobs, so N concurrent
+// uploads each read the pre-write total, each decided they fit, and each landed.
+// The document store closed exactly this and this is the same mechanism, not a
+// second one: an in-process stripe for the goroutines of one pod, and the
+// repository's own cross-process lock when the repository offers one.
+//
+// The in-process stripe alone orders one process. A deployment running more
+// than one replica still needs the repository half, which is why the optional
+// interface is consulted rather than assumed: a store that cannot offer
+// cross-process exclusion stays usable and simply falls back to the stripe.
+func (s *BlobService) serializePseudonymWrite(ctx context.Context, pseudonym string, fn func(context.Context) error) error {
+	stripe := &s.writeLocks[blobLockStripe(pseudonym)]
+	stripe.Lock()
+	defer stripe.Unlock()
+
+	if serializer, ok := s.repo.(SubjectWriteSerializer); ok {
+		return serializer.WithSubjectWriteLock(ctx, pseudonym, fn)
+	}
+	return fn(ctx)
 }
 
 // NewBlobService creates a new blob service.
@@ -119,21 +171,9 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 
 	pseudo := s.Pseudonym(userID)
 
-	// For named blobs, delete existing before quota check so replacement doesn't double-count.
 	var rh string
 	if refName != "" {
 		rh = s.refHash(refName, pseudo)
-		// Best-effort delete — ignore "not found" (first upload for this name).
-		_ = s.repo.DeleteByRefAndPseudonym(ctx, rh, pseudo)
-	}
-
-	// Check quota before processing
-	quota, err := s.repo.GetQuota(ctx, pseudo)
-	if err != nil {
-		return nil, fmt.Errorf("blob quota check: %w", err)
-	}
-	if quota.UsedCount >= s.config.MaxBlobsPerUser {
-		return nil, ErrQuotaExceeded
 	}
 
 	// Compress (deflate — stdlib, no external deps)
@@ -149,11 +189,9 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 		return nil, fmt.Errorf("blob compress close: %w", err)
 	}
 
-	// Check byte quota (using compressed+encrypted estimate: compressed size + AES overhead ~28 bytes)
+	// The size the byte quota is charged (compressed size + AES-GCM overhead of
+	// a 12-byte nonce and a 16-byte tag). Computed here, decided under the lock.
 	estimatedStored := compressed.Len() + 28
-	if quota.UsedBytes+estimatedStored > s.config.QuotaBytes {
-		return nil, ErrQuotaExceeded
-	}
 
 	// Compute checksum of original data
 	hash := sha256.Sum256(data)
@@ -202,11 +240,94 @@ func (s *BlobService) uploadInternal(ctx context.Context, userID string, data []
 		CreatedAt:   time.Now(),
 	}
 
-	if err := s.repo.Create(ctx, blob); err != nil {
-		return nil, fmt.Errorf("blob store: %w", err)
+	// Load, decide and write as one section per owner. Compression and both
+	// encryptions are deliberately behind us: doing them in here would hold the
+	// lock, and against Postgres a pooled connection and an open transaction,
+	// for the length of an AES-GCM seal while every other writer for this owner
+	// queues behind it.
+	if err := s.serializePseudonymWrite(ctx, pseudo, func(ctx context.Context) error {
+		// The row a named upload would replace is LOADED, not deleted.
+		//
+		// It used to be deleted before the quota was read, so that a replacement
+		// would not be charged twice. The effect was that a replacement the quota
+		// then refused had already destroyed the blob it was replacing: an
+		// oversized backup came back as "409 quota_exceeded" and the previous
+		// backup was gone, with no second copy anywhere and nothing in the
+		// response saying so. The discount that delete existed to provide is
+		// arithmetic, and arithmetic does not have to happen before the decision
+		// it feeds.
+		var existing *model.Blob
+		if rh != "" {
+			var getErr error
+			existing, getErr = s.repo.GetByRefAndPseudonym(ctx, rh, pseudo)
+			if getErr != nil {
+				return fmt.Errorf("blob replace lookup: %w", getErr)
+			}
+		}
+
+		quota, quotaErr := s.repo.GetQuota(ctx, pseudo)
+		if quotaErr != nil {
+			return fmt.Errorf("blob quota check: %w", quotaErr)
+		}
+		// A replacement already holds one slot and one copy of the bytes, so
+		// both are discounted before the incoming object is charged. This is
+		// what the pre-emptive delete was buying, without the data loss.
+		usedCount, usedBytes := quota.UsedCount, quota.UsedBytes
+		if existing != nil {
+			usedCount--
+			usedBytes -= existing.StoredBytes
+		}
+		if usedCount >= s.config.MaxBlobsPerUser {
+			return ErrQuotaExceeded
+		}
+		if usedBytes+estimatedStored > s.config.QuotaBytes {
+			return ErrQuotaExceeded
+		}
+
+		// The replaced row goes now, one step before the insert that supersedes
+		// it. Everything that can refuse this upload has already run, so the
+		// only failure left after this line is the insert, and that one is
+		// compensated.
+		if rh != "" {
+			// Best-effort delete — ignore "not found" (first upload for this name).
+			_ = s.repo.DeleteByRefAndPseudonym(ctx, rh, pseudo)
+		}
+
+		if createErr := s.repo.Create(ctx, blob); createErr != nil {
+			s.restoreReplaced(ctx, existing)
+			return fmt.Errorf("blob store: %w", createErr)
+		}
+		return nil
+	}); err != nil {
+		// Returned exactly as the section produced it. The handler matches
+		// ErrQuotaExceeded against this value to choose a 409, so wrapping it
+		// here would change what a rejected caller sees.
+		return nil, err
 	}
 
 	return blob, nil
+}
+
+// restoreReplaced puts back the row a replacement deleted when the replacement
+// itself could not be written.
+//
+// Without it the last remaining window is real: the old blob is gone, the new
+// one never landed, and the caller is told only that their upload failed. The
+// row is still in memory because the quota discount needed it, so putting it
+// back costs one insert.
+//
+// If that insert fails too the object is genuinely lost, and this is the only
+// place that can say so — the caller's error describes the upload, not the
+// destruction of what it was replacing.
+func (s *BlobService) restoreReplaced(ctx context.Context, existing *model.Blob) {
+	if existing == nil {
+		return
+	}
+	if err := s.repo.Create(ctx, existing); err != nil {
+		log.Printf("ERROR: blob: FAILED to restore the replaced blob after the replacement write "+
+			"failed; the stored object is gone: id=%s pseudonym=%s: %v",
+			existing.ID, existing.PseudonymID, err)
+	}
 }
 
 // Download retrieves, decrypts, and decompresses a blob by ID.
