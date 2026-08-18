@@ -2099,7 +2099,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -2162,7 +2162,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy"
@@ -5425,7 +5425,7 @@
       "requirement": "AAL2: Permitted Authenticator Types",
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:39"
+        "internal/service/mfa.go:43"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -7299,7 +7299,7 @@
         "TestSSDF_800_218_DependencyUpdateAutomationIsAutomated",
         "TestNIST_RA_5_NightlySecurityScannersEnforceHighCriticalGate"
       ],
-      "notes": "Met: .github/dependabot.yml configures automated dependency updates, which is the half that was missing. Detection was already automated -- govulncheck, Trivy over source and Trivy over the shipped image, nightly rather than at release -- but a scanner reports a vulnerable dependency and does not raise the pull request that fixes it. Carried as accepted risk CR-32 for precisely that distinction, and TestSSDF_800_218_DependencyUpdateAutomationIsAbsent, written to fail the day either a dependabot or a Renovate configuration appeared, is what moved this row."
+      "notes": "Met: .github/dependabot.yml configures automated dependency updates, which is the half that was missing. Detection was already automated -- govulncheck, Trivy over source and Trivy over the shipped image, nightly rather than at release -- but a scanner reports a vulnerable dependency and does not raise the pull request that fixes it. Carried as accepted risk CR-32 for precisely that distinction, and the tripwire written to fail the day either a dependabot or a Renovate configuration appeared is what moved this row. It was replaced on that day by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated, which asserts the configuration exists and covers gomod, npm and github-actions."
     },
     {
       "standard": "NIST SP 800-218",
@@ -7525,7 +7525,7 @@
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no chart template sets privileged: true, asserted across every template rather than on the ones that exist today. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: no chart template sets privileged: true, asserted across every template rather than on the ones that exist today. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7542,7 +7542,7 @@
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: no workload takes a host namespace in a default render. hostPID and hostIPC are set nowhere, and adminGateway.hostNetwork now defaults to false (charts/vault/values.yaml:591); the admin-gateway template only emits hostNetwork when an operator opts in (charts/vault/templates/admin-gateway.yaml:22), and the chart makes that choice explicit rather than silent. This was accepted risk CR-33 while the default was true. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: no workload takes a host namespace in a default render. hostPID and hostIPC are set nowhere, and adminGateway.hostNetwork now defaults to false (charts/vault/values.yaml:591); the admin-gateway template only emits hostNetwork when an operator opts in (charts/vault/templates/admin-gateway.yaml:22), and the chart makes that choice explicit rather than silent. This was accepted risk CR-33 while the default was true. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7557,7 +7557,7 @@
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no template mounts a hostPath. The volume types in use are secret, configMap, emptyDir and persistentVolumeClaim, all of which the restricted profile permits. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: no template mounts a hostPath. The volume types in use are secret, configMap, emptyDir and persistentVolumeClaim, all of which the restricted profile permits. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7572,7 +7572,7 @@
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: no container declares a hostPort. Ports are exposed through Services. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: no container declares a hostPort. Ports are exposed through Services. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7588,7 +7588,7 @@
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: no template adds a capability back. The shared container security context drops ALL. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: no template adds a capability back. The shared container security context drops ALL. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7604,7 +7604,7 @@
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: allowPrivilegeEscalation: false on the shared container security context, which four workloads inherit, and inline on the three that declare their own. Without it a setuid binary in the image regains what runAsUser dropped. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: allowPrivilegeEscalation: false on the shared container security context, which four workloads inherit, and inline on the three that declare their own. Without it a setuid binary in the image regains what runAsUser dropped. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7620,7 +7620,7 @@
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: runAsNonRoot: true with an explicit non-root uid on every vault-plane workload — 65532 for the Go binaries, 101 for nginx-unprivileged, 999 for redis. The frontend image half of that is held separately by TestTheFrontendImageDoesNotRunAsRoot, because a securityContext can only refuse to start a container that was built to need root. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: runAsNonRoot: true with an explicit non-root uid on every vault-plane workload — 65532 for the Go binaries, 101 for nginx-unprivileged, 999 for redis. The frontend image half of that is held separately by TestTheFrontendImageDoesNotRunAsRoot, because a securityContext can only refuse to start a container that was built to need root. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7635,7 +7635,7 @@
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: seccompProfile type RuntimeDefault on every vault-plane pod spec. This is one of the two controls that separate restricted from baseline, and it is the one most often left at the default, which is unconfined. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: seccompProfile type RuntimeDefault on every vault-plane pod spec. This is one of the two controls that separate restricted from baseline, and it is the one most often left at the default, which is unconfined. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7652,7 +7652,7 @@
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: capabilities drop ALL, with nothing added back anywhere. The Go binaries bind ports above 1024, so even NET_BIND_SERVICE is unnecessary. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: capabilities drop ALL, with nothing added back anywhere. The Go binaries bind ports above 1024, so even NET_BIND_SERVICE is unnecessary. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -7668,7 +7668,7 @@
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
-      "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_TheExcludedWorkloadsAreStillExcluded existed to force."
+      "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     }
   ],
   "retired_risks": {

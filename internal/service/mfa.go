@@ -29,9 +29,13 @@ const (
 	AAL2 AuthenticatorAssuranceLevel = 2
 
 	// AAL3 — multi-factor authentication using a hardware-based, phishing-
-	// resistant authenticator (WebAuthn / FIDO2 security key or platform
-	// authenticator). Requires proof of possession of a key via a cryptographic
-	// protocol and verifier impersonation resistance. NIST SP 800-63B §4.3.
+	// resistant authenticator. Requires proof of possession of a key via a
+	// cryptographic protocol and verifier impersonation resistance. NIST SP
+	// 800-63B §4.3.
+	//
+	// vault42 never reaches this level and AALForMethods never returns it. The
+	// constant stays because the vocabulary is what makes the ceiling legible:
+	// see AALForMethods for what would have to be built first.
 	AAL3 AuthenticatorAssuranceLevel = 3
 )
 
@@ -87,25 +91,48 @@ func factorsFrom(methods []string) factorSet {
 // AALForMethods maps a set of completed authenticator methods to the NIST SP
 // 800-63B assurance level they satisfy, applying the §5.2.4 combination rules:
 //
-//   - WebAuthn with the authenticator's user-verification flag set → AAL3.
-//     That is a multi-factor cryptographic device: possession of the key plus
-//     the PIN or biometric that unlocked it.
+//   - WebAuthn with the authenticator's user-verification flag set → AAL2.
+//     That is a multi-factor cryptographic authenticator on its own: possession
+//     of the key plus the PIN or biometric that unlocked it.
 //   - a first factor (password or an upstream IdP assertion) plus any
 //     possession factor → AAL2.
 //   - anything else → AAL1.
 //
+// This function returns AAL3 for nothing, and the ceiling is deliberate rather
+// than an omission.
+//
+// It used to return AAL3 for user-verified WebAuthn, and that level was rendered
+// into the acr claim of every issued access token (ACRForAAL, NewAuthContext,
+// token.go). A signed token is the strongest form a claim can take, and vault42
+// cannot support this one. SP 800-63B-4 §2.2.4 requires an AAL3 authenticator to
+// be hardware-based and verifier-impersonation-resistant, and §5.2.4 requires
+// the verifier to establish that it is. This service requests "none" attestation
+// (internal/handler/webauthn.go:218 says so, and adoptUnknownCredentialFlags at
+// :603 depends on it), stores no AAGUID and no attestation statement, and has no
+// metadata service: nothing anywhere in the tree can distinguish a FIDO2
+// security key from a passkey synced through a consumer cloud account. Both
+// present exactly one self-asserted UV bit. So AAL3 was asserted on evidence
+// that does not separate it from AAL2, over a synced software credential, while
+// docs/COMPLIANCE.md recorded AAL3 as claimed nowhere and the register carried
+// 63B-4 §3.2.4 (Attestation) as Not Applicable.
+//
+// The ceiling lifts when the evidence exists, not before: persist the AAGUID and
+// attestation statement at registration, verify it against FIDO MDS, and gate a
+// third branch on the result. Until then AAL2 is the true answer, and it is what
+// a relying party reading the token gets.
+//
 // userVerified is the WebAuthn UV flag from the assertion that completed the
 // login, and it is the reason this takes two arguments. A discoverable-
 // credential assertion with UV clear proves possession of a key and nothing
-// else: it is single-factor, and treating it as AAL3 asserted the highest
-// assurance level NIST defines over one factor.
+// else: it is single-factor, and reporting it as multi-factor would assert a
+// second factor no ceremony performed.
 func AALForMethods(methods []string, userVerified bool) AuthenticatorAssuranceLevel {
 	f := factorsFrom(methods)
 	firstFactor := f.password || f.federated
 	possession := f.totp || f.emailOTP || f.backupCode || f.webAuthn
 	switch {
 	case f.webAuthn && userVerified:
-		return AAL3
+		return AAL2
 	case firstFactor && possession:
 		return AAL2
 	default:

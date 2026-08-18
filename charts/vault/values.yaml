@@ -389,6 +389,16 @@ networkPolicy:
   # -- SMTP destination selector (empty = allow external). For production,
   # restrict to specific SMTP server IPs via ipBlock CIDR.
   smtpCIDR: ""
+  # -- Outbound HTTPS from the vault pod. Required by the HIBP breach check
+  # (hibpCheck, on by default), by any configured OIDC/OAuth provider and by the
+  # SendGrid API. Disabling it while hibpCheck stays true leaves the breach check
+  # enabled in configuration and unreachable in network, where it fails open
+  # silently on every password set.
+  httpsEgress:
+    # -- Allow egress on 443
+    enabled: true
+    # -- Restrict to these CIDRs (empty = any destination on 443)
+    cidrs: []
 
 # -- Node selector
 nodeSelector: {}

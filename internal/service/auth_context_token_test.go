@@ -34,8 +34,18 @@ func TestAccessTokenCarriesTheAuthenticationContext(t *testing.T) {
 	}
 
 	claims := parseIssuedToken(t, pair.AccessToken, key, kid)
-	if claims.ACR != "urn:vault42:aal:3" {
-		t.Errorf("acr = %q, want urn:vault42:aal:3", claims.ACR)
+	// The expectation read urn:vault42:aal:3 until 1.0.0, and it was pinning a
+	// defect rather than holding a property. AALForMethods returned AAL3 for a
+	// user-verified WebAuthn assertion, so this test required every token issued
+	// on that path to assert the highest assurance level NIST defines — over a
+	// credential that may be a passkey synced through a consumer cloud account,
+	// because the service accepts "none" attestation and stores no AAGUID, and on
+	// the strength of a UV bit the authenticator asserts about itself. Meanwhile
+	// docs/COMPLIANCE.md recorded AAL3 as claimed nowhere. A test that requires
+	// the overclaim makes the honest value a build failure, so the expectation
+	// moves here in the same change that caps AALForMethods at AAL2.
+	if claims.ACR != "urn:vault42:aal:2" {
+		t.Errorf("acr = %q, want urn:vault42:aal:2", claims.ACR)
 	}
 	if want := []string{"pwd", "hwk", "user", "mfa"}; !slices.Equal(claims.AMR, want) {
 		t.Errorf("amr = %v, want %v", claims.AMR, want)
