@@ -36,7 +36,7 @@ Adding a document means adding a row here.
 | [Standards Compliance](COMPLIANCE.md) | Mapping to NIST SP 800-63B, OWASP ASVS, OWASP Top 10 and the RFC family, with the tests that back each claim. |
 | [Privacy & Data Protection Policy](PRIVACY.md) | GDPR posture: lawful basis, data inventory, retention, data-subject rights, processors, and the breach-notification procedure. |
 
-Vulnerability reports go to **vault@42-v.com**, never to a public issue. See
+Vulnerability reports go to **<vault@42-v.com>**, never to a public issue. See
 [SECURITY.md](../SECURITY.md) for the intake process, the security-release process, and the
 support and versioning policy. Contributors should read
 [CONTRIBUTING.md](../CONTRIBUTING.md) before opening a pull request.

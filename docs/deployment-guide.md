@@ -31,6 +31,7 @@ tar xzf "vault42_${VERSION}_linux_arm64.tar.gz"
 ```
 
 This will:
+
 1. Install MicroK8s (if not present)
 2. Enable required addons (dns, storage, ingress, helm3)
 3. Generate all secrets
@@ -158,6 +159,7 @@ Total idle memory: ~60-80 MB for Vault42 process.
 ## Configuration
 
 The embedded profile uses:
+
 - **Cache**: In-memory (no Redis required)
 - **Database**: 5 max connections
 - **Auto-migrate**: Enabled
@@ -377,6 +379,7 @@ microk8s kubectl -n vault42 exec deploy/vault42-postgres -- \
 Vault42 uses neon green (#00FF42) on pure black (#000000) as the default color scheme. This applies to email templates and the embedded Vue frontend.
 
 Customize via environment variables:
+
 - `VAULT_PRIMARY_COLOR`: Hex color code (default: `#00FF42`)
 - `VAULT_LOGO_URL`: URL to your logo image
 - `VAULT_APP_NAME`: Application display name (default: `Vault42`)

@@ -1,6 +1,6 @@
 # vault42 -- Standards Compliance Report
 
-**vault42 1.0.0 · assessed 2026-08-10 · self-assessment**
+vault42 1.0.0 · assessed 2026-08-10 · self-assessment
 
 vault42 has been assessed against nine security and privacy standards at the
 revisions listed below, each cited with its publication date and the source the
@@ -376,13 +376,13 @@ register.
 
 **Reproducing this report.** Clone the repository and run:
 
-```
+```bash
 go test ./tests/compliance/
 ```
 
 To run only the register gate:
 
-```
+```bash
 go test ./tests/compliance/ -run TestComplianceRegister
 ```
 

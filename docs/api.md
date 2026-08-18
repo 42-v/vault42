@@ -60,7 +60,7 @@ The slug is validated for shape only; it is never an authorization decision, whi
 
 Most endpoints require a valid JWT access token in the `Authorization` header:
 
-```
+```http
 Authorization: Bearer <access_token>
 ```
 
@@ -78,7 +78,7 @@ A challenge token is not accepted by any other endpoint, so it cannot be used fo
 
 The `POST /client/token` endpoint accepts HTTP Basic authentication:
 
-```
+```http
 Authorization: Basic base64(client_id:client_secret)
 ```
 
@@ -137,7 +137,7 @@ Rate limits are enforced per-IP, per-user, or per-client depending on the endpoi
 
 When the limit is exceeded:
 
-```
+```http
 HTTP/1.1 429 Too Many Requests
 Retry-After: <window_seconds>
 ```
@@ -148,7 +148,7 @@ Retry-After: <window_seconds>
 
 **Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, the OAuth2 callback, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
 
-```
+```http
 HTTP/1.1 503 Service Unavailable
 Retry-After: <window_seconds>
 ```
@@ -246,7 +246,7 @@ Prometheus metrics endpoint. Returns metrics in Prometheus text exposition forma
 
 **Success response (200 OK):**
 
-```
+```text
 # HELP vault_argon2_active Current number of in-flight Argon2id operations
 # TYPE vault_argon2_active gauge
 vault_argon2_active 1
@@ -2933,7 +2933,7 @@ curl -i -X POST https://vault42.example.com/mint \
   -d '{"subject":"legacy-user-8814","roles":["admin"]}'
 ```
 
-```
+```http
 HTTP/1.1 403 Forbidden
 Content-Type: application/json
 
@@ -3092,7 +3092,7 @@ curl -i -X PUT "https://vault42.example.com/service/documents/$SUBJECT/loyalty" 
   -d '[{"tier":"gold"}]'
 ```
 
-```
+```http
 HTTP/1.1 400 Bad Request
 Content-Type: application/json
 

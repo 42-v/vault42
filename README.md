@@ -43,7 +43,7 @@ replay protection. See [docs/security.md](docs/security.md) AR-10.
 
 ## Architecture
 
-```
+```text
 cmd/vault/              Entry point (also hosts the `vault ...` admin CLI)
 cmd/admin-gateway/      mTLS admin gateway (key rotation, erasure, RBAC)
 cmd/bridge/             Honeypot bridge proxy (standalone, stdlib only)
@@ -184,7 +184,7 @@ commit that is already on `main`; nothing in a commit subject triggers one.
 
 Found a vulnerability? **Do not open a public issue.**
 
-Email **vault@42-v.com** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md) for the
+Email **<vault@42-v.com>** (Tuta, end-to-end encrypted). See [SECURITY.md](SECURITY.md) for the
 intake process, how a security fix ships, the supported-version and semver policy, and how to
 verify a release with `cosign`.
 

@@ -202,6 +202,7 @@ hop and the reason the first row of that pair is the documented answer.
 | `DB_APP_PASSWORD_FILE` | string | *(none)* | Yes | Path to file containing the `vault_app` role password. Used for all runtime queries. See [Secret Loading](#secret-loading-_file-convention). |
 
 The application uses two PostgreSQL roles with least-privilege separation:
+
 - **`vault_mig`** -- DDL privileges for migrations only. Connection is closed after migrations complete.
 - **`vault_app`** -- SELECT/INSERT/UPDATE on `auth` schema, INSERT/SELECT only on `audit` schema (append-only: no UPDATE, no DELETE). No TRUNCATE, no DDL. DELETE is held on the per-user and per-session tables for token lifecycle and the erasure cascade, and on `auth.signing_keys` for the key reap, where a trigger narrows it to retired keys past expiry. Two writes are narrowed further than their grant: it may not put a vault42 capability scope on a client row (migration 023), and it may not un-confirm an email address, re-arm `import_pending`, ban or disable an account (migration 024). See [admin-gateway.md](admin-gateway.md#database-role-separation).
 

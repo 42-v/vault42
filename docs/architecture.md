@@ -17,7 +17,7 @@ a read-only filesystem.
 
 ### High-Level Request Flow
 
-```
+```text
                                  +-------------------+
                                  |   Kubernetes      |
                                  |   Ingress (nginx) |
@@ -64,13 +64,12 @@ pattern specificity (e.g., `POST /auth/login` is more specific than `/` and is
 always matched first). This allows Vault42 to serve both the API and the UI
 from a single binary without path conflicts.
 
-
 ## Project Layout
 
 All application code lives under `internal/`, which Go enforces as non-importable
 by external modules. This is intentional -- the service is not a library.
 
-```
+```text
 cmd/vault42/main.go            Entry point: config, migrations, wiring, server start
 cmd/bridge/                  Honeypot bridge reverse proxy (standalone binary, stdlib only)
   main.go                    Entry point, config, graceful shutdown
@@ -183,14 +182,13 @@ tests/
   stress/                    12 load/stress tests across 3 tiers (stress build tag)
 ```
 
-
 ## Middleware Chain
 
 The middleware chain is assembled in `internal/server/server.go` at `Start()`.
 Middleware wraps from inside out, so the **execution order is the reverse of the
 wrapping order**:
 
-```
+```text
 Incoming request
   |
   v
@@ -261,7 +259,7 @@ relying parties; no vault42 route authorizes on them.
 Its one current consumer is the KMS unwrap oracle, which is also the longest chain in the
 server and worth reading in full:
 
-```
+```text
 POST /kms/unwrap                        mounted only when KMS_ROOT_KEY_FILE is set
   |
   v
@@ -310,12 +308,11 @@ would multiply the effective key-release rate by the replica count.
 
 See: `internal/server/server.go`, `internal/middleware/`
 
-
 ## Request Lifecycle
 
 Trace of an authenticated `GET /user/profile` request:
 
-```
+```text
 1. TCP connection arrives at the Go HTTP server (TLS 1.3 if enabled)
 2. Recovery middleware installs panic handler via defer/recover
 3. RequestID generates "a1b2c3d4..." and stores in context
@@ -356,7 +353,6 @@ Values flow through the request context:
 | `"request_id"` | `string` | RequestID middleware | Logger, any handler |
 | `"claims"` | `*vaultcrypto.VaultClaims` | Auth/AuthChallenge middleware | Fingerprint, Confirmed, all handlers |
 
-
 ## Auth Flows
 
 > **0.8.0 additions**:
@@ -370,7 +366,7 @@ Values flow through the request context:
 
 ### Registration Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/register           |                               |
@@ -413,7 +409,7 @@ See: `internal/handler/auth.go` Register(), `internal/service/auth.go` Register(
 
 ### Login Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/login              |                               |
@@ -464,7 +460,7 @@ See: `internal/service/auth.go` Login()
 When the login response includes `requires_2fa: true`, the client must complete
 a second factor before receiving real tokens.
 
-```
+```text
 Client                           Vault42                         Cache
   |                                |                               |
   |  POST /auth/2fa/totp/verify    |                               |
@@ -506,7 +502,7 @@ See: `internal/handler/totp.go` Verify(), `internal/handler/webauthn.go` VerifyF
 
 ### Token Refresh Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/refresh            |                               |
@@ -559,7 +555,7 @@ See: `internal/service/auth.go` Refresh()
 
 ### Logout Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/logout             |                               |
@@ -585,7 +581,7 @@ See: `internal/handler/auth.go` Logout(), `internal/service/auth.go` Logout()
 
 ### Password Reset Flow
 
-```
+```text
 Client                           Vault42                  Cache           Email
   |                                |                      |               |
   |  POST /auth/password/reset     |                      |               |
@@ -644,7 +640,7 @@ See: `internal/handler/password.go`
 
 ### OAuth2 Flow
 
-```
+```text
 Client                    Vault42                   Provider (Google/GitHub)
   |                         |                              |
   |  GET /auth/oauth2/authorize?provider=google            |
@@ -702,7 +698,6 @@ be verified. This prevents account takeover via unverified OAuth emails.
 
 See: `internal/handler/oauth.go`
 
-
 ## Token Architecture
 
 ### Access Tokens
@@ -758,10 +753,9 @@ See: `internal/handler/oauth.go`
 
 See: `internal/crypto/jwt.go`, `internal/service/token.go`
 
-
 ## Key Rotation (JWKS)
 
-```
+```text
 /.well-known/jwks.json  <--  Serves the current public key set
 
 On rotation (via CLI: vault42 rotate-jwks --admin-token <token>):
@@ -783,6 +777,7 @@ serving concurrent JWKS requests.
 ### File-Based Keys (Default)
 
 At startup, key loading depends on configuration:
+
 - **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive restarts. `kid` derived deterministically from SHA-256 of the public key modulus.
 - **`SIGNING_KEY_FILE` not set (fallback):** ephemeral RSA-2048 key pair generated in memory. Tokens invalidated on restart. Suitable for single-pod deployments only.
 
@@ -807,14 +802,13 @@ rotation without shared filesystem access.
 
 See: `internal/keystore/`, `internal/handler/wellknown.go`, `internal/service/token.go` UpdateSigningKey()
 
-
 ## Service Layer
 
 The service layer (`internal/service/`) contains all business logic. Handlers
 never access repositories directly for core auth operations -- they delegate to
 services.
 
-```
+```text
 Handler                    Service                    Repository
   |                          |                           |
   |  AuthHandler.Login()     |                           |
@@ -839,6 +833,7 @@ Handler                    Service                    Repository
 ```
 
 **Responsibilities**:
+
 - **Handlers**: HTTP concerns only -- decode request, extract headers, call
   service, set cookies, write response. Handlers import services and repositories
   but never contain business logic.
@@ -860,7 +855,6 @@ Three services coordinate the auth domain:
 | `MFAService` | MFA policy: which methods are enabled, whether MFA is required |
 
 See: `internal/service/auth.go`, `internal/service/token.go`, `internal/service/mfa.go`
-
 
 ## Data Layer
 
@@ -893,7 +887,7 @@ and use `pgx/v5` for connection pooling and query execution.
 
 Three PostgreSQL roles enforce separation of concerns:
 
-```
+```text
 vault_mig (migration role)
   - Used ONLY at startup for schema migrations
   - Has DDL privileges (CREATE TABLE, ALTER, etc.)
@@ -924,6 +918,7 @@ Each entry includes: event type, user ID, client ID, IP, user agent, fingerprint
 hash, device ID, scrubbed metadata, risk score, and timestamp.
 
 **Security properties**:
+
 - Append-only at the database level (vault_app has INSERT + SELECT only, and a
   trigger refuses DELETE and UPDATE regardless)
 - The one function that can remove a row, `audit.cleanup_old_entries()`, is
@@ -960,6 +955,7 @@ this is the only path that can remove an escrow record.
 ### Cache Interface
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:
+
 - Rate limiting counters (sliding window via `Increment`)
 - Email verification tokens (`verify:<hash>` -> user ID, 24h TTL)
 - Password reset tokens (`reset:<hash>` -> user ID, 1h TTL)
@@ -995,7 +991,6 @@ default is used as a fallback. This allows operators to customize email branding
 without rebuilding the binary.
 
 See: `internal/email/templates.go`
-
 
 ## Configuration & Profiles
 
@@ -1056,7 +1051,6 @@ The argon2 semaphore gauge (`vault_argon2_semaphore_in_use` /
 `vault_argon2_semaphore_capacity`) is designed for HPA scaling: when utilization
 approaches capacity, Kubernetes can scale out the pod count.
 
-
 ## Frontend & i18n Architecture
 
 ### Vue Frontend (`web/`)
@@ -1065,6 +1059,7 @@ The Vue 3 + Vite + Tailwind frontend provides the user-facing dashboard. It uses
 the `@vault42/vue` package (`packages/vue/`) for all API interaction and i18n.
 
 **Key files:**
+
 - `web/src/App.vue` -- main layout, nav links (computed via `t()`), LanguageSwitcher
 - `web/src/views/*.vue` -- 15 view components, all strings translated via `t()`
 - `web/src/components/LanguageSwitcher.vue` -- searchable locale dropdown
@@ -1088,6 +1083,7 @@ Custom i18n plugin with no external dependencies:
 ### LanguageSwitcher
 
 Custom searchable dropdown (not a native `<select>`):
+
 - Trigger button shows current locale's native name
 - Opens upward as a popover with search input
 - Filters by locale code and native name
@@ -1096,7 +1092,7 @@ Custom searchable dropdown (not a native `<select>`):
 
 ### Build Pipeline
 
-```
+```text
 packages/vue/  →  pnpm build (tsup)  →  dist/vault42-vue.js
 web/           →  pnpm build (Vite)  →  dist/ (index.html + assets)
 scripts/build-all.sh  →  copies web/dist → internal/frontend/dist (go:embed)
@@ -1110,7 +1106,7 @@ scripts/build-all.sh  →  copies web/dist → internal/frontend/dist (go:embed)
 
 The Helm chart at `charts/vault/` serves all environments via value overlays:
 
-```
+```text
 charts/vault/
   values.yaml              Production defaults
   values-dev.yaml          Dev overlay (single replica, local images, in-cluster services)
@@ -1134,7 +1130,7 @@ charts/vault/
 
 A single command deploys the full stack locally:
 
-```
+```text
 scripts/deploy-dev.sh
   1. Generate mkcert TLS certificates for vault.localhost
   2. Build Docker images: vault42:dev, vault42-frontend:dev
@@ -1149,6 +1145,7 @@ Access at `https://vault.localhost` via nginx ingress controller. Requires:
 ### Container Image
 
 Multi-stage Dockerfile:
+
 - **Builder**: `golang:1.24-alpine` -- compiles static binary with `CGO_ENABLED=0`
 - **Runtime**: `gcr.io/distroless/static-debian12:nonroot` -- no shell, no
   package manager, non-root user, read-only filesystem, all capabilities dropped

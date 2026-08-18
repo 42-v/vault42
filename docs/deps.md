@@ -64,6 +64,7 @@
 | `internal/keystore` | 98.70% |
 | `internal/crypto` | 98.19% |
 | `internal/kms` | 91.67% |
+
 ## Maintainers
 
 12 maintainers behind Vault's dependency tree.
@@ -82,4 +83,3 @@
 | [philhofer](https://github.com/philhofer) | User | fwd | 47 | ![followers](https://img.shields.io/github/followers/philhofer?style=flat&label=) | 2012-12-01 |
 | [tinylib](https://github.com/tinylib) | Org | msgp | 3 | ![followers](https://img.shields.io/github/followers/tinylib?style=flat&label=) | 2015-01-12 |
 | [x448](https://github.com/x448) | User | float16 | 54 | ![followers](https://img.shields.io/github/followers/x448?style=flat&label=) | 2019-10-27 |
-
