@@ -83,6 +83,7 @@ spec:
               value: {{ .Values.tls.keyFile | quote }}
             {{- end }}
           volumeMounts:
+            {{- include "vault.firstBootCredentialMount" . | nindent 12 }}
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
               readOnly: true
@@ -106,6 +107,7 @@ spec:
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
       volumes:
+        {{- include "vault.firstBootCredentialVolume" . | nindent 8 }}
         - name: secrets
           secret:
             secretName: {{ include "vault.secretName" . }}
