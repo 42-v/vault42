@@ -2,13 +2,13 @@
 
 **vault42 1.0.0 · assessed 2026-08-10 · self-assessment**
 
-vault42 has been assessed against six security and privacy standards at the
+vault42 has been assessed against nine security and privacy standards at the
 revisions listed below, each cited with its publication date and the source the
 revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **367 requirements in scope across 6 standards: 295 Met, 26 Accepted Risk,
+> **404 requirements in scope across 9 standards: 329 Met, 29 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -76,6 +76,9 @@ memory and not from a previous version of this document.
 | OWASP Top 10 | **2025** | *see note* | Category identifiers and names from [owasp.org/Top10/2025/](https://owasp.org/Top10/2025/) |
 | GDPR (EU) 2016/679 | stable | 2016-04-27 | [EUR-Lex](https://eur-lex.europa.eu/eli/reg/2016/679/oj) |
 | RFC 6238 / 6749 / 7636 / 8725 / 9449 / 9700 and OpenID Connect Core 1.0 | per clause | stable | [rfc-editor.org](https://www.rfc-editor.org/) |
+| OWASP API Security Top 10 | **2023** | 2023 | Category identifiers and titles from [owasp.org/API-Security/editions/2023](https://owasp.org/API-Security/editions/2023/en/0x00-header/). A separate list from the OWASP Top 10:2025 above, not another edition of it |
+| NIST SP 800-218 -- *Secure Software Development Framework (SSDF)* | **1.1** | 2022-02 | Practice and task identifiers from the SP 800-218 v1.1 table on [csrc.nist.gov](https://csrc.nist.gov/pubs/sp/800/218/final) |
+| Kubernetes Pod Security Standards | **restricted profile** | living | Control names from [kubernetes.io](https://kubernetes.io/docs/concepts/security/pod-security-standards/) |
 
 > **Needs verification:** OWASP publishes no release date for the Top 10:2025
 > edition on the project page, on the 2025 pages, or through the repository's
@@ -192,9 +195,12 @@ than being retired on a technicality.
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 12 | 1 | 0 | 13 |
-| **Total** | **295** | **26** | **46** | **367** |
+| OWASP API Security Top 10:2023 | 9 | 1 | 0 | 10 |
+| NIST SP 800-218 (SSDF v1.1) | 16 | 1 | 0 | 17 |
+| Kubernetes Pod Security Standards, restricted | 9 | 1 | 0 | 10 |
+| **Total** | **329** | **29** | **46** | **404** |
 
-The 26 Accepted Risk rows collapse to **15 distinct accepted risks**: several
+The 29 Accepted Risk rows collapse to **17 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -278,6 +284,52 @@ neither namespace.
 | **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
 | **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
 | **CR-31** | Medium | The 15-character password minimum is the shipped **default**; the enforced floor is 8 outside dev, and the dev profile has no floor. This document said "the minimum vault42 has enforced since 0.4". It was not. | 800-63B-4 §3.1.1.2 |
+| **CR-32** | Low | Dependency versions are pinned and scanned nightly, but nothing updates them: there is no dependabot or Renovate configuration. A scanner reports a vulnerable dependency; it does not raise the pull request that fixes it. | SSDF PO.3.2 |
+| **CR-33** | Low | The admin gateway sets `hostNetwork: true`, which the Pod Security Standards forbid at baseline. It is load-bearing: `LocalOnly` means the node's loopback, and inside a pod namespace loopback is the pod's. Every other restricted control is met. | Kubernetes PSS host namespaces |
+
+### The three standards added in 1.0.0
+
+Each was added only where the code already satisfies it and a test can prove
+each row. Three were considered and **not** added, which is the more useful half
+of the list:
+
+| Added | Why it fits |
+|---|---|
+| **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. Nine Met, one accepted risk (API7 is CR-17, the same SSRF residual ASVS V1.3.6 carries). API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
+| **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. PO.3.2 is an accepted risk, CR-32: there is no dependency-update automation, and a nightly scanner is not one. |
+| **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. Nine controls Met across the vault-plane workloads; host namespaces is CR-33. |
+
+**Not added, and why.**
+
+- **CIS Kubernetes Benchmark.** Overwhelmingly control-plane, etcd, kubelet and
+  node configuration that a chart does not own. Claiming it would be the exact
+  overclaim pattern the rest of this document is retracting. PSS-restricted is
+  the workload-scoped standard, and it is what is claimed.
+- **SOC 2 and ISO/IEC 27001.** Both attest an organisation, not a codebase. A
+  repository cannot be "SOC 2 compliant". The only legitimate artefact would be
+  a customer-enablement mapping, clearly labelled, and it would publish a gap on
+  day one: CC7.2 and CC7.3 are directly blocked by CR-15.
+- **PCI-DSS.** vault42 stores, processes and transmits no cardholder data and
+  has never been in a CDE assessment. The only honest sentence is that vault42
+  can serve as the authentication component supporting Requirement 8 in an
+  operator's CDE, and that vault42 itself is out of scope and unassessed.
+- **RFC 8414 (Authorization Server Metadata).** The discovery document publishes
+  three of the four fields §2 requires, and `internal/handler/client.go` returns
+  `invalid_client_credentials` where RFC 6749 §5.2 specifies `invalid_client`.
+  6749 first, then 8414 is free.
+- **"FIDO2 L2".** FIDO Alliance L1/L2 are *authenticator* certifications; there
+  is no such certification for a relying party. What is claimable, and what the
+  WebAuthn rows say, is conformance to the W3C WebAuthn specification's relying
+  party operations.
+- **A SLSA build level.** `provenance: true` is BuildKit provenance in
+  `mode=min`, which is not a signed build-level attestation. The SSDF PS.3.2 row
+  says exactly that rather than converting it into a number.
+- **FIPS 140 and AAL3.** Neither is claimed anywhere. AAL2 is claimed and stated
+  precisely: every SHALL met, two SHOULDs deviated from with published
+  justification (CR-14).
+- **OWASP Top 10:2021.** The register carries the 2025 edition. Adding 2021
+  alongside it would recreate the two-editions-at-once confusion the ASVS
+  4.0.3 -> 5.0.0 migration already cost this project.
 
 ---
 

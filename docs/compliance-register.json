@@ -20,7 +20,8 @@
         "web/ — the Vue single-page frontend, assessed separately",
         "packages/ — the C# and TypeScript client SDKs, assessed separately",
         "Operator deployment configuration beyond the shipped Helm chart",
-        "cmd/bridge and the honeypot profile, which are non-default deployment modes"
+        "cmd/bridge and the honeypot profile, which are non-default deployment modes",
+        "The chart's bundled PostgreSQL and Mailpit workloads — labelled dev-only in values.yaml and disabled by default — are excluded from the Kubernetes Pod Security Standards claim. They do not meet the restricted profile, and the claim names the workloads it covers rather than implying the whole chart."
       ],
       "asvs_level": "L2",
       "asvs_level_note": "Every ASVS 5.0.0 requirement at L1 and L2 is classified. L3 requirements are outside the declared level; where one is nevertheless satisfied or deliberately not satisfied it is recorded anyway rather than omitted."
@@ -83,6 +84,27 @@
       "released": "",
       "source": "https://www.rfc-editor.org/",
       "verified": "RFC 6749, 6238, 7636, 8725, 9449 and 9700 plus OpenID Connect Core 1.0. Stable documents. Under ASVS 5.0.0 most of these now map onto chapters V9 and V10, so each row here cross-references its ASVS requirement rather than standing alone as it did through 0.9.9."
+    },
+    {
+      "name": "OWASP API Security Top 10",
+      "short_name": "OWASP API Top 10",
+      "revision": "2023",
+      "source": "https://owasp.org/API-Security/editions/2023/en/0x00-header/",
+      "verified": "Category identifiers and titles taken from the 2023 edition pages on owasp.org on 2026-08-18. This is a separate list from the OWASP Top 10:2025 already in this register; the two are not editions of one document."
+    },
+    {
+      "name": "NIST SP 800-218 — Secure Software Development Framework (SSDF)",
+      "short_name": "NIST SP 800-218",
+      "revision": "1.1",
+      "source": "https://csrc.nist.gov/pubs/sp/800/218/final",
+      "verified": "Practice and task identifiers taken from the SP 800-218 v1.1 table on csrc.nist.gov on 2026-08-18. SSDF describes practices, not controls; every row here names the workflow job or tracked file that performs the practice."
+    },
+    {
+      "name": "Kubernetes Pod Security Standards — restricted profile",
+      "short_name": "Kubernetes PSS",
+      "revision": "restricted",
+      "source": "https://kubernetes.io/docs/concepts/security/pod-security-standards/",
+      "verified": "Control names taken from the Pod Security Standards page on kubernetes.io on 2026-08-18. Deliberately NOT the CIS Kubernetes Benchmark: that benchmark is overwhelmingly control-plane, etcd, kubelet and node configuration, none of which a Helm chart owns."
     }
   ],
   "accepted_risks": {
@@ -265,6 +287,30 @@
       "residual_risk": "A deployment that lowers VAULT_PASSWORD_MIN_LENGTH accepts passwords below the Rev 4 single-factor figure, and the software does not stop it above 8. The code's own comment at internal/config/config.go:599 concedes the exposure.",
       "revisit_when": "Any deployment states SP 800-63B-4 conformance to a third party rather than self-assessing, or the floor is raised. Raising passwordMinLengthFloor to 15 outside dev converts this row back to Met in one constant, at the cost of a release note: it invalidates shorter existing passwords at next change.",
       "cost_of_closing": "One constant plus a release note. TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fails if the register, docs/COMPLIANCE.md or README.md state anything else, so the day the floor moves the documents have to move with it."
+    },
+    "CR-32": {
+      "title": "No automated dependency-update tool is configured",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-18",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
+      "rationale": "SSDF PO.3.2 asks that the toolchain be configured to improve the security of the software it produces, and an automated dependency-update tool is the piece this repository does not have: there is no .github/dependabot.yml and no Renovate configuration. Nightly govulncheck and Trivy find a vulnerable dependency; neither raises the pull request that updates it, and treating a scanner as an updater is the kind of substitution this register exists to refuse.",
+      "compensating_control": "Every dependency is version-pinned and integrity-checked (go mod verify, a frozen pnpm lockfile, pnpm override floors); govulncheck, Trivy over source and Trivy over the shipped image run nightly rather than only at release, so the window between a disclosure and its detection is a day rather than a release cycle; the nightly gate fails on HIGH and CRITICAL rather than reporting them.",
+      "residual_risk": "Between a fix being published upstream and a maintainer acting on the nightly finding, the repository stays on the vulnerable version. Detection is automated; remediation is not.",
+      "revisit_when": "The dependency count grows past what a maintainer can triage from a nightly report, or a deployment requires a documented patch SLA.",
+      "cost_of_closing": "A dependabot or Renovate configuration file, plus the review load it creates. The reason it has not landed is the second half: an update bot with nobody reading its pull requests is worse than none, because it makes the branch list look maintained."
+    },
+    "CR-33": {
+      "title": "The admin gateway takes the host network, which the Pod Security Standards forbid at baseline",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-18",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
+      "rationale": "charts/vault/templates/admin-gateway.yaml sets hostNetwork: true, and both the baseline and restricted profiles disallow host namespaces. It is deliberate and load-bearing: the gateway's primary control is that it binds loopback and refuses anything that did not arrive on it, and inside a pod network namespace loopback is the pod's, not the node's. The chart refuses to render with hostNetwork false unless the operator also sets devMode explicitly, which is what turning the control off looks like when it is stated out loud rather than defaulted away.",
+      "compensating_control": "The gateway meets every other restricted control: runAsNonRoot at uid 65532, RuntimeDefault seccomp, allowPrivilegeEscalation false, capabilities drop ALL, read-only root filesystem, no service-account token. On top of the network namespace it requires mutual TLS with a client certificate signed by a configured CA, a bearer session token, and RBAC on every route. It is disabled by default.",
+      "residual_risk": "The admin gateway pod shares the node's network namespace, so it can see and bind the node's interfaces. A compromise of that container is a better network position than a compromise of any other pod in the chart.",
+      "revisit_when": "A deployment needs the whole chart to pass a restricted-profile admission controller, or the gateway gains an access path that does not depend on node loopback.",
+      "cost_of_closing": "Replace node loopback with a different trust anchor for LocalOnly, such as requiring the mutual-TLS client certificate to carry a specific identity, which docs/security.md AR-9 records as not currently validated. That is a change to the admin plane's trust model, not a chart edit."
     }
   },
   "requirements": [
@@ -7069,6 +7115,609 @@
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
       ],
       "notes": ""
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API1:2023",
+      "requirement": "Broken Object Level Authorization",
+      "status": "Met",
+      "evidence": [
+        "internal/service/blob.go:89",
+        "internal/handler/servicedoc.go:105",
+        "internal/handler/blob.go:294"
+      ],
+      "tests": [
+        "TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered"
+      ],
+      "notes": "Met: object reads are keyed by (id, owner), not filtered after lookup. The blob service derives a pseudonym from the caller's authenticated subject and every repository read passes it (internal/service/blob.go:89, GetByIDAndPseudonym), so an object id held by a second authenticated user is a miss rather than a read. The service-document store carries a second ownership axis and asserts it directly: internal/handler/servicedoc.go:105 refuses a token with no client id, and the comment above it explains that the scope check alone is sufficient only by accident. TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered drives a real cross-user read."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API2:2023",
+      "requirement": "Broken Authentication",
+      "status": "Met",
+      "evidence": [
+        "internal/middleware/auth.go:57",
+        "internal/crypto/jwt.go:25"
+      ],
+      "tests": [
+        "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated",
+        "TestASVS_V9_1_2_TokenAlgorithmAllowlistExcludesNoneAndHMAC",
+        "TestNIST63B4_2_2_2_AAL2RequiresTwoDistinctFactors"
+      ],
+      "notes": "Met: every route outside a declared public allowlist passes through an authentication guard, asserted by parsing the router rather than by testing the routes that exist today. Tokens are RS256 only with an algorithm allowlist that rejects none and HMAC, are size-bounded before parsing, and are bound to a device fingerprint. Passwords are Argon2id with a pepper; MFA is on by default."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API3:2023",
+      "requirement": "Broken Object Property Level Authorization",
+      "status": "Met",
+      "evidence": [
+        "internal/handler/response.go:24"
+      ],
+      "tests": [
+        "TestAPITop10_API3_2023_UnknownRequestPropertiesAreRejectedNotIgnored",
+        "TestOWASP_NoSensitiveDataInJWTClaims"
+      ],
+      "notes": "Met: every JSON request body in the HTTP layer is decoded through decodeJSON (internal/handler/response.go:24), which sets DisallowUnknownFields, so a property the API did not offer is a 400 rather than a silent write. On the response side the token carries no sensitive property and the audit projection deliberately omits the fingerprint hash. TestAPITop10_API3_2023_UnknownRequestPropertiesAreRejectedNotIgnored also asserts no handler bypasses the strict decoder, because a strict helper half the package ignores is not a control."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API4:2023",
+      "requirement": "Unrestricted Resource Consumption",
+      "status": "Met",
+      "evidence": [
+        "internal/server/server.go:158",
+        "internal/service/blob.go:134",
+        "internal/service/blob.go:153"
+      ],
+      "tests": [
+        "TestAPITop10_API4_2023_EveryConsumableResourceHasACeiling",
+        "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
+        "TestASVS_V5_2_1_OversizedUploadsAreRefusedAtTheReader"
+      ],
+      "notes": "Met with three independent ceilings. Per-route rate limits on the flows that cost the most, which matters because Argon2id at 46 MiB makes an unlimited login endpoint a memory-exhaustion primitive and not only a guessing one; http.MaxBytesReader on every write path including the two routes exempted from the global 8 KiB cap; and per-user object-count and stored-byte quotas, which are the only one of the three that bounds slow accumulation."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API5:2023",
+      "requirement": "Broken Function Level Authorization",
+      "status": "Met",
+      "evidence": [
+        "internal/adminapi/router.go:37",
+        "internal/rbac/rbac.go:338"
+      ],
+      "tests": [
+        "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer",
+        "TestASVS_V4_1_1_RequireScopeEnforcesExactScope",
+        "TestASVS_V4_1_3_ViewerHoldsNoMutatingPermission"
+      ],
+      "notes": "Met: the admin plane's authorization model is internal/rbac, three strictly hierarchical roles and 29 permission constants hardcoded in Go so SQL injection cannot mint one, and 36 admin endpoints are permission-gated in adminapi.NewRouter. The gate is parsed out of the router rather than sampled, so a new mutating route wired without a permission fails the build. On the user plane, scope enforcement is exact-match rather than prefix."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API6:2023",
+      "requirement": "Unrestricted Access to Sensitive Business Flows",
+      "status": "Met",
+      "evidence": [
+        "internal/server/server.go:318",
+        "internal/server/server.go:321",
+        "internal/server/server.go:327"
+      ],
+      "tests": [
+        "TestAPITop10_API6_2023_BulkAbusableFlowsAreThrottledAndSwitchable",
+        "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
+      ],
+      "notes": "Met for the flows worth abusing in bulk here: account creation, credential guessing and password-reset mail. Each carries its own rate limiter, registration can be switched off entirely for a deployment that provisions its users, and a flagged source address consumes the credential-guessing buckets three times faster, which is the control aimed at the distributed version. The reset flow answers identically whether or not the address exists, so it cannot be used as an enumeration oracle while it is being used as a mail cannon."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API7:2023",
+      "requirement": "Server Side Request Forgery",
+      "status": "Accepted Risk",
+      "evidence": [
+        "internal/email/smtp.go:57",
+        "charts/vault/templates/networkpolicy.yaml:1"
+      ],
+      "tests": [],
+      "notes": "Accepted risk CR-17, the same residual the ASVS V1.3.6 row carries. All four outbound destinations are operator-configured rather than caller-supplied: the OIDC issuer, the SMTP relay reached through smtp.SendMail, the HIBP range API and the honeypot webhook. No request path lets a caller influence a destination, so the precondition for server-side request forgery is absent; what is missing is defence in depth, a code-level allowlist that would catch an operator misconfiguration. The chart's NetworkPolicy enforces the allowlist at the network layer instead.",
+      "accepted_risk": "CR-17"
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API8:2023",
+      "requirement": "Security Misconfiguration",
+      "status": "Met",
+      "evidence": [
+        "internal/config/config.go:605",
+        "internal/middleware/security_headers.go:17"
+      ],
+      "tests": [
+        "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults",
+        "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
+      ],
+      "notes": "Met: the production profile refuses to start on an insecure default rather than warning about it, and the security-headers middleware sets HSTS, nosniff, frame-ancestors, Referrer-Policy, Permissions-Policy and the cross-origin isolation headers on every response. The chart renders every values file in CI so a default that stops parsing stops the build. The one configuration gap is CR-27, the two CSP directives V3.4.3 names."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API9:2023",
+      "requirement": "Improper Inventory Management",
+      "status": "Met",
+      "evidence": [
+        "docs/api.md:1",
+        "internal/handler/wellknown.go:53"
+      ],
+      "tests": [
+        "TestAPITop10_API9_2023_EveryMountedRouteAppearsInThePublishedReference"
+      ],
+      "notes": "Met by assertion rather than by habit: every route the server mounts must appear in docs/api.md, and TestAPITop10_API9_2023_EveryMountedRouteAppearsInThePublishedReference checks all 51 of them on every build. An endpoint that ships without an entry in the inventory is the one nobody remembers to retire, which is the whole category. The discovery document at /.well-known/openid-configuration publishes only what is implemented and explains its omissions in a comment."
+    },
+    {
+      "standard": "OWASP API Top 10",
+      "revision": "2023",
+      "revision_date": "",
+      "requirement_id": "API10:2023",
+      "requirement": "Unsafe Consumption of APIs",
+      "status": "Met",
+      "evidence": [
+        "internal/oauth2/oidc.go:1",
+        "internal/handler/oauth.go:417",
+        "internal/service/hibp.go:33"
+      ],
+      "tests": [
+        "TestAPITop10_API10_2023_ThirdPartyResponsesAreValidatedBeforeUse",
+        "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned",
+        "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
+      ],
+      "notes": "Met: vault42 calls three third parties and bounds each answer before believing it. The OIDC provider's metadata is pinned against the configured issuer; the provider's own email_verified claim is required before a first-time sign-in provisions an account, and linking to an existing account requires both sides to be verified; HIBP is consumed under k-anonymity and its outage is fail-open by design. No outbound client sets InsecureSkipVerify and every tls.Config declares a minimum version."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PO.1.1",
+      "requirement": "Define security requirements for software development",
+      "status": "Met",
+      "evidence": [
+        "docs/compliance-register.json:1",
+        "docs/security.md:1"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist"
+      ],
+      "notes": "Met: the security requirements this software is developed against are this register and docs/security.md, both tracked in the repository and both enforced by tests that run on every build. LICENSE states the terms the software is released under."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PO.2.1",
+      "requirement": "Create new roles and alter responsibilities to encompass the SDLC",
+      "status": "Met",
+      "evidence": [
+        ".github/CODEOWNERS:1"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist"
+      ],
+      "notes": "Met: .github/CODEOWNERS names the reviewer for each area, so review has an owner rather than whoever is available. Branch review is required before merge."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PO.3.1",
+      "requirement": "Specify which tools are to be included in each toolchain",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:1",
+        ".github/workflows/nightly-security.yml:42"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent",
+        "TestOWASP_A03_2025_WorkflowActionsArePinnedToCommitSHAs"
+      ],
+      "notes": "Met: the Go toolchain is pinned to go.mod by every workflow rather than resolved at run time, and each security scanner is installed at an exact version (govulncheck v1.1.4, gosec v2.28.0), so a scan result is attributable to a known tool. Every third-party GitHub Action is pinned to a full commit SHA."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PO.3.2",
+      "requirement": "Follow recommended security practices to deploy and maintain tools and toolchains",
+      "status": "Accepted Risk",
+      "evidence": [
+        ".github/workflows/nightly-security.yml:30"
+      ],
+      "tests": [
+        "TestSSDF_800_218_DependencyUpdateAutomationIsAbsent"
+      ],
+      "notes": "Accepted risk CR-32. Dependency versions are pinned and integrity-checked, and vulnerable ones are found nightly, but nothing updates them: there is no dependabot configuration and no Renovate configuration in the repository. A scheduled scan reports a vulnerable dependency; it does not raise the pull request that fixes it, and the register records the difference rather than letting the scan stand in for the update tool. TestSSDF_800_218_DependencyUpdateAutomationIsAbsent fails the day either lands.",
+      "accepted_risk": "CR-32"
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PS.1.1",
+      "requirement": "Store all forms of code based on the principle of least privilege",
+      "status": "Met",
+      "evidence": [
+        ".goreleaser.yaml:105",
+        ".goreleaser.yaml:117"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
+      ],
+      "notes": "Met: the release archives are covered by a SHA256SUMS file, and one keyless cosign signature over that file covers every artifact in it because every artifact's digest is inside the file being signed."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PS.2.1",
+      "requirement": "Make software integrity verification information available to software acquirers",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:39",
+        ".github/workflows/release.yml:292"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
+      ],
+      "notes": "Met: images are signed keylessly with cosign over their digests, the checksum file carries a detached signature, and the workflow requests the OIDC token those signatures need. A signing step without id-token: write is inert, so the permission is asserted alongside the step."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PS.3.1",
+      "requirement": "Securely archive the necessary files and supporting data to be retained for each release",
+      "status": "Met",
+      "evidence": [
+        "CHANGELOG.md:1",
+        ".github/workflows/release.yml:299"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist",
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
+      ],
+      "notes": "Met: CHANGELOG.md records what changed in each release, the release job publishes the archives and their checksums, and the chart and images are published at the same version."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PS.3.2",
+      "requirement": "Collect, safeguard, maintain and share provenance data for all components",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:241",
+        ".goreleaser.yaml:109"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
+      ],
+      "notes": "Met: BuildKit provenance and an SBOM are produced for each of the three images, and syft SBOMs for the release archives. Stated precisely: provenance: true is BuildKit provenance in mode=min, which is not the same as a signed SLSA build-level attestation, and the register makes no SLSA level claim on the strength of it."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PW.4.1",
+      "requirement": "Acquire and maintain well-secured software components from commercial, open-source and other third-party developers",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:366",
+        ".github/workflows/ci.yml:369"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
+        "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned"
+      ],
+      "notes": "Met: go mod verify checks every dependency against its recorded hash and go mod tidy -diff fails when the manifest and the imports disagree, both on every pull request that touches Go. The pnpm side is integrity-pinned by a frozen lockfile."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PW.7.1",
+      "requirement": "Determine whether code review or automated analysis should be used",
+      "status": "Met",
+      "evidence": [
+        ".github/CODEOWNERS:1",
+        ".github/workflows/ci.yml:226"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist",
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met: both, and neither is optional. .github/CODEOWNERS assigns human review; the golangci job runs the linters on every pull request."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PW.7.2",
+      "requirement": "Perform the code review and/or code analysis based on the organization's secure coding standards",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/nightly-security.yml:47"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
+        "TestNIST_RA_5_NightlySecurityScannersEnforceHighCriticalGate"
+      ],
+      "notes": "Met: golangci on every pull request, gosec and Trivy nightly over source and image, govulncheck against the Go vulnerability database. The nightly job fails on HIGH and CRITICAL rather than reporting them."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PW.8.2",
+      "requirement": "Design the software to meet security requirements and mitigate security risks",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:23",
+        ".github/workflows/ci.yml:372"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met: the tests/ tree is the executable form of the requirements in this register, and two thirds of the compliance suite asserts properties of the whole tree rather than the behaviour of one function, because the second kind cannot see a defect that arrives with code that does not exist yet. Fuzz targets run in CI over the parsers."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "PW.9.1",
+      "requirement": "Configure software to have secure settings by default",
+      "status": "Met",
+      "evidence": [
+        "internal/config/config.go:605",
+        ".github/workflows/ci.yml:277"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
+        "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
+      ],
+      "notes": "Met: the production profile refuses to start on an insecure setting rather than warning, the container images are distroless nonroot, and the chart's every values file is rendered in CI so a default that stops parsing stops the build. MFA and HIBP checking are on by default; the embedded frontend and the DPoP surface are off."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "RV.1.1",
+      "requirement": "Gather information from software acquirers, users and public sources on potential vulnerabilities",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/nightly-security.yml:30",
+        ".github/workflows/nightly-security.yml:114"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met: govulncheck, Trivy over source and over the shipped image, all nightly rather than only at release, so a vulnerability disclosed after a release is found without one."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "RV.1.2",
+      "requirement": "Review, analyze and/or test the software's code to identify or confirm the presence of previously undetected vulnerabilities",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/nightly-security.yml:47",
+        ".github/workflows/nightly-security.yml:142"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met: gosec nightly for static analysis, plus the tests/attack suite, which is written as an adversary rather than as a user and is run on the same schedule."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "RV.1.3",
+      "requirement": "Have a policy that addresses vulnerability disclosure and remediation",
+      "status": "Met",
+      "evidence": [
+        "SECURITY.md:1"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist"
+      ],
+      "notes": "Met: SECURITY.md states how to report and what to expect afterwards."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "",
+      "requirement_id": "RV.2.1",
+      "requirement": "Analyze each vulnerability to gather sufficient information to plan its remediation",
+      "status": "Met",
+      "evidence": [
+        "SECURITY.md:1",
+        "docs/security.md:1"
+      ],
+      "tests": [
+        "TestSSDF_800_218_GovernanceArtifactsExist"
+      ],
+      "notes": "Met: SECURITY.md names the channel a report arrives by, and this register plus docs/security.md are where the analysis of an accepted residual is written down, with a compensating control, a residual statement and a revisit condition rather than a status."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-privileged",
+      "requirement": "Privileged Containers: privileged pods disable most security mechanisms and must be disallowed",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:41"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
+      ],
+      "notes": "Met: no chart template sets privileged: true, asserted across every template rather than on the ones that exist today. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-host-namespaces",
+      "requirement": "Host Namespaces: sharing the host namespaces must be disallowed",
+      "status": "Accepted Risk",
+      "evidence": [
+        "charts/vault/templates/admin-gateway.yaml:24"
+      ],
+      "tests": [],
+      "notes": "Accepted risk CR-33. Every workload except one leaves the host namespaces alone; the admin gateway sets hostNetwork: true so that binding loopback binds the node's loopback, which is what makes its LocalOnly guard meaningful. hostPID and hostIPC are set nowhere. The gate asserts hostNetwork appears in exactly one template, so a second one is a regression rather than a precedent. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence.",
+      "accepted_risk": "CR-33"
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-hostpath",
+      "requirement": "HostPath Volumes: hostPath volumes must be forbidden",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/templates/deployment.yaml:103"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
+      ],
+      "notes": "Met: no template mounts a hostPath. The volume types in use are secret, configMap, emptyDir and persistentVolumeClaim, all of which the restricted profile permits. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-host-ports",
+      "requirement": "Host Ports: host ports should be disallowed entirely (or restricted to a known allowlist)",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/templates/service.yaml:1"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
+      ],
+      "notes": "Met: no container declares a hostPort. Ports are exposed through Services. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-capabilities-baseline",
+      "requirement": "Capabilities: adding capabilities beyond the default set must be disallowed",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:45"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
+      ],
+      "notes": "Met: no template adds a capability back. The shared container security context drops ALL. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-privilege-escalation",
+      "requirement": "Privilege Escalation: privilege escalation to root must be disallowed",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:43",
+        "charts/vault/templates/frontend.yaml:36"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
+      ],
+      "notes": "Met: allowPrivilegeEscalation: false on the shared container security context, which four workloads inherit, and inline on the three that declare their own. Without it a setuid binary in the image regains what runAsUser dropped. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-run-as-non-root",
+      "requirement": "Running as Non-root: containers must be required to run as non-root users",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:34",
+        "charts/vault/templates/frontend.yaml:32"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
+      ],
+      "notes": "Met: runAsNonRoot: true with an explicit non-root uid on every vault-plane workload — 65532 for the Go binaries, 101 for nginx-unprivileged, 999 for redis. The frontend image half of that is held separately by TestTheFrontendImageDoesNotRunAsRoot, because a securityContext can only refuse to start a container that was built to need root. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-seccomp",
+      "requirement": "Seccomp: the RuntimeDefault or a Localhost seccomp profile must be set",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:38"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
+      ],
+      "notes": "Met: seccompProfile type RuntimeDefault on every vault-plane pod spec. This is one of the two controls that separate restricted from baseline, and it is the one most often left at the default, which is unconfined. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-capabilities-restricted",
+      "requirement": "Capabilities (v1.22+): containers must drop ALL capabilities and may add back only NET_BIND_SERVICE",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:45",
+        "charts/vault/templates/redis.yaml:93"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
+      ],
+      "notes": "Met: capabilities drop ALL, with nothing added back anywhere. The Go binaries bind ports above 1024, so even NET_BIND_SERVICE is unnecessary. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
+    },
+    {
+      "standard": "Kubernetes PSS",
+      "revision": "restricted",
+      "revision_date": "",
+      "requirement_id": "PSS-volume-types",
+      "requirement": "Volume Types: only the listed volume types may be used",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/templates/deployment.yaml:103",
+        "charts/vault/templates/postgres.yaml:9"
+      ],
+      "tests": [
+        "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
+      ],
+      "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: the vault-plane workloads the chart deploys — vault, admin gateway, frontend, redis, cloudflared, bridge and the honeypot vault. The bundled PostgreSQL and Mailpit are labelled dev-only in values.yaml, are disabled by default, and do not meet the profile; they are excluded by name rather than by silence."
     }
   ],
   "retired_risks": {
