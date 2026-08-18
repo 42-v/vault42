@@ -7456,7 +7456,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/ci.yml:23",
-        ".github/workflows/ci.yml:372"
+        ".github/workflows/ci.yml:104"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -7472,7 +7472,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:605",
-        ".github/workflows/ci.yml:277"
+        ".github/workflows/ci.yml:427"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
