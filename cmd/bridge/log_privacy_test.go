@@ -205,3 +205,48 @@ func assertMaskedOnly(t *testing.T, out, marker, full, masked string) {
 			"which network the line is about.", out, masked)
 	}
 }
+
+// TestAnUnparseableAddressIsLoggedAsAConstant closes the last way a raw value
+// reaches the process log through the masking.
+//
+// /bridge/flag takes its address out of a JSON body and never checks that it is
+// one: FlagStore is keyed by string, so anything non-empty can be flagged and
+// then unflagged, and whatever it was goes to log.Printf. obfuscatedIP's job is
+// that the log line names a network and nothing else, and a value it cannot
+// parse has no network to name. Returning it unchanged would mean the one input
+// the masking cannot understand is the one input it passes through — which is
+// the shape of every mask that has ever failed open.
+//
+// The constant is also the right answer for the operator: "invalid_ip" says the
+// value was not an address, which is information, where an echo of the string
+// would just be the string.
+func TestAnUnparseableAddressIsLoggedAsAConstant(t *testing.T) {
+	const junk = "not-an-address-198.51.100.9"
+
+	fs := NewFlagStore(time.Hour, "")
+	fs.Flag(junk, "manual", 100)
+	ah := NewAdminHandler(fs, "secret-token")
+
+	out := captureBridgeLog(t, func() {
+		req := httptest.NewRequest(http.MethodDelete, "/bridge/flag",
+			strings.NewReader(`{"ip":"`+junk+`"}`))
+		req.Header.Set("Authorization", "Bearer secret-token")
+		rec := httptest.NewRecorder()
+		ah.ServeFlag(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; the unflag was refused so there is no log line", rec.Code)
+		}
+	})
+
+	if !strings.Contains(out, "bridge: admin unflagged") {
+		t.Fatalf("log = %q, want it to contain the unflag line; the branch under test did not run", out)
+	}
+	if strings.Contains(out, junk) {
+		t.Errorf("log = %q, which echoes the caller's string verbatim. A value the mask cannot parse "+
+			"is the one value it must not pass through.", out)
+	}
+	if !strings.Contains(out, "invalid_ip") {
+		t.Errorf("log = %q, want the invalid_ip constant so the line still says what happened", out)
+	}
+}
