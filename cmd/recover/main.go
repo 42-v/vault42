@@ -256,7 +256,13 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 	for rows.Next() {
 		var row escrowLogRow
 		if err := rows.Scan(&row.id, &row.pseudonym, &row.payload, &row.deletedAt, &row.deletedBy, &row.reason); err != nil {
-			logger.Printf("recover: scan: %v", err)
+			// Redacted for the same reason as the connect failure above: this
+			// error comes from pgx, pgx puts the DSN it dialed into the errors it
+			// raises, and a connection that dies mid-read surfaces here rather
+			// than at connect time. Every line in this function that prints an
+			// error the tool did not build goes through the same helper, so
+			// there is no unredacted one left for the next error path to copy.
+			logger.Printf("recover: scan: %v", httputil.RedactDSN(err))
 			return 1
 		}
 		// Rows read, not records recovered: a row that failed still came out of the
@@ -270,7 +276,12 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 			continue
 		}
 		if err := enc.Encode(rec); err != nil {
-			logger.Printf("recover: encode: %v", err)
+			// The least likely of the three to be handed a DSN, since this error
+			// comes from the output writer. It goes through the helper anyway:
+			// the value of "every error this function logs is redacted" is that
+			// it is checkable by reading the function, which stops being true the
+			// moment one line is exempt.
+			logger.Printf("recover: encode: %v", httputil.RedactDSN(err))
 			return 1
 		}
 		count++
@@ -292,7 +303,10 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 	}
 
 	if err := rows.Err(); err != nil {
-		logger.Printf("recover: iterate: %v", err)
+		// This is the driver reporting a failure raised after the last row - a
+		// statement timeout, a reset connection - and pgx builds those messages
+		// around the DSN it dialed.
+		logger.Printf("recover: iterate: %v", httputil.RedactDSN(err))
 		return 1
 	}
 
