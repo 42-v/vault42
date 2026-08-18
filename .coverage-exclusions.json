@@ -139,7 +139,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 309,
+      "line": 310,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
@@ -149,7 +149,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 423,
+      "line": 436,
       "occurrence": 1,
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
@@ -159,7 +159,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 424,
+      "line": 437,
       "occurrence": 1,
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
@@ -299,7 +299,7 @@
     {
       "package": "internal/email",
       "file": "internal/email/templates.go",
-      "line": 272,
+      "line": 289,
       "occurrence": 1,
       "source": "\t\tpanic(\"email: failed to initialize default templates: \" + err.Error())",
       "bucket": "C",
@@ -549,7 +549,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 491,
+      "line": 504,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -559,7 +559,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 500,
+      "line": 513,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",
