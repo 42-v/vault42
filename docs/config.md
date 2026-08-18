@@ -262,7 +262,7 @@ Optional IP-based access control and geographic restrictions. All lists are empt
 | `GEO_ALLOWLIST` | string | *(none)* | No | Comma-separated country codes. When set, only matching countries are allowed. Requires `GEO_IP_HEADER`. |
 | `GEO_BLOCKLIST` | string | *(none)* | No | Comma-separated country codes. Matching countries are denied (403). Requires `GEO_IP_HEADER`. Use `T1` for Tor exit nodes (Cloudflare). |
 
-The IP blocklist supports runtime updates via `AddToIPBlocklist()` / `RemoveFromIPBlocklist()`: atomic copy-on-write, zero read contention.
+The blocklist is published as an atomic pointer, so reads on the request path take no lock. `AddToIPBlocklist()` / `RemoveFromIPBlocklist()` implement copy-on-write mutation of it, but **nothing calls them and a deployment cannot reach them**: the list is a package global in one process, the chart runs three vault replicas, and the admin plane is a separate binary that never mounts the IP filter. Changing the blocklist means changing `IP_BLOCKLIST` and rolling the deployment, which is the only mechanism that reaches every replica.
 
 **Evaluation order:** IP allowlist → IP blocklist → Geo allowlist → Geo blocklist. Health endpoints (`/healthz`, `/readyz`) bypass all checks.
 

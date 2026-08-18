@@ -11,11 +11,15 @@ import (
 	"testing"
 )
 
-// The IP blocklist is the one access-control list in this package that changes
-// while the server is serving. Everything else is written once by startup
-// wiring and then only read; AddToIPBlocklist and RemoveFromIPBlocklist are
-// reached from the admin surface during an incident, which is precisely the
-// moment the request path is busiest.
+// The IP blocklist is the one access-control list in this package with mutators
+// that could run while the server is serving. Everything else is written once by
+// startup wiring and then only read.
+//
+// AddToIPBlocklist and RemoveFromIPBlocklist are not in fact reached from the
+// admin surface -- nothing calls them, and the note above AddToIPBlocklist says
+// why a deployment could not use them if it did. What this test protects is the
+// copy-on-write discipline itself, which is the part any real runtime-mutation
+// path would be built on and the part that is easy to break by accident.
 //
 // The list is published as an atomic pointer to a slice and mutated
 // copy-on-write under ipBlockMu, and the whole safety argument rests on the

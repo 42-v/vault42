@@ -6268,7 +6268,7 @@
       "status": "Met",
       "evidence": [
         "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/middleware/ipaccess.go:199"
+        "internal/middleware/ipaccess.go:220"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"

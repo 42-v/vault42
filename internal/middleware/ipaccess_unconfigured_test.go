@@ -33,9 +33,10 @@ func clearIPAccessState(t *testing.T) {
 // mounted globally, ahead of authentication, on every route. A process that
 // mounts it without calling SetIPAccessLists therefore dereferences four nil
 // pointers on its first request, and the result is not one failed handler but a
-// panic on the front door. That is not hypothetical wiring: AddToIPBlocklist is
-// reachable from the runtime ban path and reads the same globals, so ordering
-// between an incident response and startup wiring is enough to get here.
+// panic on the front door. Every binary that mounts IPAccess calls
+// SetIPAccessLists beside it today, so this is a guard on the wiring order
+// rather than on a path that is live: it fails the day a second entry point
+// mounts the middleware and forgets the initialiser.
 func TestIPAccessServesRequestsBeforeAnyListIsConfigured(t *testing.T) {
 	clearIPAccessState(t)
 
