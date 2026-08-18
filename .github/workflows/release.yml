@@ -33,10 +33,14 @@ on:
 env:
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
+# Read-only by default so a job inherits nothing it did not ask for. Eight jobs
+# used to inherit `contents: write` + `packages: write` from here, including
+# `coverage`, which runs the entire Go test suite, and `security`, which runs
+# the attack suite: arbitrary repository code executed holding a token that
+# could push to GHCR and write to the repo. Each job below grants exactly what
+# its own steps use.
 permissions:
-  contents: write
-  packages: write
-  id-token: write # cosign keyless signing and NuGet trusted publishing
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -46,11 +50,18 @@ jobs:
   detect:
     name: Resolve release version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.parse.outputs.version }}
       tag: ${{ steps.parse.outputs.tag }}
       prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
+      # The only checkout in the tree without `persist-credentials: false`. The
+      # two steps below fetch the tag and origin/main to prove the release ref
+      # is the tag being published and that the tag is an ancestor of main, and
+      # both need the credentials this leaves in .git/config.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
@@ -121,6 +132,8 @@ jobs:
   security:
     name: Security
     needs: detect
+    permissions:
+      contents: read
     uses: ./.github/workflows/nightly-security.yml
     with:
       full_scan: true
@@ -135,8 +148,13 @@ jobs:
     name: Coverage gate
     needs: detect
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -168,12 +186,20 @@ jobs:
     name: Build & push images (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
     outputs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
       admin_digest: ${{ steps.build_admin.outputs.digest }}
       bridge_digest: ${{ steps.build_bridge.outputs.digest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -224,6 +250,13 @@ jobs:
           emit admin  vault42-admin-gateway
           emit bridge vault42-bridge
 
+      # No `cache-from: type=gha` on any release build. A GitHub Actions cache
+      # entry is writable by any run on the default branch, and cache scoping
+      # lets a tag build restore what main wrote, so a cached release could be
+      # assembled from layers that never came from the tagged commit. The
+      # provenance attestation below names that commit, so the cache and the
+      # attestation would contradict each other. ci.yml keeps its cache: the
+      # artifact there is thrown away and never attested.
       - name: Build and push vault42
         id: build_vault
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -236,8 +269,6 @@ jobs:
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.buildtime.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: true
           sbom: true
 
@@ -254,8 +285,6 @@ jobs:
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.buildtime.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: true
           sbom: true
 
@@ -275,8 +304,6 @@ jobs:
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.buildtime.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: true
           sbom: true
 
@@ -293,15 +320,52 @@ jobs:
           cosign sign --yes "ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}"
           cosign sign --yes "ghcr.io/42-v/vault42-bridge@${BRIDGE_DIGEST}"
 
+      # BuildKit's `provenance: true` above is not a substitute for these. It
+      # emits an unsigned SLSA v0.2 predicate produced by the same BuildKit
+      # process that ran the build, with nothing countersigning it and no
+      # transparency-log entry, and `gh attestation verify` cannot read it.
+      # These statements are assembled and signed by GitHub's attestation
+      # service under the workflow's OIDC identity and logged to Rekor, so a
+      # build step cannot mint provenance naming a source it did not build.
+      #
+      # push-to-registry stores each statement beside its image in GHCR, so
+      # verification does not depend on the GitHub API staying reachable.
+      - name: Attest build provenance (vault42)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42
+          subject-digest: ${{ steps.build_vault.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (admin-gateway)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-admin-gateway
+          subject-digest: ${{ steps.build_admin.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (bridge)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-bridge
+          subject-digest: ${{ steps.build_bridge.outputs.digest }}
+          push-to-registry: true
+
   # Every release before 1.0.0 shipped notes and nothing else: no binary, no
   # SHA256SUMS, no SBOM, no detached signature.
   artifacts:
     name: Binaries, checksums & SBOMs
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # cosign keyless blob signing
+      attestations: write # SLSA build provenance and SBOM attestation
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -318,7 +382,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
@@ -336,6 +399,77 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ needs.detect.outputs.tag }}
 
+      # The cosign signature over SHA256SUMS establishes who published the
+      # archives. It says nothing about which workflow, at which commit, with
+      # which inputs produced them, which is the question SLSA answers and the
+      # one a consumer of a 1.0.0 tarball actually has.
+      - name: Attest build provenance (release archives)
+        id: attest_archives
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS
+
+      # gh attestation verify resolves statements through the GitHub API. The
+      # bundle is shipped as a release asset as well so the archives can also be
+      # verified offline, from the tarball and the bundle alone.
+      - name: Ship the provenance bundle as a release asset
+        env:
+          BUNDLE_PATH: ${{ steps.attest_archives.outputs.bundle-path }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" "dist/vault42_${VERSION}.intoto.jsonl"
+
+      # sbom-path names one file, and every archive carries its own SBOM, so
+      # this cannot be a single globbed step: one glob would attest whichever
+      # SBOM matched first to all four archives and quietly misdescribe three
+      # of them. goos/goarch in .goreleaser.yaml decide this list.
+      #
+      # actions/attest rather than actions/attest-sbom. The latter is a
+      # composite whose first step is
+      # `echo "::warning::actions/attest-sbom has been deprecated, please use
+      # actions/attest instead"`, and it then calls this same action with these
+      # same inputs. Four deprecation warnings on every release, for nothing.
+      #
+      # NODE_OPTIONS is not decoration: both attest-sbom and
+      # attest-build-provenance set it on the inner action, because the
+      # attestation API's responses exceed Node's default header limit. Calling
+      # actions/attest directly means setting it here or inheriting a failure
+      # the wrappers were quietly preventing.
+      - name: Attest SBOM (linux_amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (linux_arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz.spdx.sbom.json
+
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -344,18 +478,23 @@ jobs:
             dist/*.tar.gz
             dist/*SHA256SUMS*
             dist/*.sbom.json
+            dist/*.intoto.jsonl
           if-no-files-found: error
 
   chart:
     name: Publish Helm chart
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-      id-token: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
@@ -418,12 +557,25 @@ jobs:
       - name: Sign chart (keyless)
         run: cosign sign --yes "ghcr.io/42-v/charts/vault-auth@${{ steps.push.outputs.digest }}"
 
+      - name: Attest chart provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/charts/vault-auth
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
   nuget:
     name: NuGet (${{ needs.detect.outputs.version }})
     needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # NuGet trusted publishing
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
@@ -471,8 +623,14 @@ jobs:
     name: GitHub release
     needs: [detect, images, artifacts, chart]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job in this file that writes to the repository.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Download release artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -511,8 +669,14 @@ jobs:
             helm install vault oci://ghcr.io/42-v/charts/vault-auth --version ${{ needs.detect.outputs.version }}
             ```
 
-            Images and the chart are signed with cosign keyless. The checksum file
-            carries a detached signature and its Fulcio certificate:
+            ### Verifying this release
+
+            Two independent things are worth checking, and they answer different
+            questions.
+
+            **Authenticity** — who signed it. Images and the chart are signed
+            with cosign keyless; the checksum file carries a detached signature
+            and its Fulcio certificate:
 
             ```
             cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
@@ -525,3 +689,37 @@ jobs:
               --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```
+
+            **Provenance** — which workflow built it, from which commit. Every
+            binary archive, image and the chart carries **SLSA Build Level 2**
+            provenance, signed by GitHub's attestation service under this
+            workflow's OIDC identity and recorded in the Rekor transparency log:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/charts/vault-auth:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+            ```
+
+            The commands above resolve the statement through the GitHub API. To
+            verify with no network access to it, use the bundle shipped as a
+            release asset:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --bundle vault42_${{ needs.detect.outputs.version }}.intoto.jsonl \
+              --repo 42-v/vault42
+            ```
+
+            Each archive also ships an SBOM in both SPDX
+            (`.spdx.sbom.json`) and CycloneDX (`.cdx.sbom.json`) form, each
+            attested to the archive it describes.
+
+            The images additionally carry BuildKit's own SLSA v0.2 predicate and
+            an SPDX attestation. Those are unsigned and are not what the claim
+            above rests on; `gh attestation verify` is.

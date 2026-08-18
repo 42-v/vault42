@@ -23,8 +23,11 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -86,10 +89,13 @@ jobs:
   coverage-gate:
     name: Go coverage gate
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -130,6 +136,7 @@ jobs:
   coverage-gate-required:
     name: Go coverage gate (required)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [changes, coverage-gate]
     if: always()
     steps:
@@ -153,9 +160,11 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -226,16 +235,32 @@ jobs:
   golangci:
     name: golangci-lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
+    # github.base_ref is a branch name in the base repository, and it was
+    # interpolated straight into the args string the lint action hands to a
+    # shell. Exploiting that needs push access to the base repo to create a
+    # branch whose name carries shell metacharacters, so it is not a fork-PR
+    # vector, but binding the value and checking its shape removes the class.
+    # It is empty on a push, which is what the fallback covers.
+    env:
+      BASE_REF: ${{ github.base_ref || 'main' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Base ref is a plain branch name
+        run: |
+          set -eu
+          printf '%s' "$BASE_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+            || { echo "::error::refusing to pass base ref '$BASE_REF' to golangci-lint"; exit 1; }
 
       - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
@@ -247,7 +272,7 @@ jobs:
           # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
           # target-Go match.
           install-mode: goinstall
-          args: --timeout 15m --new-from-merge-base=origin/${{ github.base_ref || 'main' }}
+          args: --timeout 15m --new-from-merge-base=origin/${{ env.BASE_REF }}
 
       - name: Full run (report only)
         continue-on-error: true
@@ -277,8 +302,11 @@ jobs:
   chart:
     name: Helm chart
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
@@ -313,19 +341,25 @@ jobs:
   version:
     name: Version consistency
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - name: Every manifest agrees with VERSION
         run: scripts/version-bump.sh --check
 
   changes:
     name: Detect Go changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       go_changed: ${{ steps.filter.outputs.go }}
       goreleaser_changed: ${{ steps.filter.outputs.goreleaser }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
@@ -354,10 +388,13 @@ jobs:
   modules:
     name: Go module hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -372,10 +409,13 @@ jobs:
   fuzz:
     name: Fuzz Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [test, changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -395,10 +435,13 @@ jobs:
   build-binaries:
     name: Build All Binaries
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -423,11 +466,13 @@ jobs:
   goreleaser-config:
     name: GoReleaser config
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true' || needs.changes.outputs.goreleaser_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -443,6 +488,7 @@ jobs:
   lint:
     name: Hadolint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         dockerfile:
@@ -455,6 +501,8 @@ jobs:
           - web/Dockerfile
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ${{ matrix.dockerfile }}

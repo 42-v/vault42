@@ -26,12 +26,31 @@ on:
 permissions:
   contents: read
 
+# This is a reusable workflow, called by both ci.yml and release.yml as well as
+# run on its own cron, and inside a called workflow `github.workflow`,
+# `github.ref` and `github.event_name` all resolve to the CALLER's. A group
+# keyed on `github.ref` alone would therefore make a pull request's security
+# run cancel a release's. All three keys are in the group so the three callers
+# never collide.
+#
+# Cancellation is on for the nightly, which should never queue behind its own
+# previous run, and for pull requests, where a force-push makes the run it
+# replaces worthless. It is off for a tag push: a release's security gate must
+# not be cancelled by anything.
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'schedule' || github.event_name == 'pull_request' }}
+
 jobs:
   govulncheck:
     name: Go Vulnerability Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -44,11 +63,34 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+      # `./...` stops at a module boundary, so this job scanned the root module
+      # and nothing else. tests/browser is a second module, and nothing in any
+      # workflow ever looked at it: that is how its golang.org/x/sys sat on
+      # v0.34.0, twelve minor versions behind the root module's and carrying
+      # GO-2026-5024, without a single scan noticing.
+      - name: Run govulncheck (nested modules)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dirs < <(find . -mindepth 2 -name go.mod \
+            -not -path '*/node_modules/*' -not -path '*/vendor/*' -printf '%h\n')
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "no nested modules in the tree; nothing beyond the root scan to do"
+            exit 0
+          fi
+          for dir in "${dirs[@]}"; do
+            echo "==> govulncheck in $dir"
+            ( cd "$dir" && govulncheck ./... )
+          done
+
   gosec:
     name: Static Security Analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -100,21 +142,43 @@ jobs:
   trivy-source:
     name: Trivy Source Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
+      # Two gaps this closes.
+      #
+      # `scanners` was unset, so this step ran Trivy's default (vuln only) while
+      # every document describing the security posture claimed misconfiguration
+      # and secret coverage. The chart templates and the Dockerfiles were never
+      # scanned by CI at all.
+      #
+      # TRIVY_FILE_PATTERNS is not cosmetic either. Trivy's file detection
+      # recognises `Dockerfile` and `Dockerfile.bridge` but not
+      # `Dockerfile.goreleaser.bridge` or `Dockerfile.goreleaser.admin-gateway`,
+      # so it silently found 11 config files where the tree has 13 and reported
+      # clean on the two it never opened. The action exposes no file-patterns
+      # input; Trivy reads every flag from a TRIVY_-prefixed environment
+      # variable, which is what this uses.
       - name: Run Trivy (filesystem)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_FILE_PATTERNS: dockerfile:Dockerfile.goreleaser.admin-gateway,dockerfile:Dockerfile.goreleaser.bridge
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: 1
+          trivyignores: .trivyignore.yaml
 
   trivy-image:
     name: Trivy Image Scan
     if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
       fail-fast: false
@@ -128,6 +192,8 @@ jobs:
             tag: vault-admin-gateway:scan
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Build ${{ matrix.name }} image for scanning
         run: scripts/ci-build-image.sh ${{ matrix.tag }} ${{ matrix.dockerfile }} .
@@ -143,8 +209,11 @@ jobs:
     name: Attack Test Suite
     if: github.event_name == 'schedule' || inputs.full_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:

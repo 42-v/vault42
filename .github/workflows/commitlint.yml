@@ -7,24 +7,53 @@ on:
 permissions:
   pull-requests: read
 
+concurrency:
+  group: commitlint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   commitlint:
     name: Validate Conventional Commits
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Install commitlint
-        run: npm install -g @commitlint/cli @commitlint/config-conventional
+      # This job used to `npm install -g @commitlint/cli
+      # @commitlint/config-conventional` and then `npx commitlint`. Both resolve
+      # "latest at run time", so a compromised release of either package would
+      # have executed here on every pull request, and neither was in any
+      # package.json: commitlint.config.js existed with nothing declaring the
+      # tool it configures. Scorecard's only npmCommand finding in the repo.
+      #
+      # Both are root devDependencies now, so pnpm-lock.yaml pins them by
+      # integrity hash and the same versions run in CI and on a developer's
+      # machine.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The two SHAs were interpolated straight into the run body. They are
+      # SHAs, so this was not exploitable, but binding them costs nothing and
+      # removes the class.
       - name: Lint commits
-        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
 
   pr-title:
     name: Validate PR Title
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # The action defaults to the conventional-commit-types list, which has no
       # `security`. commitlint.config.js does allow it, so a `security:` title
