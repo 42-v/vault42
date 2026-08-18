@@ -13,6 +13,7 @@ import (
 	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
@@ -303,11 +304,21 @@ func seedClient(ctx context.Context, cs ClientSeed, clients repository.ClientRep
 		UpdatedAt:    now,
 	}
 
+	// Delivered before the row is created, for the same reason EnsureFirstAdmin
+	// does it in that order: only the Argon2id hash is stored, so a secret that
+	// was never handed over leaves a client nobody can authenticate as, and
+	// seeding is idempotent by name so no re-run will mint a second one.
+	dest, err := firstboot.Deliver("VAULT_CLIENT_SECRET_"+cs.Name, secret)
+	if err != nil {
+		return fmt.Errorf("deliver client secret: %w", err)
+	}
+
 	if err := clients.Create(ctx, client); err != nil {
 		return fmt.Errorf("create: %w", err)
 	}
 
-	fmt.Printf("seed: client %q created (id=%s, secret=%s — save this)\n", cs.Name, clientID, secret)
+	fmt.Printf("seed: client %q created (id=%s); its secret was written to %s and is not in this output\n",
+		cs.Name, clientID, dest)
 	return nil
 }
 

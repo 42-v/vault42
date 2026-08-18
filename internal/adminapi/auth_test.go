@@ -191,8 +191,9 @@ func TestAuthHandler_Logout(t *testing.T) {
 }
 
 func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
+	firstBootSink(t)
 	repo := newFakeAdminRepo()
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
 func TestEnsureFirstAdmin_AlreadyExists(t *testing.T) {
 	repo := newFakeAdminRepo()
 	repo.users["existing"] = &model.AdminUser{ID: "existing", Username: "admin"}
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestEnsureFirstAdmin_AlreadyExists(t *testing.T) {
 func TestEnsureFirstAdmin_CountError(t *testing.T) {
 	repo := newFakeAdminRepo()
 	repo.errCount = errors.New("count fail")
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err == nil || !strings.Contains(err.Error(), "count admins") {
 		t.Errorf("expected count error, got %v", err)
 	}

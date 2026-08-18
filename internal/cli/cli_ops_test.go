@@ -19,45 +19,9 @@ func cliWith(audit repository.AuditRepository) *CLI {
 	return New(&mockClientRepo{}, &mockUserRepo{}, nil, nil, audit, "")
 }
 
-func TestCLI_CleanupAudit(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("missing retention-days prints usage", func(t *testing.T) {
-		if !cliWith(&mockAuditRepo{}).cleanupAudit(ctx, nil) {
-			t.Error("expected handled=true")
-		}
-	})
-
-	t.Run("invalid retention-days rejected", func(t *testing.T) {
-		cli := cliWith(&mockAuditRepo{})
-		for _, arg := range []string{"0", "-3", "notanumber"} {
-			cli.cleanupAudit(ctx, []string{"--retention-days", arg})
-		}
-	})
-
-	t.Run("nil audit repo reports unavailable", func(t *testing.T) {
-		cliWith(nil).cleanupAudit(ctx, []string{"--retention-days", "30"})
-	})
-
-	t.Run("success reports deleted count", func(t *testing.T) {
-		called := false
-		cli := cliWith(&mockAuditRepo{CleanupFn: func(context.Context, time.Time) (int64, error) {
-			called = true
-			return 7, nil
-		}})
-		cli.cleanupAudit(ctx, []string{"--retention-days", "30"})
-		if !called {
-			t.Error("Cleanup was not invoked")
-		}
-	})
-
-	t.Run("repo error is handled", func(t *testing.T) {
-		cli := cliWith(&mockAuditRepo{CleanupFn: func(context.Context, time.Time) (int64, error) {
-			return 0, errors.New("db down")
-		}})
-		cli.cleanupAudit(ctx, []string{"--retention-days", "30"})
-	})
-}
+// TestCLI_CleanupAudit is retired along with the command: the argument-parsing
+// and repository paths it drove no longer exist. cli_cleanup_audit_retired_test.go
+// holds the contract that replaced them.
 
 func TestCLI_ExportAudit(t *testing.T) {
 	ctx := context.Background()
@@ -153,6 +117,7 @@ func TestCLI_RotateAdminToken(t *testing.T) {
 	c, _, _, _, admin := newTestCLI()
 
 	t.Run("success stores the new hash", func(t *testing.T) {
+		firstBootSink(t)
 		var storedKey string
 		admin.SetFn = func(_ context.Context, key, _ string) error { storedKey = key; return nil }
 		if !c.rotateAdminToken(ctx) {
@@ -164,6 +129,7 @@ func TestCLI_RotateAdminToken(t *testing.T) {
 	})
 
 	t.Run("store error is handled", func(t *testing.T) {
+		firstBootSink(t)
 		admin.SetFn = func(context.Context, string, string) error { return errors.New("db down") }
 		c.rotateAdminToken(ctx)
 	})
@@ -187,9 +153,16 @@ func TestCLI_RotateJWKS(t *testing.T) {
 		}
 	})
 
-	t.Run("prints to stdout when no --output", func(t *testing.T) {
-		if !c.rotateJWKS(nil) {
-			t.Error("expected handled=true")
+	// The stdout path is retired: a PKCS#1 private key printed by a Job lands in
+	// the pod log. The command now refuses and names the flag instead.
+	t.Run("refuses to run without --output", func(t *testing.T) {
+		stderr := captureStderr(t, func() {
+			if !c.rotateJWKS(nil) {
+				t.Error("expected handled=true")
+			}
+		})
+		if !strings.Contains(stderr, "--output") {
+			t.Errorf("stderr does not name the required flag: %q", stderr)
 		}
 	})
 }
@@ -199,6 +172,7 @@ func TestCLI_AddClient(t *testing.T) {
 	c, clients, _, _, _ := newTestCLI()
 
 	t.Run("creates a client", func(t *testing.T) {
+		firstBootSink(t)
 		created := false
 		clients.CreateFn = func(context.Context, *model.Client) error { created = true; return nil }
 		c.addClient(ctx, []string{"--name", "frontend", "--role", "frontend", "--scopes", "user:read,user:write"})
@@ -237,6 +211,7 @@ func TestCLI_InitAdminToken(t *testing.T) {
 	c, _, _, _, admin := newTestCLI()
 
 	t.Run("generates when unset", func(t *testing.T) {
+		firstBootSink(t)
 		admin.GetFn = func(context.Context, string) (string, error) { return "", nil }
 		set := false
 		admin.SetFn = func(context.Context, string, string) error { set = true; return nil }

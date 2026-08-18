@@ -96,7 +96,7 @@ func TestEnsureFirstAdmin_RefusesToBootstrapWhenHashingIsOverloaded(t *testing.T
 	adminSaturateArgon2(t)
 
 	repo := newFakeAdminRepo()
-	err := EnsureFirstAdmin(context.Background(), repo, "test-pepper")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "test-pepper")
 
 	if err == nil {
 		t.Fatal("first-boot bootstrap reported success while password hashing was refusing work")

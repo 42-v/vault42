@@ -60,7 +60,7 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 			ip := net.ParseIP(host)
 			if ip == nil || !ip.IsLoopback() {
 				log.Printf("CRITICAL admin-gateway: non-loopback connection from %s (UA: %s)", // #nosec G706 — sanitized
-					sanitizeLogValue(r.RemoteAddr), sanitizeLogValue(r.UserAgent()))
+					httputil.SafeLogValue(r.RemoteAddr), httputil.SafeLogValue(r.UserAgent()))
 
 				// Best-effort audit entry
 				if auditRepo != nil {
@@ -82,7 +82,7 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 				}
 
 				if killswitch {
-					panic(killswitchPrefix + "admin-gateway received request from non-local source: " + sanitizeLogValue(host))
+					panic(killswitchPrefix + "admin-gateway received request from non-local source: " + httputil.SafeLogValue(host))
 				}
 
 				httputil.WriteError(w, http.StatusForbidden, "local_only")
@@ -101,7 +101,7 @@ func RejectProxyHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, h := range proxyHeaders {
 			if r.Header.Get(h) != "" {
-				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, sanitizeLogValue(r.RemoteAddr)) // #nosec G706 — sanitized
+				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, httputil.SafeLogValue(r.RemoteAddr)) // #nosec G706 — sanitized
 				httputil.WriteError(w, http.StatusForbidden, "proxy_not_allowed")
 				return
 			}
@@ -378,7 +378,7 @@ func (rl *LoginRateLimit) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		rl.mu.Unlock()
 
 		if exceeded {
-			log.Printf("admin-gateway: login rate limit exceeded for %s", sanitizeLogValue(host)) // #nosec G706 — sanitized
+			log.Printf("admin-gateway: login rate limit exceeded for %s", httputil.SafeLogValue(host)) // #nosec G706 — sanitized
 			httputil.WriteError(w, http.StatusTooManyRequests, "rate_limited")
 			return
 		}
@@ -389,8 +389,3 @@ func (rl *LoginRateLimit) Wrap(next http.HandlerFunc) http.HandlerFunc {
 
 // configKeyPattern validates config key names — alphanumeric, underscores, dots only.
 var configKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.]{0,63}$`)
-
-// sanitizeLogValue strips newlines and control characters to prevent log injection.
-func sanitizeLogValue(s string) string {
-	return strings.NewReplacer("\n", "", "\r", "", "\t", " ").Replace(s)
-}

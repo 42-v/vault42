@@ -792,15 +792,18 @@ func TestTOTPVerify_Success(t *testing.T) {
 
 func TestEnsureFirstAdmin_CountErrorPropagates(t *testing.T) {
 	repo := &countErrAdminRepo{fakeAdminRepo: newFakeAdminRepo()}
-	if err := EnsureFirstAdmin(context.Background(), repo, ""); err == nil {
+	if err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), ""); err == nil {
 		t.Fatal("expected error when Count fails")
 	}
 }
 
 func TestEnsureFirstAdmin_CreateErrorPropagates(t *testing.T) {
+	// The sink matters: without it the bootstrap is abandoned at delivery and
+	// never reaches Create, so the test would pass while asserting nothing.
+	firstBootSink(t)
 	repo := newFakeAdminRepo()
 	repo.errCreate = errors.New("insert failed")
-	if err := EnsureFirstAdmin(context.Background(), repo, ""); err == nil {
+	if err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), ""); err == nil {
 		t.Fatal("expected error when Create fails")
 	}
 }

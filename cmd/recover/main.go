@@ -59,6 +59,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/httputil"
 )
 
 // escrowQuery reads the append-only escrow log newest first. The table is
@@ -240,7 +241,12 @@ func run(args []string, stdout, stderr io.Writer, open escrowOpener) (code int) 
 	ctx := context.Background()
 	rows, release, err := open(ctx, *dsn, *limit)
 	if err != nil {
-		logger.Printf("recover: %v", err)
+		// pgx puts the DSN it dialled into its connect errors, and this is the one
+		// tool that always holds the production DSN — that is what the offline host
+		// is for. Unredacted, a wrong host or a firewall in the way printed the
+		// database password onto the operator's terminal and into whatever captured
+		// its stderr. cmd/vault and cmd/admin-gateway have always stripped it.
+		logger.Printf("recover: %v", httputil.RedactDSN(err))
 		return 1
 	}
 	defer release()

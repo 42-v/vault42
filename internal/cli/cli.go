@@ -1,10 +1,12 @@
 // Package cli implements administrative CLI commands for The Vault.
-// All commands require authentication via --admin-token. Available commands:
+// All commands require the admin credential, taken from ADMIN_TOKEN_FILE or,
+// with a warning that it is disclosed through argv, from --admin-token.
+// Available commands:
 // add-client, list-clients, revoke-all-sessions, rotate-admin-token,
-// rotate-jwks, seed, cleanup-audit, cleanup-recovery, and export-audit.
-// The revoke-client, rotate-client-secret, lock-user and unlock-user
-// subcommands are retired stubs that print an error and redirect to the admin
-// gateway; they issue no database write.
+// rotate-jwks, seed, cleanup-recovery, and export-audit.
+// The revoke-client, rotate-client-secret, lock-user, unlock-user and
+// cleanup-audit subcommands are retired stubs that print an error and redirect
+// to the plane that owns the capability; they issue no database write.
 package cli
 
 import (
@@ -12,6 +14,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -20,6 +23,7 @@ import (
 
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/seed"
@@ -90,10 +94,12 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 			adminToken = args[i+1]
 		}
 	}
+	if adminToken != "" {
+		warnAdminTokenInArgv()
+	}
 
-	// Verify admin token
-	if !c.verifyAdminToken(ctx, adminToken) {
-		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required.")
+	if !c.authenticate(ctx, adminToken) {
+		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required. Set ADMIN_TOKEN_FILE to a file holding the admin token, or pass --admin-token, which discloses it through /proc/<pid>/cmdline.")
 		exitProcess(1)
 	}
 
@@ -127,6 +133,41 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 	default:
 		return false
 	}
+}
+
+// authenticate resolves the admin credential, preferring ADMIN_TOKEN_FILE.
+//
+// A flag is the one delivery mechanism for a secret that cannot be made safe:
+// every argument of a running process is readable through /proc/<pid>/cmdline by
+// anything running as the same uid, it appears in `ps` and in container process
+// listings, and the shell keeps it in history afterwards. cmd/recover says the
+// same about --dsn and warns; the difference here is that the safe path is now
+// the default one, following the _FILE convention this repo already uses for
+// ADMIN_TOKEN, BRIDGE_ADMIN_TOKEN and VAULT_PEPPER.
+//
+// The mounted file is tried first and the flag is the fallback rather than the
+// other way round, so an operator who has done nothing gets the safe path, and a
+// mount that is no longer the credential in force does not lock them out of a
+// command they authenticated correctly.
+func (c *CLI) authenticate(ctx context.Context, flagToken string) bool {
+	if c.provisionedAdminToken != "" {
+		if storedHash, err := c.adminConfig.Get(ctx, "admin_token_hash"); err == nil && storedHash != "" {
+			if c.provisionedTokenMatches(storedHash) {
+				return true
+			}
+		}
+	}
+	return c.verifyAdminToken(ctx, flagToken)
+}
+
+// warnAdminTokenInArgv says out loud that a credential passed on the command
+// line is already disclosed. The process cannot rewrite its own argv, so this is
+// the only move left, and it is worth making while the operator is still at the
+// keyboard.
+func warnAdminTokenInArgv() {
+	fmt.Fprintln(os.Stderr, "WARNING: --admin-token puts the admin credential in this process's argv, where it is "+
+		"readable by every process on this host via /proc/<pid>/cmdline, shows in `ps` and container process listings, "+
+		"and is kept in shell history. Set ADMIN_TOKEN_FILE to a file holding the token instead, and rotate this one.")
 }
 
 func (c *CLI) verifyAdminToken(ctx context.Context, token string) bool {
@@ -182,12 +223,21 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 		UpdatedAt:  now,
 	}
 
+	// Delivered before the row is created: only the Argon2id hash is stored, so
+	// a secret that could not be handed over leaves a client nobody can
+	// authenticate as and no command can repair.
+	dest, err := firstboot.Deliver("VAULT_CLIENT_SECRET_"+name, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
+
 	if err := c.clients.Create(ctx, client); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
 
-	fmt.Printf("Client created:\n  ID: %s\n  Secret: %s\n  (secret shown ONCE — save it now)\n", clientID, secret)
+	fmt.Printf("Client created:\n  ID: %s\n  Secret written to: %s (not shown here, and not shown again)\n", clientID, dest)
 	return true
 }
 
@@ -287,16 +337,35 @@ func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
+	// Delivered before the hash is installed, for the same reason as
+	// InitAdminToken: a rotation the operator cannot receive locks every
+	// administrative subcommand out of the deployment.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", newToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	fmt.Printf("New admin token: %s\n(shown ONCE — save it now)\n", newToken)
+	fmt.Printf("Admin token rotated; the new token was written to %s and is not shown here.\n", dest)
 	return true
 }
 
+// rotateJWKS mints a signing key. --output is required: without it the command
+// wrote a PKCS#1 RSA private key to stdout, and that key signs every access
+// token the deployment issues. Run from a Job or an init container — which is
+// how key rotation is actually driven — stdout is the pod log, so the private
+// half of the signing key ended up in the aggregator alongside the tokens it
+// signs. There is no safe way to print it, only a safe file to put it in, which
+// is what --output already was.
 func (c *CLI) rotateJWKS(args []string) bool {
 	output := getFlag(args, "--output")
+	if output == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: rotate-jwks requires --output <path>: the private key is written to that file at mode 0600 and is never printed.")
+		return true
+	}
 
 	// Generate new RSA-2048 key pair
 	privateKey, err := vaultcrypto.GenerateRSAKeyPair()
@@ -320,19 +389,34 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	}
 	pemBytes := pem.EncodeToMemory(pemBlock)
 
-	if output != "" {
-		if err := os.WriteFile(output, pemBytes, 0o600); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
-			return true
-		}
-		fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
-	} else {
-		fmt.Printf("kid: %s\n%s", kid, pemBytes)
+	if err := writeKeyFileExclusive(output, pemBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
+		return true
 	}
+	fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
 
 	fmt.Fprintln(os.Stderr, "NOTE: Vault generates JWKS keys in memory at startup. To use this key,")
 	fmt.Fprintln(os.Stderr, "configure the key file path and restart the service.")
 	return true
+}
+
+// writeKeyFileExclusive writes a private key to a path the process must create
+// itself.
+//
+// O_EXCL rather than os.WriteFile, on the model of cmd/recover's openOutput: it
+// refuses to follow a symlink planted at the path, because open(2) with
+// O_CREAT|O_EXCL fails with EEXIST on a symlink whether or not its target
+// exists, and os.WriteFile would otherwise have written the signing key through
+// it at whatever mode the attacker's file already carried. It also refuses to
+// truncate a key that is already there, which would leave the previous key's
+// mode in place and the previous key gone.
+func writeKeyFileExclusive(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator names their own key file
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	return errors.Join(werr, f.Close())
 }
 
 // argon2idPrefix marks the PHC-encoded form of an Argon2id hash and is what
@@ -411,10 +495,17 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hash admin token: %w", err)
 	}
+	// Delivered before the hash is stored. InitAdminToken returns early once
+	// admin_token_hash is set, so storing the hash of a token the operator never
+	// received locks every administrative subcommand out with no way back.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", token)
+	if err != nil {
+		return fmt.Errorf("deliver admin token: %w", err)
+	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
 		return err
 	}
-	fmt.Printf("\n=== FIRST BOOT ===\nAdmin token: %s\nSave this token — it will NOT be shown again.\n================\n\n", token)
+	fmt.Printf("FIRST BOOT: an admin token was generated and written to %s; it is not in this output and will not be shown again.\n", dest)
 	return nil
 }
 
@@ -452,28 +543,35 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 	return true
 }
 
-func (c *CLI) cleanupAudit(ctx context.Context, args []string) bool {
-	daysStr := getFlag(args, "--retention-days")
-	if daysStr == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault cleanup-audit --admin-token <token> --retention-days <N>")
-		return true
-	}
-	days, err := strconv.Atoi(daysStr)
-	if err != nil || days < 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: --retention-days must be a positive integer")
-		return true
-	}
-	if c.audit == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: audit repository not available")
-		return true
-	}
-	olderThan := time.Now().AddDate(0, 0, -days)
-	deleted, err := c.audit.Cleanup(ctx, olderThan)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	fmt.Printf("Deleted %d audit entries older than %d days.\n", deleted, days)
+// cleanupAudit is retired (F-17). It reached a capability the RBAC model grants
+// no admin, behind a gate the role running it can rewrite.
+//
+// internal/rbac/rbac.go says audit access "is read-only by design: there is no
+// corresponding write or delete permission, because an admin who can edit the
+// audit trail can erase their own actions", and no admin tier holds an
+// audit-delete permission. Migration 018 grants EXECUTE on
+// audit.cleanup_old_entries to vault_app and deliberately not to vault_admin, so
+// the admin plane cannot run this at all — while cmd/vault, running as vault_app,
+// could, gated only by admin_token_hash in auth.admin_config, a table migration
+// 001 grants vault_app SELECT, INSERT and UPDATE on. The caller could overwrite
+// its own gate, which makes the token operator convenience and not an
+// authorization boundary.
+//
+// Retiring rather than promoting it to the admin gateway is the honest
+// resolution. Promoting would mean granting vault_admin EXECUTE on the purge
+// function and minting the audit-delete permission rbac refuses on purpose —
+// a migration, and a reversal of a decision the codebase argues for.
+//
+// Nothing is lost. Audit retention is VAULT_AUDIT_RETENTION_DAYS, swept in
+// process by internal/audit.Retention through the same SECURITY DEFINER
+// function: declarative, part of the deployment rather than of whoever holds the
+// CLI token, and not aimable at an arbitrary cutoff.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: cleanup-audit is retired. Audit retention is set with VAULT_AUDIT_RETENTION_DAYS, which the server sweeps at startup and every 6h. No admin tier holds an audit-delete permission, and the vault CLI no longer deletes audit entries on demand.")
 	return true
 }
 

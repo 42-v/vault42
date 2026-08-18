@@ -130,7 +130,7 @@ func main() {
 	defer auditLogger.Close(ctx)
 
 	// First boot: create super_admin if none exist
-	if err := adminapi.EnsureFirstAdmin(ctx, adminUserRepo, cfg.Pepper); err != nil {
+	if err := adminapi.EnsureFirstAdmin(ctx, adminUserRepo, adminConfigRepo, cfg.Pepper); err != nil {
 		log.Printf("admin-gateway: first admin creation error: %v", err)
 	}
 

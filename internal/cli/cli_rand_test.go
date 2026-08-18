@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,7 +84,6 @@ func TestAddClient_EntropyFailureAborts(t *testing.T) {
 	})
 }
 
-
 func TestRotateJWKS_KidEntropyFailureAborts(t *testing.T) {
 	c, _, _, _, _ := newTestCLI()
 	// rsa.GenerateKey does not read from a replaced rand.Reader (key
@@ -94,7 +94,7 @@ func TestRotateJWKS_KidEntropyFailureAborts(t *testing.T) {
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			if !c.rotateJWKS(nil) {
+			if !c.rotateJWKS([]string{"--output", filepath.Join(t.TempDir(), "signing-key.pem")}) {
 				t.Error("expected handled=true")
 			}
 		})

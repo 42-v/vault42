@@ -436,6 +436,7 @@ func TestVerifyAdminToken(t *testing.T) {
 
 func TestInitAdminToken(t *testing.T) {
 	t.Run("success first boot", func(t *testing.T) {
+		sink := firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		var storedKey, storedValue string
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
@@ -462,8 +463,8 @@ func TestInitAdminToken(t *testing.T) {
 		if !strings.Contains(out, "FIRST BOOT") {
 			t.Error("expected FIRST BOOT message in output")
 		}
-		if !strings.Contains(out, "Admin token:") {
-			t.Error("expected Admin token in output")
+		if !strings.Contains(out, sink) {
+			t.Error("expected the output to name where the token was delivered")
 		}
 	})
 
@@ -487,6 +488,7 @@ func TestInitAdminToken(t *testing.T) {
 	})
 
 	t.Run("repo Set error", func(t *testing.T) {
+		firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil
@@ -535,6 +537,7 @@ func setupAuthenticatedCLI(t *testing.T) (*CLI, *mockClientRepo, *mockUserRepo, 
 
 func TestAddClient(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		var created *model.Client
 		clients.CreateFn = func(_ context.Context, cl *model.Client) error {
@@ -568,8 +571,11 @@ func TestAddClient(t *testing.T) {
 		if !strings.Contains(out, "Client created:") {
 			t.Error("expected 'Client created:' in output")
 		}
-		if !strings.Contains(out, "Secret:") {
-			t.Error("expected secret in output")
+		if !strings.Contains(out, "Secret written to:") {
+			t.Error("expected the output to name where the secret was delivered")
+		}
+		if strings.Contains(out, "Secret: ") {
+			t.Error("the client secret was printed rather than delivered")
 		}
 	})
 
@@ -602,6 +608,9 @@ func TestAddClient(t *testing.T) {
 	})
 
 	t.Run("repo create error", func(t *testing.T) {
+		// The sink matters: without it the command stops at delivery and never
+		// reaches Create, so the assertion below would pass on the wrong error.
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		clients.CreateFn = func(_ context.Context, _ *model.Client) error {
 			return errors.New("duplicate client")
@@ -622,6 +631,7 @@ func TestAddClient(t *testing.T) {
 	})
 
 	t.Run("empty scopes", func(t *testing.T) {
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		var created *model.Client
 		clients.CreateFn = func(_ context.Context, cl *model.Client) error {
@@ -861,6 +871,7 @@ func TestRevokeAllSessions(t *testing.T) {
 
 func TestRotateAdminToken(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
+		sink := firstBootSink(t)
 		c, _, _, _, admin, token := setupAuthenticatedCLI(t)
 		var storedHash string
 		admin.SetFn = func(_ context.Context, key, value string) error {
@@ -881,11 +892,8 @@ func TestRotateAdminToken(t *testing.T) {
 		if storedHash == "" {
 			t.Error("expected new hash to be stored")
 		}
-		if !strings.Contains(out, "New admin token:") {
-			t.Error("expected new token in output")
-		}
-		if !strings.Contains(out, "shown ONCE") {
-			t.Error("expected 'shown ONCE' warning")
+		if !strings.Contains(out, sink) {
+			t.Error("expected the output to name where the new token was delivered")
 		}
 	})
 
@@ -1021,26 +1029,8 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("routes to cleanup-audit", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		cleanupCalled := false
-		c.audit.(*mockAuditRepo).CleanupFn = func(_ context.Context, _ time.Time) (int64, error) {
-			cleanupCalled = true
-			return 0, nil
-		}
-
-		args := []string{"vault", "cleanup-audit", "--admin-token", token, "--retention-days", "30"}
-		captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if !cleanupCalled {
-			t.Error("expected cleanup-audit to be routed")
-		}
-	})
+	// cleanup-audit is retired (it no longer deletes via vault_app); its routing
+	// and inertness are pinned in cli_cleanup_audit_retired_test.go.
 
 	t.Run("routes to export-audit", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
@@ -1069,67 +1059,32 @@ func TestRun(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRotateJWKS(t *testing.T) {
-	t.Run("success stdout", func(t *testing.T) {
+	// The stdout path is retired. A PKCS#1 private key printed by a rotation Job
+	// lands in the pod log next to the tokens it signs, and there is no safe way
+	// to print it — only the 0600 file --output already wrote. What used to be
+	// asserted about that stdout key is now asserted about the file, one subtest
+	// down.
+	t.Run("refuses to mint a key it cannot deliver to a file", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
 
 		args := []string{"vault", "rotate-jwks", "--admin-token", token}
 		var stdout, stderr string
 		stderr = captureStderr(t, func() {
 			stdout = captureStdout(t, func() {
-				result := c.Run(context.Background(), args)
-				if !result {
+				if !c.Run(context.Background(), args) {
 					t.Error("expected true")
 				}
 			})
 		})
 
-		// Should contain kid line
-		if !strings.Contains(stdout, "kid: ") {
-			t.Error("expected 'kid:' in stdout")
+		if strings.Contains(stdout, "PRIVATE KEY") || strings.Contains(stderr, "PRIVATE KEY") {
+			t.Errorf("rotate-jwks printed a private key\nstdout: %s\nstderr: %s", stdout, stderr)
 		}
-
-		// Should contain PEM-encoded private key
-		if !strings.Contains(stdout, "-----BEGIN RSA PRIVATE KEY-----") {
-			t.Error("expected PEM block in stdout")
+		if strings.Contains(stdout, "kid: ") {
+			t.Error("a key was minted although there was nowhere to put it")
 		}
-		if !strings.Contains(stdout, "-----END RSA PRIVATE KEY-----") {
-			t.Error("expected PEM end block in stdout")
-		}
-
-		// kid should be a valid UUID format (hex + dashes)
-		lines := strings.Split(stdout, "\n")
-		var kidValue string
-		for _, line := range lines {
-			if strings.HasPrefix(line, "kid: ") {
-				kidValue = strings.TrimPrefix(line, "kid: ")
-				break
-			}
-		}
-		if kidValue == "" {
-			t.Fatal("kid value not found in output")
-		}
-		if len(kidValue) < 32 {
-			t.Errorf("kid too short: %q", kidValue)
-		}
-
-		// Verify the PEM key is valid by parsing it
-		pemStart := strings.Index(stdout, "-----BEGIN RSA PRIVATE KEY-----")
-		pemData := stdout[pemStart:]
-		block, _ := pem.Decode([]byte(pemData))
-		if block == nil {
-			t.Fatal("failed to decode PEM block from output")
-		}
-		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			t.Fatalf("failed to parse private key: %v", err)
-		}
-		if key.N.BitLen() != 2048 {
-			t.Errorf("key size = %d bits, want 2048", key.N.BitLen())
-		}
-
-		// Should contain operational note on stderr
-		if !strings.Contains(stderr, "NOTE:") {
-			t.Error("expected NOTE on stderr about key usage")
+		if !strings.Contains(stderr, "--output") {
+			t.Errorf("stderr does not name the required flag: %q", stderr)
 		}
 	})
 
@@ -1213,10 +1168,12 @@ func TestRotateJWKS(t *testing.T) {
 
 	t.Run("unique kid per invocation", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "rotate-jwks", "--admin-token", token}
+		dir := t.TempDir()
 
 		var kids []string
 		for i := 0; i < 3; i++ {
+			args := []string{"vault", "rotate-jwks", "--admin-token", token,
+				"--output", filepath.Join(dir, fmt.Sprintf("key-%d.pem", i))}
 			var stdout string
 			captureStderr(t, func() {
 				stdout = captureStdout(t, func() {

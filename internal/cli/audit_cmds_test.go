@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -15,68 +14,11 @@ func auditCLI(audit *mockAuditRepo) *CLI {
 	return New(&mockClientRepo{}, &mockUserRepo{}, &mockRefreshTokenRepo{}, &mockAdminConfigRepo{}, audit, "")
 }
 
-// `vault cleanup-audit` is the manual half of the retention control: it is the
-// only sanctioned way to delete from an append-only audit log. Its argument
-// validation is therefore a safety gate — a mis-parsed retention window would
-// delete the wrong side of the horizon, and there is no undo.
-func TestCleanupAudit_RejectsBadRetentionWindows(t *testing.T) {
-	cleanupCalled := false
-	audit := &mockAuditRepo{
-		CleanupFn: func(context.Context, time.Time) (int64, error) {
-			cleanupCalled = true
-			return 0, nil
-		},
-	}
-	c := auditCLI(audit)
-
-	for _, args := range [][]string{
-		{"cleanup-audit"},                               // no window at all
-		{"cleanup-audit", "--retention-days", "0"},      // would purge everything
-		{"cleanup-audit", "--retention-days", "-30"},    // negative window
-		{"cleanup-audit", "--retention-days", "thirty"}, // not a number
-	} {
-		cleanupCalled = false
-		if !c.cleanupAudit(context.Background(), args) {
-			t.Errorf("%v: command should have been handled", args)
-		}
-		if cleanupCalled {
-			t.Errorf("%v: deleted audit entries on an invalid retention window", args)
-		}
-	}
-}
-
-func TestCleanupAudit_PurgesPastTheHorizon(t *testing.T) {
-	var cutoff time.Time
-	audit := &mockAuditRepo{
-		CleanupFn: func(_ context.Context, olderThan time.Time) (int64, error) {
-			cutoff = olderThan
-			return 5, nil
-		},
-	}
-
-	if !auditCLI(audit).cleanupAudit(context.Background(), []string{"cleanup-audit", "--retention-days", "30"}) {
-		t.Fatal("command not handled")
-	}
-
-	want := time.Now().AddDate(0, 0, -30)
-	if cutoff.Before(want.Add(-time.Minute)) || cutoff.After(want.Add(time.Minute)) {
-		t.Errorf("cutoff %v is not ~30 days ago", cutoff)
-	}
-}
-
-// A failed purge must be reported, not swallowed: an operator who is told the
-// log was cleaned when it was not will believe a retention obligation has been
-// met that has not.
-func TestCleanupAudit_ReportsFailure(t *testing.T) {
-	audit := &mockAuditRepo{
-		CleanupFn: func(context.Context, time.Time) (int64, error) {
-			return 0, errors.New("db down")
-		},
-	}
-	if !auditCLI(audit).cleanupAudit(context.Background(), []string{"cleanup-audit", "--retention-days", "30"}) {
-		t.Fatal("command not handled")
-	}
-}
+// `vault cleanup-audit` is retired (F-17): it reached an audit-delete the RBAC
+// model grants no admin, through a gate the calling role could rewrite. What
+// used to be asserted about its retention window is now asserted about its
+// refusal, in cli_cleanup_audit_retired_test.go; the surviving retention path is
+// VAULT_AUDIT_RETENTION_DAYS, tested in internal/audit.
 
 // `vault export-audit` is how a subject-access request or an incident review gets
 // the trail out. Bad filters must be refused rather than silently producing a

@@ -66,7 +66,7 @@ func TestEnsureFirstAdmin_CountFailureDoesNotBootstrapAnAdmin(t *testing.T) {
 	repo := newFakeAdminRepo()
 	repo.errCount = errors.New("db down")
 
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 
 	if err == nil {
 		t.Fatal("EnsureFirstAdmin reported success while it could not count the existing admins")
