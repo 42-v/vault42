@@ -65,6 +65,14 @@ func TestRefreshTokenRepo_SurfacesDatabaseFailures(t *testing.T) {
 	if _, err := repo.DeleteExpired(ctx); err == nil {
 		t.Error("DeleteExpired reported success against an unreachable database")
 	}
+	// The second sweep, over rows that expired without ever being used or
+	// revoked. On an instance with churn those are the majority of the table, and
+	// the retention loop logs whatever count it is handed: a (0, nil) on failure
+	// is a job that reports a clean run forever while the table only grows.
+	if _, err := repo.DeleteExpiredUnused(ctx); err == nil {
+		t.Error("DeleteExpiredUnused reported success against an unreachable database — " +
+			"the retention sweep would log a clean run while every expired-unused row stayed")
+	}
 }
 
 // Devices carry the trust decision that lets a login skip a second factor. A Trust that

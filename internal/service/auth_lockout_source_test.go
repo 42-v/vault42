@@ -252,3 +252,39 @@ func TestLockoutFallsBackWhenTheAccountCounterCannotBeRead(t *testing.T) {
 			"users.FailedLoginCount, so a cache outage unlocks every account again")
 	}
 }
+
+// TestThrottleDoesNotSleepOnAnUnreadableCounter is the throttle's behavior when
+// the cache it reads from is the thing that is broken.
+//
+// The delay is derived from a counter in Redis, and Redis is exactly what is
+// unavailable during the incident an attacker is most likely to pick. Falling
+// through on an unreadable counter would take the error return — a zero — and
+// treat it as a real reading; reading it as maximum suspicion instead would put
+// the capped delay on every login attempt in the deployment while the cache is
+// down, which turns a cache outage into an authentication outage.
+//
+// Failing open here is safe because it is not the control: isAccountLocked
+// falls back to the durable failed_login_count on the user row when the cache
+// cannot answer, so the account lockout survives the same outage. The throttle
+// is the anti-enumeration timing smear on top of it, and a smear nobody can
+// compute is simply not applied.
+func TestThrottleDoesNotSleepOnAnUnreadableCounter(t *testing.T) {
+	svc, o := newMockAuthService(t)
+	var reads int
+	o.cache.GetFn = func(context.Context, string) (string, error) {
+		reads++
+		return "", errors.New("redis: connection refused")
+	}
+
+	start := time.Now()
+	svc.throttleLogin(context.Background(), "known@example.com")
+	elapsed := time.Since(start)
+
+	if reads == 0 {
+		t.Fatal("throttleLogin never read the counter, so this test is not exercising the read failure")
+	}
+	if elapsed >= loginThrottleBase {
+		t.Fatalf("throttleLogin slept %v with the counter unreadable; an unreadable counter is not a "+
+			"failure count, and a cache outage must not become a login outage", elapsed)
+	}
+}

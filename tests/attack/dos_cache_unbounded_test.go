@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,8 +58,21 @@ func TestDoS_MemoryCacheRefusesNewKeysAtTheCap(t *testing.T) {
 
 	// Set and SetIfNotExists refuse too, or the cap would only cover one of
 	// the three write paths.
-	if err := mc.Set(ctx, "oauth_state:brand-new", "1", time.Minute); !errors.Is(err, cache.ErrCacheFull) {
-		t.Fatalf("Set of a new key at the cap = %v, want ErrCacheFull", err)
+	full := mc.Set(ctx, "oauth_state:brand-new", "1", time.Minute)
+	if !errors.Is(full, cache.ErrCacheFull) {
+		t.Fatalf("Set of a new key at the cap = %v, want ErrCacheFull", full)
+	}
+	// The refusal reaches a caller that wraps it and logs it, and that message is
+	// the whole of what an operator gets while the cache is saturated. It has to
+	// say the cache is full: rendered as a miss it sends whoever is paged looking
+	// for a key that was never written, and the fix for a saturated cache — raise
+	// the cap, or find what is flooding it — is not the fix for a miss.
+	if msg := fmt.Errorf("oauth authorize: %w", full).Error(); !strings.Contains(msg, "cap reached") {
+		t.Errorf("a saturated cache surfaces %q, which does not say the cache is full; the refusal is "+
+			"indistinguishable from a miss in the one place an operator reads it", msg)
+	}
+	if full.Error() == cache.ErrNotFound.Error() {
+		t.Error("ErrCacheFull renders exactly like ErrNotFound")
 	}
 	if _, err := mc.SetIfNotExists(ctx, "reset:brand-new", "1", time.Minute); !errors.Is(err, cache.ErrCacheFull) {
 		t.Fatalf("SetIfNotExists of a new key at the cap = %v, want ErrCacheFull", err)

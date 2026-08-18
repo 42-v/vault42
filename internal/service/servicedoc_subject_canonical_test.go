@@ -232,3 +232,130 @@ func TestSubjectCharsetIsASCIIOnly(t *testing.T) {
 		}
 	}
 }
+
+// The legacy pseudonym doubles every repository read the store makes: one call
+// under the canonical hash, one under the pre-canonicalisation hash, and the
+// answer is the two combined. The error arm of the SECOND call is what these
+// cases pin.
+//
+// It matters more than an ordinary "the database was down" arm. A legacy lookup
+// that failed quietly would degrade into exactly the state canonicalisation was
+// introduced to remove — a document that is stored, charged for and erasable
+// under one spelling of a subject while every operation the caller can perform
+// looks only at the other. A listing short of its legacy rows understates the
+// caller's own quota; a delete short of its legacy row reports the document gone
+// while it is still readable; a write that proceeded past a failed legacy delete
+// leaves the shadow copy that Put exists to replace.
+//
+// The fake fails on the legacy hash only, so in every case the canonical call
+// succeeds and the legacy one does not. That is the shape of a real partial
+// failure — one statement timing out, one row locked — and it is the only shape
+// that distinguishes these arms from the canonical ones next to them.
+func TestALegacyPseudonymLookupFailureIsSurfacedAndTheOperationRefused(t *testing.T) {
+	ctx := context.Background()
+	const subject = "Alice@Example.com"
+	legacy := legacySvcDocHash(subject)
+	body := []byte(`{"tier":"gold"}`)
+
+	newRepo := func(op string) (*fakeSvcDocRepo, *DocumentService) {
+		t.Helper()
+		repo := newFakeSvcDocRepo()
+		repo.failOn, repo.failOnSubject = op, legacy
+		return repo, newSvcDocService(t, repo, defaultSvcDocConfig())
+	}
+
+	t.Run("a write whose legacy replacement fails stores nothing", func(t *testing.T) {
+		repo, svc := newRepo("delete")
+
+		_, _, err := svc.Put(ctx, svcDocClientA, subject, "profile", body, repository.VisibilityPrivate)
+		if err == nil {
+			t.Fatal("Put reported success while the legacy row it must replace could not be deleted; " +
+				"the caller now has two rows for one subject, and only one of them is ever read")
+		}
+		if !strings.Contains(err.Error(), "replace legacy row") {
+			t.Fatalf("Put error = %q, want it to name the legacy replacement", err)
+		}
+		if len(repo.rows) != 0 {
+			t.Fatalf("Put wrote %d row(s) after failing to replace the legacy one", len(repo.rows))
+		}
+	})
+
+	t.Run("a write whose legacy document count fails stores nothing", func(t *testing.T) {
+		repo, svc := newRepo("count")
+
+		if _, _, err := svc.Put(ctx, svcDocClientA, subject, "profile", body, repository.VisibilityPrivate); err == nil {
+			t.Fatal("Put reported success with the legacy document count unread; the per-subject " +
+				"document cap was enforced against half the subject's documents")
+		} else if !strings.Contains(err.Error(), "count legacy") {
+			t.Fatalf("Put error = %q, want it to name the legacy count", err)
+		}
+		if len(repo.rows) != 0 {
+			t.Fatalf("Put wrote %d row(s) without a quota decision", len(repo.rows))
+		}
+	})
+
+	t.Run("a write whose legacy byte total fails stores nothing", func(t *testing.T) {
+		repo, svc := newRepo("sum")
+
+		if _, _, err := svc.Put(ctx, svcDocClientA, subject, "profile", body, repository.VisibilityPrivate); err == nil {
+			t.Fatal("Put reported success with the legacy byte total unread; the byte quota was " +
+				"enforced against half the subject's stored bytes, which is a second budget for the " +
+				"price of a capital letter")
+		} else if !strings.Contains(err.Error(), "quota legacy") {
+			t.Fatalf("Put error = %q, want it to name the legacy quota read", err)
+		}
+		if len(repo.rows) != 0 {
+			t.Fatalf("Put wrote %d row(s) without a quota decision", len(repo.rows))
+		}
+	})
+
+	t.Run("a listing whose legacy own-documents call fails returns no listing", func(t *testing.T) {
+		_, svc := newRepo("listOwner")
+
+		metas, quota, err := svc.List(ctx, svcDocClientA, subject)
+		if err == nil {
+			t.Fatal("List reported success without its legacy rows; the caller is shown a listing " +
+				"missing documents it holds and is charged for")
+		}
+		if !strings.Contains(err.Error(), "list own legacy") {
+			t.Fatalf("List error = %q, want it to name the legacy listing", err)
+		}
+		if metas != nil || quota != nil {
+			t.Fatalf("List returned a partial answer alongside the error: metas=%v quota=%v", metas, quota)
+		}
+	})
+
+	t.Run("a listing whose legacy shared-documents call fails returns no listing", func(t *testing.T) {
+		_, svc := newRepo("listShared")
+
+		metas, quota, err := svc.List(ctx, svcDocClientA, subject)
+		if err == nil {
+			t.Fatal("List reported success without the legacy documents other services shared for " +
+				"this subject")
+		}
+		if !strings.Contains(err.Error(), "list shared legacy") {
+			t.Fatalf("List error = %q, want it to name the legacy shared listing", err)
+		}
+		if metas != nil || quota != nil {
+			t.Fatalf("List returned a partial answer alongside the error: metas=%v quota=%v", metas, quota)
+		}
+	})
+
+	t.Run("a delete whose legacy row cannot be reached is not reported as not-found", func(t *testing.T) {
+		_, svc := newRepo("delete")
+
+		err := svc.Delete(ctx, svcDocClientA, subject, "profile")
+		if err == nil {
+			t.Fatal("Delete reported success; the caller was told a document was removed while the " +
+				"only row holding it was never reached")
+		}
+		if errors.Is(err, ErrSvcDocNotFound) {
+			t.Fatal("Delete reported ErrSvcDocNotFound for a legacy lookup that FAILED; " +
+				"'the row is not there' and 'I could not look' are the same answer to the caller, " +
+				"and only one of them means the document is gone")
+		}
+		if !strings.Contains(err.Error(), "delete legacy") {
+			t.Fatalf("Delete error = %q, want it to name the legacy delete", err)
+		}
+	})
+}

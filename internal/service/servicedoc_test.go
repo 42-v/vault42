@@ -20,21 +20,33 @@ type svcDocKey struct{ client, subject, key string }
 type fakeSvcDocRepo struct {
 	rows   map[svcDocKey]*repository.ServiceDocument
 	failOn string
+	// failOnSubject narrows failOn to one pseudonym. Empty fails every call to
+	// the named operation, which is what every test that predates the
+	// legacy-hash fallback expects.
+	//
+	// The narrowing is what makes the fallback observable at all: the canonical
+	// lookup and the legacy lookup are the SAME repository method called twice
+	// with two different subject hashes, so a fake that can only fail "the
+	// method" cannot tell the second call from the first.
+	failOnSubject string
 }
 
 func newFakeSvcDocRepo() *fakeSvcDocRepo {
 	return &fakeSvcDocRepo{rows: map[svcDocKey]*repository.ServiceDocument{}}
 }
 
-func (f *fakeSvcDocRepo) fail(op string) error {
-	if f.failOn == op {
-		return errors.New("db unavailable")
+func (f *fakeSvcDocRepo) fail(op, subjectHash string) error {
+	if f.failOn != op {
+		return nil
 	}
-	return nil
+	if f.failOnSubject != "" && f.failOnSubject != subjectHash {
+		return nil
+	}
+	return errors.New("db unavailable")
 }
 
 func (f *fakeSvcDocRepo) Get(_ context.Context, clientID, subjectHash, docKey string) (*repository.ServiceDocument, error) {
-	if err := f.fail("get"); err != nil {
+	if err := f.fail("get", subjectHash); err != nil {
 		return nil, err
 	}
 	d, ok := f.rows[svcDocKey{clientID, subjectHash, docKey}]
@@ -46,7 +58,7 @@ func (f *fakeSvcDocRepo) Get(_ context.Context, clientID, subjectHash, docKey st
 }
 
 func (f *fakeSvcDocRepo) ListSharedByKey(_ context.Context, subjectHash, docKey, exclude string) ([]*repository.ServiceDocument, error) {
-	if err := f.fail("shared"); err != nil {
+	if err := f.fail("shared", subjectHash); err != nil {
 		return nil, err
 	}
 	var out []*repository.ServiceDocument
@@ -60,7 +72,7 @@ func (f *fakeSvcDocRepo) ListSharedByKey(_ context.Context, subjectHash, docKey,
 }
 
 func (f *fakeSvcDocRepo) Upsert(_ context.Context, doc *repository.ServiceDocument) (bool, error) {
-	if err := f.fail("upsert"); err != nil {
+	if err := f.fail("upsert", doc.SubjectHash); err != nil {
 		return false, err
 	}
 	k := svcDocKey{doc.ClientID, doc.SubjectHash, doc.DocKey}
@@ -71,7 +83,7 @@ func (f *fakeSvcDocRepo) Upsert(_ context.Context, doc *repository.ServiceDocume
 }
 
 func (f *fakeSvcDocRepo) Delete(_ context.Context, clientID, subjectHash, docKey string) (bool, error) {
-	if err := f.fail("delete"); err != nil {
+	if err := f.fail("delete", subjectHash); err != nil {
 		return false, err
 	}
 	k := svcDocKey{clientID, subjectHash, docKey}
@@ -83,7 +95,7 @@ func (f *fakeSvcDocRepo) Delete(_ context.Context, clientID, subjectHash, docKey
 }
 
 func (f *fakeSvcDocRepo) ListByOwner(_ context.Context, clientID, subjectHash string) ([]*repository.ServiceDocument, error) {
-	if err := f.fail("listOwner"); err != nil {
+	if err := f.fail("listOwner", subjectHash); err != nil {
 		return nil, err
 	}
 	var out []*repository.ServiceDocument
@@ -97,7 +109,7 @@ func (f *fakeSvcDocRepo) ListByOwner(_ context.Context, clientID, subjectHash st
 }
 
 func (f *fakeSvcDocRepo) ListSharedForSubject(_ context.Context, subjectHash, exclude string) ([]*repository.ServiceDocument, error) {
-	if err := f.fail("listShared"); err != nil {
+	if err := f.fail("listShared", subjectHash); err != nil {
 		return nil, err
 	}
 	var out []*repository.ServiceDocument
@@ -111,7 +123,7 @@ func (f *fakeSvcDocRepo) ListSharedForSubject(_ context.Context, subjectHash, ex
 }
 
 func (f *fakeSvcDocRepo) ListAllForSubject(_ context.Context, subjectHash string) ([]*repository.ServiceDocument, error) {
-	if err := f.fail("listAll"); err != nil {
+	if err := f.fail("listAll", subjectHash); err != nil {
 		return nil, err
 	}
 	var out []*repository.ServiceDocument
@@ -125,7 +137,7 @@ func (f *fakeSvcDocRepo) ListAllForSubject(_ context.Context, subjectHash string
 }
 
 func (f *fakeSvcDocRepo) CountForOwner(_ context.Context, clientID, subjectHash string) (int, error) {
-	if err := f.fail("count"); err != nil {
+	if err := f.fail("count", subjectHash); err != nil {
 		return 0, err
 	}
 	n := 0
@@ -138,7 +150,7 @@ func (f *fakeSvcDocRepo) CountForOwner(_ context.Context, clientID, subjectHash 
 }
 
 func (f *fakeSvcDocRepo) SumBytesForSubjectAndClient(_ context.Context, subjectHash, clientID string) (int, error) {
-	if err := f.fail("sum"); err != nil {
+	if err := f.fail("sum", subjectHash); err != nil {
 		return 0, err
 	}
 	total := 0
@@ -151,7 +163,7 @@ func (f *fakeSvcDocRepo) SumBytesForSubjectAndClient(_ context.Context, subjectH
 }
 
 func (f *fakeSvcDocRepo) DeleteAllForSubject(_ context.Context, subjectHash string) error {
-	if err := f.fail("deleteAll"); err != nil {
+	if err := f.fail("deleteAll", subjectHash); err != nil {
 		return err
 	}
 	for k := range f.rows {

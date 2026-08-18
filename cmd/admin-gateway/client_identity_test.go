@@ -235,3 +235,133 @@ func TestStaleCRLFailsTheHandshake(t *testing.T) {
 		t.Fatal("a CRL past its nextUpdate must fail the handshake")
 	}
 }
+
+// An operator identity does not have to be a common name. SPIFFE and every
+// service mesh that issues from one put it in a URI SAN and leave the CN
+// decorative, and RFC 5280 has treated the CN as deprecated for identity for
+// twenty years. A gateway that pinned only the CN and the DNS names would force
+// such a deployment to leave ADMIN_GW_CLIENT_CN_ALLOWLIST empty, which is
+// precisely the "the CA is the only boundary" state AR-9 describes.
+//
+// The reject half is what makes it a pin rather than a lookup: the second
+// certificate carries a well-formed URI SAN from the same CA, and it must not
+// complete the handshake.
+func TestAURISANIdentityCanBePinned(t *testing.T) {
+	const allowed = "spiffe://vault42.test/ns/admin/sa/operator"
+	const decommissioned = "spiffe://vault42.test/ns/admin/sa/decommissioned"
+
+	f := newFixture(t)
+	c := f.start(t, "ADMIN_GW_CLIENT_CN_ALLOWLIST="+allowed)
+
+	dial := func(cert tls.Certificate) (*http.Response, error) {
+		cfg := f.pki.tlsClientConfig()
+		cfg.Certificates = []tls.Certificate{cert}
+		client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: cfg}}
+		return client.Get("https://" + f.addr + "/admin/status")
+	}
+
+	// The CN is deliberately not in the allowlist, so only the URI SAN can let
+	// this certificate through.
+	resp, err := dial(f.pki.issueClientWithURI(t, "mesh-issued", allowed))
+	if err != nil {
+		t.Fatalf("a certificate pinned by its URI SAN was refused: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		t.Errorf("GET /admin/status = %s, want 401 from the session middleware (body: %s)", resp.Status, body)
+	}
+
+	other, err := dial(f.pki.issueClientWithURI(t, "mesh-issued", decommissioned))
+	if err == nil {
+		_ = other.Body.Close()
+		t.Fatalf("a URI SAN outside the allowlist returned %s, want the handshake refused", other.Status)
+	}
+
+	c.signal(t, syscall.SIGTERM)
+	if code := c.waitForExit(t); code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstderr:\n%s", code, c.stderr.String())
+	}
+}
+
+// A CRL is a file that says which operators are no longer operators, and
+// believing one that this gateway's own CA did not sign hands that decision to
+// whoever can write the file. The signature check is therefore not optional, and
+// "there is no certificate to check the signature against" is not a reason to
+// skip it — it is the one case where skipping it would be silent.
+//
+// firstCertificate is where the issuer comes from, and every way it can come
+// back empty ends at the same refusal. The CRL in each case is real, current and
+// correctly signed by the fixture's CA, so nothing but the missing issuer can
+// produce the error.
+func TestARevocationListIsRefusedWithNoIssuerToAuthenticateItAgainst(t *testing.T) {
+	f := newFixture(t)
+	crlFile := f.pki.writeCRL(t, big.NewInt(4242))
+	keyOnly := keyPEM(t, f.pki.ca.key)
+
+	bundles := []struct {
+		name   string
+		bundle []byte
+	}{
+		// pem.Decode finds no block at all and hands back the input untouched.
+		// Reading on would loop forever on the same bytes.
+		{"a file that is not PEM at all", []byte("this is a note the operator left in the config directory\n")},
+		// Well-formed PEM carrying no certificate. An operator who points
+		// ADMIN_GW_CLIENT_CA_FILE at the CA's key instead of the CA's
+		// certificate lands here.
+		{"PEM blocks that are not certificates", keyOnly},
+		// Two non-certificate blocks, so the skip has to keep going rather than
+		// stop at the first one.
+		{"several non-certificate blocks", append(append([]byte{}, keyOnly...), keyOnly...)},
+		{"an empty bundle", nil},
+	}
+
+	for _, tt := range bundles {
+		t.Run(tt.name, func(t *testing.T) {
+			issuer := firstCertificate(tt.bundle)
+			if issuer != nil {
+				t.Fatalf("firstCertificate returned a certificate (subject %q) for %s; loadCRL would "+
+					"then authenticate the revocation list against it", issuer.Subject, tt.name)
+			}
+
+			if _, err := loadCRL(crlFile, issuer); err == nil {
+				t.Fatal("loadCRL accepted a revocation list with nothing to authenticate it against; " +
+					"an attacker-supplied file could revoke every operator, or unrevoke one")
+			} else if !strings.Contains(err.Error(), "no client CA certificate") {
+				t.Fatalf("loadCRL error = %q, want it to name the missing issuer", err)
+			}
+
+			// The handshake is what the refusal has to reach. The leaf here is
+			// NOT on the list, so a policy that returned nil on an
+			// unauthenticated CRL would let it straight through.
+			p := clientIdentityPolicy{crlFile: crlFile, issuer: issuer}
+			if err := p.checkRevocation(&x509.Certificate{SerialNumber: big.NewInt(7)}); err == nil {
+				t.Fatal("checkRevocation admitted a client while the CRL could not be authenticated")
+			}
+		})
+	}
+}
+
+// The bundle an operator actually has on disk is often a key and a certificate
+// concatenated, in whichever order the tooling emitted them. The certificate has
+// to be found regardless, or a gateway configured with a perfectly good CA file
+// would refuse every handshake once a CRL was added.
+func TestTheIssuerIsFoundPastNonCertificateBlocks(t *testing.T) {
+	f := newFixture(t)
+	bundle := append(keyPEM(t, f.pki.ca.key), certPEM(f.pki.ca.der)...)
+
+	issuer := firstCertificate(bundle)
+	if issuer == nil {
+		t.Fatal("firstCertificate stopped at the leading key block; a key-then-certificate bundle is " +
+			"what most CA tooling emits, and a gateway reading one would authenticate no CRL at all")
+	}
+	if !issuer.Equal(f.pki.ca.cert) {
+		t.Fatalf("firstCertificate returned %q, want the CA %q", issuer.Subject, f.pki.ca.cert.Subject)
+	}
+
+	// And it is the issuer the CRL is checked against, so a correctly signed
+	// list now loads.
+	if _, err := loadCRL(f.pki.writeCRL(t, big.NewInt(4242)), issuer); err != nil {
+		t.Fatalf("loadCRL with the issuer recovered from a key-first bundle: %v", err)
+	}
+}
