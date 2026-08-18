@@ -8,11 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-<<<<<<< HEAD
-> **404 requirements in scope across 9 standards: 341 Met, 17 Accepted Risk,
-=======
-> **404 requirements in scope across 9 standards: 340 Met, 18 Accepted Risk,
->>>>>>> hard/inactivity
+> **404 requirements in scope across 9 standards: 345 Met, 13 Accepted Risk,
 > 46 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -197,30 +193,18 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-<<<<<<< HEAD
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 212 | 9 | 42 | 263 |
-| NIST SP 800-63B-4 | 27 | 2 | 2 | 31 |
-| NIST SP 800-53 Rev 5 (Release 5.2.0) | 30 | 3 | 1 | 34 |
-=======
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 210 | 11 | 42 | 263 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 214 | 7 | 42 | 263 |
 | NIST SP 800-63B-4 | 28 | 1 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 31 | 2 | 1 | 34 |
->>>>>>> hard/inactivity
 | OWASP Top 10:2025 | 9 | 1 | 0 | 10 |
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
-<<<<<<< HEAD
-| **Total** | **341** | **17** | **46** | **404** |
+| **Total** | **345** | **13** | **46** | **404** |
 
-The 17 Accepted Risk rows collapse to **9 distinct accepted risks**: several
-=======
-| **Total** | **340** | **18** | **46** | **404** |
-
-The 18 Accepted Risk rows collapse to **11 distinct accepted risks**: several
->>>>>>> hard/inactivity
+The 13 Accepted Risk rows collapse to **9 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
