@@ -135,7 +135,7 @@ async function handleDelete() {
             <div class="vault42-card space-y-4">
               <div class="flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-vault42-muted uppercase tracking-wider">{{ t('identity.billingAddress') }}</h3>
-                <button type="button" class="text-sm text-vault42-accent hover:text-vault42-accent transition-colors" @click="showBilling = !showBilling">
+                <button type="button" class="text-sm text-vault42-accent hover:text-vault42-text transition-colors" @click="showBilling = !showBilling">
                   {{ showBilling ? t('identity.hideBilling') : t('identity.addBilling') }}
                 </button>
               </div>

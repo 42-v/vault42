@@ -20,6 +20,8 @@ const { t } = useT()
 
 const code = ref('')
 const codesCopied = ref(false)
+const copyFailed = ref(false)
+const backupCodesRef = ref<HTMLElement | null>(null)
 const qrDataUrl = ref('')
 const confirmPassword = ref('')
 const showConfirmDialog = ref(false)
@@ -131,9 +133,40 @@ async function handleGenerateBackupCodes() {
   })
 }
 
-function copyBackupCodes() {
-  const text = backupCodes.value.join('\n')
-  navigator.clipboard.writeText(text)
+/**
+ * Selects the rendered codes so they can still be copied by hand.
+ *
+ * The only fallback that works when the Clipboard API is unavailable, which is
+ * exactly when the user needs one.
+ */
+function selectBackupCodes() {
+  const node = backupCodesRef.value
+  const selection = window.getSelection?.()
+  if (!node || !selection) return
+
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+async function copyBackupCodes() {
+  copyFailed.value = false
+
+  try {
+    await navigator.clipboard.writeText(backupCodes.value.join('\n'))
+  } catch {
+    // writeText rejects in a non-secure context, when the document is not
+    // focused, and when clipboard permission is denied; on an insecure origin
+    // `navigator.clipboard` is not even defined. The promise used to be dropped
+    // on the floor and "Copied!" shown unconditionally, so a user could believe
+    // their recovery codes were saved with nothing on the clipboard — on the one
+    // path that exists to stop them being locked out of the account.
+    copyFailed.value = true
+    selectBackupCodes()
+    return
+  }
+
   codesCopied.value = true
   setTimeout(() => { codesCopied.value = false }, 2000)
 }
@@ -366,11 +399,16 @@ function copyBackupCodes() {
               <p class="text-xs text-yellow-500/80 mt-0.5">{{ t('twoFactor.backup.storeOffline') }}</p>
             </div>
             <div class="flex justify-end mb-2">
-              <button class="text-xs text-vault42-accent hover:text-vault42-accent transition-colors" @click="copyBackupCodes">
-                {{ codesCopied ? t('twoFactor.backup.copied') : t('twoFactor.backup.copyAll') }}
+              <button
+                class="text-xs transition-colors"
+                :class="copyFailed ? 'text-vault42-error' : 'text-vault42-accent hover:text-vault42-text'"
+                aria-live="polite"
+                @click="copyBackupCodes"
+              >
+                {{ copyFailed ? t('common.error') : codesCopied ? t('twoFactor.backup.copied') : t('twoFactor.backup.copyAll') }}
               </button>
             </div>
-            <div class="grid grid-cols-2 gap-2">
+            <div ref="backupCodesRef" class="grid grid-cols-2 gap-2">
               <code
                 v-for="c in backupCodes"
                 :key="c"

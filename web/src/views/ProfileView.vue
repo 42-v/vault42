@@ -63,7 +63,7 @@ onMounted(() => fetchProfile())
                   <span v-if="profile.mfa_enabled" class="text-vault42-success">{{ t('common.enabled') }}</span>
                   <span v-else class="text-vault42-muted">
                     {{ t('common.disabled') }} &mdash;
-                    <router-link to="/2fa" class="text-vault42-accent hover:text-vault42-accent transition-colors">{{ t('profile.enable') }}</router-link>
+                    <router-link to="/2fa" class="text-vault42-accent hover:text-vault42-text transition-colors">{{ t('profile.enable') }}</router-link>
                   </span>
                 </p>
               </div>

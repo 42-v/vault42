@@ -55,7 +55,7 @@ onMounted(() => {
             <div>
               <p class="text-sm text-vault42-muted">{{ t('home.twoFactor') }}</p>
               <p class="text-sm font-medium">{{ (mfaStatus?.totp_enabled || mfaStatus?.webauthn_enabled) ? t('common.enabled') : t('common.disabled') }}</p>
-              <router-link v-if="!(mfaStatus?.totp_enabled || mfaStatus?.webauthn_enabled)" to="/2fa" class="text-xs text-vault42-accent hover:text-vault42-accent transition-colors">
+              <router-link v-if="!(mfaStatus?.totp_enabled || mfaStatus?.webauthn_enabled)" to="/2fa" class="text-xs text-vault42-accent hover:text-vault42-text transition-colors">
                 {{ t('home.enableNow') }}
               </router-link>
             </div>
@@ -71,7 +71,7 @@ onMounted(() => {
               <p class="text-sm text-vault42-muted">{{ t('home.securityKeys') }}</p>
               <p v-if="mfaStatus?.webauthn_enabled" class="text-sm font-medium text-vault42-success">{{ t('home.registered') }}</p>
               <p v-else class="text-sm font-medium text-vault42-muted">{{ t('home.notConfigured') }}</p>
-              <router-link to="/2fa" class="text-xs text-vault42-accent hover:text-vault42-accent transition-colors">
+              <router-link to="/2fa" class="text-xs text-vault42-accent hover:text-vault42-text transition-colors">
                 {{ mfaStatus?.webauthn_enabled ? t('home.manageKeys') : t('home.setUp') }}
               </router-link>
             </div>

@@ -33,7 +33,7 @@ async function handleSubmit() {
         <p class="text-sm text-vault42-muted mb-6">
           {{ t('forgotPassword.checkEmailDesc') }}
         </p>
-        <router-link to="/login" class="text-sm text-vault42-accent hover:text-vault42-accent transition-colors">
+        <router-link to="/login" class="text-sm text-vault42-accent hover:text-vault42-text transition-colors">
           {{ t('forgotPassword.backToSignIn') }}
         </router-link>
       </div>
@@ -63,7 +63,7 @@ async function handleSubmit() {
 
         <p class="text-center text-sm text-vault42-muted mt-5">
           {{ t('forgotPassword.rememberPassword') }}
-          <router-link to="/login" class="text-vault42-accent hover:text-vault42-accent transition-colors">{{ t('common.signIn') }}</router-link>
+          <router-link to="/login" class="text-vault42-accent hover:text-vault42-text transition-colors">{{ t('common.signIn') }}</router-link>
         </p>
       </div>
     </div>
