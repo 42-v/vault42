@@ -39,8 +39,19 @@ jobs:
       # -coverpkg attributes coverage to the internal packages under test rather
       # than to the test binary, which is what makes the profile comparable with
       # the canonical run in coverage-gate.
+      # Every step in this job pipes into tee, and a step with no `shell:` key
+      # runs under GitHub's default `bash -e {0}`, which does NOT set pipefail.
+      # The status of the pipeline is tee's, so `go test` could fail, or fail to
+      # compile, and the step still exited 0. This job could not go red.
+      # `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`, which is
+      # the difference. scripts/lib/coverage-env.sh already works around this on
+      # the coverage path with cov_check_failures; the Tests job never did.
       - name: Unit + handler + middleware + service tests
-        run: go test ./internal/... -count=1 -race -v -coverprofile=coverage-unit.out -coverpkg=./internal/... 2>&1 | tee test-output.txt
+        shell: bash
+        run: |
+          go test ./internal/... -count=1 -race -v \
+            -coverprofile=coverage-unit.out -coverpkg=./internal/... \
+            2>&1 | tee test-output.txt
 
       # The race detector used to see ./internal/... and nothing else, which is
       # backwards: the suites that actually drive concurrency live under tests/.
@@ -56,19 +67,30 @@ jobs:
       # tests/unit was not run by this job at all. It reached CI only through
       # coverage-gate, which is skipped when no Go file changed.
       - name: Attack, unit, fuzz and spec tests (race)
-        run: go test ./tests/attack/... ./tests/unit/... ./tests/fuzz/... ./tests/spec/... -count=1 -race -v -timeout 600s 2>&1 | tee -a test-output.txt
+        shell: bash
+        run: |
+          go test ./tests/attack/... ./tests/unit/... ./tests/fuzz/... ./tests/spec/... \
+            -count=1 -race -v -timeout 600s \
+            2>&1 | tee -a test-output.txt
 
       # -p 1 matches the canonical coverage run: integration and compliance each
       # start their own Postgres, and in parallel they contend for ports.
       - name: Integration and compliance tests (race)
-        run: go test ./tests/integration/... ./tests/compliance/... -count=1 -p 1 -race -v -timeout 1800s 2>&1 | tee -a test-output.txt
+        shell: bash
+        run: |
+          go test ./tests/integration/... ./tests/compliance/... \
+            -count=1 -p 1 -race -v -timeout 1800s \
+            2>&1 | tee -a test-output.txt
 
       # tests/e2e/multireplica runs here: it starts its own containers. The outer
       # tests/e2e suite needs a deployed cluster and skips without one, which is
       # why VAULT_E2E_REQUIRED is deliberately NOT set. That skip is a real gap
       # rather than a passing gate, and the step name says so.
       - name: E2E tests (multireplica only; the cluster suite skips here)
-        run: go test ./tests/e2e/... -count=1 -race -v -timeout 1800s 2>&1 | tee -a test-output.txt
+        shell: bash
+        run: |
+          go test ./tests/e2e/... -count=1 -race -v -timeout 1800s \
+            2>&1 | tee -a test-output.txt
 
       - name: Upload unit coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
