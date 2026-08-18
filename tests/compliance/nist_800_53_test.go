@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/rbac"
 )
 
@@ -61,25 +62,95 @@ func TestNIST80053_AC_6_LeastPrivilegeHoldsAcrossTheRoleLattice(t *testing.T) {
 
 // --- AC-7 "Unsuccessful Logon Attempts" ---
 
-// The control requires a limit on consecutive invalid attempts and an action
-// taken when it is exceeded. Both halves are configuration, so the assertion is
-// that the configuration surface still exists and still has a finite default.
+// AC-7 requires a limit on consecutive invalid logon attempts and an action
+// taken when the limit is exceeded.
+//
+// This gate used to be three substring searches: "lockoutThreshold" and
+// "FailedLoginCount" somewhere in internal/service/auth.go, and
+// "CheckAccountLockout" somewhere in internal/middleware/ratelimit.go. The third
+// was the instructive one. CheckAccountLockout was a helper with no callers in
+// the binary; the string was present, the gate was green, and the function it
+// named had nothing to do with whether a failed logon was bounded. Rename a
+// constant in a correct refactor and the gate goes red for no reason; delete the
+// enforcement and leave the names behind and it stays green. That teaches people
+// to edit the gate rather than the code, which is how the repository acquired
+// three tripwires that could never trip.
+//
+// So AC-7 is now measured, not grepped. Every number below is discovered by
+// attempting logins against a real AuthService until the answer changes.
 func TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded(t *testing.T) {
-	src := readProductionSource(t, "internal/service/auth.go")
-	for _, knob := range []string{"lockoutThreshold", "lockoutDuration"} {
-		if !strings.Contains(src, knob) {
-			t.Errorf("AC-7: internal/service/auth.go no longer declares %s; failed logons would be unbounded", knob)
+	// "A limit on consecutive invalid attempts." Measured on the login path
+	// three times, because there are three limits and only together do they
+	// bound an attacker: one address against one account, one account across
+	// every address, and one address across every account.
+	perSource := perSourceAttemptLimit(t, perSourceSearchCeiling)
+	account := accountWideAttemptLimit(t, nistConsecutiveFailureCeiling)
+	address := sourceAddressAttemptLimit(t, 2*nistConsecutiveFailureCeiling)
+	for _, m := range []struct {
+		name string
+		n    int
+	}{
+		{"per (account, source address)", perSource},
+		{"per account across all addresses", account},
+		{"per source address across all accounts", address},
+	} {
+		if m.n < 1 {
+			t.Fatalf("AC-7: the limit %s measured %d; a limit below one is not a control, it is an outage",
+				m.name, m.n)
 		}
 	}
-	if !strings.Contains(readProductionSource(t, "internal/middleware/ratelimit.go"), "CheckAccountLockout") {
-		t.Error("AC-7: the account lockout mechanism is gone from the rate-limit middleware")
+	if account > nistConsecutiveFailureCeiling {
+		t.Errorf("AC-7: an account absorbs %d consecutive failures from rotating addresses before it "+
+			"locks, over the %d that NIST SP 800-63B 5.2.2 allows a throttling verifier",
+			account, nistConsecutiveFailureCeiling)
+	}
+	// The third limit bounds the attacker who never lets any one account reach
+	// its own limit — the spray. Without it the other two are a budget per
+	// account, multiplied by every address the attacker can guess.
+	if address <= perSource {
+		t.Errorf("AC-7: one address may fail %d logins across all accounts but %d against a single "+
+			"account. A per-address limit at or below the per-account one leaves password spraying "+
+			"bounded only by how many accounts the attacker knows about.", address, perSource)
+	}
+	t.Logf("AC-7 measured limits: %d failures per (account, source address), %d per account across "+
+		"all addresses, %d per address across all accounts", perSource, account, address)
+
+	// "An action taken when the limit is exceeded." The action is that the
+	// correct password stops working, which is what the two measurements above
+	// each observed to terminate; assert it explicitly so the action cannot be
+	// reduced to a log line.
+	const (
+		email      = "ac7-target@example.com"
+		attackerIP = "198.51.100.7"
+	)
+	f := newLockoutFixture(t)
+	f.account(email)
+	for i := 0; i < perSource; i++ {
+		f.fail(email, attackerIP)
+	}
+	if f.probe(t, email, attackerIP) == loginAccepted {
+		t.Errorf("AC-7: after %d consecutive invalid attempts the correct password was still accepted "+
+			"from %s; the limit is counted but nothing acts on it", perSource, attackerIP)
 	}
 
-	// The counter lives in the cache, so a cache outage would otherwise lift
-	// the limit entirely. The database fallback is what keeps AC-7 enforced
-	// when the fast path is unavailable.
-	if !strings.Contains(src, "FailedLoginCount") {
-		t.Error("AC-7: the database-backed lockout fallback is gone; a cache outage would remove the attempt limit")
+	// The counter lives in the cache, so a cache outage would otherwise lift the
+	// limit entirely. The durable failed_login_count column is what keeps AC-7
+	// enforced when the fast path cannot answer — asserted here by breaking the
+	// cache and driving the same attack, rather than by finding the column's
+	// name in the file.
+	down := newLockoutFixtureWithCache(t, unreadableCache{cache.NewMemoryCache()})
+	down.account(email)
+	if down.probe(t, email, attackerIP) != loginAccepted {
+		t.Fatalf("AC-7: an untouched account could not log in with the cache unavailable; the fallback " +
+			"is failing closed on every login, not enforcing a limit")
+	}
+	for i := 0; i < perSource; i++ {
+		down.fail(email, attackerIP)
+	}
+	if down.probe(t, email, attackerIP) == loginAccepted {
+		t.Errorf("AC-7: with the lockout cache unreadable, %d consecutive invalid attempts left the "+
+			"account open. A cache outage would remove the attempt limit, and a cache outage is when "+
+			"an attacker would most like it removed.", perSource)
 	}
 }
 

@@ -556,57 +556,6 @@ func TestConfirmed_WithConfirmation(t *testing.T) {
 }
 
 // ===========================================================================
-// IsAccountLocked / RecordFailedAttempt edge cases
-// ===========================================================================
-
-// TestIsAccountLocked_NoFailures tests that a fresh user is not locked.
-func TestIsAccountLocked_NoFailures(t *testing.T) {
-	c := cache.NewMemoryCache()
-	defer c.Close()
-
-	locked, err := IsAccountLocked(context.Background(), c, "fresh-user", 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if locked {
-		t.Error("fresh user should not be locked")
-	}
-}
-
-// TestRecordFailedAttempt_ThenCheck tests recording failures and checking lockout.
-func TestRecordFailedAttempt_ThenCheck(t *testing.T) {
-	c := cache.NewMemoryCache()
-	defer c.Close()
-
-	ctx := context.Background()
-	userID := "lockout-test-user"
-
-	// Record 5 failures (threshold is 5, so count must exceed)
-	for i := 0; i < 5; i++ {
-		RecordFailedAttempt(ctx, c, userID, time.Minute)
-	}
-
-	// At exactly 5 failures, should NOT be locked (count > threshold, not >=)
-	locked, err := IsAccountLocked(ctx, c, userID, 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if locked {
-		t.Error("should not be locked at exactly threshold")
-	}
-
-	// One more failure should trigger lockout
-	RecordFailedAttempt(ctx, c, userID, time.Minute)
-	locked, err = IsAccountLocked(ctx, c, userID, 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !locked {
-		t.Error("should be locked after exceeding threshold")
-	}
-}
-
-// ===========================================================================
 // ClientIP edge cases
 // ===========================================================================
 

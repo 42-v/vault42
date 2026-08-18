@@ -1,7 +1,6 @@
 package compliance
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -10,11 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
-	"github.com/42-v/vault42/internal/middleware"
 )
 
 // =============================================================================
@@ -873,31 +870,48 @@ func TestASVS_V2_1_1_PasswordMinLengthConfigured(t *testing.T) {
 
 // --- V2.2.1: Account Lockout ---
 
+// TestASVS_V2_2_1_AccountLockoutMechanism holds both halves of V2.2.1 at once.
+//
+// V2.2.1 names three things in one sentence: breached credential testing, brute
+// force, AND "account lockout attacks". The third is the control turned on its
+// owner, and no assertion covered it. The old body counted a helper with no
+// production callers up to a threshold it chose itself, and could observe
+// neither half.
+//
+// The lockout used to key on the user id alone, so five wrong passwords from any
+// address denied logins for fifteen minutes to any account whose email the
+// caller knew — no credential, five requests, indefinitely renewable, and
+// silent, because a locked account answers exactly like a wrong password. MFA
+// verify shared the counter, so a victim could not climb out with a second
+// factor either. Keying the hard lock on (account, source address) means an
+// attacker shuts only the path they attack from.
 func TestASVS_V2_2_1_AccountLockoutMechanism(t *testing.T) {
-	// V2.2.1: Verify that anti-automation controls are effective at mitigating
-	// breached credential testing, brute force, and account lockout attacks.
-	// NIST SP 800-63B-4 §3.2.2: Max 100 consecutive failed attempts per account.
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
+	const (
+		victim     = "v221-victim@example.com"
+		attackerIP = "198.51.100.66"
+		victimIP   = "203.0.113.10"
+	)
+	f := newLockoutFixture(t)
+	f.account(victim)
 
-	ctx := context.Background()
-	threshold := 10
-	lockDuration := 15 * time.Minute
-
-	// Simulate failed attempts up to threshold
-	for i := 0; i < threshold; i++ {
-		locked, _ := middleware.CheckAccountLockout(ctx, mc, "brute-target", threshold, lockDuration)
-		if locked {
-			t.Fatalf("V2.2.1: Locked too early at attempt %d (threshold %d)", i+1, threshold)
-		}
+	limit := perSourceAttemptLimit(t, perSourceSearchCeiling)
+	for i := 0; i < limit+1; i++ {
+		f.fail(victim, attackerIP)
 	}
 
-	// Attempts after threshold: locked
-	for i := 0; i < 5; i++ {
-		locked, _ := middleware.CheckAccountLockout(ctx, mc, "brute-target", threshold, lockDuration)
-		if !locked {
-			t.Fatalf("V2.2.1: Should be locked at attempt %d after threshold %d", threshold+i+1, threshold)
-		}
+	// Half one, brute force: the attacking source is shut out, and holding the
+	// correct password does not reopen it.
+	if f.probe(t, victim, attackerIP) == loginAccepted {
+		t.Errorf("V2.2.1: %d wrong passwords from %s did not stop that source; there is no "+
+			"anti-automation control on the login path", limit+1, attackerIP)
+	}
+
+	// Half two, lockout attack: the account owner, on their own address, is
+	// untouched by what the attacker did on theirs.
+	if f.probe(t, victim, victimIP) != loginAccepted {
+		t.Errorf("V2.2.1: %d failures from %s locked the account owner out of their own account at %s. "+
+			"An attacker who knows an address could then deny it at will, with no credential.",
+			limit+1, attackerIP, victimIP)
 	}
 }
 

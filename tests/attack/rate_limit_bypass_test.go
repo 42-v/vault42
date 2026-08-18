@@ -1,7 +1,7 @@
 package attack
 
 import (
-	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -97,38 +97,59 @@ func TestRateLimitBypass_IPRotation(t *testing.T) {
 	}
 }
 
-// TestRateLimitBypass_AccountLockoutPerUser verifies that account lockout
-// is per-user, not global, and cannot be bypassed by targeting different users.
+// TestRateLimitBypass_AccountLockoutPerUser attacks the two properties an
+// attacker would test first: does locking one account lock another, and does
+// rotating the source address buy unlimited guesses.
+//
+// The old body proved that a map keyed on user id returns different values for
+// different keys, using a helper the binary never calls. It could not have seen
+// the second question at all, because that helper had no notion of a source
+// address — which is precisely where the bypass would be.
 func TestRateLimitBypass_AccountLockoutPerUser(t *testing.T) {
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
+	perSource := atkPerSourceLimit(t, atkSearchCeiling)
 
-	ctx := context.Background()
-	threshold := 5
-	lockDuration := 15 * time.Minute
+	const (
+		userA      = "bypass-a@example.com"
+		userB      = "bypass-b@example.com"
+		attackerIP = "198.51.100.50"
+	)
+	a := newAtkLockout(t)
+	a.account(userA)
+	a.account(userB)
 
-	// Lock out user-A
-	for i := 0; i < threshold; i++ {
-		middleware.CheckAccountLockout(ctx, mc, "user-A", threshold, lockDuration)
+	for i := 0; i < perSource; i++ {
+		a.guess(userA, attackerIP)
+	}
+	if a.canReach(t, userA, attackerIP) == atkAdmitted {
+		t.Fatalf("%d wrong passwords did not lock %s to %s", perSource, userA, attackerIP)
+	}
+	if a.canReach(t, userB, attackerIP) != atkAdmitted {
+		t.Errorf("locking %s also locked %s from the same address; the counter is not per-account", userA, userB)
 	}
 
-	// user-A should be locked
-	locked, _ := middleware.CheckAccountLockout(ctx, mc, "user-A", threshold, lockDuration)
+	// Rotation is the bypass this suite exists to try. Every attempt below comes
+	// from an address that has never been seen before, so the per-address lock
+	// can never engage — and yet the account must still stop answering, or the
+	// only cost of unlimited guessing is a proxy list.
+	const rotated = "bypass-rotate@example.com"
+	r := newAtkLockout(t)
+	r.account(rotated)
+	locked := false
+	const rotations = 100
+	for n := 1; n <= rotations && !locked; n++ {
+		r.guess(rotated, fmt.Sprintf("198.51.%d.%d", 200+n/250, n%250))
+		switch r.canReach(t, rotated, fmt.Sprintf("203.0.%d.%d", 200+n/250, n%250)) {
+		case atkAdmitted:
+		case atkMasked:
+			locked = true
+			t.Logf("rotating the source address bought %d guesses before the account itself locked", n)
+		case atkAddressLocked:
+			t.Fatalf("the probing address was refused after %d rotations; it should have been fresh", n)
+		}
+	}
 	if !locked {
-		t.Fatal("user-A should be locked after exceeding threshold")
-	}
-
-	// user-B should NOT be affected
-	locked, _ = middleware.CheckAccountLockout(ctx, mc, "user-B", threshold, lockDuration)
-	if locked {
-		t.Fatal("user-B should not be locked due to user-A's lockout")
-	}
-
-	// user-C with 1 attempt should not be locked
-	middleware.CheckAccountLockout(ctx, mc, "user-C", threshold, lockDuration)
-	locked, _ = middleware.CheckAccountLockout(ctx, mc, "user-C", threshold, lockDuration)
-	if locked {
-		t.Fatal("user-C should not be locked after 2 attempts (threshold=5)")
+		t.Errorf("%d failures from %d distinct addresses left the account open: rotating the source "+
+			"address is a complete bypass of the lockout", rotations, rotations)
 	}
 }
 
@@ -227,39 +248,65 @@ func TestRateLimitBypass_IPv6Variations(t *testing.T) {
 	}
 }
 
-// TestRateLimitBypass_AccountLockoutThresholdExact verifies the exact
-// boundary of account lockout: threshold-1 should not lock, threshold should.
+// TestRateLimitBypass_AccountLockoutThresholdExact attacks the boundary from the
+// two independent routes the code can take to it, and requires them to agree.
+//
+// The limit is enforced from a cache counter when the cache can answer, and from
+// the durable failed_login_count column when it cannot. Those are different
+// reads, different comparisons, and different code. If they disagree, the number
+// of guesses an attacker gets changes with the health of a component they can
+// often influence and can always wait for — and it changes silently, because
+// both paths answer with the same masked error.
+//
+// This also pins the boundary itself without hardcoding it. The old body swept
+// six invented thresholds — 1, 3, 5, 10, 50, 100 — through a helper that took
+// the threshold as an argument, so what it asserted was that a comparison
+// operator compares. An off-by-one in the shipped code, which takes its
+// threshold from nobody, was invisible to it. An off-by-one on either path here
+// shows up as a disagreement.
 func TestRateLimitBypass_AccountLockoutThresholdExact(t *testing.T) {
-	thresholds := []int{1, 3, 5, 10, 50, 100}
+	cached := atkPerSourceLimit(t, atkSearchCeiling)
+	// The durable search is quadratic in the answer, so it is bounded relative to
+	// the number the cache path already produced. A durable limit past that
+	// bound is a disagreement too, and is reported as one.
+	durable := atkDurableLimit(t, 2*cached+5)
 
-	for _, threshold := range thresholds {
-		t.Run("threshold="+string(rune('0'+threshold%10)), func(t *testing.T) {
-			mc := cache.NewMemoryCache()
-			defer mc.Close()
-			ctx := context.Background()
-			lockDuration := time.Minute
+	if cached != durable {
+		t.Fatalf("the account locks after %d failures when the cache answers and after %d when it "+
+			"cannot. The number of guesses on offer changes with the health of a component an "+
+			"attacker can wait for, and nothing in the response says which limit is in force.",
+			cached, durable)
+	}
+	if cached < 2 {
+		t.Fatalf("measured a limit of %d; there is no boundary to pin", cached)
+	}
+	t.Logf("boundary agrees at %d consecutive failures on both the cache and the durable path", cached)
 
-			userID := "user-exact-test"
+	const (
+		email      = "boundary@example.com"
+		attackerIP = "198.51.100.60"
+	)
 
-			// threshold-1 attempts should not lock
-			for i := 0; i < threshold-1; i++ {
-				locked, _ := middleware.CheckAccountLockout(ctx, mc, userID, threshold, lockDuration)
-				if locked {
-					t.Fatalf("Should not be locked at attempt %d (threshold=%d)", i+1, threshold)
-				}
-			}
+	// One short of the limit, the correct password still works. A control that
+	// locks early is a denial of service against the account owner.
+	below := newAtkLockout(t)
+	below.account(email)
+	for i := 0; i < cached-1; i++ {
+		below.guess(email, attackerIP)
+	}
+	if below.canReach(t, email, attackerIP) != atkAdmitted {
+		t.Errorf("locked at %d failures, one short of the measured limit of %d: an account is denied "+
+			"before its owner has spent the attempts they are allowed", cached-1, cached)
+	}
 
-			// The threshold-th attempt is the last one allowed
-			locked, _ := middleware.CheckAccountLockout(ctx, mc, userID, threshold, lockDuration)
-			if locked {
-				t.Fatalf("Should not be locked at exact threshold attempt (threshold=%d)", threshold)
-			}
-
-			// threshold+1 should be locked
-			locked, _ = middleware.CheckAccountLockout(ctx, mc, userID, threshold, lockDuration)
-			if !locked {
-				t.Fatalf("Should be locked after exceeding threshold (threshold=%d)", threshold)
-			}
-		})
+	// At the limit, it does not.
+	at := newAtkLockout(t)
+	at.account(email)
+	for i := 0; i < cached; i++ {
+		at.guess(email, attackerIP)
+	}
+	if at.canReach(t, email, attackerIP) == atkAdmitted {
+		t.Errorf("still open at %d failures, the measured limit: the attacker gets one more guess "+
+			"than the limit claims", cached)
 	}
 }

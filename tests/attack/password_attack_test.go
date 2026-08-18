@@ -1,83 +1,107 @@
 package attack
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
-	"github.com/42-v/vault42/internal/middleware"
 )
 
-// TestPasswordSpray_LockoutPerAccount verifies that password spray attacks
-// (trying the same password across many accounts) are mitigated by per-account
-// lockout counters.
+// TestPasswordSpray_LockoutPerAccount attacks the real login path with a spray:
+// one password, many accounts, so no account ever reaches its own limit.
+//
+// The per-account counter is the wrong control to look at here, and the old
+// version of this test looked at nothing else — it incremented
+// middleware.CheckAccountLockout for twenty made-up user ids and asserted that
+// the twenty-first increment on one of them crossed a threshold the test had
+// picked. Spraying is defined by never crossing that threshold. What stops it is
+// the per-ADDRESS counter, which counts failures from one source across every
+// account it touches, and which that test never went near because the helper had
+// no such counter.
 func TestPasswordSpray_LockoutPerAccount(t *testing.T) {
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
-	ctx := context.Background()
+	perSource := atkPerSourceLimit(t, atkSearchCeiling)
+	spray := atkSprayLimit(t, 200)
 
-	threshold := 5
-	lockDuration := 15 * time.Minute
-
-	// Simulate spraying: 3 attempts per account across 20 accounts
-	for i := 0; i < 20; i++ {
-		userID := "sprayed-user-" + string(rune('A'+i%26))
-		for j := 0; j < 3; j++ {
-			locked, _ := middleware.CheckAccountLockout(ctx, mc, userID, threshold, lockDuration)
-			if locked {
-				t.Fatalf("Account %s locked too early at attempt %d (threshold=%d)", userID, j+1, threshold)
-			}
-		}
+	// A sprayer never reaches the per-account limit by construction, so the
+	// per-address limit is the only thing between them and every account in the
+	// deployment. It has to exist and it has to bind first.
+	if spray <= perSource {
+		t.Errorf("the per-address limit (%d) is not above the per-account one (%d); either the "+
+			"address counter is unnecessary or the account counter is unreachable", spray, perSource)
 	}
+	t.Logf("measured: one address gets %d failures against a single account and %d across all "+
+		"accounts before the address itself is refused", perSource, spray)
 
-	// Now spray one account past the threshold
-	targetUser := "sprayed-user-A"
-	// Already has 3 attempts, add 2 more to reach threshold
-	for i := 0; i < 2; i++ {
-		middleware.CheckAccountLockout(ctx, mc, targetUser, threshold, lockDuration)
+	// And the lock is on the address, not on the accounts it touched: an account
+	// the sprayer failed once against is still reachable by its owner elsewhere.
+	a := newAtkLockout(t)
+	const (
+		victim     = "sprayed@example.com"
+		sprayerIP  = "198.51.100.30"
+		ownerIP    = "203.0.113.30"
+		bystanderA = "bystander@example.com"
+	)
+	a.account(victim)
+	a.account(bystanderA)
+	a.guess(victim, sprayerIP)
+	if a.canReach(t, victim, ownerIP) != atkAdmitted {
+		t.Error("one sprayed guess from another address denied the account owner their own account")
 	}
-
-	// 6th attempt should be locked
-	locked, _ := middleware.CheckAccountLockout(ctx, mc, targetUser, threshold, lockDuration)
-	if !locked {
-		t.Fatal("Account should be locked after threshold exceeded via spray attack")
+	if a.canReach(t, bystanderA, ownerIP) != atkAdmitted {
+		t.Error("an account the sprayer never touched was affected")
 	}
 }
 
-// TestCredentialStuffing_IndependentAccounts verifies that credential stuffing
-// (using leaked credential pairs) against different accounts triggers independent
-// lockouts and does not affect unrelated accounts.
+// TestCredentialStuffing_IndependentAccounts stuffs leaked pairs at the real
+// login path and holds the blast radius to the account and address that earned
+// it.
+//
+// The old version asserted that a counter keyed on a user id gives different
+// answers for different user ids, which is a property of a map. The question
+// worth asking is whether locking one account leaks into another account, or
+// into another address, and that can only be asked of the code that decides.
 func TestCredentialStuffing_IndependentAccounts(t *testing.T) {
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
-	ctx := context.Background()
+	perSource := atkPerSourceLimit(t, atkSearchCeiling)
 
-	threshold := 3
-	lockDuration := 5 * time.Minute
+	const (
+		stuffedA  = "stuffed-a@example.com"
+		stuffedB  = "stuffed-b@example.com"
+		clean     = "clean@example.com"
+		stufferIP = "198.51.100.40"
+		ownerIP   = "203.0.113.40"
+	)
+	a := newAtkLockout(t)
+	for _, email := range []string{stuffedA, stuffedB, clean} {
+		a.account(email)
+	}
 
-	// Stuff credentials into 5 different accounts
-	accounts := []string{"user-leaked-1", "user-leaked-2", "user-leaked-3", "user-leaked-4", "user-leaked-5"}
-	for _, acct := range accounts {
-		for i := 0; i < threshold; i++ {
-			middleware.CheckAccountLockout(ctx, mc, acct, threshold, lockDuration)
+	for i := 0; i < perSource; i++ {
+		a.guess(stuffedA, stufferIP)
+		a.guess(stuffedB, stufferIP)
+	}
+
+	// Both stuffed accounts are shut to the stuffer.
+	for _, email := range []string{stuffedA, stuffedB} {
+		if a.canReach(t, email, stufferIP) == atkAdmitted {
+			t.Errorf("%d wrong passwords against %s from %s did not stop that source", perSource, email, stufferIP)
 		}
 	}
 
-	// All 5 accounts should now be locked
-	for _, acct := range accounts {
-		locked, _ := middleware.CheckAccountLockout(ctx, mc, acct, threshold, lockDuration)
-		if !locked {
-			t.Fatalf("Account %s should be locked after %d attempts", acct, threshold)
-		}
+	// An account the stuffer never tried is untouched from the same address, so
+	// the lock is not a blunt per-address ban applied one attempt too early.
+	if a.canReach(t, clean, stufferIP) != atkAdmitted {
+		t.Errorf("an account the stuffer never tried was refused from %s; the per-account lock is "+
+			"leaking across accounts", stufferIP)
 	}
 
-	// Clean accounts should not be affected
-	clean := "user-clean"
-	locked, _ := middleware.CheckAccountLockout(ctx, mc, clean, threshold, lockDuration)
-	if locked {
-		t.Fatal("Clean account should not be locked")
+	// And the owners of both stuffed accounts can still log in from their own
+	// address. This is the half a lockout keyed on the account alone fails:
+	// there, a stuffer with a leaked address list denies every one of those
+	// accounts for the lockout window, holding no valid credential at all.
+	for _, email := range []string{stuffedA, stuffedB} {
+		if a.canReach(t, email, ownerIP) != atkAdmitted {
+			t.Errorf("credential stuffing from %s locked %s out of their own account at %s", stufferIP, email, ownerIP)
+		}
 	}
 }
 
