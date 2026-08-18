@@ -34,3 +34,18 @@ var ErrNotFound = errNotFound{}
 type errNotFound struct{}
 
 func (errNotFound) Error() string { return "cache: key not found" }
+
+// ErrCacheFull is returned when a backend refuses a NEW key because it has
+// reached its entry cap.
+//
+// It is deliberately not ErrNotFound. Callers treat a miss as "no counter yet",
+// which for a rate limiter or a lockout means "admit this request" — the last
+// answer a saturated cache should give. A distinct error reaches the
+// fail-closed limiters as the 503 they already emit for an unavailable cache,
+// and reaches the lockout as the cache failure that falls back to the durable
+// failed-login count.
+var ErrCacheFull = errCacheFull{}
+
+type errCacheFull struct{}
+
+func (errCacheFull) Error() string { return "cache: entry cap reached" }
