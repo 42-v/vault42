@@ -214,32 +214,37 @@ func TestLockoutCacheDown_IPLockoutDisabledWithoutCache(t *testing.T) {
 	}
 }
 
-// TestLockoutCacheDown_CacheRecovery pins what happens when the cache comes
-// back, which is the part of an outage nobody writes down.
+// TestLockoutCacheDown_CacheRecovery attacks the moment the cache comes back,
+// which is the part of an outage nobody writes down and the one an attacker who
+// can end the outage would aim for.
 //
 // The old body incremented a MemoryCache key five times, read back "5", deleted
-// it, and read back "". That is a test of MemoryCache. It says nothing about
+// it, and read back "". That is a test of MemoryCache. It said nothing about
 // recovery, because no lockout decision was ever taken.
 //
-// The real behaviour is worth pinning in both directions. During the outage the
-// durable count holds the lock. After recovery the cache counters are empty —
-// every increment during the outage failed — and the durable count is only ever
-// consulted when the cache cannot answer, so the account is open again. That is
-// deliberate: the cache counter carries the fifteen-minute TTL, and a durable
-// column that is never consulted while the cache is healthy cannot pin an
-// account shut forever after one bad afternoon. It also means an attacker gains
-// nothing from an outage they can end, and loses the failures they spent during
-// one.
+// Recovery is where a counter store hands back a clean zero for a counter that
+// was never written, and a zero is indistinguishable from an account with no
+// recent failures. So a refused write is latched, and while the latch stands a
+// zero is not taken as proof of innocence: the durable count is consulted
+// instead. Without that, ending an outage — or filling the cache to its entry
+// cap, which refuses new keys and then answers reads with an ordinary miss —
+// would clear every lockout in the deployment at once.
+//
+// The latch is bounded by the same window the counters would have lived for, so
+// it heals without an operator. That bound is not exercised here: it is fifteen
+// minutes of wall clock, and a test that waits it out measures a clock.
 func TestLockoutCacheDown_CacheRecovery(t *testing.T) {
 	limit := atkPerSourceLimit(t, atkSearchCeiling)
 
 	const (
 		email      = "recovery@example.com"
+		bystander  = "recovery-bystander@example.com"
 		attackerIP = "198.51.100.90"
 	)
 	c := &togglableCache{Cache: cache.NewMemoryCache(), down: true}
 	a := newAtkLockoutWithCache(t, c)
 	a.account(email)
+	a.account(bystander)
 
 	for i := 0; i < limit; i++ {
 		a.guess(email, attackerIP)
@@ -251,21 +256,34 @@ func TestLockoutCacheDown_CacheRecovery(t *testing.T) {
 
 	c.down = false
 
-	// A successful login here also resets the durable count, so assert before
-	// doing anything else that would.
-	if a.canReach(t, email, attackerIP) != atkAdmitted {
-		t.Errorf("the account was still locked after the cache recovered. Nothing expires the durable " +
-			"count, so a lock that outlives the outage outlives it permanently, and every account " +
-			"that failed a login during an incident stays shut until an operator intervenes.")
+	// The attack: the account's cache counters are empty, because every write
+	// during the outage was refused. If a zero counter alone decided the answer,
+	// ending the outage would unlock the account.
+	//
+	// Asserted before anything else, because a successful login here would reset
+	// the durable count and destroy the evidence.
+	if a.canReach(t, email, attackerIP) == atkAdmitted {
+		t.Errorf("the account unlocked the moment the cache came back. Its counters read zero because "+
+			"every write during the outage was refused, and a zero that was never written is not the "+
+			"same as an account with no failures — %d of them had just been spent.", limit)
 	}
 
-	// And the control is back on its normal footing: the recovered cache
-	// enforces the same limit it did before.
-	for i := 0; i < limit; i++ {
-		a.guess(email, attackerIP)
+	// And the latch is not a blanket refusal. An account that failed nothing
+	// still logs in: the durable count is consulted, not assumed.
+	if a.canReach(t, bystander, attackerIP) != atkAdmitted {
+		t.Error("an account with no failures at all was refused after the cache recovered; the " +
+			"unwritable-counter latch is locking everyone rather than falling back to what the " +
+			"durable count actually says")
 	}
-	if a.canReach(t, email, attackerIP) == atkAdmitted {
-		t.Errorf("after recovery, %d failures no longer locked the account; the outage left the "+
-			"lockout permanently disabled", limit)
+
+	// On a service that never saw a refusal, a healthy cache enforces the limit
+	// from its own counters, so the fallback is not left permanently in charge.
+	clean := newAtkLockout(t)
+	clean.account(email)
+	for i := 0; i < limit; i++ {
+		clean.guess(email, attackerIP)
+	}
+	if clean.canReach(t, email, attackerIP) == atkAdmitted {
+		t.Errorf("%d failures against a healthy cache did not lock the account", limit)
 	}
 }
