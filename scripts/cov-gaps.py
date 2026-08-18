@@ -379,8 +379,9 @@ def check_sources(entries):
         hits = [n for n, line in enumerate(src, 1) if line == e["source"]]
         if len(hits) < e["occurrence"]:
             problems.append(f"{e['file']}:{e['line']}: the excluded statement is gone "
-                            f"({len(hits)} lines match its frozen text, wanted #{e['occurrence']}). "
-                            f"Delete the entry, or re-justify it against the new code.")
+                            f"({len(hits)} lines match its frozen text, wanted "
+                            f"#{e['occurrence']}). Delete the entry, or re-justify it "
+                            f"against the new code.")
             continue
         at = hits[e["occurrence"] - 1]
         if at == e["line"]:
@@ -419,8 +420,8 @@ def resolve_exclusions(blocks, doc):
     for e in doc["entries"]:
         hits = [b for b in by_file.get(e["file"], []) if b[0] <= e["line"] <= b[1]]
         if not hits:
-            problems.append(f"{e['file']}:{e['line']}: no instrumented statement here in the profile; "
-                            f"the source moved, or its package was not measured")
+            problems.append(f"{e['file']}:{e['line']}: no instrumented statement here in "
+                            f"the profile; the source moved, or its package was not measured")
             continue
         if any(b[3] for b in hits):
             problems.append(f"{e['file']}:{e['line']}: now COVERED, delete the exclusion")
@@ -498,7 +499,8 @@ def verify_exclusions(args):
         with open(path, "w") as fh:
             json.dump(doc, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
-        print(f"{shown}: relocated {plural(len(moved), 'line number')}. Review the diff, then rerun to verify.")
+        print(f"{shown}: relocated {plural(len(moved), 'line number')}. "
+              f"Review the diff, then rerun to verify.")
         return 1
 
     problems += src_problems
@@ -683,7 +685,8 @@ def main():
                     help="coverage profile from scripts/coverage.sh; only --relocate, "
                          "which never reports a pass, runs without one")
     ap.add_argument("--file", help="show every uncovered block in files matching this substring")
-    ap.add_argument("--target", type=float, help="covered-count needed to land this coverage figure")
+    ap.add_argument("--target", type=float,
+                    help="covered-count needed to land this coverage figure")
     ap.add_argument("--diff", metavar="OTHER", help="blocks OTHER covers that PROFILE does not")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--exclude", metavar="FILE", nargs="?", const=DEFAULT_EXCLUSIONS,

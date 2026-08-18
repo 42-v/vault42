@@ -55,7 +55,10 @@ SOURCES = {
     "ripencc": ("https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-extended-latest", "rir"),
     "apnic": ("https://ftp.apnic.net/stats/apnic/delegated-apnic-extended-latest", "rir"),
     "lacnic": ("https://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-extended-latest", "rir"),
-    "afrinic": ("https://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-extended-latest", "rir"),
+    "afrinic": (
+        "https://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-extended-latest",
+        "rir",
+    ),
     # Hosting (cloud prefix lists)
     "aws": ("https://ip-ranges.amazonaws.com/ip-ranges.json", "aws"),
     "gcp": ("https://www.gstatic.com/ipranges/cloud.json", "gcp"),
@@ -71,17 +74,22 @@ def fetch_to_file(url, dest, sock_timeout, deadline):
     """Stream url to dest in chunks. Enforces a per-read socket timeout AND a
     hard wall-clock deadline so a slow trickle cannot hang the run.
     """
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    # S310 / bandit B310 audit urlopen for file:// and custom schemes. Every url
+    # reaching here comes from the SOURCES table above, which holds nothing but
+    # fixed https public-data URLs, so the scheme is never caller-controlled.
+    req = urllib.request.Request(url, headers={"User-Agent": UA})  # nosec B310 # noqa: S310
     start = time.monotonic()
-    with urllib.request.urlopen(req, timeout=sock_timeout) as resp:  # nosec B310 -- fixed https public data URLs
-        with open(dest, "wb") as f:
-            while True:
-                if time.monotonic() - start > deadline:
-                    raise TimeoutError(f"exceeded {deadline:.0f}s wall-clock budget")
-                chunk = resp.read(1 << 16)
-                if not chunk:
-                    break
-                f.write(chunk)
+    with (
+        urllib.request.urlopen(req, timeout=sock_timeout) as resp,  # nosec B310 # noqa: S310
+        open(dest, "wb") as f,
+    ):
+        while True:
+            if time.monotonic() - start > deadline:
+                raise TimeoutError(f"exceeded {deadline:.0f}s wall-clock budget")
+            chunk = resp.read(1 << 16)
+            if not chunk:
+                break
+            f.write(chunk)
     return time.monotonic() - start
 
 
@@ -161,7 +169,7 @@ class Collector:
 
 def parse_rir(col, path):
     kept = 0
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.rstrip("\n")
             if not line or line[0] == "#":
@@ -241,7 +249,7 @@ def parse_oracle(col, path):
 def parse_csv_prefixes(col, path):
     """First CSV column is a CIDR (DigitalOcean, Linode geofeed)."""
     n = 0
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line or line[0] == "#":
@@ -254,7 +262,7 @@ def parse_csv_prefixes(col, path):
 
 def parse_tor(col, path):
     n = 0
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line or line[0] == "#":
@@ -379,7 +387,8 @@ def main():
     tmpdir = tempfile.mkdtemp(prefix="ipintel-gen-")
     try:
         print(f"Downloading {len(SOURCES)} sources concurrently "
-              f"(socket={args.timeout:.0f}s, deadline={args.deadline:.0f}s, workers={args.workers})...")
+              f"(socket={args.timeout:.0f}s, deadline={args.deadline:.0f}s, "
+              f"workers={args.workers})...")
         t0 = time.monotonic()
         paths, warns = download_all(tmpdir, args.timeout, args.deadline, args.workers)
         print(f"Downloaded {len(paths)}/{len(SOURCES)} sources in {time.monotonic()-t0:.1f}s")
