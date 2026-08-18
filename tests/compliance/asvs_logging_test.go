@@ -374,46 +374,449 @@ func TestASVS_V16_3_2_AdminSessionRejectionsAreAudited(t *testing.T) {
 }
 
 // --- V16.4.1: log data is encoded to prevent log injection ---
+//
+// Both assertions in this section used to call the helper and stop there.
+//
+//	got := httputil.SafeLogValue(tc.input)   // no log line involved
+//	got := httputil.ObfuscatedIP(tc.in)      // no log line involved
+//
+// A helper is not a control. The control is that no unencoded request value
+// reaches a log call, and the helpers had 27 and 11 production call sites with
+// no test between them observing one. Both tests would have passed with every
+// call site stripped, which is the pinned-the-helper-never-a-call-site defect
+// this repository already found once, recurring in the section it was found in.
+//
+// So the helpers are still pinned — a broken encoder is a real regression — but
+// the pinning now happens inside a scan of the call sites, and the scan is what
+// fails when a value goes to a log raw.
 
+// logCalls are the calls that write a line to the process log. The vault, the
+// bridge and the admin gateway all use the standard logger, so this is the whole
+// surface; a new logging package would have to be added here, which is the point.
+var logCalls = map[string]struct{}{
+	"Printf": {}, "Print": {}, "Println": {},
+	"Fatalf": {}, "Fatal": {}, "Fatalln": {},
+	"Panicf": {}, "Panic": {}, "Panicln": {},
+}
+
+// isLogCall reports whether call writes a line to the process log.
+//
+// Fprintf and Fprintln count only when the destination is os.Stderr or
+// os.Stdout — the shape a CLI subcommand uses instead of the logger. The same
+// call writing into an http.ResponseWriter is answering a request, which is a
+// different surface with a different control.
+func isLogCall(call *ast.CallExpr) bool {
+	name := callName(call)
+	if _, direct := logCalls[name]; direct {
+		return true
+	}
+	if name != "Fprintf" && name != "Fprintln" && name != "Fprint" {
+		return false
+	}
+	if len(call.Args) == 0 {
+		return false
+	}
+	switch selectorName(call.Args[0]) {
+	case "os.Stderr", "os.Stdout":
+		return true
+	}
+	return false
+}
+
+// logSanitisers are the two encoders. A value wrapped in either has been through
+// the control; ObfuscatedIP additionally drops the host part of an address, so
+// it satisfies the injection requirement as well.
+var logSanitisers = map[string]struct{}{
+	"SafeLogValue": {}, "ObfuscatedIP": {}, "obfuscatedIP": {}, "safeLogValue": {},
+}
+
+// requestDerived are the reads that return a value the caller of the HTTP
+// request chose. Each is matched on the selector, not on the receiver name, so
+// renaming r to req does not hide one.
+//
+// Method is not in the set: net/http rejects a request line whose method is not
+// an RFC 9110 token before a handler ever runs, so there is no byte in it an
+// encoder would change.
+var requestDerived = map[string]string{
+	"RemoteAddr": "the peer address, which is also the value ObfuscatedIP exists to mask",
+	"RequestURI": "the raw request line",
+	"UserAgent":  "a header the client writes",
+	"Referer":    "a header the client writes",
+}
+
+// urlFields are the parts of a parsed request URL a client controls. They are
+// matched only through a URL selector — r.URL.Path, not any field called Path —
+// because "Path" on its own is the name of half the file handling in the tree
+// and the gate has to survive being right.
+var urlFields = map[string]string{
+	"Path":     "the request path",
+	"RawPath":  "the request path",
+	"RawQuery": "the query string",
+	"Fragment": "the URL fragment",
+	"Host":     "the request host",
+	"Opaque":   "the opaque part of the URL",
+}
+
+// urlFieldRead reports the request-URL field a selector reads, or "".
+func urlFieldRead(sel *ast.SelectorExpr) string {
+	why, isField := urlFields[sel.Sel.Name]
+	if !isField {
+		return ""
+	}
+	switch base := sel.X.(type) {
+	case *ast.SelectorExpr:
+		if base.Sel.Name == "URL" {
+			return why
+		}
+	case *ast.Ident:
+		if base.Name == "URL" || base.Name == "u" || base.Name == "url" {
+			return why
+		}
+	}
+	return ""
+}
+
+// requestHeaderRead is the shape r.Header.Get("X") takes: a Get whose receiver
+// is itself a Header selector. Anything a client can set arrives this way.
+func requestHeaderRead(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Get" {
+		return false
+	}
+	inner, ok := sel.X.(*ast.SelectorExpr)
+	return ok && (inner.Sel.Name == "Header" || inner.Sel.Name == "Trailer")
+}
+
+// rawRequestValue reports the request-derived read at n, or "" when n is not one.
+func rawRequestValue(n ast.Node) string {
+	switch node := n.(type) {
+	case *ast.CallExpr:
+		if requestHeaderRead(node) {
+			return "a request header"
+		}
+		if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+			if why, hit := requestDerived[sel.Sel.Name]; hit {
+				return why
+			}
+		}
+	case *ast.SelectorExpr:
+		// A selector that is the Fun of a call is reported by the call case, so
+		// only value reads reach here: r.RemoteAddr, r.URL.Path.
+		if why, hit := requestDerived[node.Sel.Name]; hit {
+			return why
+		}
+		if why := urlFieldRead(node); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// unsanitisedRequestReads walks a log argument and returns the request-derived
+// reads that are not inside a call to an encoder.
+//
+// Nesting is what makes this structural rather than textual: the argument
+// httputil.SafeLogValue(r.UserAgent()) contains a request read and is clean,
+// while fmt.Sprintf("%s", r.UserAgent()) contains the same read and is not.
+func unsanitisedRequestReads(arg ast.Expr) []string {
+	var found []string
+	var walk func(n ast.Node, sanitised bool)
+	walk = func(n ast.Node, sanitised bool) {
+		if n == nil {
+			return
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if _, clean := logSanitisers[callName(call)]; clean {
+				sanitised = true
+			}
+		}
+		if !sanitised {
+			if why := rawRequestValue(n); why != "" {
+				found = append(found, why)
+			}
+		}
+		for _, child := range astChildren(n) {
+			walk(child, sanitised)
+		}
+	}
+	walk(arg, false)
+	return found
+}
+
+// astChildren returns a node's child expressions. ast.Inspect cannot be used
+// here because the sanitised flag has to travel down one branch only.
+func astChildren(n ast.Node) []ast.Node {
+	var out []ast.Node
+	ast.Inspect(n, func(c ast.Node) bool {
+		if c == nil || c == n {
+			return c == n
+		}
+		out = append(out, c)
+		return false
+	})
+	return out
+}
+
+// TestASVS_V16_4_1_LogValuesCannotForgeNewRecords asserts the encoder at the
+// call sites, not on its own.
+//
 // "Verify that all logging components appropriately encode data to prevent log
 // injection."
 //
 // The attack is a newline or carriage return in an attacker-controlled field
-// that forges a second log line. SafeLogValue is the encoder; this pins the
-// control characters it is documented to neutralize.
+// that forges a second log line. Encoding it is only a control if the encoder
+// is on the path: the scan below fails when a production log call reads a value
+// off the request and passes it through without one.
 func TestASVS_V16_4_1_LogValuesCannotForgeNewRecords(t *testing.T) {
-	cases := []struct{ name, input string }{
+	// The encoder still has to work. This is the premise of the scan, not a
+	// substitute for it, which is why it is a Fatal: a broken encoder makes
+	// every call site below meaningless.
+	for _, tc := range []struct{ name, input string }{
 		{"newline", "user\nADMIN LOGIN SUCCEEDED"},
 		{"carriage return", "user\rADMIN LOGIN SUCCEEDED"},
 		{"crlf", "user\r\nADMIN LOGIN SUCCEEDED"},
 		{"null byte", "user\x00truncated"},
 		{"tab", "user\tfield-split"},
-	}
-
-	for _, tc := range cases {
+		{"line separator", "user\u2028ADMIN LOGIN SUCCEEDED"},
+		{"escape", "user\x1b[2J"},
+	} {
 		got := httputil.SafeLogValue(tc.input)
-		for _, forbidden := range []string{"\n", "\r", "\x00", "\t"} {
+		for _, forbidden := range []string{"\n", "\r", "\x00", "\t", "\u2028", "\x1b"} {
 			if strings.Contains(got, forbidden) {
-				t.Errorf("V16.4.1: %s: SafeLogValue returned %q, which still carries a record-forging control character", tc.name, got)
+				t.Fatalf("V16.4.1: %s: SafeLogValue returned %q, which still carries a "+
+					"record-forging control character", tc.name, got)
 			}
 		}
 	}
+
+	var sites int
+	for _, pf := range productionGoFiles(t) {
+		ast.Inspect(pf.file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if !isLogCall(call) {
+				return true
+			}
+			for _, arg := range call.Args {
+				sites++
+				for _, why := range unsanitisedRequestReads(arg) {
+					t.Errorf("V16.4.1: %s writes a log line carrying %s with no encoder on it. "+
+						"A CR, an LF or a U+2028 in that value forges a second record, and an "+
+						"ESC drives the terminal of whoever tails the log. Wrap it in "+
+						"httputil.SafeLogValue, or in httputil.ObfuscatedIP if it is an address.",
+						pf.pos(call), why)
+				}
+			}
+			return true
+		})
+	}
+
+	if sites < 100 {
+		t.Fatalf("V16.4.1: only %d log-call arguments were inspected across the production tree; "+
+			"the scan has stopped seeing what it guards, and would report the same ok whether "+
+			"every call site were encoded or none were", sites)
+	}
+	t.Logf("V16.4.1: %d log-call arguments inspected for unencoded request values", sites)
 }
 
+// TestASVS_V16_4_1_LoggedAddressesArePseudonymised asserts the masking at the
+// call sites, not on its own.
+//
 // Source addresses are pseudonymised before they reach a log line. This is both
-// a log-hygiene control and the GDPR Art. 5(1)(c) minimisation position, so it
-// is asserted rather than assumed.
+// a log-hygiene control and the GDPR Art. 5(1)(c) minimisation position, so what
+// is asserted is the "before they reach a log line" half: no log call in the
+// production tree may pass a whole peer address.
+//
+// docs/PRIVACY.md inventories the full address in exactly two stores, the audit
+// record and the device record, each with a retention period. The operational
+// log is not one of them, so a full address written there is processing the
+// document does not describe.
 func TestASVS_V16_4_1_LoggedAddressesArePseudonymised(t *testing.T) {
-	cases := []struct{ in, want string }{
+	// The mask still has to work, for the same reason as above.
+	for _, tc := range []struct{ in, want string }{
 		{"192.168.1.42", "192.168.1.0"},
 		{"203.0.113.201", "203.0.113.0"},
+		{"203.0.113.201:44321", "203.0.113.0"},
 		{"not-an-ip", "invalid_ip"},
-	}
-	for _, tc := range cases {
+	} {
 		if got := httputil.ObfuscatedIP(tc.in); got != tc.want {
-			t.Errorf("V16.4.1: ObfuscatedIP(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Fatalf("V16.4.1: ObfuscatedIP(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
+
+	files := productionGoFiles(t)
+	identNames := addressIdentNames(files)
+	if len(identNames) == 0 {
+		t.Fatal("V16.4.1: no variable in the production tree is passed to a mask, so this scan " +
+			"knows no address-shaped names and would pass over every raw one")
+	}
+
+	var sites int
+	stillNeeded := map[string]struct{}{}
+	for _, pf := range files {
+		ast.Inspect(pf.file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if !isLogCall(call) {
+				return true
+			}
+			for _, arg := range call.Args {
+				for _, addr := range unmaskedAddressReads(arg, identNames) {
+					sites++
+					key := pf.path + ":" + enclosingFunc(pf, call)
+					if _, exempt := fullAddressByDesign[key]; exempt {
+						stillNeeded[key] = struct{}{}
+						continue
+					}
+					t.Errorf("V16.4.1: %s writes a log line carrying %s, a whole client address. "+
+						"docs/PRIVACY.md inventories the full address in the audit store and the "+
+						"device record only; the operational log is not one of its stores, and a "+
+						"reader tailing it needs the network, not the host. Wrap it in "+
+						"httputil.ObfuscatedIP, or add %q to fullAddressByDesign with the reason "+
+						"this channel is the one that needs the host.", pf.pos(call), addr, key)
+				}
+			}
+			return true
+		})
+	}
+
+	// The ratchet. An exemption for a line that no longer logs an address is a
+	// standing permission nobody has to justify again, and the next line added
+	// to the same function would inherit it.
+	for key, reason := range fullAddressByDesign {
+		if reason == "" {
+			t.Errorf("fullAddressByDesign[%q] carries no reason; an exemption without one is "+
+				"indistinguishable from an oversight", key)
+		}
+		if _, needed := stillNeeded[key]; !needed {
+			t.Errorf("fullAddressByDesign names %q, which no longer logs a whole client address. "+
+				"Delete the entry: the list may only shrink.", key)
+		}
+	}
+	t.Logf("V16.4.1: %d whole-address log arguments found, %d covered by a written exemption",
+		sites, len(stillNeeded))
+}
+
+// fullAddressByDesign are the log lines that deliberately keep the whole client
+// address, with the reason each is the channel that needs it.
+//
+// Keyed by file and enclosing function, never by line: an absolute line number
+// goes stale on a correct refactor, which makes a gate that fails on the fix and
+// passes on the defect. Adding an entry is a privacy decision — the question to
+// answer is which store in docs/PRIVACY.md §3 the value now lives in, and for
+// how long.
+var fullAddressByDesign = map[string]string{
+	"internal/honeypot/honeypot.go:LoggingMiddleware": "the honeypot log is the threat-analysis " +
+		"channel itself, not an operational log with an audit store behind it: nothing else " +
+		"records who probed the decoy vault, so masking to a /24 would delete the finding rather " +
+		"than relocate it. The subjects are unauthenticated callers who reached a workload that " +
+		"serves nobody legitimately, and the profile is off unless an operator turns it on",
+}
+
+// enclosingFunc names the function declaration a node sits inside, so an
+// exemption can be keyed on something a refactor moves with the code.
+func enclosingFunc(pf parsedFile, n ast.Node) string {
+	pos := pf.fset.Position(n.Pos()).Line
+	for _, decl := range pf.file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if pos >= pf.fset.Position(fn.Pos()).Line && pos <= pf.fset.Position(fn.End()).Line {
+			return fn.Name.Name
+		}
+	}
+	return "(file scope)"
+}
+
+// addressReads are the expressions that resolve a whole client address.
+var addressReads = map[string]struct{}{
+	"RemoteAddr": {}, "ClientIP": {}, "ClientIPFromContext": {},
+}
+
+// maskers are the two implementations of the /24 mask. cmd/bridge carries its
+// own because it is stdlib-only and cannot import internal/httputil.
+var maskers = map[string]struct{}{"ObfuscatedIP": {}, "obfuscatedIP": {}}
+
+// addressIdentNames returns the variable names this codebase itself treats as
+// client addresses: every bare identifier that is passed to a masker anywhere in
+// the production tree.
+//
+// This is deliberately derived rather than written down. A hand-kept list of
+// address-shaped names is a guess, and it guesses wrong in both directions — it
+// would have to include "ip" while excluding "addr", which is a listen address
+// in internal/server. Taking the names from the call sites means the codebase
+// says which variables hold an address, and the gate believes it: strip the mask
+// from one of them and the name is still known from the others.
+func addressIdentNames(files []parsedFile) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, pf := range files {
+		ast.Inspect(pf.file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if _, isMask := maskers[callName(call)]; !isMask {
+				return true
+			}
+			for _, arg := range call.Args {
+				if id, ok := arg.(*ast.Ident); ok {
+					out[id.Name] = struct{}{}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// unmaskedAddressReads walks a log argument and returns the address reads that
+// are not inside a masking call.
+func unmaskedAddressReads(arg ast.Expr, identNames map[string]struct{}) []string {
+	var found []string
+	var walk func(n ast.Node, masked bool)
+	walk = func(n ast.Node, masked bool) {
+		if n == nil {
+			return
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if _, isMask := maskers[callName(call)]; isMask {
+				masked = true
+			}
+		}
+		if !masked {
+			switch node := n.(type) {
+			case *ast.SelectorExpr:
+				if _, hit := addressReads[node.Sel.Name]; hit {
+					found = append(found, node.Sel.Name)
+				}
+			case *ast.CallExpr:
+				if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+					if _, hit := addressReads[sel.Sel.Name]; hit {
+						found = append(found, sel.Sel.Name+"()")
+					}
+				}
+				if id, ok := node.Fun.(*ast.Ident); ok {
+					if _, hit := addressReads[id.Name]; hit {
+						found = append(found, id.Name+"()")
+					}
+				}
+			case *ast.Ident:
+				if _, hit := identNames[node.Name]; hit {
+					found = append(found, "the variable "+node.Name)
+				}
+			}
+		}
+		for _, child := range astChildren(n) {
+			walk(child, masked)
+		}
+	}
+	walk(arg, false)
+	return found
 }
 
 // --- V16.4.2: logs are protected from unauthorized access and modification ---
