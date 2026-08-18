@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -98,6 +99,12 @@ type Config struct {
 	SMTPUser string
 	// SMTPPass is the SMTP authentication password (SMTP_PASS_FILE).
 	SMTPPass string
+	// SMTPAllowPlaintext permits delivery to an SMTP server that does not
+	// advertise STARTTLS (VAULT_SMTP_ALLOW_PLAINTEXT). Default: false — every
+	// message carries a bearer secret, so a relay that cannot be upgraded is a
+	// failed send. Outside dev the opt-out is accepted only for a loopback
+	// SMTP_HOST, which is the one hop that never leaves the machine.
+	SMTPAllowPlaintext bool
 	// EmailFrom is the sender address for outgoing emails (VAULT_EMAIL_FROM).
 	EmailFrom string
 
@@ -396,6 +403,8 @@ func Load() (*Config, error) {
 		SMTPPort:      envOr("SMTP_PORT", "587"),
 		EmailFrom:     os.Getenv("VAULT_EMAIL_FROM"),
 
+		SMTPAllowPlaintext: envBool("VAULT_SMTP_ALLOW_PLAINTEXT"),
+
 		OAuthGoogleClientID:   os.Getenv("VAULT_OAUTH_GOOGLE_CLIENT_ID"),
 		OAuthGitHubClientID:   os.Getenv("VAULT_OAUTH_GITHUB_CLIENT_ID"),
 		OAuthFacebookClientID: os.Getenv("VAULT_OAUTH_FACEBOOK_CLIENT_ID"),
@@ -600,10 +609,18 @@ func Load() (*Config, error) {
 	// AuthService.Register and PasswordHandler both compare the rune count
 	// against this number and nothing downstream enforces a minimum of its own,
 	// so a deployment that sets it to 4 accepts a password an offline attacker
-	// enumerates in seconds. Dev keeps the escape hatch; a local login is not a
-	// deployment.
-	if c.Profile != ProfileDev && c.PasswordMinLength < passwordMinLengthFloor {
-		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", passwordMinLengthFloor, c.Profile, c.PasswordMinLength)
+	// enumerates in seconds. Dev gets a lower floor, not an absent one; a local
+	// login is not a deployment, but a build that accepts a four-character
+	// password is not a password check either.
+	// The plaintext-SMTP opt-out is scoped to the relay it was meant for. An
+	// operator who sets it against a remote host is not accepting a local hop,
+	// they are mailing one-time codes across a network in cleartext.
+	if c.SMTPAllowPlaintext && c.Profile != ProfileDev && !isLoopbackSMTPHost(c.SMTPHost) {
+		return nil, fmt.Errorf("VAULT_SMTP_ALLOW_PLAINTEXT is accepted only for a loopback SMTP_HOST in %s profile (got %q)", c.Profile, c.SMTPHost)
+	}
+
+	if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor {
+		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", floor, c.Profile, c.PasswordMinLength)
 	}
 
 	// Enforce HMAC secret minimum length in non-dev profiles
@@ -766,10 +783,42 @@ func (c *Config) checkGeoFence() error {
 	return nil
 }
 
+// isLoopbackSMTPHost reports whether SMTP_HOST names a relay on this machine.
+// "localhost" is accepted by name because that is how a sidecar relay is
+// usually addressed; everything else has to resolve to a loopback literal.
+func isLoopbackSMTPHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
-// outside dev. NIST SP 800-63B sets 8 characters as the minimum length of a
-// memorized secret the subscriber chooses; the package default is 15.
-const passwordMinLengthFloor = 8
+// outside dev, and it is the figure docs/COMPLIANCE.md and README.md publish.
+// NIST SP 800-63B-4 §3.1.1.2 raised the floor for a password used as the only
+// authenticator from 8 to 15 characters, and vault42 permits single-factor
+// login (MFA is configurable), so 15 is the number an operator may not go
+// under. It equals the package default deliberately: a claim that the product
+// enforces 15 is false the moment the enforced floor is lower than the figure.
+const passwordMinLengthFloor = 15
+
+// devPasswordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
+// in the dev profile. Dev deliberately sits below the published floor so a
+// seeded local account does not need a 15-character secret, but it is still a
+// floor: NIST SP 800-63B-4 §3.1.1.1 requires a verifier to accept memorized
+// secrets of at least 8 characters, and a build that accepts fewer is not
+// exercising the password path the deployment profiles run.
+const devPasswordMinLengthFloor = 8
+
+// passwordFloorFor returns the shortest VAULT_PASSWORD_MIN_LENGTH the profile
+// accepts. Every profile has one; dev's is merely lower.
+func passwordFloorFor(p Profile) int {
+	if p == ProfileDev {
+		return devPasswordMinLengthFloor
+	}
+	return passwordMinLengthFloor
+}
 
 // argon2idPrefix marks the PHC-encoded form of an Argon2id hash. Its presence
 // is what tells ADMIN_TOKEN_FILE's two accepted forms apart: a hash, which is

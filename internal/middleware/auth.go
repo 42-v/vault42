@@ -93,13 +93,19 @@ func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audienc
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				httputil.WriteError(w, http.StatusUnauthorized, "missing_authorization")
+				// RFC 6750 §3: a request that carries no bearer credential gets
+				// a bare challenge. An error code here would describe a
+				// credential the client never sent.
+				httputil.WriteBearerError(w, http.StatusUnauthorized, "missing_authorization", httputil.BearerChallenge{})
 				return
 			}
 
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) != 2 || !o.schemeAllowed(parts[0]) {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_authorization")
+				// Also a bare challenge: an unsupported scheme, or a header with
+				// no credential after it, is "the client attempted using an
+				// unsupported authentication method" (§3), not a bad token.
+				httputil.WriteBearerError(w, http.StatusUnauthorized, "invalid_authorization", httputil.BearerChallenge{})
 				return
 			}
 
@@ -115,7 +121,10 @@ func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audienc
 				return key, nil
 			}, issuer, audience)
 			if err != nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_token")
+				httputil.WriteBearerError(w, http.StatusUnauthorized, "invalid_token", httputil.BearerChallenge{
+					Error:       httputil.BearerErrInvalidToken,
+					Description: "the access token is expired, malformed, or signed by an unknown key",
+				})
 				return
 			}
 
@@ -125,7 +134,13 @@ func authWithTypes(keyProvider func() map[string]*rsa.PublicKey, issuer, audienc
 				tt = "Bearer" // backward compat: empty = Bearer
 			}
 			if !allowed[tt] {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_token_type")
+				// §3.1 has no code for "right signature, wrong purpose", and
+				// invalid_token is the one that fits: the credential presented
+				// is not usable at this resource.
+				httputil.WriteBearerError(w, http.StatusUnauthorized, "invalid_token_type", httputil.BearerChallenge{
+					Error:       httputil.BearerErrInvalidToken,
+					Description: "the token type is not accepted at this resource",
+				})
 				return
 			}
 
@@ -145,7 +160,7 @@ func GetClaims(ctx context.Context) *vaultcrypto.VaultClaims {
 func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if GetClaims(r.Context()) == nil {
-			httputil.WriteError(w, http.StatusUnauthorized, "unauthorized")
+			httputil.WriteBearerError(w, http.StatusUnauthorized, "unauthorized", httputil.BearerChallenge{})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -161,7 +176,7 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := GetClaims(r.Context())
 			if claims == nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "unauthorized")
+				httputil.WriteBearerError(w, http.StatusUnauthorized, "unauthorized", httputil.BearerChallenge{})
 				return
 			}
 			for _, s := range claims.Scopes {
@@ -170,7 +185,14 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 					return
 				}
 			}
-			httputil.WriteError(w, http.StatusForbidden, "insufficient_scope")
+			// RFC 6750 §3: insufficient_scope carries the scope the resource
+			// requires, so the client can ask for exactly it instead of
+			// guessing or re-authorizing for everything.
+			httputil.WriteBearerError(w, http.StatusForbidden, "insufficient_scope", httputil.BearerChallenge{
+				Error:       httputil.BearerErrInsufficientScope,
+				Description: "the access token does not carry the scope this resource requires",
+				Scope:       scope,
+			})
 		})
 	}
 }

@@ -3,13 +3,25 @@ package email
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/mail"
 	"net/smtp"
 	"strings"
 )
+
+// ErrSMTPNoSTARTTLS is returned when the SMTP server does not advertise
+// STARTTLS and the sender was not explicitly told to accept a cleartext relay.
+//
+// Every message vault42 sends carries a bearer secret for the length of its
+// TTL: a verification link, a password-reset link, an email one-time code. An
+// on-path attacker who strips STARTTLS from the EHLO response reads all of them
+// and, without this check, the send still reports success.
+var ErrSMTPNoSTARTTLS = errors.New("email: SMTP server does not advertise STARTTLS and plaintext delivery was not permitted")
 
 // SMTPSender sends emails via SMTP with optional PLAIN authentication.
 // It implements the [Sender] interface.
@@ -19,14 +31,36 @@ type SMTPSender struct {
 	user     string
 	password string
 	from     string
+	// allowPlaintext permits delivery over an unupgraded connection. See
+	// AllowPlaintext.
+	allowPlaintext bool
 }
 
-// NewSMTPSender creates a new SMTP email sender.
-func NewSMTPSender(host, port, user, password, from string) *SMTPSender {
-	return &SMTPSender{
+// SMTPOption configures an [SMTPSender] at construction.
+type SMTPOption func(*SMTPSender)
+
+// AllowPlaintext permits delivery to a server that does not advertise STARTTLS.
+//
+// It exists for the one deployment where cleartext SMTP is not an exposure: a
+// relay reached over loopback or a unix-domain-equivalent hop that never leaves
+// the host. config.Load refuses the opt-out outside dev for any other SMTP_HOST
+// for that reason. It is not a fallback — a server that does advertise STARTTLS
+// is still upgraded — it only decides what happens when no upgrade is on offer.
+func AllowPlaintext(allow bool) SMTPOption {
+	return func(s *SMTPSender) { s.allowPlaintext = allow }
+}
+
+// NewSMTPSender creates a new SMTP email sender. STARTTLS is required unless
+// [AllowPlaintext] is passed.
+func NewSMTPSender(host, port, user, password, from string, opts ...SMTPOption) *SMTPSender {
+	s := &SMTPSender{
 		host: host, port: port,
 		user: user, password: password, from: from,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Send sends a multipart/alternative email (HTML + plain text) via SMTP.
@@ -45,16 +79,12 @@ func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBo
 
 	msg := buildMIMEMessage(fromHeader, to, subject, htmlBody, textBody)
 
-	var auth smtp.Auth
-	if s.user != "" {
-		auth = smtp.PlainAuth("", s.user, s.password, s.host)
-	}
-
-	// smtp.SendMail ignores context, so run it in a goroutine with a timeout.
+	// The SMTP conversation ignores context, so run it in a goroutine and let
+	// the caller's deadline win the select.
 	type result struct{ err error }
 	ch := make(chan result, 1)
 	go func() {
-		ch <- result{smtp.SendMail(addr, auth, envelopeFrom, []string{to}, []byte(msg))}
+		ch <- result{s.deliver(addr, envelopeFrom, to, []byte(msg))}
 	}()
 
 	select {
@@ -63,6 +93,51 @@ func (s *SMTPSender) Send(ctx context.Context, from Address, to, subject, htmlBo
 	case r := <-ch:
 		return r.err
 	}
+}
+
+// deliver runs one SMTP conversation. It replaces smtp.SendMail, whose TLS
+// policy is opportunistic: SendMail upgrades when the server offers STARTTLS
+// and sends in cleartext, reporting success, when it does not.
+func (s *SMTPSender) deliver(addr, envelopeFrom, to string, msg []byte) error {
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("email: smtp connect %s: %w", addr, err)
+	}
+	defer c.Close() // #nosec G104 -- Quit below is the ordered close; this is the abort path
+
+	// Extension sends EHLO on first use, so a server that refuses EHLO reports
+	// no capabilities and is treated as offering no STARTTLS — the fail-closed
+	// direction.
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: s.host, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("email: smtp starttls: %w", err)
+		}
+	} else if !s.allowPlaintext {
+		return fmt.Errorf("%w (host %s)", ErrSMTPNoSTARTTLS, s.host)
+	}
+
+	// Each step is a closure so the whole conversation shares one error path:
+	// an SMTP session that fails midway is a failed send regardless of which
+	// verb the server refused.
+	var steps []func() error
+	if s.user != "" {
+		steps = append(steps, func() error { return c.Auth(smtp.PlainAuth("", s.user, s.password, s.host)) })
+	}
+	var w io.WriteCloser
+	steps = append(steps,
+		func() error { return c.Mail(envelopeFrom) },
+		func() error { return c.Rcpt(to) },
+		func() (err error) { w, err = c.Data(); return err },
+		func() error { _, err := w.Write(msg); return err },
+		func() error { return w.Close() },
+		c.Quit,
+	)
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return fmt.Errorf("email: smtp send: %w", err)
+		}
+	}
+	return nil
 }
 
 // sanitizeHeader strips CR/LF characters to prevent email header injection.

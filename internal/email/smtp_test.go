@@ -253,6 +253,12 @@ type mockSMTPServer struct {
 	received []mockSMTPMessage
 	auths    []string
 	failData bool
+	// advertiseSTARTTLS makes the mock announce the STARTTLS capability in its
+	// EHLO response and answer the command with 220. It then hangs up instead of
+	// serving a certificate, so the client's handshake fails: enough to prove the
+	// upgrade was attempted without minting a throwaway CA per test.
+	advertiseSTARTTLS bool
+	starttls          int
 }
 
 type mockSMTPMessage struct {
@@ -291,6 +297,12 @@ func (s *mockSMTPServer) messages() []mockSMTPMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]mockSMTPMessage{}, s.received...)
+}
+
+func (s *mockSMTPServer) starttlsAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.starttls
 }
 
 func (s *mockSMTPServer) authAttempts() []string {
@@ -358,7 +370,16 @@ func (s *mockSMTPServer) handleConn(conn net.Conn) {
 		case strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO"):
 			write("250-localhost Hello")
 			write("250-AUTH PLAIN")
+			if s.advertiseSTARTTLS {
+				write("250-STARTTLS")
+			}
 			write("250 OK")
+		case strings.HasPrefix(upper, "STARTTLS"):
+			s.mu.Lock()
+			s.starttls++
+			s.mu.Unlock()
+			write("220 Ready to start TLS")
+			return
 		case strings.HasPrefix(upper, "AUTH"):
 			s.mu.Lock()
 			s.auths = append(s.auths, line)
@@ -401,7 +422,7 @@ func TestSendWithMockSMTPServer(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "sender@test.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "sender@test.com", AllowPlaintext(true))
 	err := sender.Send(context.Background(), Address{}, "recipient@test.com", "Test Subject", "<b>HTML</b>", "text body")
 	if err != nil {
 		t.Fatalf("Send should succeed: %v", err)
@@ -423,7 +444,7 @@ func TestSendMessageContainsSubject(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
 	sender.Send(context.Background(), Address{}, "r@t.com", "My Custom Subject", "<b>h</b>", "t")
 
 	msgs := srv.messages()
@@ -439,7 +460,7 @@ func TestSendMessageContainsHTMLBody(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
 	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<h1>Hello HTML</h1>", "text")
 
 	msgs := srv.messages()
@@ -455,7 +476,7 @@ func TestSendMessageContainsTextBody(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
 	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "Plain text content")
 
 	msgs := srv.messages()
@@ -482,7 +503,7 @@ func TestSendNoAuth(t *testing.T) {
 	defer srv.close()
 
 	// Empty user means no auth
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "noauth@test.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "noauth@test.com", AllowPlaintext(true))
 	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err != nil {
 		t.Fatalf("Send without auth should succeed: %v", err)
@@ -493,7 +514,7 @@ func TestSendWithAuthAndFromOverride(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "user", "secret", "default@test.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "user", "secret", "default@test.com", AllowPlaintext(true))
 	err := sender.Send(context.Background(), Address{Email: "tenant@acme.test"}, "r@t.com", "Sub", "<b>h</b>", "t")
 	if err != nil {
 		t.Fatalf("Send with auth should succeed: %v", err)
@@ -540,7 +561,7 @@ func TestSendMultipleMessages(t *testing.T) {
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com")
+	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
 
 	for i := 0; i < 3; i++ {
 		err := sender.Send(context.Background(), Address{}, fmt.Sprintf("r%d@t.com", i),

@@ -321,8 +321,11 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "0")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// object-src and base-uri are declared, not inherited (ASVS V3.4.3):
+		// base-uri has no default-src fallback, so without it an injected
+		// <base> re-points every relative URL the admin UI resolves.
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; form-action 'self'")
+			"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; object-src 'none'; base-uri 'none'")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 		w.Header().Set("Pragma", "no-cache")
