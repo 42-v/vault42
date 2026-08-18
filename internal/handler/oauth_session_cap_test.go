@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/oauth2"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
 )
@@ -132,5 +134,165 @@ func TestOAuth_Callback_UnsetSessionCapDoesNotBlock(t *testing.T) {
 
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status %d, want 302 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// CheckSessionLimit is a soft pre-check. The password path then inserts through
+// CreateWithinCap under a per-user lock. The OAuth callback used to call Create
+// instead, so N simultaneous social logins each counted the same pre-insert
+// total, each saw a free slot, and all inserted — a cap of N admitted N+k.
+//
+// The barrier forces every goroutine through the pre-check before any insert,
+// which is the interleaving a real concurrent burst produces. After the fix
+// the insert itself must refuse the overshoot.
+func TestOAuth_Callback_ConcurrentLoginsCannotExceedTheCap(t *testing.T) {
+	const sessionCap = 3
+	const goroutines = 12
+
+	var mu sync.Mutex
+	var admitted int
+	var started sync.WaitGroup
+	started.Add(goroutines)
+
+	tokens := &mocks.MockRefreshTokenRepo{
+		CountActiveFamiliesFn: func(context.Context, string) (int, error) {
+			started.Done()
+			started.Wait()
+			mu.Lock()
+			defer mu.Unlock()
+			return admitted, nil
+		},
+		CreateFn: func(context.Context, *model.RefreshToken) error {
+			// The pre-fix insert path. If Callback still calls Create, every
+			// racer lands here after the barrier and the cap is overshot.
+			mu.Lock()
+			defer mu.Unlock()
+			admitted++
+			return nil
+		},
+		CreateWithinCapFn: func(_ context.Context, _ *model.RefreshToken, maxFamilies int) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if maxFamilies > 0 && admitted >= maxFamilies {
+				return repository.ErrSessionLimitReached
+			}
+			admitted++
+			return nil
+		},
+	}
+
+	users := &mocks.MockUserRepo{
+		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
+		},
+	}
+	social := &mocks.MockSocialAccountRepo{
+		GetByProviderAndIDFn: func(context.Context, string, string) (*model.SocialAccount, error) {
+			return &model.SocialAccount{UserID: oauthCapUserID}, nil
+		},
+	}
+	cache := &mocks.MockCache{
+		GetAndDeleteFn: func(context.Context, string) (string, error) { return "verifier", nil },
+	}
+	tokenSvc, _ := newTestTokenService(t)
+	auditLog := newTestAuditLogger()
+	authSvc := service.NewAuthService(
+		users, tokens, &mocks.MockDeviceRepo{}, &mocks.MockPasswordHistoryRepo{},
+		tokenSvc, nil, auditLog, nil, cache, nil,
+		"https://vault.test", "TestVault", "", 15, false, nil,
+	)
+	authSvc.SetMaxSessionsPerUser(sessionCap)
+	h := NewOAuthHandler(
+		map[string]oauth2.Provider{"google": &mockProvider{name: "google"}},
+		[]byte("test-hmac-secret-32-bytes-long!!"), cache, "https://vault.test",
+		users, social, tokens, authSvc, tokenSvc, nil, auditLog, false,
+	)
+
+	var wg sync.WaitGroup
+	codes := make(chan int, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := oauthCapCallback(t, h, fmt.Sprintf("race-nonce-%d", i))
+			codes <- rec.Code
+		}(i)
+	}
+	wg.Wait()
+	close(codes)
+
+	if admitted != sessionCap {
+		t.Fatalf("admitted %d families, want the cap of %d; concurrent OAuth callbacks overshot the session cap", admitted, sessionCap)
+	}
+	var ok, limited int
+	for code := range codes {
+		switch code {
+		case http.StatusFound:
+			ok++
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Errorf("callback status %d, want 302 or 429", code)
+		}
+	}
+	if ok != sessionCap {
+		t.Fatalf("accepted %d callbacks, want %d", ok, sessionCap)
+	}
+	if limited != goroutines-sessionCap {
+		t.Fatalf("refused %d callbacks, want %d", limited, goroutines-sessionCap)
+	}
+}
+
+// The pre-check can be stale: CountActiveFamilies says there is a slot, then
+// a racer takes it. The insert must still surface as the same 429 the
+// pre-check returns, not a 500 and not a minted family.
+func TestOAuth_Callback_CreateWithinCapRejectionSurfacesAs429(t *testing.T) {
+	users := &mocks.MockUserRepo{
+		GetByIDFn: func(_ context.Context, id string) (*model.User, error) {
+			return &model.User{ID: id, EmailVerified: true}, nil
+		},
+	}
+	social := &mocks.MockSocialAccountRepo{
+		GetByProviderAndIDFn: func(context.Context, string, string) (*model.SocialAccount, error) {
+			return &model.SocialAccount{UserID: oauthCapUserID}, nil
+		},
+	}
+	wrote := false
+	tokens := &mocks.MockRefreshTokenRepo{
+		CountActiveFamiliesFn: func(context.Context, string) (int, error) { return 0, nil },
+		CreateFn: func(context.Context, *model.RefreshToken) error {
+			wrote = true
+			return nil
+		},
+		CreateWithinCapFn: func(context.Context, *model.RefreshToken, int) error {
+			return repository.ErrSessionLimitReached
+		},
+	}
+	cache := &mocks.MockCache{
+		GetAndDeleteFn: func(context.Context, string) (string, error) { return "verifier", nil },
+	}
+	tokenSvc, _ := newTestTokenService(t)
+	auditLog := newTestAuditLogger()
+	authSvc := service.NewAuthService(
+		users, tokens, &mocks.MockDeviceRepo{}, &mocks.MockPasswordHistoryRepo{},
+		tokenSvc, nil, auditLog, nil, cache, nil,
+		"https://vault.test", "TestVault", "", 15, false, nil,
+	)
+	authSvc.SetMaxSessionsPerUser(3)
+	h := NewOAuthHandler(
+		map[string]oauth2.Provider{"google": &mockProvider{name: "google"}},
+		[]byte("test-hmac-secret-32-bytes-long!!"), cache, "https://vault.test",
+		users, social, tokens, authSvc, tokenSvc, nil, auditLog, false,
+	)
+
+	rec := oauthCapCallback(t, h, "stale-count-nonce")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "session_limit_reached") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if wrote {
+		t.Fatal("Create ran after CreateWithinCap refused the family")
 	}
 }

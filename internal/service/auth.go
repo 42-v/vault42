@@ -298,6 +298,14 @@ func (s *AuthService) SetMaxSessionsPerUser(n int) {
 	s.maxSessionsPerUser = n
 }
 
+// MaxSessionsPerUser returns the configured concurrent-family cap, or 0 when
+// the bound is disabled. Login paths that persist a family themselves (the
+// OAuth callback) pass this into CreateWithinCap so the insert, not only the
+// CheckSessionLimit pre-check, is the hard bound.
+func (s *AuthService) MaxSessionsPerUser() int {
+	return s.maxSessionsPerUser
+}
+
 // SetRoleCatalog enables catalog-aware role validation. When set, JWT issuance
 // keeps only roles present in the auth.app_roles catalog (in addition to the
 // admin-reserved filter). Nil (the default) preserves the prior behavior.
@@ -1679,8 +1687,9 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 // returns an access token only and never writes a refresh-token row, so it
 // creates no family for CountActiveFamilies to count.
 //
-// Semantics are identical to the password path, including the soft, non-atomic
-// behavior documented on checkSessionLimit.
+// This is the same soft pre-check Login runs before storeRefreshToken. The
+// hard bound is CreateWithinCap on the insert, which the OAuth callback must
+// also use: a pre-check alone is the race documented on checkSessionLimit.
 func (s *AuthService) CheckSessionLimit(ctx context.Context, userID string) error {
 	return s.checkSessionLimit(ctx, userID)
 }

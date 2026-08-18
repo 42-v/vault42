@@ -637,6 +637,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		// Client credentials are structurally exempt rather than missing, since that
 		// path discards its refresh token and creates no family at all.
 		deviceID := ""
+		sessionCap := 0
 		if h.authSvc != nil {
 			if err := h.authSvc.CheckSessionLimit(r.Context(), userID); err != nil {
 				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
@@ -646,6 +647,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			// so this session lists in GET /user/sessions and RevokeByDeviceID can
 			// reach it. Match the password path's fp/ip/ua threading.
 			deviceID = h.authSvc.FindOrCreateDevice(r.Context(), userID, fp, middleware.ClientIP(r), r.Header.Get("User-Agent"))
+			sessionCap = h.authSvc.MaxSessionsPerUser()
 		}
 		// Draw the refresh-token ID last, right before the store, the same order the
 		// password path uses in storeRefreshToken.
@@ -654,7 +656,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
-		if err := h.tokens.Create(r.Context(), &model.RefreshToken{
+		// CreateWithinCap, not Create: CheckSessionLimit is a soft pre-check and
+		// N simultaneous callbacks each pass it. The password path already inserts
+		// under the per-user lock; this path has to as well or the cap is not a
+		// cap for social login (ASVS V2.3.4).
+		if err := h.tokens.CreateWithinCap(r.Context(), &model.RefreshToken{
 			ID:              rtID,
 			UserID:          userID,
 			TokenHash:       tokenHash,
@@ -663,7 +669,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			FingerprintHash: fp,
 			ExpiresAt:       pair.RefreshExpAt,
 			CreatedAt:       time.Now(),
-		}); err != nil {
+		}, sessionCap); err != nil {
+			if errors.Is(err, repository.ErrSessionLimitReached) {
+				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
+				return
+			}
 			log.Printf("oauth: failed to store refresh token for %s: %v", httputil.SafeLogValue(userID), err) // #nosec G706 -- sanitized via SafeLogValue
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 			return
