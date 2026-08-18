@@ -167,6 +167,13 @@ func TestEveryRenderedContainerIsConfined(t *testing.T) {
 					"are not inherited from the pod securityContext, so this has to be set "+
 					"on the container and nowhere else.", w, c.name)
 			}
+			if added := capabilitiesAddedBack(sc); len(added) > 0 {
+				t.Errorf("%s container %q adds %v back after dropping ALL. The restricted "+
+					"profile permits exactly one, NET_BIND_SERVICE, and nothing in this chart "+
+					"binds a privileged port. drop: [ALL] followed by an add is not a "+
+					"confined container; it is the capability set someone chose.",
+					w, c.name, added)
+			}
 		}
 	}
 }
@@ -716,6 +723,29 @@ func dropsAllCapabilities(containerSC map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// capabilitiesAddedBack returns every capability the container asks for beyond
+// the one the restricted profile permits.
+//
+// Dropping ALL and adding one back is a single securityContext away, and until
+// 1.0.0 nothing saw it: putting `capabilities: {drop: [ALL], add: [SYS_ADMIN]}`
+// into the chart's default container securityContext left this suite green and
+// the compliance suite green, because the compliance scan reads
+// charts/vault/templates/ and the container securityContext lives in
+// values.yaml. Every rendered container in a default install would have carried
+// CAP_SYS_ADMIN.
+func capabilitiesAddedBack(containerSC map[string]any) []string {
+	add, _ := mapAt(containerSC, "capabilities")["add"].([]any)
+	var beyond []string
+	for _, entry := range add {
+		name, _ := entry.(string)
+		if strings.EqualFold(name, "NET_BIND_SERVICE") {
+			continue
+		}
+		beyond = append(beyond, name)
+	}
+	return beyond
 }
 
 func containsAny(src string, needles []string) bool {

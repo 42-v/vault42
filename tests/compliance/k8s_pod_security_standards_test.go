@@ -3,6 +3,8 @@ package compliance
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -191,17 +193,72 @@ func chartHelper(t *testing.T, name string) string {
 	return src[start : start+end]
 }
 
+// pssAllowedVolumeTypes is the restricted profile's volume allow-list, verbatim.
+// The profile names the permitted types rather than forbidding a few, so a scan
+// that only refuses hostPath answers a narrower question than the one PSS asks:
+// nfs, iscsi, gitRepo and flexVolume are all forbidden and none of them is
+// hostPath. This is what PSS-volume-types is Met on, and it has to be an
+// allow-list for the row to be true.
+var pssAllowedVolumeTypes = map[string]bool{
+	"configMap":             true,
+	"csi":                   true,
+	"downwardAPI":           true,
+	"emptyDir":              true,
+	"ephemeral":             true,
+	"persistentVolumeClaim": true,
+	"projected":             true,
+	"secret":                true,
+}
+
+// pssVolumesBlockRe finds a `volumes:` key and captures its indentation, so the
+// entries beneath it can be read without mistaking a volumeMount, an env var or
+// a container port for a volume -- each of those is also a `- name:` item
+// followed by a key, and a regex that only looks at that shape matches all of
+// them.
+var pssVolumesBlockRe = regexp.MustCompile(`(?m)^([ \t]*)volumes:[ \t]*$`)
+
+// pssVolumeItemRe matches the head of one volume entry inside such a block.
+var pssVolumeItemRe = regexp.MustCompile(`^([ \t]*)- name:`)
+
+// pssVolumeTypeRe matches the type key of a volume entry.
+var pssVolumeTypeRe = regexp.MustCompile(`^([ \t]*)([A-Za-z][A-Za-z0-9]*):`)
+
+// pssCapabilityAddRe matches a capabilities add, in either YAML form: a block
+// list on following lines, or an inline flow list. The old scan looked for the
+// bare token "add:" over charts/vault/templates only, and the container
+// securityContext is in values.yaml, so `capabilities: {drop: [ALL], add:
+// [SYS_ADMIN]}` in the chart defaults passed this gate and the tests/spec render
+// gate together while giving every container in a default install CAP_SYS_ADMIN.
+var pssCapabilityAddRe = regexp.MustCompile(`(?m)^\s*add:\s*(\[\s*[^\]\s][^\]]*\]|$)`)
+
 // TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege is the
 // negative half. The profile forbids host namespaces, host ports, privileged
-// containers, added capabilities and hostPath volumes, and the only way to know
-// none of them arrived is to look for all of them.
+// containers, added capabilities and every volume type outside its allow-list,
+// and the only way to know none of them arrived is to look for all of them.
+//
+// The corpus is the templates AND the values files. A chart's securityContext
+// can be written in either, this one writes it in values.yaml, and a scan of
+// templates/ alone cannot see the setting it exists to check.
 func TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege(t *testing.T) {
 	root := repoRoot(t)
-	dir := filepath.Join(root, "charts", "vault", "templates")
+	chart := filepath.Join(root, "charts", "vault")
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read chart templates: %v", err)
+	var files []string
+	for _, sub := range []string{"templates", ""} {
+		dir := filepath.Join(chart, sub)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+				continue
+			}
+			if sub == "" && !strings.HasPrefix(entry.Name(), "values") {
+				continue
+			}
+			files = append(files, filepath.Join(sub, entry.Name()))
+		}
 	}
 
 	forbidden := map[string]string{
@@ -209,42 +266,66 @@ func TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege(t *testing.T
 		"hostPID: true":    "the host process namespace is forbidden at baseline",
 		"hostIPC: true":    "the host IPC namespace is forbidden at baseline",
 		"hostPath:":        "hostPath volumes are forbidden at baseline",
-		"add:":             "adding a capability back is forbidden at restricted, which requires drop ALL and permits only NET_BIND_SERVICE",
+		"hostPort:":        "host ports are forbidden at baseline, and PSS-host-ports is Met on their absence",
 	}
 
 	scanned := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+	for _, rel := range files {
+		raw, err := os.ReadFile(filepath.Join(chart, rel))
 		if err != nil {
 			continue
 		}
 		src := string(raw)
 		scanned++
+		shown := filepath.ToSlash(filepath.Join("charts/vault", rel))
 
 		for token, why := range forbidden {
 			if strings.Contains(src, token) {
-				t.Errorf("PSS restricted: charts/vault/templates/%s contains %q -- %s",
-					entry.Name(), token, why)
+				t.Errorf("PSS restricted: %s contains %q -- %s", shown, token, why)
 			}
+		}
+
+		// Capabilities. drop: ALL followed by an add is the shape the profile
+		// forbids, and the restricted profile permits exactly one addition.
+		for _, m := range pssCapabilityAddRe.FindAllString(src, -1) {
+			if strings.Contains(m, "NET_BIND_SERVICE") {
+				continue
+			}
+			t.Errorf("PSS restricted: %s adds a capability back (%q). The restricted profile "+
+				"requires drop ALL and permits only NET_BIND_SERVICE, and nothing in this "+
+				"chart binds a privileged port.", shown, strings.TrimSpace(m))
+		}
+
+		// Volume types, as the allow-list the profile actually specifies.
+		for _, kind := range volumeTypesIn(src) {
+			if pssAllowedVolumeTypes[kind] {
+				continue
+			}
+			t.Errorf("PSS restricted: %s declares a %q volume. The restricted profile allows "+
+				"only %v, so this is not a narrower spelling of an allowed type; it is one the "+
+				"profile forbids.", shown, kind, sortedVolumeTypes(pssAllowedVolumeTypes))
 		}
 
 		// hostNetwork is the one deviation, and it belongs to exactly one
 		// workload. Anywhere else it is a regression.
-		if strings.Contains(src, "hostNetwork: true") && entry.Name() != "admin-gateway.yaml" {
-			t.Errorf("PSS restricted: charts/vault/templates/%s takes the host network "+
-				"unconditionally. The admin gateway is the only workload permitted to offer it at "+
-				"all, and even there it is opt-in and off by default.", entry.Name())
+		if strings.Contains(src, "hostNetwork: true") && rel != filepath.Join("templates", "admin-gateway.yaml") {
+			t.Errorf("PSS restricted: %s takes the host network unconditionally. The admin "+
+				"gateway is the only workload permitted to offer it at all, and even there it "+
+				"is opt-in and off by default.", shown)
 		}
 	}
 
 	if scanned < 10 {
-		t.Fatalf("only %d chart templates scanned; the walk is broken and every assertion above is "+
+		t.Fatalf("only %d chart files scanned; the walk is broken and every assertion above is "+
 			"vacuous", scanned)
 	}
-	t.Logf("PSS restricted: %d chart templates scanned for host namespaces and privilege", scanned)
+	if volumes := countVolumeDeclarations(t, chart, files); volumes < 5 {
+		t.Fatalf("only %d volume declarations were parsed out of %d chart files. The chart mounts "+
+			"more than that; the volume regex no longer matches the chart's shape, so the "+
+			"allow-list above cleared every volume by not seeing one.", volumes, scanned)
+	}
+	t.Logf("PSS restricted: %d chart files scanned for host namespaces, privilege, added "+
+		"capabilities, host ports and volume types", scanned)
 }
 
 // TestK8sPSS_Restricted_ThereAreNoDeviationsLeft is what the deviation and
@@ -304,4 +385,75 @@ func readChartFile(t *testing.T, rel string) string {
 		t.Fatalf("read charts/vault/%s: %v", rel, err)
 	}
 	return string(raw)
+}
+
+// sortedVolumeTypes renders the allow-list deterministically for a failure
+// message.
+func sortedVolumeTypes(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// countVolumeDeclarations is the floor under the volume allow-list. A regex that
+// stops matching the chart's shape would clear every volume by finding none, and
+// PSS-volume-types would go on being Met on a check that read nothing.
+func countVolumeDeclarations(t *testing.T, chart string, files []string) int {
+	t.Helper()
+	n := 0
+	for _, rel := range files {
+		raw, err := os.ReadFile(filepath.Join(chart, rel))
+		if err != nil {
+			continue
+		}
+		n += len(volumeTypesIn(string(raw)))
+	}
+	return n
+}
+
+// volumeTypesIn returns the type key of every volume declared in one chart file.
+//
+// The blocks are read by indentation rather than parsed, because a chart
+// template is Go template source and not YAML until Helm has rendered it. A
+// volume entry is a `- name:` item under a `volumes:` key, and its type is the
+// first key one level inside it; anything deeper belongs to that type
+// (secretName, claimName) and anything shallower has left the block.
+func volumeTypesIn(src string) []string {
+	lines := strings.Split(src, "\n")
+	var kinds []string
+
+	for i, line := range lines {
+		block := pssVolumesBlockRe.FindStringSubmatch(line)
+		if block == nil {
+			continue
+		}
+		blockIndent := len(block[1])
+
+		itemIndent := -1
+		for _, next := range lines[i+1:] {
+			trimmed := strings.TrimSpace(next)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "{{") {
+				continue
+			}
+			indent := len(next) - len(strings.TrimLeft(next, " \t"))
+			if indent <= blockIndent {
+				break // the block ended
+			}
+			if m := pssVolumeItemRe.FindStringSubmatch(next); m != nil {
+				itemIndent = len(m[1]) + 2
+				continue
+			}
+			if itemIndent < 0 {
+				continue
+			}
+			if m := pssVolumeTypeRe.FindStringSubmatch(next); m != nil && len(m[1]) == itemIndent {
+				kinds = append(kinds, m[2])
+				itemIndent = -1
+			}
+		}
+	}
+	return kinds
 }
