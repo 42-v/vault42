@@ -231,24 +231,29 @@ func (ks *KeyStore) Import(ctx context.Context, key *rsa.PrivateKey) (string, er
 		return "", fmt.Errorf("keystore: retire active key: %w", err)
 	}
 
-	// Insert new active key. The kid is derived from the public key, so
-	// re-importing the same PEM always conflicts with the existing row; the
-	// WHERE guard stops that upsert from reactivating a revoked key.
-	result, err := tx.Exec(ctx, `
-		INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at)
-		VALUES ($1, $2, $3, 'RS256', 'active', $4)
-		ON CONFLICT (kid) DO UPDATE SET
-			private_key = EXCLUDED.private_key,
-			public_key = EXCLUDED.public_key,
-			status = 'active',
-			retired_at = NULL,
-			expires_at = NULL
-		WHERE signing_keys.status != 'revoked'
-	`, kid, encPriv, pubDER, now)
+	// Write the new active key. The upsert itself lives in migration 037's
+	// auth.import_signing_key, a SECURITY DEFINER function, and this call is the
+	// only way it is reached.
+	//
+	// It is a function rather than a statement because neither role the services
+	// connect as holds UPDATE on the key material any more. A raw UPDATE was
+	// enough to reactivate a rotated-out key under bytes of the writer's
+	// choosing, and no trigger can refuse that write: a re-import and a
+	// substitution differ only in whether the ciphertext opens under the master
+	// key, which the database does not hold. So the write is constrained by who
+	// may issue it instead of by what it contains, and the raw privilege is gone.
+	//
+	// The function refuses a kid that is not the digest of the public key it
+	// arrives with, keeps 017's "not revoked" guard on the only write path there
+	// is, and returns false rather than raising when that guard refuses, which is
+	// the ErrRevokedKey case below.
+	var written bool
+	err = tx.QueryRow(ctx, `SELECT auth.import_signing_key($1, $2, $3, $4, $5)`,
+		kid, encPriv, pubDER, "RS256", now).Scan(&written)
 	if err != nil {
 		return "", fmt.Errorf("keystore: insert key: %w", err)
 	}
-	if result.RowsAffected() == 0 {
+	if !written {
 		return "", fmt.Errorf("%w: %s cannot be reactivated", ErrRevokedKey, kid)
 	}
 

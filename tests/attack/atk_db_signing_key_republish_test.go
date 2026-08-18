@@ -257,7 +257,19 @@ func TestSigningKeyRepublishAndReapReinsertAsVaultApp(t *testing.T) {
 		// public_key can never legitimately change under a fixed kid. A re-import
 		// of the same key supplies the same bytes; only an attacker supplies
 		// different ones.
+		// 037 leaves vault_app no UPDATE on private_key or public_key, so this
+		// statement is refused for want of a privilege before any trigger runs.
+		// Both controls are asserted: the privilege is what answers for the
+		// role the services connect as, and the trigger is what answers for every
+		// other role, which is why the same write is then made as the owner.
 		_, err = app.Exec(ctx, `
+			UPDATE auth.signing_keys
+			SET status = 'active', private_key = $2, public_key = $3, retired_at = NULL
+			WHERE kid = $1`, kid, []byte{0x99}, attackerPub)
+		if !atkKeyPermissionDenied(err) {
+			t.Fatalf("vault_app wrote a retired row's key material: err = %v, want 037's privilege refusal", err)
+		}
+		_, err = owner.Exec(ctx, `
 			UPDATE auth.signing_keys
 			SET status = 'active', private_key = $2, public_key = $3, retired_at = NULL
 			WHERE kid = $1`, kid, []byte{0x99}, attackerPub)
@@ -289,12 +301,56 @@ func TestSigningKeyRepublishAndReapReinsertAsVaultApp(t *testing.T) {
 		// is what a genuine re-import looks like to a trigger comparing OLD and
 		// NEW. What it is not is a row that stopped being retired — Import clears
 		// retired_at, an attacker rewriting material in place does not.
+		//
+		// 037 answers this for vault_app with a privilege error; the CHECK is
+		// what answers for every other role, and it is the only one of the two
+		// that survives with row triggers suspended, so it is still exercised on
+		// the owner pool below.
 		_, err = app.Exec(ctx,
+			`UPDATE auth.signing_keys SET status = 'active', private_key = $2 WHERE kid = $1`,
+			kid, []byte{0x77})
+		if !atkKeyPermissionDenied(err) {
+			t.Fatalf("vault_app rewrote a retired row's private_key: err = %v, want 037's privilege refusal", err)
+		}
+		_, err = owner.Exec(ctx,
 			`UPDATE auth.signing_keys SET status = 'active', private_key = $2 WHERE kid = $1`,
 			kid, []byte{0x77})
 		if !isRetirementStamp(err) {
 			t.Fatalf("promoting a retired row while it still carries retired_at returned %v, want the "+
 				"signing_keys_active_is_not_retired violation", err)
+		}
+	})
+
+	// The residual 035 disclosed and 037 narrows rather than closes. With the
+	// retirement stamp cleared in the same statement, a rewrite of private_key
+	// under an unchanged public_key is byte-for-byte a genuine re-import, and the
+	// database cannot open a ciphertext to tell them apart. vault_app can no
+	// longer express it -- that is the subtest above -- but the owner can, and
+	// nothing in the schema refuses it. Pinned here so the limit is a recorded
+	// fact rather than an assumption, and so that a later change which does close
+	// it fails this test loudly instead of passing unnoticed.
+	t.Run("B2c: the owner can still rewrite material on a reactivation (disclosed residual)", func(t *testing.T) {
+		atkKeyTruncate(t, owner)
+		ks := atkKeyStoreRetention(t, app, time.Hour)
+
+		kid, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+		atkKeyRetireActive(t, kid)
+
+		if _, err := owner.Exec(ctx, `
+			UPDATE auth.signing_keys SET status = 'active', private_key = $2,
+			       retired_at = NULL, expires_at = NULL WHERE kid = $1`,
+			kid, []byte{0x77}); err != nil {
+			t.Fatalf("the residual has been closed for the owner too, which is better than this test "+
+				"expects: err = %v. Update the finding rather than the assertion.", err)
+		}
+
+		// What holds is the control that always held: the row does not publish,
+		// because opening it needs the master key.
+		if err := ks.Refresh(ctx); err == nil {
+			t.Errorf("Refresh accepted an active row whose ciphertext cannot be opened")
 		}
 	})
 

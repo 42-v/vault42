@@ -78,6 +78,17 @@ func atkKeyTruncate(t *testing.T, owner *pgxpool.Pool) {
 	}
 }
 
+// atkKeyPermissionDenied reports whether err is PostgreSQL refusing a write for
+// want of a privilege, which since migration 037 is what a vault_app statement
+// that touches this table's identity or material columns gets. It is
+// deliberately distinct from the trigger and CHECK predicates in these files: a
+// guard and a grant are different controls, and a test that accepted either
+// would not notice the two swapping places.
+func atkKeyPermissionDenied(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "42501") ||
+		strings.Contains(err.Error(), "permission denied"))
+}
+
 // atkKeyForgeToken mints an RS256 token for victim under the attacker's key,
 // exactly as a relying party would receive it.
 func atkKeyForgeToken(t *testing.T, key *rsa.PrivateKey, kid, victim string) string {
@@ -199,10 +210,21 @@ func TestSigningKeyInjectionAsVaultApp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKIXPublicKey: %v", err)
 		}
+		// Migration 037 took UPDATE on public_key away from vault_app, so the swap
+		// is refused before any of the Go-side machinery is reached. That is
+		// asserted, and then the swap is made as the owner anyway: the control
+		// this subtest exists for is Refresh's public-half comparison, which
+		// holds for every role and for anyone with direct psql access, and it
+		// must keep being exercised rather than retired behind a privilege.
 		if _, err := app.Exec(ctx,
 			`UPDATE auth.signing_keys SET public_key = $1 WHERE kid = $2`,
+			attackerPub, victimKID); !atkKeyPermissionDenied(err) {
+			t.Fatalf("vault_app wrote public_key: err = %v, want 037's privilege refusal", err)
+		}
+		if _, err := owner.Exec(ctx,
+			`UPDATE auth.signing_keys SET public_key = $1 WHERE kid = $2`,
 			attackerPub, victimKID); err != nil {
-			t.Fatalf("the premise of this test is that vault_app can write this column: %v", err)
+			t.Fatalf("the premise of this test is that the column can be written at all: %v", err)
 		}
 
 		if err := ks.Refresh(ctx); err != nil {
