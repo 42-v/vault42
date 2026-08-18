@@ -27,7 +27,7 @@ func (f *FacebookProvider) httpClient() *http.Client {
 	if f.client != nil {
 		return f.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // NewFacebookProvider creates a Facebook OAuth2 provider with the given credentials

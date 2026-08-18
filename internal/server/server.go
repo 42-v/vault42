@@ -166,10 +166,22 @@ func (s *Server) Start() error {
 	h = middleware.Recovery(h)
 
 	s.httpSrv = &http.Server{
-		Addr:           cfg.ListenAddr,
-		Handler:        h,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		Addr:    cfg.ListenAddr,
+		Handler: h,
+		// The only one of the three servers in this tree without a header
+		// deadline of its own. Go falls back to ReadTimeout when this is zero,
+		// so a slowloris header trickle got ten seconds per connection instead
+		// of five, and gosec G112 flags exactly this shape.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		// Thirty seconds, matching bridge and admin-gateway.
+		//
+		// Ten was reachable on the argon2 path under exactly the load where a
+		// login failing is worst: acquireArgon2 alone waits up to five seconds
+		// before hashing begins, and the hash is another 50-200ms depending on
+		// the host. A write deadline shorter than the work the handler is
+		// allowed to do turns queueing into 502s.
+		WriteTimeout:   30 * time.Second,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1 MB — prevents large-header DoS
 	}

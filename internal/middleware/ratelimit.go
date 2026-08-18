@@ -407,6 +407,9 @@ func normalizeIP(v string) string {
 // is attacker-supplied.
 func lastRealIP(value string) string {
 	parts := strings.Split(value, ",")
+	if len(parts) > maxXFFHops {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		if strings.TrimSpace(parts[i]) == "" {
 			continue
@@ -415,6 +418,11 @@ func lastRealIP(value string) string {
 	}
 	return ""
 }
+
+// maxXFFHops caps the right-to-left walk over X-Forwarded-For. Thirty-two is
+// more hops than any real path has and bounds a header-sized walk to a
+// constant.
+const maxXFFHops = 32
 
 // ClientIP extracts the client IP from a request, respecting X-Forwarded-For
 // only when the direct connection comes from a trusted proxy.
@@ -459,14 +467,28 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	xff := r.Header.Get("X-Forwarded-For")
+	// Every field line, not just the first. Header.Get returns the FIRST line
+	// only, so a peer that appends X-Forwarded-For as a separate line rather
+	// than comma-joining it left this walk reading the client's own line and
+	// dropping the real appended hop, which is leftmost trust reopened. nginx,
+	// ALB and Cloudflare comma-join; not every proxy does.
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 	if xff == "" {
 		return remoteIP
 	}
 
 	// Parse all IPs from XFF, walk from right to left,
-	// return the first (rightmost) IP that is NOT a trusted proxy
+	// return the first (rightmost) IP that is NOT a trusted proxy.
+	//
+	// Capped at maxXFFHops. MaxHeaderBytes is 1 MiB, so "203.0.113.1, "
+	// repeated is ~70k hops, each one a ParseIP plus a walk of the trusted
+	// proxy list, on top of the 1 MiB allocation — per request, before the
+	// handler runs. No real deployment has more than a handful of hops.
 	parts := strings.Split(xff, ",")
+	truncated := len(parts) > maxXFFHops
+	if truncated {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		ip := normalizeIP(parts[i])
 		if ip == "" {
@@ -477,9 +499,19 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	// All XFF entries are trusted proxies — use the leftmost
-	if first := normalizeIP(parts[0]); first != "" {
-		return first
+	// All XFF entries are trusted proxies — use the leftmost, which is the
+	// closest thing to the origin the header offers.
+	//
+	// Not when the header was truncated, though: parts[0] is then whatever
+	// happened to land at the cap boundary, not the leftmost the client sent,
+	// and a caller who pads their header past maxXFFHops would get to choose
+	// which of their own entries becomes the bucket key. Fall back to the peer,
+	// which is the answer for an untrusted header everywhere else in this
+	// function.
+	if !truncated {
+		if first := normalizeIP(parts[0]); first != "" {
+			return first
+		}
 	}
 	return remoteIP
 }

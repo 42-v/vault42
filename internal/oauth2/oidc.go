@@ -88,7 +88,7 @@ func (p *OIDCProvider) httpClient() *http.Client {
 	if p.client != nil {
 		return p.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // Name returns the provider key.

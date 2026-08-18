@@ -27,7 +27,7 @@ func (g *GoogleProvider) httpClient() *http.Client {
 	if g.client != nil {
 		return g.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // NewGoogleProvider creates a Google OAuth2/OIDC provider with the given

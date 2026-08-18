@@ -27,7 +27,7 @@ func (g *GitHubProvider) httpClient() *http.Client {
 	if g.client != nil {
 		return g.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // NewGitHubProvider creates a GitHub OAuth2 provider with the given credentials
