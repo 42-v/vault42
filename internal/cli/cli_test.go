@@ -608,6 +608,9 @@ func TestAddClient(t *testing.T) {
 	})
 
 	t.Run("repo create error", func(t *testing.T) {
+		// The sink matters: without it the command stops at delivery and never
+		// reaches Create, so the assertion below would pass on the wrong error.
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		clients.CreateFn = func(_ context.Context, _ *model.Client) error {
 			return errors.New("duplicate client")

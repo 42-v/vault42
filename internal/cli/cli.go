@@ -1,5 +1,7 @@
 // Package cli implements administrative CLI commands for The Vault.
-// All commands require authentication via --admin-token. Available commands:
+// All commands require the admin credential, taken from ADMIN_TOKEN_FILE or,
+// with a warning that it is disclosed through argv, from --admin-token.
+// Available commands:
 // add-client, list-clients, revoke-all-sessions, rotate-admin-token,
 // rotate-jwks, seed, cleanup-recovery, and export-audit.
 // The revoke-client, rotate-client-secret, lock-user, unlock-user and
@@ -91,10 +93,12 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 			adminToken = args[i+1]
 		}
 	}
+	if adminToken != "" {
+		warnAdminTokenInArgv()
+	}
 
-	// Verify admin token
-	if !c.verifyAdminToken(ctx, adminToken) {
-		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required.")
+	if !c.authenticate(ctx, adminToken) {
+		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required. Set ADMIN_TOKEN_FILE to a file holding the admin token, or pass --admin-token, which discloses it through /proc/<pid>/cmdline.")
 		exitProcess(1)
 	}
 
@@ -128,6 +132,41 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 	default:
 		return false
 	}
+}
+
+// authenticate resolves the admin credential, preferring ADMIN_TOKEN_FILE.
+//
+// A flag is the one delivery mechanism for a secret that cannot be made safe:
+// every argument of a running process is readable through /proc/<pid>/cmdline by
+// anything running as the same uid, it appears in `ps` and in container process
+// listings, and the shell keeps it in history afterwards. cmd/recover says the
+// same about --dsn and warns; the difference here is that the safe path is now
+// the default one, following the _FILE convention this repo already uses for
+// ADMIN_TOKEN, BRIDGE_ADMIN_TOKEN and VAULT_PEPPER.
+//
+// The mounted file is tried first and the flag is the fallback rather than the
+// other way round, so an operator who has done nothing gets the safe path, and a
+// mount that is no longer the credential in force does not lock them out of a
+// command they authenticated correctly.
+func (c *CLI) authenticate(ctx context.Context, flagToken string) bool {
+	if c.provisionedAdminToken != "" {
+		if storedHash, err := c.adminConfig.Get(ctx, "admin_token_hash"); err == nil && storedHash != "" {
+			if c.provisionedTokenMatches(storedHash) {
+				return true
+			}
+		}
+	}
+	return c.verifyAdminToken(ctx, flagToken)
+}
+
+// warnAdminTokenInArgv says out loud that a credential passed on the command
+// line is already disclosed. The process cannot rewrite its own argv, so this is
+// the only move left, and it is worth making while the operator is still at the
+// keyboard.
+func warnAdminTokenInArgv() {
+	fmt.Fprintln(os.Stderr, "WARNING: --admin-token puts the admin credential in this process's argv, where it is "+
+		"readable by every process on this host via /proc/<pid>/cmdline, shows in `ps` and container process listings, "+
+		"and is kept in shell history. Set ADMIN_TOKEN_FILE to a file holding the token instead, and rotate this one.")
 }
 
 func (c *CLI) verifyAdminToken(ctx context.Context, token string) bool {
