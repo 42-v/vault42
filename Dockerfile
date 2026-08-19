@@ -3,7 +3,7 @@
 # Frontend build stage: compile Vue SPA on the native build host. Output is static
 # JS/HTML so target arch is irrelevant — pinning $BUILDPLATFORM avoids running Node
 # under QEMU, which segfaults corepack/pnpm on arm64.
-FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd AS frontend
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS frontend
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/vue/package.json packages/vue/
