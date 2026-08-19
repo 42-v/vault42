@@ -17,7 +17,7 @@ a read-only filesystem.
 
 ### High-Level Request Flow
 
-```
+```text
                                  +-------------------+
                                  |   Kubernetes      |
                                  |   Ingress (nginx) |
@@ -64,14 +64,13 @@ pattern specificity (e.g., `POST /auth/login` is more specific than `/` and is
 always matched first). This allows Vault42 to serve both the API and the UI
 from a single binary without path conflicts.
 
-
 ## Project Layout
 
 All application code lives under `internal/`, which Go enforces as non-importable
 by external modules. This is intentional -- the service is not a library.
 
-```
-cmd/vault42/main.go            Entry point: config, migrations, wiring, server start
+```text
+cmd/vault/main.go            Entry point: config, migrations, wiring, server start
 cmd/bridge/                  Honeypot bridge reverse proxy (standalone binary, stdlib only)
   main.go                    Entry point, config, graceful shutdown
   config.go                  Env var parsing (BRIDGE_* vars)
@@ -96,10 +95,15 @@ internal/
     security_headers.go      HSTS, CSP, X-Frame-Options, etc.
     cors.go                  Single-origin CORS (or allow-all in dev)
     maxbody.go               Request body size limit (8KB)
-    auth.go                  JWT Bearer validation, challenge token support
+    auth.go                  JWT Bearer validation, challenge token support, RequireScope,
+                             Confirmed (recent-password-confirmation gate)
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
-    dpop.go                  DPoP proof-of-possession validation (RFC 9449)
+    dpop.go                  DPoP proof validation (RFC 9449). When VAULT_DPOP_ENABLED,
+                             issuance stamps cnf.jkt on access and challenge tokens
+                             on login, refresh and 2FA verify; /client/token and the
+                             OAuth callback are not wrapped. Refresh tokens stay
+                             unbound and there is no DPoP-Nonce
   handler/
     auth.go                  Register, Login, Refresh, Logout, VerifyEmail, ConfirmPassword
     oauth.go                 OAuth2 Authorize + Callback (Google, GitHub, Facebook)
@@ -112,6 +116,7 @@ internal/
     user.go                  Profile, sessions, devices
     identity.go              Identity store: get, put (upsert), delete encrypted PII
     blob.go                  Blob storage: upload, list, download, delete encrypted files
+    kms.go                   POST /kms/unwrap: KEK envelope unwrap, uniform opaque failure
     wellknown.go             /.well-known/jwks.json and openid-configuration
     health.go                /healthz (liveness) and /readyz (readiness)
     response.go              JSON response/error helpers
@@ -129,7 +134,7 @@ internal/
   jwt/                       Stdlib-only JWT implementation (RS256 sign/verify, ES256 verify, parsing, claims)
   redis/                     Stdlib-only Redis RESP2 client with connection pooling (PING, GET, SET, DEL, GETDEL, INCR, EXPIRE, EXISTS)
   crypto/
-    jwks.go                  JWKS serialization, RSA key loading from SIGNING_KEY_FILE
+    jwt.go                   JWKS serialization, PKCS#8 RSA loading (LoadSigningKeyPEM), KIDFromPublicKey
     argon2.go                HashPassword, VerifyPassword (Argon2id, constant-time, semaphore-limited to 4 concurrent ops)
     fingerprint.go           ComputeFingerprint (SHA256 over length-prefixed fields)
     totp.go                  TOTP generation/validation (RFC 6238, hand-rolled)
@@ -158,13 +163,13 @@ internal/
   kms/                       KEK envelope-unwrap oracle behind POST /kms/unwrap. Per-kid KEKs are derived from a KMS root secret (KMS_ROOT_KEY_FILE) via HKDF-SHA256 with a versioned, domain-separated info label, cryptographically separate from the master key. Wrap/Unwrap reuse the AES-256-GCM AEAD with kid as AAD; every unwrap failure collapses to one opaque error (oracle-resistant).
   metrics/                   Hand-rolled Prometheus text exposition format. Collector aggregates argon2 semaphore, login, and token counters. No external dependencies.
   oauth2/                    OAuth2/OIDC provider implementations (Google, GitHub, etc.)
-  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-audit, export-audit, etc.)
+  cli/                       Admin CLI commands (add-client, rotate-jwks, seed, cleanup-recovery, export-audit, etc.)
   seed/                      Declarative JSON seeding for clients and users (idempotent)
   httputil/                  Shared HTTP response helpers
   sanitize/                  Input sanitization (email, strings, URLs, locale)
   useragent/                 User-Agent parsing for device friendly names
 
-charts/vault42/                Helm chart (single chart for all environments)
+charts/vault/                Helm chart (single chart for all environments)
 migrations/                  SQL migration files (executed in sorted order)
 web/                         Vue 3 + Vite + Tailwind frontend SPA
   src/__tests__/             Vitest + Vue Test Utils frontend tests
@@ -180,14 +185,13 @@ tests/
   stress/                    12 load/stress tests across 3 tiers (stress build tag)
 ```
 
-
 ## Middleware Chain
 
 The middleware chain is assembled in `internal/server/server.go` at `Start()`.
 Middleware wraps from inside out, so the **execution order is the reverse of the
 wrapping order**:
 
-```
+```text
 Incoming request
   |
   v
@@ -241,37 +245,100 @@ functions:
 | `authed(h)` | Auth -> Fingerprint -> h | Standard authenticated endpoints |
 | `authedChallenge(h)` | AuthChallenge -> Fingerprint -> h | 2FA verify endpoints (accept `2fa_challenge` tokens) |
 | `confirmed(h)` | Auth -> Fingerprint -> Confirmed -> h | Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup codes) |
-| `admin(h)` | AdminAuth -> h | Admin endpoints (key rotation, revocation). Bearer token verified with constant-time comparison against `ADMIN_TOKEN_FILE`. |
+
+There is no admin wrapper in `setupRoutes()`. Admin endpoints (key rotation,
+revocation, user and client management) are not served by this mux at all: they
+live on the separate admin gateway binary, whose router is built by
+`adminapi.NewRouter` and whose authentication is `adminapi.SessionAuth` -- a
+session-token gate backed by the `admin_sessions` table, not a static bearer
+token. This table used to name an `admin(h)` wrapper over
+`middleware.AdminAuth`; neither has been in a served request path.
+`ADMIN_TOKEN_FILE` is not consulted per request: it seeds
+`admin_config.admin_token_hash` on first boot, and that hash is what the admin
+CLI verifies against. See [config.md](config.md#admin-token-provisioning) and
+[admin-gateway.md](admin-gateway.md).
 
 When `VAULT_KEY_ROTATION_DB` is enabled, `authed` and `authedChallenge` use
 `AuthDynamic` / `AuthChallengeDynamic` variants that resolve signing keys from
 the keystore's dynamic key provider instead of the static file-based key map.
 
+**Scope gating (`RequireScope`).** Authentication answers "is this token valid"; it does not
+answer "may this token do this". `middleware.RequireScope(scope)`
+(`internal/middleware/auth.go`) reads the validated claims from context and returns
+`403 insufficient_scope` unless `claims.Scopes` contains the exact string. It **must** be
+chained after an `Auth` middleware -- absent claims are a `401`, never a pass -- and it is the
+only per-route authorization primitive on the user-facing plane. JWT `roles` are advisory to
+relying parties; no vault42 route authorizes on them.
+
+Its one current consumer is the KMS unwrap oracle, which is also the longest chain in the
+server and worth reading in full:
+
+```text
+POST /kms/unwrap                        mounted only when KMS_ROOT_KEY_FILE is set
+  |
+  v
+kmsUnwrapRL          RateLimit(30/min, per IP, FailClosed: true)
+  |                  Fail-closed like login/register/reset, unlike the OAuth
+  |                  callback: a cache outage must not let the per-pod in-memory
+  |                  fallback multiply the key-release rate across replicas (audit L4).
+  v
+authMw               Auth (or AuthDynamic under VAULT_KEY_ROTATION_DB). Resolves and
+  |                  validates the client-credential token, puts claims in context.
+  v
+RequireScope("kms:unwrap")
+  |                  403 insufficient_scope without the exact scope.
+  v
+dpopWrap             Identity when VAULT_DPOP_ENABLED=false. When true, the DPoP
+  |                  middleware runs INSIDE the auth wrappers so it sees resolved
+  |                  claims and enforces cnf.jkt. KMS tokens come from
+  |                  POST /client/token, which is not a DPoP issuance path, so
+  |                  they never carry cnf.jkt and a missing proof still passes.
+  |                  GET /auth/oauth2/callback/{provider} is also unwrapped: the
+  |                  provider redirects the browser with a GET.
+  v
+KMSHandler.Unwrap    Re-checks claims for nil (defense in depth), then unwraps.
+                     Every post-authorization failure collapses to one opaque
+                     400 unwrap_failed; the audit record carries kid + outcome only.
+```
+
+Wiring: the `POST /kms/unwrap` mount in `internal/server/server.go`. Rationale and threat
+model: the `internal/kms` package doc and [Attack Cheatsheet §8](cheatsheet.md).
+
 Rate limiting middleware is instantiated per-endpoint group with different limits
 and key functions, then wraps the appropriate routes:
 
-| Rate Limit | Limit | Window | Key | Endpoints |
-|------------|-------|--------|-----|-----------|
-| `loginRL` | 5 | 15 min | IP | POST /auth/login |
-| `registerRL` | 3 | 1 hour | IP | POST /auth/register |
-| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh |
-| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm |
-| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/totp/verify |
-| `confirmRL` | 5 | 15 min | IP | POST /auth/confirm |
-| `clientTokenRL` | 10 | 1 min | IP | POST /client/token |
+| Rate Limit | Limit | Window | Key | Endpoints | On cache outage |
+|------------|-------|--------|-----|-----------|-----------------|
+| `loginRL` | 5 | 15 min | IP | POST /auth/login | Closed |
+| `registerRL` | 3 | 1 hour | IP | POST /auth/register | Closed |
+| `refreshRL` | 30 | 1 min | IP | POST /auth/refresh | In-memory fallback |
+| `passwordResetRL` | 3 | 1 hour | IP | POST /auth/password/reset, /reset/confirm | Closed |
+| `totpRL` | 5 | 5 min | IP | POST /auth/2fa/{totp,backup-code,email-otp}/verify and email-otp/resend | Closed |
+| `confirmRL` | 5 | 15 min | user ID | POST /auth/confirm (and the other confirmRL routes) | In-memory fallback |
+| `clientTokenRL` | 10 | 1 min | IP | POST /client/token | Closed |
+| `oauthCallbackRL` | 10 | 1 min | IP | GET /auth/oauth2/callback/{provider} | In-memory fallback |
+| `authorizeRL` | 10 | 1 min | IP | GET /auth/oauth2/authorize | In-memory fallback |
+| `oauthExchangeRL` | 10 | 1 min | IP | POST /auth/oauth2/exchange | In-memory fallback |
+| `kmsUnwrapRL` | 30 | 1 min | IP | POST /kms/unwrap | Closed |
+| `mintRL` | 60 | 1 min | client_id | POST /mint | Closed |
 
-Rate limiting uses `cache.Increment()` with a sliding window. On cache failure,
-requests are **allowed through** (graceful degradation -- auth never fails because
-the cache is down).
+Rate limiting uses `cache.Increment()` with a fixed window. On cache failure an
+ordinary limiter falls back to a per-process in-memory counter: the limit stays
+enforced per pod, it is not lifted. A limiter marked Closed rejects with
+`503 rate_limiter_unavailable` instead, because the per-pod fallback would
+multiply the budget by the replica count. Login, register, password reset,
+TOTP/backup/email-OTP verify, `POST /client/token`, account deletion,
+`POST /kms/unwrap` and `POST /mint` are Closed. The OAuth callback is not:
+it used to share `loginRL` and no longer does (`internal/server/server.go`).
+A cache outage here is a per-pod 10/min, not a 503, and not "allow through".
 
 See: `internal/server/server.go`, `internal/middleware/`
-
 
 ## Request Lifecycle
 
 Trace of an authenticated `GET /user/profile` request:
 
-```
+```text
 1. TCP connection arrives at the Go HTTP server (TLS 1.3 if enabled)
 2. Recovery middleware installs panic handler via defer/recover
 3. RequestID generates "a1b2c3d4..." and stores in context
@@ -312,7 +379,6 @@ Values flow through the request context:
 | `"request_id"` | `string` | RequestID middleware | Logger, any handler |
 | `"claims"` | `*vaultcrypto.VaultClaims` | Auth/AuthChallenge middleware | Fingerprint, Confirmed, all handlers |
 
-
 ## Auth Flows
 
 > **0.8.0 additions**:
@@ -326,7 +392,7 @@ Values flow through the request context:
 
 ### Registration Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/register           |                               |
@@ -369,7 +435,7 @@ See: `internal/handler/auth.go` Register(), `internal/service/auth.go` Register(
 
 ### Login Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/login              |                               |
@@ -420,7 +486,7 @@ See: `internal/service/auth.go` Login()
 When the login response includes `requires_2fa: true`, the client must complete
 a second factor before receiving real tokens.
 
-```
+```text
 Client                           Vault42                         Cache
   |                                |                               |
   |  POST /auth/2fa/totp/verify    |                               |
@@ -462,7 +528,7 @@ See: `internal/handler/totp.go` Verify(), `internal/handler/webauthn.go` VerifyF
 
 ### Token Refresh Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/refresh            |                               |
@@ -515,7 +581,7 @@ See: `internal/service/auth.go` Refresh()
 
 ### Logout Flow
 
-```
+```text
 Client                           Vault42                         PostgreSQL
   |                                |                               |
   |  POST /auth/logout             |                               |
@@ -541,7 +607,7 @@ See: `internal/handler/auth.go` Logout(), `internal/service/auth.go` Logout()
 
 ### Password Reset Flow
 
-```
+```text
 Client                           Vault42                  Cache           Email
   |                                |                      |               |
   |  POST /auth/password/reset     |                      |               |
@@ -600,7 +666,7 @@ See: `internal/handler/password.go`
 
 ### OAuth2 Flow
 
-```
+```text
 Client                    Vault42                   Provider (Google/GitHub)
   |                         |                              |
   |  GET /auth/oauth2/authorize?provider=google            |
@@ -658,7 +724,6 @@ be verified. This prevents account takeover via unverified OAuth emails.
 
 See: `internal/handler/oauth.go`
 
-
 ## Token Architecture
 
 ### Access Tokens
@@ -714,24 +779,38 @@ See: `internal/handler/oauth.go`
 
 See: `internal/crypto/jwt.go`, `internal/service/token.go`
 
-
 ## Key Rotation (JWKS)
 
-```
+```text
 /.well-known/jwks.json  <--  Serves the current public key set
 
-On rotation (via CLI: vault42 rotate-jwks --admin-token <token>):
-  1. Generate new RSA-2048 key pair
-  2. Generate new kid (UUID)
-  3. Update TokenService signing key (mutex-protected)
-  4. Add new public key to the keys map
-  5. Old key remains in the map for validating existing tokens
-  6. /.well-known/jwks.json now returns both keys
+File-based keys (SIGNING_KEY_FILE; default):
+  Generate an RSA-2048 PKCS#8 PEM (`BEGIN PRIVATE KEY`) with
+  scripts/generate-secrets.sh or
+  `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`.
+  Point SIGNING_KEY_FILE at that path and restart. There is no live swap.
+
+  The kid the process advertises is KIDFromPublicKey: the first 16 hex
+  characters of SHA-256 over the PKIX DER of the public key, formatted
+  xxxxxxxx-xxxxxxxx. It is not a UUID you choose.
+
+  vault rotate-jwks is not this path. It writes PKCS#1
+  (`BEGIN RSA PRIVATE KEY`), prints a random UUID that LoadSigningKeyPEM
+  never reads, and a SIGNING_KEY_FILE pointed at that file fails at
+  startup with a parse error. Convert first
+  (`openssl pkcs8 -topk8 -nocrypt`) if you already have a PKCS#1 file,
+  then ignore the printed UUID and read the kid from
+  GET /.well-known/jwks.json after restart.
+
+DB-backed rotation (VAULT_KEY_ROTATION_DB=true):
+  POST /admin/keys/rotate, or the VAULT_KEY_ROTATION_INTERVAL scheduler.
+  The previously active key is retired and stays in JWKS until
+  VAULT_KEY_RETENTION_PERIOD. The CLI verb does not drive this path.
 ```
 
 The JWKS endpoint sets `Cache-Control: public, max-age=300` (5 minutes). During
-rotation, both the old and new keys are available, so tokens signed with the old
-key remain valid until they expire naturally.
+a DB-backed rotation, both the old and new keys are available, so tokens signed
+with the old key remain valid until they expire naturally.
 
 The `WellKnownHandler` uses a `sync.RWMutex` to safely update the key map while
 serving concurrent JWKS requests.
@@ -739,7 +818,8 @@ serving concurrent JWKS requests.
 ### File-Based Keys (Default)
 
 At startup, key loading depends on configuration:
-- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM file. Shared across all pods for horizontal scaling. Tokens survive restarts. `kid` derived deterministically from SHA-256 of the public key modulus.
+
+- **`SIGNING_KEY_FILE` set:** RSA-2048 private key loaded from PKCS#8 PEM (`x509.ParsePKCS8PrivateKey` in `LoadSigningKeyPEM`). Shared across all pods for horizontal scaling. Tokens survive restarts. PKCS#1 (`BEGIN RSA PRIVATE KEY`), including the file `vault rotate-jwks` writes, is a startup parse failure. `kid` is `KIDFromPublicKey`: the first 16 hex characters of SHA-256 over the PKIX DER encoding of the public key, formatted `xxxxxxxx-xxxxxxxx`. Hashing the modulus alone is not what the process does.
 - **`SIGNING_KEY_FILE` not set (fallback):** ephemeral RSA-2048 key pair generated in memory. Tokens invalidated on restart. Suitable for single-pod deployments only.
 
 This mode is backward compatible and requires no additional configuration.
@@ -754,15 +834,16 @@ rotation without shared filesystem access.
   (configurable via `VAULT_KEY_REFRESH_INTERVAL`).
 - On rotation, the previously active key is marked **retired**. Retired keys
   remain in the JWKS response until their retention period expires (default:
-  48 hours via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
+  1 hour via `VAULT_KEY_RETENTION_PERIOD`), so existing tokens validate
   seamlessly.
-- Key management (rotate, list, revoke) is performed exclusively via the admin
-  gateway (`cmd/admin-gateway/`), not exposed on the main vault42 binary.
+- Live key management (rotate, list, revoke) is performed via the admin
+  gateway (`cmd/admin-gateway/`). `vault rotate-jwks` writes a PKCS#1
+  key file and a discarded UUID; it does not rotate the live store and
+  cannot be mounted as `SIGNING_KEY_FILE`.
 - Revoked keys are removed from JWKS immediately. Expired retired keys are
   cleaned up automatically during the refresh cycle.
 
 See: `internal/keystore/`, `internal/handler/wellknown.go`, `internal/service/token.go` UpdateSigningKey()
-
 
 ## Service Layer
 
@@ -770,7 +851,7 @@ The service layer (`internal/service/`) contains all business logic. Handlers
 never access repositories directly for core auth operations -- they delegate to
 services.
 
-```
+```text
 Handler                    Service                    Repository
   |                          |                           |
   |  AuthHandler.Login()     |                           |
@@ -795,6 +876,7 @@ Handler                    Service                    Repository
 ```
 
 **Responsibilities**:
+
 - **Handlers**: HTTP concerns only -- decode request, extract headers, call
   service, set cookies, write response. Handlers import services and repositories
   but never contain business logic.
@@ -816,7 +898,6 @@ Three services coordinate the auth domain:
 | `MFAService` | MFA policy: which methods are enabled, whether MFA is required |
 
 See: `internal/service/auth.go`, `internal/service/token.go`, `internal/service/mfa.go`
-
 
 ## Data Layer
 
@@ -849,7 +930,7 @@ and use `pgx/v5` for connection pooling and query execution.
 
 Three PostgreSQL roles enforce separation of concerns:
 
-```
+```text
 vault_mig (migration role)
   - Used ONLY at startup for schema migrations
   - Has DDL privileges (CREATE TABLE, ALTER, etc.)
@@ -880,6 +961,7 @@ Each entry includes: event type, user ID, client ID, IP, user agent, fingerprint
 hash, device ID, scrubbed metadata, risk score, and timestamp.
 
 **Security properties**:
+
 - Append-only at the database level (vault_app has INSERT + SELECT only, and a
   trigger refuses DELETE and UPDATE regardless)
 - The one function that can remove a row, `audit.cleanup_old_entries()`, is
@@ -900,7 +982,7 @@ exactly why they need a purge of their own. A sweeper deletes entries older than
 `VAULT_AUDIT_RETENTION_DAYS` at startup and every 6 hours. It is disabled by default:
 silently deleting security logs is not a safe default, so the horizon is an explicit
 operator choice. Because the log is append-only, this is the only sanctioned removal
-path (`vault cleanup-audit` runs the same purge on demand).
+path. `vault cleanup-audit` is retired and writes nothing.
 
 **Recovery-escrow retention** (`internal/service/recovery_retention.go`): the
 account-recovery escrow (`auth.account_recovery`) has the same shape as the audit log --
@@ -916,7 +998,8 @@ this is the only path that can remove an escrow record.
 ### Cache Interface
 
 The cache (`internal/cache/cache.go`) is a pluggable key-value store used for:
-- Rate limiting counters (sliding window via `Increment`)
+
+- Rate limiting counters (fixed window via `Increment`)
 - Email verification tokens (`verify:<hash>` -> user ID, 24h TTL)
 - Password reset tokens (`reset:<hash>` -> user ID, 1h TTL)
 - TOTP replay prevention (`totp_used:<user>:<step>` -> "1", 90s TTL)
@@ -952,7 +1035,6 @@ without rebuilding the binary.
 
 See: `internal/email/templates.go`
 
-
 ## Configuration & Profiles
 
 ### Profile System
@@ -963,7 +1045,6 @@ Four deployment profiles control default configuration values:
 |---------|-----------|-----|----------|----------|
 | Listen address | :8443 | :8443 | :8443 | :8443 |
 | TLS enabled | true | true | true | true |
-| Log level | warn | debug | info | debug |
 | Cache backend | redis | (inherited) | memory | redis |
 | DB max conns | 25 | 25 | 5 | 25 |
 | Auto-migrate | false | true | true | true |
@@ -976,10 +1057,12 @@ Four deployment profiles control default configuration values:
 | Shutdown timeout | 15s | 5s | 5s | 15s |
 
 **Dev extends production** -- it starts from the production baseline and applies
-minimal overrides (debug logging, CORS allow-all, shorter refresh TTL, faster
-shutdown, auto-migration). TLS, rate limits, listen address, and cache backend
-are all inherited from production unless explicitly overridden via environment
-variables.
+minimal overrides (CORS allow-all, shorter refresh TTL, faster shutdown,
+auto-migration). TLS, rate limits, listen address, and cache backend are all
+inherited from production unless explicitly overridden via environment
+<!-- loglevel-gate:begin -->
+variables. There is no log-level control: `LOG_LEVEL` is read and ignored.
+<!-- loglevel-gate:end -->
 
 **Embedded** is tuned for resource-constrained environments (e.g., Raspberry Pi 5)
 with in-memory cache, 5 DB connections, and auto-migration. Target memory
@@ -993,8 +1076,10 @@ in `internal/config/secrets.go`:
 
 1. Reads `<ENV_KEY>_FILE` to get the file path
 2. Reads the file contents
-3. **Zeros the file** after reading (defense in depth)
-4. Trims whitespace and returns the value
+3. Trims whitespace and returns the value
+4. If `VAULT_SECRET_FILE_CONSUME=true` (exact string), zeros and removes the file. The default leaves the file intact.
+
+`LoadSecret` is the vault path. `BRIDGE_ADMIN_TOKEN_FILE` always overwrites the file with zeros and ignores the flag. The admin gateway's own `loadSecret` never consumes; its `MASTER_KEY_FILE` still goes through `LoadSecretBinary`, so consume applies there.
 
 Secrets are never passed as environment variables directly. This integrates with
 Kubernetes secrets mounted as files.
@@ -1012,7 +1097,6 @@ The argon2 semaphore gauge (`vault_argon2_semaphore_in_use` /
 `vault_argon2_semaphore_capacity`) is designed for HPA scaling: when utilization
 approaches capacity, Kubernetes can scale out the pod count.
 
-
 ## Frontend & i18n Architecture
 
 ### Vue Frontend (`web/`)
@@ -1021,6 +1105,7 @@ The Vue 3 + Vite + Tailwind frontend provides the user-facing dashboard. It uses
 the `@vault42/vue` package (`packages/vue/`) for all API interaction and i18n.
 
 **Key files:**
+
 - `web/src/App.vue` -- main layout, nav links (computed via `t()`), LanguageSwitcher
 - `web/src/views/*.vue` -- 15 view components, all strings translated via `t()`
 - `web/src/components/LanguageSwitcher.vue` -- searchable locale dropdown
@@ -1044,6 +1129,7 @@ Custom i18n plugin with no external dependencies:
 ### LanguageSwitcher
 
 Custom searchable dropdown (not a native `<select>`):
+
 - Trigger button shows current locale's native name
 - Opens upward as a popover with search input
 - Filters by locale code and native name
@@ -1052,7 +1138,7 @@ Custom searchable dropdown (not a native `<select>`):
 
 ### Build Pipeline
 
-```
+```text
 packages/vue/  →  pnpm build (tsup)  →  dist/vault42-vue.js
 web/           →  pnpm build (Vite)  →  dist/ (index.html + assets)
 scripts/build-all.sh  →  copies web/dist → internal/frontend/dist (go:embed)
@@ -1064,10 +1150,10 @@ scripts/build-all.sh  →  copies web/dist → internal/frontend/dist (go:embed)
 
 ### Single Helm Chart
 
-The Helm chart at `charts/vault42/` serves all environments via value overlays:
+The Helm chart at `charts/vault/` serves all environments via value overlays:
 
-```
-charts/vault42/
+```text
+charts/vault/
   values.yaml              Production defaults
   values-dev.yaml          Dev overlay (single replica, local images, in-cluster services)
   templates/
@@ -1075,7 +1161,7 @@ charts/vault42/
     service.yaml           ClusterIP service
     ingress.yaml           Split routing: API paths -> vault42, / -> frontend
     configmap.yaml         Environment variables
-    postgres.yaml          Optional in-cluster PostgreSQL (dev only)
+    postgres.yaml          Optional in-cluster PostgreSQL (dev only, off by default)
     redis.yaml             Optional in-cluster Redis (dev only)
     frontend.yaml          Optional Vue frontend deployment
     mailpit.yaml           Optional dev email server
@@ -1090,13 +1176,13 @@ charts/vault42/
 
 A single command deploys the full stack locally:
 
-```
+```text
 scripts/deploy-dev.sh
   1. Generate mkcert TLS certificates for vault.localhost
   2. Build Docker images: vault42:dev, vault42-frontend:dev
   3. Create vault42-dev namespace
   4. Create TLS secret + vault42 secrets
-  5. helm upgrade --install vault42 charts/vault42 -n vault42-dev -f charts/vault42/values-dev.yaml
+  5. helm upgrade --install vault42 charts/vault -n vault42-dev -f charts/vault/values-dev.yaml
 ```
 
 Access at `https://vault.localhost` via nginx ingress controller. Requires:
@@ -1105,6 +1191,7 @@ Access at `https://vault.localhost` via nginx ingress controller. Requires:
 ### Container Image
 
 Multi-stage Dockerfile:
+
 - **Builder**: `golang:1.24-alpine` -- compiles static binary with `CGO_ENABLED=0`
 - **Runtime**: `gcr.io/distroless/static-debian12:nonroot` -- no shell, no
   package manager, non-root user, read-only filesystem, all capabilities dropped
@@ -1112,4 +1199,4 @@ Multi-stage Dockerfile:
 ARM64 cross-compilation uses Go's native `GOARCH` instead of QEMU emulation,
 avoiding ~10x build overhead for ARM targets.
 
-See: `charts/vault42/`, `scripts/deploy-dev.sh`, `Dockerfile`
+See: `charts/vault/`, `scripts/deploy-dev.sh`, `Dockerfile`

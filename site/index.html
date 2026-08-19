@@ -149,10 +149,14 @@
   <!-- 4. AUDIT -->
   <section class="section container" id="audit" aria-labelledby="audit-head">
     <h2 id="audit-head">AUDIT</h2>
-    <p style="margin-bottom:14px">Append-only. Hash-chained. Sealed. Mirrors the production audit log: DB triggers + role enforcement prevent mutation. Every entry references its predecessor; the final root is the chain seal.</p>
+    <p style="margin-bottom:14px">Append-only, enforced at the database. A trigger raises on UPDATE and DELETE,
+      and both are revoked from the application role, so the service that writes the log cannot rewrite it.
+      The ledger below is an illustration of what chaining looks like, computed in your browser. It is not a
+      vault42 feature: the production log is not hash-chained, and the reasoning is published as an accepted
+      risk (CR-24) rather than implied away.</p>
 
     <div class="v-panel" data-title="LEDGER" style="padding-bottom:4px">
-      <div class="ledger" id="audit-ledger" role="table" aria-label="append-only hash-chained audit ledger">
+      <div class="ledger" id="audit-ledger" role="table" aria-label="simulated hash-chained audit ledger">
         <div class="ledger-head">
           <div>TIMESTAMP</div>
           <div>EVENT</div>
@@ -169,7 +173,8 @@
       <button class="v-btn" id="audit-append" type="button">APPEND EVENT</button>
       <button class="v-btn v-btn--ghost" id="audit-reset" type="button" style="margin-left:8px">RESET CHAIN</button>
     </div>
-    <p class="small">Client-side simulation using real SHA-256. Production log is immutable at the database.</p>
+    <p class="small">Client-side simulation using real SHA-256. The chaining shown here is the simulation's own;
+      production rows carry no predecessor hash. What production does hold is immutability at the database.</p>
   </section>
 
   <!-- 5. SELF-HOST QUICKSTART -->
@@ -182,18 +187,18 @@
       </div>
 
       <div id="panel-binary" class="quickstart" style="position:relative;margin-top:0">
-        <pre id="code-binary"><code>CGO_ENABLED=0 go build -ldflags="-s -w" -o vault42 ./cmd/vault42
+        <pre id="code-binary"><code>CGO_ENABLED=0 go build -ldflags="-s -w" -o vault42 ./cmd/vault
 
 # ARM64 (RPi5)
-CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault42</code></pre>
+CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault</code></pre>
         <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-binary" type="button" aria-label="copy binary commands">COPY</button>
       </div>
 
       <div id="panel-helm" class="quickstart" style="position:relative;margin-top:10px;display:none">
-        <pre id="code-helm"><code>microk8s helm3 upgrade --install vault42 charts/vault42 \
+        <pre id="code-helm"><code>microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
-  -f charts/vault42/values-embedded.yaml \
-  --set image.tag=v0.8.0 \
+  -f charts/vault/values-embedded.yaml \
+  --set image.tag=1.0.0 \
   --set origin=https://vault.example.com \
   --set secrets.existingSecret=vault42-secrets</code></pre>
         <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-helm" type="button" aria-label="copy helm commands">COPY</button>
@@ -206,7 +211,7 @@ CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault42</c
   <!-- 6. FOOTER -->
   <footer class="footer container">
     <div>
-      <span class="ver">vault42 v0.8.0</span> <span style="margin:0 6px">·</span> MIT
+      <span class="ver">vault42 v1.0.0</span> <span style="margin:0 6px">·</span> MIT
     </div>
     <div class="links">
       <a href="#deploy" class="upper">DEPLOY</a>

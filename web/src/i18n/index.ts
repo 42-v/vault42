@@ -1,50 +1,66 @@
 import type { LocaleMessages } from '@vault42/vue'
 
-import en from '../locales/en.json'
-import sk from '../locales/sk.json'
-import hu from '../locales/hu.json'
-import de from '../locales/de.json'
-import fr from '../locales/fr.json'
-import es from '../locales/es.json'
-import pt from '../locales/pt.json'
-import it from '../locales/it.json'
-import nl from '../locales/nl.json'
-import pl from '../locales/pl.json'
-import cs from '../locales/cs.json'
-import ro from '../locales/ro.json'
-import bg from '../locales/bg.json'
-import hr from '../locales/hr.json'
-import sr from '../locales/sr.json'
-import sl from '../locales/sl.json'
-import uk from '../locales/uk.json'
-import ru from '../locales/ru.json'
-import tr from '../locales/tr.json'
-import el from '../locales/el.json'
-import ar from '../locales/ar.json'
-import he from '../locales/he.json'
-import ja from '../locales/ja.json'
-import ko from '../locales/ko.json'
-import zhHans from '../locales/zh-Hans.json'
-import zhHant from '../locales/zh-Hant.json'
-import hi from '../locales/hi.json'
-import th from '../locales/th.json'
-import vi from '../locales/vi.json'
-import id from '../locales/id.json'
-import ms from '../locales/ms.json'
-import fi from '../locales/fi.json'
-import sv from '../locales/sv.json'
-import da from '../locales/da.json'
-import no from '../locales/no.json'
-import et from '../locales/et.json'
-import lv from '../locales/lv.json'
-import lt from '../locales/lt.json'
+/**
+ * The shipped locale catalogues, one lazily loaded chunk each.
+ *
+ * They used to be 38 static imports. `src/locales` is 844 KB, so every visitor
+ * downloaded every language to render one, and because the login view is this
+ * app's cold start that cost sat on the critical path before a password could be
+ * typed. It was the bulk of an 895 kB entry chunk.
+ *
+ * `import.meta.glob` gives Rollup one dynamic import per file, so it emits one
+ * chunk per locale and the entry carries none of them.
+ */
+const loaders = import.meta.glob<{ default: LocaleMessages }>('../locales/*.json')
 
-export const messages: Record<string, LocaleMessages> = {
-  en, sk, hu, de, fr, es, pt, it, nl, pl, cs, ro, bg, hr, sr, sl,
-  uk, ru, tr, el, ar, he, ja, ko,
-  'zh-Hans': zhHans,
-  'zh-Hant': zhHant,
-  hi, th, vi, id, ms, fi, sv, da, no, et, lv, lt,
+function localeOf(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1, -'.json'.length)
+}
+
+/** Every locale that has a catalogue, whether or not it has been fetched yet. */
+export const availableLocales: string[] = Object.keys(loaders).map(localeOf).sort()
+
+/**
+ * The catalogues handed to `createI18nPlugin`.
+ *
+ * Every locale is present from the start, initially empty. That is load-bearing
+ * twice over: `createI18n` snapshots `Object.keys(messages)` into its own
+ * `availableLocales` at construction, so a locale absent here could never appear
+ * in the switcher, and its `setLocale` refuses any locale with no entry. An
+ * empty catalogue resolves through the `en` fallback, and `t()` re-reads
+ * `messages[locale]` on every call, so replacing an entry before that locale
+ * becomes active is enough — {@link loadLocale} does exactly that.
+ */
+export const messages: Record<string, LocaleMessages> = Object.fromEntries(
+  availableLocales.map(locale => [locale, {} as LocaleMessages]),
+)
+
+const loaded = new Set<string>()
+
+/**
+ * Fetches a locale's catalogue and installs it into {@link messages}.
+ *
+ * Idempotent, and safe to call for a locale that does not exist: it resolves
+ * `false` rather than throwing, so a stale `vault42-locale` in localStorage or a
+ * hand-typed tag cannot break startup.
+ *
+ * Await it *before* switching the active locale. Installing a catalogue is a
+ * plain property write on a non-reactive object and re-renders nothing by
+ * itself; the render is driven by the locale ref changing afterwards.
+ *
+ * @param locale - A tag from {@link availableLocales}.
+ * @returns Whether a catalogue is now installed for that locale.
+ */
+export async function loadLocale(locale: string): Promise<boolean> {
+  if (loaded.has(locale)) return true
+
+  const load = loaders[`../locales/${locale}.json`]
+  if (!load) return false
+
+  messages[locale] = (await load()).default
+  loaded.add(locale)
+  return true
 }
 
 export { detectLocale } from './detection'
+export { applyDocumentLocale, isRTL } from './documentLocale'

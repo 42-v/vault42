@@ -20,10 +20,12 @@ var ErrUserNotFound = errors.New("user not found")
 
 // ErasureService performs GDPR account erasure with key-recoverable escrow.
 //
-// On deletion it (optionally) writes an encrypted recovery record, cascade-
-// deletes the user's PII, revokes all sessions, then scrubs and soft-deletes the
-// user row. When a recovery public key is configured the escrow write happens
-// FIRST and must succeed — the service fails closed rather than erase a user
+// On deletion it (optionally) writes an encrypted recovery record, then scrubs
+// and soft-deletes the user row, then cascade-deletes the user's PII and
+// hard-deletes every refresh token. That order is the safety property and not an
+// accident; DeleteAccount explains why, and the doc that used to be here had it
+// backwards. When a recovery public key is configured the escrow write happens
+// FIRST and must succeed: the service fails closed rather than erase a user
 // without a recoverable record.
 type ErasureService struct {
 	users       repository.UserRepository
@@ -40,6 +42,38 @@ type ErasureService struct {
 	auditLog    *audit.Logger
 	recoveryPub *rsa.PublicKey
 	hmacSecret  []byte
+
+	// svcDocs is optional and set separately rather than through the constructor,
+	// which already carries fourteen positional repositories. Nil when the service
+	// document store is disabled, in which case the cascade skips it.
+	svcDocs repository.ServiceDocumentRepository
+
+	// loginCountries is attached the same way and for the same reason. Unlike
+	// svcDocs there is no deployment in which it is legitimately absent — the
+	// table is unconditional — so tests/spec/erasure_cascade_test.go is what holds
+	// every production call site to setting it.
+	loginCountries repository.LoginCountryRepository
+}
+
+// SetLoginCountries attaches the login-country store to the erasure cascade.
+//
+// The countries an account has signed in from are location-revealing personal
+// data and must go with it. migrations/028 declared ON DELETE CASCADE and
+// concluded erasure removed them "automatically with no bespoke cascade step",
+// which is not true of a system that tombstones the user row instead of deleting
+// it: the referential action never fires. Without this call the store retains
+// that data across an erasure that reports success.
+func (s *ErasureService) SetLoginCountries(repo repository.LoginCountryRepository) {
+	s.loginCountries = repo
+}
+
+// SetServiceDocs attaches the service-scoped document store to the erasure
+// cascade. Documents written about a user by other services are personal data
+// under Art. 4(1) regardless of which service authored them, so erasure must
+// reach them; without this the store would silently retain data across an
+// erasure that reported success.
+func (s *ErasureService) SetServiceDocs(repo repository.ServiceDocumentRepository) {
+	s.svcDocs = repo
 }
 
 // NewErasureService constructs an ErasureService. recoveryPub may be nil, in
@@ -68,9 +102,27 @@ func NewErasureService(
 	}
 }
 
+// recoveryPayloadVersion is stamped into every escrowed profile. It is not a
+// framing discriminator - crypto.RecoveryBlobFormat does that from the outside,
+// before any key is touched - but a statement made INSIDE the sealed and bound
+// region about what the plaintext is. cmd/recover refuses a bound record whose
+// payload does not claim this version, so a producer that starts writing a
+// different shape cannot have it silently parsed as this one.
+const recoveryPayloadVersion = 2
+
 // recoveryPayload is the minimal recoverable profile escrowed on deletion. It is
-// JSON-marshalled and encrypted; only the offline recovery private key can read it.
+// JSON-marshaled and encrypted; only the offline recovery private key can read it.
+//
+// UserID is what makes a recovered record self-describing. The escrow row names
+// its subject only as an HMAC pseudonym, which the offline tool cannot invert, so
+// before this field existed a decrypted profile could not say who it was about:
+// it was an email and a display name that the recovery tool attributed to
+// whichever row's deleted_at/deleted_by/reason it happened to be sitting next to.
+// It is also the value an operator needs to actually restore the account, since
+// the scrubbed user row is keyed by exactly this id.
 type recoveryPayload struct {
+	Version     int       `json:"v"`
+	UserID      string    `json:"user_id"`
 	Email       string    `json:"email"`
 	CreatedAt   time.Time `json:"created_at"`
 	Roles       []string  `json:"roles"`
@@ -89,7 +141,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 		return ErrUserNotFound
 	}
 
-	// The cascade below spans nine stores and the repositories are pool-backed, so
+	// The cascade below spans ten stores and the repositories are pool-backed, so
 	// there is no transaction to roll back with: any step can fail with the ones
 	// before it already committed. What matters is which side of the failure the
 	// account is left on.
@@ -144,6 +196,37 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	if err := s.blobs.DeleteAllForPseudonym(ctx, s.blobPseudonym(userID)); err != nil {
 		return fmt.Errorf("erasure: delete blobs: %w", err)
 	}
+	// Service documents are written about the user BY other services and span every
+	// owning client, so the delete is keyed by subject rather than by owner.
+	// Idempotent like the rest of the cascade, so an interrupted erasure re-runs
+	// cleanly. Documents filed under the global sentinel belong to a service rather
+	// than a user and carry a different hash, so they are correctly untouched.
+	//
+	// The delete takes the same per-subject write lock a Put takes, because
+	// otherwise it races one. A Put that passed its quota check just before the
+	// delete ran can commit its row just after, and the document then belongs to
+	// an account that no longer exists, with the erasure having reported success.
+	// The window is small and the consequence is an Art. 17 failure, so it is
+	// closed rather than accepted.
+	//
+	// The lock is best-effort in one direction only: a repository that does not
+	// implement the serialiser still gets the plain delete, which is the previous
+	// behavior, never a skipped delete.
+	if s.svcDocs != nil {
+		pseudonym := s.svcDocPseudonym(userID)
+		deleteDocs := func(ctx context.Context) error {
+			return s.svcDocs.DeleteAllForSubject(ctx, pseudonym)
+		}
+		var err error
+		if serializer, ok := s.svcDocs.(SubjectWriteSerializer); ok {
+			err = serializer.WithSubjectWriteLock(ctx, pseudonym, deleteDocs)
+		} else {
+			err = deleteDocs(ctx)
+		}
+		if err != nil {
+			return fmt.Errorf("erasure: delete service documents: %w", err)
+		}
+	}
 	if err := s.devices.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete devices: %w", err)
 	}
@@ -152,6 +235,23 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 	}
 	if err := s.pwHistory.DeleteAllForUser(ctx, userID); err != nil {
 		return fmt.Errorf("erasure: delete password history: %w", err)
+	}
+
+	// Login countries. Same trap as the MFA tables below, and migration 028 walked
+	// straight into it: the table declares ON DELETE CASCADE on user_id and its
+	// header concludes erasure therefore clears it "automatically with no bespoke
+	// cascade step". The user row is never deleted, so it does not. The set of
+	// countries an account signed in from is location data about a person, and it
+	// survived every erasure between 028 and this line.
+	//
+	// Guarded like svcDocs so the cascade degrades to its previous behavior
+	// rather than panicking if a call site forgets the setter; what actually
+	// prevents that is tests/spec/erasure_cascade_test.go, which fails the build
+	// when a production ErasureService is built without it.
+	if s.loginCountries != nil {
+		if err := s.loginCountries.DeleteAllForUser(ctx, userID); err != nil {
+			return fmt.Errorf("erasure: delete login countries: %w", err)
+		}
 	}
 
 	// MFA authenticators. These hang off user_id with ON DELETE CASCADE, but the
@@ -192,7 +292,7 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 			meta["retry"] = true
 			meta["note"] = "cascade completed on re-run; address was recorded by the original attempt"
 		}
-		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", meta, 50) // #nosec G104 -- audit is best-effort
+		_ = s.auditLog.Log(ctx, audit.AccountErased, userID, "", "", "", "", "", meta) // #nosec G104 -- audit is best-effort
 	}
 
 	return nil
@@ -206,7 +306,19 @@ func (s *ErasureService) DeleteAccount(ctx context.Context, userID, deletedBy, r
 // horizon would not eventually clear, and keep docs/PRIVACY.md §3.2 in step with
 // what recoveryPayload actually carries.
 func (s *ErasureService) escrow(ctx context.Context, user *model.User, deletedBy, reason string) error {
+	// The record id and the pseudonym are drawn BEFORE the payload is sealed,
+	// because they are what it is sealed to. The order used to be the other way
+	// round, which is how the escrow ended up bound to nothing: the ciphertext
+	// existed before anything identifying its row did.
+	id, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		return fmt.Errorf("erasure: recovery record id: %w", err)
+	}
+	pseudonym := s.recoveryPseudonym(user.ID)
+
 	payload, err := json.Marshal(recoveryPayload{
+		Version:     recoveryPayloadVersion,
+		UserID:      user.ID,
 		Email:       user.Email,
 		CreatedAt:   user.CreatedAt,
 		Roles:       user.Roles,
@@ -216,19 +328,23 @@ func (s *ErasureService) escrow(ctx context.Context, user *model.User, deletedBy
 		return fmt.Errorf("erasure: marshal recovery payload: %w", err)
 	}
 
-	enc, err := vaultcrypto.EncryptRecovery(s.recoveryPub, payload)
+	// Bound to (id, pseudonym): the primary key of the row this blob is about to
+	// occupy and the pseudonym of its subject. Both are columns cmd/recover reads
+	// back, which is what lets the offline tool rebuild the same binding without
+	// the HMAC secret and without ever learning the user id in advance.
+	//
+	// The retry path above can write a second record for the same user. That is
+	// fine and stays fine: each record gets its own id, so each blob is bound to
+	// its own row, and the two are not interchangeable even though they describe
+	// the same account.
+	enc, err := vaultcrypto.EncryptRecovery(s.recoveryPub, payload, vaultcrypto.RecoveryBinding(id, pseudonym))
 	if err != nil {
 		return fmt.Errorf("erasure: encrypt recovery payload: %w", err)
 	}
 
-	id, err := vaultcrypto.RandomUUID()
-	if err != nil {
-		return fmt.Errorf("erasure: recovery record id: %w", err)
-	}
-
 	rec := &model.AccountRecovery{
 		ID:        id,
-		Pseudonym: s.recoveryPseudonym(user.ID),
+		Pseudonym: pseudonym,
 		Payload:   enc,
 		DeletedAt: time.Now(),
 		DeletedBy: deletedBy,
@@ -251,4 +367,16 @@ func (s *ErasureService) blobPseudonym(userID string) string {
 
 func (s *ErasureService) recoveryPseudonym(userID string) string {
 	return vaultcrypto.HMACSign([]byte(userID+":recovery"), s.hmacSecret)
+}
+
+// svcDocPseudonym must derive exactly what DocumentService.SubjectPseudonym
+// derives, canonicalisation included. A divergence would not fail loudly: the
+// delete would match no rows and the erasure would report success while the
+// documents survived.
+//
+// The fold is what makes this cascade reach a document a service filed under a
+// differently-cased spelling of the same user id. Without it those rows sat in a
+// namespace the erasure never addressed, and Art. 17 was answered with a lie.
+func (s *ErasureService) svcDocPseudonym(userID string) string {
+	return vaultcrypto.HMACSign([]byte(CanonicalSubject(userID)+":svcdoc"), s.hmacSecret)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -296,8 +297,12 @@ func TestAuthHandler_TOTPVerify_BadJSON400(t *testing.T) {
 }
 
 func TestEnsureFirstAdmin_CreatesWhenEmpty(t *testing.T) {
+	// A generated bootstrap password is delivered before the row is written and
+	// never through the log, so the test has to give the process somewhere to
+	// put it.
+	t.Setenv("VAULT_FIRST_BOOT_CREDENTIAL_FILE", filepath.Join(t.TempDir(), "first-boot.env"))
 	admins := newMockAdminUserRepo()
-	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, ""); err != nil {
+	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, &mocks.MockAdminConfigRepo{}, ""); err != nil {
 		t.Fatalf("EnsureFirstAdmin: %v", err)
 	}
 	got, _ := admins.List(context.Background())
@@ -311,7 +316,7 @@ func TestEnsureFirstAdmin_NoOpWhenExists(t *testing.T) {
 	_ = admins.Create(context.Background(), &model.AdminUser{
 		ID: "00000000-0000-0000-0000-000000000001", Username: "existing",
 	})
-	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, ""); err != nil {
+	if err := adminapi.EnsureFirstAdmin(context.Background(), admins, &mocks.MockAdminConfigRepo{}, ""); err != nil {
 		t.Fatalf("EnsureFirstAdmin: %v", err)
 	}
 	got, _ := admins.List(context.Background())
@@ -420,7 +425,7 @@ func TestAdminMiddleware_GetSession_NoneReturnsNil(t *testing.T) {
 // SessionAuth has many rejection branches; one test per branch reaches a
 // distinct error path. A passing handler downstream confirms the happy path.
 func sessionAuthGuard(sessions *mockAdminSessionRepo, admins *mockAdminUserRepo) http.Handler {
-	mw := adminapi.SessionAuth(sessions, admins)
+	mw := adminapi.SessionAuth(sessions, admins, audit.NewLogger(&mocks.MockAuditRepo{}, 0))
 	return mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -469,7 +474,7 @@ func TestSessionAuth_UnknownToken401(t *testing.T) {
 }
 
 func TestRBACCheck_NoAdmin401(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.AuditRead)
+	mw := adminapi.RBACCheck(rbac.AuditRead, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/audit", nil))
@@ -479,7 +484,7 @@ func TestRBACCheck_NoAdmin401(t *testing.T) {
 }
 
 func TestRBACCheck_AdminMissingPerm403(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.ConfigWrite)
+	mw := adminapi.RBACCheck(rbac.ConfigWrite, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	r := httptest.NewRequest(http.MethodPost, "/admin/config/x", nil)
 	r = r.WithContext(adminapi.WithAdmin(r.Context(), &model.AdminUser{Role: string(rbac.RoleViewer)}))
@@ -570,7 +575,7 @@ func TestAdminHandler_RevokeAdmin_OtherID(t *testing.T) {
 
 func TestSeed_RunAdminsCreatesAndSkips(t *testing.T) {
 	admins := newMockAdminUserRepo()
-	sf := &seed.SeedFile{
+	sf := &seed.File{
 		Admins: []seed.AdminSeed{
 			{Username: "seeded-1", Password: "SeedingAdminLongerThan15Chars!", Role: string(rbac.RoleSuperAdmin)},
 			{Username: "seeded-2", Password: "AnotherLongEnoughPassword!2", Role: string(rbac.RoleViewer)},
@@ -594,7 +599,7 @@ func TestSeed_RunAdminsCreatesAndSkips(t *testing.T) {
 }
 
 func TestRBACCheck_AdminWithPerm200(t *testing.T) {
-	mw := adminapi.RBACCheck(rbac.AuditRead)
+	mw := adminapi.RBACCheck(rbac.AuditRead, nil)
 	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	r := httptest.NewRequest(http.MethodGet, "/admin/audit", nil)
 	r = r.WithContext(adminapi.WithAdmin(r.Context(), &model.AdminUser{Role: string(rbac.RoleSuperAdmin)}))

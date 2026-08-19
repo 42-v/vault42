@@ -2,6 +2,7 @@
 import { onMounted, ref, computed } from 'vue'
 import { useBlobs, VaultAuthGuard, useT } from '@vault42/vue'
 import { friendlyError } from '../errorMessages'
+import { useModalFocus } from '../composables/useModalFocus'
 
 const { blobs, quota, isLoading, isUploading, error, fetchBlobs, uploadBlob, downloadBlob, deleteBlob } = useBlobs()
 const { t, formatDate } = useT()
@@ -9,6 +10,7 @@ const { t, formatDate } = useT()
 const fileInput = ref<HTMLInputElement | null>(null)
 const label = ref('')
 const deleteConfirmId = ref<string | null>(null)
+const { dialogRef } = useModalFocus(deleteConfirmId, () => { deleteConfirmId.value = null })
 
 const quotaPercent = computed(() => {
   if (!quota.value || !quota.value.max_bytes) return 0
@@ -74,7 +76,7 @@ async function handleDelete(id: string) {
         </div>
 
         <div v-else class="space-y-6">
-          <div v-if="error" class="vault42-alert-error">{{ friendlyError(error.code) }}</div>
+          <div v-if="error" class="vault42-alert-error" role="alert">{{ friendlyError(error.code) }}</div>
 
           <!-- Quota bar -->
           <div v-if="quota" class="vault42-card">
@@ -89,7 +91,7 @@ async function handleDelete(id: string) {
             <div class="w-full bg-vault42-surface rounded-full h-2">
               <div
                 class="h-2 rounded-full transition-all duration-300"
-                :class="quotaPercent > 90 ? 'bg-red-500' : 'bg-vault42-primary'"
+                :class="quotaPercent > 90 ? 'bg-vault42-error' : 'bg-vault42-accent'"
                 :style="{ width: quotaPercent + '%' }"
               ></div>
             </div>
@@ -146,7 +148,7 @@ async function handleDelete(id: string) {
         <!-- Delete confirmation -->
         <Teleport to="body">
           <div v-if="deleteConfirmId" class="vault42-modal-overlay" @click.self="deleteConfirmId = null">
-            <div class="vault42-modal" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
+            <div ref="dialogRef" class="vault42-modal" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
               <h3 id="delete-dialog-title" class="text-lg font-semibold mb-2">{{ t('blobs.deleteFile') }}</h3>
               <p class="text-sm text-vault42-muted mb-4">{{ t('blobs.deleteConfirm') }}</p>
               <div class="flex gap-3">

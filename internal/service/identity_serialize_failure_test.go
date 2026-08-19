@@ -29,7 +29,7 @@ func apUnserializableProfile() *IdentityData {
 // profile would be indistinguishable from encryption of a whole one: the
 // ciphertext is opaque, so a partially serialized blob would be written, stored
 // and only discovered on the next read, by which time the real profile is gone.
-// A profile that cannot be marshalled must stop before the repository is touched.
+// A profile that cannot be marshaled must stop before the repository is touched.
 func TestIdentityWritePaths_UnserializableProfileNeverReachesTheStore(t *testing.T) {
 	tests := []struct {
 		name  string

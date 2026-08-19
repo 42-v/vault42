@@ -16,6 +16,7 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/dpop"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
@@ -119,7 +120,7 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), audit.OAuth2Authorize, "", "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"provider": providerName,
-			}, 0)
+			})
 	}
 
 	authURL := provider.AuthURL(state, nonce, challenge)
@@ -175,6 +176,56 @@ func isSafeAuthorizeRedirect(raw string) bool {
 		return false
 	}
 	return u.Scheme == "https" && u.Host != ""
+}
+
+// linkableToExistingAccount reports whether a provider identity may be attached
+// to an account that already holds this email address. Both sides have to be
+// verified: the IdP's assertion about the address, and the account's own
+// email_verified. Either half alone lets an attacker who can assert an address
+// they do not own inherit somebody else's account, and the link is permanent,
+// so it becomes a standing passwordless login as that user.
+//
+// It is a function rather than two inline conditions because the callback
+// reaches this decision twice, and the second site did not have it. The
+// lookup-hit branch enforced the predicate while the 23505 race fallback adopted
+// whichever row won the race, which is the same takeover with a race window in
+// front of it. Both sites call this now so they cannot drift apart again.
+func linkableToExistingAccount(userInfo *oauth2.UserInfo, existing *model.User) bool {
+	return userInfo.EmailVerified && existing.EmailVerified
+}
+
+// normalizedProviderEmail folds a provider-asserted address into the single form
+// the rest of vault42 stores and queries, or returns "" when the address is not
+// one this system would accept from anybody else.
+//
+// The address is both a join key and a delivery destination, and this path had
+// been treating it as neither. GetByEmail is an exact SQL comparison against a
+// VARCHAR(255) UNIQUE column, while Register and Login fold to lower case before
+// they query, so an unfolded spelling from an IdP missed the row that already
+// holds the mailbox: it skipped linkableToExistingAccount instead of failing it,
+// and fell through to the create branch. That turns the address of an
+// unverified account into something claimable by anyone whose IdP will assert a
+// differently-cased spelling of it, and the resulting row is invisible to every
+// path that folds first. Validation covers the other end: the same string is
+// handed to the verification mailer as an envelope recipient and written to a
+// 255-character column, so an issuer was choosing both.
+//
+// An unusable address is dropped rather than fataled. An identity already linked
+// by (provider, provider_user_id) still signs in, and a first-time login with no
+// usable address falls through to unable_to_identify_user, which is accurate.
+func normalizedProviderEmail(raw string) string {
+	email := strings.ToLower(strings.TrimSpace(raw))
+	if !sanitize.Email(email) {
+		return ""
+	}
+	return email
+}
+
+// logRefusedLink records a refused identity link. Both refusal sites log the
+// same shape so the two are indistinguishable in an incident review.
+func logRefusedLink(providerName string, userInfo *oauth2.UserInfo, existing *model.User) {
+	log.Printf("oauth: refusing to link %s to existing user %s (oauth_verified=%v, user_verified=%v)", // #nosec G706 -- sanitized via SafeLogValue
+		httputil.SafeLogValue(providerName), existing.ID, userInfo.EmailVerified, existing.EmailVerified)
 }
 
 // Callback handles GET /auth/oauth2/callback/{provider}.
@@ -293,25 +344,97 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The provider's subject is the join key on both ends of the identity bridge,
+	// and auth.social_accounts stores it NOT NULL but not non-empty, so the empty
+	// string is one storable value with exactly one UNIQUE(provider,
+	// provider_user_id) row behind it. Left unchecked, every response that named
+	// nobody collapsed onto that single row: the first such login claims it, and
+	// each later one is answered with that account's session. Refuse before the
+	// lookup, so neither direction is reachable.
+	if strings.TrimSpace(userInfo.ID) == "" {
+		log.Printf("oauth: provider %s returned no subject", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
+		WriteError(w, http.StatusBadGateway, "provider_error")
+		return
+	}
+
+	if raw := userInfo.Email; raw != "" {
+		if userInfo.Email = normalizedProviderEmail(raw); userInfo.Email == "" {
+			log.Printf("oauth: provider %s asserted an unusable email address", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
+		}
+	}
+
 	// Find or create user
 	var userID string
 	if h.social != nil {
-		existing, _ := h.social.GetByProviderAndID(r.Context(), providerName, userInfo.ID)
+		// GetByProviderAndID returns (nil, nil) on a clean miss and (nil, err)
+		// on a read fault. Discarding the error collapsed the two: a linked
+		// identity that momentarily could not be read was treated as absent, so
+		// the callback ran the create-or-link-by-email path and, on a free
+		// address, wrote a user row whose (provider, provider_user_id) is already
+		// claimed. The later social.Create then fails and leaves that row
+		// orphaned, squatting the address. Fail closed instead.
+		existing, lookupErr := h.social.GetByProviderAndID(r.Context(), providerName, userInfo.ID)
+		if lookupErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
 		if existing != nil {
 			userID = existing.UserID
 		}
 	}
 
+	// linkIdentity records that this callback resolved an account without an
+	// existing (provider, provider_user_id) row, so one still has to be written.
+	// The write itself waits for the account-state gate below, because a row in
+	// auth.social_accounts is a standing passwordless login: the next callback
+	// finds it through GetByProviderAndID, never reaches the verified-email gate
+	// again, and is answered with that account's refresh-token family.
+	//
+	// Writing it first meant a refused callback still handed the account a
+	// credential it did not have before. locked_until is a timestamp, so the
+	// refusal lifts on its own while the row stays, and banned, disabled and
+	// deleted accounts collected identities through a 403 as well. The gate's
+	// own suite already holds this line for the import claim, on the grounds
+	// that a locked row must come out of the callback in the state it went in.
+	// The identity table is the half of that rule that grants access.
+	linkIdentity := false
+
 	if userID == "" && userInfo.Email != "" {
-		// Check if a user with this email already exists
-		existingUser, _ := h.users.GetByEmail(r.Context(), userInfo.Email)
+		// A provider that cannot prove the caller owns this address (Facebook
+		// publishes no per-address verification signal, internal/oauth2/facebook.go;
+		// an OIDC issuer may answer email_verified:false) must not resolve or create
+		// an account by it. The address is attacker-supplied, so the create branch
+		// below would squat a free address and mail its real owner, while the
+		// existing-vs-free outcome (409 email_already_registered vs a created account
+		// + 302 #code) tells an unauthenticated caller, across a rotated IP, whether
+		// the address is registered. Return one neutral outcome BEFORE the existence
+		// lookup, byte-identical whether or not the address is registered, so there
+		// is nothing to observe and no account is squatted and no mail is sent.
+		//
+		// Providers that DO verify ownership (google, github, a verified OIDC issuer)
+		// still create/link/sign in below; an identity already linked by (provider,
+		// provider_user_id) resolved userID above and never reaches here. First-time
+		// sign-in from an unverified provider is simply not auto-provisioned.
+		if !userInfo.EmailVerified {
+			log.Printf("oauth: refusing first-time sign-in from unverified provider %s (no per-address ownership proof)", httputil.SafeLogValue(providerName)) // #nosec G706 -- sanitized via SafeLogValue
+			fragment := url.Values{}
+			fragment.Set("error", "verification_required")
+			http.Redirect(w, r, h.origin+"/oauth/callback#"+fragment.Encode(), http.StatusFound)
+			return
+		}
+		// Check if a user with this email already exists. A read fault here is
+		// (nil, err), indistinguishable from a clean (nil, nil) miss once the
+		// error is dropped, and dropping it sent a fault down the create branch
+		// to write a row for an address the failed read never got to resolve.
+		// Fail closed rather than create on a lookup that did not complete.
+		existingUser, emailErr := h.users.GetByEmail(r.Context(), userInfo.Email)
+		if emailErr != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
 		if existingUser != nil {
-			// SECURITY: Only link to existing account when BOTH the OAuth provider
-			// confirms the email is verified AND the existing account's email is verified.
-			// This prevents account takeover via unverified OAuth emails.
-			if !userInfo.EmailVerified || !existingUser.EmailVerified {
-				log.Printf("oauth: refusing to link %s to existing user %s (oauth_verified=%v, user_verified=%v)", // #nosec G706 -- sanitized via SafeLogValue
-					httputil.SafeLogValue(providerName), existingUser.ID, userInfo.EmailVerified, existingUser.EmailVerified)
+			if !linkableToExistingAccount(userInfo, existingUser) {
+				logRefusedLink(providerName, userInfo, existingUser)
 				WriteError(w, http.StatusConflict, "email_already_registered")
 				return
 			}
@@ -336,11 +459,28 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			}); err != nil {
 				// Handle concurrent registration race: if another request created
 				// a user with this email between our lookup and insert, look them up.
+				//
+				// The re-lookup lands on a row this flow has never vetted, so it has
+				// to re-apply the same predicate as the lookup-hit branch above
+				// rather than trust the row for having won a race. Skipping it was a
+				// takeover with a race window: a victim registers victim@ex.com
+				// (email_verified=false), an attacker completes a social login
+				// asserting that address, the GetByEmail above misses, the victim's
+				// INSERT commits first, the attacker's Create comes back 23505 and
+				// the attacker adopted the victim's id with their own IdP account
+				// linked to it. UNIQUE(provider, provider_user_id) does not cover
+				// this: it stops one IdP account attaching twice, not a new IdP
+				// account attaching to somebody else's user row.
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 					raceUser, lookupErr := h.users.GetByEmail(r.Context(), userInfo.Email)
 					if lookupErr != nil || raceUser == nil {
 						WriteError(w, http.StatusInternalServerError, "internal_error")
+						return
+					}
+					if !linkableToExistingAccount(userInfo, raceUser) {
+						logRefusedLink(providerName, userInfo, raceUser)
+						WriteError(w, http.StatusConflict, "email_already_registered")
 						return
 					}
 					userID = raceUser.ID
@@ -350,30 +490,14 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				userID = newID
+				// Only a provider that verified the address reaches this branch: the
+				// guard at the top of the block refuses unverified first-time sign-in
+				// before the lookup. So the account is created verified (EmailVerified
+				// is true here) and needs no verification mail.
 			}
 		}
 
-		// Link social account — the social link is the identity bridge;
-		// if it fails, the OAuth flow must fail to prevent orphaned users.
-		if h.social != nil {
-			saID, err := vaultcrypto.RandomUUID()
-			if err != nil {
-				WriteError(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
-			if err := h.social.Create(r.Context(), &model.SocialAccount{
-				ID:             saID,
-				UserID:         userID,
-				Provider:       providerName,
-				ProviderUserID: userInfo.ID,
-				Email:          userInfo.Email,
-				CreatedAt:      time.Now(),
-			}); err != nil {
-				log.Printf("oauth: failed to link social account for %s", httputil.SafeLogValue(userID)) // #nosec G706 -- sanitized via SafeLogValue
-				WriteError(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
-		}
+		linkIdentity = h.social != nil
 	}
 
 	if userID == "" {
@@ -383,9 +507,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce account state on the OAuth path too (parity with password login +
 	// token refresh; 2nd-pass review): OAuth must not become a bypass for a
-	// banned/disabled/deleted account. An unclaimed imported account is claimed
-	// here — the OAuth provider has verified ownership of the email, which is a
-	// valid claim — clearing import_pending so later logins behave normally.
+	// banned/disabled/deleted/locked account. An unclaimed imported account is
+	// claimed here, because the OAuth provider has verified ownership of the email
+	// and that is a valid claim, clearing import_pending so later logins behave
+	// normally.
 	acct, _ := h.users.GetByID(r.Context(), userID)
 	if acct == nil || acct.Deleted {
 		WriteError(w, http.StatusForbidden, "account_unavailable")
@@ -399,6 +524,53 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "account_disabled")
 		return
 	}
+	// The lock was missing from this gate while the comment above already claimed
+	// parity, and that gap made POST /admin/users/{id}/lock useless against the
+	// attacker it exists for. Login answered account_locked and Refresh burned the
+	// family, so an operator responding to a suspected takeover saw both of those
+	// paths close, while an attacker holding a linked social identity completed a
+	// callback and collected a brand new refresh family. The lock stopped every
+	// login that had not happened yet except the one already in play.
+	//
+	// Both sources count, matching Login: the persisted locked_until an operator
+	// writes, and the cache auto-lockout the failed-password counter trips.
+	// MFAVerifyLocked is the exported reader for that counter.
+	//
+	// This sits ahead of the import claim and ahead of the 2FA branch on purpose.
+	// A locked row must not be claimed (import_pending is cleared once and never
+	// comes back), and a locked account must not receive a challenge token, which
+	// is a bearer credential carrying its own window to finish in.
+	if acct.LockedUntil != nil && time.Now().Before(*acct.LockedUntil) {
+		WriteError(w, http.StatusForbidden, "account_locked")
+		return
+	}
+	if h.authSvc != nil && h.authSvc.MFAVerifyLocked(r.Context(), acct.ID) {
+		WriteError(w, http.StatusForbidden, "account_locked")
+		return
+	}
+
+	// Link social account — the social link is the identity bridge;
+	// if it fails, the OAuth flow must fail to prevent orphaned users.
+	if linkIdentity {
+		saID, err := vaultcrypto.RandomUUID()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		if err := h.social.Create(r.Context(), &model.SocialAccount{
+			ID:             saID,
+			UserID:         userID,
+			Provider:       providerName,
+			ProviderUserID: userInfo.ID,
+			Email:          userInfo.Email,
+			CreatedAt:      time.Now(),
+		}); err != nil {
+			log.Printf("oauth: failed to link social account for %s", httputil.SafeLogValue(userID)) // #nosec G706 -- sanitized via SafeLogValue
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+	}
+
 	if acct.ImportPending {
 		if err := h.users.ClearImportPending(r.Context(), acct.ID); err != nil {
 			WriteError(w, http.StatusInternalServerError, "internal_error")
@@ -424,7 +596,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			requiresMFA = true
 		}
 		if requiresMFA {
-			challengeToken, err := h.tokenSvc.IssueChallengeToken(userID, fp)
+			// The first factor here is the upstream provider's assertion, not a
+			// password. It travels on the challenge so the completed login
+			// does not claim a memorized secret vault42 never verified.
+			challengeToken, err := h.tokenSvc.IssueChallengeToken(r.Context(), userID, fp, service.MethodFederated)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, "internal_error")
 				return
@@ -435,7 +610,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 					r.Header.Get("User-Agent"), fp, "", map[string]interface{}{
 						"provider":     providerName,
 						"mfa_required": true,
-					}, 0)
+					})
 			}
 
 			fragment := url.Values{}
@@ -447,10 +622,14 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Issue tokens
-	pair, err := h.tokenSvc.IssueTokenPair(
-		userID, []string{"user"}, []string{"read", "write"},
+	// Issue tokens. The only factor vault42 observed is the provider assertion,
+	// so this is AAL1 and carries no amr value: RFC 8176 registers none for "an
+	// assertion from another issuer", and inventing one would name a check this
+	// server did not make.
+	pair, err := h.tokenSvc.IssueTokenPairWithAuth(
+		r.Context(), userID, []string{"user"}, []string{"read", "write"},
 		"", fp, "", false,
+		service.NewAuthContext(time.Now(), []string{service.MethodFederated}, false),
 	)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
@@ -459,21 +638,61 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Store refresh token (hashed) in database
 	tokenHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
-	rtID, err := vaultcrypto.RandomUUID()
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
 	if h.tokens != nil {
-		if err := h.tokens.Create(r.Context(), &model.RefreshToken{
+		// The concurrent-session cap applies here for the same reason it applies to a
+		// password login: this path writes a refresh-token family. The MFA-completing
+		// OAuth path is already covered because it finishes through CompleteMFALogin.
+		// Client credentials are structurally exempt rather than missing, since that
+		// path discards its refresh token and creates no family at all.
+		deviceID := ""
+		sessionCap := 0
+		if h.authSvc != nil {
+			if err := h.authSvc.CheckSessionLimit(r.Context(), userID); err != nil {
+				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
+				return
+			}
+			// Bind the family to a device with the same fingerprint the row stores,
+			// so this session lists in GET /user/sessions and RevokeByDeviceID can
+			// reach it. Match the password path's fp/ip/ua threading.
+			deviceID = h.authSvc.FindOrCreateDevice(r.Context(), userID, fp, middleware.ClientIP(r), r.Header.Get("User-Agent"))
+			sessionCap = h.authSvc.MaxSessionsPerUser()
+		}
+		// Draw the refresh-token ID last, right before the store, the same order the
+		// password path uses in storeRefreshToken.
+		rtID, err := vaultcrypto.RandomUUID()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "internal_error")
+			return
+		}
+		// CreateWithinCap, not Create: CheckSessionLimit is a soft pre-check and
+		// N simultaneous callbacks each pass it. The password path already inserts
+		// under the per-user lock; this path has to as well or the cap is not a
+		// cap for social login (ASVS V2.3.4).
+		if err := h.tokens.CreateWithinCap(r.Context(), &model.RefreshToken{
 			ID:              rtID,
 			UserID:          userID,
 			TokenHash:       tokenHash,
 			FamilyID:        pair.FamilyID,
+			DeviceID:        deviceID,
 			FingerprintHash: fp,
-			ExpiresAt:       pair.RefreshExpAt,
-			CreatedAt:       time.Now(),
-		}); err != nil {
+			// Read from the request for the same reason storeRefreshToken does:
+			// this is a login, so it is where a DPoP binding would be
+			// established. It is empty in practice — the provider callback is a
+			// browser redirect and dpopWrap is deliberately not on it, since a
+			// redirect cannot carry a proof header — so this family is a bearer
+			// family and the token issued beside it carries no cnf either.
+			// Taking the value from the same place issuance takes cnf.jkt is
+			// what keeps those two facts from disagreeing if the route ever
+			// gains the middleware: a token carrying cnf.jkt on a family that
+			// recorded no binding is the rotation hole in its original form.
+			DPoPJKT:   dpop.Thumbprint(r.Context()),
+			ExpiresAt: pair.RefreshExpAt,
+			CreatedAt: time.Now(),
+		}, sessionCap); err != nil {
+			if errors.Is(err, repository.ErrSessionLimitReached) {
+				WriteError(w, http.StatusTooManyRequests, "session_limit_reached")
+				return
+			}
 			log.Printf("oauth: failed to store refresh token for %s: %v", httputil.SafeLogValue(userID), err) // #nosec G706 -- sanitized via SafeLogValue
 			WriteError(w, http.StatusInternalServerError, "internal_error")
 			return
@@ -488,7 +707,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		h.auditLog.Log(r.Context(), audit.OAuth2Callback, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
 			r.Header.Get("User-Agent"), fp, "", map[string]interface{}{
 				"provider": providerName,
-			}, 0)
+			})
 	}
 
 	// Store access token behind a one-time code instead of placing it in the URL fragment.
@@ -521,6 +740,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 // Exchanges a one-time code (from the OAuth2 callback redirect) for the access token.
 func (h *OAuthHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	var input struct {
+		// Code is the one-time exchange value from the OAuth2 callback
+		// fragment. Required. Empty is 400 invalid_request. Lookup is
+		// SHA-256 of this value plus the request fingerprint; a miss or
+		// fingerprint change is 400 invalid_or_expired_code so the two
+		// cases cannot be distinguished.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &input); err != nil || input.Code == "" {

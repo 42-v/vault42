@@ -4,7 +4,7 @@
 
 ## Architecture
 
-```
+```text
                 Internet
                    │
           ┌────────▼────────┐
@@ -31,7 +31,11 @@
     └────────────┘  └──────────────┘
 ```
 
-The bridge sits in front of two fully isolated Vault42 instances. Both run the same binary with the same `VAULT_ORIGIN`, producing identical response shapes and timing (including Argon2id dummy burns for anti-enumeration). The attacker never knows they've been switched.
+The bridge sits in front of two isolated Vault42 instances. Both run the same binary with the same
+`VAULT_ORIGIN`, producing identical response shapes and timing (including Argon2id dummy burns for
+anti-enumeration). What that buys is described precisely below: the switch is invisible in the shape
+of a response, and it is **not** invisible to an attacker who inspects signing key material. The two
+instances deliberately do not share a Secret, so they do not share a signing key.
 
 ## Quick Start
 
@@ -40,7 +44,7 @@ The bridge sits in front of two fully isolated Vault42 instances. Both run the s
 scripts/build-all.sh
 
 # Deploy with Helm
-helm install vault42 charts/vault42 -f charts/vault42/values-bridge.yaml \
+helm install vault42 charts/vault -f charts/vault/values-bridge.yaml \
   --set origin="https://auth.example.com" \
   --set secrets.existingSecret=vault42-secrets
 ```
@@ -59,7 +63,7 @@ Score-based detection -- cumulative score >= `BRIDGE_FLAG_THRESHOLD` (default: 1
 
 ## Routing Logic
 
-```
+```text
 Request
   │
   ├─ /bridge/* path? ──────────── Admin/health handlers
@@ -84,7 +88,14 @@ Built-in fake login pages served directly by the bridge (never proxied):
 | `/wp-admin*`, `/wp-login.php` | WordPress login |
 | `/phpmyadmin*`, `/pma*` | phpMyAdmin login |
 | `/cpanel*`, `/webmail*` | cPanel login |
-| `/admin*`, `/administrator*` | Generic admin panel |
+| `/administrator*` | Generic admin panel (Joomla) |
+
+`/admin*` is deliberately absent. vault42 serves its own admin SPA and roughly
+thirty documented API routes under `/admin/`, and decoy matching is by prefix, so
+listing it aimed the honeypot at the operator: opening the admin console through
+a bridge flagged them for the full `BRIDGE_FLAG_TTL` and then answered every
+later request with fabricated key, user, session and audit data. `/administrator`
+stays because it is Joomla's and nothing under it is registered.
 
 POST on decoy forms returns fake "invalid credentials". All subsequent requests from that IP route to the honeypot.
 
@@ -135,6 +146,21 @@ curl -X DELETE https://bridge/bridge/flag \
 | `BRIDGE_TRUSTED_PROXIES` | -- | CIDR list for proxy IP detection |
 | `BRIDGE_REAL_IP_HEADER` | -- | Header from proxy (e.g. `CF-Connecting-IP`) |
 | `BRIDGE_LOG_LEVEL` | `info` | Log level (`info`, `debug`) |
+| `BRIDGE_MAX_BODY_BYTES` | `16777216` | Cap on a proxied request body |
+| `BRIDGE_MAX_INFLIGHT` | `512` | Cap on concurrently proxied requests (`0` disables) |
+
+Every number above is range-checked at startup and the bridge refuses to start
+outside the range. The thresholds, the windows and `BRIDGE_MAX_BODY_BYTES` must
+be positive; `BRIDGE_MAX_INFLIGHT` may be `0`, which its own documentation
+defines as "no cap". The reason for refusing rather than clamping is that the
+code applying each cap guards on a positive value, so a negative one does not
+lower the limit, it removes it -- and after startup nothing distinguishes an
+operator who asked for that from one who typed a minus sign.
+
+A value that does not parse is treated differently: it falls back to the
+default, because a bridge that will not start over one mistyped threshold takes
+the whole edge down with it. It now logs a `WARNING` naming the variable and the
+value in force, so "the setting did not take" is something an operator can find.
 
 ## State Persistence
 
@@ -149,7 +175,7 @@ curl -X DELETE https://bridge/bridge/flag \
 
 When `bridge.enabled=true`, network policies enforce:
 
-```
+```text
 Bridge → Real Vault42:       ALLOW
 Bridge → Honeypot Vault42:   ALLOW
 Bridge → Redis:            ALLOW (if enabled)
@@ -161,13 +187,31 @@ External → Bridge:         ALLOW (port 8080)
 External → Vaults:         BLOCKED (only bridge can reach them)
 ```
 
-## Transparent Switching Guarantees
+## What Switching Does And Does Not Conceal
 
-- Both Vaults share the same `VAULT_ORIGIN` → identical cookies
-- Both run the same binary → identical response shapes, timing
+Concealed:
+
+- Both Vaults share the same `VAULT_ORIGIN`, so cookie names, domains and attributes are identical
+- Both run the same binary, so response shapes, status codes and error bodies are identical
 - Argon2id dummy burns on user-not-found prevent timing leaks
-- Attacker's refresh token is invalid on honeypot (different DB) → looks like normal session expiry
-- Bridge adds no detectable headers to proxied requests
+- The attacker's refresh token is invalid on the honeypot (different DB), which presents as an
+  ordinary rejected session rather than as a distinct error
+- The bridge adds no headers to the response an attacker sees
+
+Not concealed, deliberately:
+
+- **Signing key material.** `vault.honeypotSecretName` refuses to resolve to the production Secret,
+  so the honeypot holds its own master key, HMAC secret, pepper and signing key: the same key names
+  with different values. The honeypot therefore serves a different `/.well-known/jwks.json`, with a
+  different `kid` and a different modulus. An attacker who fetched JWKS before the switch and fetches
+  it again after can see that it changed, and an access token minted by the real vault fails on the
+  honeypot as an unknown `kid` rather than as an expiry.
+- This is the correct trade and not a defect to fix. Sharing key material to make the decoy
+  indistinguishable would mean handing the production signing key to the component whose entire
+  purpose is to be broken into, which is exactly the finding that separated the two Secrets in the
+  first place. The deception is designed to survive a casual attacker and an automated one; it is not
+  designed to survive an attacker who diffs key sets, and claiming otherwise would be the kind of
+  guarantee an operator would plan around.
 
 ## Cloudflare Tunnel Setup
 
@@ -184,8 +228,8 @@ ingress:
 In the Helm chart, set `cloudflared.enabled=true` with the bridge overlay:
 
 ```bash
-helm install vault42 charts/vault42 \
-  -f charts/vault42/values-bridge.yaml \
+helm install vault42 charts/vault \
+  -f charts/vault/values-bridge.yaml \
   --set cloudflared.enabled=true \
   --set cloudflared.tunnelToken="$TUNNEL_TOKEN"
 ```

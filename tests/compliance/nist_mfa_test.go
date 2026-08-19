@@ -15,10 +15,10 @@ import (
 // https://pages.nist.gov/800-63-4/sp800-63b.html
 // =============================================================================
 
-// --- Section 5.1.4: Single-Factor OTP Device ---
+// --- Section 3.1.4: Single-Factor OTP Device ---
 
 func TestNIST_MFA_TOTPSecretMinEntropy(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: "The secret key SHALL be at least 128 bits."
+	// NIST SP 800-63B-4 §3.1.4.1: "The secret key SHALL be at least 128 bits."
 	// Vault generates 160-bit (20-byte) secrets.
 	for i := 0; i < 20; i++ {
 		secret, err := vaultcrypto.GenerateTOTPSecret()
@@ -51,7 +51,7 @@ func TestNIST_MFA_TOTPSecretUniqueness(t *testing.T) {
 }
 
 func TestNIST_MFA_TOTPValidPeriod(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: OTP SHALL be valid for a limited time.
+	// NIST SP 800-63B-4 §3.1.4.1: OTP SHALL be valid for a limited time.
 	// Vault uses 30-second periods with ±1 skew (90-second total window).
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	now := time.Now()
@@ -79,7 +79,7 @@ func TestNIST_MFA_TOTPValidPeriod(t *testing.T) {
 }
 
 func TestNIST_MFA_TOTPCodeFormat(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: OTP SHALL be at least 6 digits.
+	// NIST SP 800-63B-4 §3.1.4.1: OTP SHALL be at least 6 digits.
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	now := time.Now()
 
@@ -98,7 +98,7 @@ func TestNIST_MFA_TOTPCodeFormat(t *testing.T) {
 }
 
 func TestNIST_MFA_TOTPRejectionOfInvalidCodes(t *testing.T) {
-	// NIST 800-63B §5.1.4.1: Verifier SHALL reject invalid OTPs.
+	// NIST SP 800-63B-4 §3.1.4.1: Verifier SHALL reject invalid OTPs.
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	now := time.Now()
 
@@ -129,10 +129,10 @@ func TestNIST_MFA_TOTPRejectionOfInvalidCodes(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.4.2: Multi-Factor OTP Device ---
+// --- Section 3.1.4.2: Multi-Factor OTP Device ---
 
 func TestNIST_MFA_TOTPSecretEncryption(t *testing.T) {
-	// NIST 800-63B §5.1.4.2: "TOTP secrets SHALL be protected at rest."
+	// NIST SP 800-63B-4 §3.1.4.2: "TOTP secrets SHALL be protected at rest."
 	// Vault encrypts TOTP secrets with AES-256-GCM.
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	masterKey := make([]byte, 32)
@@ -166,10 +166,10 @@ func TestNIST_MFA_TOTPSecretEncryption(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.2: Look-Up Secrets (Backup Codes) ---
+// --- Section 3.1.2: Look-Up Secrets (Backup Codes) ---
 
 func TestNIST_MFA_BackupCodeEntropy(t *testing.T) {
-	// NIST 800-63B §5.1.2.1: "Look-up secrets SHALL have at least 20 bits
+	// NIST SP 800-63B-4 §3.1.2.1: "Look-up secrets SHALL have at least 20 bits
 	// of entropy if rate limiting is applied."
 	// Vault: RandomHex(6) = 48 bits.
 	code, _ := vaultcrypto.RandomHex(6)
@@ -183,7 +183,7 @@ func TestNIST_MFA_BackupCodeEntropy(t *testing.T) {
 }
 
 func TestNIST_MFA_BackupCodeHashStorage(t *testing.T) {
-	// NIST 800-63B §5.1.2.2: "Look-up secrets SHALL be hashed and salted."
+	// NIST SP 800-63B-4 §3.1.2.2: "Look-up secrets SHALL be hashed and salted."
 	codes := make([]string, 10)
 	hashes := make([]string, 10)
 
@@ -212,7 +212,7 @@ func TestNIST_MFA_BackupCodeHashStorage(t *testing.T) {
 }
 
 func TestNIST_MFA_BackupCodeVerification(t *testing.T) {
-	// NIST 800-63B §5.1.2.2: Verify that backup codes can be verified
+	// NIST SP 800-63B-4 §3.1.2.2: Verify that backup codes can be verified
 	// against their hashes and wrong codes are rejected.
 	code, _ := vaultcrypto.RandomHex(6)
 	hash, _ := vaultcrypto.HashPassword(code)
@@ -231,10 +231,10 @@ func TestNIST_MFA_BackupCodeVerification(t *testing.T) {
 	}
 }
 
-// --- Section 5.2: General Authenticator Requirements ---
+// --- Section 3.2: General Authenticator Requirements ---
 
 func TestNIST_MFA_AuthenticatorOutputSecure(t *testing.T) {
-	// NIST 800-63B §5.2.1: "Authenticator outputs SHALL be compared using
+	// NIST SP 800-63B-4 §5.2.1: "Authenticator outputs SHALL be compared using
 	// approved methods" (constant-time comparison).
 	code1 := "123456"
 	code2 := "123456"
@@ -249,7 +249,7 @@ func TestNIST_MFA_AuthenticatorOutputSecure(t *testing.T) {
 }
 
 func TestNIST_MFA_TOTPWindowStrictness(t *testing.T) {
-	// NIST 800-63B §5.2.8: The window of time for OTP acceptance should be
+	// NIST SP 800-63B-4 §5.2.8: The window of time for OTP acceptance should be
 	// as small as possible. Vault allows ±1 period (minimal).
 	secret, _ := vaultcrypto.GenerateTOTPSecret()
 	now := time.Now()
@@ -284,7 +284,7 @@ func TestNIST_MFA_TOTPWindowStrictness(t *testing.T) {
 }
 
 func TestNIST_MFA_TOTPDeterministicGeneration(t *testing.T) {
-	// NIST 800-63B §5.1.4: The same secret + same time must always produce
+	// NIST SP 800-63B-4 §3.1.4: The same secret + same time must always produce
 	// the same code (deterministic).
 	secret := "JBSWY3DPEHPK3PXP"
 	fixedTime := time.Unix(1700000000, 0)

@@ -36,6 +36,10 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// Password is the account password, required so a stolen access
+		// token alone cannot erase the account. Empty or a missing body
+		// is 401 password_required (treated as a failed confirmation, not
+		// a 400). A wrong value is 401 invalid_password.
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Password == "" {
@@ -57,7 +61,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if verifyErr != nil || !valid {
 		if h.auditLog != nil {
 			h.auditLog.Log(r.Context(), audit.LoginFailure, claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
-				r.Header.Get("User-Agent"), "", "", map[string]interface{}{"reason": "account_delete_wrong_password"}, 20)
+				r.Header.Get("User-Agent"), "", "", map[string]interface{}{"reason": "account_delete_wrong_password"})
 		}
 		WriteError(w, http.StatusUnauthorized, "invalid_password")
 		return

@@ -23,16 +23,3 @@ func TestSecureCompare(t *testing.T) {
 		})
 	}
 }
-
-func TestSecureCompareBytes(t *testing.T) {
-	a := []byte{1, 2, 3}
-	b := []byte{1, 2, 3}
-	c := []byte{1, 2, 4}
-
-	if !SecureCompareBytes(a, b) {
-		t.Error("equal slices should match")
-	}
-	if SecureCompareBytes(a, c) {
-		t.Error("different slices should not match")
-	}
-}

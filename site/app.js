@@ -8,7 +8,7 @@
   'use strict';
 
   // ---------- constants / samples ----------
-  var SAMPLE_JWT = {
+  const SAMPLE_JWT = {
     header: { alg: 'RS256', typ: 'JWT', kid: 'a1b2c3d4' },
     payload: {
       iss: 'https://vault.42-v.com',
@@ -24,18 +24,18 @@
     signature: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...'
   };
 
-  var AUDIT_SEED = [
+  const AUDIT_SEED = [
     { ts: '2026-06-27T11:04:12Z', event: 'login_success', ip: '203.0.113.41' },
     { ts: '2026-06-27T11:04:18Z', event: 'token_refresh', ip: '203.0.113.41' },
     { ts: '2026-06-27T11:07:51Z', event: '2fa_verify', ip: '198.51.100.7' },
     { ts: '2026-06-27T11:12:03Z', event: 'session_revoke', ip: '203.0.113.41' }
   ];
 
-  var REDUCED = false;
+  let REDUCED = false;
 
   // ---------- utils ----------
   function getReducedMotion() {
-    var mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+    const mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
     return !!(mq && mq.matches);
   }
 
@@ -56,8 +56,8 @@
 
   // real SHA-256 via Web Crypto when possible; deterministic fallback
   function simpleHash(str) {
-    var h = 2166136261 >>> 0;
-    for (var i = 0; i < str.length; i++) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) {
       h ^= str.charCodeAt(i);
       h = Math.imul(h, 16777619) >>> 0;
     }
@@ -67,10 +67,10 @@
 
   function computeHash(input, cb) {
     if (window.crypto && window.crypto.subtle && window.crypto.subtle.digest) {
-      var enc = new TextEncoder().encode(input);
+      const enc = new TextEncoder().encode(input);
       window.crypto.subtle.digest('SHA-256', enc).then(function (buf) {
-        var arr = new Uint8Array(buf);
-        var hex = Array.prototype.map.call(arr, function (b) { return ('00' + b.toString(16)).slice(-2); }).join('');
+        const arr = new Uint8Array(buf);
+        const hex = Array.prototype.map.call(arr, function (b) { return ('00' + b.toString(16)).slice(-2); }).join('');
         cb(hex);
       }).catch(function () {
         cb(simpleHash(input));
@@ -82,22 +82,22 @@
   }
 
   // ---------- DOM refs (declared early) ----------
-  var jwtEl, issuerStatus, v1Status, v2Status, v1Detail, v2Detail;
-  var aNoneStatus, aHsStatus, aJkuStatus;
-  var replayBtn;
-  var ledgerEl, rootEl, appendBtn, resetBtn;
-  var tabBinary, tabHelm, panelBinary, panelHelm;
-  var copyBtns;
+  let jwtEl, issuerStatus, v1Status, v2Status, v1Detail, v2Detail;
+  let aNoneStatus, aHsStatus, aJkuStatus;
+  let replayBtn;
+  let ledgerEl, rootEl, appendBtn, resetBtn;
+  let tabBinary, tabHelm, panelBinary, panelHelm;
+  let copyBtns;
 
-  var chainTimer = null;
-  var currentAudit = [];
-  var currentRoot = '';
+  let chainTimer = null;
+  let currentAudit = [];
+  let currentRoot = '';
 
   // ---------- reduced motion ----------
   function applyReducedGuards() {
     REDUCED = getReducedMotion();
-    var crt = document.querySelector('.v-crt');
-    var grain = document.querySelector('.v-grain');
+    const crt = document.querySelector('.v-crt');
+    const grain = document.querySelector('.v-grain');
     if (REDUCED) {
       if (crt) crt.style.animation = 'none';
       if (grain) grain.style.opacity = '0.03';
@@ -176,7 +176,7 @@
 
     if (REDUCED) {
       // static final resolved state, no animation
-      var jwtStr = formatJWT(SAMPLE_JWT);
+      const jwtStr = formatJWT(SAMPLE_JWT);
       setText(jwtEl, jwtStr);
       setText(issuerStatus, 'ISSUED RS256');
       issuerStatus.className = 'status issued';
@@ -187,8 +187,8 @@
     }
 
     // animated loop sequence
-    var step = 0;
-    var delays = [420, 620, 520, 580, 420, 420, 380, 520];
+    let step = 0;
+    const delays = [420, 620, 520, 580, 420, 420, 380, 520];
 
     function next() {
       stopChainTimer();
@@ -199,12 +199,13 @@
           setIssuerState('ISSUING…', '—');
           chainTimer = setTimeout(next, delays[0]);
           break;
-        case 1:
-          var j = formatJWT(SAMPLE_JWT);
+        case 1: {
+          const j = formatJWT(SAMPLE_JWT);
           setIssuerState('ISSUED RS256', j);
           setVerifier('v1', 'VERIFYING…', 'fetch /.well-known/jwks.json');
           chainTimer = setTimeout(next, delays[1]);
           break;
+        }
         case 2:
           setVerifier('v1', 'VERIFIED', 'JWKS OK · kid=a1b2c3d4');
           setVerifier('v2', 'VERIFYING…', 'fetch /.well-known/jwks.json');
@@ -275,14 +276,14 @@
     if (!ledgerEl) return;
     ledgerEl.innerHTML = '';
 
-    var head = document.createElement('div');
+    const head = document.createElement('div');
     head.className = 'ledger-head';
     head.innerHTML = '<div>TIMESTAMP</div><div>EVENT</div><div>IP</div><div>PREV</div><div>HASH</div>';
     ledgerEl.appendChild(head);
 
-    for (var i = 0; i < currentAudit.length; i++) {
-      var row = currentAudit[i];
-      var div = document.createElement('div');
+    for (let i = 0; i < currentAudit.length; i++) {
+      const row = currentAudit[i];
+      const div = document.createElement('div');
       div.className = 'ledger-row';
       div.innerHTML =
         '<div>' + row.ts + '</div>' +
@@ -301,13 +302,13 @@
   function seedAudit() {
     currentAudit = [];
     currentRoot = '';
-    var prev = '00000000000000000000000000000000';
+    let prev = '00000000000000000000000000000000';
 
-    for (var i = 0; i < AUDIT_SEED.length; i++) {
-      var seed = AUDIT_SEED[i];
-      var input = prev + '|' + seed.ts + '|' + seed.event + '|' + seed.ip;
-      var h = simpleHash(input);  // sync for init reliability (real sha used on appends)
-      var entry = {
+    for (let i = 0; i < AUDIT_SEED.length; i++) {
+      const seed = AUDIT_SEED[i];
+      const input = prev + '|' + seed.ts + '|' + seed.event + '|' + seed.ip;
+      const h = simpleHash(input);  // sync for init reliability (real sha used on appends)
+      const entry = {
         ts: seed.ts,
         event: seed.event,
         ip: seed.ip,
@@ -322,19 +323,19 @@
   }
 
   function appendAuditEvent() {
-    var last = currentAudit.length ? currentAudit[currentAudit.length - 1] : null;
-    var prev = last ? last.hash : '00000000000000000000000000000000';
+    let last = currentAudit.length ? currentAudit[currentAudit.length - 1] : null;
+    let prev = last ? last.hash : '00000000000000000000000000000000';
     if (!last) {
       seedAudit();
       last = currentAudit.length ? currentAudit[currentAudit.length - 1] : null;
       prev = last ? last.hash : '00000000000000000000000000000000';
     }
-    var now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-    var events = ['login_success', 'token_refresh', '2fa_verify', 'fingerprint_anomaly', 'session_revoke'];
-    var ev = events[Math.floor(Math.random() * events.length)];
-    var ip = (Math.random() > 0.5) ? '203.0.113.' + Math.floor(10 + Math.random() * 80) : '198.51.100.' + Math.floor(10 + Math.random() * 80);
+    const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    const events = ['login_success', 'token_refresh', '2fa_verify', 'fingerprint_anomaly', 'session_revoke'];
+    const ev = events[Math.floor(Math.random() * events.length)];
+    const ip = (Math.random() > 0.5) ? '203.0.113.' + Math.floor(10 + Math.random() * 80) : '198.51.100.' + Math.floor(10 + Math.random() * 80);
 
-    var input = prev + '|' + now + '|' + ev + '|' + ip;
+    const input = prev + '|' + now + '|' + ev + '|' + ip;
     computeHash(input, function (h) {
       currentAudit.push({ ts: now, event: ev, ip: ip, prev: prev, hash: h });
       currentRoot = h;
@@ -392,7 +393,7 @@
   }
 
   function copyText(text, btn) {
-    var orig = btn.textContent;
+    const orig = btn.textContent;
     function done(ok) {
       btn.textContent = ok ? 'COPIED' : 'ERR';
       setTimeout(function () { btn.textContent = orig; }, 900);
@@ -401,15 +402,17 @@
       navigator.clipboard.writeText(text).then(function () { done(true); }).catch(function () { done(false); });
     } else {
       // fallback
-      var ta = document.createElement('textarea');
+      const ta = document.createElement('textarea');
       ta.value = text;
       ta.style.position = 'fixed';
       ta.style.opacity = '0';
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
-      var ok = false;
-      try { ok = document.execCommand('copy'); } catch (e) {}
+      let ok = false;
+      // execCommand throws in a sandboxed frame rather than returning false.
+      // Either way the outcome reaches the caller through `ok`.
+      try { ok = document.execCommand('copy'); } catch { /* handled by ok staying false */ }
       document.body.removeChild(ta);
       done(ok);
     }
@@ -417,13 +420,13 @@
 
   function initCopy() {
     copyBtns = document.querySelectorAll('.copy-btn');
-    for (var i = 0; i < copyBtns.length; i++) {
+    for (let i = 0; i < copyBtns.length; i++) {
       (function (btn) {
         btn.addEventListener('click', function () {
-          var targetId = btn.getAttribute('data-copy-target');
-          var pre = document.getElementById(targetId);
+          const targetId = btn.getAttribute('data-copy-target');
+          const pre = document.getElementById(targetId);
           if (!pre) return;
-          var txt = pre.textContent || pre.innerText || '';
+          const txt = pre.textContent || pre.innerText || '';
           copyText(txt.trim(), btn);
         });
       })(copyBtns[i]);
@@ -444,8 +447,8 @@
     });
 
     // ensure all buttons have type if not
-    var allBtns = document.querySelectorAll('button');
-    for (var i = 0; i < allBtns.length; i++) {
+    const allBtns = document.querySelectorAll('button');
+    for (let i = 0; i < allBtns.length; i++) {
       if (!allBtns[i].getAttribute('type')) allBtns[i].setAttribute('type', 'button');
     }
   }
@@ -467,7 +470,7 @@
 
     // re-eval reduced on change (no loops restart)
     if (window.matchMedia) {
-      var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
       if (mq.addEventListener) {
         mq.addEventListener('change', function () {
           applyReducedGuards();

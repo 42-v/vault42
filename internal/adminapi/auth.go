@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/42-v/vault42/internal/audit"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/rbac"
@@ -107,7 +109,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, "", "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 			"reason":   "user_not_found",
 			"username": req.Username,
-		}, 5)
+		})
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
@@ -116,13 +118,24 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if admin.LockedUntil != nil && time.Now().Before(*admin.LockedUntil) {
 		_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, admin.ID, "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 			"reason": "account_locked",
-		}, 3)
+		})
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
 
-	// Verify password
+	// Verify password.
+	//
+	// Argon2 backpressure is not a wrong password. Folding it into the failure
+	// branch counted a server-side rejection against the admin's lockout budget
+	// and wrote an audit record saying "wrong_password" about a password the
+	// server never checked, so a busy process could lock out an operator and then
+	// misattribute why. Every user-plane call site already separates the two
+	// (internal/handler/auth.go and account.go); the admin plane did not.
 	valid, err := vaultcrypto.VerifyPassword(req.Password, admin.PasswordHash, h.pepper)
+	if errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "server_busy")
+		return
+	}
 	if err != nil || !valid {
 		h.handleFailedLogin(ctx, admin, clientIP, r.UserAgent())
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_credentials")
@@ -203,7 +216,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(ctx, audit.AdminLogin, admin.ID, "", clientIP, r.UserAgent(), "", "", map[string]interface{}{
 		"username": admin.Username,
 		"role":     admin.Role,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, loginResponse{
 		Token:     token,
@@ -236,7 +249,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	if admin != nil {
 		adminID = admin.ID
 	}
-	_ = h.auditLog.Log(r.Context(), audit.AdminLogout, adminID, "", r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminLogout, adminID, "", r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
@@ -358,21 +371,76 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.TwoFASetup, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"method": "totp",
 		"admin":  true,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "totp_verified"})
 }
 
+// firstAdminMarkerKey records, in auth.admin_config, that this deployment has
+// been through bootstrap. It is the durable half of the once-only guard: an
+// empty auth.admin_users is not evidence of a first boot, because the table can
+// return to empty, and this row cannot.
+const firstAdminMarkerKey = "first_admin_bootstrapped_at"
+
 // EnsureFirstAdmin creates a super_admin account on first boot if no admins exist.
-// The password is generated randomly and printed to stdout (one-time).
+// The password is generated randomly and handed to the operator through
+// firstboot.Deliver, which is never the process log.
 // pepper is applied to the password hash (must match the value the gateway
 // runtime uses; empty for no pepper).
-func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository, pepper string) error {
+//
+// Delivery happens before the row is written, and a failed delivery abandons the
+// bootstrap. The other order is unrecoverable: auth.admin_users is non-empty from
+// the moment Create succeeds, so no later boot mints another, and the deployment
+// owns a super_admin whose password nobody holds and which no admin plane can
+// reset.
+//
+// Bootstrap happens once per deployment, not once per empty table (F-16). The
+// old gate was admins.Count(ctx) == 0, and auth.admin_users can return to empty:
+// AdminUserRepo.Revoke is a hard DELETE rather than a disable, and RevokeAdmin
+// refuses only self-revocation, so two concurrent super_admin sessions revoking
+// each other empty it — as does anything reaching the database as vault_admin.
+// The next restart then minted a second bootstrap super_admin, with migration
+// 016's created_by-NULL carve-out reopening alongside it, which is precisely the
+// window migration 023 argues can never reopen.
+//
+// marker is auth.admin_config, which vault_admin may write and which survives the
+// admin table being emptied. The residual risk is honest and smaller than what it
+// replaces: reopening the window now requires both emptying auth.admin_users and
+// blanking this row, and vault_app can do neither on its own. Closing it outright
+// wants an INSERT ... WHERE NOT EXISTS in the repository and a refusal to revoke
+// the last super_admin in the handler.
+func EnsureFirstAdmin(
+	ctx context.Context,
+	admins repository.AdminUserRepository,
+	marker repository.AdminConfigRepository,
+	pepper string,
+) error {
+	bootstrapped, err := marker.Get(ctx, firstAdminMarkerKey)
+	if err != nil {
+		// Fails closed: unable to tell a genuine first boot from a re-entry,
+		// minting a super_admin is a guess, and it is the guess this guard exists
+		// to prevent.
+		return fmt.Errorf("read first-admin marker: %w", err)
+	}
+	if bootstrapped != "" {
+		if count, cerr := admins.Count(ctx); cerr == nil && count > 0 {
+			return nil
+		}
+		return fmt.Errorf("refusing to create a bootstrap super_admin: this deployment was already bootstrapped at %s "+
+			"and auth.admin_users is now empty; restore an admin rather than minting a second first admin", bootstrapped)
+	}
+
 	count, err := admins.Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count admins: %w", err)
 	}
 	if count > 0 {
+		// An upgrade into this code: admins exist, the marker does not. Record it
+		// now, so the window closes for deployments that predate the guard rather
+		// than staying one revocation away from re-entry.
+		if err := marker.Set(ctx, firstAdminMarkerKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("record first-admin marker: %w", err)
+		}
 		return nil
 	}
 
@@ -402,17 +470,27 @@ func EnsureFirstAdmin(ctx context.Context, admins repository.AdminUserRepository
 		UpdatedAt:    now,
 	}
 
+	// MustDeliver, not Deliver: cmd/admin-gateway logs this function's error and
+	// serves anyway, so an unwritable sink left a gateway running with no
+	// super_admin at all and nothing but one log line to say so.
+	dest, err := firstboot.MustDeliver("VAULT_FIRST_BOOT_SUPER_ADMIN_PASSWORD", password)
+	if err != nil {
+		return fmt.Errorf("deliver first admin password: %w", err)
+	}
+
 	if err := admins.Create(ctx, admin); err != nil {
 		return fmt.Errorf("create first admin: %w", err)
 	}
 
-	log.Println("════════════════════════════════════════════════════════════════")
-	log.Println("  FIRST BOOT: super_admin account created")
-	log.Printf("  Username: admin")
-	log.Printf("  Password: %s", password)
-	log.Println("  ⚠ This password will NOT be shown again. Save it now.")
-	log.Println("  ⚠ You must set up TOTP on first login.")
-	log.Println("════════════════════════════════════════════════════════════════")
+	log.Printf("FIRST BOOT: super_admin %q created; its password was written to %s and is not in this log. "+
+		"Rotate it after the first login, at which point TOTP enrolment is also required.", admin.Username, dest)
+
+	// Written after the admin exists, so a failure here leaves a usable admin and
+	// a loud error rather than a marker for a bootstrap that did not happen. The
+	// next boot sees a non-empty table and records it on the upgrade path above.
+	if err := marker.Set(ctx, firstAdminMarkerKey, now.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("record first-admin marker: %w", err)
+	}
 
 	return nil
 }
@@ -430,13 +508,13 @@ func (h *AuthHandler) handleFailedLogin(ctx context.Context, admin *model.AdminU
 			"username":     admin.Username,
 			"failed_count": newCount,
 			"locked_until": lockUntil.Format(time.RFC3339),
-		}, 8)
+		})
 	}
 
 	_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, admin.ID, "", ip, ua, "", "", map[string]interface{}{
 		"username": admin.Username,
 		"reason":   "wrong_password",
-	}, 5)
+	})
 }
 
 func hashSessionToken(token string) string {

@@ -157,6 +157,112 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 			notWant: ErrInvalidCredentials,
 		},
 		{
+			// A soft-deleted account is masked as "no such user"; under load it must
+			// answer with the same overload error, not the faster no-burn
+			// ErrInvalidCredentials that would re-reveal the soft delete by timing.
+			name: "login as a soft-deleted account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{
+							ID: "user-1", Email: "deleted@example.com",
+							PasswordHash: hash, EmailVerified: true, Deleted: true,
+						}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "deleted@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
+			// A cache auto-locked account answers ErrInvalidCredentials (not a
+			// distinct ErrAccountLocked, which would leak that the address exists);
+			// under load it must burn the same Argon2 and answer with the overload
+			// error, not the faster no-burn path that re-reveals the lock by timing.
+			name: "login as an auto-locked account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-1", Email: "locked@example.com", PasswordHash: hash, EmailVerified: true}, nil
+					}
+					o.cache.GetFn = func(_ context.Context, key string) (string, error) {
+						if len(key) > 8 && key[:8] == "lockout:" {
+							return "10", nil
+						}
+						return "0", nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "locked@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
+			name: "login as an admin-locked account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					lockUntil := time.Now().Add(time.Hour)
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-2", Email: "adminlocked@example.com", PasswordHash: hash, EmailVerified: true, LockedUntil: &lockUntil}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "adminlocked@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrInvalidCredentials,
+		},
+		{
+			// A banned account is refused only after a successful password
+			// verification, so under load VerifyPassword short-circuits to the
+			// overload error before the banned check is reached; it must not answer
+			// ErrAccountBanned, which would leak that the address exists.
+			name: "login as a banned account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-3", Email: "banned@example.com", PasswordHash: hash, EmailVerified: true, Banned: true}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "banned@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrAccountBanned,
+		},
+		{
+			name: "login as a disabled account",
+			build: func(_ *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{ID: "user-4", Email: "disabled@example.com", PasswordHash: hash, EmailVerified: true, Disabled: true}, nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{Email: "disabled@example.com", Password: password}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrAccountDisabled,
+		},
+		{
 			name: "login as an imported account awaiting its claim link",
 			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
 				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
@@ -179,6 +285,36 @@ func TestAuthArgon2OverloadPropagatesFromEveryEntryPoint(t *testing.T) {
 				return err
 			},
 			notWant: nil,
+		},
+		{
+			name: "login as an account under a forced password reset",
+			build: func(rec *serviceAuthOverloadSideEffects) *AuthService {
+				svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+					o.userRepo.GetByEmailFn = func(context.Context, string) (*model.User, error) {
+						return &model.User{
+							ID: "user-5", Email: "forced@example.com", PasswordHash: hash,
+							EmailVerified: true, MustResetPassword: true,
+						}, nil
+					}
+					o.userRepo.IncrementFailedLoginFn = func(context.Context, string) error {
+						rec.failureCounted.Store(true)
+						return nil
+					}
+					o.emailSender.SendFn = func(context.Context, string, string, string, string) error {
+						rec.emailSent.Store(true)
+						return nil
+					}
+				})
+				return svc
+			},
+			invoke: func(svc *AuthService, rec *serviceAuthOverloadSideEffects) error {
+				res, err := svc.Login(ctx, LoginInput{
+					Email: "forced@example.com", Password: password, DiscloseStatus: true,
+				}, "1.2.3.4", "TestAgent")
+				rec.gotResult.Store(res != nil)
+				return err
+			},
+			notWant: ErrPasswordResetRequired,
 		},
 		{
 			name: "login with the correct password",

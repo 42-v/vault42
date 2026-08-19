@@ -238,6 +238,20 @@ func (c *Client) Close() error {
 
 // exec sends a command on the given connection and handles pool return/removal.
 func (c *Client) exec(ctx context.Context, cn *conn, args ...string) (reply, error) {
+	// A caller who has already given up must not have their command executed.
+	// GETDEL and SET NX are consumed on the server whether or not anyone is
+	// still listening, so sending one anyway burns a single-use email
+	// verification token, password reset token, OAuth exchange code or PKCE
+	// verifier on behalf of a request that will never see the reply. Returning
+	// the connection rather than removing it matters too: an expired deadline
+	// belongs to the caller, not to the socket, and treating it as a broken
+	// connection made a burst of timed-out requests drain the pool at exactly
+	// the moment the cache was already slow.
+	if err := ctx.Err(); err != nil {
+		c.pool.put(cn)
+		return reply{}, err
+	}
+
 	ioTimeout := c.opts.IOTimeout
 
 	// Respect context deadline if shorter
@@ -257,14 +271,13 @@ func (c *Client) exec(ctx context.Context, cn *conn, args ...string) (reply, err
 
 	r, err := readReply(cn.rd)
 	if err != nil {
-		// Nil is a valid Redis response (key not found), not a connection error
-		if errors.Is(err, Nil) {
-			cn.netConn.SetDeadline(time.Time{}) // #nosec G104 -- deadline clear; errors surface on next I/O op //nolint:errcheck
-			c.pool.put(cn)
-			return reply{}, err
-		}
-		// RedisError is a server error (e.g., WRONGTYPE), connection is still healthy
-		var redisErr *RedisError
+		// A key that does not exist is never an error here: readReply turns the
+		// $-1 bulk reply into reply{isNil: true} with a nil error (resp.go), and
+		// the Nil sentinel is produced by Get/GetDel from r.isNil after exec has
+		// already returned. So err is always a real failure at this point.
+		//
+		// ServerError is a server error (e.g., WRONGTYPE), connection is still healthy
+		var redisErr *ServerError
 		if errors.As(err, &redisErr) {
 			cn.netConn.SetDeadline(time.Time{}) // #nosec G104 -- deadline clear; errors surface on next I/O op //nolint:errcheck
 			c.pool.put(cn)

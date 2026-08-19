@@ -259,8 +259,20 @@ func TestWebAuthn_VerifyBegin_ListByUserError(t *testing.T) {
 
 	h.VerifyBegin(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	// A failed credential lookup is an internal fault, not a fact about the
+	// account. Reporting it as no_webauthn_credentials tells a user mid-login
+	// their passkey is gone when the database merely hiccuped, and a client that
+	// trusts that answer drops to a weaker listed factor. Every other internal
+	// failure in this handler returns 500; this one must too, and must not emit
+	// the definitive "no credentials" claim it cannot stand behind.
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on credential lookup error, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	decodeResponse(t, rec, &result)
+	if result["error"] == "no_webauthn_credentials" {
+		t.Errorf("a database error was reported as no_webauthn_credentials, masking a transient fault as a definitive absence of the factor")
 	}
 }
 

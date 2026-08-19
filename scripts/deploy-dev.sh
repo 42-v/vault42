@@ -3,6 +3,9 @@
 # Usage: scripts/deploy-dev.sh
 set -euo pipefail
 
+# shellcheck source=lib/credential-output.sh
+source "$(dirname "$0")/lib/credential-output.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 NAMESPACE="vault-dev"
@@ -61,7 +64,9 @@ if ! kubectl -n "$NAMESPACE" get secret vault-secrets &>/dev/null; then
         --from-literal=hmac-secret="$HMAC_SECRET" \
         --from-literal=admin-token="$ADMIN_TOKEN" \
         --from-literal=redis-password=""
-    echo "Created vault-secrets (admin-token: $ADMIN_TOKEN)"
+    echo "Created vault-secrets"
+    show_credential "Admin token" "$ADMIN_TOKEN" \
+        "kubectl -n $NAMESPACE get secret vault-secrets -o jsonpath='{.data.admin-token}' | base64 -d"
 else
     echo "vault-secrets already exists, keeping existing"
 fi

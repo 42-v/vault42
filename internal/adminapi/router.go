@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/rbac"
 	"github.com/42-v/vault42/internal/repository"
 )
@@ -26,7 +27,15 @@ type RouterOpts struct {
 func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler {
 	mux := http.NewServeMux()
 
-	sessionAuth := SessionAuth(auth.sessions, auth.admins)
+	sessionAuth := SessionAuth(auth.sessions, auth.admins, api.auditLog)
+
+	// withPerm chains SessionAuth then RBACCheck for one route. It is a closure
+	// so every guarded route shares the one audit logger without threading it
+	// through a fourth positional argument at each call site; RBACCheck writes
+	// an admin_authz_denied record on a permission denial (ASVS V16.3.2).
+	withPerm := func(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
+		return sessionAuth(RBACCheck(perm, api.auditLog)(h))
+	}
 
 	// Public: login (rate-limited — 10 attempts per minute per IP)
 	loginRL := NewLoginRateLimit(10, time.Minute)
@@ -51,10 +60,30 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("POST /admin/users/import", withPerm(sessionAuth, rbac.UsersImport, api.ImportUsers))
 	mux.Handle("POST /admin/users/{id}/lock", withPerm(sessionAuth, rbac.UsersLock, api.LockUser))
 	mux.Handle("POST /admin/users/{id}/unlock", withPerm(sessionAuth, rbac.UsersUnlock, api.UnlockUser))
+	// The forced-password-reset pair (migration 039). Two routes rather than one
+	// carrying a boolean, because that is the shape lock and unlock already give
+	// a reversible account-state flag here, and because the two directions are
+	// not mirror images: imposing the state terminates the account's live
+	// sessions and lifting it deliberately does not. One permission covers both;
+	// rbac.UsersReset says why.
+	mux.Handle("POST /admin/users/{id}/require-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.RequirePasswordReset))
+	mux.Handle("POST /admin/users/{id}/clear-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.ClearPasswordReset))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
-	// Session management
-	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.SessionsList, api.ListSessions))
+	// Session management.
+	//
+	// The two routes read and write different things, so they are gated
+	// differently. GET /admin/sessions lists ADMIN sessions: the live roster of
+	// who can administer the deployment, with each one's source IP and user
+	// agent. rbac.go keeps admins:manage at super_admin because that roster is
+	// reconnaissance for an attacker holding a lower-tier admin session, and
+	// this route hands over the same thing, so it takes the same permission.
+	// sessions:list stays viewer-tier and describes visibility into user
+	// sessions, which this route does not provide.
+	//
+	// POST /admin/sessions/revoke-all is the global USER refresh-token nuke and
+	// keeps sessions:revoke, the permission written for exactly that.
+	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.AdminsManage, api.ListSessions))
 	mux.Handle("POST /admin/sessions/revoke-all", withPerm(sessionAuth, rbac.SessionsRevoke, api.RevokeAllSessions))
 
 	// Audit log
@@ -88,8 +117,10 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("PUT /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.UpdateConfig))
 	mux.Handle("DELETE /admin/config/{key}", withPerm(sessionAuth, rbac.ConfigWrite, api.DeleteConfig))
 
-	// Metrics
-	mux.Handle("GET /admin/metrics", withPerm(sessionAuth, rbac.MetricsRead, api.GetMetrics))
+	// Metrics: the route and its permission gate exist, the implementation does
+	// not. It answers 501 rather than a placeholder 200 so a caller cannot
+	// mistake an empty stub for a working metrics feed.
+	mux.Handle("GET /admin/metrics", withPerm(sessionAuth, rbac.MetricsRead, notImplemented))
 
 	// Admin user management
 	mux.Handle("GET /admin/admins", withPerm(sessionAuth, rbac.AdminsManage, api.ListAdmins))
@@ -137,7 +168,8 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	return handler
 }
 
-// withPerm applies SessionAuth + RBACCheck middleware to a handler.
-func withPerm(sessionAuth func(http.Handler) http.Handler, perm rbac.Permission, h http.HandlerFunc) http.Handler {
-	return sessionAuth(RBACCheck(perm)(h))
+// notImplemented answers a route that is mounted and permission-gated but has
+// no implementation behind it, using the standard error envelope.
+func notImplemented(w http.ResponseWriter, _ *http.Request) {
+	httputil.WriteError(w, http.StatusNotImplemented, "not_implemented")
 }

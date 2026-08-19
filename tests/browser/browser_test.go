@@ -429,10 +429,10 @@ func TestSecurityHeadersPresent(t *testing.T) {
 
 	expected := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":       "DENY",
-		"X-XSS-Protection":      "0",
-		"Referrer-Policy":       "no-referrer",
-		"Cache-Control":         "no-store",
+		"X-Frame-Options":        "DENY",
+		"X-XSS-Protection":       "0",
+		"Referrer-Policy":        "no-referrer",
+		"Cache-Control":          "no-store",
 	}
 
 	for name, want := range expected {

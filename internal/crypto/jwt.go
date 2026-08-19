@@ -33,6 +33,32 @@ type VaultClaims struct {
 	Fingerprint  string        `json:"fingerprint,omitempty"`
 	Confirmation *Confirmation `json:"cnf,omitempty"`
 	TokenType    string        `json:"token_type,omitempty"`
+	// MintedBy names the client that requested a minted subject assertion. It
+	// is set only by the mint path and carries no authority: it is attribution
+	// for a relying party, not a credential. It is deliberately not ClientID,
+	// which is the claim that marks a client-credentials caller and is read as
+	// such by the service document store.
+	MintedBy string `json:"minted_by,omitempty"`
+
+	// ACR is the OIDC Core §2 authentication context class reference: the
+	// assurance level this session reached, as "urn:vault42:aal:N". OIDC leaves
+	// the value space to the issuer, so the URN is vault42's own and its
+	// meaning is the NIST SP 800-63B AAL of the same number.
+	ACR string `json:"acr,omitempty"`
+	// AMR is the OIDC Core §2 authentication methods reference: the RFC 8176
+	// values for the authenticators this session actually presented.
+	AMR []string `json:"amr,omitempty"`
+	// AuthTime is the OIDC Core §2 auth_time: seconds since the Unix epoch at
+	// which the end user authenticated, which for a rotated token is when the
+	// refresh family began rather than when the token was minted. Zero means no
+	// authentication event is recorded, and the claim is omitted.
+	AuthTime int64 `json:"auth_time,omitempty"`
+	// Factors lists the vault42 authenticator methods already completed. It
+	// appears only on a 2fa_challenge token, where it carries the first factor
+	// across to the second-factor verify so the completed login knows whether it
+	// began with a password or with an upstream identity provider. It is not an
+	// authorization claim and no access token carries it.
+	Factors []string `json:"factors,omitempty"`
 }
 
 // Confirmation holds DPoP proof-of-possession binding (RFC 9449).
@@ -82,9 +108,29 @@ func MarshalSigningKeyPEM(key *rsa.PrivateKey) ([]byte, error) {
 }
 
 // KIDFromPublicKey derives a deterministic key ID from the RSA public key.
-// Format: first 16 hex chars of SHA-256(N bytes), split as xxxxxxxx-xxxxxxxx.
+// Format: first 16 hex chars of SHA-256 over the PKIX DER encoding, split as
+// xxxxxxxx-xxxxxxxx.
+//
+// The DER covers both the modulus and the exponent. Hashing N alone meant two
+// keys sharing a modulus but differing in exponent produced the same kid, and
+// keystore.Import upserts ON CONFLICT (kid) DO UPDATE, so importing the second
+// overwrote the first key's private material in place. Reaching it needs admin
+// import of a crafted key, which is why this is hardening rather than a live
+// break, but the fix costs nothing.
+//
+// Changing the derivation does not disturb existing keys. Both call sites derive
+// the kid once, when a key is generated or imported, and store it; nothing
+// recomputes a kid and compares it against a stored one, so keys already in the
+// keystore keep the id they were filed under and the JWKS keeps publishing it.
 func KIDFromPublicKey(pub *rsa.PublicKey) string {
-	h := sha256.Sum256(pub.N.Bytes())
+	// MarshalPKIXPublicKey fails only for a key type it does not understand, and
+	// this one is *rsa.PublicKey. Falling back to the modulus keeps the function
+	// total rather than introducing an error return that no caller can act on.
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		der = pub.N.Bytes()
+	}
+	h := sha256.Sum256(der)
 	s := hex.EncodeToString(h[:8])
 	return s[:8] + "-" + s[8:]
 }
@@ -99,6 +145,7 @@ func SignToken(claims VaultClaims, privateKey *rsa.PrivateKey, kid string) (stri
 // - Algorithm whitelist (RS256 only)
 // - kid is present and non-empty
 // - jku/x5u/x5c/jwk headers are rejected
+// - any crit header is rejected (RFC 7515 4.1.11: no JOSE extensions implemented)
 // - Standard claims (exp, nbf, iss, aud) are validated
 func ParseAndValidate(tokenString string, keyFunc vjwt.Keyfunc, issuer string, audience string) (*VaultClaims, error) {
 	if len(tokenString) > MaxJWTSize {
@@ -112,6 +159,23 @@ func ParseAndValidate(tokenString string, keyFunc vjwt.Keyfunc, issuer string, a
 			if _, exists := t.Header[h]; exists {
 				return nil, fmt.Errorf("jwt: rejected header %q", h)
 			}
+		}
+
+		// `crit` lists header parameters the producer requires the recipient to
+		// understand and act on, and RFC 7515 4.1.11 says a recipient MUST reject
+		// a JWS carrying one it does not fully implement. vault42 implements no
+		// JOSE extensions, so every crit qualifies, whatever it names and whether
+		// or not it is even a list. The RFC forbids an empty array outright,
+		// which is the case a "nothing is listed, so nothing is required" reading
+		// would wave through.
+		//
+		// Not exploitable on its own, since the header is inside the signature
+		// and forging one needs the signing key. It matters because these tokens
+		// are consumed elsewhere: a relying party that honors crit would refuse
+		// a token this vault called valid, and two verifiers disagreeing about
+		// what a valid token is is the kind of gap that later gets built on.
+		if _, exists := t.Header["crit"]; exists {
+			return nil, errors.New("jwt: rejected crit header, no JOSE extensions are implemented")
 		}
 
 		// Validate kid presence

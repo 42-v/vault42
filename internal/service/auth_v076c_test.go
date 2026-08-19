@@ -115,8 +115,13 @@ func TestLogin_LockNotificationEmailSent(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
+			// The account-wide counter is a separate key now, and it is nowhere
+			// near the distributed threshold in this scenario.
+			if !strings.Contains(key, "|") {
+				return "0", nil
+			}
 			lockoutReads++
-			// First lockout: read (pre-verify) → not locked; post-failure → locked.
+			// First per-source read (pre-verify) → not locked; post-failure → locked.
 			if lockoutReads == 1 {
 				return "0", nil
 			}

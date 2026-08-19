@@ -183,27 +183,95 @@ type argon2TestParams struct {
 	parallelism int
 }
 
+// parseArgon2Params reads the PHC parameter segment of a hash the production
+// hasher produced.
+//
+// It does not call internal/crypto's own decoder: parseArgon2Hash is unexported,
+// and exporting it so a test could call it would add a production seam whose
+// only consumer is this file. What closes the gap the duplicate leaves is
+// TestArgon2Params_TheEncodedParametersAreTheOnesTheHashWasComputedWith below —
+// the numbers read here are provably the numbers the derivation used, because
+// verification re-derives from them and matches.
+//
+// The parse is strict where the previous version was not: it required nothing,
+// silently ignored an unknown key, and left a missing one at zero, so an
+// encoding change turned every floor below into a comparison against 0.
 func parseArgon2Params(t *testing.T, paramStr string) argon2TestParams {
 	t.Helper()
+	fields := strings.Split(paramStr, ",")
+	if len(fields) != 3 {
+		t.Fatalf("PHC parameter segment %q has %d fields, want exactly m, t and p", paramStr, len(fields))
+	}
+
 	params := argon2TestParams{}
-	parts := strings.Split(paramStr, ",")
-	for _, p := range parts {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) != 2 {
-			t.Fatalf("Malformed param: %q", p)
+	seen := map[string]bool{}
+	for _, f := range fields {
+		key, value, ok := strings.Cut(f, "=")
+		if !ok {
+			t.Fatalf("PHC parameter %q is not key=value", f)
 		}
-		val, err := strconv.Atoi(kv[1])
+		n, err := strconv.Atoi(value)
 		if err != nil {
-			t.Fatalf("Invalid param value: %q", kv[1])
+			t.Fatalf("PHC parameter %q has a non-numeric value: %v", f, err)
 		}
-		switch kv[0] {
+		if seen[key] {
+			t.Fatalf("PHC parameter %q appears twice in %q", key, paramStr)
+		}
+		seen[key] = true
+		switch key {
 		case "m":
-			params.memory = val
+			params.memory = n
 		case "t":
-			params.iterations = val
+			params.iterations = n
 		case "p":
-			params.parallelism = val
+			params.parallelism = n
+		default:
+			t.Fatalf("unknown PHC parameter %q in %q; the encoding changed and every floor "+
+				"asserted against this segment is now measuring something else", key, paramStr)
 		}
 	}
 	return params
+}
+
+// The assertion that makes the parse above evidence rather than a second opinion.
+//
+// The floors are read off the encoded parameter segment, which would be worth
+// nothing if the hasher could encode one cost and derive with another: the test
+// would report 46 MiB while every stored password was derived at 8. Verification
+// re-derives the key using exactly the parsed parameters, so a hash that verifies
+// against the password that produced it is a hash whose encoded parameters are
+// the ones the derivation used. Editing the encoded m without changing the
+// derivation, or the reverse, breaks this.
+func TestArgon2Params_TheEncodedParametersAreTheOnesTheHashWasComputedWith(t *testing.T) {
+	const password = "test-argon2-parameter-honesty" // #nosec G101 -- test input to HashPassword, authenticates nothing
+	hash, err := vaultcrypto.HashPassword(password)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+
+	ok, err := vaultcrypto.VerifyPassword(password, hash)
+	if err != nil || !ok {
+		t.Fatalf("the hasher's own output did not verify (ok=%v err=%v)", ok, err)
+	}
+
+	parts := strings.Split(hash, "$")
+	if len(parts) != 6 {
+		t.Fatalf("Invalid PHC format: expected 6 parts, got %d", len(parts))
+	}
+	params := parseArgon2Params(t, parts[3])
+
+	// Re-encode the segment with the memory cost halved and leave the derived key
+	// untouched. Verification now derives at a cost the key was not derived at, so
+	// it must refuse — which is what proves the segment is load-bearing.
+	parts[3] = strings.Replace(parts[3], "m="+strconv.Itoa(params.memory),
+		"m="+strconv.Itoa(params.memory/2), 1)
+	ok, err = vaultcrypto.VerifyPassword(password, strings.Join(parts, "$"))
+	if err != nil {
+		t.Fatalf("verifying against a re-encoded parameter segment errored: %v", err)
+	}
+	if ok {
+		t.Fatal("a hash whose declared memory cost was halved still verified; the encoded " +
+			"parameters are not what the derivation uses, so the floors asserted against " +
+			"them mean nothing")
+	}
 }

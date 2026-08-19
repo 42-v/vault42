@@ -226,45 +226,6 @@ func TestGetClaimsPresent(t *testing.T) {
 	}
 }
 
-func TestRequireAuthNoClaims(t *testing.T) {
-	handler := RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
-	}
-	assertJSONError(t, rec, "unauthorized")
-}
-
-func TestRequireAuthWithClaims(t *testing.T) {
-	var called bool
-	handler := RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	claims := &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{Subject: "user-789"},
-	}
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	ctx := context.WithValue(req.Context(), ClaimsKey, claims)
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
-	}
-	if !called {
-		t.Error("next handler was not called")
-	}
-}
-
 // assertJSONError decodes the response body as JSON and asserts the "error" field matches want.
 func assertJSONError(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 	t.Helper()

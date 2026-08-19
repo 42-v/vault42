@@ -1,0 +1,120 @@
+-- ============================================================================
+-- 038: the DPoP sender constraint survives rotation
+-- ============================================================================
+--
+-- RFC 9449 binds an access token to a key: the token names the key's RFC 7638
+-- thumbprint in cnf.jkt and every use of it has to be signed by that key. The
+-- benefit that buys is stated in §1 of the RFC and is the reason browsers keep
+-- the key in non-extractable WebCrypto storage — script that reads a token
+-- cannot read the key, so the credential it steals stops working when the page
+-- does.
+--
+-- Rotation gave that back. cnf.jkt was minted from dpop.Thumbprint(ctx), the
+-- CURRENT request's proof, at both mint sites in internal/service/token.go, and
+-- there was nothing else it could have been minted from: auth.refresh_tokens
+-- stored no binding, and model.RefreshToken had no field for one. POST
+-- /auth/refresh is mounted under dpopWrap without authMw, so claims is nil,
+-- tokenRequiresDPoP is false, and the middleware's own thumbprint comparison
+-- never fires there either.
+--
+-- The attack that opens is the one DPoP is sold as closing. Script that reaches
+-- the page steals only the opaque refresh cookie — which rides on the request by
+-- itself, so it does not even have to be read. It generates its own keypair,
+-- extractable this time because it chose the parameters, presents a proof over
+-- it to /auth/refresh, and is handed an access token validly bound to a key it
+-- can serialize and carry off the machine. A credential that was supposed to die
+-- with the page becomes a portable one. Omitting the proof entirely worked too:
+-- the successor simply carried no cnf at all and the session downgraded to
+-- bearer. The device fingerprint checked on the same path is not a
+-- counter-measure; it is IP, User-Agent and Accept-Language, all of which the
+-- script matches by construction because it is running in that very browser.
+--
+-- ----------------------------------------------------------------------------
+-- The column
+-- ----------------------------------------------------------------------------
+--
+-- dpop_jkt is the binding, recorded once by the first token of a family and
+-- inherited unchanged by every rotation, exactly as 013 does for
+-- family_created_at. It is nullable and NULL is meaningful: it is an ordinary
+-- bearer family, which is every client that does not speak DPoP and must keep
+-- working untouched. There is no backfill for the same reason — a session that
+-- was never bound must not acquire a binding retroactively, and no session
+-- predating this migration has one to recover.
+--
+-- VARCHAR(64) holds a base64url SHA-256 thumbprint (43 characters) with room to
+-- spare, matching how token_hash and fingerprint_hash are sized on this table.
+--
+-- The inheritance is enforced in the INSERT rather than trusted to the caller,
+-- which is the same argument 013 makes for family_created_at and it is stronger
+-- here because the caller is the thing under attack. See
+-- internal/repository/postgres/refresh_token.go, insertRefreshRowSQL: an insert
+-- into a family that already has rows takes that family's dpop_jkt and discards
+-- whatever it was handed, so a rotation cannot re-bind a bound family and cannot
+-- upgrade an unbound one. Only a family with no rows — a genuine new session —
+-- supplies the value, which is where a login's validated proof establishes it.
+--
+-- This migration declares no function, so the search_path pinning and the
+-- REVOKE EXECUTE ... FROM PUBLIC that 012 and 018 carry have nothing to apply to
+-- here. The guard is a grant and a statement shape, not a trigger.
+--
+-- ----------------------------------------------------------------------------
+-- Grants: why this is not the 029 one-liner
+-- ----------------------------------------------------------------------------
+--
+-- 029 narrowed vault_app with a bare `REVOKE UPDATE (locked_until) ON auth.users`
+-- and that worked because 001 granted UPDATE on auth.users at COLUMN level
+-- (001: `GRANT UPDATE (password_hash, ..., locked_until, ...)`), so there was a
+-- column privilege there to take away.
+--
+-- auth.refresh_tokens is granted the other way: 001 says
+-- `GRANT SELECT, INSERT, UPDATE, DELETE ON auth.refresh_tokens TO vault_app`, at
+-- TABLE level. A column-level REVOKE against a table-level grant removes nothing
+-- — PostgreSQL keeps the table privilege, which covers every column — and it
+-- reports success while doing it. Reproduced on postgres:16-alpine:
+--
+--     GRANT SELECT, INSERT, UPDATE, DELETE ON auth.refresh_tokens TO vault_app;
+--     REVOKE UPDATE (dpop_jkt) ON auth.refresh_tokens FROM vault_app;   -- REVOKE
+--     SET ROLE vault_app;
+--     UPDATE auth.refresh_tokens SET dpop_jkt = 'ATTACKER';             -- UPDATE 1
+--
+-- So the 029 statement, copied here, would have read as a control in the diff,
+-- passed review, and enforced nothing. What is copied instead is 029's argument:
+-- give the web-facing role update rights over the columns it actually writes and
+-- no others.
+--
+-- vault_app updates exactly two columns anywhere in the product —
+-- internal/repository/postgres/refresh_token.go writes `SET used = TRUE`
+-- (MarkUsed) and `SET revoked = TRUE` (RevokeByID, RevokeByDeviceID,
+-- RevokeFamily, RevokeAllForUser, RevokeAll) and nothing else. Narrowing to
+-- those two also puts family_created_at out of its reach, so 013's absolute
+-- session lifetime stops depending solely on the shape of one application
+-- statement.
+--
+-- Three things deliberately do not change:
+--
+--   * INSERT stays at table level, so a login still writes dpop_jkt on the
+--     family's first row;
+--   * DELETE stays, so DeleteExpired and the erasure cascade are unaffected;
+--   * SELECT ... FOR UPDATE keeps working. It requires UPDATE on the relation,
+--     and a column-level UPDATE on any column satisfies that — verified on
+--     postgres:16-alpine against this exact grant, because the lock order
+--     documented on lockThenWrite depends on it and a privilege error there
+--     would break logout and refresh rather than fail visibly in review.
+--
+-- vault_admin is untouched: 001 grants it SELECT and 009 grants it DELETE on
+-- this table, never UPDATE, so an operator could already destroy a session but
+-- not rewrite one.
+--
+-- Written bare rather than inside a pg_roles guard, the way 015, 024 and 029
+-- argue: 001 creates both roles unconditionally, and a statement nested in a DO
+-- block is skipped by the integration fixture's applyRealGrants(), which would
+-- leave that suite exercising the pre-038 privilege model.
+-- ============================================================================
+
+ALTER TABLE auth.refresh_tokens ADD COLUMN dpop_jkt VARCHAR(64);
+
+COMMENT ON COLUMN auth.refresh_tokens.dpop_jkt IS
+    'RFC 7638 JWK thumbprint of the DPoP key this rotation family is bound to; NULL for an ordinary bearer family. Written by the family''s first token and inherited unchanged by every rotation, so a refresh mints cnf.jkt from the family and never from the caller (RFC 9449 §5).';
+
+REVOKE UPDATE ON auth.refresh_tokens FROM vault_app;
+GRANT UPDATE (used, revoked) ON auth.refresh_tokens TO vault_app;

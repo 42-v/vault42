@@ -13,12 +13,12 @@ import (
 // StressResult aggregates metrics from stress test workers.
 type StressResult struct {
 	Total        int64
-	Success      int64         // 2xx
-	RateLimited  int64         // 429
-	Backpressure int64         // 503 (server_busy — healthy load-shedding)
-	ClientErr    int64         // 4xx (non-429)
-	ServerErr    int64         // 5xx (non-503)
-	Timeouts     int64         // net errors / timeouts
+	Success      int64 // 2xx
+	RateLimited  int64 // 429
+	Backpressure int64 // 503 (server_busy — healthy load-shedding)
+	ClientErr    int64 // 4xx (non-429)
+	ServerErr    int64 // 5xx (non-503)
+	Timeouts     int64 // net errors / timeouts
 	Latencies    []time.Duration
 	Duration     time.Duration // wall clock
 }

@@ -16,7 +16,7 @@ import (
 // on, the user would be shown a QR code — and would scan it into their authenticator — for
 // a secret the server either never stored or stored in the clear.
 //
-// The first is a lockout: they enrol a factor the server cannot verify. The second is
+// The first is a lockout: they enroll a factor the server cannot verify. The second is
 // worse. Either way the request must fail before a QR code is ever rendered.
 func TestTOTPSetup_UnusableMasterKeyStoresNothing(t *testing.T) {
 	stored := false

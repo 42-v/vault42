@@ -356,5 +356,6 @@
   "error.forbidden": "Nemate dopuštenje za to.",
   "error.code_already_used": "Ovaj kod je već iskorišten. Upotrijebite novi.",
   "error.password_recently_used": "Nedavno ste koristili ovu lozinku. Odaberite drugu.",
-  "error.no_webauthn_credentials": "Na ovom računu nije registriran nijedan sigurnosni ključ."
+  "error.no_webauthn_credentials": "Na ovom računu nije registriran nijedan sigurnosni ključ.",
+  "error.password_reset_required": "Ovaj račun mora ponovno postaviti lozinku. Poslali smo vam poveznicu e-poštom."
 }

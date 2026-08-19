@@ -4,9 +4,6 @@ root = false
 # whose root LICENSE covers all files.
 [*.cs]
 dotnet_diagnostic.SA1633.severity = none      # File header (we use the root LICENSE)
-dotnet_diagnostic.SA1652.severity = none      # XML doc compatibility — we don't ship docfx
-dotnet_diagnostic.SA0001.severity = none      # XML comment analysis disabled
-dotnet_diagnostic.CS1591.severity = none      # Missing XML comment for publicly visible type/member
 
 # Prefer braces but don't FAIL the build if an early-return uses a single
 # statement form — common in our auth handler short-circuits.
@@ -52,6 +49,7 @@ csharp_style_namespace_declarations = file_scoped:warning
 [tests/**/*.cs]
 dotnet_diagnostic.CA1707.severity = none      # xUnit test_method_naming convention
 dotnet_diagnostic.SA1600.severity = none      # documentation not required for test methods
+dotnet_diagnostic.CS1591.severity = none      # test assemblies are not consumed via IntelliSense
 dotnet_diagnostic.S2699.severity = none       # tests sometimes assert via Theory data, not Assert.X
 dotnet_diagnostic.CA1861.severity = none      # constant arrays in test data are fine
 dotnet_diagnostic.CA1852.severity = none      # internal test fixture types don't need 'sealed'

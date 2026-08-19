@@ -1,3 +1,23 @@
+<!--
+  VaultRegisterForm: a ready-made registration form wired to useAuth().register().
+
+  Props:
+    minPasswordLength  minimum accepted length (default 15). Presentation only;
+                       the server enforces its own policy regardless.
+
+  Emits:
+    success  (result)  registration was accepted
+    error    (err)     registration failed
+
+  Translates through the i18n plugin when one is installed and falls back to
+  built-in English copy otherwise, so it renders standalone.
+
+  Server error codes are mapped to fixed copy and the raw code is never
+  rendered. There is deliberately no message for a duplicate address: the server
+  answers a repeat registration exactly as it answers a new one, and naming the
+  conflict here would reintroduce the account-enumeration oracle the server
+  withholds.
+-->
 <script setup lang="ts">
 import { ref, computed, inject } from 'vue'
 import { useAuth } from '../composables/useAuth'
@@ -102,7 +122,7 @@ async function handleRegister() {
       <h2>{{ t('register.header', 'Create Account') }}</h2>
     </slot>
 
-    <div v-if="error" class="vault42-register-form__error">
+    <div v-if="error" class="vault42-register-form__error" role="alert">
       <slot name="error" :error="error">
         <p>{{ error.code ? friendlyError(error.code) : t('register.failed', 'Registration failed') }}</p>
       </slot>
@@ -138,7 +158,7 @@ async function handleRegister() {
           :minlength="minPasswordLength"
           required
         />
-        <p v-if="passwordTooShort" class="vault42-register-form__hint vault42-register-form__hint--error">
+        <p v-if="passwordTooShort" class="vault42-register-form__hint vault42-register-form__hint--error" aria-live="polite">
           {{ t('register.minChars', `Minimum ${minPasswordLength} characters`, { count: minPasswordLength }) }}
         </p>
       </div>
@@ -151,7 +171,7 @@ async function handleRegister() {
           autocomplete="new-password"
           required
         />
-        <p v-if="passwordMismatch" class="vault42-register-form__hint vault42-register-form__hint--error">
+        <p v-if="passwordMismatch" class="vault42-register-form__hint vault42-register-form__hint--error" aria-live="polite">
           {{ t('register.passwordsDoNotMatch', 'Passwords do not match') }}
         </p>
       </div>

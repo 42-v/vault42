@@ -6,10 +6,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/oauth2"
 	"github.com/42-v/vault42/tests/mocks"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // A concurrent-registration race (UNIQUE violation on Create) resolves by

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/model"
@@ -58,16 +59,21 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 
 			ip := net.ParseIP(host)
 			if ip == nil || !ip.IsLoopback() {
-				log.Printf("CRITICAL admin-gateway: non-loopback connection from %s (UA: %s)", // #nosec G706 — sanitized
-					sanitizeLogValue(r.RemoteAddr), sanitizeLogValue(r.UserAgent()))
+				// The masked network, not the address: the audit entry written
+				// immediately below carries the whole one, and docs/PRIVACY.md
+				// inventories the audit store as the place that holds it. The
+				// same split the proxy-header line at the bottom of this file
+				// already makes.
+				log.Printf("CRITICAL admin-gateway: non-loopback connection from %s (UA: %s)", // #nosec G706 — masked network, and the user agent is encoded
+					httputil.ObfuscatedIP(r.RemoteAddr), httputil.SafeLogValue(r.UserAgent()))
 
 				// Best-effort audit entry
 				if auditRepo != nil {
 					entry := &model.AuditEntry{
-						EventType: "admin:killswitch_triggered",
+						EventType: audit.AdminKillswitchTriggered,
 						IP:        r.RemoteAddr,
 						UserAgent: r.UserAgent(),
-						RiskScore: 100,
+						RiskScore: audit.Severity(audit.AdminKillswitchTriggered),
 						Metadata: map[string]interface{}{
 							"method": r.Method,
 							"path":   r.URL.Path,
@@ -81,7 +87,7 @@ func LocalOnly(killswitch bool, auditRepo repository.AuditRepository) func(http.
 				}
 
 				if killswitch {
-					panic(killswitchPrefix + "admin-gateway received request from non-local source: " + sanitizeLogValue(host))
+					panic(killswitchPrefix + "admin-gateway received request from non-local source: " + httputil.SafeLogValue(host))
 				}
 
 				httputil.WriteError(w, http.StatusForbidden, "local_only")
@@ -100,7 +106,7 @@ func RejectProxyHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, h := range proxyHeaders {
 			if r.Header.Get(h) != "" {
-				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, sanitizeLogValue(r.RemoteAddr)) // #nosec G706 — sanitized
+				log.Printf("admin-gateway: rejected request with proxy header %s from %s", h, httputil.ObfuscatedIP(r.RemoteAddr)) // #nosec G706 -- masked network, never a full address
 				httputil.WriteError(w, http.StatusForbidden, "proxy_not_allowed")
 				return
 			}
@@ -109,52 +115,79 @@ func RejectProxyHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// SessionAuth middleware validates admin session tokens from the Authorization header.
-// It looks up the session by SHA-256 hash, checks expiry and revocation, and loads
-// the admin user into context.
+// SessionAuth middleware validates admin session tokens from the Authorization
+// header. It looks up the session by SHA-256 hash, checks expiry and revocation,
+// and loads the admin user into context. Each token or session validity failure
+// (missing or malformed Authorization header, an unknown, revoked or expired
+// session, or a session whose admin no longer exists) is written to the
+// append-only audit log as an admin_session_rejected event naming the reason
+// (ASVS V16.3.2): the rejection is enforced regardless, and the record is what
+// makes session-token replay and bogus-token probing detectable after the fact.
+// auditLog may be nil, in which case the rejection is still enforced but not
+// recorded; the wired gateway always supplies one.
 //
 //nolint:gocognit // explicit branches for token-format check, hash lookup, expiry, revocation, killswitch — security boundary; flat is clearer than helpers
-func SessionAuth(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository) func(http.Handler) http.Handler {
+func SessionAuth(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository, auditLog *audit.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// reject records an admin_session_rejected audit event naming the
+			// reason (when a logger is wired) and answers 401. It covers the
+			// token and session validity failures only; the account_locked and
+			// 2fa_required policy gates below apply to an already-valid session
+			// and keep their own handling.
+			// actorID is the admin the looked-up session belongs to, or empty
+			// when the token never resolved to a row. A canceled request
+			// context must not erase the row: the client that is probing can
+			// drop the connection the instant the gateway starts handling it.
+			reject := func(reason, actorID string) {
+				if auditLog != nil {
+					_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminSessionRejected, actorID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+						"reason": reason,
+						"method": r.Method,
+						"path":   r.URL.Path,
+					})
+				}
+				httputil.WriteError(w, http.StatusUnauthorized, reason)
+			}
+
 			auth := r.Header.Get("Authorization")
 			if auth == "" {
-				httputil.WriteError(w, http.StatusUnauthorized, "missing_authorization")
+				reject("missing_authorization", "")
 				return
 			}
 
 			parts := strings.SplitN(auth, " ", 2)
 			if len(parts) != 2 || parts[0] != "Bearer" {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_authorization")
+				reject("invalid_authorization", "")
 				return
 			}
 
 			token := parts[1]
 			if len(token) == 0 || len(token) > 256 {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_token")
+				reject("invalid_token", "")
 				return
 			}
 
 			hash := hashSessionToken(token)
 			session, err := sessions.GetByTokenHash(r.Context(), hash)
 			if err != nil || session == nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "invalid_session")
+				reject("invalid_session", "")
 				return
 			}
 
 			if session.Revoked {
-				httputil.WriteError(w, http.StatusUnauthorized, "session_revoked")
+				reject("session_revoked", session.AdminID)
 				return
 			}
 
 			if time.Now().After(session.ExpiresAt) {
-				httputil.WriteError(w, http.StatusUnauthorized, "session_expired")
+				reject("session_expired", session.AdminID)
 				return
 			}
 
 			admin, err := admins.GetByID(r.Context(), session.AdminID)
 			if err != nil || admin == nil {
-				httputil.WriteError(w, http.StatusUnauthorized, "admin_not_found")
+				reject("admin_not_found", session.AdminID)
 				return
 			}
 
@@ -173,9 +206,12 @@ func SessionAuth(sessions repository.AdminSessionRepository, admins repository.A
 				}
 			}
 
-			ctx := context.WithValue(r.Context(), adminSessionKey, session)
-			ctx = context.WithValue(ctx, adminUserKey, admin)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// Through the exported setters rather than context.WithValue here.
+			// They were the only writers a test could reach, so every fixture in
+			// the tree built its admin context with WithAdmin while the
+			// middleware built its own beside them; a change to either key would
+			// have left RBACCheck reading nil in production and every test green.
+			next.ServeHTTP(w, r.WithContext(WithAdmin(WithSession(r.Context(), session), admin)))
 		})
 	}
 }
@@ -185,8 +221,13 @@ func isTOTPSetupPath(path string) bool {
 	return path == "/admin/admins/me/totp/setup" || path == "/admin/admins/me/totp/verify" || path == "/admin/ui/totp-setup"
 }
 
-// RBACCheck middleware enforces that the authenticated admin has the required permission.
-func RBACCheck(perm rbac.Permission) func(http.Handler) http.Handler {
+// RBACCheck middleware enforces that the authenticated admin has the required
+// permission. A permission denial is written to the append-only audit log as an
+// admin_authz_denied event (ASVS V16.3.2): the decision is enforced regardless,
+// and the record is what makes privilege-boundary probing detectable after the
+// fact. auditLog may be nil, in which case the denial is enforced but not
+// recorded — the wired gateway always supplies one.
+func RBACCheck(perm rbac.Permission, auditLog *audit.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			admin := GetAdmin(r.Context())
@@ -196,6 +237,14 @@ func RBACCheck(perm rbac.Permission) func(http.Handler) http.Handler {
 			}
 
 			if !rbac.HasPermission(rbac.Role(admin.Role), perm) {
+				if auditLog != nil {
+					_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminAuthzDenied, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+						"role":       admin.Role,
+						"permission": string(perm),
+						"method":     r.Method,
+						"path":       r.URL.Path,
+					})
+				}
 				httputil.WriteError(w, http.StatusForbidden, "insufficient_permissions")
 				return
 			}
@@ -217,9 +266,10 @@ func GetAdmin(ctx context.Context) *model.AdminUser {
 	return u
 }
 
-// WithAdmin attaches an admin user to the context. Used by middleware after
-// session verification, and by tests that drive handlers directly with a
-// pre-authenticated admin.
+// WithAdmin attaches an admin user to the context. [SessionAuth] calls it once a
+// session resolves, and tests that drive handlers directly with a
+// pre-authenticated admin call the same function, so the fixture and the
+// deployment write the same key.
 func WithAdmin(ctx context.Context, admin *model.AdminUser) context.Context {
 	return context.WithValue(ctx, adminUserKey, admin)
 }
@@ -280,8 +330,11 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "0")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// object-src and base-uri are declared, not inherited (ASVS V3.4.3):
+		// base-uri has no default-src fallback, so without it an injected
+		// <base> re-points every relative URL the admin UI resolves.
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; form-action 'self'")
+			"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; object-src 'none'; base-uri 'none'")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 		w.Header().Set("Pragma", "no-cache")
@@ -334,7 +387,7 @@ func (rl *LoginRateLimit) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		rl.mu.Unlock()
 
 		if exceeded {
-			log.Printf("admin-gateway: login rate limit exceeded for %s", sanitizeLogValue(host)) // #nosec G706 — sanitized
+			log.Printf("admin-gateway: login rate limit exceeded for %s", httputil.SafeLogValue(host)) // #nosec G706 — sanitized
 			httputil.WriteError(w, http.StatusTooManyRequests, "rate_limited")
 			return
 		}
@@ -345,8 +398,3 @@ func (rl *LoginRateLimit) Wrap(next http.HandlerFunc) http.HandlerFunc {
 
 // configKeyPattern validates config key names — alphanumeric, underscores, dots only.
 var configKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.]{0,63}$`)
-
-// sanitizeLogValue strips newlines and control characters to prevent log injection.
-func sanitizeLogValue(s string) string {
-	return strings.NewReplacer("\n", "", "\r", "", "\t", " ").Replace(s)
-}

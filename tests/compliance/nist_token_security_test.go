@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,14 +17,14 @@ import (
 )
 
 // =============================================================================
-// NIST SP 800-63B — Token Security & Session Management
+// NIST SP 800-63B-4 — Token Security and Session Management
 // https://pages.nist.gov/800-63-4/sp800-63b.html
 // =============================================================================
 
-// --- Section 5.2.2: Account Lockout Threshold ---
+// --- Section 3.2.2: Account Lockout Threshold ---
 
 func TestNIST_AccountLockoutMax100(t *testing.T) {
-	// NIST 800-63B §5.2.2: "Rate limiting ... SHALL NOT be more than 100 failed attempts."
+	// NIST SP 800-63B-4 §3.2.2: "Rate limiting ... SHALL NOT be more than 100 failed attempts."
 	// Vault uses lockoutThreshold = 5 (well within the NIST maximum of 100).
 	// Verify lockout behavior via MemoryCache: 5 failed attempts triggers lockout.
 
@@ -66,7 +67,7 @@ func TestNIST_AccountLockoutMax100(t *testing.T) {
 // --- Section 5.3 / RFC 7636: PKCE S256 Enforcement ---
 
 func TestNIST_OAuth2_PKCE_S256(t *testing.T) {
-	// NIST 800-63B §5.3 / RFC 7636: PKCE with S256 code challenge method MUST be enforced.
+	// NIST SP 800-63B-4 §5.3 / RFC 7636: PKCE with S256 code challenge method MUST be enforced.
 	// Verify SHA256Base64URL produces a valid S256 challenge, and Google provider
 	// includes code_challenge_method=S256 in the authorization URL.
 
@@ -118,10 +119,10 @@ func TestNIST_OAuth2_PKCE_S256(t *testing.T) {
 	}
 }
 
-// --- Section 5.1.1.2: No Forced Password Expiration ---
+// --- Section 3.1.1.2: No Forced Password Expiration ---
 
 func TestNIST_NoForcedPasswordExpiration(t *testing.T) {
-	// NIST 800-63B §5.1.1.2: "Verifiers SHOULD NOT require memorized secrets to
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers SHOULD NOT require memorized secrets to
 	// be changed arbitrarily (e.g., periodically)."
 	// Verify that no password expiration field exists in User or Config.
 
@@ -143,43 +144,18 @@ func TestNIST_NoForcedPasswordExpiration(t *testing.T) {
 	// Scan all User fields for anything suggesting password expiry
 	for i := 0; i < userType.NumField(); i++ {
 		name := userType.Field(i).Name
-		lower := toLower(name)
-		if contains(lower, "passwordexpir") || contains(lower, "passwordmaxage") || contains(lower, "pwexpir") {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "passwordexpir") || strings.Contains(lower, "passwordmaxage") ||
+			strings.Contains(lower, "pwexpir") {
 			t.Fatalf("model.User field %q suggests password expiration — NIST violation", name)
 		}
 	}
 }
 
-// toLower is a simple ASCII lowercase helper to avoid importing strings.
-func toLower(s string) string {
-	b := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
-}
-
-// contains checks if s contains substr (ASCII, case-insensitive already handled by caller).
-func contains(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Section 7.1: Token Not in URL / Response Body ---
 
 func TestNIST_TokenNotInURL(t *testing.T) {
-	// NIST 800-63B §7.1: Refresh tokens MUST NOT be transmitted in URL query
+	// NIST SP 800-63B-4 §7.1: Refresh tokens MUST NOT be transmitted in URL query
 	// parameters or response bodies. Vault sets refresh tokens via cookies only.
 	// The LoginResult.RefreshToken field has json:"-" to ensure it is never serialized.
 
@@ -206,7 +182,7 @@ func TestNIST_TokenNotInURL(t *testing.T) {
 // --- Section 5.2.7: Token Hashing (HMAC-SHA256) ---
 
 func TestNIST_HMAC_SHA256_TokenHashing(t *testing.T) {
-	// NIST 800-63B §5.2.7: "Verifiers SHALL store the hash of the authenticator
+	// NIST SP 800-63B-4 §3.1.1.2: "Verifiers SHALL store the hash of the authenticator
 	// rather than the authenticator itself."
 	// Test SHA256 hex output format and HMAC sign/verify roundtrip.
 
@@ -266,7 +242,7 @@ func TestNIST_HMAC_SHA256_TokenHashing(t *testing.T) {
 // --- Section 5.1: Password Reset Token Single-Use ---
 
 func TestNIST_PasswordResetSingleUse(t *testing.T) {
-	// NIST 800-63B §5.1: Password reset tokens MUST be single-use.
+	// NIST SP 800-63B-4 §5.1: Password reset tokens MUST be single-use.
 	// Vault uses GetAndDelete for atomic single-use token consumption.
 	// After one successful retrieval, the token must no longer exist.
 

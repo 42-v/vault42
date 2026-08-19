@@ -11,7 +11,13 @@ import (
 // ParseOption configures parse-time behavior.
 type ParseOption func(*validationConfig)
 
-// WithValidMethods sets the algorithm whitelist.
+// WithValidMethods narrows the set of accepted "alg" header values to methods.
+//
+// It only ever narrows. The hard allowlist is the signature switch in
+// [ParseWithClaims], which implements RS256 and ES256 and rejects everything
+// else through its default branch; naming an algorithm here that the switch
+// does not implement does not make it verifiable. Omitting the option leaves
+// that switch as the sole gate rather than disabling algorithm checking.
 func WithValidMethods(methods []string) ParseOption {
 	return func(cfg *validationConfig) {
 		cfg.validMethods = methods
@@ -72,8 +78,21 @@ func splitToken(raw string) (header, payload, sig string, err error) {
 	return h, p, remain, nil
 }
 
-// ParseWithClaims parses and fully validates a JWT string.
-// Enforces: algorithm whitelist, signature verification, claims validation.
+// ParseWithClaims parses and fully validates a JWT string, in this order:
+// segment/header decoding, the caller's optional algorithm allowlist, the
+// signature switch that is the real algorithm gate, and finally claims
+// validation.
+//
+// The fail-closed guarantee lives in the signature switch below, not in the
+// [WithValidMethods] allowlist: the switch implements RS256 and ES256 and its
+// default branch rejects every other alg as unverifiable, so "none" and the
+// symmetric algorithms behind CVE-2015-9235 are refused even when no allowlist
+// is configured. [WithValidMethods] narrows that set earlier and with a
+// clearer error; it can never widen it.
+//
+// On any error the returned *Token may be non-nil but its Valid field is
+// false and its claims are unverified, attacker-controlled data. Callers must
+// branch on err, never on the token being non-nil.
 func ParseWithClaims(tokenString string, claims Claims, keyFunc Keyfunc, opts ...ParseOption) (*Token, error) {
 	cfg := &validationConfig{}
 	for _, opt := range opts {
@@ -96,7 +115,11 @@ func ParseWithClaims(tokenString string, claims Claims, keyFunc Keyfunc, opts ..
 		return nil, fmt.Errorf("%w: bad header JSON", ErrTokenMalformed)
 	}
 
-	// Check algorithm against whitelist
+	// Optional caller allowlist. An empty validMethods does not disable
+	// algorithm verification: it defers the decision to the signature switch
+	// below, whose default branch rejects everything that is not RS256 or
+	// ES256. That switch is where "none" and the symmetric algorithms die, so
+	// this block can only tighten the accepted set, never loosen it.
 	alg, _ := header["alg"].(string)
 	if alg == "" {
 		return nil, fmt.Errorf("%w: missing alg", ErrTokenUnverifiable)
@@ -145,7 +168,11 @@ func ParseWithClaims(tokenString string, claims Claims, keyFunc Keyfunc, opts ..
 		return token, fmt.Errorf("%w: keyfunc error: %w", ErrTokenUnverifiable, err)
 	}
 
-	// Verify signature
+	// The hard algorithm allowlist. Only the cases below can verify a
+	// signature; the default branch is the fail-closed guarantee that an
+	// unrecognized alg (including "none" and any HMAC variant, which would
+	// otherwise let a public JWKS key be replayed as a shared secret) is
+	// refused. token.Valid stays false on every branch that returns here.
 	signingString := headerSeg + "." + payloadSeg
 	switch alg {
 	case "RS256":

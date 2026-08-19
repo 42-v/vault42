@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/42-v/vault42/internal/repository"
 )
 
 // stubPruner records what the sweeper asked the escrow store to do. It is local
@@ -174,11 +176,11 @@ func TestRecoveryRetention_SweepErrorDoesNotKillTheSweeper(t *testing.T) {
 	}
 }
 
-// A cancelled context must end the loop, otherwise the sweeper outlives shutdown
+// A canceled context must end the loop, otherwise the sweeper outlives shutdown
 // and keeps issuing deletes against a closing pool.
 //
 // This deliberately does not call Stop: the loop parks in a select over stopCh,
-// ctx.Done and the ticker, and Go picks at random among ready cases, so signalling
+// ctx.Done and the ticker, and Go picks at random among ready cases, so signaling
 // both would make which return statement the coverage profile records a coin flip.
 func TestRecoveryRetention_StopsOnContextCancel(t *testing.T) {
 	pruner := newStubPruner(0, true, nil)
@@ -197,7 +199,44 @@ func TestRecoveryRetention_StopsOnContextCancel(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("sweeper did not exit when its context was cancelled, it would outlive shutdown")
+		t.Fatal("sweeper did not exit when its context was canceled, it would outlive shutdown")
+	}
+}
+
+// Start has to be idempotent the way Stop is. Two calls used to launch two sweep
+// loops over one pair of channels, and the second goroutine's deferred
+// close(doneCh) closed an already-closed channel: an unrecoverable panic that
+// takes the whole auth server down, some hours after start-up, from a defer in a
+// background goroutine that no handler can recover.
+//
+// It is reachable from ordinary wiring - a second Start in a restart path, or a
+// caller that starts the sweeper on config reload - and the two loops would also
+// double the rate at which an ACCESS EXCLUSIVE lock is taken on the escrow table.
+func TestRecoveryRetention_StartTwiceRunsOneSweeperAndDoesNotPanic(t *testing.T) {
+	pruner := newStubPruner(0, true, nil)
+	r := NewRecoveryRetention(pruner, 30*24*time.Hour)
+
+	r.Start(context.Background())
+	select {
+	case <-pruner.swept:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweeper never ran")
+	}
+
+	r.Start(context.Background())
+
+	// A second loop sweeps immediately on start, so its arrival is observable.
+	select {
+	case <-pruner.swept:
+		t.Fatal("a second Start launched a second sweep loop; its deferred close of the done channel panics the process")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	r.Stop()
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Stop returned while a sweep loop was still running")
 	}
 }
 
@@ -212,5 +251,117 @@ func TestRecoveryRetention_DisabledLifecycleIsSafe(t *testing.T) {
 	case <-r.Done():
 		t.Error("a sweeper that never started must not report itself done")
 	default:
+	}
+}
+
+// scriptedPruner returns a fixed sequence of batch sizes, then zero. It is what
+// a sweeper with a backlog sees: full batches while there is more, a short one
+// when the horizon is clear.
+type scriptedPruner struct {
+	mu     sync.Mutex
+	script []int64
+	calls  int
+}
+
+func (s *scriptedPruner) Prune(context.Context, time.Time) (int64, error) { return 0, nil }
+
+func (s *scriptedPruner) PruneLocked(context.Context, time.Time) (int64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.calls <= len(s.script) {
+		return s.script[s.calls-1], true, nil
+	}
+	return 0, true, nil
+}
+
+func (s *scriptedPruner) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// One PruneLocked deletes at most a batch, so a backlog needs several. A sweeper
+// that took the first count as the whole job would leave the escrow above its
+// horizon until the next tick, six hours later, and never catch up on a table
+// growing faster than one batch a tick.
+func TestRecoveryRetention_SweepLoopsUntilAShortBatch(t *testing.T) {
+	const batch = repository.RecoveryCleanupBatch
+	pruner := &scriptedPruner{script: []int64{batch, batch, 17}}
+
+	deleted, err := NewRecoveryRetention(pruner, 30*24*time.Hour).Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if want := int64(2*batch + 17); deleted != want {
+		t.Errorf("deleted = %d, want %d", deleted, want)
+	}
+	if pruner.count() != 3 {
+		t.Errorf("PruneLocked was called %d times, want 3: two full batches and the short one "+
+			"that says the horizon is clear", pruner.count())
+	}
+}
+
+// The loop needs a ceiling, or a tick against a large enough backlog never ends
+// and the sweeper holds the escrow's exclusive lock in a tight cycle. The
+// remainder is not urgent: the next tick takes it.
+func TestRecoveryRetention_SweepStopsAtTheBatchCeiling(t *testing.T) {
+	const batch = repository.RecoveryCleanupBatch
+	script := make([]int64, SweepMaxBatches+5)
+	for i := range script {
+		script[i] = batch
+	}
+	pruner := &scriptedPruner{script: script}
+
+	deleted, err := NewRecoveryRetention(pruner, 30*24*time.Hour).Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if want := int64(SweepMaxBatches) * batch; deleted != want {
+		t.Errorf("deleted = %d, want %d", deleted, want)
+	}
+	if pruner.count() != SweepMaxBatches {
+		t.Errorf("PruneLocked was called %d times, want the %d-batch ceiling",
+			pruner.count(), SweepMaxBatches)
+	}
+}
+
+// A shutdown between batches has to end the sweep. Each batch takes the escrow's
+// exclusive lock, and a sweeper that kept going would still be holding it when
+// the pool it runs on is closed.
+func TestRecoveryRetention_SweepStopsBetweenBatchesOnStop(t *testing.T) {
+	const batch = repository.RecoveryCleanupBatch
+	pruner := &scriptedPruner{script: []int64{batch, batch, batch}}
+
+	r := NewRecoveryRetention(pruner, 30*24*time.Hour)
+	r.Stop() // never started, so this only closes stopCh
+
+	deleted, err := r.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if deleted != batch {
+		t.Errorf("deleted = %d, want one batch: the sweep stops after the batch it was in", deleted)
+	}
+	if pruner.count() != 1 {
+		t.Errorf("PruneLocked was called %d times after Stop, want 1", pruner.count())
+	}
+}
+
+// Same for a canceled context, which is the shutdown path when the process is
+// going away rather than the sweeper being turned off.
+func TestRecoveryRetention_SweepStopsBetweenBatchesOnContextCancel(t *testing.T) {
+	const batch = repository.RecoveryCleanupBatch
+	pruner := &scriptedPruner{script: []int64{batch, batch, batch}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	deleted, err := NewRecoveryRetention(pruner, 30*24*time.Hour).Sweep(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if deleted != batch {
+		t.Errorf("deleted = %d, want the batch that had already been purged", deleted)
 	}
 }

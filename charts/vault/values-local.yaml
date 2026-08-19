@@ -1,5 +1,6 @@
 # Local production overlay — Cloudflare Tunnel for real HTTPS.
-# Usage: helm install vault charts/vault -f charts/vault/values-local.yaml --set cloudflared.existingSecret=cloudflared-token
+# Usage: helm install vault charts/vault -f charts/vault/values-local.yaml \
+#   --set cloudflared.existingSecret=cloudflared-token
 fullnameOverride: vault
 replicaCount: 1
 
@@ -30,6 +31,9 @@ trustedProxies: "10.0.0.0/8"
 database:
   host: vault-postgres
   sslmode: disable
+  # In-cluster Postgres on a private link: the connection is unencrypted on
+  # purpose, so the override says so where an operator reviews it.
+  allowPlaintext: true
   maxConns: "10"
 
 cache:
@@ -63,7 +67,6 @@ cloudflared:
 
 postgres:
   enabled: true
-  appPassword: "local-app-password"
 
 mailpit:
   enabled: true

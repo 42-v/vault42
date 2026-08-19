@@ -612,6 +612,22 @@ describe('IdentityView', () => {
     expect((wrapper.find('#identity-given-name').element as HTMLInputElement).value).toBe('Jane')
   })
 
+  it('closes the delete dialog on Escape without deleting', async () => {
+    mockIdentity.value = { given_name: 'Jane' }
+    const wrapper = mountView()
+
+    const outerDeleteBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === 'Delete')
+    await outerDeleteBtn!.trigger('click')
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+    expect(mockDeleteIdentity).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('clears a stale success banner when a later save fails', async () => {
     const wrapper = mountView()
 

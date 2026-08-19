@@ -1,19 +1,67 @@
-name: Nightly Security Scan
+name: Security Scan
 
+# Also the security gate for pull requests and for the release ref: ci.yml and
+# release.yml call this workflow instead of copying its jobs, so a PR cannot
+# introduce a HIGH CVE that only surfaces on main at 03:00 the next day.
+#
+# `full_scan` adds the image builds and the attack suite. Off for pull requests,
+# where they are the slowest jobs and the source scans carry the signal; on for
+# the nightly and for a release.
 on:
   schedule:
     - cron: '0 3 * * *' # 3 AM UTC daily
-  workflow_dispatch: # manual trigger
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: 'Also build and scan images, and run the attack suite'
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      full_scan:
+        type: boolean
+        default: false
+        required: false
+      # Image scanning alone, without the attack suite. ci.yml sets this from a
+      # paths filter so a pull request that changes a base image pin or a
+      # dependency manifest gets its images scanned, while a pull request that
+      # only touches Go code does not pay for a container build it cannot
+      # affect. Before this, `full_scan` was the only switch and it defaults to
+      # false on workflow_call, so no pull request ever scanned an image: a
+      # HIGH base-image CVE merged green and was first seen at release time.
+      image_scan:
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
+
+# This is a reusable workflow, called by both ci.yml and release.yml as well as
+# run on its own cron, and inside a called workflow `github.workflow`,
+# `github.ref` and `github.event_name` all resolve to the CALLER's. A group
+# keyed on `github.ref` alone would therefore make a pull request's security
+# run cancel a release's. All three keys are in the group so the three callers
+# never collide.
+#
+# Cancellation is on for the nightly, which should never queue behind its own
+# previous run, and for pull requests, where a force-push makes the run it
+# replaces worthless. It is off for a tag push: a release's security gate must
+# not be cancelled by anything.
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'schedule' || github.event_name == 'pull_request' }}
 
 jobs:
   govulncheck:
     name: Go Vulnerability Check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -26,11 +74,36 @@ jobs:
       - name: Run govulncheck
         run: govulncheck ./...
 
+      # `./...` stops at a module boundary, so this job scanned the root module
+      # and nothing else. tests/browser is a second module, and nothing in any
+      # workflow ever looked at it: that is how its golang.org/x/sys sat on
+      # v0.34.0, twelve minor versions behind the root module's and carrying
+      # GO-2026-5024, without a single scan noticing.
+      - name: Run govulncheck (nested modules)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dirs < <(find . -mindepth 2 -name go.mod \
+            -not -path '*/node_modules/*' -not -path '*/vendor/*' -printf '%h\n')
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "no nested modules in the tree; nothing beyond the root scan to do"
+            exit 0
+          fi
+          for dir in "${dirs[@]}"; do
+            echo "==> govulncheck in $dir"
+            ( cd "$dir" && govulncheck ./... )
+          done
+
   gosec:
     name: Static Security Analysis
     runs-on: ubuntu-latest
+    # Two gosec passes now, and the -tests pass walks 1067 files against the
+    # non-test pass's 174, so the previous 20 does not leave enough headroom.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -40,42 +113,167 @@ jobs:
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 
-      - name: Run gosec
+      # gosec exits non-zero on any finding at all, including the LOW and MEDIUM
+      # ones this gate deliberately tolerates, so its exit status cannot be the
+      # gate. The report is. That makes a scanner which produced no report the
+      # dangerous case, and it used to be the silent one: the check was wrapped
+      # in `if [ -s gosec-results.json ]`, so a gosec that crashed, ran out of
+      # memory or failed to install wrote nothing, the guard evaluated false, and
+      # the step exited green on a release-blocking path.
+      # Deliberately WITHOUT -tests. gosec's default excludes _test.go, which
+      # meant this scan covered 174 of the repository's 1067 Go files, and that
+      # was an accident of a missing flag rather than a decision. Measured with
+      # gosec 2.28.0 on this tree:
+      #
+      #   gosec ./...          174 files,  38 369 lines,   0 issues
+      #   gosec -tests ./...  1067 files, 247 856 lines, 664 issues
+      #                                   (127 HIGH, 137 MEDIUM, 400 LOW)
+      #
+      # Every one of the 127 HIGH is in a _test.go file; production code has
+      # none. They are also all test-shaped: 76 G101 hardcoded credentials that
+      # are fake DSNs in fixtures (including the one in cmd/recover/opsec_test.go
+      # that exists to test redacting a prod DSN), 38 G115 conversions inside a
+      # CBOR helper, 2 G402 InsecureSkipVerify against dev certs, and 11 taint
+      # findings on code that already carries #nosec for the pre-2.28 rule IDs.
+      #
+      # So the split is: production must stay at zero, which this step enforces,
+      # and test files are scanned separately under a ratchet rather than either
+      # being ignored or being allowed to fail the release on fixture noise.
+      - name: Run gosec (production code)
         run: gosec -fmt json -out gosec-results.json ./... || true
 
       - name: Check findings
         run: |
-          if [ -s gosec-results.json ]; then
-            cat gosec-results.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          issues = data.get('Issues', [])
-          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
-          if high:
-              for i in high:
-                  print(f\"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}\")
-              sys.exit(1)
-          print(f'No HIGH/CRITICAL findings ({len(issues)} total issues)')
-          "
+          set -euo pipefail
+          if [ ! -s gosec-results.json ]; then
+            echo "gosec produced no report at all. That is a failed scan, not a clean one." >&2
+            exit 1
           fi
+          python3 - gosec-results.json <<'PY'
+          import json, sys
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  data = json.load(fh)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"gosec report is not valid JSON, so the scan did not complete: {exc}")
+
+          issues = data.get('Issues')
+          if issues is None:
+              sys.exit("gosec report has no Issues key; the report format changed "
+                       "or the scan aborted midway")
+
+          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
+          for i in high:
+              print(f"[{i['severity']}] {i['details']} in {i['file']}:{i['line']}")
+          if high:
+              sys.exit(f"{len(high)} HIGH/CRITICAL gosec finding(s)")
+          print(f"No HIGH/CRITICAL findings ({len(issues)} total issues)")
+          PY
+
+      - name: Run gosec (test files)
+        run: gosec -tests -fmt json -out gosec-tests.json ./... || true
+
+      # A ratchet, not a suppression list. Each rule's HIGH/CRITICAL count may
+      # fall and may not rise, so a new InsecureSkipVerify or a new hardcoded
+      # credential in a test still turns this red, while the fixture noise that
+      # predates the gate does not block 1.0.0.
+      - name: Test-file findings may not increase
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s gosec-tests.json ]; then
+            echo "gosec produced no report for the test scan. That is a failed" \
+                 "scan, not a clean one." >&2
+            exit 1
+          fi
+          python3 - gosec-tests.json .gosec-tests-baseline.json <<'PY'
+          import collections, json, sys
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  data = json.load(fh)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"gosec test report is not valid JSON, so the scan did not complete: {exc}")
+
+          issues = data.get('Issues')
+          if issues is None:
+              sys.exit("gosec test report has no Issues key; the format changed or the scan aborted")
+
+          baseline = json.load(open(sys.argv[2]))['high_and_critical_by_rule']
+          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
+          counts = collections.Counter(i['rule_id'] for i in high)
+
+          # Production is gated at zero by the step above; anything HIGH outside a
+          # test file here means that gate was bypassed, so it is never tolerated.
+          leaked = [i for i in high if not i['file'].endswith('_test.go')]
+          for i in leaked:
+              print(f"::error file={i['file']},line={i['line']}::{i['rule_id']} "
+                    f"{i['details']} in non-test code")
+
+          worse = {r: (n, baseline.get(r, 0)) for r, n in counts.items()
+                   if n > baseline.get(r, 0)}
+          for rule, (now, was) in sorted(worse.items()):
+              print(f"::error::gosec {rule} rose from {was} to {now} in test files")
+              for i in high:
+                  if i['rule_id'] == rule:
+                      print(f"    {i['file']}:{i['line']} {i['details']}")
+
+          better = {r: (counts.get(r, 0), n) for r, n in baseline.items()
+                    if counts.get(r, 0) < n}
+          if better:
+              for rule, (now, was) in sorted(better.items()):
+                  print(f"gosec {rule} fell from {was} to {now}; lower the baseline")
+              print("replacement for high_and_critical_by_rule:")
+              print(json.dumps(dict(sorted(counts.items())), indent=2))
+
+          if worse or leaked:
+              sys.exit(f"{len(worse)} rule(s) regressed, {len(leaked)} finding(s) in non-test code")
+          print(f"test-file HIGH/CRITICAL at or below baseline ({sum(counts.values())} vs "
+                f"{sum(baseline.values())})")
+          PY
 
   trivy-source:
     name: Trivy Source Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
+      # Two gaps this closes.
+      #
+      # `scanners` was unset, so this step ran Trivy's default (vuln only) while
+      # every document describing the security posture claimed misconfiguration
+      # and secret coverage. The chart templates and the Dockerfiles were never
+      # scanned by CI at all.
+      #
+      # TRIVY_FILE_PATTERNS is not cosmetic either. Trivy's file detection
+      # recognises `Dockerfile` and `Dockerfile.bridge` but not
+      # `Dockerfile.goreleaser.bridge` or `Dockerfile.goreleaser.admin-gateway`,
+      # so it silently found 11 config files where the tree has 13 and reported
+      # clean on the two it never opened. The action exposes no file-patterns
+      # input; Trivy reads every flag from a TRIVY_-prefixed environment
+      # variable, which is what this uses.
       - name: Run Trivy (filesystem)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_FILE_PATTERNS: dockerfile:Dockerfile.goreleaser.admin-gateway,dockerfile:Dockerfile.goreleaser.bridge
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           exit-code: 1
+          trivyignores: .trivyignore.yaml
 
   trivy-image:
     name: Trivy Image Scan
+    if: >-
+      github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       # One flaky Docker Hub read must not cancel the sibling image's scan.
       fail-fast: false
@@ -87,8 +285,18 @@ jobs:
           - name: admin-gateway
             dockerfile: Dockerfile.admin-gateway
             tag: vault-admin-gateway:scan
+          # release.yml has published ghcr.io/42-v/vault42-bridge since the
+          # bridge job was added, and charts/vault/values.yaml points bridge
+          # mode at it. It was in no scan matrix and on no schedule, so the one
+          # published image nobody looked at was the one running as a network
+          # edge component.
+          - name: bridge
+            dockerfile: Dockerfile.bridge
+            tag: vault-bridge:scan
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Build ${{ matrix.name }} image for scanning
         run: scripts/ci-build-image.sh ${{ matrix.tag }} ${{ matrix.dockerfile }} .
@@ -100,11 +308,60 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: 1
 
-  attack-suite:
-    name: Attack Test Suite
+  # The frontend image is deployed by the chart and built by nothing: no
+  # workflow builds web/Dockerfile, and charts/vault/values.yaml names a
+  # bare `vault-frontend` with no registry. So it cannot join the matrix above,
+  # which scans images this repository builds.
+  #
+  # Its OS package surface is entirely its base image: web/Dockerfile only
+  # COPYs static files on top. Scanning the base by the digest the Dockerfile
+  # pins therefore gives the same package findings with no SPA build and no
+  # container build at all, and reading the digest out of the file rather than
+  # repeating it here means the two cannot drift apart.
+  trivy-frontend-base:
+    name: Trivy Frontend Base Image
+    if: >-
+      github.event_name == 'schedule' || inputs.full_scan || inputs.image_scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve the pinned base image
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=$(sed -n 's/^FROM  *\([^ ]*\).*/\1/p' web/Dockerfile | head -1)
+          if [ -z "$ref" ]; then
+            echo "::error::no FROM line in web/Dockerfile; nothing to scan" >&2
+            exit 1
+          fi
+          case "$ref" in
+            *@sha256:*) ;;
+            *) echo "::error::web/Dockerfile base $ref is not digest-pinned" >&2; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "scanning $ref"
+
+      - name: Run Trivy (frontend base)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.base.outputs.ref }}
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  attack-suite:
+    name: Attack Test Suite
+    if: github.event_name == 'schedule' || inputs.full_scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:

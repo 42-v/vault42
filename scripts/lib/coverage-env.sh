@@ -5,6 +5,14 @@
 #
 # ONE canonical package set, ONE canonical number.
 #
+# The set spans internal/ AND cmd/. It used to be internal/ only, which meant
+# 996 statements of main(), CLI, config parsing, the offline recovery tool and
+# the honeypot bridge sat in neither the numerator nor the denominator of a
+# badge reading "100.00% reachable". They were not covered and not excluded, the
+# one state the exclusion policy says is impossible. Two of those binaries had
+# no test file at all, including cmd/recover, which reconstructs data from the
+# GDPR erasure escrow.
+#
 # The set spans every suite that exercises internal/ in-process: unit, attack and
 # fuzz, plus the DB-backed integration and compliance suites. Large parts of
 # internal/ — repository/postgres, keystore, migrate, the cache backends, the
@@ -14,15 +22,26 @@
 #
 # tests/e2e/multireplica is excluded on purpose: its two in-process replicas are
 # flaky under coverage instrumentation and double-count in-process code.
+#
+# tests/honeypot, tests/stress, tests/admin, tests/browser and tests/e2e-browser
+# are also out of this set. None of them exercise internal/ in-process on a CI
+# runner: honeypot needs locally-tagged vault:dev / vault-bridge:dev images and
+# a five-container topology whose host-mapped DB ports do not reach siblings;
+# stress, admin, browser and e2e-browser need a deployed cluster (and Chrome or
+# Playwright for the last two). Adding a skip-only package would spend a test
+# binary on a profile it cannot change. The suites are invoked from the test
+# job so the skip is visible; they are not part of the coverage number.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script
 COV_PKGS=(
   ./internal/...
+  ./cmd/...
   ./tests/unit/...
   ./tests/attack/...
   ./tests/fuzz/...
   ./tests/integration/...
   ./tests/compliance/...
+  ./tests/spec/...
 )
 
 # cov_detect_runtime exports DOCKER_HOST when a container runtime is reachable.
@@ -31,6 +50,30 @@ COV_PKGS=(
 # Ryuk (Testcontainers' reaper) needs write access to the container socket, which
 # trips SELinux AVC denials on rootless podman + Fedora. Every suite tears down
 # its own containers via defer, so the reaper is redundant.
+# cov_socket_answers reports whether a container socket is not just present but
+# serving. Returns 0 when the daemon answers, 1 when the socket exists and does
+# not.
+#
+# The existence check alone is not enough, and the failure it lets through is the
+# expensive kind. A rootless podman can leave its socket file in place while the
+# API stops answering: /_ping still returns OK while /version and /info hang
+# forever. Detection then succeeds, the coverage run starts, and every suite that
+# wants a container blocks until the 40m per-binary timeout, burning most of an
+# hour to arrive at a failure the first second could have reported.
+#
+# /version is the probe rather than /_ping precisely because /_ping is the
+# endpoint that keeps answering when the daemon is wedged.
+#
+# When curl is unavailable this returns 0 rather than refusing, because a missing
+# probe tool is not evidence about the daemon and refusing on it would break
+# every machine that has a working runtime and no curl.
+cov_socket_answers() {
+  local sock=$1
+  command -v curl >/dev/null 2>&1 || return 0
+  curl --silent --fail --max-time 5 --unix-socket "$sock" \
+       "http://d/v1.41/version" >/dev/null 2>&1
+}
+
 cov_detect_runtime() {
   export TESTCONTAINERS_RYUK_DISABLED=true
 
@@ -40,7 +83,7 @@ cov_detect_runtime() {
   for sock in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" \
               /run/podman/podman.sock \
               /var/run/docker.sock; do
-    if [ -S "$sock" ]; then
+    if [ -S "$sock" ] && cov_socket_answers "$sock"; then
       export DOCKER_HOST="unix://$sock"
       return 0
     fi
@@ -71,9 +114,10 @@ MSG
 
 # cov_run PROFILE TESTOUT — the canonical coverage test invocation.
 #
-# -coverpkg=./internal/... attributes coverage from tests that live under tests/
-# back to the internal packages they exercise; without it those suites are a
-# silent no-op for the profile.
+# -coverpkg attributes coverage from tests that live under tests/ back to the
+# packages they exercise; without it those suites are a silent no-op for the
+# profile. cmd/ is listed alongside internal/ so the binaries are measured by the
+# same run that measures the library, and cannot drift out of the claim again.
 # -count=1 disables the test cache: a cached package is skipped but produces no
 # coverage, so a second run would report a lower number than the first.
 # -p 1 serializes package binaries — integration and compliance each spin up
@@ -89,7 +133,7 @@ cov_run() {
   # profile with no FAIL line, so the raw code is the only signal that the number
   # is incomplete rather than a real regression.
   local rc=0
-  go test -count=1 -p 1 -timeout 30m -v -coverprofile="$profile" -coverpkg=./internal/... \
+  go test -count=1 -p 1 -timeout 40m -v -coverprofile="$profile" -coverpkg=./internal/...,./cmd/... \
       "${COV_PKGS[@]}" > "$out" 2>&1 || rc=$?
   echo "$rc" > "${out}.rc"
 }

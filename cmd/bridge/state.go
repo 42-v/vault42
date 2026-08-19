@@ -10,12 +10,26 @@ import (
 	"time"
 )
 
-// FlagEntry represents a flagged IP with metadata.
+// FlagEntry represents a flagged IP with metadata. It is the shape returned by
+// the admin API and, when Redis is configured, the shape persisted there.
 type FlagEntry struct {
-	IP        string    `json:"ip"`
-	Reason    string    `json:"reason"`
-	Score     int       `json:"score"`
+	// IP is the client address the flag applies to, as resolved by the
+	// trusted-proxy rules in Config.
+	IP string `json:"ip"`
+	// Reason records what triggered the flag: "auto:automation_ua",
+	// "auto:rate_exceeded", "auto:login_failures", "decoy:<path>", or the
+	// operator's own string for a manual flag, which defaults to "manual
+	// flag" when none is supplied.
+	Reason string `json:"reason"`
+	// Score is the accumulated score at the moment of flagging. A decoy hit
+	// records 100 rather than a computed total, since it bypasses scoring.
+	Score int `json:"score"`
+	// FlaggedAt is when the flag was created.
 	FlaggedAt time.Time `json:"flagged_at"`
+	// ExpiresAt is when the flag lapses and the IP is served the real vault
+	// again. Set from Config.FlagTTL at creation. Traffic from a flagged IP
+	// does not extend it, so a flag ages out on wall-clock time rather than on
+	// silence; only a fresh Flag call for the same IP restarts the clock.
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -64,9 +78,9 @@ func (fs *FlagStore) Flag(ip, reason string, score int) {
 	fs.flags[ip] = entry
 
 	if fs.redis != nil {
-		val := fmt.Sprintf("%s|%d|%s", reason, score, now.Format(time.RFC3339))
+		val := encodeFlagValue(reason, score, now)
 		if err := fs.redis.Set("bridge:flag:"+ip, val, fs.ttl); err != nil {
-			log.Printf("bridge: redis SET failed for %s: %v", ip, err) // #nosec G706 -- IP is validated before flag
+			log.Printf("bridge: redis SET failed for %s: %v", obfuscatedIP(ip), err) // #nosec G706 -- masked network, never a full address
 		}
 	}
 }
@@ -83,7 +97,7 @@ func (fs *FlagStore) Unflag(ip string) bool {
 
 	if fs.redis != nil {
 		if err := fs.redis.Del("bridge:flag:" + ip); err != nil {
-			log.Printf("bridge: redis DEL failed for %s: %v", ip, err)
+			log.Printf("bridge: redis DEL failed for %s: %v", obfuscatedIP(ip), err)
 		}
 	}
 	return true
@@ -136,6 +150,32 @@ func (fs *FlagStore) Close() {
 	}
 }
 
+// encodeFlagValue writes reason|score|timestamp. The parser splits from the
+// right so a pipe inside the reason (a legal URL path character, used by
+// decoy reasons) cannot shift the score or timestamp.
+func encodeFlagValue(reason string, score int, at time.Time) string {
+	return fmt.Sprintf("%s|%d|%s", reason, score, at.Format(time.RFC3339))
+}
+
+// parseFlagValue reads both new rows and the historical three-field form.
+// ok is false when the value does not have two separators; an unparseable
+// timestamp still returns ok so the caller can drop it as expired, matching
+// the previous fail-closed behavior.
+func parseFlagValue(val string) (reason string, score int, flaggedAt time.Time, ok bool) {
+	tsSep := strings.LastIndex(val, "|")
+	if tsSep < 1 {
+		return "", 0, time.Time{}, false
+	}
+	scoreSep := strings.LastIndex(val[:tsSep], "|")
+	if scoreSep < 0 {
+		return "", 0, time.Time{}, false
+	}
+	reason = val[:scoreSep]
+	fmt.Sscanf(val[scoreSep+1:tsSep], "%d", &score) // #nosec G104 -- parse failure leaves score=0
+	flaggedAt, _ = time.Parse(time.RFC3339, val[tsSep+1:])
+	return reason, score, flaggedAt, true
+}
+
 func (fs *FlagStore) loadFromRedis() {
 	keys, err := fs.redis.Scan("bridge:flag:*")
 	if err != nil {
@@ -151,15 +191,10 @@ func (fs *FlagStore) loadFromRedis() {
 			continue
 		}
 
-		parts := strings.SplitN(val, "|", 3)
-		if len(parts) < 3 {
+		reason, score, flaggedAt, ok := parseFlagValue(val)
+		if !ok {
 			continue
 		}
-
-		reason := parts[0]
-		score := 0
-		fmt.Sscanf(parts[1], "%d", &score)                 // #nosec G104 -- parse failure leaves score=0
-		flaggedAt, _ := time.Parse(time.RFC3339, parts[2]) // #nosec G104 -- parse failure leaves zero time
 
 		entry := &FlagEntry{
 			IP:        ip,

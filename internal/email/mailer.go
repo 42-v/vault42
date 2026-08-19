@@ -1,10 +1,8 @@
 package email
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"html/template"
 	"net/mail"
 	"strings"
 	"sync"
@@ -27,7 +25,7 @@ var ErrNoSender = errors.New("email: mailer has no sender configured")
 // Mailer applies the per-app white-label layer on top of the global templates
 // and a [Sender]. It resolves each tenant's branding, renders either a custom
 // override or the global template, picks an allowlisted From line, and sends.
-// A zero/absent app slug reproduces the pre-white-label global behaviour.
+// A zero/absent app slug reproduces the pre-white-label global behavior.
 type Mailer struct {
 	renderer           *TemplateRenderer
 	sender             Sender
@@ -45,7 +43,7 @@ type Mailer struct {
 // overrides still apply, on the default address).
 func NewMailer(renderer *TemplateRenderer, sender Sender, store OverrideStore, defaults Branding, allowedFromDomains []string) *Mailer {
 	if renderer == nil {
-		renderer = defaultRenderer
+		renderer = currentRenderer()
 	}
 	allowed := make(map[string]bool, len(allowedFromDomains))
 	for _, d := range allowedFromDomains {
@@ -138,31 +136,22 @@ func (m *Mailer) renderOverride(ctx context.Context, app, templateName string, d
 	}
 	c, found := m.cache.getTemplate(app, templateName)
 	if !found {
+		// The store hands back an override that is already validated and
+		// parsed. Nothing on this path compiles, and a row the store refused is
+		// cached as "no override" so the built-in template renders instead.
 		c = cachedTemplate{exp: time.Now().Add(m.ttl)}
-		if ov, has := m.store.Template(ctx, app, templateName); has {
-			if st, ht, err := compileOverride(ov.Subject, ov.HTMLContent); err == nil {
-				c.subj, c.htmlTmpl, c.text, c.ok = st, ht, ov.TextContent, true
-			}
+		if co, has := m.store.Template(ctx, app, templateName); has {
+			c.compiled = co
 		}
 		m.cache.putTemplate(app, templateName, c)
 	}
-	if !c.ok {
+	if c.compiled == nil {
 		return "", "", "", false
 	}
 
-	var subBuf, htmlBuf bytes.Buffer
-	if err := c.subj.Execute(&subBuf, data); err != nil {
+	subject, html, text, err := c.compiled.render(data)
+	if err != nil {
 		return "", "", "", false
-	}
-	subject = strings.TrimSpace(subBuf.String())
-	data.Subject = subject
-	if err := c.htmlTmpl.Execute(&htmlBuf, data); err != nil {
-		return "", "", "", false
-	}
-	html = htmlBuf.String()
-	text = c.text
-	if strings.TrimSpace(text) == "" {
-		text = stripHTML(html)
 	}
 	return subject, html, text, true
 }
@@ -195,21 +184,6 @@ func (m *Mailer) fromDomainAllowed(addr string) bool {
 	return m.allowedFromDomains[strings.ToLower(parsed.Address[at+1:])]
 }
 
-// compileOverride parses a custom subject + HTML body into executable templates,
-// using the same safe function map (and therefore the same safeURL guard) as the
-// global templates.
-func compileOverride(subject, htmlContent string) (*template.Template, *template.Template, error) {
-	st, err := template.New("subject").Funcs(safeFuncMap()).Parse(subject)
-	if err != nil {
-		return nil, nil, err
-	}
-	ht, err := template.New("html").Funcs(safeFuncMap()).Parse(htmlContent)
-	if err != nil {
-		return nil, nil, err
-	}
-	return st, ht, nil
-}
-
 // --- send-path cache -------------------------------------------------------
 
 type cachedBranding struct {
@@ -218,10 +192,9 @@ type cachedBranding struct {
 }
 
 type cachedTemplate struct {
-	subj     *template.Template
-	htmlTmpl *template.Template
-	text     string
-	ok       bool
+	// compiled is nil when the app has no usable override: either none is
+	// stored, or the stored one failed validation at load.
+	compiled *CompiledOverride
 	exp      time.Time
 }
 

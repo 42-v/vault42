@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
@@ -19,11 +20,39 @@ type BackupCodeHandler struct {
 	hmacKey       []byte
 	authSvc       *service.AuthService
 	secureCookies bool
+	auditLog      *audit.Logger
 }
 
 // NewBackupCodeHandler creates a new backup code handler.
 func NewBackupCodeHandler(repo repository.BackupCodeRepository, hmacKey []byte, authSvc *service.AuthService, secureCookies bool) *BackupCodeHandler {
 	return &BackupCodeHandler{backupRepo: repo, hmacKey: hmacKey, authSvc: authSvc, secureCookies: secureCookies}
+}
+
+// SetAuditLog attaches the audit logger. Called once at wiring time; a nil
+// logger is ignored.
+func (h *BackupCodeHandler) SetAuditLog(l *audit.Logger) {
+	if l != nil {
+		h.auditLog = l
+	}
+}
+
+// logEvent records a backup-code lifecycle event against the user's trail.
+//
+// Generation is the quietest way to take an account: it hands the caller ten
+// standing bypasses of every other factor and invalidates whatever the owner
+// had written down, and until 1.0.0 it left no record at all. Redemption needs
+// the same treatment, because a code spent from an unfamiliar address is the
+// signal that separates "the owner lost their phone" from "someone else had the
+// list", and only failed attempts were ever recorded.
+//
+// Best-effort on purpose. A trail that can refuse a code the user just spent
+// would convert an audit outage into an authentication outage.
+func (h *BackupCodeHandler) logEvent(r *http.Request, event, userID string, meta map[string]interface{}) {
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", meta)
 }
 
 // Generate handles POST /auth/2fa/backup-codes.
@@ -72,6 +101,22 @@ func (h *BackupCodeHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The count is recorded, never the codes: they are the factor itself, and
+	// audit rows outlive account erasure. Their hashes are already in the
+	// backup-code table if anyone needs to prove which set was issued.
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method": "backup_code",
+		"action": "enrolled",
+		"count":  backupCodeCount,
+	})
+
+	// Before the codes are handed out: a set issued while containment failed is
+	// a set the caller believes is the only one that works.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "backup codes", "regenerated"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, BackupCodesResponse{
 		Codes:   codes,
 		Warning: "Save these codes. They will not be shown again.",
@@ -94,6 +139,11 @@ func (h *BackupCodeHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// Code is one unused 16-hex backup code from POST
+		// /auth/2fa/backup-codes. Required. Empty is 400 code_required.
+		// A miss is 401 invalid_backup_code and records an MFA failure.
+		// Comparison is HMAC-SHA256 of the guess against every unused
+		// CodeHash.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Code == "" {
@@ -135,8 +185,15 @@ func (h *BackupCodeHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Recorded before the login is completed and regardless of how it ends. The
+	// code was spent here; whether the session that follows is issued or refused
+	// by account policy is a separate fact the login path records for itself,
+	// and folding the two together would lose every redemption that happened
+	// against a banned or locked account.
+	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "backup_code"})
+
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies, service.MFACompletion{Method: service.MethodBackupCode}) {
 		return
 	}
 

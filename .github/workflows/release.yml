@@ -1,18 +1,46 @@
 name: Release
 
-# Releases are commit-message-driven. The head commit of each push to
-# main is inspected; if its first line begins with a semantic version
-# (e.g. `0.4.2 …` or `v0.4.2 …`, optionally with a `-prerelease`
-# suffix), every artifact is built and published at that version.
-# Pushes whose head commit does not start with a version are no-ops.
+# Releases are tag-driven. Pushing an annotated `vX.Y.Z` tag publishes every
+# artifact at that version.
+#
+# The previous trigger read the version off the head commit's subject on main,
+# which commitlint rejects: a subject that fires the release cannot pass the
+# commit lint, and a subject that passes the lint cannot fire the release. Every
+# release to date was cut by hand-editing the squash subject in the merge
+# dialog, and 0.8.6 was lost when that edit was skipped once: no tag, no
+# release, no image, and nuget.org jumps 0.8.0 to 0.9.0.
+#
+# workflow_dispatch re-runs a release for a tag that already exists, so a
+# registry outage no longer costs a version number. Start it with that tag
+# selected as the ref: the version input names the release, and the ref decides
+# what gets built, so the detect job below refuses a run where the two disagree.
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without the leading v (e.g. 1.0.0)'
+        required: true
 
+# Disable Testcontainers' Ryuk reaper. ci.yml sets this at workflow level, but a
+# workflow-level env does NOT propagate into a called reusable workflow, so the
+# attack suite that nightly-security runs on the release path was starting Ryuk
+# and tripping SELinux AVC denials on hardened hosts. Every suite tears down its
+# own containers via defer, so the reaper is redundant.
+env:
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
+# Read-only by default so a job inherits nothing it did not ask for. Eight jobs
+# used to inherit `contents: write` + `packages: write` from here, including
+# `coverage`, which runs the entire Go test suite, and `security`, which runs
+# the attack suite: arbitrary repository code executed holding a token that
+# could push to GHCR and write to the repo. Each job below grants exactly what
+# its own steps use.
 permissions:
-  contents: write
-  packages: write
-  id-token: write # cosign keyless signing
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -20,37 +48,187 @@ concurrency:
 
 jobs:
   detect:
-    name: Detect release version
+    name: Resolve release version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.parse.outputs.version }}
       tag: ${{ steps.parse.outputs.tag }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
     steps:
+      # The only checkout in the tree without `persist-credentials: false`. The
+      # two steps below fetch the tag and origin/main to prove the release ref
+      # is the tag being published and that the tag is an ancestor of main, and
+      # both need the credentials this leaves in .git/config.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
       - id: parse
         env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          REF_NAME: ${{ github.ref_name }}
+          DISPATCHED: ${{ inputs.version }}
         run: |
           set -eu
-          first=$(printf '%s' "$COMMIT_MESSAGE" | head -n1 | sed -E 's/^[[:space:]]+//')
-          if version=$(printf '%s' "$first" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' | head -n1); then
-            version=${version#v}
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$version"   >> "$GITHUB_OUTPUT"
-            echo "Detected release version: $version"
-          else
-            echo "Head commit does not start with a version; skipping release."
-          fi
+          version=${DISPATCHED:-${REF_NAME#v}}
+          printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' \
+            || { echo "::error::not a semantic version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version"    >> "$GITHUB_OUTPUT"
+
+          # The optional -suffix the regex above admits is the whole difference
+          # between a release and a candidate, and this is the only place that
+          # reading is done. Jobs that have to treat a candidate differently,
+          # starting with the floating image tags, take the answer from here
+          # instead of re-reading the version string and drifting from the job
+          # that decides what the release itself is.
+          case $version in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (prerelease: $prerelease)"
+
+      # The version input names the release; it never reaches a checkout. Every
+      # job here runs actions/checkout with no ref, which takes GITHUB_SHA, and
+      # GITHUB_SHA on a workflow_dispatch is the head of the ref the run was
+      # started from. Dispatching 1.0.0 from a main that has moved past v1.0.0
+      # therefore built main and published it as 1.0.0, over the images, the
+      # chart, the NuGet packages and the release assets, while the tag kept
+      # naming the reviewed commit. The version consistency step below could not
+      # see it, because VERSION stays at the released value until the next bump.
+      #
+      # Requiring the run to start from the tag, rather than pointing the
+      # checkouts at the tag, is what keeps the rest of the file honest:
+      # GITHUB_SHA is also what the ancestor check, the sha- image tags, the
+      # GIT_COMMIT build arg and the release body record.
+      - name: Release ref is the tag being published
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          set -eu
+          git fetch --quiet --force origin "refs/tags/${TAG}:refs/tags/${TAG}" || {
+            echo "::error::$TAG does not exist on origin; a release publishes" \
+                 "a tag that was already pushed"
+            exit 1
+          }
+          tagged=$(git rev-list -n 1 "$TAG")
+          [ "$tagged" = "$GITHUB_SHA" ] || {
+            echo "::error::$TAG names $tagged but this run builds $GITHUB_SHA;" \
+                 "re-run the workflow with $TAG as the selected ref"
+            exit 1
+          }
+
+      # A tag on a branch that never merged would publish code main does not
+      # have, under a version number main will later reuse.
+      - name: Tag is an ancestor of main
+        run: |
+          set -eu
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_SHA is not an ancestor of origin/main"; exit 1; }
+
+      # The tag must agree with the version the tree ships, or the images, the
+      # NuGet packages and the chart all name different versions.
+      - name: Version consistency
+        run: scripts/release-check.sh --version-only "${{ steps.parse.outputs.version }}"
+
+  security:
+    name: Security
+    needs: detect
+    permissions:
+      contents: read
+    uses: ./.github/workflows/nightly-security.yml
+    with:
+      full_scan: true
+
+  # The release advertises "100.00% of reachable statements", and until now
+  # nothing checked that sentence against the commit being published. release.yml
+  # ran only --version-only, and ci.yml fires on push to main and pull requests to
+  # main, never on a tag. So the gate was a pull-request check the release
+  # inherited by assumption, and an exclusion-set change that reached main through
+  # a PR the paths filter skipped would have been published unverified.
+  coverage:
+    name: Coverage gate
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # tests/spec renders the chart and asserts on the rendered manifests. With
+      # no helm on PATH those assertions skip, and a skipped assertion reports
+      # green, which is indistinguishable from one that ran and passed. Three
+      # separate gates in this repository turned out to be incapable of failing;
+      # a silent skip is the same defect wearing a different hat.
+      #
+      # The version matches the chart jobs so CI renders with one helm, not two.
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      # setup-helm failing soft would put us straight back to silent skips.
+      - name: helm is on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v helm >/dev/null || {
+            echo "::error::helm is not on PATH; the rendered-manifest assertions" \
+                 "in tests/spec would skip and report green"
+            exit 1
+          }
+          helm version --short
+
+      # The same canonical run ci.yml's coverage-gate performs, on the tagged ref.
+      - name: Canonical coverage run
+        shell: bash
+        run: |
+          set -eo pipefail
+          source scripts/lib/coverage-env.sh
+          cov_require_runtime
+          cov_run coverage.out coverage-test-output.txt
+          cov_check_failures coverage-test-output.txt
+
+      - name: Gate
+        run: scripts/release-check.sh --coverage-only coverage.out
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-coverage
+          path: |
+            coverage.out
+            coverage-test-output.txt
 
   images:
     name: Build & push images (${{ needs.detect.outputs.version }})
-    needs: detect
-    if: needs.detect.outputs.version != ''
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
     outputs:
       vault_digest: ${{ steps.build_vault.outputs.digest }}
       admin_digest: ${{ steps.build_admin.outputs.digest }}
+      bridge_digest: ${{ steps.build_bridge.outputs.digest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -62,6 +240,52 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve build timestamp
+        id: buildtime
+        run: echo "value=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      # `docker pull ghcr.io/42-v/vault42` with no tag resolves to :latest, so
+      # :latest is what everyone who never pinned a version is running, and it is
+      # the reference the published quickstarts hand out by name. Every release
+      # used to move it, prereleases included, which meant one `v1.1.0-rc.1` tag
+      # served a release candidate to all of them with no version number changing
+      # anywhere they could see it. A candidate now publishes its own version and
+      # its sha- build only.
+      #
+      # The test is for "false" rather than against "true" so that a missing or
+      # unexpected classification withholds :latest: a floating tag left one
+      # release behind is a rerun away from correct, while a floating tag pointing
+      # at a candidate is already in production wherever it was pulled.
+      - name: Resolve image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          PRERELEASE: ${{ needs.detect.outputs.prerelease }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          emit() {
+            {
+              echo "$1<<TAGS"
+              echo "ghcr.io/42-v/$2:${VERSION}"
+              echo "ghcr.io/42-v/$2:sha-${SHA}"
+              if [ "$PRERELEASE" = "false" ]; then
+                echo "ghcr.io/42-v/$2:latest"
+              fi
+              echo "TAGS"
+            } >> "$GITHUB_OUTPUT"
+          }
+          emit vault  vault42
+          emit admin  vault42-admin-gateway
+          emit bridge vault42-bridge
+
+      # No `cache-from: type=gha` on any release build. A GitHub Actions cache
+      # entry is writable by any run on the default branch, and cache scoping
+      # lets a tag build restore what main wrote, so a cached release could be
+      # assembled from layers that never came from the tagged commit. The
+      # provenance attestation below names that commit, so the cache and the
+      # attestation would contradict each other. ci.yml keeps its cache: the
+      # artifact there is thrown away and never attested.
       - name: Build and push vault42
         id: build_vault
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -69,16 +293,11 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
-            ghcr.io/42-v/vault42:latest
-            ghcr.io/42-v/vault42:sha-${{ github.sha }}
+          tags: ${{ steps.tags.outputs.vault }}
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
           provenance: true
           sbom: true
 
@@ -90,16 +309,30 @@ jobs:
           file: Dockerfile.admin-gateway
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
-            ghcr.io/42-v/vault42-admin-gateway:latest
-            ghcr.io/42-v/vault42-admin-gateway:sha-${{ github.sha }}
+          tags: ${{ steps.tags.outputs.admin }}
           build-args: |
             VERSION=${{ needs.detect.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
+          provenance: true
+          sbom: true
+
+      # charts/vault/values.yaml:357 has always pointed bridge mode at
+      # ghcr.io/42-v/vault42-bridge, which no release ever pushed, so
+      # values-bridge.yaml was undeployable from published artifacts.
+      - name: Build and push bridge
+        id: build_bridge
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.bridge
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.bridge }}
+          build-args: |
+            VERSION=${{ needs.detect.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.buildtime.outputs.value }}
           provenance: true
           sbom: true
 
@@ -110,17 +343,268 @@ jobs:
         env:
           VAULT_DIGEST: ${{ steps.build_vault.outputs.digest }}
           ADMIN_DIGEST: ${{ steps.build_admin.outputs.digest }}
+          BRIDGE_DIGEST: ${{ steps.build_bridge.outputs.digest }}
         run: |
-          cosign sign --yes ghcr.io/42-v/vault42@${VAULT_DIGEST}
-          cosign sign --yes ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}
+          cosign sign --yes "ghcr.io/42-v/vault42@${VAULT_DIGEST}"
+          cosign sign --yes "ghcr.io/42-v/vault42-admin-gateway@${ADMIN_DIGEST}"
+          cosign sign --yes "ghcr.io/42-v/vault42-bridge@${BRIDGE_DIGEST}"
+
+      # BuildKit's `provenance: true` above is not a substitute for these. It
+      # emits an unsigned SLSA v0.2 predicate produced by the same BuildKit
+      # process that ran the build, with nothing countersigning it and no
+      # transparency-log entry, and `gh attestation verify` cannot read it.
+      # These statements are assembled and signed by GitHub's attestation
+      # service under the workflow's OIDC identity and logged to Rekor, so a
+      # build step cannot mint provenance naming a source it did not build.
+      #
+      # push-to-registry stores each statement beside its image in GHCR, so
+      # verification does not depend on the GitHub API staying reachable.
+      - name: Attest build provenance (vault42)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42
+          subject-digest: ${{ steps.build_vault.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (admin-gateway)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-admin-gateway
+          subject-digest: ${{ steps.build_admin.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest build provenance (bridge)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/vault42-bridge
+          subject-digest: ${{ steps.build_bridge.outputs.digest }}
+          push-to-registry: true
+
+  # Every release before 1.0.0 shipped notes and nothing else: no binary, no
+  # SHA256SUMS, no SBOM, no detached signature.
+  artifacts:
+    name: Binaries, checksums & SBOMs
+    needs: [detect, security, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # cosign keyless blob signing
+      attestations: write # SLSA build provenance and SBOM attestation
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # goreleaser's before hooks build the Vue dashboard into
+      # internal/frontend/dist so the archives embed a real SPA rather than the
+      # placeholder. Without node and pnpm here those hooks fail and the release
+      # stops, which is the correct direction to fail: a silently dashboard-less
+      # archive is what this replaces.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+
+      - name: Build release artifacts
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish,announce
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ needs.detect.outputs.tag }}
+
+      # The cosign signature over SHA256SUMS establishes who published the
+      # archives. It says nothing about which workflow, at which commit, with
+      # which inputs produced them, which is the question SLSA answers and the
+      # one a consumer of a 1.0.0 tarball actually has.
+      - name: Attest build provenance (release archives)
+        id: attest_archives
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS
+
+      # gh attestation verify resolves statements through the GitHub API. The
+      # bundle is shipped as a release asset as well so the archives can also be
+      # verified offline, from the tarball and the bundle alone.
+      - name: Ship the provenance bundle as a release asset
+        env:
+          BUNDLE_PATH: ${{ steps.attest_archives.outputs.bundle-path }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" "dist/vault42_${VERSION}.intoto.jsonl"
+
+      # sbom-path names one file, and every archive carries its own SBOM, so
+      # this cannot be a single globbed step: one glob would attest whichever
+      # SBOM matched first to all four archives and quietly misdescribe three
+      # of them. goos/goarch in .goreleaser.yaml decide this list.
+      #
+      # actions/attest rather than actions/attest-sbom. The latter is a
+      # composite whose first step is
+      # `echo "::warning::actions/attest-sbom has been deprecated, please use
+      # actions/attest instead"`, and it then calls this same action with these
+      # same inputs. Four deprecation warnings on every release, for nothing.
+      #
+      # NODE_OPTIONS is not decoration: both attest-sbom and
+      # attest-build-provenance set it on the inner action, because the
+      # attestation API's responses exceed Node's default header limit. Calling
+      # actions/attest directly means setting it here or inheriting a failure
+      # the wrappers were quietly preventing.
+      - name: Attest SBOM (linux_amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (linux_arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_linux_arm64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_amd64.tar.gz.spdx.sbom.json
+
+      - name: Attest SBOM (darwin_arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        env:
+          NODE_OPTIONS: --max-http-header-size=32768
+        with:
+          subject-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz
+          sbom-path: dist/vault42_${{ needs.detect.outputs.version }}_darwin_arm64.tar.gz.spdx.sbom.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS*
+            dist/*.sbom.json
+            dist/*.intoto.jsonl
+          if-no-files-found: error
+
+  chart:
+    name: Publish Helm chart
+    needs: [detect, security, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing
+      attestations: write # SLSA build provenance
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      - name: Lint and render
+        run: |
+          set -eu
+          helm lint charts/vault
+          helm template release charts/vault > /dev/null
+          for values in charts/vault/values-*.yaml; do
+            helm template release charts/vault -f "$values" > /dev/null
+          done
+
+      - name: Package
+        run: |
+          helm package charts/vault \
+            --version "${{ needs.detect.outputs.version }}" \
+            --app-version "${{ needs.detect.outputs.version }}"
+
+      # cosign does not read helm's credential store. `helm registry login`
+      # writes HELM_REGISTRY_CONFIG (~/.config/helm/registry/config.json), while
+      # cosign resolves registry auth through go-containerregistry's default
+      # keychain, which reads ~/.docker/config.json and knows nothing about
+      # helm's file. Without this step the signing below ran unauthenticated,
+      # GHCR answered 401, and the job went red on every release with the chart
+      # already pushed and unsigned, while the release notes said it was signed.
+      # The images job has always had this login; the chart job never got one.
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR
+        id: push
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # pipefail matters for the push below. Without it the pipeline reports
+          # tee's exit status, so a failed helm push yields an empty digest and
+          # the run dies two steps later on an invalid image reference instead
+          # of here, where the actual error is.
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GHCR_USER" --password-stdin
+          helm push "vault-auth-${VERSION}.tgz" oci://ghcr.io/42-v/charts 2>&1 | tee push.log
+          digest=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -1)
+          if [ -z "$digest" ]; then
+            echo "::error::helm push printed no digest, so there is nothing to sign"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign chart (keyless)
+        run: cosign sign --yes "ghcr.io/42-v/charts/vault-auth@${{ steps.push.outputs.digest }}"
+
+      - name: Attest chart provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/42-v/charts/vault-auth
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   nuget:
     name: NuGet (${{ needs.detect.outputs.version }})
-    needs: detect
-    if: needs.detect.outputs.version != ''
+    needs: [detect, security, coverage]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # NuGet trusted publishing
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
@@ -129,12 +613,19 @@ jobs:
             10.0.x
           dotnet-quality: preview
 
+      # packages/dotnet/tests/ existed for eleven releases and no workflow ever ran
+      # it: both NuGet packages were published without their tests executing.
+      - name: Test
+        run: dotnet test packages/dotnet/Vault42.sln -c Release
+
       - name: Pack
         run: |
           dotnet pack packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj \
-            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+            -c Release -o nupkgs --include-symbols -p:SymbolPackageFormat=snupkg \
+            -p:Version=${{ needs.detect.outputs.version }}
           dotnet pack packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj \
-            -c Release -o nupkgs -p:Version=${{ needs.detect.outputs.version }}
+            -c Release -o nupkgs --include-symbols -p:SymbolPackageFormat=snupkg \
+            -p:Version=${{ needs.detect.outputs.version }}
 
       - name: Authenticate to NuGet (trusted publishing)
         id: nuget-login
@@ -149,44 +640,126 @@ jobs:
             --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --skip-duplicate
 
+  # nuget is deliberately not a dependency: nuget.org is a secondary consumer and
+  # is independently retryable, and making the GitHub release wait on it is how a
+  # registry hiccup used to cost the whole release.
+  #
+  # chart IS a dependency, unlike nuget, because the release body tells the
+  # reader the chart is published and cosign-signed at that version. Publishing
+  # the release while the chart job is red announces an artifact that is either
+  # absent or unsigned, and the announcement is the thing people act on.
   github-release:
-    name: GitHub release & tag
-    needs: [detect, images, nuget]
-    if: needs.detect.outputs.version != ''
+    name: GitHub release
+    needs: [detect, images, artifacts, chart]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job in this file that writes to the repository.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Tag commit
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          script: |
-            try {
-              await github.rest.git.createRef({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                ref:   `refs/tags/${{ needs.detect.outputs.tag }}`,
-                sha:   context.sha,
-              })
-            } catch (e) {
-              if (e.status === 422) {
-                core.info('Tag already exists, continuing')
-              } else {
-                throw e
-              }
-            }
+          persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-artifacts
+          path: dist
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name:    ${{ needs.detect.outputs.tag }}
-          name:        Vault42 ${{ needs.detect.outputs.version }}
-          prerelease:  ${{ contains(needs.detect.outputs.version, '-') }}
+          tag_name: ${{ needs.detect.outputs.tag }}
+          name: Vault42 ${{ needs.detect.outputs.version }}
+          prerelease: ${{ contains(needs.detect.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.detect.outputs.version, '-') }}
           generate_release_notes: true
+          files: dist/*
           body: |
+            ## Vault42 ${{ needs.detect.outputs.version }}
+
+            > ### Support policy
+            >
+            > **1.0.0 and later are the only production-ready releases.** Every tag
+            > before 1.0.0 was a development preview and is not fit for production.
+            >
+            > Vault42 is supported latest-only. Only the most recent stable release
+            > receives fixes and security patches. Older releases are archived as
+            > published and are not patched, so run the latest tag and upgrade
+            > forward rather than pinning to a version and holding it.
+
             **Commit:** ${{ github.sha }}
 
             ```
             docker pull ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }}
             docker pull ghcr.io/42-v/vault42-admin-gateway:${{ needs.detect.outputs.version }}
+            docker pull ghcr.io/42-v/vault42-bridge:${{ needs.detect.outputs.version }}
+            helm install vault oci://ghcr.io/42-v/charts/vault-auth --version ${{ needs.detect.outputs.version }}
             ```
+
+            ### Verifying this release
+
+            Two independent things are worth checking, and they answer different
+            questions.
+
+            **Authenticity** — who signed it. Images and the chart are signed
+            with cosign keyless; the checksum file carries a detached signature
+            and its Fulcio certificate:
+
+            ```
+            cosign verify ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
+              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+            cosign verify-blob vault42_${{ needs.detect.outputs.version }}_SHA256SUMS \
+              --signature vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.sig \
+              --certificate vault42_${{ needs.detect.outputs.version }}_SHA256SUMS.pem \
+              --certificate-identity-regexp '^https://github.com/42-v/vault42/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            ```
+
+            **Provenance** — which workflow built it, from which commit. Every
+            binary archive, image and the chart carries a build-provenance
+            attestation, signed by GitHub's attestation service under this
+            workflow's OIDC identity and recorded in the Rekor transparency log:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/vault42:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+
+            gh attestation verify oci://ghcr.io/42-v/charts/vault-auth:${{ needs.detect.outputs.version }} \
+              --repo 42-v/vault42
+            ```
+
+            The commands above resolve the statement through the GitHub API. To
+            verify with no network access to it, use the bundle shipped as a
+            release asset:
+
+            ```
+            gh attestation verify vault42_${{ needs.detect.outputs.version }}_linux_amd64.tar.gz \
+              --bundle vault42_${{ needs.detect.outputs.version }}.intoto.jsonl \
+              --repo 42-v/vault42
+            ```
+
+            Each archive also ships an SBOM in both SPDX
+            (`.spdx.sbom.json`) and CycloneDX (`.cdx.sbom.json`) form, each
+            attested to the archive it describes.
+
+            The images additionally carry BuildKit's own SLSA v0.2 predicate and
+            an SPDX attestation. Those are unsigned and are not what the claim
+            above rests on; `gh attestation verify` is.
+
+            **No SLSA level is claimed.** What is described above is the
+            mechanism, and the commands check it. A level describes the build
+            platform rather than this repository, so naming one here would be
+            vault42 repeating GitHub's assessment as though it were its own —
+            and this project publishes no claim it cannot evidence itself.
+            `docs/compliance-register.json` carries no SLSA row and
+            `docs/COMPLIANCE.md` lists a SLSA build level under what is
+            deliberately not claimed. This paragraph says the same thing, and
+            `TestSupplyChain_TheReleaseNotesClaimNoStandardTheRegisterOmits`
+            fails the build if the three ever disagree again.

@@ -36,6 +36,23 @@ public sealed class VaultJwksManager : IDisposable
     private DateTimeOffset _lastRefresh = DateTimeOffset.MinValue;
     private bool _disposed;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="VaultJwksManager"/> class.
+    /// </summary>
+    /// <param name="httpClient">
+    /// Client used for every JWKS fetch. Its <see cref="HttpClient.Timeout"/> bounds the fetch;
+    /// <c>AddVault</c> configures one from <see cref="VaultAuthenticationOptions.JwksHttpTimeout"/>.
+    /// </param>
+    /// <param name="options">
+    /// Source of the JWKS URI (<see cref="VaultAuthenticationOptions.Authority"/> plus
+    /// <c>/.well-known/jwks.json</c>) and of the refresh and size limits. The values are copied
+    /// here, so later mutation of <paramref name="options"/> has no effect.
+    /// </param>
+    /// <remarks>
+    /// The constructor performs no I/O and leaves the key cache empty; the background refresh
+    /// timer stays disarmed until <see cref="InitializeAsync"/> runs. Resolving a kid before then
+    /// fails.
+    /// </remarks>
     public VaultJwksManager(HttpClient httpClient, VaultAuthenticationOptions options)
     {
         _httpClient = httpClient;
@@ -52,6 +69,18 @@ public sealed class VaultJwksManager : IDisposable
     /// <summary>
     /// Initialize by fetching JWKS. Call once at startup.
     /// </summary>
+    /// <param name="ct">Cancels the initial fetch.</param>
+    /// <returns>A task that completes once the first fetch has settled and the refresh timer is armed.</returns>
+    /// <exception cref="HttpRequestException">
+    /// The initial fetch failed at the transport layer or the server answered a non-success status.
+    /// Startup should treat this as fatal: with no keys cached, every token is rejected as
+    /// "Unknown signing key".
+    /// </exception>
+    /// <remarks>
+    /// A malformed or oversized JWKS body is not an exception. The fetch returns having cached
+    /// nothing, and the periodic refresh retries on the next tick, so this method can complete
+    /// successfully with an empty key set.
+    /// </remarks>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         await RefreshInternalAsync(ct);
@@ -62,6 +91,22 @@ public sealed class VaultJwksManager : IDisposable
     /// Resolve a security key by kid. Returns null if not found
     /// (after attempting a forced refresh if enabled).
     /// </summary>
+    /// <param name="kid">The <c>kid</c> header value of the token being validated.</param>
+    /// <param name="ct">Cancels a forced refresh triggered by an unknown kid.</param>
+    /// <returns>
+    /// The cached <see cref="SecurityKey"/> for <paramref name="kid"/>, or <see langword="null"/>
+    /// when the key is unknown. Callers must fail authentication on null rather than fall back to
+    /// any other key.
+    /// </returns>
+    /// <remarks>
+    /// A cache miss triggers one immediate refetch only when
+    /// <see cref="VaultAuthenticationOptions.RefreshOnUnknownKid"/> is enabled and at least
+    /// <see cref="VaultAuthenticationOptions.MinimumJwksRefreshInterval"/> has passed since the
+    /// last successful refresh. That rate limit makes an unknown kid a bounded cost, so a flood of
+    /// forged kids cannot turn token validation into a request amplifier against the Vault server.
+    /// Within the window the miss returns null without any network call, which means a genuinely
+    /// new signing key can be rejected for up to that interval after rotation.
+    /// </remarks>
     public async Task<SecurityKey?> ResolveKeyAsync(string kid, CancellationToken ct = default)
     {
         if (_keys.TryGetValue(kid, out var key))
@@ -175,6 +220,15 @@ public sealed class VaultJwksManager : IDisposable
         return Convert.FromBase64String(s);
     }
 
+    /// <summary>
+    /// Stops the background refresh timer and releases the refresh lock.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent. Cached keys are left in place and a refresh already in flight is not awaited,
+    /// so <see cref="ResolveKeyAsync"/> must not be called after disposal. The manager is
+    /// registered as a singleton by <c>AddVault</c>, so in a normal host the container owns this
+    /// call at shutdown.
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed) return;

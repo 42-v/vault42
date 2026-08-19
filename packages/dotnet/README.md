@@ -46,6 +46,7 @@ app.UseAuthorization();
 ```
 
 Security defaults (cannot be disabled by configuration):
+
 - Algorithm whitelist: `RS256` only — `none`, `HS256`, etc. are rejected.
 - Dangerous JWT headers (`jku`, `x5u`, `x5c`, `jwk`) are rejected.
 - JWKS keys must declare `use=sig` (or no `use`) and `alg=RS256` (or no `alg`).
@@ -69,6 +70,7 @@ builder.Services.AddVaultAuth(options =>
 ```
 
 `RefreshStorage` trade-offs:
+
 - **`HttpOnlyCookieOnly` (default)** — refresh token never touches JS storage. Vault42 server issues `HttpOnly + Secure + SameSite=Strict` cookies; the browser auto-attaches them. Best XSS resistance. Requires same-origin or CORS-with-credentials origin.
 - **`InMemoryOnly`** — refresh token kept in process memory; lost on full reload. XSS-resistant.
 - **`SessionStorage`** — legacy XSS-readable persistence. Opt-in only; document the risk in your app.
@@ -86,4 +88,4 @@ MIT. See repository root `LICENSE`.
 
 ## Security
 
-Report vulnerabilities to **vault@42-v.com** (Tuta, end-to-end encrypted). Do not open a public GitHub issue. Full policy: [`SECURITY.md`](https://github.com/42-v/vault42/blob/main/SECURITY.md).
+Report vulnerabilities to **<vault@42-v.com>** (Tuta, end-to-end encrypted). Do not open a public GitHub issue. Full policy: [`SECURITY.md`](https://github.com/42-v/vault42/blob/main/SECURITY.md).

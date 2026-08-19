@@ -31,25 +31,22 @@ func TestNewCache(t *testing.T) {
 		}
 	})
 
-	t.Run("memory backend is default for unknown type", func(t *testing.T) {
+	// An unrecognized backend name is rejected. It used to fall through to the
+	// per-process memory cache, which in a multi-replica deployment gave every
+	// replica its own lockout counters, TOTP replay guard and rate-limit
+	// buckets with nothing reporting the downgrade.
+	t.Run("unknown backend type is rejected", func(t *testing.T) {
 		skipIfNoDocker(t)
 
 		c, err := cache.NewCache("unknown-backend", "", "", nil)
-		if err != nil {
-			t.Fatalf("expected no error for unknown backend (should default to memory), got %v", err)
+		if err == nil {
+			if c != nil {
+				defer c.Close()
+			}
+			t.Fatal("expected an error for an unknown backend, got a usable cache")
 		}
-		defer c.Close()
-
-		ctx := context.Background()
-		if err := c.Set(ctx, "default-key", "val", 0); err != nil {
-			t.Fatalf("set: %v", err)
-		}
-		val, err := c.Get(ctx, "default-key")
-		if err != nil {
-			t.Fatalf("get: %v", err)
-		}
-		if val != "val" {
-			t.Fatalf("expected 'val', got %q", val)
+		if c != nil {
+			t.Fatalf("expected no cache alongside the error, got %T", c)
 		}
 	})
 

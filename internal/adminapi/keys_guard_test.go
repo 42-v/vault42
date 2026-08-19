@@ -40,4 +40,3 @@ func TestKeyEndpoints_RefuseWithoutKeystore(t *testing.T) {
 		})
 	}
 }
-

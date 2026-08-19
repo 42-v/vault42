@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/42-v/vault42/internal/model"
@@ -225,5 +226,61 @@ func TestRequiresMFAWithMethodsUntrusted(t *testing.T) {
 	}
 	if !required {
 		t.Error("untrusted device with MFA methods should require MFA")
+	}
+}
+
+// GET /auth/2fa/status serializes MFAStatus directly, so this struct is a
+// public wire contract. Two things must hold for every value of it: the method
+// list is an array and never null, and the list is published under both
+// mfa_methods (canonical) and available_methods (the deprecated pre-1.0.0
+// name), carrying identical contents.
+func TestMFAStatusJSON_MethodListIsAnArrayUnderBothNames(t *testing.T) {
+	cases := map[string]MFAStatus{
+		"no factor enrolled": {Required: true},
+		"an empty list":      {Methods: []string{}},
+		"enrolled factors":   {TOTPEnabled: true, Methods: []string{MethodTOTP, MethodWebAuthn}},
+	}
+
+	for name, status := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(status)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			var decoded map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+
+			canonical, ok := decoded["mfa_methods"]
+			if !ok {
+				t.Fatalf("mfa_methods is missing: %s", raw)
+			}
+			alias, ok := decoded["available_methods"]
+			if !ok {
+				t.Fatalf("the deprecated available_methods alias is missing: %s", raw)
+			}
+			if string(canonical) != string(alias) {
+				t.Errorf("the two names disagree: mfa_methods=%s available_methods=%s", canonical, alias)
+			}
+			if string(canonical) == "null" {
+				t.Errorf("the method list serialized as null rather than []: %s", raw)
+			}
+		})
+	}
+}
+
+// GetStatus is the only production constructor, and its result reaches the wire
+// unchanged. A user with nothing enrolled must come back with an empty list.
+func TestGetStatus_EmptyMethodsIsNotNil(t *testing.T) {
+	svc := NewMFAService(&mocks.MockTOTPRepo{}, &mocks.MockWebAuthnRepo{}, &mocks.MockBackupCodeRepo{}, false)
+
+	status, err := svc.GetStatus(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status.Methods == nil {
+		t.Fatal("Methods is nil, so the status serializes as null")
 	}
 }

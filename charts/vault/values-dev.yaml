@@ -131,6 +131,16 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
+# HTTPS like the two above: this profile terminates TLS in the server, so a probe
+# left on the chart default speaks plaintext to a TLS port and never succeeds.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+    scheme: HTTPS
+  periodSeconds: 5
+  failureThreshold: 60
+
 secrets:
   existingSecret: vault-secrets
 
@@ -138,6 +148,12 @@ secrets:
 adminGateway:
   enabled: true
   hostNetwork: false
+  # Stated explicitly, because hostNetwork: false means LocalOnly would refuse
+  # every request arriving through the ingress this profile enables. Dev mode
+  # also switches off RejectProxyHeaders. That is acceptable for a development
+  # cluster and is not acceptable in production, which is why it is written here
+  # rather than inferred from the line above.
+  devMode: true
   listenAddr: "0.0.0.0:9443"
   image:
     repository: vault-admin-gateway

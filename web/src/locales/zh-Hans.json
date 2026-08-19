@@ -356,5 +356,6 @@
   "error.forbidden": "您没有执行此操作的权限。",
   "error.code_already_used": "此代码已被使用。请使用新的代码。",
   "error.password_recently_used": "您最近使用过此密码。请选择其他密码。",
-  "error.no_webauthn_credentials": "此账户未注册任何安全密钥。"
+  "error.no_webauthn_credentials": "此账户未注册任何安全密钥。",
+  "error.password_reset_required": "此账户必须重置密码。我们已通过电子邮件向您发送了重置链接。"
 }

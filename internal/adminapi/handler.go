@@ -42,6 +42,12 @@ type Handler struct {
 	maxTemplateSize int
 }
 
+// uuidPattern is the 8-4-4-4-12 hex shape of a user id. Compiled once at
+// package init rather than on every admin user search: regexp.MustCompile
+// builds an automaton, and building it per request puts that work on the
+// request path for nothing.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // SetEmailRepos wires the per-app email branding + template repositories,
 // enabling the /admin/email-branding and /admin/email-templates endpoints.
 // Optional (nil → those handlers return 503). maxTemplateSize caps custom
@@ -119,7 +125,10 @@ func (h *Handler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if keys == nil {
 		keys = []keystore.KeyInfo{}
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"keys":  keys,
+		"total": len(keys),
+	})
 }
 
 // RotateKey handles POST /admin/keys/rotate.
@@ -137,7 +146,7 @@ func (h *Handler) RotateKey(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRotate, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"kid": kid,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "rotated", "kid": kid})
 }
@@ -161,7 +170,7 @@ func (h *Handler) RevokeKey(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminKeyRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"kid": kid,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
@@ -169,9 +178,14 @@ func (h *Handler) RevokeKey(w http.ResponseWriter, r *http.Request) {
 // ========== User Management ==========
 
 // listUsersResponse wraps paginated user list.
+//
+// Every admin list endpoint answers with the same four keys: the collection,
+// total, limit and offset. total is always present, including on an empty
+// result, so a client never has to distinguish "no matches" from "this
+// endpoint does not report a total".
 type listUsersResponse struct {
 	Users  []userSummary `json:"users"`
-	Total  int           `json:"total,omitempty"`
+	Total  int           `json:"total"`
 	Limit  int           `json:"limit"`
 	Offset int           `json:"offset"`
 }
@@ -184,23 +198,36 @@ type userSummary struct {
 	MFARequired   bool       `json:"mfa_required"`
 	LockedUntil   *time.Time `json:"locked_until,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// MustResetPassword is the state POST /admin/users/{id}/require-password-reset
+	// imposes and .../clear-password-reset withdraws. It is on the record because
+	// an operator must not be able to impose a state they cannot read back: both
+	// routes are audited, so it was recoverable from the trail, but recovering an
+	// account's current state by replaying an audit log is not reading a record.
+	//
+	// No omitempty, deliberately, and for the same reason as mfa_required: on a
+	// bool it would erase the cleared state, leaving "not required" and "this
+	// build does not report it" indistinguishable -- which is the gap this closes,
+	// not a smaller version of it.
+	MustResetPassword bool `json:"must_reset_password"`
 }
 
 // ListUsers handles GET /admin/users.
 // Accepts ?q= query param: UUID format → lookup by ID, contains @ → lookup by email.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	limit, offset := parsePagination(r)
+
 	q := r.URL.Query().Get("q")
 	if q == "" {
 		httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
-			Users: []userSummary{},
+			Users:  []userSummary{},
+			Limit:  limit,
+			Offset: offset,
 		})
 		return
 	}
 
 	var users []userSummary
 
-	// UUID pattern: 8-4-4-4-12 hex digits
-	uuidPattern := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	if uuidPattern.MatchString(q) {
 		user, err := h.users.GetByID(r.Context(), q)
 		if err != nil {
@@ -209,13 +236,14 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if user != nil {
 			users = append(users, userSummary{
-				ID:            user.ID,
-				Email:         user.Email,
-				EmailVerified: user.EmailVerified,
-				DisplayName:   user.DisplayName,
-				MFARequired:   user.MFARequired,
-				LockedUntil:   user.LockedUntil,
-				CreatedAt:     user.CreatedAt,
+				ID:                user.ID,
+				Email:             user.Email,
+				EmailVerified:     user.EmailVerified,
+				DisplayName:       user.DisplayName,
+				MFARequired:       user.MFARequired,
+				LockedUntil:       user.LockedUntil,
+				CreatedAt:         user.CreatedAt,
+				MustResetPassword: user.MustResetPassword,
 			})
 		}
 	} else if strings.Contains(q, "@") {
@@ -226,13 +254,14 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if user != nil {
 			users = append(users, userSummary{
-				ID:            user.ID,
-				Email:         user.Email,
-				EmailVerified: user.EmailVerified,
-				DisplayName:   user.DisplayName,
-				MFARequired:   user.MFARequired,
-				LockedUntil:   user.LockedUntil,
-				CreatedAt:     user.CreatedAt,
+				ID:                user.ID,
+				Email:             user.Email,
+				EmailVerified:     user.EmailVerified,
+				DisplayName:       user.DisplayName,
+				MFARequired:       user.MFARequired,
+				LockedUntil:       user.LockedUntil,
+				CreatedAt:         user.CreatedAt,
+				MustResetPassword: user.MustResetPassword,
 			})
 		}
 	}
@@ -241,10 +270,12 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		users = []userSummary{}
 	}
 
+	total := len(users)
 	httputil.WriteJSON(w, http.StatusOK, listUsersResponse{
-		Users: users,
-		Total: len(users),
-		Limit: len(users),
+		Users:  paginate(users, limit, offset),
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
 	})
 }
 
@@ -267,13 +298,14 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, userSummary{
-		ID:            user.ID,
-		Email:         user.Email,
-		EmailVerified: user.EmailVerified,
-		DisplayName:   user.DisplayName,
-		MFARequired:   user.MFARequired,
-		LockedUntil:   user.LockedUntil,
-		CreatedAt:     user.CreatedAt,
+		ID:                user.ID,
+		Email:             user.Email,
+		EmailVerified:     user.EmailVerified,
+		DisplayName:       user.DisplayName,
+		MFARequired:       user.MFARequired,
+		LockedUntil:       user.LockedUntil,
+		CreatedAt:         user.CreatedAt,
+		MustResetPassword: user.MustResetPassword,
 	})
 }
 
@@ -311,11 +343,37 @@ func (h *Handler) LockUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A lock that leaves live sessions running is not containment. This is the
+	// documented first response to a suspected account takeover, and setting
+	// locked_until alone only stopped logins that had not happened yet: an
+	// attacker holding a refresh token kept rotating it. Refresh now rejects a
+	// locked account too, so this revocation is defense in depth rather than the
+	// only barrier, but it is what makes containment immediate instead of
+	// dependent on when the attacker next rotates.
+	//
+	// Best-effort by design: the lock itself has already been written, and
+	// failing the request here would tell the operator the account is not locked
+	// when it is. The audit event records whether the revocation succeeded.
+	// The nil check is not defensive noise. This repository arrives as a
+	// positional argument, cmd/admin-gateway passed nil for it, and the panic
+	// landed here: after the lock had committed, on the one route an operator
+	// reaches for during a takeover. Recovery turned it into a 500 that reads as
+	// "the lock failed", which invites an unlock. A missing repository now
+	// reports revoked=false in the audit row, which is the honest answer and the
+	// one this function already knows how to give.
+	revoked := true
+	if h.tokens == nil {
+		revoked = false
+	} else if err := h.tokens.RevokeAllForUser(r.Context(), id); err != nil {
+		revoked = false
+	}
+
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserLock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
-		"target_user": id,
-		"until":       until.Format(time.RFC3339),
-	}, 0)
+		"target_user":      id,
+		"until":            until.Format(time.RFC3339),
+		"sessions_revoked": revoked,
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "locked", "until": until.Format(time.RFC3339)})
 }
@@ -336,7 +394,7 @@ func (h *Handler) UnlockUser(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserUnlock, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"target_user": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
 }
@@ -368,7 +426,7 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.auditLog.Log(r.Context(), audit.AdminUserDelete, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"target_user": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
@@ -420,6 +478,14 @@ func paginate[T any](items []T, limit, offset int) []T {
 // ========== Session Management ==========
 
 // ListSessions handles GET /admin/sessions.
+//
+// It lists ADMIN sessions, not user sessions: the live roster of every
+// currently logged-in admin, with each one's source IP and user agent. That is
+// reconnaissance for an attacker holding a lower-tier admin session, which is
+// the stated reason internal/rbac/rbac.go keeps admins:manage at super_admin,
+// so the route is gated on admins:manage rather than the viewer-tier
+// sessions:list it used to take.
+//
 // Results are paginated via enforced limit/offset query params (default 50,
 // max 100) to bound the response size of an unbounded active-session set.
 func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
@@ -466,41 +532,93 @@ func (h *Handler) ListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // RevokeAllSessions handles POST /admin/sessions/revoke-all.
+//
+// It revokes every USER's refresh tokens service-wide. That is the break-glass
+// containment for bulk refresh-token theft, and it is what docs/security.md,
+// docs/api.md, the SessionsRevoke permission's own definition in
+// internal/rbac/rbac.go and the mitigation named in
+// tests/attack/atk_authtok_lock_refresh_test.go all describe.
+//
+// It used to run UPDATE auth.admin_sessions instead. It touched zero rows in
+// auth.refresh_tokens, so the control four documents lean on did not exist: an
+// operator responding to mass token theft pressed it, was told
+// all_sessions_revoked, and nothing was contained. It also handed an
+// operator-tier admin an availability lever over every super_admin, because
+// revoking admin sessions logs the whole admin plane out and SessionsRevoke sits
+// one tier below the destructive permissions precisely because it was believed
+// to revoke user tokens.
+//
+// Admin sessions are deliberately left alone. Revoking them is a different
+// action with a different blast radius and belongs behind its own permission at
+// super_admin tier, not smuggled into the user-containment control.
 func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {
-	if err := h.sessions.RevokeAll(r.Context()); err != nil {
+	// The nil check is not defensive noise. This repository arrives as a
+	// positional argument and cmd/admin-gateway has passed nil for it before, on
+	// this same handler. A containment control that answers 200 while holding
+	// nothing to revoke through is the defect this function was just fixed for,
+	// so an unwired one says so instead of repeating it.
+	if h.tokens == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "token_repository_not_configured")
+		return
+	}
+	if err := h.tokens.RevokeAll(r.Context()); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminSessionRevoke, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
-		"scope": "all",
-	}, 0)
+		"scope":  "all",
+		"target": "user_refresh_tokens",
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "all_sessions_revoked"})
 }
 
 // ========== Audit Log ==========
 
+// auditEntryView is the response projection of an audit row.
+//
+// FingerprintHash is deliberately absent. It is an HMAC of a device
+// fingerprint, so it correlates events across accounts and across users; an
+// operator investigating an event needs DeviceID, which identifies the same
+// device without being a cross-account correlator.
+//
+// RiskScore is a hardcoded per-event-type severity tag, not a computed score.
+// Treat it as an opaque label: values are not comparable between event types
+// and may change as the event catalog grows.
+type auditEntryView struct {
+	ID        string                 `json:"id"`
+	Timestamp time.Time              `json:"timestamp"`
+	EventType string                 `json:"event_type"`
+	UserID    string                 `json:"user_id,omitempty"`
+	ClientID  string                 `json:"client_id,omitempty"`
+	IP        string                 `json:"ip,omitempty"`
+	UserAgent string                 `json:"user_agent,omitempty"`
+	DeviceID  string                 `json:"device_id,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	RiskScore int                    `json:"risk_score"`
+}
+
 // QueryAudit handles GET /admin/audit.
+//
+// Pagination shares parsePagination with the other admin list endpoints, so one
+// default (50) and one cap (maxListLimit) apply across the whole gateway.
+//
+// total is the number of entries in the returned window: repository.AuditFilter
+// has no counterpart that counts matches without returning them. The key is
+// fixed here so that adding a true filtered count later changes a value, not the
+// response shape.
 func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	limit, offset := parsePagination(r)
 	filter := repository.AuditFilter{
 		UserID:    q.Get("user_id"),
 		EventType: q.Get("event_type"),
-		Limit:     50,
+		Limit:     limit,
+		Offset:    offset,
 	}
 
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
-			filter.Limit = n
-		}
-	}
-	if v := q.Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			filter.Offset = n
-		}
-	}
 	if v := q.Get("since"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			filter.Since = &t
@@ -511,24 +629,84 @@ func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 			filter.Until = &t
 		}
 	}
+	// min_risk_score selects on the internal/audit severity scale: 0 routine,
+	// 25 notable, 50 elevated, 75 serious, 100 critical. A value that does not
+	// parse, or one below the scale, leaves the predicate off rather than
+	// landing on some other threshold -- the same shape as since and until
+	// above, and for the same reason: a filter that silently becomes a
+	// different filter gives a wrong answer rather than no answer.
+	if v := q.Get("min_risk_score"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.MinRiskScore = n
+		}
+	}
 
 	entries, err := h.auditRepo.Query(r.Context(), filter)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
-	if entries == nil {
-		entries = []*model.AuditEntry{}
+
+	views := make([]auditEntryView, 0, len(entries))
+	for _, e := range entries {
+		views = append(views, auditEntryView{
+			ID:        e.ID,
+			Timestamp: e.Timestamp,
+			EventType: e.EventType,
+			UserID:    e.UserID,
+			ClientID:  e.ClientID,
+			IP:        e.IP,
+			UserAgent: e.UserAgent,
+			DeviceID:  e.DeviceID,
+			Metadata:  e.Metadata,
+			RiskScore: e.RiskScore,
+		})
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"entries": entries,
-		"count":   len(entries),
-		"filter":  filter,
+		"entries": views,
+		"total":   len(views),
+		"limit":   limit,
+		"offset":  offset,
 	})
 }
 
 // ========== Client Management ==========
+
+// clientView is the response projection of a service client. SecretHash is the
+// argon2id hash of the client secret and is never projected: GET on a client
+// must not hand an operator's browser offline-crackable credential material.
+type clientView struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Role         string    `json:"role"`
+	Scopes       []string  `json:"scopes"`
+	RedirectURIs []string  `json:"redirect_uris"`
+	Active       bool      `json:"active"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func toClientView(c *model.Client) clientView {
+	scopes := c.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	redirects := c.RedirectURIs
+	if redirects == nil {
+		redirects = []string{}
+	}
+	return clientView{
+		ID:           c.ID,
+		Name:         c.Name,
+		Role:         c.Role,
+		Scopes:       scopes,
+		RedirectURIs: redirects,
+		Active:       c.Active,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
+	}
+}
 
 // ListClients handles GET /admin/clients.
 func (h *Handler) ListClients(w http.ResponseWriter, r *http.Request) {
@@ -538,30 +716,15 @@ func (h *Handler) ListClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type clientView struct {
-		ID           string    `json:"id"`
-		Name         string    `json:"name"`
-		Role         string    `json:"role"`
-		Scopes       []string  `json:"scopes"`
-		RedirectURIs []string  `json:"redirect_uris"`
-		Active       bool      `json:"active"`
-		CreatedAt    time.Time `json:"created_at"`
-	}
-
 	views := make([]clientView, 0, len(clients))
 	for _, c := range clients {
-		views = append(views, clientView{
-			ID:           c.ID,
-			Name:         c.Name,
-			Role:         c.Role,
-			Scopes:       c.Scopes,
-			RedirectURIs: c.RedirectURIs,
-			Active:       c.Active,
-			CreatedAt:    c.CreatedAt,
-		})
+		views = append(views, toClientView(c))
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"clients": views})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"clients": views,
+		"total":   len(views),
+	})
 }
 
 // GetClient handles GET /admin/clients/{id}.
@@ -582,7 +745,7 @@ func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, client)
+	httputil.WriteJSON(w, http.StatusOK, toClientView(client))
 }
 
 // CreateClient handles POST /admin/clients.
@@ -641,7 +804,7 @@ func (h *Handler) CreateClient(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminClientCreate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"client_name": req.Name,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
 		"id":     id,
@@ -664,7 +827,7 @@ func (h *Handler) RevokeClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := GetAdmin(r.Context())
-	_ = h.auditLog.Log(r.Context(), audit.AdminClientRevoke, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRevoke, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
@@ -703,7 +866,7 @@ func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := GetAdmin(r.Context())
-	_ = h.auditLog.Log(r.Context(), audit.AdminClientRotate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil, 0)
+	_ = h.auditLog.Log(r.Context(), audit.AdminClientRotate, admin.ID, id, r.RemoteAddr, r.UserAgent(), "", "", nil)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"status": "rotated",
@@ -713,12 +876,33 @@ func (h *Handler) RotateClientSecret(w http.ResponseWriter, r *http.Request) {
 
 // ========== Config Management ==========
 
-// GetConfig handles GET /admin/config.
+// redactedConfigKeys are auth.admin_config entries that hold credential
+// material rather than operator-facing runtime configuration. admin_token_hash
+// is the Argon2id hash of the CLI admin token, written to this table by
+// InitAdminToken and rotate-admin-token. GET /admin/config is a ConfigRead
+// (viewer-tier) route, so returning the whole table would hand a read-only
+// admin an offline-crackable hash of a privileged credential — the same class
+// of secret clientView and adminView are careful never to project. The row is
+// left in place (the CLI reads it directly); it is stripped from the response.
+var redactedConfigKeys = map[string]bool{
+	"admin_token_hash": true,
+}
+
+// GetConfig handles GET /admin/config. entries is a key/value object, not a
+// list, so it carries no list envelope; an empty store is an empty object
+// rather than null. Credential-bearing keys (see redactedConfigKeys) are
+// stripped so a viewer-tier reader never receives them.
 func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.adminConfig.List(r.Context())
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
+	}
+	if entries == nil {
+		entries = map[string]string{}
+	}
+	for k := range redactedConfigKeys {
+		delete(entries, k)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
@@ -753,7 +937,7 @@ func (h *Handler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	admin := GetAdmin(r.Context())
 	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"config_key": key,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "updated", "key": key})
 }
@@ -775,7 +959,7 @@ func (h *Handler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
 	_ = h.auditLog.Log(r.Context(), audit.AdminConfigChange, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"config_key": key,
 		"action":     "delete",
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted", "key": key})
 }
@@ -912,7 +1096,7 @@ func (h *Handler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		"new_admin_id":       id,
 		"new_admin_username": req.Username,
 		"new_admin_role":     req.Role,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
 		"id":       id,
@@ -947,7 +1131,7 @@ func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"revoked_admin_id": id,
-	}, 0)
+	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }

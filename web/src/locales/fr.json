@@ -356,5 +356,6 @@
   "error.forbidden": "Vous n'avez pas la permission de faire cela.",
   "error.code_already_used": "Ce code a déjà été utilisé. Veuillez en utiliser un nouveau.",
   "error.password_recently_used": "Vous avez utilisé ce mot de passe récemment. Veuillez en choisir un autre.",
-  "error.no_webauthn_credentials": "Aucune clé de sécurité n'est enregistrée sur ce compte."
+  "error.no_webauthn_credentials": "Aucune clé de sécurité n'est enregistrée sur ce compte.",
+  "error.password_reset_required": "Ce compte doit réinitialiser son mot de passe. Nous vous avons envoyé un lien par e-mail."
 }

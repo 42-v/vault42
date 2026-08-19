@@ -22,10 +22,33 @@ import type {
   Capabilities,
 } from './types'
 
+/**
+ * The error every failed client call rejects with.
+ *
+ * Branch on {@link VaultAPIError.code}, never on the message, which is not part
+ * of the contract.
+ */
 class VaultAPIError extends Error implements VaultError {
+  /**
+   * Machine-readable failure code, taken from the server's `error` field. Falls
+   * back to `unknown_error` when the body is absent or not JSON. Errors raised
+   * before the request leaves use their own codes, such as
+   * `invalid_resource_id`, `invalid_blob_label` and `invalid_request_url`.
+   */
   code: string
+
+  /**
+   * HTTP status, or `0` for an error raised locally before any request was
+   * made. A `0` therefore means the call never reached the network.
+   */
   status: number
 
+  /**
+   * @param code - Machine-readable failure code.
+   * @param status - HTTP status, or `0` when raised before the request was sent.
+   * @param message - Human-readable detail. Defaults to `code`. For diagnostics
+   * only; do not render it to users, since server-supplied text is not UI copy.
+   */
   constructor(code: string, status: number, message?: string) {
     super(message || code)
     this.code = code
@@ -43,12 +66,34 @@ const PRINTABLE_ASCII = /^[\x20-\x7E]*$/
 /** Character code of "/", used to trim a base URL without a backtracking regex. */
 const SLASH = 0x2f
 
+/**
+ * Transport for the Vault HTTP API: one method per endpoint, plus the access
+ * token and the automatic refresh that every call goes through.
+ *
+ * This is a plain, non-reactive object. Assigning {@link VaultClient.accessToken}
+ * changes what the next request sends but re-renders nothing; the reactive
+ * session state lives in the composables. Application code normally reaches the
+ * client through `useVaultClient()` rather than constructing one.
+ *
+ * Every request carries `credentials: 'include'`, because the refresh token is
+ * an HttpOnly cookie the browser holds and this code cannot read.
+ *
+ * A 401 on an authenticated request triggers one refresh and one replay of the
+ * original request. Concurrent calls share a single in-flight refresh rather
+ * than each starting their own. If the refresh fails, or the replay is refused
+ * again, the token is dropped and the call rejects with `session_expired`, so a
+ * dead session cannot spin.
+ */
 export class VaultClient {
   private baseURL: string
   private options: VaultClientOptions
   private _accessToken: string | null = null
   private _refreshing: Promise<RefreshResult> | null = null
 
+  /**
+   * @param baseURL - Origin of the Vault server. Trailing slashes are stripped.
+   * @param options - Optional per-request hook.
+   */
   constructor(baseURL: string, options?: VaultClientOptions) {
     // Trailing slashes are stripped by scanning rather than with /\/+$/, which
     // is unanchored at the start and therefore retries from every position: on
@@ -60,6 +105,15 @@ export class VaultClient {
     this.options = options || {}
   }
 
+  /**
+   * The bearer sent on every request, or null when anonymous.
+   *
+   * Held in memory only, so it does not survive a page reload; call
+   * {@link VaultClient.refresh} on startup to restore a session from the
+   * refresh cookie. Assigning null makes subsequent requests anonymous but does
+   * not end the server-side session, which is what {@link VaultClient.logout}
+   * is for.
+   */
   get accessToken(): string | null {
     return this._accessToken
   }

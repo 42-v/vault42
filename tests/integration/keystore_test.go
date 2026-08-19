@@ -466,6 +466,89 @@ func TestKeyStoreRefreshResilience(t *testing.T) {
 		}
 	})
 
+	// auth.signing_keys is writable by vault_app, so a row in the table proves
+	// only that someone could issue SQL. A row this vault cannot open is not its
+	// key and must not be published, whatever the row claims; a row it can open
+	// but whose public_key column was swapped is the same attack with the
+	// ciphertext left genuine, which decryption alone waves through.
+	t.Run("a retired key this vault cannot open is skipped, not published", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x26)
+		defer ks.Stop()
+
+		goodKID, err := ks.Rotate(ctx)
+		if err != nil {
+			t.Fatalf("Rotate: %v", err)
+		}
+
+		foreign, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		foreignPub, err := x509.MarshalPKIXPublicKey(&foreign.PublicKey)
+		if err != nil {
+			t.Fatalf("MarshalPKIXPublicKey: %v", err)
+		}
+		// Nothing seals this row, so the private_key column is junk and the
+		// public key parses: the decrypt is the only thing that can reject it.
+		insertRetiredKey(t, pool, "kid-foreign", foreignPub)
+
+		// Sealed by this vault under its own master key, then paired with a
+		// public key it does not match.
+		mine, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		insertSealedKey(t, pool, "kid-swapped", mine, masterKey(0x26), foreignPub, "retired")
+
+		if err := ks.Refresh(ctx); err != nil {
+			t.Fatalf("Refresh must skip keys it cannot open, got: %v", err)
+		}
+		pubs := ks.AllPublicKeys()
+		if pubs[goodKID] == nil {
+			t.Error("the vault's own key was dropped along with the rows it rejected")
+		}
+		if pubs["kid-foreign"] != nil {
+			t.Error("a key sealed by nobody is published as a verification key")
+		}
+		if pubs["kid-swapped"] != nil {
+			t.Error("a row whose public key is not the public half of its private key is published")
+		}
+	})
+
+	t.Run("active key whose public key is not its own fails closed", func(t *testing.T) {
+		truncateSigningKeys(t, pool)
+		ks := newKeyStore(t, pool, time.Hour, 0x27)
+		defer ks.Stop()
+
+		mine, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		other, err := vaultcrypto.GenerateRSAKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateRSAKeyPair: %v", err)
+		}
+		otherPub, err := x509.MarshalPKIXPublicKey(&other.PublicKey)
+		if err != nil {
+			t.Fatalf("MarshalPKIXPublicKey: %v", err)
+		}
+		insertSealedKey(t, pool, "kid-active-swapped", mine, masterKey(0x27), otherPub, "active")
+
+		// Skipping this row instead would leave the process signing with a key
+		// that is absent from its own JWKS.
+		err = ks.Refresh(ctx)
+		if err == nil {
+			t.Fatal("Refresh accepted an active key whose published public key is somebody else's")
+		}
+		if !strings.Contains(err.Error(), "is not the public half") {
+			t.Errorf("Refresh error = %q, want it to name the mismatch", err)
+		}
+		if key, _ := ks.ActiveKey(); key != nil {
+			t.Error("a failed Refresh published an active key")
+		}
+	})
+
 	t.Run("active key that decrypts but does not parse fails closed", func(t *testing.T) {
 		truncateSigningKeys(t, pool)
 		ks := newKeyStore(t, pool, time.Hour, 0x25)
@@ -576,8 +659,8 @@ func truncateSigningKeys(t *testing.T, pool *pgxpool.Pool) {
 }
 
 // insertRetiredKey writes a retired row directly, bypassing Import, so Refresh
-// meets a public key it cannot use. Retired rows are never decrypted, so the
-// private_key bytes are irrelevant.
+// meets a row no master key ever sealed: the private_key bytes are junk, which
+// is precisely what a row written by anything but this vault looks like.
 func insertRetiredKey(t *testing.T, pool *pgxpool.Pool, kid string, pubDER []byte) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
@@ -586,5 +669,30 @@ func insertRetiredKey(t *testing.T, pool *pgxpool.Pool, kid string, pubDER []byt
 	`, kid, []byte("unused"), pubDER)
 	if err != nil {
 		t.Fatalf("insert retired key %s: %v", kid, err)
+	}
+}
+
+// insertSealedKey writes the row Import would have written for priv, except
+// that public_key is supplied separately, so a test can pair a genuine
+// ciphertext with a public key that does not belong to it.
+func insertSealedKey(t *testing.T, pool *pgxpool.Pool, kid string, priv *rsa.PrivateKey, master, pubDER []byte, status string) {
+	t.Helper()
+	privPEM, err := vaultcrypto.MarshalSigningKeyPEM(priv)
+	if err != nil {
+		t.Fatalf("MarshalSigningKeyPEM: %v", err)
+	}
+	encPriv, err := vaultcrypto.Encrypt(privPEM, master, []byte(kid))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	// The active key never expires; a retired one has to be inside its retention
+	// window or Refresh's WHERE drops it before any of this is exercised.
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at, expires_at)
+		VALUES ($1, $2, $3, 'RS256', $4, NOW(),
+			CASE WHEN $4 = 'active' THEN NULL ELSE NOW() + INTERVAL '1 hour' END)
+	`, kid, encPriv, pubDER, status)
+	if err != nil {
+		t.Fatalf("insert sealed key %s: %v", kid, err)
 	}
 }

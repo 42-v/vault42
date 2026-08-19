@@ -115,10 +115,14 @@ func (r *AdminSessionRepo) RevokeAll(ctx context.Context) error {
 	return nil
 }
 
-// DeleteExpired removes expired sessions.
+// DeleteExpired removes expired sessions. Expiry is terminal: a row past
+// expires_at is rejected by the admin middleware regardless of the revoked flag,
+// so it is collected whether or not it was explicitly revoked. Gating the reap on
+// revoked = TRUE left the common case (a session that simply timed out) in the
+// table for good, retaining its token_hash, ip and user_agent with no purpose.
 func (r *AdminSessionRepo) DeleteExpired(ctx context.Context) (int64, error) {
 	tag, err := r.db.Pool.Exec(ctx,
-		`DELETE FROM auth.admin_sessions WHERE expires_at < NOW() AND revoked = TRUE`)
+		`DELETE FROM auth.admin_sessions WHERE expires_at < NOW()`)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired admin sessions: %w", err)
 	}

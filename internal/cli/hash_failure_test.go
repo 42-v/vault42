@@ -193,41 +193,6 @@ func TestCommands_HashFailureMintsNoCredential(t *testing.T) {
 		}
 	})
 
-	t.Run("rotate-client-secret", func(t *testing.T) {
-		c, clients, _, _, _ := newTestCLI()
-		clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-			return &model.Client{ID: id, Name: "frontend", SecretHash: "old-hash", Active: true}, nil
-		}
-		var updated []*model.Client
-		clients.UpdateFn = func(_ context.Context, cl *model.Client) error {
-			updated = append(updated, cl)
-			return nil
-		}
-		calls := cliconfigStubHasher(t, vaultcrypto.ErrArgon2Overloaded)
-
-		var stdout string
-		stderr := captureStderr(t, func() {
-			stdout = captureStdout(t, func() {
-				if !c.rotateClientSecret(ctx, []string{"--id", "client-1"}) {
-					t.Error("expected handled=true")
-				}
-			})
-		})
-
-		if *calls != 1 {
-			t.Errorf("hasher called %d times, want 1", *calls)
-		}
-		if len(updated) != 0 {
-			t.Errorf("client was updated with hash %q despite the failure", updated[0].SecretHash)
-		}
-		if !strings.Contains(stderr, vaultcrypto.ErrArgon2Overloaded.Error()) {
-			t.Errorf("stderr = %q, want the overload error", stderr)
-		}
-		if strings.Contains(stdout, "New secret for") {
-			t.Errorf("a secret was printed for a rotation that never happened: %q", stdout)
-		}
-	})
-
 	t.Run("rotate-admin-token", func(t *testing.T) {
 		c, _, _, _, admin := newTestCLI()
 		var stored []string
@@ -309,7 +274,7 @@ func TestRotateJWKS_KeyGenerationFailureWritesNothing(t *testing.T) {
 	c, _, _, _, _ := newTestCLI()
 	out := t.TempDir() + "/signing-key.pem"
 
-	// crypto/rsa only honours a replaced crypto/rand.Reader when this GODEBUG
+	// crypto/rsa only honors a replaced crypto/rand.Reader when this GODEBUG
 	// knob is set; without it key generation draws from the internal DRBG and
 	// the failure cannot be injected at all.
 	t.Setenv("GODEBUG", "cryptocustomrand=1")

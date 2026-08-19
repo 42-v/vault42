@@ -535,4 +535,3 @@ func TestEmailOTPVerify_WrongCodeRejected(t *testing.T) {
 		t.Fatalf("expected error=invalid_code, got %q", result["error"])
 	}
 }
-

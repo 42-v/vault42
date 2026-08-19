@@ -1,10 +1,18 @@
 # API Reference
 
 > Vault42 -- JWT Authentication & Authorization Microservice
+> **API v1 · document version 1.0.0**
 
 ## Overview
 
-Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies. All endpoints are prefixed at the root (no `/api/v1` prefix).
+Vault42 is a production-grade Go authentication and authorization service. All endpoints are served over HTTPS with TLS 1.3 minimum. The API uses JSON for request and response bodies.
+
+**Versioning.** There is no `/v1` path prefix and there will not be one: the release's major version *is* the API version, and the root paths are v1 permanently. [`spec.md` section 0](spec.md#0-api-stability-contract) is the normative stability contract -- what may change in a minor release, what costs a major one, and which surfaces (`risk_score`, DPoP-Nonce and refresh-token sender-binding, the admin HTML console, the `/metrics` body) are excluded from the promise entirely. Read it before building against anything here.
+
+Two rules from that contract that change how a client is written:
+
+- **Clients MUST ignore response fields they do not recognise.** New response fields are added in minor releases.
+- **Clients MUST NOT feature-probe by sending an optional request field.** The main binary decodes with `DisallowUnknownFields()`, so an unknown key in a request body is a hard `400` and the whole request fails, not just the unknown part. Use `GET /auth/capabilities` instead. No endpoint reports the running version -- `GET /healthz` omits it deliberately, so as not to hand an attacker a version to match against a CVE -- which makes capability discovery the only in-band channel. The admin gateway is looser and ignores unknown keys; do not rely on either behaviour beyond what the contract states.
 
 **Base URL convention:** `https://vault42.example.com`
 
@@ -52,21 +60,25 @@ The slug is validated for shape only; it is never an authorization decision, whi
 
 Most endpoints require a valid JWT access token in the `Authorization` header:
 
-```
+```http
 Authorization: Bearer <access_token>
 ```
 
 Access tokens are RS256-signed JWTs with a short TTL (typically 5-15 minutes). They are stateless and fingerprint-bound.
 
+The `Bearer` scheme is accepted for any token that does not carry `cnf.jkt`. The `DPoP` scheme is rejected with `401 invalid_authorization` unless `VAULT_DPOP_ENABLED` is set. When the flag is on, a token issued with a DPoP proof carries `cnf.jkt` and must be presented as `Authorization: DPoP <token>` with a matching proof. A token issued without a proof stays an ordinary bearer token. See `spec.md` section 0.6.2.
+
 ### 2FA Challenge Tokens
 
-When a user has MFA enabled, the login endpoint returns a `challenge_token` instead of a full access token. This short-lived token must be presented to 2FA verify endpoints (`POST /auth/2fa/totp/verify`, `POST /auth/2fa/webauthn/verify/begin`, `POST /auth/2fa/webauthn/verify/finish`, `POST /auth/2fa/email-otp/verify`) to complete authentication.
+When a user has MFA enabled, the login endpoint returns a `challenge_token` instead of a full access token. This short-lived token (5-minute TTL, `token_type: "2fa_challenge"`) must be presented to a 2FA verify endpoint to complete authentication: `POST /auth/2fa/totp/verify`, `POST /auth/2fa/webauthn/verify/begin`, `POST /auth/2fa/webauthn/verify/finish`, `POST /auth/2fa/backup-code/verify`, `POST /auth/2fa/email-otp/verify`, or `POST /auth/2fa/email-otp/resend`.
+
+A challenge token is not accepted by any other endpoint, so it cannot be used for ordinary API access.
 
 ### Client Credentials (Basic Auth)
 
 The `POST /client/token` endpoint accepts HTTP Basic authentication:
 
-```
+```http
 Authorization: Basic base64(client_id:client_secret)
 ```
 
@@ -80,13 +92,38 @@ Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup code 
 
 ## Device Fingerprint
 
-Authenticated requests are fingerprint-verified. The fingerprint is computed as `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)` and embedded in the access token at issuance. The TLS-fingerprint component is populated from the header specified by `VAULT_TLS_FINGERPRINT_HEADER` (e.g. `X-TLS-Fingerprint`), which the TLS-terminating proxy must set. When the header is not configured, the TLS-fingerprint field is empty (backward compatible). On each authenticated request, the server recomputes the fingerprint and compares it to the token claim. A mismatch results in:
+The fingerprint is `SHA256(IP + User-Agent + Accept-Language + TLS-fingerprint)`, computed at issuance and carried in the access token as the `fingerprint` claim. The TLS-fingerprint component comes from the header named by `VAULT_TLS_FINGERPRINT_HEADER` (e.g. `X-TLS-Fingerprint`), which the TLS-terminating proxy must set; with that variable unset the component is empty and the other three still apply.
+
+Whether a given request is actually checked turns on two conditions, and both of them have exceptions, so neither is worth stating as "authenticated requests are fingerprint-verified".
+
+**1. The route has to run the check.** It is mounted on every authenticated end-user route in `internal/server/server.go`: through the `authed`, `confirmed` and `authedChallenge` wrappers, or inlined in the same order on the routes that carry their own rate limiter or confirmation gate. The machine endpoints deliberately do not run it, because a service client has no device to bind to:
+
+<!-- BEGIN FINGERPRINT EXEMPTIONS -->
+
+| Authenticated route | Fingerprint check |
+|---------------------|-------------------|
+| `POST /mint` | Not mounted -- machine endpoint |
+| `POST /kms/unwrap` | Not mounted -- machine endpoint |
+| `PUT /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `GET /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `DELETE /service/documents/{subject}/{key}` | Not mounted -- machine endpoint |
+| `GET /service/documents/{subject}` | Not mounted -- machine endpoint |
+
+<!-- END FINGERPRINT EXEMPTIONS -->
+
+Every other authenticated route runs it. `tests/spec/fingerprint_docs_test.go` compares that table against the chain the server installs and fails if either side moves.
+
+**2. The presented token has to carry the claim.** `middleware.Fingerprint` passes a request whose token has no `fingerprint` claim straight through rather than rejecting it (`internal/middleware/fingerprint.go`). Tokens issued by `POST /auth/login`, `POST /auth/refresh` and the 2FA challenge flow carry one. Tokens issued by `POST /client/token` and `POST /mint` do not -- both are issued with an empty fingerprint -- so a machine token presented to a user route is not fingerprint-checked, even on a route that mounts the check. That is the shipped behaviour and not an oversight: those tokens are constrained by scope and by DPoP, not by a device.
+
+When both conditions hold and the recomputed value differs from the claim, the request is rejected with:
 
 ```json
-{"error": "fingerprint_mismatch"}
+{"error": "invalid_token"}
 ```
 
 Status: `401 Unauthorized`
+
+The per-endpoint sections below do not repeat any of this. They used to carry an unqualified `Fingerprint: Verified` line on 38 routes, which was true of the chain and not true of the request: it said nothing about condition 2 and nothing about the six routes above.
 
 ---
 
@@ -94,7 +131,12 @@ Status: `401 Unauthorized`
 
 ### Success responses
 
-Success responses have an appropriate HTTP status code (200, 201) and a JSON body whose shape is endpoint-specific.
+Success responses have an appropriate HTTP status code (200, 201) and a JSON body whose shape is endpoint-specific. Four conventions hold everywhere:
+
+- **Field names are `snake_case`.** No response carries a Go field name or a camelCase key.
+- **Timestamps are RFC 3339 in UTC.** Fractional seconds may be present, so parse RFC 3339 generally rather than matching a fixed layout.
+- **A list field is always an array.** An empty collection is `[]`, never `null`. Changing that in either direction is a breaking change.
+- **List responses carry `{<collection>, total, limit, offset}`** where the endpoint is paged. `total` is present even on an empty result. On the admin gateway `limit` defaults to 50 and is clamped to 100; an out-of-range value falls back to the default rather than erroring. Unpaged collections return the collection key alone.
 
 ### Error responses
 
@@ -110,7 +152,7 @@ Error codes are lowercase, underscore-separated strings (e.g., `invalid_credenti
 
 ## Rate Limiting
 
-Rate limits are enforced per-IP or per-user depending on the endpoint. When rate limiting is active, the following headers are present on every response (including successful ones):
+Rate limits are enforced per-IP, per-user, or per-client depending on the endpoint. When rate limiting is active, the following headers are present on every response (including successful ones):
 
 | Header | Description |
 |--------|-------------|
@@ -120,7 +162,7 @@ Rate limits are enforced per-IP or per-user depending on the endpoint. When rate
 
 When the limit is exceeded:
 
-```
+```http
 HTTP/1.1 429 Too Many Requests
 Retry-After: <window_seconds>
 ```
@@ -129,7 +171,18 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-Rate limits degrade gracefully -- if the cache backend is unavailable, requests are allowed through.
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: <window_seconds>
+```
+
+```json
+{"error": "rate_limiter_unavailable"}
+```
+
+`spec.md` section 8.1 lists which limiter each endpoint carries.
 
 ---
 
@@ -218,7 +271,7 @@ Prometheus metrics endpoint. Returns metrics in Prometheus text exposition forma
 
 **Success response (200 OK):**
 
-```
+```text
 # HELP vault_argon2_active Current number of in-flight Argon2id operations
 # TYPE vault_argon2_active gauge
 vault_argon2_active 1
@@ -250,6 +303,14 @@ vault_tokens_issued_total 76
 # HELP vault_tokens_refreshed_total Total token refresh operations
 # TYPE vault_tokens_refreshed_total counter
 vault_tokens_refreshed_total 120
+
+# HELP vault_audit_buffer_full_total Audit events that arrived to a full in-memory buffer
+# TYPE vault_audit_buffer_full_total counter
+vault_audit_buffer_full_total 0
+
+# HELP vault_audit_events_dropped_total Buffered audit entries discarded because a rejected batch would not fit back into the buffer
+# TYPE vault_audit_events_dropped_total counter
+vault_audit_events_dropped_total 0
 ```
 
 **Exposed metrics:**
@@ -264,6 +325,24 @@ vault_tokens_refreshed_total 120
 | `vault_login_failed_total` | Counter | Total failed logins |
 | `vault_tokens_issued_total` | Counter | Total access tokens issued (login + MFA completion) |
 | `vault_tokens_refreshed_total` | Counter | Total token refresh operations |
+| `vault_audit_buffer_full_total` | Counter | Audit events that arrived to a full in-memory buffer. Non-critical events were discarded; critical event types were written straight to the store instead |
+| `vault_audit_events_dropped_total` | Counter | Buffered audit entries discarded because the store rejected the batch and the retry would not fit back into the buffer |
+
+**Audit loss alerting:**
+
+Both audit counters mean records went missing, and both are worth an alert, but
+they are answered differently and should not be summed into one rule.
+
+`vault_audit_buffer_full_total` rising means the process is producing audit
+events faster than `VAULT_AUDIT_FLUSH_INTERVAL` drains them. The store is
+healthy. Raise `VAULT_AUDIT_BUFFER_SIZE`, shorten the flush interval, or shed
+load. Sustained growth here can also be someone flooding an audited path to bury
+activity in discarded events.
+
+`vault_audit_events_dropped_total` rising means the audit store rejected a batch
+and the retry had nowhere to put the entries. Those entries were already
+reported to their callers as written, so each one is a hole in an append-only
+trail that has no second copy. Treat any increase as a database incident.
 
 **curl example:**
 
@@ -406,7 +485,7 @@ Authenticate a user with email and password. If the user has MFA enabled, return
 > **Honeypot mode:** When `VAULT_PROFILE=honeypot` and the email matches a configured trap user (`VAULT_HONEYPOT_TRAP_USERS`), the endpoint returns a fake 200 response with realistic-looking but unsigned JWT tokens. The attacker's request triggers a webhook alert. Subsequent requests with the fake token will fail silently on any real API call.
 
 **Authentication:** None
-**Rate limit:** 5 requests per 15 minutes (per IP)
+**Rate limit:** 5 requests per 15 minutes (per IP), fail-closed. A cache outage rejects with `503 rate_limiter_unavailable` rather than falling back to a per-pod counter.
 
 **Request body:**
 
@@ -441,13 +520,19 @@ The response also sets an `HttpOnly` cookie named `refresh_token` on the `/auth`
 
 No refresh token cookie is set until MFA is completed.
 
+**Field naming.** `mfa_methods` is the canonical name for this list, and `GET /auth/2fa/status` emits it. This endpoint still emits the pre-1.0.0 `available_methods` and `requires_2fa`. Clients SHOULD read `mfa_methods` where it is present and fall back to `available_methods`; both name the same list. The `mfa_` names are canonical because the product supports more than two factors, while the URL paths keep `2fa` (`/auth/2fa/*`) because renaming a route is a breaking change. `available_methods` is deprecated and will be removed at 2.0.0. See `spec.md` section 4.4.
+
+Both fields carry `omitempty`, so on a non-MFA login they are absent rather than `null`.
+
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `invalid_request` | Malformed JSON |
-| 401 | `invalid_credentials` | Wrong email/password or email not verified (identical response for anti-enumeration) |
-| 403 | `account_locked` | Account locked due to too many failed attempts |
+| 401 | `invalid_credentials` | Wrong email/password, an unverified/deleted/import-pending account, or a banned/disabled account without the correct password (identical response for anti-enumeration) |
+| 403 | `account_locked` | The per-IP lockout tripped (IP-scoped; reveals nothing about any account). The per-user lockout answers 401 instead, so it cannot be used to enumerate. |
+| 403 | `account_banned` | The account is banned. Returned only after a successful password verification, so a caller without the password cannot distinguish it from an unknown address. |
+| 403 | `account_disabled` | The account is disabled. Returned only after a successful password verification, same anti-enumeration property as `account_banned`. |
 | 429 | `rate_limit_exceeded` | Login rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
@@ -521,7 +606,6 @@ curl -X POST https://vault42.example.com/auth/refresh \
 Revoke all refresh tokens for the authenticated user and clear the refresh token cookie.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -538,8 +622,7 @@ Clears the `refresh_token` cookie.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `missing_authorization` | No Authorization header |
-| 401 | `invalid_token` | Token invalid or expired |
-| 401 | `fingerprint_mismatch` | Device fingerprint does not match token |
+| 401 | `invalid_token` | Token invalid, expired, or device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -558,7 +641,6 @@ curl -X POST https://vault42.example.com/auth/logout \
 Verify the user's password to grant a 5-minute elevated access window for sensitive operations (TOTP setup, WebAuthn management, backup codes).
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 15 minutes (per IP)
 
 **Request body:**
@@ -583,7 +665,7 @@ Verify the user's password to grant a 5-minute elevated access window for sensit
 | 400 | `password_required` | Missing or empty password |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_password` | Wrong password |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
@@ -695,7 +777,6 @@ curl -X POST https://vault42.example.com/auth/password/reset/confirm \
 Change the password for the currently authenticated user. Requires the current password. Revokes all existing sessions after a successful change.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -721,7 +802,7 @@ All existing refresh tokens for the user are revoked.
 | 400 | `password_recently_used` | New password matches one of the last 5 passwords |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_current_password` | Wrong current password |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
@@ -751,7 +832,6 @@ curl -X POST https://vault42.example.com/user/password \
 Retrieve the authenticated user's profile information.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -761,18 +841,25 @@ Retrieve the authenticated user's profile information.
   "email": "user@example.com",
   "email_verified": true,
   "display_name": "Jane Doe",
+  "avatar_url": "https://cdn.example.com/avatars/jane.png",
   "locale": "en",
   "mfa_required": false,
+  "mfa_enabled": true,
+  "mfa_methods": ["totp"],
   "created_at": "2025-01-15T10:30:00Z"
 }
 ```
+
+`avatar_url` is readable here as well as writable through `PUT /user/profile`. Before 1.0.0 it was write-only: a client could set it and could only read it back through the GDPR export.
+
+`mfa_methods` is always an array; a user with no configured factor gets `[]`, never `null`.
 
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 
 **curl example:**
@@ -791,7 +878,6 @@ curl https://vault42.example.com/user/profile \
 Update the authenticated user's profile fields. Only fields included in the request body are updated; omitted fields remain unchanged. Email is not updatable via this endpoint.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -841,7 +927,6 @@ curl -X PUT https://vault42.example.com/user/profile \
 List all active sessions (devices) for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -866,7 +951,7 @@ List all active sessions (devices) for the authenticated user.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -885,7 +970,6 @@ curl https://vault42.example.com/user/sessions \
 Revoke a specific session. Removes the device record and revokes all associated refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -905,7 +989,7 @@ Revoke a specific session. Removes the device record and revokes all associated 
 |--------|-------|-------------|
 | 400 | `missing_session_id` | Empty session ID in path |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `session_not_found` | Session not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -925,7 +1009,6 @@ curl -X DELETE https://vault42.example.com/user/sessions/device-uuid-1 \
 Revoke all sessions (sign out everywhere). Removes all device records and revokes all refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -938,7 +1021,7 @@ Revoke all sessions (sign out everywhere). Removes all device records and revoke
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -957,7 +1040,6 @@ curl -X DELETE https://vault42.example.com/user/sessions \
 List all registered devices for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -984,7 +1066,7 @@ The `fingerprint_hash` field is truncated to the first 8 characters for display 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1003,7 +1085,6 @@ curl https://vault42.example.com/user/devices \
 Rename a device (set a friendly name).
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1036,7 +1117,7 @@ Rename a device (set a friendly name).
 | 400 | `name_too_long` | Name exceeds 100 characters |
 | 400 | `name_invalid_chars` | Name contains control characters |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `device_not_found` | Device not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1058,7 +1139,6 @@ curl -X PATCH https://vault42.example.com/user/devices/device-uuid-1 \
 Remove a device and revoke all associated refresh tokens.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1077,7 +1157,7 @@ Remove a device and revoke all associated refresh tokens.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `device_not_found` | Device not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1088,6 +1168,148 @@ curl -X DELETE https://vault42.example.com/user/devices/device-uuid-1 \
   -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
   -H "User-Agent: MyApp/1.0" \
   -H "Accept-Language: en-US"
+```
+
+---
+
+### Account Lifecycle
+
+Self-service erasure and data portability. Both are subject rights under the GDPR, and both are reachable by the account holder without an operator in the loop.
+
+---
+
+#### DELETE /user/account
+
+Erase the authenticated user's account. **This is the most destructive endpoint in the API.** It is irreversible from the service's own side: the only path back is an offline recovery key that the server does not hold.
+
+**Mounted only when an account-recovery repository is wired.** Where it is not, the route does not exist and answers a `text/plain` 404 rather than the JSON error envelope.
+
+**Authentication:** Bearer token **and** the current password in the request body. A stolen access token alone cannot erase an account.
+**Rate limit:** 3 requests per hour (per IP), fail-closed
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `password` | string | Yes | The account's current password, re-entered |
+
+**What is erased:** the identity profile, all blobs, devices, linked social accounts, password history, refresh tokens, TOTP secrets, WebAuthn credentials and backup codes. The user row is scrubbed and soft-deleted (tombstoned) so that foreign keys stay intact and the account stops authenticating immediately.
+
+**What survives, and why:** the audit log and the recovery escrow. Both are append-only by database trigger, and both are bounded by a retention horizon instead of by the erasure cascade (`VAULT_AUDIT_RETENTION_DAYS`, `VAULT_RECOVERY_RETENTION_DAYS` / `vault cleanup-recovery`). `vault cleanup-audit` is retired and writes nothing. The escrow row holds the erased email RSA-encrypted to a key whose private half is offline, so a compromised server cannot read it back.
+
+**Order matters:** escrow, then tombstone, then purge. The account stops authenticating before any PII is destroyed, so an interrupted erasure leaves an account that is dead but not yet fully purged -- never one that is still loginable but has already lost its second factors. Every step is idempotent; re-issuing the request finishes an interrupted erasure.
+
+**Success response (200 OK):**
+
+```json
+{
+  "status": "deleted"
+}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `password_required` | Body missing or `password` empty |
+| 401 | `invalid_password` | Wrong password (audited as a failed login) |
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `invalid_token` | Device fingerprint mismatch |
+| 404 | `not_found` | Account already erased |
+| 429 | `rate_limit_exceeded` | Deletion rate limit exceeded |
+| 500 | `internal_error` | Erasure failed; the account may be tombstoned but not fully purged. Retry. |
+| 503 | `server_busy` | Argon2id semaphore full (load shedding) |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+**curl example:**
+
+```bash
+curl -X DELETE https://vault42.example.com/user/account \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -d '{"password": "my-secure-passphrase-here"}'
+```
+
+---
+
+#### GET /user/data-export
+
+Return every category of personal data the service holds for the authenticated user, in one JSON document. Satisfies the right of access (GDPR Article 15) and the right to data portability (Article 20).
+
+The endpoint aggregates the live repositories and stores nothing of its own, so an export cannot drift from what is actually held.
+
+**Authentication:** Bearer token
+**Rate limit:** 5 requests per minute (per IP)
+
+**Success response (200 OK):**
+
+```json
+{
+  "generated_at": "2026-08-10T12:00:00Z",
+  "account": {
+    "id": "user-uuid",
+    "email": "user@example.com",
+    "email_verified": true,
+    "display_name": "Alice",
+    "avatar_url": "",
+    "locale": "en",
+    "roles": ["user"],
+    "mfa_required": true,
+    "disabled": false,
+    "banned": false,
+    "created_at": "2026-01-04T09:12:00Z",
+    "updated_at": "2026-08-01T18:40:00Z",
+    "last_login_at": "2026-08-10T08:03:00Z"
+  },
+  "identity": { "given_name": "Alice", "family_name": "Example", "country": "SK" },
+  "devices": [
+    {"id": "device-uuid", "friendly_name": "Firefox on Linux", "trusted": false,
+     "ip": "203.0.113.10", "user_agent": "Mozilla/5.0 ...",
+     "first_seen_at": "2026-01-04T09:12:00Z", "last_seen_at": "2026-08-10T08:03:00Z"}
+  ],
+  "blobs": [
+    {"id": "blob-uuid", "label": "notes", "named": false, "size_bytes": 2048,
+     "checksum": "sha256:...", "created_at": "2026-03-02T11:00:00Z"}
+  ],
+  "social_accounts": [
+    {"provider": "google", "provider_user_id": "1234567890",
+     "email": "user@example.com", "created_at": "2026-01-04T09:14:00Z"}
+  ],
+  "audit_events": [
+    {"timestamp": "2026-08-10T08:03:00Z", "event_type": "login_success",
+     "ip": "203.0.113.10", "user_agent": "Mozilla/5.0 ..."}
+  ],
+  "audit_events_total": 4210,
+  "audit_events_limit": 1000,
+  "audit_events_truncated": true
+}
+```
+
+**Blob contents are never included** -- only metadata (id, label, size, checksum, created_at). Provider access and refresh tokens on linked social accounts are excluded by design.
+
+**Audit events are capped at 1000, most recent first.** Because a silently truncated export is indistinguishable from a complete one, the response always states the shape of the truncation: `audit_events_total` is how many exist, `audit_events_limit` is the cap, and `audit_events_truncated` says whether it was reached. A subject who sees `true` can ask the Operator for the remainder rather than assuming this is everything.
+
+`identity` is `null` when the identity store is disabled or the user has set no profile. `blobs` is `[]` when blob storage is disabled.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `invalid_token` | Device fingerprint mismatch |
+| 429 | `rate_limit_exceeded` | Export rate limit exceeded |
+| 500 | `internal_error` | Server error |
+
+**curl example:**
+
+```bash
+curl https://vault42.example.com/user/data-export \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -o my-vault42-data.json
 ```
 
 ---
@@ -1103,7 +1325,6 @@ Encrypted personal identity information (PII). All fields are encrypted at rest 
 Retrieve the authenticated user's identity profile. Returns decrypted fields.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1148,7 +1369,6 @@ curl https://vault42.example.com/user/identity \
 Create or replace the authenticated user's identity profile. All fields are optional.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:**
 
@@ -1200,7 +1420,6 @@ curl -X PUT https://vault42.example.com/user/identity \
 Permanently delete the authenticated user's identity profile.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1290,7 +1509,6 @@ provider. An ID that does not exist (or is not the caller's) reports success rat
 response must not become an oracle for whether an ID belongs to somebody else.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1320,7 +1538,6 @@ Encrypted file storage with per-user quotas. Blobs are compressed (DEFLATE), enc
 Upload an encrypted blob. Accepts raw binary body or multipart form data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Raw upload:**
 
@@ -1345,6 +1562,14 @@ Body: raw binary data
 | Maximum blob size | 10 MB | `VAULT_BLOB_MAX_SIZE` |
 | Max files per user | 50 | `VAULT_BLOB_MAX_PER_USER` |
 | Max total storage | 10 MB | `VAULT_BLOB_QUOTA_BYTES` |
+
+**Permitted file types and extensions:** there are none to permit, and that is a
+property of the feature rather than an omission. A blob is an opaque octet
+stream: vault42 never parses it, never sniffs it, never decides a type for it,
+and stores it encrypted, so there is no type for a policy to be about. Named
+blobs are addressed by a reference from the `[a-zA-Z0-9_-]+` charset, which
+excludes the dot, so a stored object has no extension either. Nothing is
+extracted or unpacked, so the unpacked size equals the stored size.
 
 **Success response (201 Created):**
 
@@ -1396,7 +1621,6 @@ curl -X POST https://vault42.example.com/user/blobs \
 List all blobs for the authenticated user with metadata and quota usage.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1439,12 +1663,42 @@ curl https://vault42.example.com/user/blobs \
 
 ---
 
+#### How stored objects are made safe to download
+
+vault42 does not scan uploads for malicious content, and would have nothing to
+scan: the bytes are encrypted at rest with a key the server holds and are never
+interpreted. What it does instead is make sure a stored object cannot act on
+retrieval.
+
+- **Every download is scoped to the caller's own pseudonym.** `Download` and
+  `DownloadNamed` resolve a blob by `(pseudonym, id)` and `(pseudonym, name)`,
+  so an object is only ever served to the account that stored it. There is no
+  sharing, no public URL and no cross-account read, so the case where one user's
+  upload is delivered to another user does not exist.
+- **`Content-Disposition: attachment`** is set on both download paths. A browser
+  navigated straight at a blob URL saves the bytes rather than rendering them,
+  so a stored HTML or SVG document cannot execute on vault42's origin.
+- **The filename is chosen by the server, not by the caller.** It is the blob's
+  own reference reduced to `[A-Za-z0-9._-]` and capped at 128 characters, with
+  everything else dropped. A reference left with nothing usable becomes `blob`.
+  Nothing a caller supplies can add a parameter to the header or a directory to
+  the path.
+- **`Content-Type: application/octet-stream` with `X-Content-Type-Options:
+  nosniff`** on every response. Together they stop a browser inferring a type
+  the response did not declare.
+- **`Content-Security-Policy: default-src 'none'`** on API paths, which leaves
+  nothing for a document served from one to load or execute.
+
+A blob whose content is malicious is therefore returned intact to the one
+account that uploaded it, as bytes, and no browser is asked to interpret it.
+
+---
+
 #### GET /user/blobs/{id}
 
 Download a decrypted blob. Returns raw binary data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1457,6 +1711,7 @@ Download a decrypted blob. Returns raw binary data.
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | `application/octet-stream` |
+| `Content-Disposition` | `attachment; filename="<id>"` -- see [How stored objects are made safe to download](#how-stored-objects-are-made-safe-to-download) |
 | `Content-Length` | Size in bytes |
 | `X-Blob-Checksum` | SHA-256 checksum of original data |
 | `X-Blob-Label` | Label (if set) |
@@ -1487,7 +1742,6 @@ curl https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 Permanently delete an encrypted blob.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1524,7 +1778,6 @@ curl -X DELETE https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef
 Create or replace a **named blob**. Named blobs are addressed by a human-readable name (e.g. `session-data`, `preferences`) instead of a UUID. If a blob with the same name already exists for this user, it is replaced atomically (delete + insert). The name is stored as an HMAC hash in the database -- the plaintext name never touches persistent storage.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1576,7 +1829,6 @@ curl -X PUT https://vault42.example.com/user/blobs/named/session-data \
 Download a named blob by its reference name. Returns raw binary data.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1589,6 +1841,7 @@ Download a named blob by its reference name. Returns raw binary data.
 | Header | Description |
 |--------|-------------|
 | `Content-Type` | `application/octet-stream` |
+| `Content-Disposition` | `attachment; filename="<name>"` -- see [How stored objects are made safe to download](#how-stored-objects-are-made-safe-to-download) |
 | `Content-Length` | Size in bytes |
 | `X-Blob-Checksum` | SHA-256 checksum of original data |
 | `X-Blob-Label` | Label (same as name for named blobs) |
@@ -1619,7 +1872,6 @@ curl https://vault42.example.com/user/blobs/named/session-data \
 Delete a named blob by its reference name.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -1660,7 +1912,6 @@ curl -X DELETE https://vault42.example.com/user/blobs/named/session-data \
 Retrieve the MFA status for the authenticated user, including which methods are configured.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -1669,17 +1920,22 @@ Retrieve the MFA status for the authenticated user, including which methods are 
   "totp_enabled": true,
   "webauthn_enabled": false,
   "backup_codes_remaining": 8,
+  "mfa_methods": ["totp", "backup_code"],
   "available_methods": ["totp", "backup_code"],
   "mfa_required": false
 }
 ```
+
+`mfa_methods` and `available_methods` are the same list under two names. `mfa_methods` is canonical; `available_methods` is retained as a deprecated alias for clients written before 1.0.0 and will be removed at 2.0.0. New clients MUST read `mfa_methods`.
+
+Both are always arrays. A user with no configured factor gets `[]`, never `null` -- the guarantee is enforced in `MFAStatus.MarshalJSON`, so it holds for every code path that returns a status, not only this one.
 
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1698,7 +1954,6 @@ curl https://vault42.example.com/auth/2fa/status \
 Begin TOTP setup. Generates a new TOTP secret and returns it along with an `otpauth://` URL for QR code generation. Requires recent password confirmation via `POST /auth/confirm`.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -1718,7 +1973,7 @@ The TOTP secret is stored encrypted (AES-256-GCM) and marked as unverified until
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required (call `POST /auth/confirm` first) |
 | 409 | `totp_already_setup` | TOTP is already configured and verified |
 | 500 | `internal_error` | Server error |
@@ -1742,7 +1997,6 @@ Verify a TOTP code. Has two modes of operation:
 2. **Login MFA challenge:** When called with a `2fa_challenge` token (from the login flow), completes authentication and issues full access/refresh tokens.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:**
@@ -1778,7 +2032,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | TOTP code is incorrect |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `totp_not_setup` | TOTP has not been configured |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 429 | `totp_code_already_used` | Same code used within the same 30-second time step (replay prevention) |
@@ -1804,7 +2058,6 @@ curl -X POST https://vault42.example.com/auth/2fa/totp/verify \
 Disable TOTP for the authenticated user. Requires recent password confirmation.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -1819,7 +2072,7 @@ Disable TOTP for the authenticated user. Requires recent password confirmation.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 404 | `totp_not_setup` | TOTP has not been configured |
 | 500 | `internal_error` | Server error |
@@ -1840,7 +2093,6 @@ curl -X DELETE https://vault42.example.com/auth/2fa/totp \
 Begin WebAuthn/FIDO2 credential registration. Returns a `PublicKeyCredentialCreationOptions` object for the browser's `navigator.credentials.create()` API. Requires recent password confirmation. Session data is cached for 5 minutes.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -1868,7 +2120,7 @@ Returns a WebAuthn `PublicKeyCredentialCreationOptions` JSON object (structure d
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 401 | `unauthorized` | User not found |
 | 500 | `webauthn_error` | WebAuthn ceremony initialization failed |
@@ -1891,7 +2143,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/register/begin \
 Complete WebAuthn credential registration. Send the `AuthenticatorAttestationResponse` from the browser's `navigator.credentials.create()` call.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Request body:** The `AuthenticatorAttestationResponse` JSON object from the browser WebAuthn API (passed through directly as the raw HTTP request body).
 
@@ -1908,8 +2159,9 @@ Complete WebAuthn credential registration. Send the `AuthenticatorAttestationRes
 | 400 | `no_pending_registration` | No registration session found (expired or not started) |
 | 400 | `webauthn_verification_failed` | Credential verification failed |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
+| 409 | `credential_already_registered` | The credential ID is already enrolled on this or another account |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
 | 500 | `internal_error` | Server error |
 
@@ -1933,7 +2185,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/register/finish \
 Begin WebAuthn authentication (login verification). Returns a `PublicKeyCredentialRequestOptions` object for the browser's `navigator.credentials.get()` API.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -1959,7 +2210,7 @@ Returns a WebAuthn `PublicKeyCredentialRequestOptions` JSON object.
 |--------|-------|-------------|
 | 400 | `no_webauthn_credentials` | No WebAuthn credentials registered for this user |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 500 | `webauthn_error` | WebAuthn ceremony initialization failed |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
@@ -1981,7 +2232,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/verify/begin \
 Complete WebAuthn authentication. Send the `AuthenticatorAssertionResponse` from the browser's `navigator.credentials.get()` call. When completing a login MFA challenge, issues full access/refresh tokens.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 
 **Request body:** The `AuthenticatorAssertionResponse` JSON object from the browser WebAuthn API.
 
@@ -2012,7 +2262,9 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `no_pending_verification` | No verification session found (expired or not started) |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `webauthn_verification_failed` | Authenticator assertion verification failed |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `user_verification_required` | The credential was enrolled with user verification; the assertion carried none. Retry with the authenticator's PIN or biometric |
+| 401 | `cloned_authenticator_detected` | The signature counter did not advance; every refresh-token family for the user is revoked |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
 | 500 | `internal_error` | Server error |
@@ -2037,7 +2289,6 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/verify/finish \
 List all registered WebAuthn credentials for the authenticated user.
 
 **Authentication:** Bearer token
-**Fingerprint:** Verified
 
 **Success response (200 OK):**
 
@@ -2058,7 +2309,7 @@ List all registered WebAuthn credentials for the authenticated user.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -2077,7 +2328,6 @@ curl https://vault42.example.com/auth/2fa/webauthn/credentials \
 Delete a specific WebAuthn credential. Requires recent password confirmation.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Path parameters:**
 
@@ -2097,7 +2347,7 @@ Delete a specific WebAuthn credential. Requires recent password confirmation.
 |--------|-------|-------------|
 | 400 | `missing_credential_id` | Empty credential ID in path |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 404 | `credential_not_found` | Credential not found or belongs to another user |
 | 500 | `internal_error` | Server error |
@@ -2118,7 +2368,6 @@ curl -X DELETE https://vault42.example.com/auth/2fa/webauthn/credentials/cred-uu
 Generate a new set of 10 backup codes. Any existing backup codes are replaced. Requires recent password confirmation. Each code is 12 hex characters (48-bit entropy), stored as Argon2id hashes.
 
 **Authentication:** Bearer token + password confirmation
-**Fingerprint:** Verified
 
 **Request body:** None
 
@@ -2147,7 +2396,7 @@ Generate a new set of 10 backup codes. Any existing backup codes are replaced. R
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 403 | `requires_confirmation` | Password confirmation required |
 | 500 | `internal_error` | Server error |
 
@@ -2162,6 +2411,69 @@ curl -X POST https://vault42.example.com/auth/2fa/backup-codes \
 
 ---
 
+#### POST /auth/2fa/backup-code/verify
+
+Consume a single-use backup code. Like the TOTP and email-OTP verify endpoints, this has two modes:
+
+1. **Standard verification:** with a normal Bearer token, confirms the code.
+2. **Login MFA challenge:** with a `2fa_challenge` token from the login flow, completes authentication and issues full access and refresh tokens.
+
+Codes are stored as HMAC-SHA256 hashes and compared in constant time. Consumption is atomic (compare-and-swap on `used`), so a code cannot be spent twice even under concurrent requests.
+
+**Authentication:** Bearer token or 2FA challenge token
+**Rate limit:** 5 requests per 5 minutes (per IP), fail-closed
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | Yes | One backup code from the set issued by `POST /auth/2fa/backup-codes` |
+
+**Success response -- standard verification (200 OK):**
+
+```json
+{
+  "verified": true
+}
+```
+
+**Success response -- MFA login completion (200 OK):**
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+Sets the `refresh_token` cookie.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_request` | Malformed JSON or missing code |
+| 401 | `unauthorized` | Not authenticated |
+| 401 | `invalid_code` | Code is wrong or already used |
+| 401 | `invalid_token` | Device fingerprint mismatch |
+| 429 | `rate_limit_exceeded` | Verify rate limit exceeded |
+| 500 | `internal_error` | Server error |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+**curl example:**
+
+```bash
+curl -X POST https://vault42.example.com/auth/2fa/backup-code/verify \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: MyApp/1.0" \
+  -H "Accept-Language: en-US" \
+  -d '{"code": "a1b2c3d4e5f6"}'
+```
+
+---
+
 #### POST /auth/2fa/email-otp/verify
 
 Verify an email one-time password code. Has two modes of operation:
@@ -2172,7 +2484,6 @@ Verify an email one-time password code. Has two modes of operation:
 An email OTP is automatically sent during login when the user's only available 2FA method is `email_otp`. Use `POST /auth/2fa/email-otp/resend` to request a new code.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:**
@@ -2208,7 +2519,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | Email OTP code is incorrect or expired |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -2232,7 +2543,6 @@ curl -X POST https://vault42.example.com/auth/2fa/email-otp/verify \
 Resend the email one-time password code. Generates a new 6-digit code and sends it to the user's registered email address. The previous code (if any) is replaced.
 
 **Authentication:** Bearer token or 2FA challenge token
-**Fingerprint:** Verified
 **Rate limit:** 5 requests per 5 minutes (per IP)
 
 **Request body:** None
@@ -2248,7 +2558,7 @@ Resend the email one-time password code. Generates a new 6-digit code and sends 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated or user not found |
-| 401 | `fingerprint_mismatch` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -2274,6 +2584,7 @@ These endpoints are only available when OAuth2 providers are configured.
 Initiate an OAuth2 social login flow. Redirects the user to the provider's authorization page with a signed state parameter and PKCE challenge.
 
 **Authentication:** None
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter.
 
 **Query parameters:**
 
@@ -2301,11 +2612,16 @@ curl -v "https://vault42.example.com/auth/oauth2/authorize?provider=google"
 
 #### GET /auth/oauth2/callback/{provider}
 
-Handle the OAuth2 callback from the identity provider. Validates the state parameter (HMAC-signed with expiry), exchanges the authorization code for tokens using PKCE, fetches user info, and either creates a new account or links to an existing one.
+Handle the OAuth2 callback from the identity provider. Validates the state parameter (HMAC-signed with expiry), exchanges the authorization code for tokens using PKCE, fetches user info, and either signs in an already-linked identity, links to an existing account, or creates a new account.
+
+A first-time sign-in is auto-provisioned only when the provider proves the caller owns the address. A provider that publishes no per-address verification signal (Facebook) or an OIDC issuer that answers `email_verified:false` cannot prove ownership: the asserted address is attacker-supplied, so creating an account on it would squat a stranger's mailbox and the create-vs-refuse outcome would reveal whether the address is registered. For such providers a first-time callback (no existing linked identity) is refused with a neutral redirect to `{origin}/oauth/callback#error=verification_required`, identical whether or not the address is registered; no account is created and no mail is sent. An identity already linked by `(provider, provider_user_id)` still signs in normally.
 
 If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=true&challenge_token=...` instead of issuing full tokens.
 
+**DPoP:** this route is not wrapped in the DPoP middleware (`internal/server/server.go`). The identity provider redirects the browser with a GET, which cannot carry a `DPoP` proof, so the access or challenge token minted here never receives `cnf.jkt` even when `VAULT_DPOP_ENABLED` is on. `POST /auth/oauth2/exchange` returns that already-issued token. A later `POST /auth/2fa/*` verify *is* wrapped, so an MFA-completing federated login can still bind there. See `spec.md` section 0.6.2.
+
 **Authentication:** None (callback from provider)
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter rather than `503 rate_limiter_unavailable`. The callback used to share the login bucket (5 per 15 minutes, fail-closed). It does not any more. Reaching the handler already takes an HMAC-valid state, a matching `__Host-oauth_state` cookie and a single-use PKCE verifier, so this is not a guessing surface, and sharing `loginRL` let one office or VPN exit spend social login with five garbage login bodies.
 
 **Path parameters:**
 
@@ -2335,7 +2651,7 @@ Also sets the `refresh_token` HttpOnly cookie. The `code` is a one-time exchange
 | 400 | `invalid_or_reused_state` | PKCE verifier not found or already consumed |
 | 400 | `missing_code` | No authorization code in callback |
 | 400 | `unable_to_identify_user` | Could not determine user from provider response |
-| 409 | `email_already_registered` | Email exists but verification status prevents linking |
+| 409 | `email_already_registered` | A verified provider asserted an address held by an account whose own email is unverified; linking is refused to prevent takeover. Unverified providers are refused earlier via the `#error=verification_required` redirect. |
 | 502 | `provider_error` | Token exchange or user info request failed |
 | 500 | `internal_error` | Server error |
 
@@ -2353,6 +2669,7 @@ curl -v "https://vault42.example.com/auth/oauth2/callback/google?state=...&code=
 Exchange a one-time code from the OAuth2 callback redirect for the access token. The code is valid for 60 seconds and can only be used once (atomic get-and-delete).
 
 **Authentication:** None
+**Rate limit:** 10 requests per minute (per IP). Not fail-closed: a cache outage falls back to a per-pod counter.
 
 **Request body:**
 
@@ -2421,12 +2738,14 @@ Authenticate a service client and issue an access token using the OAuth2 client 
 
 Requested scopes are intersected with the client's allowed scopes. If no scopes are requested, all allowed scopes are granted.
 
+**Two deviations from RFC 6749, both frozen until 2.0.0.** The endpoint does not read `grant_type` at all -- sending `grant_type=client_credentials` is harmless but not required -- and it reports `invalid_client_credentials` where RFC 6749 section 5.2 specifies `invalid_client`. Requiring the parameter and renaming the code are both breaking changes under the stability contract, so they wait for a major version. Write clients against what is documented here, not against the RFC.
+
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `invalid_scope` | Requested scopes have no overlap with allowed scopes |
-| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials |
+| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials. RFC 6749 calls this `invalid_client`; see above |
 | 401 | `client_revoked` | Client has been deactivated |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
@@ -2454,7 +2773,7 @@ curl -X POST https://vault42.example.com/client/token \
 
 KEK envelope-unwrap oracle. The caller presents a wrapped-key envelope and vault42 returns the unwrapped key. vault42 holds the Key-Encryption-Key (derived per `kid` from `KMS_ROOT_KEY_FILE` via HKDF-SHA256) and never releases it. Mounted **only** when `KMS_ROOT_KEY_FILE` is configured; otherwise the route does not exist (404).
 
-**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. When `VAULT_DPOP_ENABLED=true` the request must also carry a fresh, single-use DPoP proof (anti-replay).
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `kms:unwrap` scope. Sender-constraint follows the token rather than the route: `POST /client/token` **is** DPoP-wrapped (`internal/server/server.go:560`), so a client-credential token minted while presenting a valid proof carries `cnf.jkt`, and this route then refuses it without a matching proof under the `DPoP` scheme. A token minted without a proof stays an ordinary bearer token and this route demands none. Both cases need `VAULT_DPOP_ENABLED=true`; with the flag off, its default, no token carries `cnf.jkt` at all. For an unbound token, replay resistance rests on the short access-token TTL, TLS, and the fail-closed per-IP limit. See `spec.md` section 0.6.2.
 **Rate limit:** per-IP, fail-closed (a cache/Redis outage rejects with 503 rather than degrading).
 
 **Request body:**
@@ -2481,12 +2800,34 @@ Every post-authorization failure (malformed body, bad base64, empty `kid`, tampe
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `unwrap_failed` | Any envelope that does not unwrap. The status, body, and audit outcome are identical across all failure modes. |
-| 401 | `unauthorized` | Missing or invalid access token (or missing DPoP proof when enabled) |
+| 401 | `missing_authorization` | No `Authorization` header |
+| 401 | `invalid_authorization` | Header is not `Bearer <token>` |
+| 401 | `invalid_token` | Signature, issuer, audience or expiry check failed |
+| 401 | `invalid_token_type` | The token's `token_type` claim is not `Bearer` |
+| 401 | `invalid_dpop_proof` | A `DPoP` header was presented and failed validation (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `dpop_proof_reused` | The proof's `jti` was seen before (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `unauthorized` | Defensive: claims absent behind the auth middleware. Not reachable through the mounted chain |
 | 403 | `insufficient_scope` | Token lacks the `kms:unwrap` scope |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
-| 503 | `service_unavailable` | Rate-limiter backing store is down (fail-closed) |
+| 503 | `rate_limiter_unavailable` | Rate-limiter backing store is down (fail-closed) |
 
 Every attempt is written synchronously to the audit log (`kid` and outcome only; key material is never logged). Use the `vault kms wrap` CLI to produce envelopes this endpoint accepts.
+
+The `kid` on this endpoint is deliberately unconstrained: it is HKDF info and GCM
+additional data, never a lookup key, and unwrap has to remain the exact inverse of
+every wrap that ever ran, including envelopes sealed under a kid this service would
+not choose today. `vault kms wrap` is stricter than the endpoint and refuses any
+`--kid` outside `^[A-Za-z0-9][A-Za-z0-9._@-]*$` (128 bytes), because a kid carrying
+a space, a control byte or a homoglyph produces an artifact that only opens under a
+string an operator cannot read back off their terminal. Producing is where that is
+worth catching; opening is not.
+
+`vault kms wrap` also refuses an empty or whitespace-only plaintext. Sealing zero
+bytes yields a well-formed envelope that unwraps to nothing, so a deploy step whose
+input file was empty produced a valid looking artifact and exit 0, and the failure
+surfaced later as an empty secret in a running service. `POST /kms/unwrap` still
+opens such an envelope, since older tooling could produce one and an operator
+holding it needs to confirm what it carries.
 
 **curl example:**
 
@@ -2496,6 +2837,479 @@ curl -X POST https://vault42.example.com/kms/unwrap \
   -H "Content-Type: application/json" \
   -d '{"kid":"data-root-v1","ciphertext":"'"$ENVELOPE_B64"'"}'
 ```
+
+---
+
+### Mint
+
+---
+
+#### POST /mint
+
+Subject-assertion signing oracle. The caller names a subject, and vault42 signs a token asserting it with the same key that signs every real one. **vault42 does not authenticate the subject and does not look it up.** The endpoint exists because eleven legacy services hold foreign-key copies of the legacy platform's own user ids, so the token subject has to stay that id rather than a vault42-native one; the alternative was rewriting every one of those tables.
+
+Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:613-620`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
+
+**Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:832`). The limiter sits inside `authMw` because `ClientRateLimitKey` reads the client id from claims that do not exist until auth has run. No fingerprint verification: this is a machine endpoint.
+**Rate limit:** 60 per minute per authenticated `client_id`, fail-closed (a cache/Redis outage rejects with `503` rather than degrading to a per-pod counter). The limiter is mounted **inside** the auth middleware, so the key function reads the client id from the validated claims and buckets by `client_id`; its source-IP fallback is unreachable here, because a request carrying no claims is rejected by the auth middleware before it reaches the limiter. Plan capacity as 60/min per client, not per source address.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. With the flag on, whether a proof is required here is decided by the token, not by this route: `POST /client/token` **is** a DPoP issuance path (`internal/server/server.go:560`), so a client-credential token minted with a proof carries `cnf.jkt` and is refused here without a matching one. A token minted without a proof carries no `cnf.jkt`, and a request presenting it with no `DPoP` header passes through. See `spec.md` section 0.6.2.
+**Max body:** 8 KiB, applied twice -- the global cap (`/mint` carries no exemption) and an explicit reader in the handler.
+
+**Request body:**
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `subject` | string | Yes | 1--128 bytes, `^[A-Za-z0-9][A-Za-z0-9._@-]*$` | The identifier being asserted. Held to a charset that cannot smuggle control characters, whitespace or delimiters, because it lands in a signed claim and in an audit row |
+| `roles` | string[] | No | Every member must appear in `VAULT_MINT_ROLES` | Omit or send `[]` for no roles. The allow-list is empty by default, so a freshly enabled mint issues bare subject assertions |
+| `scopes` | string[] | No | Every member must appear in `VAULT_MINT_SCOPES` | Same deny-by-default rule as `roles` |
+| `ttl_seconds` | int | No | `0` or absent means `VAULT_MINT_TOKEN_TTL`; otherwise `0 < ttl <= VAULT_MINT_MAX_TTL`, itself capped at 900 in code | A value above the ceiling is **refused, not clamped**. Silently issuing something other than what was asked for hides a misconfigured caller until the day its tokens expire mid-flight |
+
+Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name fails the whole request with `400 invalid_request`.
+
+**Success response (200 OK):**
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 300,
+  "subject": "legacy-user-8814",
+  "audience": "https://legacy.example.com",
+  "issuer": "https://vault42.example.com",
+  "roles": ["rider"],
+  "scopes": ["orders:read"],
+  "kid": "4f1c9e60-2a77-4e0f-9a3e-9c2b7f0d51aa",
+  "jti": "0f2b8c1d-6e4a-4c92-b8a1-2f7d3e5a90c4"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `access_token` | string | The signed assertion (RS256 JWT) |
+| `token_type` | string | Always `Bearer`. This is the RFC 6749 presentation scheme, **not** the JWT's own `token_type` claim, which is `mint` |
+| `expires_in` | int | Lifetime in seconds, granted rather than requested |
+| `subject` | string | Echo of the asserted subject |
+| `audience` | string | `VAULT_MINT_AUDIENCE`, the `aud` claim on the token |
+| `issuer` | string | `VAULT_ORIGIN`, the `iss` claim on the token |
+| `roles` | string[] | Granted roles. Omitted when none were requested |
+| `scopes` | string[] | Granted scopes. Omitted when none were requested |
+| `kid` | string | Key id the assertion was signed under, resolvable against `GET /.well-known/jwks.json` |
+| `jti` | string | The token's unique id, also recorded in the audit event so a downstream incident traces back to the exact assertion |
+
+**Claims on the minted token:**
+
+| Claim | Value |
+|-------|-------|
+| `iss` | `VAULT_ORIGIN` |
+| `aud` | `VAULT_MINT_AUDIENCE` (single-element array) |
+| `sub` | The caller-asserted subject, verbatim |
+| `iat`, `nbf` | Issue time. The token is valid immediately |
+| `exp` | Issue time plus the granted TTL |
+| `jti` | Per-token UUID |
+| `roles`, `scopes` | Granted values, omitted when empty |
+| `token_type` | `mint` |
+| `minted_by` | The `client_id` of the client that requested the mint. This is the attribution a relying party can act on: the `token_minted` audit event names the same client, but that row lives in vault42's database and an RP cannot read it |
+| `client_id` | **Absent, deliberately.** A minted token must not look like an authenticated service caller. The service document store treats the presence of this claim as proof of one and uses it as the ownership axis, so a minted token carrying it would be admitted as the minting client. That is why the attribution claim is spelled `minted_by`. See the security notes below |
+| `fingerprint`, `cnf` | Absent. A minted token is not device-bound and not sender-constrained |
+
+There is no refresh token and no stored session behind a minted token. It cannot be exchanged, rotated, extended or revoked; vault42 keeps no record of it beyond the audit event.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_request` | Body is not JSON, carries an unknown key, or exceeds 8 KiB |
+| 400 | `invalid_subject` | `subject` is empty, longer than 128 bytes, or outside the charset |
+| 400 | `invalid_ttl` | `ttl_seconds` is negative, or above `VAULT_MINT_MAX_TTL` |
+| 401 | `missing_authorization` | No `Authorization` header |
+| 401 | `invalid_authorization` | Header is not `Bearer <token>` |
+| 401 | `invalid_token` | Signature, issuer, audience or expiry check failed |
+| 401 | `invalid_token_type` | The token's `token_type` claim is not `Bearer`. This is what a minted token presented back to `/mint` hits |
+| 401 | `invalid_dpop_proof` | A `DPoP` header was presented and failed validation (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `dpop_proof_reused` | The proof's `jti` was seen before (`VAULT_DPOP_ENABLED=true` only) |
+| 401 | `unauthorized` | Defensive: claims absent behind the auth middleware. Not reachable through the mounted chain |
+| 403 | `insufficient_scope` | Token lacks the `mint:token` scope |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim, so it is not a service client |
+| 403 | `role_not_permitted` | A requested role is outside `VAULT_MINT_ROLES`, or is `admin` or `super_admin` |
+| 403 | `scope_not_permitted` | A requested scope is outside `VAULT_MINT_SCOPES`, or is one of the vault42 capability scopes |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Signing or UUID generation failed |
+| 503 | `server_busy` | No signing key is currently available |
+| 503 | `rate_limiter_unavailable` | Rate-limiter backing store is down (fail-closed) |
+
+Roles and scopes are checked as whole sets: one bad member rejects the request rather than issuing a token with the rest. A signing oracle that quietly issues something other than what was requested hides the misconfiguration that produced the request.
+
+**Audit.** Every path, accepted and refused, writes one `token_minted` event. `user_id` holds the asserted subject and `client_id` the service that asserted it, so the log answers "who was spoken for, and by whom". Accepted mints record the `jti`, `kid`, `audience`, roles, scopes and lifetime at risk score 30; refusals record only the reason at risk score 45, because a client probing for roles it cannot mint is the early signal that its credential has been taken. The token itself is never logged. `token_minted` is a distinct event type from `login_success`, `token_refresh` and `client_auth` on purpose: the signature on a minted token is indistinguishable from any other, so the log is the only place the difference is recorded.
+
+`token_minted` is **not** in the critical-event set, so under a deployment that batches audit writes (`VAULT_AUDIT_FLUSH_INTERVAL > 0`, which is the embedded profile) a full buffer drops the event rather than writing it synchronously. On the default configuration the interval is `0` and every event is written inline. An operator who enables minting and batching together is choosing to lose mint attribution under load.
+
+**curl example (happy path):**
+
+```bash
+MINT_TOKEN=$(curl -sS -X POST https://vault42.example.com/client/token \
+  -u "$CLIENT_ID:$CLIENT_SECRET" -d "scope=mint:token" | jq -r .access_token)
+
+curl -X POST https://vault42.example.com/mint \
+  -H "Authorization: Bearer $MINT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"legacy-user-8814","roles":["rider"],"ttl_seconds":300}'
+```
+
+**curl example (instructive failure).** Asking for a role the operator did not allow-list is refused outright, not silently stripped:
+
+```bash
+curl -i -X POST https://vault42.example.com/mint \
+  -H "Authorization: Bearer $MINT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"legacy-user-8814","roles":["admin"]}'
+```
+
+```http
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"error": "role_not_permitted"}
+```
+
+`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time.
+
+**What a caller must understand before integrating.**
+
+- **This signs an assertion for a subject the caller merely claims.** Every other token vault42 issues follows an authentication vault42 performed: a password, a second factor, a social callback, a client secret. A minted token follows nothing. A verifier cannot tell the difference from the signature, so whoever holds the mint credential can speak as any subject to every service that trusts vault42's JWKS. Treat the credential as equivalent to the signing key's blast radius, not as an API key.
+- **The audience must differ from the vault42 issuer, and startup enforces it.** A minted token carrying vault42's own audience would satisfy vault42's own audience validation, leaving `token_type` as the single control between a subject assertion and a session. `config.Validate()` refuses that configuration before the dev-profile short-circuit, and `service.NewMintService` refuses it again.
+- **Minted tokens are structurally rejected by vault42 itself.** The `token_type` claim is `mint`, which is not in the allow-list vault42's own auth middleware accepts (`Bearer`, plus `2fa_challenge` on the 2FA verify routes), and the audience is not vault42's. Either check alone stops a minted token at vault42's door; both are enforced. Without this, a mint credential would be full account takeover of every vault42 user: mint for any subject, then read the identity profile, download the blobs, delete the account.
+- **Admin-tier roles and vault42 capability scopes cannot be minted.** `admin` and `super_admin` are refused unconditionally. So are `mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read` and `admin:write` -- a minted token carrying one of those would let the holder pivot from "assert a subject downstream" into "operate vault42's privileged endpoints as that subject".
+- **`client_id` is deliberately absent from the claims.** Setting it would make a minted token indistinguishable from a client-credentials token to any code that treats the claim's presence as proof of a service caller, including the service document store, which asserts exactly that. Attribution for the minting client lives in the audit event, where it cannot be replayed. A downstream verifier must therefore not use `client_id` to decide anything about a minted token, and must not assume its absence means "user token".
+- **Lifetimes are the only revocation.** A minted token cannot be revoked before it expires. The hard ceiling is 15 minutes regardless of configuration, enforced in the service constructor rather than left to the operator, and the default is 5.
+- **Downstream verifiers should pin all three.** Check `iss` against `VAULT_ORIGIN`, `aud` against your own resource identifier, and `token_type == "mint"` if you accept both minted and self-authenticated tokens. Accepting a token on signature and `iss` alone re-opens the confusion the separate audience and type exist to prevent.
+
+---
+
+### Service Documents
+
+A namespaced JSON document store with an ownership axis: a registered service client writes documents scoped to the triple `(itself, a subject, a key)`, and by default nothing else can read them. It exists so a service can keep small structured records about a user without owning a schema migration for every new per-user boolean.
+
+Mounted **only** when `VAULT_SVCDOC_ENABLED=true`; otherwise the four routes do not exist and `ServeMux` answers `404` in `text/plain`. Off by default because this is new surface reachable by every existing client-credentials holder, so enabling it is an explicit operator decision rather than a consequence of upgrading. The shared visibility tier is a second, separate switch (`VAULT_SVCDOC_SHARED_ENABLED`).
+
+**Authentication:** Bearer access token from `POST /client/token`, carrying `svcdoc:read` (reads) or `svcdoc:write` (writes). Every handler additionally requires a non-empty `client_id` claim.
+**Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("svcdoc:read" | "svcdoc:write")` -> DPoP wrapper -> handler (`internal/server/server.go:760-769`). No fingerprint verification: this is a machine endpoint.
+**DPoP:** the wrapper is a no-op unless `VAULT_DPOP_ENABLED=true`. With the flag on, the token decides: `POST /client/token` **is** a DPoP issuance path (`internal/server/server.go:560`), so a client-credential token minted with a proof carries `cnf.jkt` and these routes refuse it without a matching one. A token minted without a proof carries no `cnf.jkt` and passes through with no `DPoP` header. See `spec.md` section 0.6.2.
+**Rate limit:** 60 per minute on `PUT` and `DELETE`, 300 per minute on both `GET`s, keyed by the authenticated `client_id`. Not fail-closed: these routes release only what the caller itself wrote, and a cache blip must not take profile reads down across every consuming service. As with `POST /mint`, the limiter runs inside the auth middleware, so the bucket is the client id read from the validated claims; the per-client key function's source-IP fallback is unreachable, because the auth middleware rejects a claimless request first.
+**Max body:** the `/service/documents` prefix is exempt from the global 8 KiB cap, so a 64 KiB document is not truncated mid-transfer with no useful error. `PUT` re-applies its own limit of `VAULT_SVCDOC_MAX_SIZE` + 1 KiB.
+
+**Storage model.**
+
+- Documents are AES-256-GCM encrypted at rest, never plaintext JSONB. The AAD is `svcdoc:<client_id>:<subject_hash>:<doc_key>`, so a row copied between clients, subjects or keys fails to decrypt rather than silently changing owner.
+- The subject is stored as an HMAC pseudonym, never in the clear, so the table does not enumerate which users a service holds records about.
+- One row per `(client_id, subject_hash, doc_key)`. A `PUT` to an existing triple is an `UPDATE`, never a second row.
+- Ownership is a SQL predicate on every request-path read, not a comparison performed after fetching a row.
+- Erasure of a vault42 account removes every document held about that subject across every owning service. `GET /user/data-export` returns them **decrypted, including private ones**: a service's privacy from other services is not privacy from the data subject. Documents under `_global` are excluded from the export, since they belong to no subject.
+
+**Path parameters.**
+
+| Parameter | Constraints | Description |
+|-----------|-------------|-------------|
+| `{subject}` | 1--128 bytes, `^[A-Za-z0-9][A-Za-z0-9._@-]*$`, or the literal `_global` | Who the document is about. Percent-encoded separators decode into this segment before validation, so `%2F` produces a `/` that the charset then rejects |
+| `{key}` | 1--128 bytes, `^[a-z0-9]+([._-][a-z0-9]+)*$` | Lowercase segments joined by `.`, `_` or `-`. Mirrors the `CHECK` constraint in `migrations/014_service_documents.sql`, so a bad key is a `400` rather than a constraint violation surfacing as a `500`. It is the identity store's dynamic-namespace charset widened with `_` and `-`, so every identity key is a legal document key but not the reverse |
+
+**`_global` is the sentinel subject** for documents that belong to a service rather than to any user: feature flags, per-service settings. It is a sentinel rather than a `NULL` subject because PostgreSQL treats `NULL`s as distinct in a unique index, so a nullable column would silently permit duplicate `(client_id, NULL, doc_key)` rows. It cannot collide with a real subject, because a real subject must start with an alphanumeric and this one starts with an underscore. Global documents are written to the audit log with an empty `user_id` rather than the sentinel, and are excluded from every subject's data export.
+
+**Visibility** is a string enum, not a boolean, so a later tier (an explicit grantee allow-list) is an added value rather than a changed field type.
+
+| Value | Meaning |
+|-------|---------|
+| `private` | Readable only by the writing client. The default on every write, including when the parameter is absent |
+| `shared` | Readable by any client holding `svcdoc:read`, for the same subject and key. Rejected with `403 shared_visibility_disabled` unless `VAULT_SVCDOC_SHARED_ENABLED=true` |
+
+**Quotas.**
+
+| Limit | Default | Config | Scope |
+|-------|---------|--------|-------|
+| Bytes per document | 65536 | `VAULT_SVCDOC_MAX_SIZE` | Measured on the canonical encoding, checked before and after canonicalisation |
+| Documents per subject | 32 | `VAULT_SVCDOC_MAX_PER_SUBJECT` | Per `(owning client, subject)`. Only charged when creating; a replacement does not consume a second slot |
+| Stored bytes per subject | 1048576 | `VAULT_SVCDOC_QUOTA_BYTES` | Summed across **every** owning client, so one user's footprint is bounded no matter how many services write about them. Counts ciphertext, so it is slightly larger than the document body |
+
+Quota is evaluated against the state the write would produce, so a replacement is not charged twice. Both checks run before the row is written; there is no compensating delete.
+
+---
+
+#### PUT /service/documents/{subject}/{key}
+
+Create or replace a document. This is a full replace: there is no merge, so a caller changing one field reads, edits and writes the whole document.
+
+**Authentication:** Bearer token with `svcdoc:write` and a `client_id` claim
+**Rate limit:** 60 per minute
+
+**Query parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `visibility` | `private`, `shared` | `private` | An absent or empty value is `private`. Any other value is a `400` |
+
+**Request body:** the document itself, `Content-Type: application/json`. It is not decoded through the strict decoder every other endpoint uses, because there is no fixed field set to reject unknown members against. It must instead satisfy:
+
+- top level is a JSON **object**. An array or a scalar is rejected: it leaves no room for a future merge-patch endpoint and makes the stored shape unpredictable;
+- valid UTF-8, checked on the raw bytes. The JSON decoder replaces invalid UTF-8 with U+FFFD as it reads, so by the time a token is in hand the evidence is gone and the document would round-trip differently than it was submitted;
+- nesting **at most 32 levels**. `encoding/json` has no depth limit, and a 64 KiB body of `[` characters is roughly 32 thousand levels; unmarshalling it recurses that deep and takes the process down. Depth is therefore bounded on the token stream, before the decoder ever builds a value;
+- **at most 1024 keys** in total across the whole document. This bounds decode cost independently of byte size: a document of tiny keys is cheap in bytes and expensive in allocations;
+- **no duplicate keys** within any one object. `encoding/json` decodes a repeated key last-wins, so such a document round-trips differently than it was submitted;
+- nothing after the closing brace. Trailing content is a second document, not whitespace.
+
+The stored form is canonical: keys sorted, HTML escaping off (it would rewrite `<`, `>` and `&` inside string values into `\u00xx` forms, so a stored document would not match what the service submitted), and numbers carried as literals so a large integer or a high-precision decimal is stored exactly as written rather than round-tripped through a `float64`. `size_bytes` is measured on that canonical encoding, which may differ from the submitted byte count.
+
+**Success response (201 Created on create, 200 OK on replace):**
+
+```json
+{
+  "key": "loyalty",
+  "owner_id": "c1f0a9d2-3b44-4a17-9f2e-7d0b6c8e5411",
+  "visibility": "private",
+  "size_bytes": 84,
+  "stored_bytes": 112,
+  "created_at": "2026-08-13T09:14:02Z",
+  "updated_at": "2026-08-13T09:14:02Z"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | Echo of `{key}` |
+| `owner_id` | string | The writing client's id, always the caller |
+| `visibility` | string | `private` or `shared` |
+| `size_bytes` | int | Canonical plaintext size |
+| `stored_bytes` | int | Ciphertext size, which is what the per-subject byte quota charges |
+| `created_at` | string | First write of this triple, preserved across replacements |
+| `updated_at` | string | This write |
+
+The write response carries no `owner` name; only listings and exports resolve one.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_visibility` | `?visibility=` is neither `private`, `shared` nor empty |
+| 400 | `invalid_key` | `{key}` is empty, over 128 bytes, or outside the key charset |
+| 400 | `invalid_subject` | `{subject}` is over 128 bytes or outside the subject charset |
+| 400 | `invalid_document` | Body is empty or whitespace, not valid UTF-8, not a JSON object, malformed, deeper than 32 levels, over 1024 keys, carries a duplicate key, or has trailing content |
+| 400 | `missing_subject`, `missing_key` | Defensive: a path segment resolved empty. Not reachable through the mux, which redirects `//` and 404s an empty trailing segment |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:write` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 403 | `shared_visibility_disabled` | `?visibility=shared` while `VAULT_SVCDOC_SHARED_ENABLED` is off |
+| 409 | `quota_exceeded` | Would breach the document count for this `(client, subject)` or the byte budget for this subject |
+| 413 | `document_too_large` | Body exceeds `VAULT_SVCDOC_MAX_SIZE`, either at the reader or after canonicalisation |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Encryption, UUID generation or storage failed |
+
+**curl example (happy path):**
+
+```bash
+SVC_TOKEN=$(curl -sS -X POST https://vault42.example.com/client/token \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  --data-urlencode "scope=svcdoc:read svcdoc:write" | jq -r .access_token)
+SUBJECT=user-8c1d4f   # the vault42 user id, or the literal _global
+
+curl -X PUT "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tier":"gold","points":4210,"since":"2024-03-01"}'
+```
+
+**curl example (instructive failure).** A top-level array is not a document:
+
+```bash
+curl -i -X PUT "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '[{"tier":"gold"}]'
+```
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"error": "invalid_document"}
+```
+
+`invalid_document` is deliberately one code for every structural rejection. A caller debugging a rejected body should check the six rules above in order rather than expect the server to say which one it broke.
+
+Audited as `svcdoc_put`, recording the key, canonical size, visibility and whether the row was created. The body is never logged.
+
+---
+
+#### GET /service/documents/{subject}/{key}
+
+Read a document body.
+
+**Authentication:** Bearer token with `svcdoc:read` and a `client_id` claim
+**Rate limit:** 300 per minute
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `owner` | No | The **registered name** of the publishing client, as it appears in a listing's `owner` field. Disambiguates when more than one service publishes a shared document at the same key |
+
+**Resolution order.** Without `owner`: the caller's own document first, then a shared document published by another client. With `owner`: that client's row directly, which is returned only if it is the caller's own or is `shared`. Two clients sharing the same key and no `owner` given is `409 ambiguous_document` rather than an arbitrary pick.
+
+**Success response (200 OK):** the stored document body, verbatim, as `application/json`. It is not wrapped in an envelope.
+
+| Header | Description |
+|--------|-------------|
+| `X-Document-Owner` | The owning client's **id** (UUID), not its name |
+| `X-Document-Visibility` | `private` or `shared` |
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_key`, `invalid_subject` | Path segment outside its charset or over 128 bytes |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:read` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 404 | `document_not_found` | No readable document at that triple. Also covers a private document owned by another client, and an `owner` that names no registered client |
+| 409 | `ambiguous_document` | Two or more other clients publish a shared document at this key and no `owner` was named |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Decryption or storage failed |
+
+**A document owned by another client and not shared reports as absent, never as forbidden.** Distinguishing the two would make the store an oracle for "does service X hold a record at key K about user U", which is exactly the question the pseudonymised subject exists to make unanswerable. An `owner` naming a client that does not exist collapses to the same `404` for the same reason.
+
+**curl example:**
+
+```bash
+curl "https://vault42.example.com/service/documents/$SUBJECT/loyalty?owner=billing" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Audited as `svcdoc_get`, recording the key, the resolved owner id, and whether the document was the caller's own.
+
+---
+
+#### DELETE /service/documents/{subject}/{key}
+
+Delete the caller's own document. A client can never delete another client's row, shared or not.
+
+**Authentication:** Bearer token with `svcdoc:write` and a `client_id` claim
+**Rate limit:** 60 per minute
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_key`, `invalid_subject` | Path segment outside its charset or over 128 bytes |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:write` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 404 | `document_not_found` | The caller holds no document at that triple. Another client's shared document at the same key is not deletable and reports the same way |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Storage failed |
+
+The delete is not idempotent in its status code: a second `DELETE` of the same key returns `404 document_not_found`.
+
+**curl example:**
+
+```bash
+curl -X DELETE "https://vault42.example.com/service/documents/$SUBJECT/loyalty" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Audited as `svcdoc_delete`.
+
+---
+
+#### GET /service/documents/{subject}
+
+List the metadata of every document the caller may read for one subject, plus that subject's quota position. Bodies are never returned by a listing.
+
+**Authentication:** Bearer token with `svcdoc:read` and a `client_id` claim
+**Rate limit:** 300 per minute
+
+**Success response (200 OK):**
+
+```json
+{
+  "subject": "user-8c1d4f",
+  "documents": [
+    {
+      "key": "loyalty",
+      "owner": "billing",
+      "owner_id": "c1f0a9d2-3b44-4a17-9f2e-7d0b6c8e5411",
+      "visibility": "private",
+      "size_bytes": 84,
+      "stored_bytes": 112,
+      "mine": true,
+      "created_at": "2026-08-13T09:14:02Z",
+      "updated_at": "2026-08-13T09:14:02Z"
+    }
+  ],
+  "count": 1,
+  "quota": {
+    "used_bytes": 112,
+    "max_bytes": 1048576,
+    "used_count": 1,
+    "max_count": 32
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subject` | string | Echo of `{subject}` |
+| `documents` | array | The caller's own documents, then other clients' shared documents for the same subject. Always an array; `[]` when empty |
+| `documents[].key` | string | Document key |
+| `documents[].owner` | string | The owning client's registered name. **Omitted** when the client lookup fails, since the id is already present and the name is a convenience |
+| `documents[].owner_id` | string | The owning client's id |
+| `documents[].visibility` | string | `private` or `shared` |
+| `documents[].mine` | bool | Whether the caller owns this document |
+| `documents[].size_bytes` | int | Canonical plaintext size |
+| `documents[].stored_bytes` | int | Ciphertext size |
+| `documents[].created_at`, `documents[].updated_at` | string | RFC 3339 UTC, read back from the row |
+| `count` | int | Length of `documents` |
+| `quota.used_bytes` | int | Stored bytes held for this subject across **every** owning client |
+| `quota.max_bytes` | int | `VAULT_SVCDOC_QUOTA_BYTES` |
+| `quota.used_count` | int | Documents this caller holds for this subject, **not** the cross-client total |
+| `quota.max_count` | int | `VAULT_SVCDOC_MAX_PER_SUBJECT` |
+
+The two `used_` fields have different scopes on purpose, because the two limits do: the count is per `(client, subject)` and the byte budget is per subject. A caller that is well under `max_count` can still be refused with `quota_exceeded` because another service filled the byte budget.
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_subject` | `{subject}` is over 128 bytes or outside the subject charset |
+| 400 | `missing_subject` | Defensive: the segment resolved empty. Not reachable through the mux |
+| 401 | `missing_authorization`, `invalid_authorization`, `invalid_token`, `invalid_token_type` | Standard bearer-token failures |
+| 403 | `insufficient_scope` | Token lacks `svcdoc:read` |
+| 403 | `client_credentials_required` | Token has the scope but no `client_id` claim |
+| 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 500 | `internal_error` | Storage failed |
+
+A subject with no documents is `200` with an empty array, not `404`.
+
+**curl example:**
+
+```bash
+curl "https://vault42.example.com/service/documents/$SUBJECT" \
+  -H "Authorization: Bearer $SVC_TOKEN"
+```
+
+Listing is the only route that writes no audit event; it discloses no body and the read of a body is audited where it happens.
+
+**What a caller must understand before integrating.**
+
+- **Documents are private to the writing `client_id` by default.** Privacy is enforced as a SQL predicate on the request path, not as a check after fetching, and the failure mode is `404`, not `403`. Do not design around distinguishing "not there" from "not yours"; you cannot.
+- **The handler asserts `claims.ClientID != ""` and does not rely on the scope check alone.** `RequireScope` looks only at the `scopes` array. Today a user token can never carry a `svcdoc` scope, because every user-token issuance site hardcodes `["read","write"]`, so the scope check happens to be sufficient. That is an accident of the current code and not an invariant: a change to user-scope issuance would otherwise silently open a service-owned store to end-user tokens. The ownership axis of this store is the client id, so the handler asserts it directly. It is also why a minted token carries no `client_id`: such a token is already refused at the auth middleware for its `token_type` and its audience, and this check would refuse it again.
+- **`_global` is a real namespace, not a wildcard.** It is a subject like any other, with its own quota row, its own document count, and no relationship to any user. Writing user data under it removes that data from the subject's erasure cascade and from their data export.
+- **Sharing is a two-key decision.** A `shared` write needs both the operator flag and the explicit `?visibility=shared` parameter. Neither implies the other, and switching the flag off later does not retroactively unshare existing rows: it only refuses new shared writes.
+- **The 32-level depth bound and the 1024-key bound are validation, not tuning.** They are not operator-configurable and are not negotiable per client. A configuration document that needs 33 levels is a document that should be several documents.
+- **A subject's documents are personal data.** They ride the erasure cascade and appear decrypted in that subject's GDPR export, private ones included. Write nothing under a real subject that you would not hand to that person.
 
 ---
 
@@ -2573,6 +3387,252 @@ Delete a custom role from the catalog. Reserved roles cannot be deleted.
 
 **Permission:** `roles:delete`
 
+#### POST /admin/clients/{id}/rotate
+
+Issue a new secret for a service client and invalidate the old one immediately. The new secret is returned once and never again; only its Argon2id hash is stored.
+
+**Permission:** `clients:rotate`
+
+The path is `/rotate`. It is **not** `/rotate-secret` -- that is the name of the CLI verb (`rotate-client-secret`), and it was documented as a path by mistake before 1.0.0. A request to `/rotate-secret` 404s.
+
+**Success response (200 OK):**
+
+```json
+{"status": "rotated", "secret": "64-hex-character-secret"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_id` | No client id in the path |
+| 404 | `client_not_found` | No such client |
+| 500 | `internal_error` | Server error |
+
+Audited as `admin_client_rotate`.
+
+#### GET /admin/config
+
+Read the runtime key-value configuration entries held in `auth.admin_config`. This is a small runtime store; environment variables remain the primary configuration mechanism and are not editable through it.
+
+**Permission:** `config:read`
+
+**Success response (200 OK):**
+
+```json
+{"entries": [{"key": "maintenance_banner", "value": "..."}]}
+```
+
+#### PUT /admin/config/{key}
+
+Set one configuration key. The key is in the path and is shape-validated.
+
+**Permission:** `config:write`
+
+`PUT /admin/config` without a key is not a route and never was; it 404s.
+
+**Request body:**
+
+```json
+{"value": "some-value"}
+```
+
+**Success response (200 OK):**
+
+```json
+{"status": "updated", "key": "maintenance_banner"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_key` | No key in the path |
+| 400 | `invalid_key_format` | Key fails shape validation |
+| 400 | `invalid_request` | Malformed JSON body |
+| 500 | `internal_error` | Server error |
+
+Audited as `admin_config_change`.
+
+#### DELETE /admin/config/{key}
+
+Delete one configuration key.
+
+**Permission:** `config:write`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted", "key": "maintenance_banner"}
+```
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `missing_key` | No key in the path |
+| 500 | `internal_error` | Server error |
+
+#### GET /admin/metrics
+
+**Not implemented. Answers `501 not_implemented`.**
+
+The route is mounted and gated on `metrics:read` with nothing behind it. It previously answered `200 OK` with a placeholder body while being documented as "get operational metrics", which is the worst of the available options: monitoring reads it as healthy and a caller cannot tell an empty feed from a working one.
+
+Prometheus metrics for the main binary are at `GET /metrics`, gated on `VAULT_METRICS_ENABLED`. This endpoint is excluded from the stability contract (`spec.md` section 0.6), so implementing it later is not a breaking change.
+
+**Permission:** `metrics:read`
+
+### Admin Endpoints -- Email Branding
+
+Nine routes managing per-app white-label branding and template overrides for outbound auth email. `spec.md` section 10.3 describes the resolution order; `spec.md` section 0.9 states, at length, what the per-app model does **not** guarantee -- it is a branding selector, not a tenancy boundary.
+
+`email:read`, `email:write` and `email:delete` are service-wide permissions. They are not app-scoped: an admin who can edit one app's branding can edit every app's.
+
+`{app}` is a slug matching `^[a-z0-9][a-z0-9_-]{0,63}$`. `{name}` is one of the seven template names: `verification`, `password_reset`, `new_device`, `account_locked`, `2fa_setup`, `suspicious_activity`, `email_otp`.
+
+#### GET /admin/email-branding
+
+List every stored branding row.
+
+**Permission:** `email:read`
+
+**Success response (200 OK):**
+
+```json
+{"branding": [
+  {"app": "beon3", "app_name": "BeOn3", "logo_url": "https://cdn.example.com/beon3.png",
+   "primary_color": "#00FF42", "from_name": "BeOn3 Security", "from_address": "no-reply@beon3.example",
+   "updated_at": "2026-08-01T10:00:00Z", "updated_by": "admin@example.com"}
+]}
+```
+
+#### GET /admin/email-branding/{app}
+
+Read one app's branding row.
+
+**Permission:** `email:read`
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_app` | Slug fails shape validation |
+| 404 | `not_found` | No branding row for that app |
+
+#### PUT /admin/email-branding/{app}
+
+Create or replace one app's branding row. Any omitted or empty column falls back to the global branding at render time, so a partial row is valid.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"app_name": "BeOn3", "logo_url": "https://cdn.example.com/beon3.png",
+ "primary_color": "#00FF42", "from_name": "BeOn3 Security",
+ "from_address": "no-reply@beon3.example"}
+```
+
+`from_address` is constrained by `VAULT_EMAIL_FROM_ALLOWED_DOMAINS`, so an admin cannot point a tenant's mail at a domain the deployment does not control.
+
+**Success response (200 OK):** the stored row, in the shape `GET /admin/email-branding/{app}` returns.
+
+#### DELETE /admin/email-branding/{app}
+
+Remove one app's branding row. That app falls back to the global branding; there is no separate disable step.
+
+**Permission:** `email:delete`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
+#### GET /admin/email-templates
+
+List every stored template override across all apps.
+
+**Permission:** `email:read`
+
+**Success response (200 OK):**
+
+```json
+{"templates": [
+  {"app": "beon3", "template_name": "verification", "subject": "Confirm your BeOn3 account",
+   "html_content": "<p>...</p>", "text_content": "...", "enabled": true,
+   "updated_at": "2026-08-01T10:00:00Z", "updated_by": "admin@example.com"}
+]}
+```
+
+#### POST /admin/email-templates/preview
+
+Validate candidate template content and render it against sample data. Stores nothing.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"subject": "Confirm your {{.AppName}} account", "html_content": "<p>Hello {{.DisplayName}}</p>"}
+```
+
+**Success response (200 OK):**
+
+```json
+{"valid": true, "subject": "Confirm your BeOn3 account", "html": "<p>Hello Alice</p>", "text": "Hello Alice"}
+```
+
+Content that fails validation also returns `200`, with the failure in the body rather than as a status code -- this is a linter, not a write:
+
+```json
+{"valid": false, "error": "forbidden pattern: <script>"}
+```
+
+#### GET /admin/email-templates/{app}/{name}
+
+Read one template override.
+
+**Permission:** `email:read`
+
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_app` | Slug fails shape validation |
+| 400 | `invalid_template` | Not one of the seven known template names |
+| 404 | `not_found` | No override stored for that app and template |
+
+#### PUT /admin/email-templates/{app}/{name}
+
+Create or replace one template override.
+
+**Permission:** `email:write`
+
+**Request body:**
+
+```json
+{"subject": "Confirm your BeOn3 account", "html_content": "<p>...</p>",
+ "text_content": "...", "enabled": true}
+```
+
+Content passes the same forbidden-pattern validation as filesystem overrides: `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form action=...>`, `javascript:` URIs, `on*=` event handlers, and the Go template `call` and `js` directives are all rejected. Size is capped by `VAULT_MAX_EMAIL_TEMPLATE_SIZE`. `enabled` is a pointer field: omitting it leaves the current value unchanged.
+
+**Success response (200 OK):** the stored override.
+
+#### DELETE /admin/email-templates/{app}/{name}
+
+Remove one template override. That app falls back to the embedded default for that template.
+
+**Permission:** `email:delete`
+
+**Success response (200 OK):**
+
+```json
+{"status": "deleted"}
+```
+
 ---
 
 ### Well-Known
@@ -2625,7 +3685,9 @@ curl https://vault42.example.com/.well-known/jwks.json
 
 #### GET /.well-known/openid-configuration
 
-Return the OpenID Connect Discovery document.
+Return the issuer metadata document.
+
+**vault42 is not an OpenID Connect provider.** There is no authorization-code token endpoint, no ID token is issued to a relying party, `GET /user/profile` is not a UserInfo response, and `POST /auth/register` is end-user signup rather than RFC 7591 dynamic client registration. The document therefore states only what is true of this server, and is served at the conventional path so that a consumer looking for the key set finds it.
 
 **Authentication:** None
 
@@ -2634,21 +3696,16 @@ Return the OpenID Connect Discovery document.
 ```json
 {
   "issuer": "https://vault42.example.com",
-  "authorization_endpoint": "https://vault42.example.com/auth/oauth2/authorize",
-  "token_endpoint": "https://vault42.example.com/auth/login",
-  "userinfo_endpoint": "https://vault42.example.com/user/profile",
   "jwks_uri": "https://vault42.example.com/.well-known/jwks.json",
-  "registration_endpoint": "https://vault42.example.com/auth/register",
-  "scopes_supported": ["openid", "profile", "email"],
-  "response_types_supported": ["code"],
-  "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
-  "subject_types_supported": ["public"],
-  "id_token_signing_alg_values_supported": ["RS256"],
-  "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
-  "code_challenge_methods_supported": ["S256"],
-  "dpop_signing_alg_values_supported": ["RS256", "ES256"]
+  "access_token_signing_alg_values_supported": ["RS256"]
 }
 ```
+
+`access_token_signing_alg_values_supported` is deliberately not named `id_token_signing_alg_values_supported`, because no ID token is ever issued. The algorithm is also published per key in the JWKS, which stays correct if a key of another algorithm is added; the summary key exists so a consumer can pin an expected algorithm before fetching the key set.
+
+Keys that were previously advertised and are now absent -- `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `registration_endpoint`, `scopes_supported`, `response_types_supported`, `grant_types_supported`, `subject_types_supported`, `code_challenge_methods_supported`, `token_endpoint_auth_methods_supported`, `dpop_signing_alg_values_supported` -- were each untrue of this server. `spec.md` section 20 lists why, one by one. They can be added back once the corresponding behaviour exists, which is an additive change; removing them later would not have been.
+
+Clients that only need to verify a vault42-issued token should fetch `/.well-known/jwks.json` directly.
 
 **curl example:**
 
@@ -2660,64 +3717,148 @@ curl https://vault42.example.com/.well-known/openid-configuration
 
 ## Endpoint Summary
 
-| Method | Path | Auth | Rate Limit | Description |
-|--------|------|------|------------|-------------|
-| `GET` | `/healthz` | None | -- | Liveness probe |
-| `GET` | `/readyz` | None | -- | Readiness probe |
-| `GET` | `/metrics` | None | -- | Prometheus metrics (requires `VAULT_METRICS_ENABLED=true`) |
-| `POST` | `/auth/register` | None | 3/hour | Register new user |
-| `GET` | `/auth/verify-email` | None | 10/hour | Verify email address |
-| `POST` | `/auth/login` | None | 5/15min | Authenticate user |
-| `POST` | `/auth/refresh` | Cookie | 30/min | Refresh access token |
-| `POST` | `/auth/logout` | Bearer | -- | Revoke all sessions |
-| `POST` | `/auth/confirm` | Bearer | 5/15min | Confirm password for elevated access |
-| `POST` | `/auth/password/reset` | None | 3/hour | Request password reset |
-| `POST` | `/auth/password/reset/confirm` | None | 3/hour | Complete password reset |
-| `POST` | `/user/password` | Bearer | -- | Change password |
-| `GET` | `/user/profile` | Bearer | -- | Get user profile |
-| `GET` | `/user/sessions` | Bearer | -- | List active sessions |
-| `DELETE` | `/user/sessions/{id}` | Bearer | -- | Revoke a session |
-| `DELETE` | `/user/sessions` | Bearer | -- | Revoke all sessions |
-| `GET` | `/user/devices` | Bearer | -- | List devices |
-| `PATCH` | `/user/devices/{id}` | Bearer | -- | Rename device |
-| `DELETE` | `/user/devices/{id}` | Bearer | -- | Remove device |
-| `GET` | `/auth/2fa/status` | Bearer | -- | Get MFA status |
-| `POST` | `/auth/2fa/totp/setup` | Bearer + Confirm | -- | Begin TOTP setup |
-| `POST` | `/auth/2fa/totp/verify` | Bearer/Challenge | 5/5min | Verify TOTP code |
-| `DELETE` | `/auth/2fa/totp` | Bearer + Confirm | -- | Disable TOTP |
-| `POST` | `/auth/2fa/webauthn/register/begin` | Bearer + Confirm | -- | Begin WebAuthn registration |
-| `POST` | `/auth/2fa/webauthn/register/finish` | Bearer + Confirm | -- | Complete WebAuthn registration |
-| `POST` | `/auth/2fa/webauthn/verify/begin` | Bearer/Challenge | -- | Begin WebAuthn verification |
-| `POST` | `/auth/2fa/webauthn/verify/finish` | Bearer/Challenge | -- | Complete WebAuthn verification |
-| `GET` | `/auth/2fa/webauthn/credentials` | Bearer | -- | List WebAuthn credentials |
-| `DELETE` | `/auth/2fa/webauthn/credentials/{id}` | Bearer + Confirm | -- | Delete WebAuthn credential |
-| `POST` | `/auth/2fa/backup-codes` | Bearer + Confirm | -- | Generate backup codes |
-| `POST` | `/auth/2fa/email-otp/verify` | Bearer/Challenge | 5/5min | Verify email OTP code |
-| `POST` | `/auth/2fa/email-otp/resend` | Bearer/Challenge | 5/5min | Resend email OTP code |
-| `GET` | `/user/identity` | Bearer | -- | Get identity profile |
-| `PUT` | `/user/identity` | Bearer | -- | Upsert identity profile |
-| `DELETE` | `/user/identity` | Bearer | -- | Delete identity profile |
-| `POST` | `/user/blobs` | Bearer | -- | Upload encrypted blob |
-| `GET` | `/user/blobs` | Bearer | -- | List blobs + quota |
-| `GET` | `/user/blobs/{id}` | Bearer | -- | Download decrypted blob |
-| `DELETE` | `/user/blobs/{id}` | Bearer | -- | Delete blob |
-| `GET` | `/auth/oauth2/authorize` | None | -- | Start OAuth2 flow |
-| `GET` | `/auth/oauth2/callback/{provider}` | None | -- | OAuth2 callback |
-| `POST` | `/auth/oauth2/exchange` | None | -- | Exchange OAuth2 one-time code for tokens |
-| `POST` | `/client/token` | Basic | 10/min | Client credentials grant |
-| `POST` | `/kms/unwrap` | Scope `kms:unwrap` | per-IP | KEK envelope-unwrap oracle (only when `KMS_ROOT_KEY_FILE` set) |
-| `GET` | `/.well-known/jwks.json` | None | -- | JWKS public keys |
-| `GET` | `/.well-known/openid-configuration` | None | -- | OpenID Connect discovery |
+**103 API routes: 62 on the main binary, 41 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
+
+The **Mounted when** column is the answer to "why does this endpoint 404 in production". A route in a group that is not mounted does not exist, and `net/http.ServeMux` answers `404` in `text/plain` -- not the JSON error envelope.
 
 **Auth column key:**
-- **None** -- Public endpoint, no authentication required
-- **Cookie** -- Requires `refresh_token` HttpOnly cookie
-- **Bearer** -- Requires `Authorization: Bearer <token>` header with fingerprint verification
-- **Bearer + Confirm** -- Requires Bearer token + recent password confirmation via `POST /auth/confirm`
-- **Bearer/Challenge** -- Accepts both standard Bearer tokens and 2FA challenge tokens
+
+- **None** -- public endpoint, no authentication required
+- **Cookie** -- requires the `refresh_token` HttpOnly cookie
 - **Basic** -- HTTP Basic authentication with client credentials
-- **Scope `kms:unwrap`** -- Bearer client-credential token carrying the `kms:unwrap` scope; DPoP-bound when `VAULT_DPOP_ENABLED=true`
-- **Admin** -- Key management is handled by the admin gateway (mTLS + RBAC); not exposed on the main vault42 binary
+- **Bearer** -- requires `Authorization: Bearer <token>` with fingerprint verification
+- **Bearer + Confirm** -- Bearer token plus a recent password confirmation via `POST /auth/confirm`
+- **Bearer/Challenge** -- accepts both standard Bearer tokens and 2FA challenge tokens
+- **Bearer + password** -- Bearer token plus the current password re-submitted in the request body
+- **Scope `<name>`** -- Bearer client-credential token carrying that scope. `mint:token` and both `svcdoc:*` scopes additionally require the token to carry a `client_id` claim, which no user token does; without one the request is `403 client_credentials_required` even though the scope check passed
+- **Session** -- admin gateway session cookie, behind mTLS and loopback-only enforcement. The permission the session's role must hold is in the Permission column.
+
+**Rate limit column.** `POST /mint` and the `/service/documents/*` routes are keyed by the authenticated `client_id`, not by source IP: their limiters are mounted inside the authentication middleware, so the per-client key function reads the client from the validated claims. Its source-IP fallback is unreachable, because a claimless request is rejected by the auth middleware first. See the endpoint sections above.
+
+<!-- BEGIN ENDPOINT SUMMARY -->
+
+### Main binary
+
+| Method | Path | Auth | Rate limit | Mounted when | Description |
+|--------|------|------|------------|--------------|-------------|
+| `GET` | `/healthz` | None | -- | Always | Liveness probe |
+| `GET` | `/readyz` | None | -- | Always | Readiness probe (pings DB + cache) |
+| `GET` | `/metrics` | None | -- | `VAULT_METRICS_ENABLED` | Prometheus metrics |
+| `GET` | `/auth/capabilities` | None | -- | Always | Server capability discovery |
+| `POST` | `/auth/register` | None | 3/hour | Always | Register a new user; `403 registration_disabled` unless enabled |
+| `POST` | `/auth/login` | None | 5/15min | Always | Authenticate; may return a 2FA challenge |
+| `POST` | `/auth/refresh` | Cookie | 30/min | Always | Rotate the refresh family |
+| `POST` | `/auth/logout` | Bearer | -- | Always | Revoke every session |
+| `GET` | `/auth/verify-email` | None | 10/hour | Always | Verify an email address |
+| `POST` | `/auth/confirm` | Bearer | 5/15min | Always | Confirm password for elevated access |
+| `POST` | `/auth/password/reset` | None | 3/hour | Always | Request a password reset |
+| `POST` | `/auth/password/reset/confirm` | None | 3/hour | Always | Complete a password reset |
+| `POST` | `/user/password` | Bearer | 5/15min | Always | Change password |
+| `GET` | `/user/profile` | Bearer | -- | Always | Get user profile |
+| `PUT` | `/user/profile` | Bearer | -- | Always | Partial profile update |
+| `GET` | `/user/sessions` | Bearer | -- | Always | List active sessions |
+| `DELETE` | `/user/sessions` | Bearer | -- | Always | Revoke all sessions |
+| `DELETE` | `/user/sessions/{id}` | Bearer | -- | Always | Revoke one session |
+| `GET` | `/user/devices` | Bearer | -- | Always | List devices |
+| `PATCH` | `/user/devices/{id}` | Bearer | -- | Always | Rename a device |
+| `DELETE` | `/user/devices/{id}` | Bearer | -- | Always | Remove a device |
+| `DELETE` | `/user/account` | Bearer + password | 3/hour, fail-closed | Account-recovery repository wired | Self-service erasure with escrow |
+| `GET` | `/user/data-export` | Bearer | 5/min | Always | GDPR Art. 15/20 data export |
+| `GET` | `/user/social` | Bearer | -- | Always | List linked federated identities |
+| `DELETE` | `/user/social/{id}` | Bearer | 5/15min | Always | Unlink a provider and its stored tokens |
+| `GET` | `/auth/2fa/status` | Bearer | -- | Always | MFA status and `mfa_methods` |
+| `POST` | `/auth/2fa/totp/setup` | Bearer + Confirm | -- | Always | Begin TOTP setup |
+| `POST` | `/auth/2fa/totp/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Verify a TOTP code |
+| `DELETE` | `/auth/2fa/totp` | Bearer + Confirm | -- | Always | Disable TOTP |
+| `POST` | `/auth/2fa/webauthn/register/begin` | Bearer + Confirm | -- | Always | Begin WebAuthn registration |
+| `POST` | `/auth/2fa/webauthn/register/finish` | Bearer + Confirm | -- | Always | Complete WebAuthn registration |
+| `POST` | `/auth/2fa/webauthn/verify/begin` | Bearer/Challenge | -- | Always | Begin WebAuthn verification |
+| `POST` | `/auth/2fa/webauthn/verify/finish` | Bearer/Challenge | -- | Always | Complete WebAuthn verification |
+| `GET` | `/auth/2fa/webauthn/credentials` | Bearer | -- | Always | List WebAuthn credentials |
+| `DELETE` | `/auth/2fa/webauthn/credentials/{id}` | Bearer + Confirm | -- | Always | Delete a WebAuthn credential |
+| `POST` | `/auth/2fa/backup-codes` | Bearer + Confirm | -- | Always | Generate backup codes |
+| `POST` | `/auth/2fa/backup-code/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Consume a backup code |
+| `POST` | `/auth/2fa/email-otp/verify` | Bearer/Challenge | 5/5min, fail-closed | Always | Verify an email OTP code |
+| `POST` | `/auth/2fa/email-otp/resend` | Bearer/Challenge | 5/5min, fail-closed | Always | Resend an email OTP code |
+| `GET` | `/user/identity` | Bearer | 30/min | Identity store enabled | Get identity profile |
+| `PUT` | `/user/identity` | Bearer | 10/min | Identity store enabled | Upsert identity profile |
+| `DELETE` | `/user/identity` | Bearer + Confirm | 5/15min | Identity store enabled | Delete identity profile |
+| `POST` | `/user/marketing/unsubscribe` | Bearer | 30/min | Identity store enabled | Withdraw marketing consent |
+| `POST` | `/user/blobs` | Bearer | 10/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Upload an encrypted blob |
+| `GET` | `/user/blobs` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | List blobs and quota |
+| `GET` | `/user/blobs/{id}` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob |
+| `DELETE` | `/user/blobs/{id}` | Bearer + Confirm | 5/15min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob |
+| `PUT` | `/user/blobs/named/{name}` | Bearer | 10/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Create or replace a named blob |
+| `GET` | `/user/blobs/named/{name}` | Bearer | 30/min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Download a blob by name |
+| `DELETE` | `/user/blobs/named/{name}` | Bearer + Confirm | 5/15min | `VAULT_BLOB_QUOTA_BYTES` > 0 | Delete a blob by name |
+| `GET` | `/auth/oauth2/authorize` | None | 10/min | >= 1 provider configured | Start a social login |
+| `GET` | `/auth/oauth2/callback/{provider}` | None | 10/min | >= 1 provider configured | Provider redirect target |
+| `POST` | `/auth/oauth2/exchange` | None | 10/min | >= 1 provider configured | Exchange the one-time code for tokens |
+| `POST` | `/client/token` | Basic | 10/min | Always | Client-credentials grant |
+| `POST` | `/kms/unwrap` | Scope `kms:unwrap` | 30/min, fail-closed | `KMS_ROOT_KEY_FILE` set | KEK envelope-unwrap oracle |
+| `POST` | `/mint` | Scope `mint:token` | 60/min per client, fail-closed | `VAULT_MINT_ENABLED` | Sign a token for a caller-asserted subject |
+| `PUT` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Store a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}/{key}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | Read a service-scoped JSON document |
+| `DELETE` | `/service/documents/{subject}/{key}` | Scope `svcdoc:write` | 60/min per client | `VAULT_SVCDOC_ENABLED` | Delete a service-scoped JSON document |
+| `GET` | `/service/documents/{subject}` | Scope `svcdoc:read` | 300/min per client | `VAULT_SVCDOC_ENABLED` | List documents visible to the caller for a subject |
+| `GET` | `/.well-known/jwks.json` | None | -- | Always | JWKS public keys |
+| `GET` | `/.well-known/openid-configuration` | None | -- | Always | Issuer metadata |
+
+### Admin gateway
+
+Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md` covers deployment, the killswitch and the full RBAC matrix.
+
+| Method | Path | Auth | Permission | Mounted when | Description |
+|--------|------|------|------------|--------------|-------------|
+| `POST` | `/admin/auth/login` | None | -- | Always | Password + optional TOTP, 10/min/IP |
+| `POST` | `/admin/auth/logout` | Session | -- | Always | Revoke the current admin session |
+| `GET` | `/admin/status` | Session | -- | Always | Current admin identity and 2FA state |
+| `POST` | `/admin/admins/me/totp/setup` | Session | -- | Always | Provision the caller's TOTP secret |
+| `POST` | `/admin/admins/me/totp/verify` | Session | -- | Always | Verify and enable the caller's TOTP |
+| `GET` | `/admin/keys` | Session | `keys:list` | Always | List signing key metadata |
+| `POST` | `/admin/keys/rotate` | Session | `keys:rotate` | Always | Generate a key, retire the old one |
+| `DELETE` | `/admin/keys/{kid}` | Session | `keys:revoke` | Always | Remove a key from the JWKS |
+| `GET` | `/admin/users` | Session | `users:list` | Always | Look a user up by `?q=` (id or email) |
+| `GET` | `/admin/users/{id}` | Session | `users:read` | Always | User detail |
+| `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
+| `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
+| `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
+| `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
+| `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
+| `GET` | `/admin/sessions` | Session | `sessions:list` | Always | List active refresh families |
+| `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
+| `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log |
+| `GET` | `/admin/clients` | Session | `clients:list` | Always | List service clients |
+| `GET` | `/admin/clients/{id}` | Session | `clients:read` | Always | Client detail |
+| `POST` | `/admin/clients` | Session | `clients:create` | Always | Create a client, secret shown once |
+| `POST` | `/admin/clients/{id}/revoke` | Session | `clients:revoke` | Always | Deactivate a client |
+| `POST` | `/admin/clients/{id}/rotate` | Session | `clients:rotate` | Always | Rotate the client secret |
+| `GET` | `/admin/roles` | Session | `roles:list` | Always | Application-role catalog |
+| `POST` | `/admin/roles` | Session | `roles:create` | Always | Create a custom application role |
+| `DELETE` | `/admin/roles/{name}` | Session | `roles:delete` | Always | Delete a non-reserved role |
+| `GET` | `/admin/email-branding` | Session | `email:read` | Always | All per-app branding rows |
+| `GET` | `/admin/email-branding/{app}` | Session | `email:read` | Always | One app's branding |
+| `PUT` | `/admin/email-branding/{app}` | Session | `email:write` | Always | Upsert one app's branding |
+| `DELETE` | `/admin/email-branding/{app}` | Session | `email:delete` | Always | Drop back to global branding |
+| `GET` | `/admin/email-templates` | Session | `email:read` | Always | All template overrides |
+| `POST` | `/admin/email-templates/preview` | Session | `email:write` | Always | Validate and render against sample data |
+| `GET` | `/admin/email-templates/{app}/{name}` | Session | `email:read` | Always | One template override |
+| `PUT` | `/admin/email-templates/{app}/{name}` | Session | `email:write` | Always | Upsert one template override |
+| `DELETE` | `/admin/email-templates/{app}/{name}` | Session | `email:delete` | Always | Drop back to the default template |
+| `GET` | `/admin/config` | Session | `config:read` | Always | Read runtime config entries |
+| `PUT` | `/admin/config/{key}` | Session | `config:write` | Always | Set one config key |
+| `DELETE` | `/admin/config/{key}` | Session | `config:write` | Always | Delete one config key |
+| `GET` | `/admin/metrics` | Session | `metrics:read` | Always | **Unimplemented; answers `501 not_implemented`** |
+| `GET` | `/admin/admins` | Session | `admins:manage` | Always | List admin accounts |
+| `POST` | `/admin/admins` | Session | `admins:create` | Always | Create an admin (20-char minimum password) |
+| `POST` | `/admin/admins/{id}/revoke` | Session | `admins:revoke` | Always | Revoke an admin; self-revocation refused |
+
+<!-- END ENDPOINT SUMMARY -->
+
+### Surfaces that are not API routes
+
+Thirteen further registrations exist and are outside this table and outside the stability contract: the embedded SPA catch-all `/` on the main binary (only when `VAULT_SERVE_FRONTEND` is set or the honeypot profile is active), and the admin gateway's ten HTML console pages plus `GET /admin/static/`. `spec.md` section 16.3 lists them.
 
 ---
 

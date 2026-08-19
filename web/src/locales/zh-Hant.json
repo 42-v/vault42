@@ -356,5 +356,6 @@
   "error.forbidden": "您沒有執行此操作的權限。",
   "error.code_already_used": "此代碼已被使用。請使用新的代碼。",
   "error.password_recently_used": "您最近使用過此密碼。請選擇其他密碼。",
-  "error.no_webauthn_credentials": "此帳戶未註冊任何安全金鑰。"
+  "error.no_webauthn_credentials": "此帳戶未註冊任何安全金鑰。",
+  "error.password_reset_required": "此帳戶必須重設密碼。我們已透過電子郵件寄給您重設連結。"
 }

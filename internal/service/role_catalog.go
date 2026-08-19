@@ -20,6 +20,16 @@ type RoleCatalog struct {
 	mu       sync.RWMutex
 	names    map[string]struct{}
 	loadedAt time.Time
+
+	// refreshMu admits one refresher at a time. Without it the TTL boundary is a
+	// cache stampede: every caller in flight sees the stale entry in the same
+	// instant and each issues its own ListNames, so the query rate against the
+	// catalog table scales with concurrent logins instead of with the TTL. It is
+	// held across the repository call deliberately. The callers it blocks would
+	// otherwise have been queued on the connection pool behind their own copy of
+	// the same query, so none of them waits longer, and they all leave with the
+	// freshly loaded set rather than a stale one.
+	refreshMu sync.Mutex
 }
 
 // NewRoleCatalog creates a catalog cache backed by repo, refreshing every ttl
@@ -31,20 +41,35 @@ func NewRoleCatalog(repo repository.AppRoleRepository, ttl time.Duration) *RoleC
 	return &RoleCatalog{repo: repo, ttl: ttl}
 }
 
-// current returns the cached name set, refreshing it if stale. On refresh error
-// it returns the last known set (possibly nil if never loaded).
-func (c *RoleCatalog) current(ctx context.Context) map[string]struct{} {
+// cached returns the cached name set and whether it is still within the TTL.
+func (c *RoleCatalog) cached() (set map[string]struct{}, fresh bool) {
 	c.mu.RLock()
-	fresh := c.names != nil && time.Since(c.loadedAt) < c.ttl
-	cached := c.names
-	c.mu.RUnlock()
-	if fresh {
-		return cached
+	defer c.mu.RUnlock()
+	return c.names, c.names != nil && time.Since(c.loadedAt) < c.ttl
+}
+
+// current returns the cached name set, refreshing it if stale. Exactly one
+// caller performs a given refresh; the rest wait for it and receive its result.
+// On refresh error it returns the last known set (possibly nil if never
+// loaded).
+func (c *RoleCatalog) current(ctx context.Context) map[string]struct{} {
+	if set, fresh := c.cached(); fresh {
+		return set
+	}
+
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	// The entry may have been refreshed by whoever held refreshMu while this
+	// caller was queued behind it. Without this second look the serialization
+	// would only spread the stampede out in time rather than collapse it.
+	if set, fresh := c.cached(); fresh {
+		return set
 	}
 
 	list, err := c.repo.ListNames(ctx)
 	if err != nil {
-		return cached // fail-open: keep last known
+		set, _ := c.cached()
+		return set // fail-open: keep last known
 	}
 	set := make(map[string]struct{}, len(list))
 	for _, n := range list {

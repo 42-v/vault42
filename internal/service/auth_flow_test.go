@@ -178,8 +178,9 @@ func TestLoginMFA_TOTPChallengeTokenExpiry(t *testing.T) {
 
 func TestLoginMFA_TOTPStatusCheckError(t *testing.T) {
 	hash := validPasswordHash(t)
-	// MFA service that returns error for GetStatus (internally, repo errors are swallowed)
-	// Since MFA errors are logged but not propagated, login should still proceed
+	// Every MFA lookup errors, so the status is undetermined. Login must fail
+	// closed rather than read the empty method set as "no second factor" and
+	// issue tokens; this test used to assert the opposite (the fail-open bug).
 	mfaSvc := NewMFAService(
 		&mocks.MockTOTPRepo{
 			GetByUserIDFn: func(_ context.Context, _ string) (*model.TOTPSecret, error) {
@@ -208,15 +209,13 @@ func TestLoginMFA_TOTPStatusCheckError(t *testing.T) {
 		}
 	})
 
-	// Even with MFA repo errors, MFA status shows no methods, so login proceeds
+	// An undetermined MFA status must refuse the login, not proceed: a factor may
+	// exist that the failed reads could not see.
 	result, err := svc.Login(context.Background(), LoginInput{
 		Email: "mfa-err@example.com", Password: "correct-horse-battery-staple",
 	}, "1.2.3.4", "TestAgent")
-	if err != nil {
-		t.Fatalf("login should succeed when MFA repos fail (no methods detected): %v", err)
-	}
-	if result.Requires2FA {
-		t.Error("should not require 2FA when MFA repos return errors")
+	if err == nil {
+		t.Fatalf("login must fail closed when the MFA status cannot be determined, got result %+v", result)
 	}
 }
 
@@ -424,7 +423,7 @@ func TestSendVerificationEmail_URLContainsOrigin(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedText, "https://vault.test/verify-email?token=") {
 		t.Errorf("email should contain origin URL, got %q", capturedText)
@@ -443,7 +442,7 @@ func TestSendVerificationEmail_TokenIs64HexChars(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	// Key is "verify:" + SHA256 hex of the token (64 hex chars)
 	if !strings.HasPrefix(cachedKey, "verify:") {
@@ -467,7 +466,7 @@ func TestSendVerificationEmail_CacheTTLIs24Hours(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if cachedTTL != 24*time.Hour {
 		t.Errorf("cache TTL should be 24 hours, got %v", cachedTTL)
@@ -486,7 +485,7 @@ func TestSendVerificationEmail_CacheStoresUserID(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-xyz-789", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-xyz-789", "", "")
 
 	if cachedValue != "user-xyz-789" {
 		t.Errorf("cached value should be user ID 'user-xyz-789', got %q", cachedValue)
@@ -506,7 +505,7 @@ func TestSendVerificationEmail_RedirectEncoded(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "/settings/profile")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "/settings/profile")
 
 	// The redirect should be URL-encoded
 	if !strings.Contains(capturedText, "redirect=") {
@@ -531,7 +530,7 @@ func TestSendVerificationEmail_HTMLAndTextBothContainURL(t *testing.T) {
 		return nil
 	}
 
-	svc.sendVerificationEmail("user@example.com", "user-123", "", "")
+	svc.sendVerificationEmail(context.Background(), "user@example.com", "user-123", "", "")
 
 	if !strings.Contains(capturedHTML, "verify-email?token=") {
 		t.Error("HTML body should contain verification URL")
@@ -550,7 +549,7 @@ func TestTokenService_IssueTokenPairUniqueJTIs(t *testing.T) {
 
 	jtis := make(map[string]bool)
 	for i := 0; i < 10; i++ {
-		pair, err := svc.IssueTokenPair("user-1", []string{"user"}, nil, "client", "fp", "", false)
+		pair, err := svc.IssueTokenPair(context.Background(), "user-1", []string{"user"}, nil, "client", "fp", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -574,7 +573,7 @@ func TestTokenService_IssueTokenPairUniqueJTIs(t *testing.T) {
 func TestTokenService_IssueTokenPairEmptyRolesAndScopes(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,11 +596,11 @@ func TestTokenService_IssueTokenPairEmptyRolesAndScopes(t *testing.T) {
 func TestTokenService_ChallengeTokenUniquePerCall(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 
-	token1, err := svc.IssueChallengeToken("user-1", "fp")
+	token1, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	token2, err := svc.IssueChallengeToken("user-1", "fp")
+	token2, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +622,7 @@ func TestTokenService_UpdateSigningKeyConcurrentSafe(t *testing.T) {
 	}()
 
 	for i := 0; i < 100; i++ {
-		_, err := svc.IssueChallengeToken("user-1", "fp")
+		_, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 		if err != nil {
 			t.Fatalf("concurrent token issuance should not fail: %v", err)
 		}
@@ -636,7 +635,7 @@ func TestTokenService_IssueTokenPairAccessTokenTTL(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		5*time.Minute, 1*time.Hour, 7*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +651,7 @@ func TestTokenService_IssueTokenPairRefreshTTLNormal(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		15*time.Minute, 7*24*time.Hour, 30*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +667,7 @@ func TestTokenService_IssueTokenPairRefreshTTLRememberMe(t *testing.T) {
 	svc := NewTokenService(key, "kid-1", "iss", "aud",
 		15*time.Minute, 7*24*time.Hour, 30*24*time.Hour)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "", "", true)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +681,7 @@ func TestTokenService_IssueTokenPairRefreshTTLRememberMe(t *testing.T) {
 func TestTokenService_IssueTokenPairFingerprintInClaims(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "", "sha256-fingerprint-value", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "", "sha256-fingerprint-value", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

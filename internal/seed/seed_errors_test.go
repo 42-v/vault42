@@ -19,7 +19,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	boom := errors.New("db down")
 
 	t.Run("a client that cannot be looked up", func(t *testing.T) {
-		sf := &SeedFile{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
+		sf := &File{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{
 				GetByNameFn: func(context.Context, string) (*model.Client, error) { return nil, boom },
@@ -27,7 +27,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			Users: &mocks.MockUserRepo{},
 		}
 
-		err := Run(context.Background(), sf, deps)
+		err := Run(context.Background(), sf, deps, "")
 		if err == nil {
 			t.Fatal("seeding reported success while the database was down")
 		}
@@ -37,7 +37,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	})
 
 	t.Run("a client that cannot be created", func(t *testing.T) {
-		sf := &SeedFile{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
+		sf := &File{Clients: []ClientSeed{{Name: "beon3-web", Role: "app", Scopes: []string{"read"}}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{
 				GetByNameFn: func(context.Context, string) (*model.Client, error) { return nil, nil },
@@ -46,13 +46,13 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			Users: &mocks.MockUserRepo{},
 		}
 
-		if err := Run(context.Background(), sf, deps); err == nil {
+		if err := Run(context.Background(), sf, deps, ""); err == nil {
 			t.Fatal("seeding reported success though the client was never written")
 		}
 	})
 
 	t.Run("a user that cannot be created", func(t *testing.T) {
-		sf := &SeedFile{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
+		sf := &File{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{},
 			Users: &mocks.MockUserRepo{
@@ -61,7 +61,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			},
 		}
 
-		err := Run(context.Background(), sf, deps)
+		err := Run(context.Background(), sf, deps, "")
 		if err == nil {
 			t.Fatal("seeding reported success though the first user was never written")
 		}
@@ -71,7 +71,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 	})
 
 	t.Run("a user that cannot be looked up", func(t *testing.T) {
-		sf := &SeedFile{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
+		sf := &File{Users: []UserSeed{{Email: "first@example.com", Password: "correctP@ssw0rd!"}}}
 		deps := Deps{
 			Clients: &mocks.MockClientRepo{},
 			Users: &mocks.MockUserRepo{
@@ -79,7 +79,7 @@ func TestSeedRun_FailuresAreNotSwallowed(t *testing.T) {
 			},
 		}
 
-		if err := Run(context.Background(), sf, deps); err == nil {
+		if err := Run(context.Background(), sf, deps, ""); err == nil {
 			t.Fatal("seeding reported success while the user lookup was failing")
 		}
 	})

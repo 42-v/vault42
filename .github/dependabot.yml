@@ -1,0 +1,104 @@
+# No dependency update tool existed before this file, and the drift shows: 19 of
+# the 21 pinned actions are a full major version behind. The repository's
+# Dependabot *security* updates were already on, but those only open a PR once
+# an advisory names a dependency; they never move a clean-but-stale one, which
+# is exactly how twenty actions fell a major behind without anything noticing.
+#
+# Minor and patch updates are grouped so a week's drift is one reviewable PR.
+# Majors are deliberately NOT grouped: actions/checkout v5 moved to the Node 24
+# runtime, upload-artifact v4 to v7 and download-artifact v4 to v8 changed
+# artifact semantics, golangci-lint-action v8 to v9 changed config handling, and
+# pnpm/action-setup v4 to v6 changed version resolution. Each of those needs to
+# fail CI on its own rather than inside a bundle of nineteen.
+#
+# commit-message prefixes are chosen from commitlint.config.js's type-enum and
+# the types list in commitlint.yml, so Dependabot PRs pass the commit and title
+# gates instead of arriving permanently red.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # tests/browser is a separate module. `go build ./...` and `govulncheck ./...`
+  # at the repo root never enter it, which is how its golang.org/x/sys sat
+  # twelve minor versions behind the root module's.
+  - package-ecosystem: gomod
+    directory: /tests/browser
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+    groups:
+      browser-minor-patch:
+        update-types: [minor, patch]
+
+  # One entry, at the root. pnpm-workspace.yaml declares packages/*, web and
+  # tests/e2e-browser as members, and pnpm-lock.yaml at the root is the only
+  # lockfile in the tree. A per-member entry would find a package.json with no
+  # lockfile beside it, so its PRs would move a range without moving the
+  # lockfile and every one of them would fail `pnpm install --frozen-lockfile`.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+    groups:
+      npm-dev:
+        dependency-type: development
+        update-types: [minor, patch]
+      npm-prod:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  - package-ecosystem: nuget
+    directory: /packages/dotnet
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+    groups:
+      nuget-minor-patch:
+        update-types: [minor, patch]
+
+  # Keeps the digest pins fresh rather than frozen-and-vulnerable. The root
+  # directory holds Dockerfile, Dockerfile.bridge, Dockerfile.admin-gateway and
+  # the three Dockerfile.goreleaser* files; /web holds the nginx-unprivileged
+  # pin.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /web
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]

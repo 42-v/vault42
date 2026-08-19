@@ -6,10 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestRenderVerification(t *testing.T) {
-	subject, html, text := RenderTemplate(TemplateVerification, TemplateData{
+	subject, html, text := currentRenderer().Render(TemplateVerification, TemplateData{
 		AppName:      "TestApp",
 		URL:          "https://example.com/verify?token=abc",
 		PrimaryColor: "#1a1a2e",
@@ -30,7 +31,7 @@ func TestRenderVerification(t *testing.T) {
 }
 
 func TestRenderPasswordReset(t *testing.T) {
-	subject, html, text := RenderTemplate(TemplatePasswordReset, TemplateData{
+	subject, html, text := currentRenderer().Render(TemplatePasswordReset, TemplateData{
 		AppName:      "TestApp",
 		URL:          "https://example.com/reset?token=xyz",
 		PrimaryColor: "#1a1a2e",
@@ -48,7 +49,7 @@ func TestRenderPasswordReset(t *testing.T) {
 }
 
 func TestRenderNewDevice(t *testing.T) {
-	_, html, text := RenderTemplate(TemplateNewDevice, TemplateData{
+	_, html, text := currentRenderer().Render(TemplateNewDevice, TemplateData{
 		AppName:      "TestApp",
 		IP:           "1.2.3.4",
 		Device:       "Chrome on Windows",
@@ -64,7 +65,7 @@ func TestRenderNewDevice(t *testing.T) {
 }
 
 func TestRenderAccountLocked(t *testing.T) {
-	_, html, _ := RenderTemplate(TemplateAccountLocked, TemplateData{
+	_, html, _ := currentRenderer().Render(TemplateAccountLocked, TemplateData{
 		AppName:      "TestApp",
 		IP:           "5.6.7.8",
 		PrimaryColor: "#1a1a2e",
@@ -82,7 +83,7 @@ func TestAllTemplatesNonEmpty(t *testing.T) {
 	}
 
 	for _, tmpl := range templates {
-		subject, html, text := RenderTemplate(tmpl, TemplateData{AppName: "Test", PrimaryColor: "#1a1a2e"})
+		subject, html, text := currentRenderer().Render(tmpl, TemplateData{AppName: "Test", PrimaryColor: "#1a1a2e"})
 		if subject == "" {
 			t.Errorf("template %s: empty subject", tmpl)
 		}
@@ -117,7 +118,7 @@ func TestNewTemplateRendererDefault(t *testing.T) {
 }
 
 func TestTemplateRendererWithLogoURL(t *testing.T) {
-	_, html, _ := RenderTemplate(TemplateVerification, TemplateData{
+	_, html, _ := currentRenderer().Render(TemplateVerification, TemplateData{
 		AppName:      "Vault",
 		URL:          "https://vault.test/verify",
 		LogoURL:      "https://vault.test/logo.png",
@@ -132,7 +133,7 @@ func TestTemplateRendererWithLogoURL(t *testing.T) {
 }
 
 func TestTemplateRendererUnknownTemplate(t *testing.T) {
-	subject, html, text := RenderTemplate("nonexistent", TemplateData{AppName: "TestApp"})
+	subject, html, text := currentRenderer().Render("nonexistent", TemplateData{AppName: "TestApp"})
 	if subject != "Notification" {
 		t.Errorf("unknown template subject = %q, want Notification", subject)
 	}
@@ -169,16 +170,30 @@ func TestTemplateRendererOverride(t *testing.T) {
 	}
 }
 
-func TestTemplateRendererOverrideExecuteErrors(t *testing.T) {
-	t.Run("subject execute error falls back to Notification", func(t *testing.T) {
-		dir := t.TempDir()
-		custom := `{{define "subject"}}{{.Nope}}{{end}}{{define "content"}}<p>x</p>{{end}}`
-		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
-
-		r, err := NewTemplateRenderer(dir)
+// Render must not emit a half-built body when a template fails to execute.
+//
+// These two cases used to arrive through an override directory. They cannot any
+// more: validateTemplate now renders an operator-authored template with canary
+// data and refuses one that will not execute, so a {{.Nope}} override is
+// rejected at construction rather than silently mailed as a blank notice. That
+// is the better failure, and it leaves the embedded defaults as the only way to
+// reach these branches -- defaults are trusted and deliberately not validated,
+// which is exactly what makes them the right lever here.
+func TestTemplateRendererExecuteErrorsProduceNoPartialBody(t *testing.T) {
+	brokenDefault := func(t *testing.T, body string) *TemplateRenderer {
+		t.Helper()
+		fsys := apGoodTemplates()
+		fsys["templates/"+TemplateVerification+".html"] = &fstest.MapFile{Data: []byte(body)}
+		apUseTemplateFS(t, fsys)
+		r, err := NewTemplateRenderer("")
 		if err != nil {
 			t.Fatalf("NewTemplateRenderer: %v", err)
 		}
+		return r
+	}
+
+	t.Run("subject execute error falls back to Notification", func(t *testing.T) {
+		r := brokenDefault(t, `{{define "subject"}}{{.Nope}}{{end}}{{define "content"}}<p>x</p>{{end}}`)
 		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
 		if subject != "Notification" {
 			t.Errorf("subject = %q, want Notification", subject)
@@ -188,14 +203,7 @@ func TestTemplateRendererOverrideExecuteErrors(t *testing.T) {
 		}
 	})
 	t.Run("content execute error keeps subject drops body", func(t *testing.T) {
-		dir := t.TempDir()
-		custom := `{{define "subject"}}RealSubject{{end}}{{define "content"}}{{.Nope}}{{end}}`
-		os.WriteFile(filepath.Join(dir, "verification.html"), []byte(custom), 0o644)
-
-		r, err := NewTemplateRenderer(dir)
-		if err != nil {
-			t.Fatalf("NewTemplateRenderer: %v", err)
-		}
+		r := brokenDefault(t, `{{define "subject"}}RealSubject{{end}}{{define "content"}}{{.Nope}}{{end}}`)
 		subject, html, text := r.Render(TemplateVerification, TemplateData{AppName: "Vault"})
 		if subject != "RealSubject" {
 			t.Errorf("subject = %q, want RealSubject", subject)
@@ -215,8 +223,13 @@ func TestTemplateRendererRejectsBrokenOverrideSyntax(t *testing.T) {
 	if err == nil {
 		t.Fatal("should reject a syntactically invalid override")
 	}
-	if !strings.Contains(err.Error(), "parse content") {
-		t.Errorf("err = %v, want a parse content error", err)
+	// The refusal now comes from validation rather than from the renderer's own
+	// parse: validateTemplate has to compile the template to inspect what it
+	// renders, so it is the first thing that sees the broken syntax. The
+	// renderer's parse error still guards the embedded defaults, which are not
+	// validated (TestNewTemplateRenderer_UnusableDefaultsFailAtConstruction).
+	if !strings.Contains(err.Error(), "unsafe template") || !strings.Contains(err.Error(), "does not compile") {
+		t.Errorf("err = %v, want the override refused as uncompilable", err)
 	}
 }
 
@@ -331,7 +344,7 @@ func TestAllTemplatesProduceValidHTML(t *testing.T) {
 	}
 	for _, name := range templates {
 		t.Run(name, func(t *testing.T) {
-			_, html, _ := RenderTemplate(name, TemplateData{
+			_, html, _ := currentRenderer().Render(name, TemplateData{
 				AppName:      "Vault",
 				URL:          "https://vault.test/action",
 				IP:           "1.2.3.4",
@@ -482,7 +495,7 @@ func TestSetRenderer_Table(t *testing.T) {
 			r2, _ := NewTemplateRenderer("")
 			SetRenderer(r2)
 
-			subj, _, _ := RenderTemplate(TemplateVerification, TemplateData{AppName: "SRTest"})
+			subj, _, _ := currentRenderer().Render(TemplateVerification, TemplateData{AppName: "SRTest"})
 			if subj == "" {
 				t.Error("expected subject after SetRenderer")
 			}

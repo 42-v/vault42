@@ -1,8 +1,35 @@
 # Vault42 .NET SDK — Changelog
 
+## 1.0.0 — 2026-08-14
+
+Version lockstep with the vault42 server, and the first release whose published packages carry
+their documentation.
+
+Both packages move 0.2.0 to 1.0.0 because `scripts/version-bump.sh` propagates one VERSION across
+the chart, the Vue package, the web app and both csproj files, and the release workflow packs and
+pushes them from that same number. The gap between 0.2.0 and the server's version was not a
+statement about SDK stability, it was drift.
+
+### Added
+
+- `GenerateDocumentationFile` on both `Vault42.AspNetCore` and `Vault42.Blazor`. The XML doc
+  comments were already written and had never been shipped, so consumers got no IntelliSense from
+  a package whose source was 82% documented.
+- `VaultJwksManager` and `VaultFingerprintValidator` in `Vault42.AspNetCore`.
+- Blazor auth surface: `VaultAuthService`, `VaultAuthCallback`, `VaultAuthorizationMessageHandler`
+  and `VaultBlazorExtensions`, with `VaultAuthenticationStateProvider` extended to match.
+
+### Notes
+
+- `VaultAuthenticationHandler` requires `token_type=Bearer` on every access token (CS-4). The Go
+  issuer has always emitted it; the handler used to accept its absence.
+- The SDK tracks the HTTP API, which 1.0.0 freezes under the stability contract in `docs/spec.md`
+  section 0. A breaking change to a route, field, error code, status code or environment variable
+  now costs a major bump.
+
 ## 0.2.0 — 2026-04-25
 
-Security re-audit ship. **Breaking** for net8 consumers; defense-in-depth + dependency uplift for everyone else. See full audit at `docs/security-audit-2026-04-25.md`.
+Security re-audit ship. **Breaking** for net8 consumers; defense-in-depth + dependency uplift for everyone else. The audit findings this release closes are itemised under **Security** below.
 
 ### Breaking
 

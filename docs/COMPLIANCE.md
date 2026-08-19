@@ -1,290 +1,508 @@
-# Vault42 -- Authentication Server Compliance Report
+# vault42 -- Standards Compliance Report
 
-This report assesses the Vault42 authentication server against seven security and
-privacy standards spanning authentication, session management, cryptography, audit
-logging, data protection, transport security, and the OAuth2/JWT/OIDC protocol family.
-Each standard was reviewed at the requirement level and classified as **Met**, **Partial**,
-**Gap**, or **Not Applicable (N/A)**. Across all auditable requirements the server shows
-strong, defense-in-depth coverage of technical authentication and session controls; the
-principal area of remaining work is organizational and lifecycle privacy compliance
-(GDPR), where several requirements depend on policy documentation and data-lifecycle
-features rather than authentication logic. Severity is reported per finding to support
-remediation prioritization.
+vault42 1.0.0 · assessed 2026-08-10 · self-assessment
 
----
+vault42 has been assessed against nine security and privacy standards at the
+revisions listed below, each cited with its publication date and the source the
+revision was verified against. Every requirement in scope is classified **Met**,
+**Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
+and no open Gap findings.
 
-## Overall Summary
+> **404 requirements in scope across 9 standards: 348 Met, 10 Accepted Risk,
+> 46 Not Applicable. 0 unclassified.**
 
-| Standard | Met | Partial | Gap | N/A | Coverage % |
-|---|---:|---:|---:|---:|---:|
-| NIST SP 800-63B (Authentication & Lifecycle Management) | 39 | 2 | 0 | 0 | 96% |
-| OWASP ASVS V2 (Authentication) + V3 (Session Management) | 40 | 2 | 0 | 0 | 95% |
-| OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8) | 34 | 3 | 0 | 3 | 96% |
-| NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (auth-relevant controls) | 20 | 3 | 0 | 0 | 95% |
-| OWASP Top 10 (2021) | 47 | 1 | 0 | 0 | 97% |
-| RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC | 50 | 1 | 0 | 3 | 96% |
-| GDPR -- General Data Protection Regulation (EU 2016/679) | 12 | 3 | 0 | 0 | 93% |
-| **Totals** | **242** | **15** | **0** | **9** | -- |
+Every **Met** requirement names at least one test in `tests/compliance/` that
+runs on every CI build. Every **Accepted Risk** carries a rationale, a
+compensating control, a residual-risk statement, a revisit condition and a named
+accepting party. Every **Not Applicable** requirement carries the reason it does
+not apply.
 
-**Overall weighted coverage:** **94.2%** (242 requirements met out of 257 applicable,
-excluding 9 Not-Applicable organizational/out-of-scope controls). Awarding half credit
-for partial findings raises the figure to **97.1%**. **High-severity open findings: 0.**
+The requirement register is [`docs/compliance-register.json`](compliance-register.json):
+one row per requirement, carrying the verbatim requirement text, its status, the
+`file:line` implementing it and the name of the test that proves it. **CI fails
+if any requirement marked Met names a test that does not exist**, so the register
+cannot drift from the suite.
 
-The GDPR data-lifecycle gaps that previously drove every high-severity finding are closed
-(erasure completeness, audit retention, consent provenance, federated unlink). What remains
-across all seven standards is medium/low: breach-notification alerting in code, cryptographic
-audit-log chaining, and a set of hardening options that are deliberate trade-offs.
+## What this report deliberately does not say
 
----
+**There is no coverage percentage here.** Through 0.9.9 this document reported
+"94.2% weighted coverage" over 242 requirements it did not enumerate, with no
+published weighting model. Neither number could be checked by a reader, which
+made both worthless as evidence and worse than useless under scrutiny. The
+register replaces them: it publishes the denominator, so anyone can compute
+whatever figure they consider meaningful and verify it.
 
-## NIST SP 800-63B (Authentication & Lifecycle Management)
+**There is no "Partial" status.** "Partial" named a finding with no owner, no
+rationale and no revisit date, which reads as neglect. Each former partial is now
+either Met, or an accepted risk that states what was accepted, what compensates
+for it, what remains, and the condition under which the decision is revisited.
 
-**Coverage: 96%** -- 39 met, 2 partial, 0 gap, 0 N/A
-
-The authentication server demonstrates comprehensive compliance with NIST SP 800-63B.
-All core password controls are met: Argon2id with a 46 MiB memory cost, a 15-character
-minimum (exceeding the 8-character floor), no composition rules, and breach-corpus
-checking of submitted passwords. Multi-factor authentication supports TOTP,
-WebAuthn/FIDO2, and backup codes, each with single-use enforcement and rate limiting.
-Account lockout combines per-user (5 failures, 15-minute window) and per-IP (20 failures)
-mechanisms. Session binding via device fingerprinting and reauthentication via password
-confirmation gate sensitive operations. Refresh-token rotation provides family tracking,
-single-use enforcement, and replay detection. The two partial findings are low severity:
-assurance levels (AAL) are implemented in behavior but not explicitly labeled in the
-codebase, and concurrent-session limiting is intentionally soft (an accepted performance
-trade-off).
-
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| NIST-5.2.2-CONCURRENT-SESSION-LIMIT | Strict enforcement of concurrent session limits with proper synchronization | Partial | Low | Implement a per-user advisory lock or sequential token-insert validation with a count check to make enforcement strict; document the soft-vs-strict limit behavior in the API documentation. |
-| NIST-5.2.4-AAL-LEVELS | Support and document AAL1/AAL2/AAL3 assurance levels with clear authenticator combinations | Partial | Low | Add explicit AAL-level constants and document which authenticator combinations achieve each AAL in code comments; extend the MFA status response with an `aal_level` field. |
+**This is a self-assessment.** No third-party audit or certification has been
+performed. The findings, the method and the full register are published so that
+the assessment can be independently checked by anyone with a clone of this
+repository.
 
 ---
 
-## OWASP ASVS V2 (Authentication) + V3 (Session Management)
+## Scope
 
-**Coverage: 95%** -- 40 met, 2 partial, 0 gap, 0 N/A
+**In scope:** the Go authentication server (`cmd/vault`, `internal/`), the admin
+gateway (`cmd/admin-gateway`, `internal/adminapi`), the database schema
+(`migrations/`) and the shipped Helm chart (`charts/vault`).
 
-The server aligns strongly with ASVS V2 and V3. Strengths include CSPRNG-based token
-generation, anti-automation lockouts (per-user 5/15min and per-IP 20/15min),
-comprehensive MFA (TOTP, WebAuthn, email OTP with downgrade protection), refresh-token
-rotation with family-based replay detection, device fingerprint binding, constant-time
-operations to resist user enumeration, breach-corpus password checking, strict JWT
-validation (RS256 only, `kid` required, dangerous headers rejected, 8 KB size limit),
-secure cookie attributes (`__Host-` prefix, HttpOnly, Secure, SameSite=Strict/Lax), and
-audit logging with risk scoring. TLS 1.3 is the enforced minimum, password recovery uses
-single-use tokens with no information leak, and logout fully revokes all refresh-token
-families. Two medium-severity partials remain: previous sessions are not automatically
-invalidated on a new login, and account-status errors (locked/banned/disabled) can reveal
-that an account exists.
+**Out of scope, assessed separately:**
 
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| V3-2-2 | Session invalidation on login (previous refresh tokens invalidated) | Partial | Medium | Add an optional policy (default off) to revoke all existing active token families on new login before issuing a new pair, for hard session replacement. |
-| V2-1-1 | Generic error messages prevent user enumeration in auth responses | Partial | Medium | Return a generic `invalid_credentials` response for locked/banned/disabled accounts instead of distinct status codes; record the true status separately in the audit trail with a high-risk flag. |
+- `web/` -- the Vue single-page frontend
+- `packages/` -- the C# and TypeScript client SDKs
+- Operator deployment configuration beyond the shipped chart
+- `cmd/bridge` and the honeypot profile, which are non-default deployment modes
+
+**ASVS level: L2.** Every ASVS 5.0.0 requirement at L1 and L2 is classified. L3
+requirements are outside the declared level; where one is nevertheless satisfied,
+or deliberately not satisfied, it is recorded anyway rather than omitted.
 
 ---
 
-## OWASP ASVS v4.0 -- Cryptography (V6) / Errors & Logging (V7) / Data Protection (V8)
+## Standards and revisions
 
-**Coverage: 96%** -- 34 met, 3 partial, 0 gap, 3 N/A
+Each revision was verified against a primary source on 2026-08-10, not from
+memory and not from a previous version of this document.
 
-Approved algorithms are enforced throughout: AES-256-GCM for data encryption, Argon2id
-for passwords (46 MiB, 1 iteration, 1 lane), SHA-256 for hashing, RS256 for JWT signing
-(2048-bit minimum), and HMAC-SHA256 for message authentication. Cryptographic keys are
-externalized via the `_FILE` convention and never hardcoded; private signing keys are
-encrypted at rest using the master key with the key ID as additional authenticated data,
-and key rotation is fully implemented with active/retired/revoked status tracking. Error
-handling avoids sensitive-data exposure through generic error codes and constant-time
-comparisons, including dummy-hash and identical-response patterns that prevent user
-enumeration. Audit logging is append-only (enforced by database triggers plus revoked
-UPDATE/DELETE privileges), captures security-relevant events, and scrubs sensitive keys
-before storage. PII is encrypted at rest with AES-256-GCM under pseudonymized
-(HMAC-derived) keys and decrypted on demand per request with no long-term plaintext
-caching. The three partials are constrained by language and standards limitations rather
-than design defects.
+| Standard | Revision | Published | Verified against |
+|---|---|---|---|
+| OWASP Application Security Verification Standard | **5.0.0** | 2025-05-30 | Requirement text taken verbatim from `5.0/docs_en/...5.0.0_en.csv` in the [OWASP/ASVS repository](https://github.com/OWASP/ASVS/releases/tag/v5.0.0_release); release date from the GitHub releases API |
+| NIST SP 800-63B-4 -- *Digital Identity Guidelines: Authentication and Authenticator Management* | **4** | 2025-07 | [csrc.nist.gov](https://csrc.nist.gov/pubs/sp/800/63/b/4/final) for title and supersession; section numbering against [pages.nist.gov/800-63-4/sp800-63b.html](https://pages.nist.gov/800-63-4/sp800-63b.html) including its own cross-references |
+| NIST SP 800-53 -- *Security and Privacy Controls for Information Systems and Organizations* | **Rev 5, Release 5.2.0** | 2025-08-27 | Control titles verbatim from the [OSCAL catalog](https://github.com/usnistgov/oscal-content) (`NIST_SP-800-53_rev5_catalog.json`, metadata version 5.2.0); release date from the NIST summary-of-changes document |
+| OWASP Top 10 | **2025** | *see note* | Category identifiers and names from [owasp.org/Top10/2025/](https://owasp.org/Top10/2025/) |
+| GDPR (EU) 2016/679 | stable | 2016-04-27 | [EUR-Lex](https://eur-lex.europa.eu/eli/reg/2016/679/oj) |
+| RFC 6238 / 6749 / 7636 / 8725 / 9449 / 9700 and OpenID Connect Core 1.0 | per clause | stable | [rfc-editor.org](https://www.rfc-editor.org/) |
+| OWASP API Security Top 10 | **2023** | 2023 | Category identifiers and titles from [owasp.org/API-Security/editions/2023](https://owasp.org/API-Security/editions/2023/en/0x00-header/). A separate list from the OWASP Top 10:2025 above, not another edition of it |
+| NIST SP 800-218 -- *Secure Software Development Framework (SSDF)* | **1.1** | 2022-02 | Practice and task identifiers from the SP 800-218 v1.1 table on [csrc.nist.gov](https://csrc.nist.gov/pubs/sp/800/218/final) |
+| Kubernetes Pod Security Standards | **restricted profile** | living | Control names from [kubernetes.io](https://kubernetes.io/docs/concepts/security/pod-security-standards/) |
 
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| V6.2.2 | Reject weak algorithms (MD5, SHA-1 except where required by standard) | Partial | Low | TOTP uses HMAC-SHA1 as mandated by RFC 6238 (no standardized SHA-256 TOTP alternative exists); document this interoperability constraint explicitly in the TOTP module for reviewers. No MD5 is used. |
-| V6.4.1 | Secrets never logged, transmitted unencrypted, or stored in plaintext | Partial | Medium | Secrets are loaded from files via the `_FILE` convention and the master key and HMAC secret are zeroed after use; the runtime pepper and database password remain in memory due to Go string immutability. Migrate these to `[]byte` end-to-end and zero on shutdown. Mitigated by the short-lived containerized process model. |
-| V8.3.2 | Secure deletion: overwrite memory holding sensitive data | Partial | Low | Key material is zeroed on shutdown and a `[]byte` zeroing helper exists; decrypted identity plaintext and ephemeral crypto buffers are not explicitly wiped after use. Zero the unmarshaled plaintext before returning and `defer`-zero nonce/tag buffers. Mitigated by request-scoped, short-lived process context. |
+> **Needs verification:** OWASP publishes no release date for the Top 10:2025
+> edition on the project page, on the 2025 pages, or through the repository's
+> releases API. The edition identifier and the ten category names are verified;
+> the publication date is not asserted here because no primary source states one.
 
-*Not Applicable (3): organizational controls outside the scope of the authentication
-codebase.*
+### What the re-baseline changed
 
----
+**NIST SP 800-63B.** Through 0.9.9 this document was titled for the **withdrawn**
+revision (*"Authentication & Lifecycle Management"*) while the tests linked the
+Rev 4 URL and cited Rev 3 section numbers against it. An auditor clicking the
+link the repository itself supplied landed on text that did not say what the test
+claimed. The renumbering is not cosmetic:
 
-## NIST SP 800-53 Rev 5 -- IA / AC / AU / SC (Authentication-Relevant Controls)
+| Rev 3 | Rev 4 | Topic |
+|---|---|---|
+| §5.1.1.x | **§3.1.1.x** | Memorized secrets, now called *passwords* |
+| §5.2.2 | **§3.2.2** | Rate Limiting (Throttling) |
+| §7.x | **§5.x** | Session Management |
+| §7.2 | **§5.2** general, **§2.1.3 / §2.2.3 / §2.3.3** per AAL | Reauthentication |
 
-**Coverage: 95%** -- 20 met, 3 partial, 0 gap, 0 N/A
+The per-AAL reauthentication timeouts live under section 2, beneath each
+assurance level, not under section 5. Anything citing §5.2.1, §5.2.2 or §5.2.3
+for those timeouts is citing sections that do not exist.
 
-The server implements strong fundamentals across Identification & Authentication, Access
-Control, Audit & Accountability, and System & Communications Protection: MFA (TOTP,
-WebAuthn, email OTP), password security (Argon2id with pepper, breach-corpus checking,
-history tracking), session management (refresh-token replay detection, fingerprinting),
-append-only audit logging with critical-event prioritization, and transmission security
-(TLS 1.3 enforcement, HTTPS-only cookies, DPoP proof-of-possession). The three partials
-concern an explicit idle-timeout policy, cryptographic audit-log integrity beyond
-database constraints, and documentation of infrastructure-level boundary protection.
+One requirement got **stricter** and vault42 now meets it, after a correction.
+Rev 4 §3.1.1.2 raises the single-factor password floor from 8 characters to 15.
+Through 1.0.0 this paragraph said 15 "is the minimum vault42 has enforced since
+0.4", and `README.md` said the same. That was false: 15 was the shipped
+**default** and the enforced floor was **8**, with the dev profile exempt from
+any floor at all. The row was downgraded to an accepted risk, CR-31, rather than
+the claim being softened.
 
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| AC-12 | Session termination: forced logout after inactivity timeout; explicit revocation on logout | Partial | Medium | Explicit logout already revokes all tokens. Add inactivity handling: store a last-activity timestamp per device/session, reject refresh once the idle threshold is exceeded (and revoke the family), update the timestamp on successful auth/refresh, and document the idle policy (e.g., 30 minutes). |
-| AU-9 | Audit log protection: prevent unauthorized modification or deletion of audit records | Partial | Medium | Database-level append-only enforcement and INSERT/SELECT-only role privileges are in place. Add cryptographic chaining (HMAC of previous-record hash plus current record) with a separately held signing key and read-time verification; consider forwarding to an immutable off-system store and document a retention policy. |
-| SC-7 | Boundary protection: network boundaries, firewall rules, access controls | Partial | Low | Application-level IP allow/block, trusted-proxy handling, and security headers exist. Document infrastructure boundary assumptions (firewall rules, ingress/TLS-termination configuration) and provide network-policy examples in the deployment documentation. |
+The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:831`),
+a non-dev profile refuses to start below it (`:580`), and dev carries a lower
+floor of 8 (`:839`, selected by `passwordFloorFor` at `:843`) rather than none
+-- 8 being the figure §3.1.1.1 requires a verifier to accept, so no profile now
+takes a four-character password. The row is Met and CR-31 is closed.
+`TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` reads both
+numbers out of `config.go` and asserts this document, `README.md` and the
+register state them, so the prose cannot outlive the constant in either
+direction.
 
----
+One requirement got **harder**: Rev 4 §2.2.3 states that *"a definite
+reauthentication overall timeout SHALL be established, which SHOULD be no more
+than 24 hours at AAL2. The inactivity timeout SHOULD be no more than 1 hour."*
+Through 0.9.9 refresh rotation issued a fresh full TTL every time, so the 7-day
+window slid indefinitely and no definite timeout existed at all. That SHALL is
+now satisfied: migration 013 gives every rotation family a stored birth date and
+`VAULT_MAX_SESSION_LIFETIME` bounds its total age. One of the two SHOULDs is
+satisfied as well: `VAULT_INACTIVITY_TIMEOUT` defaults to 1 hour and
+`AuthService.enforceSessionInactivity` terminates a family that goes unused for
+longer, measured from the family's last rotation. The remaining deviation is the
+720-hour overall default, and that residual is CR-14.
 
-## OWASP Top 10 (2021)
+**OWASP ASVS 5.0.0.** The two new chapters, V9 (Self-contained Tokens) and V10
+(OAuth and OIDC), let vault42 claim *more*, not less. Through 0.9.9 the JWT
+hardening was filed under a session-management requirement and the OAuth work had
+no ASVS home at all, so it was hived off into a bespoke "RFC family" section an
+auditor had to take on trust. That section is now 36 rows inside the standard's
+own numbering, and the RFC rows that remain cross-reference their ASVS
+requirement rather than standing alone.
 
-**Coverage: 97%** -- 47 met, 1 partial, 0 gap, 0 N/A
-
-The server reflects enterprise-grade alignment with the OWASP Top 10 (2021): a layered
-administrative gateway (mutual TLS, loopback-only access, role-based access control,
-session authentication, local-only enforcement, and a kill switch); fully parameterized
-SQL; hardcoded role assignment that prevents privilege escalation through database
-compromise; fail-closed rate limiting on authentication endpoints; Argon2id hashing with
-pepper and constant-time comparison; audit logging with automatic sensitive-data
-scrubbing; DPoP proof-of-possession with replay prevention; OIDC issuer validation
-restricted to RSA algorithms; strict cryptographic enforcement (TLS 1.3, RS256, 2048-bit
-RSA minimum); and a complete set of security headers (HSTS, CSP, CORS, frame protections).
-A single partial finding concerns missing pagination limits on administrative list
-endpoints.
-
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| M06 | Implement pagination with limits to prevent result-set denial of service (e.g., list audit logs, admin sessions) | Partial | Low | Add `limit`/`offset` parameters with enforced maximum limits to the administrative session-list and audit-log-list endpoints to bound result-set size. |
-
----
-
-## RFC 8725 (JWT BCP) + RFC 6749/6819 (OAuth2) + RFC 7636 (PKCE) + RFC 9449 (DPoP) + RFC 9700 (OAuth Security BCP) + OIDC
-
-**Coverage: 96%** -- 50 met, 1 partial, 0 gap, 3 N/A
-
-*Since 0.9.6 the family's core requirements are pinned as clause-numbered regression
-tests in `tests/compliance/rfc9700_oauth_bcp_test.go`: PKCE S256 on every provider
-(§2.1.1/§4.8.2), HMAC state integrity (§4.1.1), OIDC nonce binding (§4.5.3), tokens
-kept out of URLs (§4.3.2), and DPoP sender-constraining (§4.10.1).*
-
-The implementation adheres strongly to the JWT and OAuth2 protocol family with
-defense-in-depth against well-known attacks (algorithm confusion, header injection,
-session fixation, code reuse, replay, key confusion). JWT parsing uses a strict algorithm
-allowlist (RS256, ES256 only -- no `none` or HMAC), rejects header-injection vectors
-(`jku`/`x5u`/`x5c`/`jwk`), validates all standard claims (`exp`, `nbf`, `iat`, `iss`,
-`aud`), enforces an 8 KB size limit, and constrains `kid` to a safe pattern to prevent
-path traversal. PKCE is fully implemented with S256 and one-time-use atomicity. CSRF state
-binding uses an HMAC signature mirrored by a host-only cookie hash with a 10-minute
-expiry. DPoP is fully implemented (typ/alg/jwk validation, htm/htu matching, freshness
-window, one-time `jti`, key-bound thumbprint via `cnf.jkt`, and access-token-hash
-validation). OIDC nonce binding, verified-email linking requirements, and account-state
-enforcement are all present, and authorization-code consumption is atomic. The single
-partial finding asks for explicit confirmation that the old refresh token is invalidated
-on rotation.
-
-| ID | Requirement | Status | Severity | Recommended fix |
-|---|---|---|---|---|
-| OAUTH2-TOKEN-001 | Token rotation on refresh: a new refresh token must be issued and the old token invalidated (RFC 6749 §6 best practice) | Partial | Low | A new refresh token is issued on refresh and family-based tracking exists; explicitly verify that the prior refresh token is revoked in the refresh code path, and add immediate revocation of the old token after the new one is issued if not already guaranteed. Since 0.9.6 the single-use mechanism itself is asserted under real Postgres (`tests/compliance/rfc9700_oauth_bcp_test.go` section 4.14.2: second `MarkUsed` fails, replay revokes the family); the service-level ordering assertion is what keeps this Partial. |
-
-*Not Applicable (3): organizational controls (e.g., rate-limiting and audit-logging
-infrastructure, JWKS endpoint operation) and unused `crit` header handling.*
+**OWASP Top 10:2025.** Two categories moved vault42's position. **A03 Software
+Supply Chain Failures** is new, and it is the category vault42 was best placed to
+evidence all along: SBOM, SLSA build provenance and keyless cosign signatures
+have shipped since 0.8 and were cited nowhere. **A09** was renamed to
+*Security Logging and **Alerting** Failures*, and that single word moved vault42
+off Met, because nothing in the tree raised an alert. It is Met again: an alert
+detector is installed on every profile and raises one windowed, deduplicated
+record per detection. See CR-15 in the closed-risks table.
 
 ---
 
-## GDPR -- General Data Protection Regulation (EU 2016/679)
+## Corrections to the 0.9.9 report
 
-**Coverage: 93%** -- 12 met, 3 partial, 0 gap, 0 N/A
+Six claims in the previous version of this document were wrong on the facts.
+They are listed here rather than quietly deleted, because a reader comparing
+versions should be able to see what changed and why.
 
-*Re-audited 2026-07-14 against the code (the previous 60% assessment predated the 0.8.x
-data-lifecycle work and understated shipped behaviour by roughly 17 points; it also asserted
-erasure guarantees the code did not implement — see GDPR-5).*
+| Previous finding | Reality |
+|---|---|
+| **V6.2.2 Partial** -- "document the RFC 6238 SHA-1 constraint in the TOTP module" | The comment already existed, at `internal/crypto/totp.go:5`. The finding requested a remediation that had shipped. Now Met. |
+| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1257` precedes `Create` at `:1344`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
+| **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 340 lines and `charts/vault/values.yaml:382` enables it **by default**. Now Met. |
+| **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **eight** string-typed configuration secrets, not 2: `DBMigPassword`, `DBAppPassword`, `Pepper`, `SendGridAPIKey` and the three OAuth client secrets on `config.Config`, plus a `ClientSecret` per configured OIDC provider. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. `docs/security.md` AR-4 still lists the pepper among the `[]byte` values it zeroes, while `internal/config/config.go:71` declares it a `string`; that correction has not been made and is owed. |
+| **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. This row used to add that the decrypted **RSA private signing key PEM** was the buffer left unwiped, citing `internal/keystore/keystore.go:297`. That was itself wrong: `:297` is a comment line, and the PEM is wiped on both paths, at `:211` and `:442`, exactly as [`security.md`](security.md) already said. The decrypted blob plaintext and label were the buffers genuinely left unwiped; both are wiped now, at `internal/service/blob.go:378`, `:405` and `:447`, which is what closed CR-25. |
+| **AU-9 and GDPR-14** | The same finding, filed twice. The GDPR row even said "Tracked as AU-9 above" while being counted separately. Now one accepted risk, CR-24, referenced from both rows. |
 
-Technical data-protection is strong: AES-256-GCM at rest under pseudonymized (HMAC-derived)
-keys, append-only audit logging with sensitive-key scrubbing, and per-purpose lawful bases
-documented in `docs/PRIVACY.md`. The data-lifecycle work is now complete: full account erasure
-cascades to every account-linked record including the MFA authenticators, audit retention is
-enforced by a background sweeper, marketing consent is stored with provenance and is withdrawable
-in one call, and federated links can be unlinked individually. The three remaining partials are
-the breach-notification *code path* (the procedure is documented but no risk-threshold alerting
-exists), cryptographic audit-log chaining, and a DPIA template.
+There is also a class of error the register makes impossible to repeat: **four of
+the five ASVS partials were filed under identifiers whose actual requirement text
+is about something else entirely.**
 
-*Since 0.9.6 the claims above are asserted by a dedicated compliance suite rather than
-scattered unit tests: `tests/compliance/gdpr_erasure_test.go` runs the assembled
-`ErasureService` cascade against a real Postgres and proves Art. 17 with row counts
-(completeness, tombstone scrub, purge-not-mark, idempotency, the Art. 17(3)(b)/(e) audit
-exemption, and the recovery escrow); `tests/compliance/gdpr_consent_test.go` pins the
-Art. 7 consent-provenance contract (affirmative-only sources, fail-closed gating,
-anti-laundering, one-call withdrawal); `tests/compliance/gdpr_retention_test.go` covers
-Art. 5(1)(e) retention defaults and the Art. 5(1)(c) audit-metadata scrubbing.*
+| Cited as | Actual ASVS v4.0.3 text at that identifier |
+|---|---|
+| `V2-1-1` "generic error messages prevent user enumeration" | *"Verify that user set passwords are at least 12 characters in length."* |
+| `V3-2-2` "session invalidation on login" | *"Verify that session tokens possess at least 64 bits of entropy."* |
+| `V6.4.1` "secrets never logged or stored in plaintext" | *"Verify that a secrets management solution such as a key vault is used..."* |
+| `V8.3.2` "secure deletion: overwrite memory holding sensitive data" | *"Verify that users have a method to remove or export their data on demand."* |
 
-| ID | Requirement | Status | Severity | Notes / remaining work |
-|---|---|---|---|---|
-| GDPR-1 | Lawful basis for processing (Art. 6) | Met | -- | Per-purpose bases P1–P10 in PRIVACY.md §2. Consent is stored as a record (`granted`/`at`/`source`/`origin`), not a bare flag, and every change writes a `consent_granted` / `consent_withdrawn` audit entry — Art. 7(1) requires the controller to be able to *demonstrate* consent. Asserted: `tests/compliance/gdpr_consent_test.go` (Art. 7(1) provenance record). |
-| GDPR-2 | Data minimization (Art. 5(1)(c)) | Met | -- | Per-field necessity rationale in PRIVACY.md §3.2. Asserted: `tests/compliance/gdpr_retention_test.go` (Art. 5(1)(c) audit-metadata scrubbing). |
-| GDPR-5 | Right to erasure (Art. 17) | Met | -- | **Was a live defect, not merely undocumented.** Erasure cascades identity, blobs, devices, social links, password history and refresh tokens — but silently retained the TOTP secret, WebAuthn credentials and backup codes. The schema carries `ON DELETE CASCADE` on all three, so it *looked* correct; the cascade never fired because the account row is scrubbed with an `UPDATE`, not deleted. Now deleted explicitly, and refresh tokens are hard-deleted rather than revoked (a revoked row keeps its fingerprint hash and device reference). Regression-tested in `erasure_test.go`. Asserted: `tests/compliance/gdpr_erasure_test.go` (row counts across every user-linked store, real Postgres). |
-| GDPR-7 | Purpose limitation (Art. 5(1)(b)) | Met | -- | PRIVACY.md §2 + §3.2. |
-| GDPR-8 | Access & portability (Arts. 15, 20) | Met | -- | `GET /user/data-export` returns profile, identity, blob metadata, devices and user-scoped audit events as machine-readable JSON. The audit list is capped at the most recent 1000 events; the response declares `audit_events_total`, `audit_events_limit` and `audit_events_truncated` so a partial export cannot be mistaken for a complete one, and the Operator supplies the remainder on request (PRIVACY.md §5.1). |
-| GDPR-9 | Accountability (Art. 5(2), Recital 76) | Met | -- | `docs/PRIVACY.md` is the processing policy: roles, bases, inventory, retention, rights, processors, breach procedure. |
-| GDPR-10 | Data retention limits (Art. 5(1)(e)) | Met | -- | `VAULT_AUDIT_RETENTION_DAYS` + a sweeper (`internal/audit/retention.go`) purging every 6h and at startup. Disabled by default: deleting security logs is not a safe default, so the horizon is an explicit operator choice. Audit entries are exempt from the erasure cascade under Art. 17(3)(b)/(e), which is why they need a time-based purge. The account-recovery escrow (`auth.account_recovery`) is exempt for the same structural reason and has the same treatment since 0.9.8: `VAULT_RECOVERY_RETENTION_DAYS` + a sweeper (`internal/service/recovery_retention.go`) and `vault cleanup-recovery`, also disabled by default. It shipped with no expiry column, DELETE revoked from both application roles and no code path that removed a row, and it was absent from PRIVACY.md §3.1/§3.2/§4/§5.3 entirely. Asserted: `tests/compliance/gdpr_retention_test.go` (disabled-by-default sweeper, config horizon), `tests/integration/postgres_recovery_retention_test.go` (escrow prune against a real Postgres). |
-| GDPR-11 | Third-party sharing and transfers (Arts. 4, 6, 28) | Met | -- | Processors documented in PRIVACY.md §6. `DELETE /user/social/{id}` unlinks a federated identity and removes the encrypted provider tokens with it; previously this was only possible by erasing the whole account. |
-| GDPR-13 | Data subject rights (Arts. 15–21) | Met | -- | Access/portability, rectification, erasure, restriction, objection and withdrawal all have endpoints; each writes to the audit trail. |
-| GDPR-15 | Consent for marketing (Arts. 5, 7) | Met | -- | `POST /user/marketing/unsubscribe` withdraws in one call with no confirmation step (Art. 7(3): withdrawal must be as easy as granting). `IdentityService.MarketingAllowed` is the sole send gate and fails closed: `import` and `legacy` provenance are **not** affirmative consent, so a migrated default-true flag or a pre-ticked checkbox cannot become a lawful basis for sending (Recital 32; *Planet49*, C-673/17). Asserted: `tests/compliance/gdpr_consent_test.go` (Affirmative()-only gate, anti-laundering, one-call withdrawal). |
-| GDPR-3 | Security of processing (Art. 32) | Met | -- | Covered in depth by the ASVS/NIST sections above. |
-| GDPR-4 | Records of processing (Art. 30) | Met | -- | PRIVACY.md §2/§3 constitute the processor-side record. |
-| GDPR-12 | Breach notification (Arts. 33–34) | Partial | Medium | PRIVACY.md §7 documents the 72-hour procedure and the processor→controller duty (Art. 33(2)), but nothing raises an alert from code. `riskScore` is computed and stored on every audit entry and no consumer reads it; the honeypot `Alerter` fires only on trap-user login, which is an intrusion tripwire, not a breach detector. **Fix:** risk-threshold webhook reusing the honeypot dispatcher. |
-| GDPR-14 | Audit-log integrity (Art. 5(2) accountability) | Partial | Medium | Append-only is enforced at the database level (trigger + revoked UPDATE/DELETE privileges). Cryptographic chaining (HMAC over the previous record hash) with read-time verification would make tampering by a DB-level adversary detectable. Tracked as AU-9 above. |
-| GDPR-16 | DPIA (Art. 35) | Partial | Low | Authentication of an existing user base is unlikely to meet the Art. 35(1) "high risk" threshold, but a DPIA template should ship for Operators whose deployment does. |
+vault42 meets all four of those requirements as actually written. The register
+carries verbatim requirement text for exactly this reason: a paraphrase can drift
+until it describes a different requirement, and nothing catches it.
+
+For completeness, the ASVS 5.0.0 mapping marks `v4.0.3-8.3.2` as **DELETED, NOT
+IN SCOPE**. The memory-zeroing concern the old finding described has no L1 or L2
+successor in the current standard; the only related requirement, V11.7.1 (full
+memory encryption), is L3. The underlying gap was recorded as CR-25, since closed, rather
+than being retired on a technicality.
 
 ---
 
-## Top Gaps to Close (Prioritized)
+## Summary by standard
 
-High-severity findings first, then medium, then low. All high-severity items fall within
-GDPR data-lifecycle and accountability scope.
+| Standard | Met | Accepted Risk | N/A | Total |
+|---|---:|---:|---:|---:|
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 214 | 7 | 42 | 263 |
+| NIST SP 800-63B-4 | 28 | 1 | 2 | 31 |
+| NIST SP 800-53 Rev 5 (Release 5.2.0) | 32 | 1 | 1 | 34 |
+| OWASP Top 10:2025 | 10 | 0 | 0 | 10 |
+| GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
+| RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
+| OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
+| NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
+| Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
+| **Total** | **348** | **10** | **46** | **404** |
 
-### High severity
+The 10 Accepted Risk rows collapse to **8 distinct accepted risks**: several
+requirements across different standards describe the same underlying gap, and
+each references one shared entry rather than being counted as an independent
+finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
+previously.
 
-**None open.** The four former high-severity findings are closed:
+### What moved, and why the N/A bucket shrank by seventeen
 
-1. ~~**GDPR-10 -- Data retention limits.**~~ Closed: `VAULT_AUDIT_RETENTION_DAYS` + background
-   sweeper (`internal/audit/retention.go`).
-2. **GDPR-12 -- Breach notification.** Downgraded to Medium: the Art. 33 procedure is documented
-   (PRIVACY.md §7); what is missing is the code path that raises an alert. See below.
-3. ~~**GDPR-5 -- Right to erasure.**~~ Closed: erasure now deletes the TOTP secret, WebAuthn
-   credentials and backup codes (which the `ON DELETE CASCADE` never removed, because the account
-   row is scrubbed with an `UPDATE`), and hard-deletes refresh-token rows.
-4. ~~**GDPR-13 -- Data subject rights.**~~ Closed: every right has an endpoint, each audited.
+Twenty-one Not Applicable rows rested on three sentences that were false on the
+facts. The V3 rationale said vault42 "ships no browser-facing application of its
+own"; `internal/frontend` embeds the SPA into the binary, `Dockerfile:32` and
+`.goreleaser.yaml:26-29` put a real Vue build there before compiling, and
+`internal/server/server.go:842` serves it. The V5 rationale said vault42
+"accepts no file uploads" and never "stores by client-supplied name";
+`internal/handler/blob.go:52` calls `r.FormFile("file")` and
+`PUT /user/blobs/named/{name}` stores under a caller-supplied name. The V1.3.7
+rationale said "no template is built from input";
+`internal/email/branding.go:76` and `:80` parse an admin-supplied subject and
+HTML body into `html/template`.
 
-### Medium severity
-5. **AC-12 -- Inactivity timeout (Partial).** Add idle-timeout tracking and refresh
-   rejection beyond the idle threshold.
-6. **AU-9 -- Audit log integrity (Partial).** Add cryptographic chaining and read-time
-   verification, and consider an immutable off-system mirror.
-7. **V3-2-2 -- Session invalidation on login (Partial).** Add an optional policy to revoke
-   existing token families on new login.
-8. **V2-1-1 -- Generic auth error messages (Partial).** Return generic
-   `invalid_credentials` for locked/banned/disabled accounts.
-9. **V6.4.1 -- Secret zeroing for runtime configs (Partial).** Migrate pepper and database
-   password to `[]byte` and zero on shutdown.
-10. **GDPR-12 -- Breach-notification alerting (Partial).** The procedure is documented but no
-    code raises an alert. `riskScore` is written on every audit entry and never read; the
-    honeypot `Alerter` fires only on trap-user login. Add a risk-threshold webhook reusing the
-    honeypot dispatcher, so a scoring spike reaches the controller inside the Art. 33 window.
+| Movement | Count | Rows |
+|---|---:|---|
+| N/A → **Met** | 13 | V3.2.1, V3.4.2, V3.5.1, V3.5.2, V3.7.1, V3.7.2, V5.1.1, V5.2.1, V5.2.3, V5.3.2, V5.4.1, V5.4.2, plus V1.3.7 |
+| N/A → **Accepted Risk** | 4 | V3.4.3, V3.5.3, V3.5.4, plus V1.3.1 |
+| **Met** → Accepted Risk | 1 | NIST SP 800-63B-4 §3.1.1.2 -- the password floor. See CR-31. |
+| **Accepted Risk** → Met | 2 | ASVS V1.3.6 and OWASP API7:2023 -- the SSRF pair. See CR-17, retired. |
+| N/A, reason rewritten and now tested | 12 | V3.2.2, V3.5.5, V5.2.2, V5.3.1, V5.4.3, V1.3.4, V6.2.6, V6.7.1, V7.4.4, V10.4.1, V14.3.1, V15.3.6 |
 
-### Low severity
-11. **NIST-5.2.2 -- Strict concurrent-session limit (Partial).** Optional hard enforcement
-    via per-user lock.
-12. **NIST-5.2.4 -- Explicit AAL labeling (Partial).** Add AAL constants and an
-    `aal_level` field.
-13. **V6.2.2 -- TOTP SHA-1 interop note (Partial).** Document the RFC 6238 constraint.
-14. **V8.3.2 -- Ephemeral buffer zeroing (Partial).** Zero decrypted identity plaintext and
-    crypto buffers after use.
-15. **SC-7 -- Boundary protection documentation (Partial).** Document infrastructure-level
-    network boundaries and provide network-policy examples.
-16. **M06 -- List endpoint pagination (Partial).** Add bounded `limit`/`offset` to
-    administrative list endpoints.
-17. **OAUTH2-TOKEN-001 -- Refresh-token invalidation (Partial).** Confirm and, if needed,
-    enforce revocation of the old refresh token on rotation.
-18. **GDPR-16 -- DPIA template (Partial).** Authentication of an existing user base is unlikely
-    to cross the Art. 35(1) "high risk" threshold, but ship a template for Operators whose
-    deployment does.
+Two of those rows -- **V3.4.3** and **V3.5.3** -- were real gaps hidden behind a
+false N/A: neither Met nor accepted, while the closing line of this document
+said there were no standing gaps. They are now CR-27 and CR-28.
+
+The Met bucket grew and one Met row was **lost**: §3.1.1.2, where the register,
+this document and `README.md` all said vault42 enforced a 15-character password
+minimum. It ships 15 as the default and enforces a floor of 8.
+
+---
+
+## Accepted risks
+
+Full text for each, including the compensating control, the residual risk and the
+revisit condition, is in the `accepted_risks` section of
+[`docs/compliance-register.json`](compliance-register.json).
+
+### Two namespaces, deliberately disjoint
+
+**`AR-nn` belongs to [`docs/security.md`](security.md)**, which defines AR-1
+through AR-18. **`CR-nn` belongs to this register.** Go source comments and the
+tests under `tests/attack/` cite `AR-nn` and always mean `docs/security.md`.
+
+Through 1.0.0 both documents numbered from one sequence, and four numbers meant
+different things in the two files:
+
+| ID | `docs/security.md` | this register, before the rename |
+|---|---|---|
+| AR-14 | the admin role-escalation triggers are not a boundary against SQL that reaches the database | session timeouts |
+| AR-15 | what keeps a forged signing key out of JWKS is the master key, not the grant | no alerting |
+| AR-17 | what stops `vault_app` issuing itself a capability credential is a trigger, not the grant | no outbound egress allowlist |
+| AR-18 | `vault_app` can still release an account lock, and owns every password hash | *(undefined)* |
+
+A reader following a cross-reference landed on an unrelated risk, and the
+sentence that used to close this document asserted that "AR-16 has since closed"
+while `docs/security.md` AR-16 -- *a `mint:token` holder can assert any subject
+the estate honors* -- was open, and remains open. The register's identifiers
+were renumbered to `CR-nn` so the collision cannot recur.
+`TestComplianceRegister_RiskIdentifierNamespacesDoNotCollide` fails on a new
+collision, and on any `AR-nn` or `CR-nn` reference in `docs/` that resolves to
+neither namespace.
+
+| ID | Severity | What is accepted | Requirements affected |
+|---|---|---|---|
+| **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
+| **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
+| **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. | ASVS V6.4.4 |
+| **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
+| **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. | ASVS V7.6.1 |
+| **CR-23** | Low | **Closed in the code, still open in the register.** The row says outbound SMTP negotiates STARTTLS opportunistically with no minimum version. `internal/email/smtp.go:112` sets `MinVersion: tls.VersionTLS12`, and `:115-117` refuses to send in the clear unless `VAULT_SMTP_ALLOW_PLAINTEXT` is set, which itself is refused outside dev and loopback. What remains is that a server advertising no STARTTLS is detected by its own EHLO response, so a downgrade needs an active attacker on the path. | ASVS V12.3.1 |
+| **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. A chain whose signing key lives in the same process would not defend against the adversary it appears to address. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
+| **CR-28** | Low | `GET /auth/verify-email` mutates state and no `Sec-Fetch-*` validation exists. The token is single-use and consumed atomically, which bounds it to one verification. | ASVS V3.5.3 |
+| **CR-29** | Low | With `VAULT_SERVE_FRONTEND` on, the SPA and the API answer on one origin, so the same-origin policy separates neither. Off by default; the chart ships the SPA as a separate workload. | ASVS V3.5.4 |
+| **CR-30** | Low | Admin email HTML is validated by a regex denylist rather than a sanitisation library. `super_admin`-only, `html/template` auto-escaping, and an email body rather than a same-origin page are the compensating controls. | ASVS V1.3.1 |
+
+### The three standards added in 1.0.0
+
+Each was added only where the code already satisfies it and a test can prove
+each row. Three were considered and **not** added, which is the more useful half
+of the list:
+
+| Added | Why it fits |
+|---|---|
+| **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. All ten Met. API7 was carried as an accepted risk alongside ASVS V1.3.6 until the four destinations an OIDC discovery document supplies -- the only ones vault42 takes from data -- were held to the issuer's own domain and judged again at dial time; see CR-17, retired. API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
+| **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. PO.3.2 is an accepted risk, CR-32: there is no dependency-update automation, and a nightly scanner is not one. |
+| **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. All ten controls Met across every workload the chart deploys, with no exclusions and no deviations. |
+
+**Not added, and why.**
+
+- **CIS Kubernetes Benchmark.** Overwhelmingly control-plane, etcd, kubelet and
+  node configuration that a chart does not own. Claiming it would be the exact
+  overclaim pattern the rest of this document is retracting. PSS-restricted is
+  the workload-scoped standard, and it is what is claimed.
+- **SOC 2 and ISO/IEC 27001.** Both attest an organisation, not a codebase. A
+  repository cannot be "SOC 2 compliant". The only legitimate artefact would be
+  a customer-enablement mapping, clearly labelled, and it would publish a gap on
+  day one: CC7.2 and CC7.3 need an operator's own monitoring and response
+  process on top of what vault42 detects, which CR-15's closure supplies the
+  detection half of and nothing in a repository can supply the rest of.
+- **PCI-DSS.** vault42 stores, processes and transmits no cardholder data and
+  has never been in a CDE assessment. The only honest sentence is that vault42
+  can serve as the authentication component supporting Requirement 8 in an
+  operator's CDE, and that vault42 itself is out of scope and unassessed.
+- **RFC 8414 (Authorization Server Metadata).** vault42 is not an authorization
+  server: it has no authorize endpoint, and `GET /auth/oauth2/authorize` takes a
+  `provider` and redirects to an upstream IdP rather than accepting a `client_id`
+  or a `redirect_uri`. The discovery document at
+  `internal/handler/wellknown.go:76-80` publishes three fields, of which one
+  (`issuer`) is required by §2, one (`jwks_uri`) is optional, and one
+  (`access_token_signing_alg_values_supported`) is not a registered §2 metadata
+  name at all; `response_types_supported` and `token_endpoint` are both absent.
+  Claiming 8414 would mean claiming a role vault42 does not play. Separately,
+  `internal/handler/client.go` returns `invalid_client_credentials` where RFC
+  6749 §5.2 specifies `invalid_client`, its 401 carries no `WWW-Authenticate`
+  though it accepts Basic auth, and `grant_type` is never read, so
+  `unsupported_grant_type` is unreachable. Those are 6749 debts, and they are
+  worth paying on their own terms rather than as a step toward 8414.
+- **"FIDO2 L2".** FIDO Alliance L1/L2 are *authenticator* certifications; there
+  is no such certification for a relying party. What is claimable, and what the
+  WebAuthn rows say, is conformance to the W3C WebAuthn specification's relying
+  party operations.
+- **FIPS 140.** Not claimed anywhere. There is no BoringCrypto build, no
+  `GOFIPS` setting and no FIPS build tag in the tree.
+- **OWASP Top 10:2021.** The register carries the 2025 edition. Adding 2021
+  alongside it would recreate the two-editions-at-once confusion the ASVS
+  4.0.3 -> 5.0.0 migration already cost this project.
+
+**Claimed elsewhere, and this section used to deny it.** Two entries were
+written when they were true and were not revisited when the code moved, which is
+the failure mode this whole document exists to catch, so they are corrected here
+rather than deleted.
+
+- **SLSA Build Level 2 is claimed**, in the body of every GitHub release
+  (`.github/workflows/release.yml:722-725`). The sentence this section used to
+  carry described only BuildKit's `provenance: true`, which is indeed an
+  unsigned `mode=min` predicate and is indeed not a level. It is not what the
+  claim rests on: `.github/workflows/release.yml:362-381`, `:435-441` and
+  `:589-596` run `actions/attest-build-provenance` over the three images, the
+  release archives and the chart, so each statement is assembled and signed by
+  GitHub's attestation service under the workflow's OIDC identity and recorded
+  in Rekor. The release body says so and names the weaker artefact separately at
+  `:752-754`. The register's SSDF PS.3.2 row still carries the superseded
+  wording and is owed the same edit.
+- **AAL3 is asserted**, on any login completed with a user-verified WebAuthn
+  authenticator. `internal/service/mfa.go:106-108` returns `AAL3` for that case,
+  `ACRForAAL` renders it as `urn:vault42:aal:3`, and
+  `internal/service/token.go:166` signs it into the access token's `acr` claim.
+  The precise statement is that AAL2 is the level vault42 meets in full, with
+  every SHALL met and two SHOULDs deviated from under CR-14, and that a
+  user-verified WebAuthn login is additionally *asserted* as AAL3 without vault42
+  having been assessed against §4.3. A relying party reading `acr` is entitled to
+  know which of those two it is holding. The register's
+  `NIST SP 800-63B-4 / 3.2.4` row files attestation as Not Applicable on the
+  basis that "vault42 publishes an AAL2 statement and no higher", which is the
+  premise this paragraph contradicts, and that row cites no test.
+
+### Closed since this document was first written
+
+Six accepted risks have closed, and in each case the test written to fail *on
+closure* is what forced the row to move rather than a person remembering to.
+
+| ID | What closed it | The test that fired |
+|---|---|---|
+| **CR-27** | Both policies now declare `object-src 'none'` and `base-uri 'none'` (`internal/middleware/security_headers.go:30-31`). | `TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims` |
+| **CR-25** | DPoP finished. `cnf.jkt` is stamped at issuance on the access, rotation and challenge paths and enforced by a constant-time thumbprint comparison; the decrypted blob buffers are now wiped too. Refresh tokens remain unbound and there is no `DPoP-Nonce`, both stated in the requirement row rather than carried as a risk. | `TestAnAccessTokenIssuedUnderAValidatedProofCarriesCnfJkt` and `TestABoundTokenIsRefusedOnAnOrdinaryAuthenticatedRouteWithoutAProof`. `TestRFC9700_4_10_1_SenderConstrainedDPoP` exercises proof validation only and does not reach the binding, so it is not the test that fired. |
+| **CR-33** | `adminGateway.hostNetwork` now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile with no exemption. It stays opt-in for operators who want the `LocalOnly` posture. | `TestK8sPSS_Restricted_ThereAreNoDeviationsLeft` |
+| **CR-31** | `passwordMinLengthFloor` is now **15**, not 8, and the dev profile no longer has *no* floor -- it has a lower one of 8, which is itself the figure §3.1.1.1 requires a verifier to accept. | `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` |
+| **CR-32** | `.github/dependabot.yml` exists and covers github-actions, gomod for both modules, npm, nuget and docker. | the assertion that no updater existed, now replaced by `TestSSDF_800_218_DependencyUpdateAutomationIsAutomated` |
+| **CR-15** | `internal/alert` keeps windowed counts per subject and per masked source network, raises one alert per rule crossing with a cooldown, bounds its key space and reports its own saturation; `cmd/vault/main.go` installs it on every profile with `alert.LogSink`. `risk_score` stopped being a per-call-site literal: `audit.Severity` keys one scale by event class, `Logger.Log` no longer takes a score, and `AuditFilter.MinRiskScore` emits a `risk_score >=` predicate reachable as `min_risk_score` on `GET /admin/audit`. **CR-24 did not close with it** -- nothing here ships audit records off-box or detects tampering at read time. | the tripwire asserting that `repository.AuditFilter` still carried no field mentioning risk, written to fail on closure and named in `tests/compliance/owasp_top10_2025_test.go` where it used to stand. It fired, and is replaced in the same change by `TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten` and `TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile` |
+
+Full text for each, including what was accepted while it was open, is in
+`retired_risks` in the register.
+
+---
+
+## Assessment method
+
+**Assessed by:** vault42 maintainers, 2026-08-10, against the revisions in the
+table above.
+
+**How each row was reached.** Every requirement was read in its published text,
+not in a paraphrase, and classified against source at a cited `file:line`. Where
+a previous version of this document and the code disagreed, the code won and the
+disagreement was recorded as a correction above.
+
+**What "Met" means here.** A requirement is Met when at least one test in
+`tests/compliance/` asserts it and that test runs in CI. Two thirds of the suite
+asserts *properties* of the tree rather than the behaviour of one function,
+because the second kind cannot see the failures that matter. `internal/rbac` sat
+at 100% statement coverage while having no access-control test at all: line
+coverage recorded that the permission table was *read*, not that it granted the
+right things. The property tests are the answer to that:
+
+- every `tls.Config` in the shipped tree declares a minimum version
+- no shipped code sets `InsecureSkipVerify`
+- every SQL call site in the repository layer is assembled only from literals,
+  package constants and placeholder-only formatting, checked by a taint analysis
+  over every such call site, with a negative control that proves the detector
+  fires on four known-bad shapes
+- every route outside a declared public allowlist passes through an
+  authentication guard
+- every mutating admin route is gated by a permission the read-only role does
+  not hold, parsed out of the router
+- every server-error response in the HTTP layer carries a fixed message literal,
+  checked across every such call site the scan finds
+- every third-party GitHub Action is pinned to a commit SHA
+
+**What was not assessed.** The components listed under Scope as out of scope.
+Nothing else was excluded.
+
+**Container-backed tests.** Some requirements are proven against a real
+PostgreSQL through testcontainers. Where no container runtime is reachable those
+tests skip cleanly and say so, rather than failing; they run in CI. Every
+requirement whose only evidence needs a database is marked as such in the
+register.
+
+**Reproducing this report.** Clone the repository and run:
+
+```bash
+go test ./tests/compliance/
+```
+
+To run only the register gate:
+
+```bash
+go test ./tests/compliance/ -run TestComplianceRegister
+```
+
+---
+
+## Standing gaps not covered by an accepted risk
+
+**None -- and the previous version of this sentence was false.** It said the
+same words, and they were true of the register rather than of the system. Two
+requirements were neither Met nor covered by any accepted risk, because both sat
+behind a Not Applicable filed on a premise that was wrong on the facts:
+
+- **ASVS V3.4.3** -- neither Content-Security-Policy declared `object-src 'none'`
+  or `base-uri 'none'`. Filed as **CR-27**, and since closed: both policies
+  declare both directives at `internal/middleware/security_headers.go:30-31`.
+- **ASVS V3.5.3** -- `GET /auth/verify-email` mutates state
+  (`internal/server/server.go:537`, `internal/handler/auth.go:194`) and the auth
+  server performs no `Sec-Fetch-*` validation. Now **CR-28**. The bridge does
+  validate those headers (`cmd/bridge/proxy.go:373-379`), which is outside this
+  assessment's scope; the earlier wording said no such validation existed
+  anywhere in the tree, and that was wrong.
+
+The sentence is true again because those two rows were reclassified, not because
+the gaps were not there. What made a false universal claim survivable was that
+nothing checked the classification underneath it: a Met row has to name a test,
+an N/A row asserting non-existence did not.
+`TestComplianceRegister_NotApplicableNonExistenceClaimsNameAnExistingTest` now
+requires one, and would have caught all twenty-one of the misclassified rows on
+the day they were written.
+
+**Correction.** This section previously said CR-14's mandatory half was
+unwired and that `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` would fail
+when the wiring landed. Both halves were wrong. The wiring is present, at
+`cmd/vault/main.go:402` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
+fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:468`
+-- and no test of that name has ever existed. The tests that do exist are
+`TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented`, which asserts
+the mandatory SHALL is satisfied, and
+`TestNIST63B4_2_2_3_TheInactivityDefaultIsTheAAL2FigureAndTheOverallOneIsNot`,
+which fails the day the 720-hour default drops inside the AAL2 SHOULD and also
+the day the inactivity default rises above 1 hour.
+
+**A second correction, and a retirement.** The tracker named above replaced
+`TestNIST63B4_2_2_3_TheOverallTimeoutIsEstablishedButNotAtTheRecommendedValue`,
+which carried the same overall-timeout assertion plus a tripwire that walked
+every migration looking for a column named `last_activity_at`, `last_used_at` or
+`idle_expires_at` and failed the moment one appeared. The inactivity timeout
+shipped without any of them: the presented refresh token's own `created_at` is
+already the instant its family last rotated, and `repository.ActiveFamily`
+publishes that same value to the user as `LastUsedAt`. The tripwire was watching
+for one expected implementation rather than for the property, so it would have
+gone on passing while the gap it guarded was closed. It is retired and replaced
+with assertions that drive the refresh path.
+
+What remains open under CR-14 is one advisory figure: the 720-hour overall
+default against section 2.2.3's 24-hour SHOULD.
+
+A test named in a register row is checked by CI. A test named in prose was not,
+which is how a name that resolves to nothing survived a release.
+`TestComplianceDocs_EveryTestNamedInProseExists` closes that hole.
+
+Both remaining trackers fail on closure rather than on regression, so a fix
+cannot land without the register being updated in the same change. CR-19,
+the login-outcome enumeration oracle, has since closed: account_locked, the
+import-claim path, banned and disabled now all answer 401 invalid_credentials
+without a valid password. CR-16 has since closed too: `RBACCheck` now writes an
+`admin_authz_denied` record on a permission denial, so a failed authorization
+decision reaches the audit log instead of leaving no trail.

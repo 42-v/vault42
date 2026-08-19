@@ -25,6 +25,21 @@ public static class VaultBlazorExtensions
     /// });
     /// </code>
     /// </example>
+    /// <param name="services">The service collection to register on.</param>
+    /// <param name="configure">
+    /// Configures the options. Invoked once, immediately; the resulting instance is registered as a
+    /// singleton, so later mutation of it changes the live configuration.
+    /// </param>
+    /// <returns>The same <paramref name="services"/>, for chaining.</returns>
+    /// <exception cref="ArgumentException">
+    /// <c>Authority</c>, <c>ClientId</c> or <c>RedirectUri</c> is empty.
+    /// </exception>
+    /// <remarks>
+    /// Registers an unauthenticated <see cref="HttpClient"/> for the token exchange itself.
+    /// Attaching the authorization handler to that client would make refresh depend on a valid
+    /// token, which is circular. Use <see cref="AddVaultAuthorization"/> on your own named clients
+    /// instead.
+    /// </remarks>
     public static IServiceCollection AddVaultAuth(
         this IServiceCollection services,
         Action<VaultBlazorOptions> configure)
@@ -92,6 +107,13 @@ public static class VaultBlazorExtensions
     /// }).AddVaultAuthorization();
     /// </code>
     /// </example>
+    /// <param name="builder">The named-client builder to attach the handler to.</param>
+    /// <returns>The same <paramref name="builder"/>, for chaining.</returns>
+    /// <remarks>
+    /// The token is attached to every request the client makes, so scope the client to the Vault
+    /// origin. Pointing it at a third-party host would send the bearer there too. Requires
+    /// <see cref="AddVaultAuth"/> to have registered the handler.
+    /// </remarks>
     public static IHttpClientBuilder AddVaultAuthorization(this IHttpClientBuilder builder)
     {
         return builder.AddHttpMessageHandler<VaultAuthorizationMessageHandler>();

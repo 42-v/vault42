@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -12,22 +13,80 @@ type memEntry struct {
 	expiresAt time.Time
 }
 
+// memoryMaxEntries caps how many keys this cache holds.
+//
+// Every key here is attacker-chosen in practice. The rate limiter writes
+// rl:<limiter>:ip:<addr> on every request including the ones it rejects, OAuth
+// authorize writes one oauth_state:<nonce> per call, and the lockout and reset
+// counters are keyed on identifiers a caller supplies. An IPv6 source has a /64
+// to spend, so a million distinct keys at roughly 150 bytes each is ~150 MiB
+// living for the window of whichever limiter was hit first — up to an hour —
+// inside a 512 MiB pod. This backend is also what the process falls back to
+// when Redis is unavailable, so the flood lands during an outage.
+//
+// 200k entries is generous for the legitimate working set (live sessions,
+// reset tokens, in-flight OAuth states) and bounds the map to tens of MiB.
+const memoryMaxEntries = 200_000
+
 // MemoryCache is an in-memory cache with TTL expiry.
 type MemoryCache struct {
-	mu        sync.RWMutex
-	data      map[string]memEntry
+	mu         sync.RWMutex
+	data       map[string]memEntry
+	maxEntries int
+	// atCap latches the first refusal so a sustained flood logs once rather
+	// than once per request, on the request path it is already saturating.
+	atCap     bool
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
 // NewMemoryCache creates a new in-memory cache with a cleanup goroutine.
 func NewMemoryCache() *MemoryCache {
+	return newMemoryCacheWithCap(memoryMaxEntries)
+}
+
+// newMemoryCacheWithCap builds a cache with an explicit entry cap, so a test
+// can reach the cap without allocating the production one.
+func newMemoryCacheWithCap(maxEntries int) *MemoryCache {
 	mc := &MemoryCache{
-		data: make(map[string]memEntry),
-		done: make(chan struct{}),
+		data:       make(map[string]memEntry),
+		maxEntries: maxEntries,
+		done:       make(chan struct{}),
 	}
 	go mc.cleanup(30 * time.Second)
 	return mc
+}
+
+// admit reports whether a NEW key may be stored. Called with the write lock
+// held.
+//
+// At the cap a new key is refused and an existing one still updates. Evicting
+// instead would be worse than refusing: the entries worth keeping are the
+// lockout, login-limiter and OTP keys, and an eviction policy driven by the
+// flood is a policy the attacker writes.
+//
+// A refusal surfaces as ErrCacheFull, and every caller that guards something has
+// to answer it, because the refusal is the ONLY signal it produces. This comment
+// used to say the lockout "already answers from the durable count", which was
+// false: the durable fallback fired on a read error, and the cap produces a
+// refused WRITE followed by a perfectly clean read miss, so a saturated cache
+// read as an account that had never failed and the lockout switched off. The
+// fail-closed limiters were correct (they check the error and answer 503); the
+// lockout now latches the refusal (AuthService.noteLockoutCounterRefused) and
+// consults the durable count while it stands. A new guard built on this cache
+// owes ErrCacheFull the same treatment: a refused write is not a zero.
+func (m *MemoryCache) admit(key string) bool {
+	if m.maxEntries <= 0 || len(m.data) < m.maxEntries {
+		return true
+	}
+	if _, exists := m.data[key]; exists {
+		return true
+	}
+	if !m.atCap {
+		m.atCap = true
+		log.Printf("WARNING: memory cache at %d entries; new keys are refused until the sweep frees space", m.maxEntries)
+	}
+	return false
 }
 
 // Get retrieves a value by key. Returns ErrNotFound if the key is missing or expired.
@@ -48,6 +107,9 @@ func (m *MemoryCache) Set(_ context.Context, key string, value string, ttl time.
 	var exp time.Time
 	if ttl > 0 {
 		exp = time.Now().Add(ttl)
+	}
+	if !m.admit(key) {
+		return ErrCacheFull
 	}
 	m.data[key] = memEntry{value: value, expiresAt: exp}
 	return nil
@@ -81,6 +143,9 @@ func (m *MemoryCache) SetIfNotExists(_ context.Context, key string, value string
 	if ok && (e.expiresAt.IsZero() || time.Now().Before(e.expiresAt)) {
 		return false, nil // key already exists and is not expired
 	}
+	if !m.admit(key) {
+		return false, ErrCacheFull
+	}
 	var exp time.Time
 	if ttl > 0 {
 		exp = time.Now().Add(ttl)
@@ -106,6 +171,9 @@ func (m *MemoryCache) Increment(_ context.Context, key string, ttl time.Duration
 	} else if ttl > 0 {
 		// Key is new or expired — start fresh window with new TTL
 		exp = now.Add(ttl)
+	}
+	if !m.admit(key) {
+		return 0, ErrCacheFull
 	}
 	count++
 	m.data[key] = memEntry{value: strconv.FormatInt(count, 10), expiresAt: exp}

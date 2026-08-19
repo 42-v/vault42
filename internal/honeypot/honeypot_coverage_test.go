@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -19,12 +20,12 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	// configures and all subsequent calls are no-ops. The default values are
 	// "vault"/"vault". We verify that calling it multiple times does not panic
 	// and that the output still produces valid JWTs with the original iss/aud.
-	ConfigureFakeJWT("should-be-ignored", "should-be-ignored")
-	ConfigureFakeJWT("also-ignored", "also-ignored")
+	ConfigureFakeJWT("should-be-ignored", "should-be-ignored", 15*time.Minute)
+	ConfigureFakeJWT("also-ignored", "also-ignored", 15*time.Minute)
 
-	token, err := GenerateFakeJWT()
+	token, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT after ConfigureFakeJWT: %v", err)
+		t.Fatalf("trap mint after ConfigureFakeJWT: %v", err)
 	}
 
 	parts := strings.Split(token, ".")
@@ -49,44 +50,12 @@ func TestConfigureFakeJWT_NoOp(t *testing.T) {
 	if !ok || iss == "" {
 		t.Error("iss claim should be a non-empty string")
 	}
-	aud, ok := claims["aud"].(string)
-	if !ok || aud == "" {
-		t.Error("aud claim should be a non-empty string")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// FakeLoginCookie tests
-// ---------------------------------------------------------------------------
-
-func TestFakeLoginCookie_ReturnsHexToken(t *testing.T) {
-	cookie, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie error: %v", err)
-	}
-	if len(cookie) != 64 {
-		t.Errorf("cookie length = %d, want 64 hex chars", len(cookie))
-	}
-	// Verify it is valid hex.
-	for _, c := range cookie {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			t.Errorf("non-hex character %q in cookie", c)
-			break
-		}
-	}
-}
-
-func TestFakeLoginCookie_Unique(t *testing.T) {
-	c1, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie: %v", err)
-	}
-	c2, err := FakeLoginCookie()
-	if err != nil {
-		t.Fatalf("FakeLoginCookie: %v", err)
-	}
-	if c1 == c2 {
-		t.Error("consecutive FakeLoginCookie calls should produce unique values")
+	// aud is an array on every token the vault signs, because jwt.ClaimStrings
+	// marshals as one. A trap token that spelled it as a bare string could be
+	// told apart from a real one by decoding a single segment.
+	aud, ok := claims["aud"].([]interface{})
+	if !ok || len(aud) == 0 {
+		t.Errorf("aud claim should be a non-empty array like a real token's, got %#v", claims["aud"])
 	}
 }
 
@@ -126,7 +95,7 @@ func TestAlert_WebhookReturnsErrorStatus(t *testing.T) {
 	a := NewAlerter(srv.URL, nil, nil)
 
 	// Should not panic; the error status is logged but not propagated.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.1",
 		UserAgent: "test-agent",
@@ -143,7 +112,7 @@ func TestAlert_WebhookReturns500(t *testing.T) {
 	a := NewAlerter(srv.URL, nil, nil)
 
 	// Should not panic.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "scan_detected",
 		IP:        "10.0.0.2",
 		RiskScore: 50,
@@ -165,7 +134,7 @@ func TestAlert_WebhookConnectionFailed(t *testing.T) {
 	a := NewAlerter(url, nil, nil)
 
 	// Should not panic; connection errors are logged but not propagated.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.3",
 		RiskScore: 90,
@@ -176,7 +145,7 @@ func TestAlert_WebhookUnresolvableHost(t *testing.T) {
 	a := NewAlerter("http://this-host-does-not-exist.invalid:9999/webhook", nil, nil)
 
 	// Should not panic; DNS resolution failure is logged.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "probe",
 		IP:        "10.0.0.4",
 		RiskScore: 20,
@@ -311,7 +280,7 @@ func TestCollectHeaders_MultiValueHeader(t *testing.T) {
 
 func TestAlert_NoWebhook_NoPanic(t *testing.T) {
 	a := NewAlerter("", []string{"trap@test.com"}, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "192.168.1.1",
 		Email:     "trap@test.com",
@@ -327,7 +296,7 @@ func TestAlert_SanitizedScheme_NoWebhookSent(t *testing.T) {
 	a := NewAlerter("ftp://evil.com/exfil", nil, nil)
 
 	// Should not panic and should not attempt to send to ftp://.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "probe",
 		IP:        "10.0.0.5",
 		RiskScore: 10,

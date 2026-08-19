@@ -69,3 +69,29 @@ func (r *AdminConfigRepo) Delete(ctx context.Context, key string) error {
 	}
 	return nil
 }
+
+// ClaimIfAbsent records value under key when the key holds nothing yet, and
+// returns whatever the key holds afterwards.
+//
+// One statement rather than Get followed by Set, because the callers are two
+// processes that can boot at the same moment. With a read then a write, both
+// would find the key empty and the second write would overwrite the first, so
+// two planes holding different HMAC secrets would each conclude they had
+// recorded theirs and neither would notice the disagreement. ON CONFLICT makes
+// the claim atomic.
+//
+// The DO UPDATE is a no-op assignment of the column to itself. It is there
+// because ON CONFLICT DO NOTHING returns no row at all on a conflict, which is
+// the one case the caller most needs an answer for: RETURNING then yields the
+// incumbent value instead of nothing.
+func (r *AdminConfigRepo) ClaimIfAbsent(ctx context.Context, key, value string) (string, error) {
+	var stored string
+	err := r.db.Pool.QueryRow(ctx, `
+		INSERT INTO auth.admin_config (key, value, updated_at) VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = auth.admin_config.value
+		RETURNING value`, key, value).Scan(&stored)
+	if err != nil {
+		return "", fmt.Errorf("claim admin config: %w", err)
+	}
+	return stored, nil
+}

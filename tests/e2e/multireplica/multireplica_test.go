@@ -144,7 +144,7 @@ func TestMultiReplica(t *testing.T) {
 					}
 				}
 				stB, _ := jsonPost(t, httpClient, replB.URL+"/auth/register", map[string]string{
-					"email": uniqueEmail("rlb-"+prof), "password": testPassword, "display_name": "r2",
+					"email": uniqueEmail("rlb-" + prof), "password": testPassword, "display_name": "r2",
 				})
 				if stB == 429 {
 					saw429 = true
@@ -309,29 +309,36 @@ func TestMultiReplica_MemoryCacheNotShared(t *testing.T) {
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	cleanupState(t, pool, rclient)
 
-	// Lockout not shared.
-	email := uniqueEmail("memlock")
-	registerAndVerify(t, pool, httpClient, replA, email)
+	// The property under test is that the in-memory cache backend keeps its state
+	// per process, so a limit one replica reaches does not carry to another. The
+	// probe is the registration IP rate limit, which lives only in the cache: 3
+	// per hour per IP (internal/server/server.go). Account lockout is no longer a
+	// valid probe for this: failed_login_count is a durable column every replica
+	// reads from the shared database, so a lockout is shared by design and cannot
+	// tell the memory backend apart from Postgres. The limiter runs ahead of the
+	// register handler, so it counts every request and the profile of the replica
+	// does not matter.
 
-	wrong := "WrongPasswordForMem-NotGood-15chars"
-	for i := 0; i < 6; i++ {
-		jsonPost(t, httpClient, replA.URL+"/auth/login", map[string]string{"email": email, "password": wrong})
-	}
-	stG, _ := jsonPost(t, httpClient, replB.URL+"/auth/login", map[string]string{"email": email, "password": testPassword})
-	if stG != 200 {
-		t.Fatalf("memory cache incorrectly shared lockout state across replicas: good login on B got %d (expected 200, documents per-process)", stG)
-	}
-
-	// Also rate not shared (but main point is lockout/rate).
-	cleanupState(t, pool, rclient)
-	for i := 0; i < 4; i++ {
-		jsonPost(t, httpClient, replA.URL+"/auth/register", map[string]string{
-			"email": uniqueEmail("memrl"), "password": testPassword, "display_name": "r",
+	// Drive replica A past its registration limit from this one client IP.
+	var lastA int
+	for i := 0; i < 5; i++ {
+		lastA, _ = jsonPost(t, httpClient, replA.URL+"/auth/register", map[string]string{
+			"email": uniqueEmail("memrl-a"), "password": testPassword, "display_name": "r",
 		})
 	}
-	stRL, _ := jsonPost(t, httpClient, replB.URL+"/auth/register", map[string]string{
-		"email": uniqueEmail("memrlb"), "password": testPassword, "display_name": "r2",
+	if lastA != http.StatusTooManyRequests {
+		t.Fatalf("replica A never rate limited its registrations from one IP: last status %d, want 429", lastA)
+	}
+
+	// Replica B, hit from the same IP, keeps its own counter in its own process,
+	// so a first registration there is admitted rather than refused. A 429 here
+	// would mean the two processes shared the counter, which only a shared backend
+	// does.
+	stB, _ := jsonPost(t, httpClient, replB.URL+"/auth/register", map[string]string{
+		"email": uniqueEmail("memrl-b"), "password": testPassword, "display_name": "r2",
 	})
-	// With separate memory, B should generally allow more than shared redis would.
-	_ = stRL
+	if stB == http.StatusTooManyRequests {
+		t.Fatalf("memory cache incorrectly shared the registration rate limit across replicas: " +
+			"B refused a first registration with 429")
+	}
 }

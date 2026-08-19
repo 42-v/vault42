@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/42-v/vault42/blob/main/SECURITY.md
+    about: >-
+      Do not open an issue. Vault42 is an authentication server; a public issue
+      discloses the vulnerability to every deployment at once. Email
+      vault@42-v.com (Tuta, end-to-end encrypted). SECURITY.md has the intake
+      process, response timelines and scope.
+  - name: Read the documentation first
+    url: https://github.com/42-v/vault42/blob/main/docs/README.md
+    about: >-
+      Configuration, deployment, the API reference and the accepted-risk
+      register. Deliberate tradeoffs are listed in docs/security.md and are not
+      bugs.

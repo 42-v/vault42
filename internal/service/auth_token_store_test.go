@@ -58,7 +58,6 @@ func TestLogin_LastLoginStampFailureDoesNotFailTheLogin(t *testing.T) {
 		Email:    "user@example.com",
 		Password: "correct-horse-battery-staple",
 	}, "203.0.113.1", "TestAgent")
-
 	if err != nil {
 		t.Fatalf("a failed last_login stamp cost the user their login: %v", err)
 	}

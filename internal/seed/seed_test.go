@@ -16,9 +16,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ repository.UserRepository         = (*mockUserRepo)(nil)
-	_ repository.ClientRepository       = (*mockClientRepo)(nil)
-	_ repository.AdminUserRepository    = (*mockAdminUserRepo)(nil)
+	_ repository.UserRepository      = (*mockUserRepo)(nil)
+	_ repository.ClientRepository    = (*mockClientRepo)(nil)
+	_ repository.AdminUserRepository = (*mockAdminUserRepo)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,8 @@ func (m *mockUserRepo) VerifyEmail(context.Context, string) error               
 func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
 func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
 func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
+func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error     { return nil }
+func (m *mockUserRepo) SetMustResetPassword(context.Context, string, bool) error { return nil }
 func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 
 type mockClientRepo struct {
@@ -124,21 +126,21 @@ func TestLoad_MissingFile(t *testing.T) {
 }
 
 func TestValidate_ClientNameRequired(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{{Role: "frontend"}}}
+	sf := &File{Clients: []ClientSeed{{Role: "frontend"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty client name")
 	}
 }
 
 func TestValidate_ClientRoleRequired(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "web"}}}
+	sf := &File{Clients: []ClientSeed{{Name: "web"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty client role")
 	}
 }
 
 func TestValidate_DuplicateClientName(t *testing.T) {
-	sf := &SeedFile{Clients: []ClientSeed{
+	sf := &File{Clients: []ClientSeed{
 		{Name: "web", Role: "frontend"},
 		{Name: "web", Role: "service"},
 	}}
@@ -148,35 +150,35 @@ func TestValidate_DuplicateClientName(t *testing.T) {
 }
 
 func TestValidate_UserEmailRequired(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Password: "TestPassword12345!"}}}
+	sf := &File{Users: []UserSeed{{Password: "TestPassword12345!"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty user email")
 	}
 }
 
 func TestValidate_UserEmailInvalid(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "notanemail", Password: "TestPassword12345!"}}}
+	sf := &File{Users: []UserSeed{{Email: "notanemail", Password: "TestPassword12345!"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for invalid email")
 	}
 }
 
 func TestValidate_UserPasswordRequired(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "a@b.com"}}}
+	sf := &File{Users: []UserSeed{{Email: "a@b.com"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for empty password")
 	}
 }
 
 func TestValidate_UserPasswordTooShort(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{{Email: "a@b.com", Password: "short"}}}
+	sf := &File{Users: []UserSeed{{Email: "a@b.com", Password: "short"}}}
 	if err := validate(sf); err == nil {
 		t.Fatal("expected error for short password")
 	}
 }
 
 func TestValidate_DuplicateEmail(t *testing.T) {
-	sf := &SeedFile{Users: []UserSeed{
+	sf := &File{Users: []UserSeed{
 		{Email: "a@b.com", Password: "TestPassword12345!"},
 		{Email: "a@b.com", Password: "AnotherPassword12345!"},
 	}}
@@ -186,17 +188,18 @@ func TestValidate_DuplicateEmail(t *testing.T) {
 }
 
 func TestRun_NewClients(t *testing.T) {
+	firstBootSink(t)
 	clients := newMockClientRepo()
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{
 			{Name: "web", Role: "frontend", Scopes: []string{"user:read"}},
 			{Name: "api", Role: "service", Scopes: []string{"user:read", "audit:read"}},
 		},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: clients}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -216,11 +219,11 @@ func TestRun_ExistingClient(t *testing.T) {
 	clients := newMockClientRepo()
 	clients.clients["web"] = &model.Client{ID: "existing-id", Name: "web"}
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -233,13 +236,13 @@ func TestRun_ExistingClient(t *testing.T) {
 func TestRun_NewUsers(t *testing.T) {
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{
 			{Email: "dev@test.com", Password: "TestPassword12345!", DisplayName: "Dev", Locale: "sk"},
 		},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -266,11 +269,11 @@ func TestRun_ExistingUser(t *testing.T) {
 	users := newMockUserRepo()
 	users.users["dev@test.com"] = &model.User{ID: "existing-id", Email: "dev@test.com"}
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "dev@test.com", Password: "TestPassword12345!"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -283,11 +286,11 @@ func TestRun_ExistingUser(t *testing.T) {
 func TestRun_UserDefaultLocale(t *testing.T) {
 	users := newMockUserRepo()
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -301,11 +304,11 @@ func TestRun_UserEmailVerifiedExplicitFalse(t *testing.T) {
 	users := newMockUserRepo()
 
 	f := false
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "a@b.com", Password: "TestPassword12345!", EmailVerified: &f}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()})
+	err := Run(context.Background(), sf, Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -323,12 +326,12 @@ func TestRun_UserPasswordPeppered(t *testing.T) {
 	const pepper = "audit-2026-04-25-test-pepper"
 	const password = "TestPassword12345!"
 
-	sf := &SeedFile{
+	sf := &File{
 		Users: []UserSeed{{Email: "peppered@test.com", Password: password, DisplayName: "P"}},
 	}
 
 	err := Run(context.Background(), sf,
-		Deps{Users: users, Clients: newMockClientRepo(), Pepper: pepper})
+		Deps{Users: users, Clients: newMockClientRepo()}, pepper)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -357,16 +360,18 @@ func TestRun_UserPasswordPeppered(t *testing.T) {
 	}
 }
 
-// A-1 negative-control: when Deps.Pepper is empty, hashes verify without pepper
-// (backward compatibility — an operator who hasn't configured VAULT_PEPPER
-// gets the same behavior as before).
+// A-1 negative-control: when the pepper is empty, hashes verify without one
+// (backward compatibility for an operator who has not configured VAULT_PEPPER).
+// The empty pepper is passed explicitly, because that is now the only way to
+// ask for it: it used to be an unset struct field, and cmd/vault leaving it
+// unset by accident locked every seeded account out of the server.
 func TestRun_UserPasswordNoPepperBackcompat(t *testing.T) {
 	users := newMockUserRepo()
 	const password = "TestPassword12345!"
 
-	sf := &SeedFile{Users: []UserSeed{{Email: "nopepper@test.com", Password: password}}}
+	sf := &File{Users: []UserSeed{{Email: "nopepper@test.com", Password: password}}}
 	err := Run(context.Background(), sf,
-		Deps{Users: users, Clients: newMockClientRepo()}) // no Pepper
+		Deps{Users: users, Clients: newMockClientRepo()}, "")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -384,11 +389,11 @@ func TestRun_UserPasswordNoPepperBackcompat(t *testing.T) {
 func TestRun_ClientRepoError(t *testing.T) {
 	clients := &errorClientRepo{err: errors.New("db down")}
 
-	sf := &SeedFile{
+	sf := &File{
 		Clients: []ClientSeed{{Name: "web", Role: "frontend"}},
 	}
 
-	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients})
+	err := Run(context.Background(), sf, Deps{Users: newMockUserRepo(), Clients: clients}, "")
 	if err == nil {
 		t.Fatal("expected error from client repo")
 	}
@@ -413,7 +418,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"admin username required", `{"admins":[{"password":"TestPassword12345!","role":"viewer"}]}`, "username is required"},
 		{"admin password required", `{"admins":[{"username":"root","role":"viewer"}]}`, "password is required"},
 		{"admin password short", `{"admins":[{"username":"root","password":"short","role":"viewer"}]}`, "at least 15"},
-		{"admin bad role", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"root"}]}`, "role must be super_admin"},
+		{"admin bad role", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"root"}]}`, `role "root" is not an admin tier`},
 		{"admin duplicate", `{"admins":[{"username":"root","password":"TestPassword12345!","role":"viewer"},{"username":"root","password":"TestPassword12345!","role":"viewer"}]}`, "duplicate username"},
 	}
 	for _, tt := range tests {
@@ -440,10 +445,12 @@ func (m *errorClientRepo) Create(context.Context, *model.Client) error { return 
 func (m *errorClientRepo) GetByName(context.Context, string) (*model.Client, error) {
 	return nil, m.err
 }
+
 func (m *errorClientRepo) GetByID(context.Context, string) (*model.Client, error) { return nil, nil }
-func (m *errorClientRepo) List(context.Context) ([]*model.Client, error)          { return nil, nil }
-func (m *errorClientRepo) Update(context.Context, *model.Client) error            { return nil }
-func (m *errorClientRepo) Deactivate(context.Context, string) error               { return nil }
+
+func (m *errorClientRepo) List(context.Context) ([]*model.Client, error) { return nil, nil }
+func (m *errorClientRepo) Update(context.Context, *model.Client) error   { return nil }
+func (m *errorClientRepo) Deactivate(context.Context, string) error      { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -462,9 +469,9 @@ func writeTemp(t *testing.T, content string) string {
 // Table for FilterUserRoles covering reserved stripping and edges.
 func TestFilterUserRoles_Table(t *testing.T) {
 	tests := []struct {
-		name  string
-		in    []string
-		want  []string
+		name string
+		in   []string
+		want []string
 	}{
 		{"nil", nil, nil},
 		{"empty", []string{}, nil},
@@ -504,21 +511,30 @@ func (m *mockAdminUserRepo) Create(_ context.Context, u *model.AdminUser) error 
 	m.users[u.Username] = u
 	return nil
 }
+
 func (m *mockAdminUserRepo) GetByUsername(_ context.Context, un string) (*model.AdminUser, error) {
 	return m.users[un], nil
 }
-func (m *mockAdminUserRepo) GetByID(context.Context, string) (*model.AdminUser, error) { return nil, nil }
-func (m *mockAdminUserRepo) List(context.Context) ([]*model.AdminUser, error)     { return nil, nil }
-func (m *mockAdminUserRepo) Count(context.Context) (int, error)                  { return 0, nil }
-func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error      { return nil }
+
+func (m *mockAdminUserRepo) GetByID(context.Context, string) (*model.AdminUser, error) {
+	return nil, nil
+}
+func (m *mockAdminUserRepo) List(context.Context) ([]*model.AdminUser, error) { return nil, nil }
+func (m *mockAdminUserRepo) Count(context.Context) (int, error)               { return 0, nil }
+func (m *mockAdminUserRepo) Update(context.Context, *model.AdminUser) error   { return nil }
 func (m *mockAdminUserRepo) IncrementFailedLogin(context.Context, string) (int, error) {
 	return 0, nil
 }
-func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error           { return nil }
-func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error       { return nil }
+
+func (m *mockAdminUserRepo) ResetFailedLogin(context.Context, string) error { return nil }
+
+func (m *mockAdminUserRepo) LockUntil(context.Context, string, time.Time) error { return nil }
+
 func (m *mockAdminUserRepo) UpdateLastTOTPCounter(context.Context, string, int64) error { return nil }
-func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error            { return nil }
-func (m *mockAdminUserRepo) Revoke(context.Context, string) error                     { return nil }
+
+func (m *mockAdminUserRepo) UpdateLastLogin(context.Context, string) error { return nil }
+
+func (m *mockAdminUserRepo) Revoke(context.Context, string) error { return nil }
 
 // TestLoad_Table covers happy and all error paths in Load/validate.
 func TestLoad_Table(t *testing.T) {
@@ -540,7 +556,7 @@ func TestLoad_Table(t *testing.T) {
 		{"admin missing username", `{"admins":[{"password":"123456789012345","role":"viewer"}]}`, "username is required"},
 		{"admin missing pass", `{"admins":[{"username":"a","role":"viewer"}]}`, "password is required"},
 		{"admin short pass", `{"admins":[{"username":"a","password":"short","role":"viewer"}]}`, "at least 15"},
-		{"admin bad role", `{"admins":[{"username":"a","password":"123456789012345","role":"root"}]}`, "role must be super_admin"},
+		{"admin bad role", `{"admins":[{"username":"a","password":"123456789012345","role":"root"}]}`, `role "root" is not an admin tier`},
 		{"admin dup username", `{"admins":[{"username":"a","password":"123456789012345","role":"viewer"},{"username":"a","password":"123456789012345","role":"viewer"}]}`, "duplicate username"},
 		{"valid with admins", `{"admins":[{"username":"root","password":"123456789012345","role":"super_admin"}]}`, ""},
 	}
@@ -568,21 +584,21 @@ func TestLoad_Table(t *testing.T) {
 func TestRunAdmins_Table(t *testing.T) {
 	tests := []struct {
 		name    string
-		sf      *SeedFile
+		sf      *File
 		setup   func(*mockAdminUserRepo)
 		wantErr string
 	}{
 		{
 			name: "empty admins ok",
-			sf:   &SeedFile{},
+			sf:   &File{},
 		},
 		{
 			name: "seed new admin",
-			sf:   &SeedFile{Admins: []AdminSeed{{Username: "adm", Password: "123456789012345", Role: "viewer"}}},
+			sf:   &File{Admins: []AdminSeed{{Username: "adm", Password: "123456789012345", Role: "viewer"}}},
 		},
 		{
 			name: "skip existing admin",
-			sf:   &SeedFile{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "admin"}}},
+			sf:   &File{Admins: []AdminSeed{{Username: "ex", Password: "123456789012345", Role: "operator"}}},
 			setup: func(m *mockAdminUserRepo) {
 				m.users["ex"] = &model.AdminUser{ID: "1", Username: "ex"}
 			},

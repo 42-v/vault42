@@ -8,6 +8,8 @@ image:
   pullPolicy: IfNotPresent
   # -- Overrides the image tag (default: Chart appVersion)
   tag: ""
+  # -- Pin the image by digest. Set, it wins over the tag above.
+  digest: ""
 
 # -- Image pull secrets for private registries
 imagePullSecrets: []
@@ -38,13 +40,21 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# -- Container security context
+# -- Container security context. The values here are the same restricted profile
+# the vault.containerSecurityContext helper renders for the bundled
+# infrastructure workloads; they live in values because these are the product's
+# own containers and an operator may have to tune them for a specific cluster.
+# Anything removed from this map is removed from every product workload at once.
 securityContext:
   allowPrivilegeEscalation: false
+  privileged: false
   readOnlyRootFilesystem: true
+  runAsNonRoot: true
   capabilities:
     drop:
       - ALL
+  seccompProfile:
+    type: RuntimeDefault
 
 # -- Vault profile: production | embedded | dev
 profile: production
@@ -71,6 +81,25 @@ serveFrontend: false
 metrics:
   # -- Enable Prometheus-compatible /metrics endpoint (VAULT_METRICS_ENABLED)
   enabled: false
+  # -- Port the metrics listener binds. /metrics moved off the public listener,
+  # where it was an unauthenticated read of every counter in the process, onto a
+  # listener of its own. The server defaults that listener to 127.0.0.1:9090,
+  # reachable only from inside the pod, so this chart has to bind it to the pod
+  # IP for a scrape to arrive at all -- and the port being separate from the
+  # public one is what finally lets a NetworkPolicy fence it, which is something
+  # no policy could do while it was a path on port 8080.
+  port: 9090
+  networkPolicy:
+    # -- Sources allowed to reach the metrics port, as NetworkPolicy peers. Empty
+    # allows any pod the cluster lets connect, which is still far narrower than
+    # the public listener was, because it is one port serving one route rather
+    # than a path behind everything else the vault answers. Narrow it to the
+    # namespace Prometheus runs in wherever that is known, e.g.
+    #   from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    from: []
   serviceMonitor:
     # -- Deploy a Prometheus ServiceMonitor (requires prometheus-operator CRDs)
     enabled: false
@@ -96,13 +125,67 @@ keyRotation:
   retentionPeriod: "1h"
   # -- How often pods refresh keys from the database (VAULT_KEY_REFRESH_INTERVAL)
   refreshInterval: "60s"
+  # -- How old the active signing key may get before the scheduler rotates it
+  # (VAULT_KEY_ROTATION_INTERVAL). The one of these three that rotates
+  # anything: the other two say how often a pod re-reads the store and how long
+  # a retired key lingers in JWKS afterwards. 720h is the binary's own horizon.
+  # 0 or less disables the scheduler, which is how a deployment that rotates
+  # through POST /admin/keys/rotate or the rotate-jwks CLI turns it off.
+  rotationInterval: "720h"
 
 # -- Force Secure flag on cookies even without local TLS (VAULT_FORCE_SECURE_COOKIES)
-# Useful behind TLS-terminating proxies like Cloudflare Tunnel.
-forceSecureCookies: false
+# On by default because tls.enabled is off by default: this chart expects TLS to
+# terminate at an ingress or a tunnel. The refresh cookie is named
+# __Host-refresh_token, and a browser discards a __Host- cookie that arrives
+# without Secure, so with both off the chart shipped a production profile whose
+# refresh could never work. Config.Validate refuses to start on that pair, so
+# the pod never reached the browser to prove it; it sat in CrashLoopBackOff with
+# the reason one line deep in the logs.
+forceSecureCookies: true
 
 # -- Trusted proxy CIDR ranges for X-Forwarded-For (TRUSTED_PROXIES)
 trustedProxies: ""
+
+# -- Header a trusted proxy puts the real client address in (REAL_IP_HEADER),
+# e.g. CF-Connecting-IP behind Cloudflare or X-Real-IP behind nginx. Believed
+# only when the connection itself came from a trustedProxies entry. Empty falls
+# back to X-Forwarded-For parsing. Without one of these the rate limiter, the
+# lockout counter and every audit row see the ingress controller's pod address
+# for every request in the deployment.
+realIPHeader: ""
+
+# -- Allowed CORS origins (CORS_ORIGINS), rendered comma-joined. This is the
+# setting that works in the production profile: applyProductionDefaults forces
+# CORS_ALLOW_ALL off without consulting the environment, so a wildcard is not
+# reachable there by any means and an origin has to be named.
+corsOrigins: []
+
+# -- Addresses or CIDR ranges allowed to reach the service (IP_ALLOWLIST),
+# rendered comma-joined. Empty allows all. An entry that is not an address or a
+# range refuses to start rather than being dropped, because a dropped entry is
+# an allowlist that covers less than it says.
+ipAllowlist: []
+
+# -- Addresses or CIDR ranges denied access (IP_BLOCKLIST), rendered
+# comma-joined. Evaluated after ipAllowlist. Changing it means changing this
+# value and rolling the deployment: the in-process mutators reach one replica.
+ipBlocklist: []
+
+# -- Header a trusted proxy puts the client's country code in (GEO_IP_HEADER),
+# e.g. CF-IPCountry. The geo lists below do nothing without it, and it does
+# nothing without trustedProxies, so the chart refuses to render either half on
+# its own outside the dev profile.
+geoIPHeader: ""
+
+# -- ISO 3166-1 alpha-2 country codes allowed access (GEO_ALLOWLIST), rendered
+# comma-joined. Empty allows all. Two letters exactly: the middleware compares
+# them against the header verbatim, so GEO_BLOCKLIST=UK blocks nothing because
+# the code for the United Kingdom is GB.
+geoAllowlist: []
+
+# -- ISO 3166-1 alpha-2 country codes denied access (GEO_BLOCKLIST), rendered
+# comma-joined. Empty blocks none.
+geoBlocklist: []
 
 # -- TLS fingerprint header from proxy (VAULT_TLS_FINGERPRINT_HEADER)
 # Requires a proxy that extracts JA4 during TLS handshake. Example: "X-TLS-Fingerprint"
@@ -124,8 +207,231 @@ passwordMinLength: 15
 # -- Enable HIBP breach check on password set
 hibpCheck: true
 
+# ---- Authentication controls ----
+# Every switch below gates a control the binary reads from the environment. A
+# switch the chart cannot set is a control that is off in every install whatever
+# the compliance register says about it, which is exactly what happened to DPoP.
+# The chart control-switch gate in tests/spec now fails on any boolean the config
+# package reads that goes unexposed here without a stated reason.
+
+# -- Require every user to enrol a second factor (VAULT_MFA_REQUIRED). On by
+# default, matching the binary. Turning it off downgrades every account to
+# password-only authentication.
+mfaRequired: true
+
+# -- Allow public self-service registration (VAULT_REGISTRATION_ENABLED). On by
+# default, matching the binary. Set false for a deployment where accounts are
+# created by an administrator or provisioned from an identity provider.
+registrationEnabled: true
+
+# -- Sender-constrain access tokens issued with a DPoP proof, RFC 9449
+# (VAULT_DPOP_ENABLED). Off by default, matching the binary. A token issued
+# without a proof stays an ordinary bearer token, so turning this on does not
+# break a client that cannot send one; a client that has been issued a bound
+# token must then send a matching proof on every later request. Refresh tokens
+# are not sender-bound and no DPoP-Nonce is issued -- see docs/config.md.
+dpop:
+  enabled: false
+
+# -- Refuse a login when the session-count query fails, instead of allowing it
+# (VAULT_STRICT_SESSION_LIMIT). Off by default, matching the binary: the session
+# cap then fails open on a database error rather than locking everybody out
+# during one. Set true where holding the cap matters more than availability.
+strictSessionLimit: false
+
+# ---- Session and token lifetimes ----
+# strictSessionLimit above says what happens when the session-count query
+# fails; until this block existed the count it fails over was not settable from
+# a chart at all, and neither was any lifetime bound on the sessions it counts.
+sessions:
+  # -- Concurrent refresh-token families a user may hold
+  # (VAULT_MAX_SESSIONS_PER_USER). The binary's own figure.
+  maxPerUser: 10
+  # -- Total age a refresh-token family may reach, measured from creation and
+  # independent of how often it is refreshed (VAULT_MAX_SESSION_LIFETIME).
+  # Without it, rotation grants a fresh full TTL every time and a continuously
+  # refreshing client holds a session forever. NIST SP 800-63B-4 section 2.2.3
+  # says the overall AAL2 timeout SHOULD be no more than 24h; 720h is the
+  # binary's default and that is a deployment decision, not a default. 0
+  # disables the bound.
+  maxLifetime: "720h"
+  # -- How long a refresh-token family may go unused before it has to
+  # reauthenticate (VAULT_INACTIVITY_TIMEOUT). The other half of maxLifetime:
+  # that one ends a session in constant use, this one ends a session that
+  # stopped being used. Measured from the last rotation, so it has to stay
+  # comfortably above the access-token TTL or sessions that never went idle are
+  # terminated. 0 disables the bound.
+  inactivityTimeout: "1h"
+  # -- Access token lifetime (VAULT_ACCESS_TOKEN_TTL). Empty renders nothing and
+  # lets the profile decide: 15m in production and embedded.
+  accessTokenTTL: ""
+  # -- Refresh token lifetime (VAULT_REFRESH_TOKEN_TTL). Empty lets the profile
+  # decide: 7 days in production, 24 hours in embedded and dev. Pinning a value
+  # here would quietly make a dev release behave like a production one.
+  refreshTokenTTL: ""
+  # -- Refresh token lifetime when the login asked to be remembered
+  # (VAULT_REMEMBER_ME_TTL). Empty lets the profile decide: 30 days.
+  rememberMeTTL: ""
+
+# -- How long in-flight requests have to finish during a graceful shutdown
+# (VAULT_SHUTDOWN_TIMEOUT). Empty lets the profile decide: 15s in production,
+# 5s in embedded and dev.
+shutdownTimeout: ""
+
+# ---- Audit log ----
+audit:
+  # -- Entries buffered before new ones are dropped (VAULT_AUDIT_BUFFER_SIZE).
+  # It is what stands between an audit write and the request path, and a
+  # deployment writing faster than the sink drains loses the overflow silently.
+  bufferSize: 1000
+  # -- Days an audit entry is kept before the sweeper purges it
+  # (VAULT_AUDIT_RETENTION_DAYS). 0 is the binary's default and means disabled.
+  # These rows hold personal data -- user id, IP, user agent, fingerprint hash --
+  # so Art. 5(1)(e) caps how long they may live, and deleting security logs is
+  # not a safe thing for a chart to start doing on upgrade. Pick a horizon
+  # consistent with the retention table in docs/PRIVACY.md section 4.
+  retentionDays: 0
+  # -- How often buffered entries are flushed (VAULT_AUDIT_FLUSH_INTERVAL).
+  # Empty lets the profile decide: 30s on embedded, unbatched elsewhere.
+  flushInterval: ""
+
+# -- Days an account-recovery escrow record is kept
+# (VAULT_RECOVERY_RETENTION_DAYS). 0 is the binary's default and means disabled.
+# Each record holds an erased user's email, roles and display name encrypted to
+# the offline recovery key, and the escrow is exempt from the erasure cascade by
+# design, so the same Art. 5(1)(e) argument applies -- and so does the caution:
+# the escrow is the only recoverable copy of an erased account.
+recoveryRetentionDays: 0
+
+# ---- Service-scoped JSON documents ----
+# New surface reachable by every existing client-credentials holder, so it is
+# off at the binary's default. All five render together: the switch alone would
+# mount a store whose size, count and quota ceilings the operator never chose.
+svcdoc:
+  # -- Mount the service-scoped document store (VAULT_SVCDOC_ENABLED)
+  enabled: false
+  # -- Let a service publish a document every other service can read
+  # (VAULT_SVCDOC_SHARED_ENABLED). Documents are private to the writing service
+  # unless this is on and the write asks for it.
+  sharedEnabled: false
+  # -- Per-document ceiling in bytes (VAULT_SVCDOC_MAX_SIZE)
+  maxSize: 65536
+  # -- Document count ceiling per (subject, service) (VAULT_SVCDOC_MAX_PER_SUBJECT)
+  maxPerSubject: 32
+  # -- Total stored bytes per subject (VAULT_SVCDOC_QUOTA_BYTES)
+  quotaBytes: 1048576
+
+# -- Permit outbound connections to private address ranges
+# (VAULT_OUTBOUND_ALLOW_PRIVATE). False renders nothing and lets the profile
+# decide, which is false in production and true in dev. Set true only when an
+# identity provider genuinely lives inside this network: it lets a provider's
+# discovery document point vault42 at an address inside the deployment. The
+# link-local range cloud instance metadata answers on stays refused either way.
+outboundAllowPrivate: false
+
+# ---- Delegated signing (POST /mint) ----
+# The endpoint signs a token for a subject vault42 never authenticated, on the
+# word of the calling service. Anyone holding the mint credential can therefore
+# speak as any subject to everything that trusts the JWKS, and a verifier cannot
+# tell a minted token from a real one by its signature. Enabling it is a trust
+# decision about the caller, not a feature toggle -- see docs/security.md.
+#
+# Every value below is the binary's own default, so a release that does not set
+# mint.enabled is unchanged by this block existing. The four settings beside the
+# switch are rendered with it because none of them works alone: without an
+# audience the process refuses to start, and with empty allow-lists the endpoint
+# mounts and grants nothing.
+mint:
+  # -- Mount POST /mint (VAULT_MINT_ENABLED). Off by default, matching the
+  # binary. When false the route is not registered at all.
+  enabled: false
+  # -- The aud claim stamped on minted tokens (VAULT_MINT_AUDIENCE). Required
+  # once enabled, and it MUST differ from origin: a minted token carrying
+  # vault42's own audience authenticates against vault42. The chart refuses to
+  # render on either mistake rather than letting the pod crash-loop over it.
+  audience: ""
+  # -- Lifetime of a minted token when the caller names none
+  # (VAULT_MINT_TOKEN_TTL). Minted tokens cannot be revoked, so the lifetime is
+  # the only bound on a leaked one.
+  tokenTTL: "5m"
+  # -- Ceiling on a caller-requested lifetime (VAULT_MINT_MAX_TTL), itself
+  # capped at 15m in code. A request above the ceiling is refused, not clamped,
+  # so a misconfigured caller is visible rather than silently downgraded.
+  maxTTL: "5m"
+  # -- Roles a minted token may carry (VAULT_MINT_ROLES), rendered comma-joined.
+  # Empty means no role may be minted, which is the safe failure and the
+  # default. Admin-reserved names are refused at startup regardless.
+  allowedRoles: []
+  # -- Scopes a minted token may carry (VAULT_MINT_SCOPES), rendered
+  # comma-joined. Empty means no scope may be minted. Capability scopes such as
+  # kms:unwrap and mint:token are refused regardless of what is listed here.
+  allowedScopes: []
+
+# -- Hosts an issuer's discovery document may name beyond the issuer's own
+# domain (VAULT_OUTBOUND_ALLOWED_HOSTS), rendered comma-joined. Empty is the
+# common case; the list exists for a provider whose endpoints legitimately span
+# domains, such as an accounts.google.com issuer serving keys from
+# www.googleapis.com.
+outboundAllowedHosts: []
+
 # -- Email sender address
 emailFrom: "noreply@example.com"
+
+# ---- Email delivery and branding ----
+email:
+  # -- Sending backend (VAULT_EMAIL_PROVIDER): smtp or sendgrid. The chart
+  # refuses to render sendgrid without secrets.keys.sendgridApiKey, because
+  # cmd/vault selects the SendGrid sender only when the provider name and the
+  # key are both present and otherwise falls through in silence.
+  provider: smtp
+  # -- Byte ceiling on a custom email template body accepted by the admin API
+  # (VAULT_MAX_EMAIL_TEMPLATE_SIZE)
+  maxTemplateSize: 65536
+  # -- Global display name on the From line (VAULT_EMAIL_FROM_NAME). Empty
+  # renders nothing.
+  fromName: ""
+  # -- Domains a per-app From-address override may use
+  # (VAULT_EMAIL_FROM_ALLOWED_DOMAINS), rendered comma-joined. Empty disables
+  # address overrides entirely; display-name overrides still apply.
+  fromAllowedDomains: []
+
+branding:
+  # -- Logo URL for email templates (VAULT_LOGO_URL). Empty renders nothing.
+  logoURL: ""
+  # -- Primary branding colour (VAULT_PRIMARY_COLOR). Must be #RRGGBB: the
+  # server refuses to start on anything else, because the value reaches a CSS
+  # attribute in an email template.
+  primaryColor: "#00FF42"
+
+# ---- Federated login ----
+# Empty means the provider is not registered and its button is not shown. Each
+# client id is public and lives in the ConfigMap; each client secret is a
+# credential and is named through secrets.keys, mounted from the release Secret
+# by the _FILE convention like every other credential here.
+oauth:
+  google:
+    # -- Google OAuth2 client id (VAULT_OAUTH_GOOGLE_CLIENT_ID)
+    clientID: ""
+  github:
+    # -- GitHub OAuth2 client id (VAULT_OAUTH_GITHUB_CLIENT_ID)
+    clientID: ""
+  facebook:
+    # -- Facebook OAuth2 client id (VAULT_OAUTH_FACEBOOK_CLIENT_ID)
+    clientID: ""
+
+# -- Generic OpenID Connect providers -- Okta, Auth0, Keycloak, Entra
+# (VAULT_OIDC_PROVIDERS and the per-name variables beside it). Each entry needs
+# a name, an issuer and a clientID; loadOIDCProviders skips an incomplete
+# provider without a word, so the chart fails the render instead. secretKey
+# names the key in the release Secret holding that provider's client secret.
+#
+#   oidcProviders:
+#     - name: okta
+#       issuer: https://example.okta.com
+#       clientID: 0oa1b2c3d4
+#       scopes: "openid email profile"
+#       secretKey: oidc-okta-client-secret
+oidcProviders: []
 
 # ---- Blob Storage ----
 blob:
@@ -139,14 +445,21 @@ blob:
   quotaBytes: "10485760"
 
 # ---- Seed ----
-# Declarative seeding of clients and users at startup. Data is stored in a
-# ConfigMap and mounted as /etc/vault/seed.json. Seeding is idempotent.
+# Declarative seeding of clients and users at startup. seed.users carries a
+# cleartext password per user, so the rendered data is a Secret mounted as
+# /etc/vault/seed.json, never a ConfigMap. Seeding is idempotent.
 seed:
   # -- Enable declarative seeding from JSON
   enabled: false
+  # -- Name of an existing Secret holding seed.json. Set it to keep seed
+  # credentials out of the values file and out of `helm get values` entirely;
+  # the chart then renders no seed object of its own.
+  existingSecret: ""
   # -- Client definitions to seed
   clients: []
-  # -- User definitions to seed
+  # -- User definitions to seed. Each entry's password is a real credential:
+  # anything that can read this values file, the release's stored values, or the
+  # rendered manifest can read it.
   users: []
 
 # ---- Secrets ----
@@ -154,7 +467,13 @@ seed:
 secrets:
   # -- Name of the existing Kubernetes Secret containing all credentials
   existingSecret: ""
-  # -- Key mappings inside the Secret
+  # -- Key mappings inside the Secret. The eight above the blank line are what a
+  # release has always mounted. Everything below it is empty by default and
+  # names a key only when the deployment needs the capability it gates, so an
+  # existing Secret is still the whole set the pod asks for. Naming one here is
+  # what puts its _FILE variable in the pod, exactly as with the eight; there is
+  # no bare path setting, because a path with nothing behind it is a capability
+  # that reports configured and does nothing.
   keys:
     masterKey: master-key
     dbMigPassword: db-mig-password
@@ -164,8 +483,60 @@ secrets:
     redisPassword: redis-password
     signingKey: signing-key
     pepper: pepper
+
+    # -- Root secret the per-kid KEKs for POST /kms/unwrap are derived from
+    # (KMS_ROOT_KEY_FILE). Empty means the KMS endpoint is not mounted at all.
+    # Kept cryptographically separate from the master key by HKDF domain
+    # separation, so it must be a different value.
+    kmsRootKey: ""
+    # -- PEM-encoded RSA public key the account-erasure escrow is encrypted to
+    # (VAULT_RECOVERY_PUBLIC_KEY_FILE). Empty means erasure escrows nothing and
+    # an erased account cannot be recovered by anyone, including the operator.
+    # The private half belongs offline.
+    recoveryPublicKey: ""
+    # -- SMTP username (SMTP_USER_FILE). Needed by any relay that authenticates.
+    smtpUser: ""
+    # -- SMTP password (SMTP_PASS_FILE)
+    smtpPass: ""
+    # -- SendGrid API key (SENDGRID_API_KEY_FILE). Required by
+    # email.provider=sendgrid; the chart refuses to render that provider
+    # without it.
+    sendgridApiKey: ""
+    # -- OAuth2 client secrets (VAULT_OAUTH_*_CLIENT_SECRET_FILE), one per
+    # provider whose clientID is set under oauth above.
+    oauthGoogleClientSecret: ""
+    oauthGithubClientSecret: ""
+    oauthFacebookClientSecret: ""
   # -- Mount path for secret files
   mountPath: /run/secrets
+
+# ---- First-boot credentials ----
+# Three credentials are minted exactly once, on a boot, with no second chance to
+# show them: the admin token, each seeded client secret, and the admin gateway's
+# super_admin bootstrap password. They used to go to the process log, which in
+# every deployment this chart targets is scraped into an aggregator whose readers
+# are a wider set than the database the credential protects, and which keeps them
+# long after they are rotated.
+#
+# They now go to a 0600 file, or to stdout when stdout is a terminal, or nowhere
+# at all -- and "nowhere" means the boot step refuses rather than proceeding.
+# That is deliberate and it is why this has to be configured: a pod is not a
+# terminal, so without this path a seeded install fails at seed time.
+firstBootCredential:
+  # -- Path the credential file is written to. Must be a path inside the volume
+  # below, not the volume's own mount point: the writer refuses anything that
+  # already exists and is not a regular file no wider than 0600.
+  path: /run/first-boot/credentials
+  # -- Size of the memory-backed volume holding it.
+  sizeLimit: 1Mi
+  # -- PersistentVolumeClaim to hold the credential file instead of memory.
+  #
+  # Empty means a memory-backed emptyDir: the credential never touches a node's
+  # disk, and it does not survive the pod. That is the right default for a secret
+  # and the wrong one for an operator who has not read it yet, so if first-boot
+  # minting is how this deployment gets its credentials rather than a Secret
+  # created up front, name a claim here and read the file from it afterwards.
+  existingClaim: ""
 
 # ---- Database ----
 database:
@@ -177,8 +548,20 @@ database:
   name: vault
   # -- SSL mode (require | verify-full | disable)
   sslmode: require
+  # -- Permit an unencrypted sslmode (disable | allow | prefer) outside the dev
+  # profile. Config.Validate refuses to start on one otherwise, so a same-pod or
+  # loopback Postgres has to opt in rather than boot on a warning.
+  allowPlaintext: false
   # -- Max connections
   maxConns: "25"
+  # -- Server-side ceiling on a single statement (DB_STATEMENT_TIMEOUT), at the
+  # binary's own figure. Without it a pathological query holds its connection
+  # until the client gives up, and maxConns of those stop the service answering
+  # with no error anywhere and a pod that stays Ready. 0 disables it.
+  statementTimeout: "10s"
+  # -- Server-side ceiling on waiting for a lock (DB_LOCK_TIMEOUT), at the
+  # binary's own figure. 0 disables it.
+  lockTimeout: "3s"
 
 # ---- Cache ----
 cache:
@@ -196,8 +579,20 @@ redis:
     repository: redis
     # -- Redis image tag
     tag: "7-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Redis maxmemory setting
   maxMemory: "64mb"
+  # -- Redis resource requests/limits. The memory limit has to clear maxMemory
+  # above with room for the process itself, or the pod is OOM-killed at the point
+  # the cache fills, which is the point it is most useful.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
 
 # ---- SMTP ----
 smtp:
@@ -219,10 +614,10 @@ ingress:
   enabled: false
   # -- Ingress class name
   className: ""
-  # -- Ingress annotations
+  # -- Ingress annotations. Examples:
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  #   nginx.ingress.kubernetes.io/ssl-redirect: "true"
   annotations: {}
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   # -- Ingress hosts
   hosts:
     - host: auth.example.com
@@ -259,6 +654,19 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 5
 
+# -- Startup probe configuration. autoMigrate is on by default, so the first
+# boot against a new or upgraded database runs the schema migration before the
+# server answers anything. Without a startup probe the liveness probe's
+# initialDelaySeconds is what has to cover that migration, and a slow one on a
+# large database gets the pod killed part-way through it. failureThreshold x
+# periodSeconds is the budget: five minutes here.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 5
+  failureThreshold: 60
+
 autoscaling:
   # -- Enable HPA
   enabled: false
@@ -290,6 +698,16 @@ networkPolicy:
   # -- SMTP destination selector (empty = allow external). For production,
   # restrict to specific SMTP server IPs via ipBlock CIDR.
   smtpCIDR: ""
+  # -- Outbound HTTPS from the vault pod. Required by the HIBP breach check
+  # (hibpCheck, on by default), by any configured OIDC/OAuth provider and by the
+  # SendGrid API. Disabling it while hibpCheck stays true leaves the breach check
+  # enabled in configuration and unreachable in network, where it fails open
+  # silently on every password set.
+  httpsEgress:
+    # -- Allow egress on 443
+    enabled: true
+    # -- Restrict to these CIDRs (empty = any destination on 443)
+    cidrs: []
 
 # -- Node selector
 nodeSelector: {}
@@ -307,14 +725,25 @@ frontend:
   image:
     # -- Frontend image repository
     repository: vault-frontend
-    # -- Frontend image tag
-    tag: latest
+    # -- Frontend image tag (default: Chart appVersion, like every other image here;
+    # "latest" meant a rebuilt tag silently replaced a running pod on restart)
+    tag: ""
     # -- Frontend image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Number of frontend replicas
   replicaCount: 1
-  # -- Frontend resource requests/limits
-  resources: {}
+  # -- Frontend resource requests/limits. An nginx serving static files needs
+  # very little; the point of the limit is that a pod with none is scheduled as
+  # best-effort and is the first thing evicted when a node runs short.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 # ---- PostgreSQL (dev/embedded only) ----
 postgres:
@@ -325,10 +754,20 @@ postgres:
     repository: postgres
     # -- PostgreSQL image tag
     tag: "17-alpine"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- PVC storage size
   storage: 1Gi
-  # -- Password for the vault_app role (set via init SQL)
-  appPassword: ""
+  # -- PostgreSQL resource requests/limits. This key used to be read by nothing:
+  # values-embedded.yaml and values-honeypot.yaml both set it and the template
+  # never referenced it, so two profiles configured a limit that never existed.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
 # ---- Mailpit (dev only) ----
 mailpit:
@@ -337,8 +776,20 @@ mailpit:
   image:
     # -- Mailpit image repository
     repository: axllent/mailpit
-    # -- Mailpit image tag
-    tag: latest
+    # -- Mailpit image tag. A version, not "latest": the tag records which
+    # release the digest below is, and a floating tag would let a rebuilt image
+    # replace a running pod on restart.
+    tag: "v1.30.7"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a"
+  # -- Mailpit resource requests/limits
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   ingress:
     # -- Expose Mailpit web UI via ingress
     enabled: false
@@ -359,6 +810,8 @@ bridge:
     tag: ""
     # -- Bridge image pull policy
     pullPolicy: IfNotPresent
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
   # -- Bridge listen address
   listenAddr: ":8080"
   # -- Requests per window before scoring
@@ -395,9 +848,29 @@ bridge:
 
 # ---- Honeypot Instance (bridge mode only) ----
 honeypotInstance:
+  secrets:
+    # -- Name of the Secret holding the honeypot's credentials. Empty resolves to
+    # <release>-honeypot, and the chart refuses to render if it resolves to the
+    # production Secret.
+    #
+    # The honeypot used to mount the production one, which handed the component
+    # this deployment invites attackers into the production master key, HMAC
+    # secret, pepper, signing key, admin token and database passwords. Breaking
+    # the decoy was breaking the vault. This Secret carries the same key names as
+    # `secrets.keys` and must carry different values: a honeypot holding a copy
+    # of the real master key is not a honeypot, it is a second copy of the vault
+    # with the door open.
+    existingSecret: ""
   database:
     # -- Honeypot database name (separate from real)
     name: vault_honeypot
+  # -- Fake usernames or emails that raise a honeypot alert when touched
+  # (VAULT_HONEYPOT_TRAP_USERS), rendered comma-joined. Read only in the
+  # honeypot profile, which is the profile this instance runs.
+  trapUsers: []
+  # -- Where a honeypot alert is POSTed (VAULT_HONEYPOT_WEBHOOK). Empty means
+  # the alerter is wired to nothing and a touched trap account notifies nobody.
+  webhookURL: ""
   # -- Honeypot vault resource requests/limits
   resources:
     requests:
@@ -409,6 +882,14 @@ honeypotInstance:
   postgres:
     # -- Honeypot PostgreSQL PVC storage size
     storage: 1Gi
+    # -- Honeypot PostgreSQL resource requests/limits
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 # ---- Admin Gateway ----
 # Local-only mTLS admin gateway with RBAC for operator access.
@@ -422,10 +903,55 @@ adminGateway:
     tag: ""
     # -- Image pull policy
     pullPolicy: IfNotPresent
-  # -- Use host network (binds to node loopback for production local-only access)
-  hostNetwork: true
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: ""
+  # -- Bind the gateway to the node's loopback via the host network namespace.
+  # Off by default. hostNetwork is forbidden by both the baseline and the
+  # restricted Pod Security Standards profiles, so shipping it on meant the
+  # chart's default posture could not be admitted to an enforcing namespace, and
+  # the operator who found that out found it out as a rejected pod. It remains
+  # the strongest posture for the admin plane -- it is layer 1 of the local-only
+  # story in docs/admin-gateway.md -- but it is now something a deployment opts
+  # in to, on a namespace that has been given the exemption to allow it. See
+  # charts/vault/README.md.
+  hostNetwork: false
+  # -- Run the gateway in dev mode. This DISABLES two controls: LocalOnly, which
+  # restricts the admin plane to loopback, and RejectProxyHeaders. It must be set
+  # explicitly whenever hostNetwork is false, because LocalOnly refuses every
+  # request arriving through an ingress and the chart will otherwise render a
+  # deployment that cannot serve. Setting it is a decision to run the admin plane
+  # reachable from the network with a bearer session token as the remaining
+  # control, so the proxy in front of it has to carry the weight LocalOnly did.
+  devMode: false
   # -- Listen address (127.0.0.1 for prod, 0.0.0.0 for dev behind ingress)
   listenAddr: "127.0.0.1:9443"
+  # -- Comma-separated client certificate identities allowed to complete the mTLS
+  # handshake. Each entry names the field it pins with a `cn:`, `dns:`, `email:`
+  # or `uri:` prefix and is matched exactly within it. An entry with no prefix
+  # matches a DNS SAN, and the common name only on a certificate carrying no SAN
+  # at all -- a certificate that carries SANs has no usable common name, which is
+  # the CA/Browser Forum rule and the only one X.509 name constraints can back.
+  # Empty accepts every certificate the client CA has ever signed (AR-9), which
+  # the gateway warns about at startup.
+  clientCNAllowlist: ""
+  # -- Client certificate revocation lists for the mTLS gate. Naming a source
+  # here is what mounts one and what sets ADMIN_GW_CLIENT_CRL_FILE; there is no
+  # bare path setting, because a path with nothing mounted at it is a fatal boot
+  # error and used to be the only way the chart could turn revocation on.
+  clientCRL:
+    # -- Name of an existing Secret holding the revocation list(s). Mutually
+    # exclusive with configMapName.
+    secretName: ""
+    # -- Name of an existing ConfigMap holding the revocation list(s). A CRL is
+    # signed and public, so a ConfigMap is a legitimate home for one.
+    configMapName: ""
+    # -- Keys inside that Secret or ConfigMap, one per CA in the client CA bundle
+    # that publishes a list. A CRL revokes only serials its own issuer signed, so
+    # a bundle with two CAs needs two lists or one of them can revoke nobody.
+    keys:
+      - client.crl
+    # -- Where the revocation lists are mounted in the container.
+    mountPath: /run/crl
   # -- Session token TTL
   sessionTTL: "1h"
   # -- Max failed login attempts before lockout
@@ -471,8 +997,21 @@ cloudflared:
   image:
     # -- cloudflared image repository
     repository: cloudflare/cloudflared
-    # -- cloudflared image tag
-    tag: latest
+    # -- cloudflared image tag. A version, not "latest". The connector holds the
+    # tunnel credential, so what runs under this name should be a decision, not
+    # whatever the registry moved the tag to since the last restart. Cloudflare
+    # ships releases often; raise this deliberately rather than floating.
+    tag: "2026.8.2"
+    # -- Pin the image by digest. Set, it wins over the tag above.
+    digest: "sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+  # -- cloudflared resource requests/limits
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   # -- Tunnel token from `cloudflared tunnel token <name>`
   tunnelToken: ""
   # -- Use an existing Kubernetes Secret for tunnel token

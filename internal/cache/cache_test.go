@@ -53,24 +53,17 @@ func TestNewCache_Memory(t *testing.T) {
 	}
 }
 
-func TestNewCache_MemoryIsDefault(t *testing.T) {
-	// Unknown backend should fall back to memory.
+// An unrecognized backend name is rejected rather than answered with a
+// per-process cache. See
+// TestNewCacheRejectsAnUnrecognizedBackendRatherThanSilentlyUsingPerProcessMemory
+// for what a silent fallback costs in a multi-replica deployment.
+func TestNewCache_UnknownBackendIsAnError(t *testing.T) {
 	c, err := NewCache("unknown_backend", "", "", nil)
-	if err != nil {
-		t.Fatalf("NewCache(unknown) error: %v", err)
-	}
-	defer c.Close()
-
-	ctx := context.Background()
-	if err := c.Set(ctx, "dk", "dv", time.Minute); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-	val, err := c.Get(ctx, "dk")
-	if err != nil {
-		t.Fatalf("Get error: %v", err)
-	}
-	if val != "dv" {
-		t.Errorf("got %q, want %q", val, "dv")
+	if err == nil {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatal("NewCache(unknown_backend) must not return a cache")
 	}
 }
 
@@ -227,7 +220,7 @@ func TestNewCache_Table(t *testing.T) {
 	}{
 		{"memory explicit", "memory", "", "", nil, false},
 		{"empty defaults memory", "", "", "", nil, false},
-		{"unknown defaults memory", "foo", "", "", nil, false},
+		{"unknown backend rejected", "foo", "", "", nil, true},
 		{"redis bad", "redis", "bad:1", "", nil, true},
 		{"postgres nil err", "postgres", "", "", nil, true},
 	}
@@ -258,8 +251,8 @@ func TestMemoryCache_Methods_Table(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name string
-		run  func() (interface{}, error)
+		name         string
+		run          func() (interface{}, error)
 		wantNotFound bool
 	}{
 		{"Get missing", func() (interface{}, error) { return c.Get(ctx, "nope") }, true},

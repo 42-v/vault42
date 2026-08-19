@@ -39,7 +39,7 @@ func TestIsTrapUserEmpty(t *testing.T) {
 }
 
 func TestAlertSendsWebhook(t *testing.T) {
-	var received HoneypotEvent
+	var received Event
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("webhook method = %s, want POST", r.Method)
@@ -53,7 +53,7 @@ func TestAlertSendsWebhook(t *testing.T) {
 	defer srv.Close()
 
 	a := NewAlerter(srv.URL, nil, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		Timestamp: time.Now(),
 		EventType: "trap_login",
 		IP:        "1.2.3.4",
@@ -76,7 +76,7 @@ func TestAlertSendsWebhook(t *testing.T) {
 func TestAlertNoWebhookURL(t *testing.T) {
 	// Should not panic with empty webhook URL
 	a := NewAlerter("", nil, nil)
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "test",
 		IP:        "1.2.3.4",
 	})
@@ -138,9 +138,9 @@ func TestIsAutomationUA(t *testing.T) {
 }
 
 func TestGenerateFakeJWT(t *testing.T) {
-	token, err := GenerateFakeJWT()
+	token, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -155,13 +155,13 @@ func TestGenerateFakeJWT(t *testing.T) {
 }
 
 func TestGenerateFakeJWTUnique(t *testing.T) {
-	t1, err := GenerateFakeJWT()
+	t1, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
-	t2, err := GenerateFakeJWT()
+	t2, err := GenerateFakeJWTForIdentity(TrapCaller{})
 	if err != nil {
-		t.Fatalf("GenerateFakeJWT: %v", err)
+		t.Fatalf("trap mint: %v", err)
 	}
 	if t1 == t2 {
 		t.Error("consecutive fake JWTs should be unique")
@@ -175,23 +175,6 @@ func TestGenerateFakeRefresh(t *testing.T) {
 	}
 	if len(r) != 64 {
 		t.Errorf("fake refresh token length = %d, want 64 hex chars", len(r))
-	}
-}
-
-func TestFakeLoginResponse(t *testing.T) {
-	resp, err := FakeLoginResponse()
-	if err != nil {
-		t.Fatalf("FakeLoginResponse: %v", err)
-	}
-	if resp["token_type"] != "Bearer" {
-		t.Errorf("token_type = %v, want Bearer", resp["token_type"])
-	}
-	if resp["expires_in"] != 900 {
-		t.Errorf("expires_in = %v, want 900", resp["expires_in"])
-	}
-	at, ok := resp["access_token"].(string)
-	if !ok || at == "" {
-		t.Error("access_token should be a non-empty string")
 	}
 }
 

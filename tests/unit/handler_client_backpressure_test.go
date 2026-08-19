@@ -23,10 +23,20 @@ import (
 // blobClientCostlyHash is a PHC string at the parameter ceiling VerifyPassword
 // accepts (128 MiB, 10 passes, 4 lanes). Verifying against it is valid but slow,
 // which is how the test holds argon2 semaphore slots for a measurable time.
+// blobClientCostlyHash builds the most expensive hash the parser will accept, so
+// a handful of concurrent verifications saturate the four-slot semaphore.
+//
+// The memory figure is read from the parser's own ceiling rather than copied.
+// It used to be the literal 128 MiB, and when argon2MaxVerifyMemory was lowered
+// to 64 MiB this hash stopped being verifiable at all, so the test failed on its
+// own fixture instead of on the behavior it exists to check. Iterations and
+// parallelism stay at their caps, so the hash remains far more expensive than
+// any hash this product issues.
 func blobClientCostlyHash() string {
 	salt := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, 16))
 	digest := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32))
-	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", 128*1024, 10, 4, salt, digest)
+	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
+		vaultcrypto.Argon2MaxVerifyMemory(), 10, 4, salt, digest)
 }
 
 // blobClientTokenRequest builds a client-credentials request with Basic auth.

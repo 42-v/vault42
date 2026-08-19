@@ -8,7 +8,7 @@ All admin operations -- key management, user management, audit log access, clien
 
 ## Architecture
 
-```
+```text
 Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
                                                        │
                                                        ├── RBAC + Session Auth
@@ -17,7 +17,8 @@ Operator (SSH tunnel) ──► 127.0.0.1:9443 (mTLS) ──► Admin Gateway
 ```
 
 The admin gateway is a separate Go binary with its own:
-- Database role (`vault_admin`) -- full CRUD on admin tables, read/update on user tables
+
+- Database role (`vault_admin`) -- full CRUD on admin tables, read on user tables plus lock/unlock and erasure
 - TLS configuration -- mTLS with client certificate verification
 - Session system -- 64-byte tokens, SHA256-hashed, stored in `auth.admin_sessions`
 - RBAC model -- hardcoded in Go (not configurable via SQL, preventing injection-based escalation)
@@ -47,7 +48,7 @@ Three roles with strict hierarchy (hardcoded in `internal/rbac/`):
 | Role | Inherits | Additional Permissions |
 |------|----------|----------------------|
 | `viewer` | -- | List/read keys, audit, users, sessions, clients, config, metrics |
-| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, revoke sessions, create/revoke/rotate clients, write config |
+| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, force/withdraw a password reset, revoke sessions, create/revoke/rotate clients, write config |
 | `super_admin` | `operator` | Manage/create/revoke admin accounts |
 
 22 permissions total. Permission checks are Go code -- not database queries -- so SQL injection cannot escalate privileges.
@@ -64,6 +65,8 @@ All configuration via environment variables:
 | `ADMIN_GW_TLS_CERT_FILE` | string | -- | Yes | Server TLS certificate path |
 | `ADMIN_GW_TLS_KEY_FILE` | string | -- | Yes | Server TLS private key path |
 | `ADMIN_GW_CLIENT_CA_FILE` | string | -- | Yes | Client CA certificate for mTLS verification |
+| `ADMIN_GW_CLIENT_CN_ALLOWLIST` | string | *(empty)* | No | Comma-separated identities allowed to complete the handshake, matched exactly against the leaf CN and its DNS, email and URI SANs. Empty pins nothing: any certificate this CA has signed is accepted, and startup logs a warning naming AR-9. |
+| `ADMIN_GW_CLIENT_CRL_FILE` | string | *(empty)* | No | Path to a PEM or DER CRL signed by the client CA. Re-read on every handshake. An unreadable path is fatal at boot. Empty checks nothing. |
 | `ADMIN_GW_SESSION_TTL` | duration | `1h` | No | Admin session lifetime |
 | `ADMIN_GW_MAX_FAILED_LOGINS` | int | `5` | No | Failed login attempts before lockout |
 | `ADMIN_GW_LOCKOUT_DURATION` | duration | `30m` | No | Account lockout duration |
@@ -78,6 +81,7 @@ All configuration via environment variables:
 | `DB_MAX_CONNS` | int | `5` | No | Max database connections |
 | `DB_ADMIN_PASSWORD_FILE` | string | -- | Yes | Path to `vault_admin` DB password |
 | `MASTER_KEY_FILE` | string | -- | Yes | Path to 32-byte AES-256 master key |
+| `VAULT_FIRST_BOOT_CREDENTIAL_FILE` | string | -- | Conditional | Path the first `super_admin` password is appended to. Required when stdout is not a terminal (every Kubernetes pod). See [First Boot](#first-boot). |
 
 ---
 
@@ -116,6 +120,8 @@ All endpoints are prefixed with `/admin/`.
 | `GET` | `/admin/users/{id}` | Session + RBAC | `users:read` | Get user details |
 | `POST` | `/admin/users/{id}/lock` | Session + RBAC | `users:lock` | Lock user account |
 | `POST` | `/admin/users/{id}/unlock` | Session + RBAC | `users:unlock` | Unlock user account |
+| `POST` | `/admin/users/{id}/require-password-reset` | Session + RBAC | `users:reset` | Force a password reset and revoke the account's live sessions |
+| `POST` | `/admin/users/{id}/clear-password-reset` | Session + RBAC | `users:reset` | Withdraw a forced password reset |
 
 ### Session Management
 
@@ -128,7 +134,7 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until) |
+| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score) |
 
 ### Client Management
 
@@ -190,20 +196,20 @@ Migration `001_initial_schema.sql` creates (among other tables):
 
 | Role | Scope |
 |------|-------|
-| `vault_admin` | Full CRUD on admin tables, read/update on user tables (lock/unlock), full on clients + config, read + append on audit |
+| `vault_admin` | Full CRUD on admin tables, read on user tables plus lock/unlock and `EXECUTE` on the erasure tombstone, full on clients + config, read + append on audit |
 | `vault_app` | SELECT only on admin tables (for verification), no INSERT/UPDATE/DELETE |
 
 ---
 
 ## First Boot
 
-On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The credentials are printed to stdout (one-time only):
+On first startup, if no admin accounts exist, the gateway automatically creates a `super_admin` account named `admin` with a random 64-character hex password. The password is delivered through `VAULT_FIRST_BOOT_CREDENTIAL_FILE` (or to a terminal), never to the process log. The log records only that a password was written and where:
 
-```
-admin-gateway: FIRST BOOT -- created super_admin "admin" with password: <random>
+```text
+FIRST BOOT: super_admin "admin" created; its password was written to /run/first-boot/credentials and is not in this log.
 ```
 
-Change this password immediately after first login.
+Without a credential file and without a terminal, first boot refuses rather than storing the hash of a password nobody holds. Change this password immediately after first login. TOTP enrolment is required after that login.
 
 ---
 
@@ -223,22 +229,81 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 | Table | `vault_app` | `vault_admin` |
 |-------|-------------|---------------|
-| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `created_at`) | SELECT, INSERT (import) + column-level UPDATE (lock/unlock and the erasure tombstone) |
-| `auth.clients` | SELECT, INSERT | SELECT, INSERT, UPDATE |
+| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`, `banned`, `ban_reason`, `disabled`; `email_verified` and `import_pending` narrowed by trigger, below) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` only |
+| `auth.clients` | SELECT, INSERT (narrowed by trigger, below) | SELECT, INSERT, UPDATE |
 | `auth.admin_config` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE, DELETE |
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
 | `auth.admin_sessions` | none (revoked in 002) | Full CRUD |
 | `auth.app_roles` | SELECT | SELECT, INSERT, DELETE |
-| `auth.signing_keys` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE |
+| `auth.signing_keys` | SELECT, INSERT, DELETE + column-level UPDATE on `status`, `retired_at`, `expires_at` only (DELETE narrowed by trigger, below) | SELECT, INSERT + the same column-level UPDATE |
 | `audit.audit_log` | SELECT, INSERT | SELECT, INSERT |
+
+`vault_app`'s DELETE on `auth.signing_keys` is the one grant in this table that a
+trigger, rather than the grant itself, makes safe. It exists so the retention
+sweep can reap retired keys, and PostgreSQL has no row scope for a privilege, so
+the bare grant would also cover the active key and every retired key still
+verifying live tokens. Migration 020 pairs it with `signing_keys_reap_scope`, a
+`BEFORE DELETE` trigger that refuses any row outside the sweep's predicate.
+
+That trigger deliberately says nothing about a revoked row. Same-event triggers
+fire in name order and `signing_keys_reap_scope` sorts ahead of
+`signing_keys_revocation_terminal`, so excluding revoked rows from its `WHEN`
+clause is what leaves migration 017 as the only guard that answers for a revoked
+key. `vault_admin` holds no DELETE here, and 020 states the revoke explicitly so
+the absence reads as a decision rather than an oversight.
+
+The UPDATE on `auth.signing_keys` is column-level for the opposite reason: a
+trigger cannot make the whole grant safe. `kid`, `private_key`, `public_key`,
+`algorithm` and `created_at` are written by exactly one statement in the tree,
+the upsert in `keystore.Import`, and migration 037 moved that upsert into
+`auth.import_signing_key`, a `SECURITY DEFINER` function on 015's pattern, so the
+raw privilege has no remaining caller and comes off both roles. What is left is
+`status`, `retired_at` and `expires_at`, which `Revoke` and `Import`'s retire
+step genuinely write and which 017, 020, 026, 027 and 035 already judge. The
+split is between the columns a guard can reason about and the ones it cannot: a
+re-import and a substitution of key material differ only in whether the
+ciphertext opens under the master key, which the database does not hold, so that
+write is constrained by who may issue it rather than by what it contains.
+`kid` also carries 037's `signing_keys_kid_immutable` trigger, because the
+privilege answers only for these two roles while the trigger states the invariant
+for every other one, including the owner.
+
+`vault_app`'s INSERT on `auth.clients` is the other grant a trigger rather than
+the grant itself makes safe. The grant exists so declarative seeding can register
+clients at startup, and `scopes` is a plain `TEXT[]`, so it also authorized
+writing a client row carrying `mint:token` and `kms:unwrap` with a chosen
+`secret_hash` and then authenticating as it at `POST /client/token` -- the whole
+authorization behind the two privileged endpoints, reachable by INSERT. Migration
+023 pairs the grant with `clients_capability_scope_guard`, which refuses any row
+carrying a scope in `auth.capability_scopes()` unless the writer holds
+`vault_admin`. `POST /admin/clients` is therefore the only way to create a
+privileged client: it is gated on `clients:create`, which belongs to
+`super_admin` alone, and writes an `admin:client_create` audit row naming the
+acting admin. A `VAULT_SEED_FILE` or a `vault add-client` that asks for a
+capability scope now fails, loudly, naming the scope. Ordinary client seeding is
+unchanged.
+
+The account-state columns of `auth.users` are split the same way, by migration
+024. `banned`, `ban_reason` and `disabled` have no UPDATE writer anywhere in the
+tree -- they are set once at INSERT by the import path -- so the grant 004 made to
+`vault_app` is revoked outright rather than guarded. `email_verified` and
+`import_pending` keep theirs, because email confirmation and import claiming are
+`vault_app`'s own work, and `users_account_state_transitions` narrows each to the
+one direction its writer moves in: an address that is confirmed stays confirmed,
+and an account that is claimed stays claimed. `locked_until` is deliberately not
+narrowed; see AR-18 in [security.md](security.md).
 
 The erasure cascade behind `DELETE /admin/users/{id}` additionally gives `vault_admin` DELETE on the per-user tables plus column-level `SELECT (user_id)` on `auth.social_accounts`, `auth.password_history`, `auth.totp_secrets`, `auth.webauthn_credentials` and `auth.backup_codes`. PostgreSQL requires SELECT on every column read in a `WHERE` clause, so DELETE alone is not enough to run `DELETE ... WHERE user_id = $1`; the grant is column-level so the role still cannot read the encrypted TOTP secret, the WebAuthn public keys, the backup-code hashes or the password history it is allowed to destroy.
 
+The erasure tombstone is not in that table because it is not a grant. Scrubbing a user row writes `email`, `display_name` and `avatar_url`, and a column grant for those is standing: it authorises `UPDATE auth.users SET email = ... WHERE id = <anyone>` just as much as it authorises the scrub, which is an account takeover because password reset follows the address. Migration 009 made that grant to both roles and migration 015 revoked it. The tombstone now runs inside `auth.erase_user_identity(user_id, tombstone_email)`, a SECURITY DEFINER function owned by the migration role with `EXECUTE` revoked from `PUBLIC` and granted to `vault_app` and `vault_admin`. It refuses any address that is not `deleted-<the id of the row being scrubbed>@<domain>.invalid`, so the one write it can perform is one nobody can receive mail at.
+
 Neither role may purge the audit log: `EXECUTE` on `audit.cleanup_old_entries()` is revoked from `PUBLIC` and granted to `vault_app` alone, which is where the retention sweeper runs.
 
-This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is intentionally restricted from modifying user identity data (password, email, display name, avatar) -- it can only lock/unlock accounts.
+This separation ensures that even if the main API is compromised (e.g., via SQL injection), the attacker cannot modify admin accounts, clients, or configuration. The admin gateway role is restricted from modifying user identity data (password, email, display name, avatar) -- it can lock/unlock an account and erase one, and nothing else on the user row.
 
-A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders protection against admin role escalation: even if SQL injection reaches the `vault_admin` role, a lower-ranked admin cannot promote themselves to a higher rank.
+Two database triggers back the Go RBAC model on `auth.admin_users`. `auth.deny_role_escalation` (BEFORE UPDATE) refuses to raise an existing admin's role, and `auth.deny_role_escalation_on_insert` (BEFORE INSERT, migration 016) refuses to create an admin that outranks the creator recorded in `created_by`, or to create one with no creator at all once the first admin exists.
+
+The UPDATE half is a real ceiling: it compares against `OLD.role`, which comes from the row. The INSERT half is not, and this document used to claim otherwise. On an INSERT every value comes from the statement, and `vault_admin` can read `auth.admin_users`, so anything able to write that table can first look up a genuine `super_admin` id and put it in `created_by`. The trigger turns a one-statement backdoor into a two-statement one and enforces a useful invariant against RBAC regressions in Go; it is not a boundary against a caller that reaches the database. What actually closes SQL injection here is that every admin-plane query is parameterised. See AR-14 in [security.md](security.md).
 
 ## Security Properties
 
@@ -258,12 +323,12 @@ A database trigger (`auth.deny_role_escalation`) provides belt-and-suspenders pr
 
 ### Accepted Risks
 
-Full rationale in [`docs/security.md`](security.md) (AR-6 through AR-9) and the Admin Gateway section of [`docs/security-review.md`](security-review.md).
+Full rationale in [Security Decisions & Accepted Risks](security.md) (AR-6 through AR-9).
 
 - **Session timing oracle (AR-6)**: Invalid session tokens return slightly faster than valid ones
 - **Session token in sessionStorage (AR-7)**: Required for JS API calls; protected by CSP + 6-layer enforcement
 - **Global login rate limit (AR-8)**: Loopback-only means one IP; per-account lockout is the primary defense
-- **Client cert CN not validated (AR-9)**: Single-purpose CA is the trust boundary
+- **Client cert identity pinning is optional (AR-9)**: `ADMIN_GW_CLIENT_CN_ALLOWLIST` and `ADMIN_GW_CLIENT_CRL_FILE` exist and fail closed once set. Empty allowlist still accepts any certificate this CA has signed. An unreadable CRL path is fatal at boot.
 - **innerHTML for empty states (M5)**: Hardcoded strings only, no interpolated variables
 
 ---
@@ -277,17 +342,18 @@ scripts/generate-admin-certs.sh
 ```
 
 Generates CA, server, and client certificates in `secrets/admin-gateway/`:
+
 - `ca.crt` -- Certificate Authority
 - `server.key`, `server.crt` -- Server certificate (SANs: localhost, 127.0.0.1, ::1)
 - `client.key`, `client.crt` -- Client certificate (CN: admin-operator)
 
 ### Kubernetes (Helm)
 
-The admin gateway is deployed via Vault42 Helm chart (`charts/vault42/templates/admin-gateway.yaml`):
+The admin gateway is deployed via Vault42 Helm chart (`charts/vault/templates/admin-gateway.yaml`):
 
 ```bash
-helm upgrade --install vault42 charts/vault42/ \
-  -f charts/vault42/values.yaml
+helm upgrade --install vault42 charts/vault/ \
+  -f charts/vault/values.yaml
 ```
 
 Access via SSH tunnel to the node:
@@ -309,6 +375,7 @@ docker run --rm \
   -e ADMIN_GW_TLS_CERT_FILE=/certs/server.crt \
   -e ADMIN_GW_TLS_KEY_FILE=/certs/server.key \
   -e ADMIN_GW_CLIENT_CA_FILE=/certs/ca.crt \
+  -e ADMIN_GW_CLIENT_CN_ALLOWLIST=admin-operator \
   -e MASTER_KEY_FILE=/secrets/master.key \
   -e DB_ADMIN_PASSWORD_FILE=/secrets/db-admin-password \
   -e DB_HOST=host.docker.internal \
@@ -319,7 +386,7 @@ docker run --rm \
 
 Multi-arch images (amd64 + arm64) published to GHCR on release:
 
-```
+```text
 ghcr.io/42-v/vault42-admin-gateway:<version>
 ghcr.io/42-v/vault42-admin-gateway:latest
 ```
@@ -328,6 +395,6 @@ ghcr.io/42-v/vault42-admin-gateway:latest
 
 ## CLI Admin Commands
 
-The main vault42 binary still provides CLI admin commands (rotate, list, revoke keys; manage clients; declarative seeding) via `--admin-*` flags. These require pod exec access (shell access to the running container), which provides equivalent security to the admin gateway's SSH tunnel. The CLI uses the DB-stored admin token hash for authentication.
+The main `vault` binary still provides CLI admin commands (`add-client`, `list-clients`, `revoke-all-sessions`, `rotate-admin-token`, `rotate-jwks`, `seed`, `cleanup-recovery`, `export-audit`) authenticated by `ADMIN_TOKEN_FILE` or `--admin-token`. These require pod exec access (shell access to the running container), which provides equivalent security to the admin gateway's SSH tunnel. Live key rotate/list/revoke is the admin gateway (`POST /admin/keys/...`). `vault rotate-jwks` writes a PKCS#1 PEM and a discarded UUID; it does not rotate the live store and cannot be mounted as `SIGNING_KEY_FILE` (`LoadSigningKeyPEM` is PKCS#8 only). File-based keys are produced by `scripts/generate-secrets.sh`. `cleanup-audit`, `revoke-client`, `rotate-client-secret`, `lock-user` and `unlock-user` are retired stubs that print an error and write nothing.
 
-Declarative seeding is also available at startup via the `VAULT_SEED_FILE` env var, which loads a JSON file and idempotently creates clients and users before the server starts. See `seed.example.json` for the file format.
+Declarative seeding is also available at startup via the `VAULT_SEED_FILE` env var, which loads a JSON file and idempotently creates clients and users before the server starts. See `seed.example.json` for the file format. A seeded client may not carry a vault42 capability scope (`mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read`, `admin:write`): the seeder runs under `vault_app` and migration 023 reserves those for `POST /admin/clients`, so a seed file asking for one aborts startup naming the scope.

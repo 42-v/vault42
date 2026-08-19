@@ -8,9 +8,9 @@ type nilError string
 
 func (e nilError) Error() string { return string(e) }
 
-// RedisError represents a server-side Redis error response.
-type RedisError struct {
+// ServerError represents a server-side Redis error response.
+type ServerError struct {
 	Msg string
 }
 
-func (e *RedisError) Error() string { return "redis: " + e.Msg }
+func (e *ServerError) Error() string { return "redis: " + e.Msg }

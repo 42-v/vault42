@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/ipintel"
 )
 
 // trustedProxies holds the configured trusted proxy CIDRs/IPs.
@@ -65,11 +66,27 @@ func SetTLSFingerprintHeader(header string) {
 	tlsFingerprintHeader.Store(header)
 }
 
-// TLSFingerprint returns the TLS fingerprint from the configured header, or empty
-// string if no header is configured or the header is absent from the request.
+// TLSFingerprint returns the TLS fingerprint from the configured header, or
+// empty when no header is configured, the header is absent, or the peer is not
+// a trusted proxy.
 func TLSFingerprint(r *http.Request) string {
 	h, _ := tlsFingerprintHeader.Load().(string)
 	if h == "" {
+		return ""
+	}
+	// Only a hop the operator has declared can know a JA4, so only that hop is
+	// believed, matching ClientIP and AppContext.
+	//
+	// This was the one device signal with no trust gate. The fingerprint exists
+	// to bind a token to a device behind a shared address, which is the ordinary
+	// case under NAT or a Helm default with no trustedProxies, where every
+	// ingress client hashes as the ingress pod. The IP, the User-Agent and the
+	// Accept-Language are all already attacker-controlled on a replay, so the
+	// JA4 was the only component actually telling two callers on one address
+	// apart. Read straight off the request, it meant an attacker holding a
+	// stolen bearer token replayed it with the victim's fingerprint in the
+	// header, and the check meant to stop them was supplied by them.
+	if !isTrustedProxy(stripPort(r.RemoteAddr)) {
 		return ""
 	}
 	return strings.TrimSpace(r.Header.Get(h))
@@ -100,14 +117,72 @@ type RateLimitConfig struct {
 	// security-sensitive limiters (login, register, password reset, TOTP): the
 	// in-memory fallback is per-pod, so under a cache outage the effective limit
 	// would otherwise multiply by the pod count, weakening brute-force protection
-	// (audit L4). Zero value keeps the prior graceful-degradation behaviour.
+	// (audit L4). Zero value keeps the prior graceful-degradation behavior.
 	FailClosed bool
+	// Weight optionally returns a per-request multiplier so a higher-scrutiny
+	// caller consumes the bucket faster. A request weighing w counts as w toward
+	// the limit, which lowers the effective limit for that caller to Limit/w
+	// without ever hard-blocking it: the outcome is still the ordinary 429 any
+	// caller hits, never a 403. Nil (the default) means every request weighs 1
+	// and behavior is exactly as before. A weight below 1 is clamped to 1, so a
+	// Weight func can never widen a bucket. Used to raise scrutiny on VPN/hosting/
+	// anonymising IPs (see IPIntelWeight) without denying them.
+	Weight func(r *http.Request) int
+	// Name namespaces this limiter's counter in the cache.
+	//
+	// Without it every limiter sharing a KeyFunc shared one counter AND one
+	// expiry, because Increment stamps a TTL on the first write of a key and
+	// preserves it afterwards (memory.go, redis.go incrWithExpireScript,
+	// postgres.go). Ten limiters passed IPRateLimitKey, so a single request to
+	// password reset (3/hour) stamped a one-hour TTL on rl:ip:<addr>, thirty
+	// requests to refresh (30/minute) then filled that shared counter, and for
+	// the rest of the hour refresh, client-token, TOTP, OAuth, KMS unwrap,
+	// register and reset all answered 429 for everyone behind that address.
+	// Thirty-one unauthenticated requests bought an hour of denial for a whole
+	// NAT, and a user who reset their password and then opened an app that
+	// refreshes on a timer did it to themselves by accident.
+	//
+	// Use a short, stable identifier per limiter. It becomes part of the cache
+	// key, so changing it resets that limiter's live counters exactly once.
+	Name string
 }
+
+// namespace is the cache-key segment that keeps this limiter's counter separate
+// from every other limiter's.
+//
+// An unnamed limiter falls back to its own budget rather than to a shared key:
+// a counter with a one-hour window must never be the counter a one-minute
+// window reads. That still lets two unnamed limiters with identical budgets
+// collide, which is why the production limiters are named and
+// TestRateLimitersAreNamespaced asserts it.
+func (cfg RateLimitConfig) namespace() string {
+	if cfg.Name != "" {
+		return cfg.Name
+	}
+	return strconv.Itoa(cfg.Limit) + "/" + strconv.FormatInt(int64(cfg.Window/time.Millisecond), 10)
+}
+
+// localRLMaxEntries caps the in-memory fallback map.
+//
+// The fallback is reached only during a cache outage and is keyed by client IP,
+// so a v6 source presents an unbounded number of distinct keys and each one
+// lives for the limiter's whole window — an hour, for the account-deletion
+// limiter. Uncapped that is an OOM during the outage the fallback exists to
+// survive.
+//
+// At the cap increment reports the key as over any configured limit rather than
+// admitting it. Admitting everything at the cap would turn a degraded control
+// into no control; rejecting is the same 429 an over-budget caller already
+// gets. 100k entries is ~15 MiB at the ~150 B an entry plus map overhead costs.
+const localRLMaxEntries = 100_000
 
 // localRateLimiter provides in-memory fallback rate limiting when the cache backend is unavailable.
 type localRateLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*localRLEntry
+	// atCap latches once the map has filled, so the operator sees the degraded
+	// control once rather than once per request.
+	atCap bool
 }
 
 type localRLEntry struct {
@@ -122,6 +197,14 @@ func (l *localRateLimiter) increment(key string, window time.Duration) int64 {
 	now := time.Now()
 	e, ok := l.entries[key]
 	if !ok || now.After(e.windowEnd) {
+		if !ok && len(l.entries) >= localRLMaxEntries {
+			if !l.atCap {
+				l.atCap = true
+				log.Printf("WARNING: in-memory rate limiter at %d entries; new keys are rejected until the sweep frees space", localRLMaxEntries)
+			}
+			// Over any configured limit, so the caller answers 429.
+			return math.MaxInt64
+		}
 		l.entries[key] = &localRLEntry{count: 1, windowEnd: now.Add(window)}
 		return 1
 	}
@@ -129,16 +212,26 @@ func (l *localRateLimiter) increment(key string, window time.Duration) int64 {
 	return e.count
 }
 
+// localEntryCount reports the fallback map size. Used by the eviction test and
+// by callers that want to see the cap being approached.
+func (l *localRateLimiter) localEntryCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
+}
+
 // evictOnce guards the eviction goroutine so only one is started per process.
 var evictOnce sync.Once
 
 // evictInterval is the sweep period of the eviction goroutine addLimiter starts.
 // A variable, not a constant, so tests can drive a sweep without a minute's wait.
-var evictInterval = 60 * time.Second
-var activeLimiters struct {
-	mu       sync.Mutex
-	limiters []*localRateLimiter
-}
+var (
+	evictInterval  = 60 * time.Second
+	activeLimiters struct {
+		mu       sync.Mutex
+		limiters []*localRateLimiter
+	}
+)
 
 func addLimiter(l *localRateLimiter) {
 	activeLimiters.mu.Lock()
@@ -167,12 +260,14 @@ func addLimiter(l *localRateLimiter) {
 	})
 }
 
-// RateLimit returns a rate limiting middleware using a sliding window counter.
+// RateLimit returns a rate limiting middleware using a fixed-window counter.
 // Falls back to an in-memory counter when the cache backend is unavailable.
 func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handler) http.Handler {
 	local := &localRateLimiter{entries: make(map[string]*localRLEntry)}
 	addLimiter(local)
 	var fallbackWarned atomic.Bool
+	// Resolved once: the namespace is a property of the limiter, not of a request.
+	prefix := "rl:" + cfg.namespace() + ":"
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +276,7 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 				return
 			}
 
-			key := fmt.Sprintf("rl:%s", cfg.KeyFunc(r))
+			key := prefix + cfg.KeyFunc(r)
 			ctx := r.Context()
 
 			count, err := c.Increment(ctx, key, cfg.Window)
@@ -204,8 +299,36 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 				count = local.increment(key, cfg.Window)
 			}
 
+			// Per-request weight (default 1). A flagged caller counts as `weight`
+			// against the shared bucket, so the bucket empties faster for them —
+			// raising scrutiny without ever hard-blocking: the only outcome is the
+			// ordinary 429 any caller hits, never a 403. The stored counter still
+			// increments by 1 (single atomic op); the weight is applied to the
+			// comparison, so it cannot widen a bucket and needs no new cache method.
+			weight := 1
+			if cfg.Weight != nil {
+				if w := cfg.Weight(r); w > 1 {
+					weight = w
+				}
+			}
+			weighted := count * int64(weight)
+
+			// The advertised remaining is computed from the unweighted count, and
+			// deliberately over-reports for a weighted caller.
+			//
+			// Reported from `weighted`, the header is a read-back of vault42's own
+			// ipintel classification: one unauthenticated request with garbage
+			// credentials returns Limit-heavy from a flagged address and Limit-1
+			// from an unflagged one, so a proxy pool can be sorted one request per
+			// address and the stuffing run entirely through addresses the weighting
+			// would not have touched. The weighting still bites — 429 arrives
+			// heavy times sooner — but it is no longer announced in advance, and
+			// learning it costs burning the bucket rather than a single probe.
+			//
+			// An exhausted bucket advertises 0 either way, so the 429 itself does
+			// not carry the same bit back out in a non-zero remaining.
 			remaining := int64(cfg.Limit) - count
-			if remaining < 0 {
+			if remaining < 0 || weighted > int64(cfg.Limit) {
 				remaining = 0
 			}
 
@@ -213,7 +336,7 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(remaining, 10))
 			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(cfg.Window).Unix(), 10))
 
-			if count > int64(cfg.Limit) {
+			if weighted > int64(cfg.Limit) {
 				w.Header().Set("Retry-After", strconv.Itoa(int(cfg.Window.Seconds())))
 				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
 				return
@@ -221,6 +344,32 @@ func RateLimit(c cache.Cache, cfg RateLimitConfig, enabled bool) func(http.Handl
 
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// IPIntelWeight builds a RateLimitConfig.Weight function that raises the
+// per-request weight to heavy for a client IP that ipintel flags as anonymising
+// or hosting infrastructure (VPN/hosting/Tor), and leaves it at 1 for every
+// other address.
+//
+// This is scrutiny, not denial: a heavier weight only empties the shared bucket
+// faster, so a VPN caller meets the ordinary 429 sooner and is NEVER answered
+// with a 403 — VPN use is allowed. Hard blocks belong in ipaccess.go, not here.
+//
+// It returns nil when db is nil (ipintel not configured) or heavy <= 1, so the
+// limiter keeps its default behavior and the whole feature stays opt-in behind
+// a present ipintel handle. ipintel is fail-open: an unknown or private address
+// flags nothing and weighs 1.
+func IPIntelWeight(db *ipintel.DB, heavy int) func(*http.Request) int {
+	if db == nil || heavy <= 1 {
+		return nil
+	}
+	return func(r *http.Request) int {
+		info := db.LookupString(ClientIP(r))
+		if info.IsAnonymous || info.IsHosting {
+			return heavy
+		}
+		return 1
 	}
 }
 
@@ -271,6 +420,9 @@ func normalizeIP(v string) string {
 // is attacker-supplied.
 func lastRealIP(value string) string {
 	parts := strings.Split(value, ",")
+	if len(parts) > maxXFFHops {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		if strings.TrimSpace(parts[i]) == "" {
 			continue
@@ -279,6 +431,11 @@ func lastRealIP(value string) string {
 	}
 	return ""
 }
+
+// maxXFFHops caps the right-to-left walk over X-Forwarded-For. Thirty-two is
+// more hops than any real path has and bounds a header-sized walk to a
+// constant.
+const maxXFFHops = 32
 
 // ClientIP extracts the client IP from a request, respecting X-Forwarded-For
 // only when the direct connection comes from a trusted proxy.
@@ -323,14 +480,28 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	xff := r.Header.Get("X-Forwarded-For")
+	// Every field line, not just the first. Header.Get returns the FIRST line
+	// only, so a peer that appends X-Forwarded-For as a separate line rather
+	// than comma-joining it left this walk reading the client's own line and
+	// dropping the real appended hop, which is leftmost trust reopened. nginx,
+	// ALB and Cloudflare comma-join; not every proxy does.
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 	if xff == "" {
 		return remoteIP
 	}
 
 	// Parse all IPs from XFF, walk from right to left,
-	// return the first (rightmost) IP that is NOT a trusted proxy
+	// return the first (rightmost) IP that is NOT a trusted proxy.
+	//
+	// Capped at maxXFFHops. MaxHeaderBytes is 1 MiB, so "203.0.113.1, "
+	// repeated is ~70k hops, each one a ParseIP plus a walk of the trusted
+	// proxy list, on top of the 1 MiB allocation — per request, before the
+	// handler runs. No real deployment has more than a handful of hops.
 	parts := strings.Split(xff, ",")
+	truncated := len(parts) > maxXFFHops
+	if truncated {
+		parts = parts[len(parts)-maxXFFHops:]
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		ip := normalizeIP(parts[i])
 		if ip == "" {
@@ -341,9 +512,19 @@ func ClientIP(r *http.Request) string {
 		}
 	}
 
-	// All XFF entries are trusted proxies — use the leftmost
-	if first := normalizeIP(parts[0]); first != "" {
-		return first
+	// All XFF entries are trusted proxies — use the leftmost, which is the
+	// closest thing to the origin the header offers.
+	//
+	// Not when the header was truncated, though: parts[0] is then whatever
+	// happened to land at the cap boundary, not the leftmost the client sent,
+	// and a caller who pads their header past maxXFFHops would get to choose
+	// which of their own entries becomes the bucket key. Fall back to the peer,
+	// which is the answer for an untrusted header everywhere else in this
+	// function.
+	if !truncated {
+		if first := normalizeIP(parts[0]); first != "" {
+			return first
+		}
 	}
 	return remoteIP
 }
@@ -369,36 +550,32 @@ func isTrustedProxy(ipStr string) bool {
 	return false
 }
 
-// IsAccountLocked checks if a user is currently locked out without modifying the counter.
-func IsAccountLocked(ctx context.Context, c cache.Cache, userID string, threshold int) (bool, error) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	val, err := c.Get(ctx, key)
-	if err != nil {
-		// Graceful degradation: a cache miss or transient cache failure must not
-		// block authentication. Auth never fails because the cache is down.
-		return false, nil //nolint:nilerr // intentional fail-open per docs/spec.md cache invariants
-	}
-	count, _ := strconv.ParseInt(val, 10, 64)
-	return count > int64(threshold), nil
-}
+// Account lockout does not live here. It is service.AuthService.isAccountLocked
+// and recordFailedAttempt, keyed on (account, source) and on the account alone
+// at two different thresholds, with a durable failed_login_count fallback.
+//
+// Three exported helpers used to sit at this spot — IsAccountLocked,
+// RecordFailedAttempt and CheckAccountLockout — implementing one flat counter
+// at a caller-supplied threshold, failing open on any cache error. Nothing in
+// production ever called them. Their only callers were the compliance and
+// attack suites certifying that vault42 resists brute force, so the evidence
+// for that claim measured a single-counter model no request reaches, and after
+// the source-keyed rework it did not even model the same scheme. They are gone;
+// those suites now drive AuthService.Login and the exported MFA gate.
+//
+// ClientIPContext below is the part of lockout that does belong to this
+// package: resolving the source address the service layer keys on.
 
-// RecordFailedAttempt increments the failed-attempt counter for lockout tracking.
-// Call this only after a confirmed authentication failure.
-func RecordFailedAttempt(ctx context.Context, c cache.Cache, userID string, lockDuration time.Duration) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	c.Increment(ctx, key, lockDuration) // #nosec G104 -- best-effort counter
-}
-
-// CheckAccountLockout atomically increments the failed-attempt counter and
-// reports whether the threshold has been crossed. Equivalent to
-// RecordFailedAttempt + IsAccountLocked but in a single round-trip — useful
-// in tight failure paths and for compliance assertions.
-func CheckAccountLockout(ctx context.Context, c cache.Cache, userID string, threshold int, lockDuration time.Duration) (bool, error) {
-	key := fmt.Sprintf("lockout:%s", userID)
-	count, err := c.Increment(ctx, key, lockDuration)
-	if err != nil {
-		// Graceful degradation: same fail-open invariant as IsAccountLocked.
-		return false, nil //nolint:nilerr // intentional fail-open per docs/spec.md cache invariants
-	}
-	return count > int64(threshold), nil
+// ClientIPContext stores the resolved client address on the request context.
+//
+// The service layer only ever receives a context, so without this the account
+// lockout could not tell one source from another and had to key solely on the
+// user id — which made five failed logins from any single address a fifteen
+// minute denial of service against any account whose email the caller knew.
+// Resolving the address once, here, also guarantees the lockout and the rate
+// limiter agree on what "the client" is.
+func ClientIPContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(httputil.WithClientIP(r.Context(), ClientIP(r))))
+	})
 }

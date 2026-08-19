@@ -81,7 +81,7 @@ func TestMarketingAllowed_RepoErrorFailsClosed(t *testing.T) {
 		t.Error("expected the repo error to surface")
 	}
 	if allowed {
-		t.Error("a failed lookup must not authorise sending")
+		t.Error("a failed lookup must not authorize sending")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unicode/utf8"
 )
@@ -32,6 +33,11 @@ const (
 	TemplateSuspiciousActivity = "suspicious_activity"
 	// TemplateEmailOTP is the email one-time password template for MFA fallback.
 	TemplateEmailOTP = "email_otp"
+	// TemplateNewLocation is the new-location (new country) login notice. It is
+	// deliberately distinct from TemplateSuspiciousActivity: it renders the
+	// country only and has no field for an IP, so the notice cannot carry one
+	// (docs/PRIVACY.md P4, data minimisation to country granularity).
+	TemplateNewLocation = "new_location"
 )
 
 //go:embed templates/*.html
@@ -45,12 +51,16 @@ var templateFS fs.FS = defaultTemplates
 // TemplateData holds the parameters used to render email templates.
 // Not all fields are used by every template.
 type TemplateData struct {
-	AppName      string
-	URL          string
-	Token        string
-	IP           string
-	Device       string
-	Code         string
+	AppName string
+	URL     string
+	Token   string
+	IP      string
+	Device  string
+	Code    string
+	// Country is the ISO 3166-1 alpha-2 country code shown in the new-location
+	// notice. It is the ONLY location field that template carries: the notice is
+	// reduced to country granularity so it can never quote the login IP.
+	Country      string
 	LogoURL      string
 	PrimaryColor string
 	Subject      string // populated internally during render
@@ -62,16 +72,23 @@ var (
 	spaceRe = regexp.MustCompile(`\s+`)
 )
 
-// unsafePattern matches dangerous content that must not appear in custom email
-// templates. Beyond active scripting it also rejects the passive auto-loading
-// vectors a credential-bearing email must never carry — meta-refresh redirects,
-// <base> hijacks, <link>/<style>/<svg> external loads, any <form>, data: URIs,
-// and CSS url() — so an admin-authored template cannot beacon a live
-// verification/reset token or OTP code out to an arbitrary host.
-// It allows benign structure a real HTML email needs (a <meta charset>/viewport,
-// a <style> block of inline CSS) but rejects the beacon-capable subset: any
-// http-equiv meta (refresh redirect), <base>, <link>, <svg>, <form>, data: URIs,
-// and CSS url().
+// unsafePattern is a fast first gate over the template SOURCE. It names the
+// active-content and auto-loading families outright — script, iframe, object,
+// embed, base, link, svg, form, http-equiv meta, javascript: and data: URIs,
+// CSS url(), on* handlers and the call/js directives — so the ordinary hostile
+// template is refused with an error that names what it did.
+//
+// It is NOT the control that holds the no-exfiltration property, and it never
+// could be. It reads the source, and the source is compiled by html/template
+// before anyone sees it, so a template action splits any literal this pattern
+// blocks: <scr{{"ipt"}}> carries no <script here and renders a working one. Its
+// list was also incomplete — img, href and background were never named, so the
+// plainest exfiltration of all, an image whose URL carries the reset token,
+// passed it untouched.
+//
+// The property is held by guardTemplate, which renders the template and
+// inspects the document a mail client would actually receive. See
+// template_guard.go for the argument.
 var unsafePattern = regexp.MustCompile(
 	`(?i)` +
 		`<\s*script|<\s*iframe|<\s*object|<\s*embed|` +
@@ -127,7 +144,7 @@ func NewTemplateRenderer(overrideDir string) (*TemplateRenderer, error) {
 	names := []string{
 		TemplateVerification, TemplatePasswordReset, TemplateNewDevice,
 		TemplateAccountLocked, Template2FASetup, TemplateSuspiciousActivity,
-		TemplateEmailOTP,
+		TemplateEmailOTP, TemplateNewLocation,
 	}
 
 	for _, name := range names {
@@ -218,12 +235,22 @@ func (r *TemplateRenderer) Render(templateName string, data TemplateData) (strin
 	return subject, htmlBody, textBody
 }
 
-// validateTemplate rejects templates containing unsafe patterns.
+// validateTemplate is the single gate every operator-authored template passes,
+// whether it arrives as a file override or as a database row. It refuses any
+// template that could cause a live verification token, reset token, OTP code or
+// action link to leave the recipient's mail client for a host the operator did
+// not configure.
+//
+// The source-text denylist runs first because its errors name the construct.
+// guardTemplate is what actually holds the property: it renders the template
+// and applies an element/attribute allowlist to the document a mail client
+// would receive, so a construct split across a template action is already
+// reassembled by the time it is judged.
 func validateTemplate(data []byte) error {
 	if unsafePattern.Match(data) {
 		return fmt.Errorf("template contains forbidden content (script/iframe/object/embed/meta/base/link/style/svg/form tags, javascript:/data: URIs, css url(), event handlers, or call/js directives)")
 	}
-	return nil
+	return guardTemplate(data)
 }
 
 // stripHTML removes HTML tags and collapses whitespace for plain-text fallback.
@@ -238,32 +265,43 @@ func stripHTML(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// RenderTemplate is the backward-compatible package-level function.
-// It uses a default renderer with embedded templates.
-func RenderTemplate(templateName string, data TemplateData) (string, string, string) {
-	return defaultRenderer.Render(templateName, data)
-}
-
 // defaultRenderer is initialized at package load time with embedded templates only.
-// Call [SetRenderer] to replace it with a custom-configured renderer.
+// Call [SetRenderer] to replace it with a custom-configured renderer; [NewMailer]
+// falls back to it whenever it is handed a nil one, which is how
+// internal/service and internal/handler build their mailers.
+//
+// It is an atomic pointer rather than a plain one because the sync.Once below
+// does not make the publication safe on its own. A Once orders the goroutine
+// inside Do against other goroutines that call Do, and against nothing else;
+// NewMailer only reads the variable and never calls Do, so it inherits no
+// ordering from it. Startup wiring publishes the configured
+// renderer while request-escaping goroutines are already sending mail
+// (internal/service finishes verification and reset mail asynchronously), which
+// made the plain pointer a genuine data race rather than a theoretical one.
 var (
-	defaultRenderer *TemplateRenderer
+	defaultRenderer atomic.Pointer[TemplateRenderer]
 	setRendererOnce sync.Once
 )
 
 func init() {
-	var err error
-	defaultRenderer, err = NewTemplateRenderer("")
+	r, err := NewTemplateRenderer("")
 	if err != nil {
 		panic("email: failed to initialize default templates: " + err.Error())
 	}
+	defaultRenderer.Store(r)
 }
 
-// SetRenderer replaces the package-level default renderer used by [RenderTemplate].
+// currentRenderer returns the package-level renderer every unsynchronized
+// reader must go through.
+func currentRenderer() *TemplateRenderer {
+	return defaultRenderer.Load()
+}
+
+// SetRenderer replaces the package-level default renderer [NewMailer] falls back to.
 // Call this once at startup after loading config to enable template overrides and branding.
-// Subsequent calls are no-ops to prevent races during concurrent access.
+// Subsequent calls are no-ops so the renderer a running process reads never changes twice.
 func SetRenderer(r *TemplateRenderer) {
 	setRendererOnce.Do(func() {
-		defaultRenderer = r
+		defaultRenderer.Store(r)
 	})
 }

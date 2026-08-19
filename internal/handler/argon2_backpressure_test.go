@@ -128,7 +128,7 @@ func TestPasswordEndpoints_Argon2OverloadFailsClosed(t *testing.T) {
 		},
 	}
 	registerCache := &mocks.MockCache{}
-	registerHandler := NewAuthHandler(acctAuthService(t, registerUsers, registerCache), registerUsers, registerCache, newTestAuditLogger(), "", false)
+	registerHandler := NewAuthHandler(acctAuthService(t, registerUsers, registerCache), registerUsers, registerCache, newTestAuditLogger(), "", false, nil)
 
 	loginFailureRecorded := false
 	loginUsers := &mocks.MockUserRepo{
@@ -141,7 +141,7 @@ func TestPasswordEndpoints_Argon2OverloadFailsClosed(t *testing.T) {
 		},
 	}
 	loginCache := &mocks.MockCache{}
-	loginHandler := NewAuthHandler(acctAuthService(t, loginUsers, loginCache), loginUsers, loginCache, newTestAuditLogger(), "", false)
+	loginHandler := NewAuthHandler(acctAuthService(t, loginUsers, loginCache), loginUsers, loginCache, newTestAuditLogger(), "", false, nil)
 
 	var confirmMu sync.Mutex
 	confirmKeysSet := []string{}
@@ -165,7 +165,7 @@ func TestPasswordEndpoints_Argon2OverloadFailsClosed(t *testing.T) {
 			return &model.User{ID: id, Email: "confirm@example.com", PasswordHash: storedHash}, nil
 		},
 	}
-	confirmHandler := NewAuthHandler(acctAuthService(t, confirmUsers, confirmCache), confirmUsers, confirmCache, newTestAuditLogger(), "", false)
+	confirmHandler := NewAuthHandler(acctAuthService(t, confirmUsers, confirmCache), confirmUsers, confirmCache, newTestAuditLogger(), "", false, nil)
 
 	accountScrubbed := false
 	accountUsers := &mocks.MockUserRepo{

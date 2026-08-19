@@ -84,6 +84,20 @@ type UserRepository interface {
 	CreateImported(ctx context.Context, user *model.User) error
 	// ClearImportPending marks an imported account as claimed after reset.
 	ClearImportPending(ctx context.Context, id string) error
+	// ClearMustResetPassword lifts a forced password reset once the account has
+	// set a new password. It is the web server's statement: it stamps updated_at
+	// alongside the flag, which vault_app may write and vault_admin may not.
+	ClearMustResetPassword(ctx context.Context, id string) error
+	// SetMustResetPassword moves a forced password reset in either direction. It
+	// is the admin plane's statement, naming must_reset_password alone because
+	// that is the only column of the three the gateway's role holds here that
+	// this write needs; see the implementation for why the two directions do not
+	// share one method with the clear above.
+	//
+	// Imposing the state is the admin plane's alone whatever the call site:
+	// migration 039's trigger refuses the FALSE->TRUE transition from any other
+	// role, so a web-server caller compiles and is then refused by the database.
+	SetMustResetPassword(ctx context.Context, id string, required bool) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential
@@ -91,13 +105,44 @@ type UserRepository interface {
 	SoftDeleteScrub(ctx context.Context, id, tombstoneEmail string) error
 }
 
+// ErrFamilyRevoked is returned by RefreshTokenRepository.Create when the family
+// the token belongs to may no longer be extended, and nothing was inserted.
+//
+// Two conditions produce it. The family has been revoked: reuse detection
+// revokes the rows a family has at that instant, so a successor inserted
+// afterwards is born outside the revocation and keeps the stolen session alive.
+// Or the account has been erased: the cascade tombstones the user row and then
+// removes every token row, so a rotation that was already in flight would put a
+// fingerprint hash and a device reference back into a table the erasure reported
+// it had cleared.
+//
+// Either way the caller must treat it as a replay: refuse the rotation and end
+// the session.
+var ErrFamilyRevoked = errors.New("refresh token family is revoked")
+
+// ErrSessionLimitReached is returned by CreateWithinCap, which inserts nothing,
+// when the user already holds the maximum number of concurrent token families.
+// It is distinct from ErrFamilyRevoked so the caller can map it to the
+// caller-facing "too many sessions" outcome rather than a replay.
+var ErrSessionLimitReached = errors.New("concurrent session limit reached")
+
 // RefreshTokenRepository manages refresh token persistence.
 type RefreshTokenRepository interface {
-	// Create inserts a new refresh token record.
+	// Create inserts a new refresh token record. Returns ErrFamilyRevoked, and
+	// inserts nothing, when the token's family already carries a revoked row or
+	// the owning account has been erased.
 	Create(ctx context.Context, token *model.RefreshToken) error
+	// CreateWithinCap inserts the first token of a new family only while the
+	// user holds fewer than maxFamilies active families, counting and inserting
+	// under one per-user lock so racing logins cannot overshoot the cap. A
+	// maxFamilies of zero or less disables the check and inserts unconditionally.
+	// Returns ErrSessionLimitReached, and inserts nothing, when the cap is
+	// already reached; ErrFamilyRevoked on the same conditions as Create.
+	CreateWithinCap(ctx context.Context, token *model.RefreshToken, maxFamilies int) error
 	// GetByTokenHash retrieves a refresh token by its SHA-256 hash. Returns nil, nil if not found.
 	GetByTokenHash(ctx context.Context, hash string) (*model.RefreshToken, error)
-	// MarkUsed atomically marks a token as used. Returns true if the token was unused and is now marked.
+	// MarkUsed atomically marks a token as used. Returns true if the token was
+	// unused, not revoked, and is now marked.
 	MarkUsed(ctx context.Context, id string) (bool, error)
 	// RevokeByID revokes a single refresh token by its ID.
 	RevokeByID(ctx context.Context, id string) error
@@ -113,8 +158,44 @@ type RefreshTokenRepository interface {
 	RevokeAll(ctx context.Context) error
 	// CountActiveFamilies returns the number of distinct active (non-revoked, non-expired) token families for a user.
 	CountActiveFamilies(ctx context.Context, userID string) (int, error)
+	// ListActiveFamilies returns one row per active token family for a user,
+	// newest first. It is the listing counterpart of CountActiveFamilies and
+	// shares its definition of "active", so a session the cap counts is a
+	// session the user can see and end.
+	ListActiveFamilies(ctx context.Context, userID string) ([]*ActiveFamily, error)
 	// DeleteExpired removes expired tokens that have already been used or revoked.
 	DeleteExpired(ctx context.Context) (int64, error)
+}
+
+// ActiveFamily is one live refresh-token family: the unit a user's session
+// actually is.
+//
+// GET /user/sessions used to list devices instead. A device is a fingerprint,
+// not a session: findOrCreateDevice is explicitly non-critical and returns ""
+// when its lookup and insert both fail, so a family can be stored with no device
+// at all — live, refreshable, and invisible to the only page that lists sessions.
+// Two families can also share one fingerprint, and a device can outlive every
+// family it ever carried.
+type ActiveFamily struct {
+	// FamilyID identifies the session. It is what DELETE /user/sessions/{id}
+	// addresses.
+	FamilyID string
+	// DeviceID is the device the newest live generation was bound to, or empty
+	// when device resolution failed at login. Empty is a session with no device
+	// metadata, never a session that does not exist.
+	DeviceID string
+	// ClientID is the service client that requested the session, when one was
+	// named at login.
+	ClientID string
+	// CreatedAt is the family's birth date (family_created_at), which the
+	// absolute session lifetime is measured from and which a rotation cannot
+	// move.
+	CreatedAt time.Time
+	// LastUsedAt is when the newest live generation was issued, i.e. the last
+	// time this session was refreshed.
+	LastUsedAt time.Time
+	// ExpiresAt is when the newest live generation stops being accepted.
+	ExpiresAt time.Time
 }
 
 // DeviceRepository manages device fingerprint persistence.
@@ -137,6 +218,35 @@ type DeviceRepository interface {
 	// defense-in-depth ownership verification at the SQL level.
 	Delete(ctx context.Context, id, userID string) error
 	// DeleteAllForUser removes all device records for a user.
+	DeleteAllForUser(ctx context.Context, userID string) error
+}
+
+// LoginCountryRepository records the set of ISO alpha-2 countries a user has
+// successfully logged in from, backing the new-location (AR-18) notice. It
+// stores country granularity only — never an IP.
+//
+// auth.login_countries carries ON DELETE CASCADE on user_id and that does NOT
+// erase it: vault42 tombstones the user row instead of deleting it, so the
+// referential action never fires. Erasure has to call DeleteAllForUser
+// explicitly, the same way it does for the MFA tables.
+type LoginCountryRepository interface {
+	// UpsertAndWasNew records that userID logged in from country cc and reports,
+	// in one round trip evaluated against a single snapshot:
+	//
+	//   wasNew  — cc was not already recorded for this user (a genuinely new
+	//             country for them);
+	//   hadAny  — the user already had at least one recorded country BEFORE this
+	//             call (so this is not their first-ever recorded login).
+	//
+	// The notice is sent only when wasNew && hadAny: a first-ever login seeds the
+	// set silently. cc must be a two-character country code; the caller passes
+	// the value from ipintel and never an empty string.
+	UpsertAndWasNew(ctx context.Context, userID, cc string) (wasNew bool, hadAny bool, err error)
+
+	// DeleteAllForUser removes every recorded country for a user. It is the
+	// Art. 17 step for this table and, like the rest of the erasure cascade, it
+	// is idempotent: erasing a user who never had a country recorded succeeds and
+	// removes nothing, so an interrupted erasure can simply be re-run.
 	DeleteAllForUser(ctx context.Context, userID string) error
 }
 
@@ -219,11 +329,29 @@ type AuditRepository interface {
 	// Cleanup removes audit entries older than the given time using the
 	// SECURITY DEFINER function that temporarily disables append-only triggers.
 	Cleanup(ctx context.Context, olderThan time.Time) (int64, error)
-	// CleanupLocked is Cleanup serialised across replicas by a Postgres advisory
+	// CleanupLocked is Cleanup serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the audit table.
+	//
+	// It deletes at most AuditCleanupBatch rows per call, so a caller with a
+	// backlog loops. A full batch means there is more; anything less means the
+	// horizon is clear.
 	CleanupLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
+
+// AuditCleanupBatch is how many rows one CleanupLocked call may delete, and
+// therefore how long one call holds ACCESS EXCLUSIVE on the audit table.
+//
+// The purge has to disable the append-only trigger to delete anything, which is
+// ALTER TABLE. Held over an unbounded DELETE that blocks every audit insert for
+// the length of the whole purge — and a failed login is a critical event,
+// written synchronously on the request path even when the buffer is full. Two
+// thousand rows is the batch the postgres cache reaper already uses.
+//
+// It lives on the interface rather than in either implementation because both
+// the implementation and the sweeper that loops over it have to agree on it,
+// and internal/audit cannot import internal/repository/postgres.
+const AuditCleanupBatch = 2000
 
 // AuditFilter specifies criteria for querying audit log entries.
 type AuditFilter struct {
@@ -231,8 +359,17 @@ type AuditFilter struct {
 	EventType string
 	Since     *time.Time
 	Until     *time.Time
-	Limit     int
-	Offset    int
+	// MinRiskScore selects entries scoring at least this much on the
+	// internal/audit severity scale. It is what makes the severity signal
+	// reviewable: the filter carried user, event type and time window only, so
+	// there was no predicate an operator could write that meant "show me
+	// everything that mattered", and the score sat in the store unread.
+	//
+	// Zero means absent rather than a floor of zero, because a floor of zero
+	// selects everything and would make an unset filter look set.
+	MinRiskScore int
+	Limit        int
+	Offset       int
 }
 
 // SocialAccountRepository manages social login persistence.
@@ -278,6 +415,16 @@ type AdminConfigRepository interface {
 	Get(ctx context.Context, key string) (string, error)
 	// Set creates or updates a configuration key-value pair.
 	Set(ctx context.Context, key, value string) error
+	// ClaimIfAbsent records value under key when the key holds nothing yet, and
+	// returns whatever the key holds afterwards. The loser of a race gets the
+	// incumbent value, never its own.
+	//
+	// On the interface rather than only on the Postgres type because Get
+	// followed by Set is not the same operation and the difference is only
+	// visible when two processes boot together, which is the shipped
+	// configuration: replicaCount 3, each running the first-boot paths. A caller
+	// that cannot reach this one writes the read-then-write it makes a mistake.
+	ClaimIfAbsent(ctx context.Context, key, value string) (string, error)
 	// Delete removes a configuration entry by key.
 	Delete(ctx context.Context, key string) error
 }
@@ -317,6 +464,98 @@ type BlobRepository interface {
 	DeleteAllForPseudonym(ctx context.Context, pseudonymID string) error
 }
 
+// ServiceDocumentVisibility controls which clients may read a service document.
+//
+// It is an integer enum rather than a boolean so a third tier (an explicit
+// grantee allow-list) can be added by widening a CHECK constraint instead of
+// changing a column's type, and so the wire representation stays a string enum
+// rather than a field whose meaning inverts. The zero value is the closed one:
+// a document whose visibility was never set is private.
+type ServiceDocumentVisibility int16
+
+const (
+	// VisibilityPrivate documents are readable and writable only by the client
+	// that owns them. This is the default for every write.
+	VisibilityPrivate ServiceDocumentVisibility = 0
+	// VisibilityShared documents are readable by any authenticated client
+	// holding the read scope, and writable only by the owning client. There is
+	// deliberately no shared-mutable tier: two services writing one document
+	// with no locking loses data.
+	VisibilityShared ServiceDocumentVisibility = 1
+)
+
+// ServiceDocument is one AES-GCM encrypted JSON document owned by a service
+// client and scoped to a subject.
+//
+// The row type lives here rather than in model because the store has no
+// plaintext-carrying representation worth sharing: DataEnc is the only payload
+// field and it is opaque outside the service layer.
+//
+// SubjectHash is an HMAC pseudonym, never a raw user id, so a database reader
+// cannot enumerate which users a service holds documents for. DocKey is stored
+// in plaintext, unlike objects.blobs.ref_hash: blob reference names are chosen
+// by users and may be personal data, whereas document keys are chosen by the
+// writing service from a constrained charset and are configuration identifiers.
+type ServiceDocument struct {
+	ID          string
+	ClientID    string
+	SubjectHash string
+	DocKey      string
+	Visibility  ServiceDocumentVisibility
+	DataEnc     []byte
+	SizeBytes   int
+	StoredBytes int
+	Version     int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ServiceDocumentRepository manages encrypted, service-scoped JSON documents
+// (objects.service_documents), keyed by (client_id, subject_hash, doc_key).
+//
+// Every read method that a request path can reach takes the caller's client id,
+// so ownership is enforced in SQL rather than by a comparison the handler could
+// forget. The two methods that span clients, ListSharedByKey and the erasure
+// and export helpers, say so in their names.
+type ServiceDocumentRepository interface {
+	// Get returns one document owned by clientID, or nil, nil if absent.
+	Get(ctx context.Context, clientID, subjectHash, docKey string) (*ServiceDocument, error)
+	// ListSharedByKey returns every shared document at (subjectHash, docKey)
+	// that is NOT owned by excludeClientID. More than one row can come back:
+	// two services may each publish a shared document under the same key, and
+	// the caller has to resolve that rather than the store guessing an owner.
+	ListSharedByKey(ctx context.Context, subjectHash, docKey, excludeClientID string) ([]*ServiceDocument, error)
+	// Upsert creates or fully replaces a document. created reports whether a new
+	// row was inserted, so the handler can answer 201 versus 200.
+	Upsert(ctx context.Context, doc *ServiceDocument) (created bool, err error)
+	// Delete removes one document owned by clientID. Returns false when there
+	// was nothing to remove.
+	Delete(ctx context.Context, clientID, subjectHash, docKey string) (deleted bool, err error)
+	// ListByOwner returns the caller's own documents for a subject, without
+	// data_enc.
+	ListByOwner(ctx context.Context, clientID, subjectHash string) ([]*ServiceDocument, error)
+	// ListSharedForSubject returns shared documents for a subject owned by other
+	// clients, without data_enc.
+	ListSharedForSubject(ctx context.Context, subjectHash, excludeClientID string) ([]*ServiceDocument, error)
+	// ListAllForSubject returns every document held for a subject across all
+	// owning clients, WITH data_enc. It exists for the Art. 15 export, which
+	// must return the document bodies a service wrote about the data subject.
+	ListAllForSubject(ctx context.Context, subjectHash string) ([]*ServiceDocument, error)
+	// CountForOwner returns how many documents clientID holds for a subject.
+	CountForOwner(ctx context.Context, clientID, subjectHash string) (int, error)
+	// SumBytesForSubjectAndClient returns the stored bytes one client holds for
+	// a subject, for the per-(client, subject) byte quota. The budget is charged
+	// against the caller's own footprint, so one service cannot fill a budget the
+	// others then fail against, and one service's usage is never reported to
+	// another.
+	SumBytesForSubjectAndClient(ctx context.Context, subjectHash, clientID string) (int, error)
+	// DeleteAllForSubject removes every document for a subject across all
+	// owning clients (account erasure). It is idempotent: erasing a subject
+	// that never had a document is not an error, so an interrupted cascade can
+	// be re-run.
+	DeleteAllForSubject(ctx context.Context, subjectHash string) error
+}
+
 // AccountRecoveryRepository manages the append-only account-recovery escrow log
 // (auth.account_recovery). Records are written on account erasure and can only
 // be decrypted with the offline recovery private key. The table is append-only:
@@ -340,11 +579,29 @@ type AccountRecoveryPruner interface {
 	// Prune removes recovery records written before olderThan and returns how
 	// many rows went.
 	Prune(ctx context.Context, olderThan time.Time) (int64, error)
-	// PruneLocked is Prune serialised across replicas by a Postgres advisory
+	// PruneLocked is Prune serialized across replicas by a Postgres advisory
 	// lock. acquired=false means another replica is already sweeping and this one
 	// must skip: the cleanup takes an ACCESS EXCLUSIVE lock on the escrow table.
+	//
+	// It deletes at most RecoveryCleanupBatch rows per call, so a caller with a
+	// backlog loops. A full batch means there is more; anything less means the
+	// horizon is clear.
 	PruneLocked(ctx context.Context, olderThan time.Time) (deleted int64, acquired bool, err error)
 }
+
+// RecoveryCleanupBatch is how many rows one PruneLocked call may delete, and
+// therefore how long one call holds ACCESS EXCLUSIVE on auth.account_recovery.
+//
+// Same reasoning as AuditCleanupBatch, against a different writer. The purge
+// disables the append-only trigger to delete anything, which is ALTER TABLE, and
+// what waits behind that lock is the erasure path: every Art. 17 deletion with a
+// recovery key configured appends its escrow record before the account goes. An
+// unbounded DELETE stalls erasures for the length of the whole purge.
+//
+// It lives on the interface because the implementation and the sweeper that
+// loops over it have to agree on it, and internal/service cannot import
+// internal/repository/postgres.
+const RecoveryCleanupBatch = 2000
 
 // AdminUserRepository manages admin gateway user persistence.
 type AdminUserRepository interface {

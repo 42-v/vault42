@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	vaultcrypto "github.com/42-v/vault42/internal/crypto"
-	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
@@ -22,7 +20,7 @@ func TestCompleteMFALoginSuccess(t *testing.T) {
 		return &model.User{ID: id, Roles: []string{"user", "admin"}}, nil
 	}
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "", MFACompletion{Method: MethodTOTP})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +36,7 @@ func TestCompleteMFALoginChallengeConsumed(t *testing.T) {
 		return false, nil
 	}
 
-	_, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1")
+	_, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP})
 	if !errors.Is(err, ErrChallengeConsumed) {
 		t.Fatalf("want ErrChallengeConsumed, got %v", err)
 	}
@@ -51,33 +49,45 @@ func TestCompleteMFALoginCacheFailsClosed(t *testing.T) {
 		return false, errors.New("redis unavailable")
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1"); err == nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP}); err == nil {
 		t.Fatal("expected fail-closed error when cache is unavailable")
 	}
 }
 
-// A user row that vanished between challenge and completion still gets tokens
-// (the challenge was already verified), but only with the default "user" role.
-func TestCompleteMFALoginNilUserDefaultsRoles(t *testing.T) {
-	svc, o := newMockAuthService(t)
-	o.userRepo.GetByIDFn = func(_ context.Context, _ string) (*model.User, error) {
-		return nil, nil
-	}
+// A subject the repository cannot resolve after the second factor gets no
+// session: a nil user (deleted inside the challenge window) and a read fault
+// (which would otherwise hide a banned/disabled state and skip the account gate)
+// both fail closed with ErrTokenInvalid, matching how Refresh treats the same
+// reads. Previously a nil user fell back to a default-role session, and a read
+// fault reached that same nil path, so a transient error minted tokens for an
+// account whose banned state it hid.
+func TestCompleteMFALoginRefusesUnresolvableUser(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		get  func(context.Context, string) (*model.User, error)
+	}{
+		{name: "nil user", get: func(context.Context, string) (*model.User, error) { return nil, nil }},
+		{name: "read error", get: func(context.Context, string) (*model.User, error) {
+			return nil, errors.New("transient db read fault")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, o := newMockAuthService(t)
+			o.userRepo.GetByIDFn = tc.get
+			stored := false
+			o.tokenRepo.CreateFn = func(context.Context, *model.RefreshToken) error { stored = true; return nil }
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	token, err := vjwt.ParseUnverified(res.AccessToken, &vaultcrypto.VaultClaims{})
-	if err != nil {
-		t.Fatalf("parse access token: %v", err)
-	}
-	claims, ok := token.Claims.(*vaultcrypto.VaultClaims)
-	if !ok {
-		t.Fatal("unexpected claims type")
-	}
-	if len(claims.Roles) != 1 || claims.Roles[0] != "user" {
-		t.Errorf("roles = %v, want [user]", claims.Roles)
+			res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "127.0.0.1", "UA", "", MFACompletion{Method: MethodTOTP})
+			if !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("err = %v, want ErrTokenInvalid: an unresolvable subject must not get a session", err)
+			}
+			if res != nil {
+				t.Error("a token pair was issued for an unresolvable subject")
+			}
+			if stored {
+				t.Error("a refresh token was stored for an unresolvable subject")
+			}
+		})
 	}
 }
 
@@ -89,7 +99,7 @@ func TestCompleteMFALoginStoreTokenError(t *testing.T) {
 		return dbErr
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); !errors.Is(err, dbErr) {
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); !errors.Is(err, dbErr) {
 		t.Fatalf("want the store error, got %v", err)
 	}
 }
@@ -101,7 +111,7 @@ func TestCompleteMFALoginSetLastLoginNonFatal(t *testing.T) {
 		return errors.New("db down")
 	}
 
-	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "")
+	res, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP})
 	if err != nil {
 		t.Fatalf("SetLastLogin error must not block MFA completion, got %v", err)
 	}
@@ -118,7 +128,7 @@ func TestCompleteMFALoginMetricsRecorded(t *testing.T) {
 	collector := metrics.NewCollector(zero, zero, func() int { return 0 })
 	svc.SetMetrics(collector)
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", ""); err != nil {
+	if _, err := svc.CompleteMFALogin(context.Background(), "user-1", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -141,7 +151,7 @@ func TestCompleteMFALoginSessionLimit(t *testing.T) {
 		return 5, nil
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", ""); !errors.Is(err, ErrTooManySessions) {
+	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "", MFACompletion{Method: MethodTOTP}); !errors.Is(err, ErrTooManySessions) {
 		t.Fatalf("want ErrTooManySessions, got %v", err)
 	}
 }
@@ -180,14 +190,14 @@ func TestIsAccountLockedDBFallback(t *testing.T) {
 	o.userRepo.GetByIDFn = func(_ context.Context, _ string) (*model.User, error) {
 		return nil, errors.New("db down")
 	}
-	if svc.isAccountLocked(ctx, "u") {
+	if svc.isAccountLocked(ctx, "u", "203.0.113.9") {
 		t.Fatal("lookup error should report not-locked")
 	}
 
 	o.userRepo.GetByIDFn = func(_ context.Context, id string) (*model.User, error) {
 		return &model.User{ID: id, FailedLoginCount: 1000}, nil
 	}
-	if !svc.isAccountLocked(ctx, "u") {
+	if !svc.isAccountLocked(ctx, "u", "203.0.113.9") {
 		t.Fatal("failed-login count over threshold should lock via DB fallback")
 	}
 }

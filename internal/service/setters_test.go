@@ -31,4 +31,7 @@ func TestAuthServiceSetters(t *testing.T) {
 	if s.maxSessionsPerUser != 7 {
 		t.Fatalf("SetMaxSessionsPerUser stored %d, want 7", s.maxSessionsPerUser)
 	}
+	if s.MaxSessionsPerUser() != 7 {
+		t.Fatalf("MaxSessionsPerUser() = %d, want 7", s.MaxSessionsPerUser())
+	}
 }

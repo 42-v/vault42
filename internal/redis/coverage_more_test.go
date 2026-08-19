@@ -139,7 +139,7 @@ func TestGet_NilReplyMapsToNil(t *testing.T) {
 	}
 }
 
-// A server error reply propagates out of GetDel as a RedisError.
+// A server error reply propagates out of GetDel as a ServerError.
 func TestGetDel_ServerError(t *testing.T) {
 	s := newScriptedServer(t, "-ERR boom\r\n")
 	defer s.close()
@@ -148,9 +148,9 @@ func TestGetDel_ServerError(t *testing.T) {
 	defer c.Close()
 
 	_, err := c.GetDel(context.Background(), "k")
-	var redisErr *RedisError
+	var redisErr *ServerError
 	if !errors.As(err, &redisErr) {
-		t.Fatalf("expected RedisError, got %T: %v", err, err)
+		t.Fatalf("expected ServerError, got %T: %v", err, err)
 	}
 }
 

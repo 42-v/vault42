@@ -356,5 +356,6 @@
   "error.forbidden": "Sie haben keine Berechtigung dafür.",
   "error.code_already_used": "Dieser Code wurde bereits verwendet. Bitte verwenden Sie einen neuen.",
   "error.password_recently_used": "Sie haben dieses Passwort kürzlich verwendet. Bitte wählen Sie ein anderes.",
-  "error.no_webauthn_credentials": "Für dieses Konto sind keine Sicherheitsschlüssel registriert."
+  "error.no_webauthn_credentials": "Für dieses Konto sind keine Sicherheitsschlüssel registriert.",
+  "error.password_reset_required": "Dieses Konto muss sein Passwort zurücksetzen. Wir haben Ihnen einen Link per E-Mail geschickt."
 }

@@ -1,0 +1,71 @@
+name: Bug report
+description: Something behaves differently from the documentation
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Stop if this is a security vulnerability.** Do not describe it here.
+        Email vault@42-v.com. See
+        [SECURITY.md](https://github.com/42-v/vault42/blob/main/SECURITY.md).
+
+
+        Deliberate tradeoffs are enumerated in
+        [docs/security.md](https://github.com/42-v/vault42/blob/main/docs/security.md);
+        an entry in that register is not a bug.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag, release version, or commit SHA.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options: [production, embedded, honeypot, dev]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+      description: >-
+        Quote the documentation that says so, with the file and section. If no
+        document says so, this is a feature request rather than a bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: >-
+        Include the HTTP status and error code, or the exact log line.
+        Redact tokens, secrets, hostnames and user email addresses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        The `curl` invocation or the sequence of calls. Include the relevant
+        environment variables with their values redacted where sensitive.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Deployment
+      description: >-
+        Kubernetes and Helm chart version, or Docker; database and cache
+        backend; whether a reverse proxy terminates TLS and which headers it
+        sets.

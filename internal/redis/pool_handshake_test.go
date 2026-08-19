@@ -179,7 +179,7 @@ func TestPool_UnhealthyIdleConnectionIsReplaced(t *testing.T) {
 
 	// The connection is now idle. This Get reuses it, the health check comes back
 	// wrong, and the pool must dial a fresh connection rather than fail the call.
-	if _, err := c.Get(ctx, "k"); err != nil && err != Nil {
+	if _, err := c.Get(ctx, "k"); err != nil && !errors.Is(err, Nil) {
 		t.Fatalf("a stale pooled connection must be replaced, not surfaced to the caller: %v", err)
 	}
 }
@@ -211,7 +211,7 @@ func TestPool_IdleConnectionPastTimeoutIsDiscarded(t *testing.T) {
 	// Let the pooled connection age past IdleTimeout.
 	time.Sleep(25 * time.Millisecond)
 
-	if _, err := c.Get(ctx, "k"); err != nil && err != Nil {
+	if _, err := c.Get(ctx, "k"); err != nil && !errors.Is(err, Nil) {
 		t.Fatalf("an expired idle connection must be replaced transparently: %v", err)
 	}
 }

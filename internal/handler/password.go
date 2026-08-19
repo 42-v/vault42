@@ -12,6 +12,7 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/deferwork"
 	"github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
@@ -43,12 +44,24 @@ type PasswordHandler struct {
 
 // PasswordResetRequestInput represents the reset request payload.
 type PasswordResetRequestInput struct {
+	// Email is the account to send a reset link to. Required. The response
+	// is identical whether the address exists or not, so this field cannot
+	// be used as an enumeration oracle.
 	Email string `json:"email"`
 }
 
 // PasswordResetConfirmInput represents the reset confirmation payload.
 type PasswordResetConfirmInput struct {
-	Token    string `json:"token"`
+	// Token is the single-use value from the reset email. Required.
+	// Unknown, expired or already-used values all return
+	// invalid_or_expired_token.
+	Token string `json:"token"`
+	// Password is the new password. Required. Shorter than the
+	// configured minimum (VAULT_PASSWORD_MIN_LENGTH / h.minLength,
+	// default 15 runes) is 400 password_too_short. A match against
+	// the last 5 hashes is 400 password_recently_used. A HIBP hit is
+	// 400 password_breached. Completing the reset revokes every
+	// refresh family for the account.
 	Password string `json:"password"` // #nosec G117 -- password field in request DTO, not stored
 }
 
@@ -107,26 +120,28 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	ip := middleware.ClientIP(r)
 	ua := r.Header.Get("User-Agent")
 
-	// Always return success to prevent user enumeration
+	// Always return the same response so the body is not an enumeration signal.
 	defer func() {
 		WriteJSON(w, http.StatusOK, StatusResponse{
 			Status: "If that email exists, a reset link has been sent.",
 		})
 	}()
 
-	user, err := h.users.GetByEmail(r.Context(), input.Email)
-	if err != nil || user == nil {
-		// Constant-time: verify against dummy hash to match the found-user path timing.
-		// ErrArgon2Overloaded is intentionally discarded here: the deferred response always
-		// returns 200 regardless, so no user enumeration signal is possible.
-		// Result discarded; deferred 200 prevents enumeration.
-		_, _ = vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash, h.pepper)
-		return
-	}
+	// Spend the same dominant work on every request so response TIMING is not an
+	// enumeration signal either: one Argon2 verification (the ~50ms cost that a
+	// login would pay, and the only large, reliable timing component here) and one
+	// token generation, whether or not the address maps to an eligible account.
+	// Only an existing, non-deleted, non-banned, non-disabled account then has the
+	// token stored and mailed. A locked-out account is still eligible: resetting
+	// the password is a legitimate way out of a failed-login lockout. The residual
+	// difference from the store/audit writes on the eligible path is sub-millisecond
+	// and dominated by the shared Argon2 cost. ErrArgon2Overloaded is discarded: the
+	// deferred 200 is returned regardless, so no path reveals more than another.
+	_, _ = vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash, h.pepper)
+	token, tokenErr := vaultcrypto.RandomHex(32)
 
-	// Generate reset token
-	token, err := vaultcrypto.RandomHex(32)
-	if err != nil {
+	user, err := h.users.GetByEmail(r.Context(), input.Email)
+	if err != nil || user == nil || user.Deleted || user.Banned || user.Disabled || tokenErr != nil {
 		return
 	}
 
@@ -142,18 +157,18 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	if h.sender != nil {
 		resetURL := h.origin + "/reset-password?token=" + token
 		app := email.AppFromContext(r.Context())
-		go func() { // #nosec G118 -- intentional: email send outlives HTTP request, uses Background ctx
+		deferwork.Go(func(ctx context.Context) {
 			// Email send is best-effort; failure logged inside Send.
-			_ = h.mailer.Send(context.Background(), app, email.TemplatePasswordReset, user.Email, email.TemplateData{
+			_ = h.mailer.Send(ctx, app, email.TemplatePasswordReset, user.Email, email.TemplateData{
 				URL: resetURL,
 			})
-		}()
+		})
 	}
 
 	// Audit log
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", ip, // #nosec G104 -- audit is best-effort, never blocks auth flow
-			ua, "", "", map[string]any{"action": "requested"}, 0)
+			ua, "", "", map[string]any{"action": "requested"})
 	}
 }
 
@@ -199,13 +214,28 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clear lockout state so the user can login immediately after reset.
-	// Both cache-based counter and DB failed_login_count must be cleared.
+	// Clear every lockout standing against this account, so the reset is a way
+	// out rather than a step that appears to do nothing.
+	//
+	// Three pieces of state, not one, and this used to reach one of them. The
+	// account-wide cache counter, the durable failed_login_count, and the
+	// per-(account, source address) counters — one key per address, with nothing
+	// to enumerate them, so ClearAccountLockout retires them by generation rather
+	// than by deletion. Clearing only the first two left the user refused from the
+	// machine they were locked out on, behind the error a wrong password gets, so
+	// the reasonable conclusion was that the reset had failed and the reasonable
+	// next step was to reset again, which cleared nothing.
+	//
+	// It must reach every address, not the one this request came from: the reset
+	// link is usually opened on a different device from the one that got locked
+	// out.
 	if h.cache != nil {
-		h.cache.Delete(r.Context(), fmt.Sprintf("lockout:%s", user.ID)) // #nosec G104 -- best-effort lockout clear
+		if err := service.ClearAccountLockout(r.Context(), h.cache, user.ID); err != nil {
+			log.Printf("password: failed to clear the lockout for user %s after password reset: %v", user.ID, err)
+		}
 	}
 	if err := h.users.ResetFailedLogin(r.Context(), user.ID); err != nil {
-		log.Printf("password: failed to reset lockout for user %s after password reset: %v", user.ID, err)
+		log.Printf("password: failed to reset the stored failed-login count for user %s after password reset: %v", user.ID, err)
 	}
 
 	// Claim an imported account: setting a password via the magic link clears
@@ -223,6 +253,36 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Lift a forced password reset (migration 039): setting a new password through
+	// the reset link is the event the flag was waiting for, and it is the only way
+	// out of the state. Idempotent no-op for an account that never carried it --
+	// the column is a privileged write, so an unconditional UPDATE would put every
+	// ordinary reset through the guard for nothing.
+	//
+	// Fail closed, exactly as the import claim above does and for the same reason:
+	// reporting success while the flag stands tells the user they are finished
+	// when the next login will refuse them, mail them another link, and say
+	// nothing about why. The flag stays set, so the next login re-issues a link
+	// and the account is recoverable.
+	if user.MustResetPassword {
+		if err := h.users.ClearMustResetPassword(r.Context(), user.ID); err != nil {
+			log.Printf("password: failed to clear must_reset_password for user %s: %v", user.ID, err)
+			WriteError(w, http.StatusInternalServerError, "forced_reset_clear_failed")
+			return
+		}
+		// Its own audit row rather than a field on the one below. That row
+		// describes the reset; this one describes the account-state change the
+		// reset caused, which is what an operator reading the lifecycle of the
+		// flag is looking for -- set at import, lifted here.
+		if h.auditLog != nil {
+			h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+				r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+					"action": "forced_reset_completed",
+					"reason": "password_reset_confirmed",
+				})
+		}
+	}
+
 	// Audit log
 	if h.auditLog != nil {
 		action := "confirmed"
@@ -230,7 +290,7 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 			action = "import_claimed"
 		}
 		h.auditLog.Log(r.Context(), audit.PasswordReset, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": action}, 0)
+			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"action": action})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "password_reset_complete"})
@@ -245,8 +305,15 @@ func (h *PasswordHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	var input struct {
+		// CurrentPassword is the password currently stored on the
+		// account. Required. A mismatch is 401 invalid_current_password.
 		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
+		// NewPassword is the replacement. Required. Shorter than the
+		// configured minimum (default 15 runes) is 400
+		// password_too_short. A match against the last 5 hashes is 400
+		// password_recently_used. A HIBP hit is 400 password_breached.
+		// Success revokes every refresh family for the account.
+		NewPassword string `json:"new_password"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_request")
@@ -292,7 +359,7 @@ func (h *PasswordHandler) ChangePassword(w http.ResponseWriter, r *http.Request)
 	// Audit log
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), audit.PasswordChange, user.ID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
-			r.Header.Get("User-Agent"), "", "", nil, 0)
+			r.Header.Get("User-Agent"), "", "", nil)
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "password_changed"})

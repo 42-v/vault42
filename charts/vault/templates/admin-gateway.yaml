@@ -1,8 +1,39 @@
 {{- if .Values.adminGateway.enabled }}
+{{- /*
+  Client revocation list wiring.
+
+  cmd/admin-gateway treats an unreadable ADMIN_GW_CLIENT_CRL_FILE as fatal on
+  purpose: a gateway that reports revocation checking as configured while
+  checking nothing is worse than one that refuses to start. This template used to
+  set that env from a bare path value and mount no volume anywhere, so the one
+  supported way to turn revocation on shipped an admin plane that
+  CrashLoopBackOffs on first boot -- on the setting whose whole purpose is to
+  harden it.
+
+  The path is now derived from the mounted source, so the two cannot disagree,
+  and the old setting fails the render with the two lines that replace it.
+*/ -}}
+{{- $crl := .Values.adminGateway.clientCRL | default dict }}
+{{- if .Values.adminGateway.clientCRLFile }}
+{{- fail "adminGateway.clientCRLFile is set, but this chart never mounted a revocation list at that path, and cmd/admin-gateway exits 1 when ADMIN_GW_CLIENT_CRL_FILE cannot be read -- so the setting rendered an admin plane that CrashLoopBackOffs on first boot. Put the CRL in a Secret or a ConfigMap and name it in adminGateway.clientCRL.secretName or adminGateway.clientCRL.configMapName, with the key(s) in adminGateway.clientCRL.keys. The container path is derived from adminGateway.clientCRL.mountPath, and adminGateway.clientCRLFile is no longer read." }}
+{{- end }}
+{{- if and $crl.secretName $crl.configMapName }}
+{{- fail "adminGateway.clientCRL.secretName and adminGateway.clientCRL.configMapName are both set, and the revocation list is mounted from exactly one volume. Pick the Secret or the ConfigMap; silently preferring one is how an operator ends up debugging a CRL they are certain they replaced." }}
+{{- end }}
+{{- $crlSource := or $crl.secretName $crl.configMapName }}
+{{- if and $crlSource (not $crl.keys) }}
+{{- fail "adminGateway.clientCRL names a source but adminGateway.clientCRL.keys is empty, so nothing would be mounted from it and ADMIN_GW_CLIENT_CRL_FILE would name no file. Set one key per CA in the client CA bundle that publishes a list." }}
+{{- end }}
+{{- $crlMountPath := $crl.mountPath | default "/run/crl" }}
+{{- $crlPaths := list }}
+{{- range $key := ($crl.keys | default list) }}
+{{- $crlPaths = append $crlPaths (printf "%s/%s" (trimSuffix "/" $crlMountPath) $key) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vault.labels" . | nindent 4 }}
     app.kubernetes.io/component: admin-gateway
@@ -21,6 +52,10 @@ spec:
       {{- if .Values.adminGateway.hostNetwork }}
       # hostNetwork: true binds to the node's loopback, not pod loopback.
       # Combined with 127.0.0.1 bind, only local connections reach the gateway.
+      # It is opt-in, not the default: both the baseline and the restricted Pod
+      # Security Standards profiles forbid hostNetwork, so a namespace enforcing
+      # either rejects this pod unless it has been given an exemption. See
+      # charts/vault/README.md.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
@@ -34,12 +69,24 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: admin-gateway
-          image: "{{ .Values.adminGateway.image.repository }}:{{ .Values.adminGateway.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "vault.image" (dict "image" .Values.adminGateway.image "tag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.adminGateway.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: https
+              containerPort: 9443
+              protocol: TCP
           env:
-            {{- if not .Values.adminGateway.hostNetwork }}
+            {{- if and (not .Values.adminGateway.hostNetwork) (not .Values.adminGateway.devMode) }}
+            {{- fail "adminGateway.hostNetwork is false, which means the admin plane is reachable through the cluster network rather than node loopback. LocalOnly refuses every such request, so the gateway can only serve with adminGateway.devMode=true, and that also switches off RejectProxyHeaders. There are two ways forward and the chart will not pick one for you. Set adminGateway.hostNetwork=true to keep the local-only posture, on a namespace whose Pod Security Standards policy permits hostNetwork -- both the baseline and restricted profiles forbid it, so this needs an explicit exemption. Or set adminGateway.devMode=true to state that you accept a network-reachable admin plane whose remaining control is the bearer session token, and put a proxy in front of it that carries the weight LocalOnly did." }}
+            {{- end }}
+            {{- if .Values.adminGateway.devMode }}
+            # Set from adminGateway.devMode, never inferred. It used to be forced
+            # on whenever hostNetwork was false, so choosing an ordinary
+            # Kubernetes networking option silently disabled LocalOnly and
+            # RejectProxyHeaders, and the layered story in docs/admin-gateway.md
+            # collapsed to "holds a valid session token" with nothing saying so.
             - name: ADMIN_GW_DEV_MODE
               value: "true"
             {{- end }}
@@ -51,6 +98,17 @@ spec:
               value: /run/tls/tls.key
             - name: ADMIN_GW_CLIENT_CA_FILE
               value: /run/tls/ca.crt
+            {{- if .Values.adminGateway.clientCNAllowlist }}
+            - name: ADMIN_GW_CLIENT_CN_ALLOWLIST
+              value: {{ .Values.adminGateway.clientCNAllowlist | quote }}
+            {{- end }}
+            {{- if $crlSource }}
+            # Derived from the mounted volume rather than set on its own: the
+            # gateway dies at boot on a path it cannot read, so the path and the
+            # mount have to come from one place.
+            - name: ADMIN_GW_CLIENT_CRL_FILE
+              value: {{ join "," $crlPaths | quote }}
+            {{- end }}
             - name: ADMIN_GW_SESSION_TTL
               value: {{ .Values.adminGateway.sessionTTL | quote }}
             - name: ADMIN_GW_MAX_FAILED_LOGINS
@@ -69,28 +127,88 @@ spec:
               value: {{ .Values.database.sslmode | quote }}
             - name: MASTER_KEY_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.masterKey }}
+            # The account-erasure service is built only when the gateway has the
+            # HMAC secret: it derives the identity and blob pseudonyms from it, so
+            # without it DELETE /admin/users/{id} answers 503. This env was absent,
+            # which left the Article 17 erasure path off in every chart install
+            # until an operator noticed and added it by hand. The secret is the
+            # same one the server mounts; it is already in this volume.
+            - name: HMAC_SECRET_FILE
+              value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.hmacSecret }}
             - name: DB_ADMIN_PASSWORD_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.adminGateway.dbAdminPasswordKey }}
             - name: DB_MIG_PASSWORD_FILE
               value: {{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.dbMigPassword }}
+            # EnsureFirstAdmin mints the super_admin bootstrap password on the
+            # first boot against an empty admin table, and it is the one
+            # credential in this deployment with no other way in: without it
+            # nobody can log into the admin plane at all. It used to be printed
+            # to the pod log. With no sink named here that step refuses and the
+            # gateway does not finish booting, which is the correct end of the
+            # trade -- a super_admin whose password only the log aggregator holds
+            # is worse than a gateway that says why it stopped.
+            - name: VAULT_FIRST_BOOT_CREDENTIAL_FILE
+              value: {{ .Values.firstBootCredential.path | quote }}
           volumeMounts:
+            {{- include "vault.firstBootCredentialMount" . | nindent 12 }}
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
               readOnly: true
             - name: tls
               mountPath: /run/tls
               readOnly: true
+            {{- if $crlSource }}
+            - name: client-crl
+              mountPath: {{ $crlMountPath | quote }}
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
           resources:
             {{- toYaml .Values.adminGateway.resources | nindent 12 }}
+          {{- if not .Values.adminGateway.hostNetwork }}
+          # tcpSocket, not httpGet: the gateway requires a client certificate, so
+          # an HTTP probe is rejected at the handshake and reads as a dead pod.
+          #
+          # Probes exist only off the host network. With hostNetwork the gateway
+          # binds the node's loopback, and the kubelet probes the pod IP, which on
+          # the host network is the node address rather than 127.0.0.1 -- the same
+          # property that keeps everything else off the admin plane keeps the
+          # probe off it. A probe added there would fail every time and restart a
+          # healthy gateway in a loop.
+          startupProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+            failureThreshold: 6
+          {{- end }}
       volumes:
+        {{- include "vault.firstBootCredentialVolume" . | nindent 8 }}
         - name: secrets
           secret:
             secretName: {{ include "vault.secretName" . }}
         - name: tls
           secret:
             secretName: {{ required "adminGateway.tls.secretName is required when adminGateway is enabled" .Values.adminGateway.tls.secretName }}
+        {{- if $crlSource }}
+        - name: client-crl
+          {{- if $crl.secretName }}
+          secret:
+            secretName: {{ $crl.secretName | quote }}
+          {{- else }}
+          configMap:
+            name: {{ $crl.configMapName | quote }}
+          {{- end }}
+        {{- end }}
         - name: tmp
           emptyDir:
             medium: Memory
@@ -103,7 +221,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- if .Values.adminGateway.hostNetwork }}
+{{- if and .Values.networkPolicy.enabled .Values.adminGateway.hostNetwork }}
 ---
 # NetworkPolicy: deny ALL ingress to admin-gateway.
 # This is layer 5 of the 6-layer local-only enforcement.
@@ -113,6 +231,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "vault.fullname" . }}-admin-gateway-deny-all
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vault.labels" . | nindent 4 }}
 spec:
@@ -124,6 +243,49 @@ spec:
     - Ingress
   # Empty ingress = deny all inbound traffic
   ingress: []
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.adminGateway.hostNetwork) }}
+---
+# NetworkPolicy for the admin gateway off the host network. The deny-all above
+# only ever rendered in hostNetwork mode, so the configuration that actually
+# exposes the admin plane to the cluster network was the one with no policy on
+# it. This narrows that exposure to the gateway's own port and gives it egress
+# only to the database and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-admin-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vault.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  # No `from`: the client is an ingress controller or a port-forward, and this
+  # chart cannot know which namespace either lives in. The port is the limit, and
+  # mTLS is what decides who gets past it.
+  ingress:
+    - ports:
+        - port: 9443
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.postgresSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.database.port | int }}
+          protocol: TCP
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 {{- end }}
 {{- if not .Values.adminGateway.hostNetwork }}
 ---

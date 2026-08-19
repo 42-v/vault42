@@ -17,8 +17,15 @@ spec:
   selector:
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
+      # A selector is a subset match, and in bridge mode selectorLabels alone
+      # also match the bridge and honeypot Services, so Prometheus would scrape
+      # the decoy and file its counters under the vault. Name the component, as
+      # service.yaml and networkpolicy.yaml do for the same reason.
+      app.kubernetes.io/component: vault
   endpoints:
-    - port: http
+    # The metrics port, not http. /metrics is no longer a route on the public
+    # listener; scraping port http now reaches a mux that does not serve it.
+    - port: metrics
       path: /metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}

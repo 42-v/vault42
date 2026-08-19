@@ -12,6 +12,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
@@ -21,6 +22,17 @@ import (
 	"github.com/42-v/vault42/internal/service"
 )
 
+// WebAuthnCeremonyTTL is how long a started registration or assertion ceremony
+// stays completable. It is the lifetime of the cached session data, which holds
+// the challenge the response is checked against, so once it lapses the ceremony
+// cannot be finished and a fresh one must be begun.
+//
+// Exported because the relying-party configuration in internal/server enforces
+// the same window inside go-webauthn. One deadline written as two independent
+// numbers drifts, and this particular pair decides how long a challenge stays
+// answerable.
+const WebAuthnCeremonyTTL = 5 * time.Minute
+
 // WebAuthnHandler handles WebAuthn/FIDO2 endpoints.
 type WebAuthnHandler struct {
 	webauthnRepo  repository.WebAuthnRepository
@@ -29,11 +41,85 @@ type WebAuthnHandler struct {
 	wan           *webauthn.WebAuthn
 	authSvc       *service.AuthService
 	secureCookies bool
+	auditLog      *audit.Logger
 }
 
 // NewWebAuthnHandler creates a new WebAuthn handler.
 func NewWebAuthnHandler(repo repository.WebAuthnRepository, userRepo repository.UserRepository, c cache.Cache, wan *webauthn.WebAuthn, authSvc *service.AuthService, secureCookies bool) *WebAuthnHandler {
 	return &WebAuthnHandler{webauthnRepo: repo, userRepo: userRepo, cache: c, wan: wan, authSvc: authSvc, secureCookies: secureCookies}
+}
+
+// SetAuditLog attaches the audit logger. Called once at wiring time; a nil
+// logger is ignored.
+func (h *WebAuthnHandler) SetAuditLog(l *audit.Logger) {
+	if l != nil {
+		h.auditLog = l
+	}
+}
+
+// logEvent records a WebAuthn credential lifecycle event against the user's
+// trail.
+//
+// A passkey is a permanent key on the account, and until 1.0.0 binding one left
+// no record: this handler had no logger, so an attacker on a stolen session
+// could enroll their own authenticator, then keep logging in as the owner long
+// after the stolen session expired, and the trail showed only the owner's own
+// logins. Removal is recorded for the same reason in reverse, since taking the
+// owner's key off the account is how the lockout is made to stick.
+//
+// Best-effort on purpose. A trail that can refuse an assertion the authenticator
+// just signed would convert an audit outage into an authentication outage.
+func (h *WebAuthnHandler) logEvent(r *http.Request, event, userID string, meta map[string]interface{}) {
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", meta)
+}
+
+// containClone revokes every active refresh-token family for the user after a
+// cloned-authenticator signal, and records what came of it either way.
+//
+// Deliberately non-blocking. The assertion is refused whether or not the revoke
+// lands, because making the refusal wait on a database write would turn a
+// database outage into a way to keep a cloned authenticator working.
+//
+// But a revoke that fails silently is worse than one that never ran. The
+// refusal and the clone-warning log line at the call site read the same either
+// way, so an operator seeing a clone warning with no failure beside it concludes
+// the sessions are gone, while the attacker keeps every session opened before
+// detection for the full refresh-token lifetime. A sign-counter regression is
+// the strongest compromise signal this service can produce, and swallowing the
+// error is how the response to it evaporates without anyone learning that it
+// did.
+//
+// Filed as token_revoke, the action attempted, rather than a new event type:
+// token_revoke is already in the audit logger's critical set, so this row is
+// written synchronously instead of going through the buffer a burst can
+// overflow. The outcome key, not the presence of the row, says whether
+// containment succeeded.
+func (h *WebAuthnHandler) containClone(r *http.Request, userID string) {
+	outcome := "revoked"
+	if err := h.authSvc.RevokeAllTokensForUser(r.Context(), userID); err != nil {
+		log.Printf("webauthn: CRITICAL clone containment failed for user %s: %v",
+			httputil.SafeLogValue(userID), err)
+		outcome = "revoke_failed"
+	}
+	if h.auditLog == nil {
+		return
+	}
+	// audit.AuthenticatorCloned, not audit.TokenRevoke with a reason. This used
+	// to be the latter, scored 100 by a constant here while an ordinary logout
+	// scored 0 through the same class. The score is a property of the class now,
+	// so a signal that is nothing like a logout needs to stop being filed as one:
+	// as its own class it keeps its severity, stays out of the droppable buffer,
+	// and raises an alert on the first occurrence.
+	h.auditLog.Log(r.Context(), audit.AuthenticatorCloned, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks the refusal
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"reason":  "cloned_authenticator",
+			"method":  "webauthn",
+			"outcome": outcome,
+		})
 }
 
 // RegisterBegin handles POST /auth/2fa/webauthn/register/begin.
@@ -63,21 +149,20 @@ func (h *WebAuthnHandler) RegisterBegin(w http.ResponseWriter, r *http.Request) 
 
 	wanUser := &model.WebAuthnUser{User: user, Credentials: wanCreds}
 
-	creation, session, err := h.wan.BeginRegistration(wanUser)
+	creation, session, err := h.wan.BeginRegistration(wanUser, webauthn.WithExclusions(credentialDescriptors(wanCreds)))
 	if err != nil {
 		log.Printf("webauthn: begin registration failed: %v", err)
 		WriteError(w, http.StatusInternalServerError, "webauthn_error")
 		return
 	}
 
-	// Store session data in cache (5 min TTL)
 	sessionBytes, err := json.Marshal(session)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 	cacheKey := "webauthn_reg:" + claims.Subject
-	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), 5*time.Minute); err != nil {
+	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), WebAuthnCeremonyTTL); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -129,6 +214,24 @@ func (h *WebAuthnHandler) RegisterFinish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// §7.1 step 17: a credential ID already registered must not be enrolled a
+	// second time. This service accepts "none" attestation, so the credential ID
+	// in the attestation is chosen by whoever built the authenticator, and the
+	// table has no unique constraint to fall back on. Two rows sharing an ID make
+	// every lookup that is not already scoped by user resolve to whichever row
+	// the database happens to return, so the public key that answers for an ID
+	// stops being the one its owner enrolled.
+	duplicate, err := h.webauthnRepo.GetByCredentialID(r.Context(), credential.ID)
+	if err != nil {
+		log.Printf("webauthn: credential ID uniqueness check failed for %s: %v", httputil.SafeLogValue(claims.Subject), err)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if duplicate != nil {
+		WriteError(w, http.StatusConflict, "credential_already_registered")
+		return
+	}
+
 	// Store credential in DB
 	credID, err := vaultcrypto.RandomUUID()
 	if err != nil {
@@ -144,6 +247,17 @@ func (h *WebAuthnHandler) RegisterFinish(w http.ResponseWriter, r *http.Request)
 		Flags:        int(credential.Flags.MsgpByte()),
 		CreatedAt:    time.Now(),
 	}); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method":        "webauthn",
+		"action":        "enrolled",
+		"credential_id": credID,
+	})
+
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "webauthn", "enrolled"); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -170,7 +284,17 @@ func (h *WebAuthnHandler) VerifyBegin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existing, err := h.webauthnRepo.ListByUser(r.Context(), claims.Subject)
-	if err != nil || len(existing) == 0 {
+	if err != nil {
+		// A lookup that failed says nothing about whether the account has a
+		// passkey. Reporting no_webauthn_credentials here would turn a transient
+		// database fault into a claim the factor is gone, which a client can act
+		// on by falling back to a weaker method mid-login. Fail closed with the
+		// same internal error every other lookup failure in this handler returns.
+		log.Printf("webauthn: failed to list credentials for %s: %v", httputil.SafeLogValue(claims.Subject), err)
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if len(existing) == 0 {
 		WriteError(w, http.StatusBadRequest, "no_webauthn_credentials")
 		return
 	}
@@ -190,7 +314,7 @@ func (h *WebAuthnHandler) VerifyBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cacheKey := "webauthn_auth:" + claims.Subject
-	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), 5*time.Minute); err != nil {
+	if err := h.cache.Set(r.Context(), cacheKey, string(sessionBytes), WebAuthnCeremonyTTL); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -262,7 +386,7 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		// log records (CWE-117).
 		log.Printf("webauthn: CRITICAL clone warning user=%s cred=%s",
 			strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
-		_ = h.authSvc.RevokeAllTokensForUser(r.Context(), claims.Subject)
+		h.containClone(r, claims.Subject)
 		WriteError(w, http.StatusUnauthorized, "cloned_authenticator_detected")
 		return
 	}
@@ -273,8 +397,21 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		if string(stored.CredentialID) != string(credential.ID) {
 			continue
 		}
+		// The client, not this server, decides whether the authenticator is
+		// asked to verify the user, so an assertion that arrives with UV clear
+		// proves only that something touched the key. Refusing the downgrade is
+		// what keeps the PIN or biometric on a stolen authenticator meaningful.
+		// Checked before the writes below so a refused assertion leaves neither
+		// the counter nor the recorded flags moved: writing the UP-only flags
+		// back would erase the very bit this gate reads.
+		if userVerificationDowngraded(stored.Flags, credential.Flags) {
+			log.Printf("webauthn: user verification downgrade refused for user %s cred=%s",
+				strconv.Quote(claims.Subject), strconv.Quote(hex.EncodeToString(credential.ID)))
+			WriteError(w, http.StatusUnauthorized, "user_verification_required")
+			return
+		}
 		if err := h.webauthnRepo.UpdateSignCount(r.Context(), stored.ID, int(credential.Authenticator.SignCount)); err != nil {
-			log.Printf("webauthn: CRITICAL sign count update failed for user %s: %v", claims.Subject, err)
+			log.Printf("webauthn: CRITICAL sign count update failed for user %s: %v", httputil.SafeLogValue(claims.Subject), err)
 			WriteError(w, http.StatusInternalServerError, "webauthn_error")
 			return
 		}
@@ -295,8 +432,23 @@ func (h *WebAuthnHandler) VerifyFinish(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 
+	// Recorded before the login is completed and regardless of how it ends. The
+	// assertion was verified here; whether the session that follows is issued
+	// or refused by account policy is a separate fact the login path records for
+	// itself, and folding the two together would lose every verification that
+	// happened against a banned or locked account.
+	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "webauthn"})
+
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	// credential.Flags.UserVerified is the authenticator's own UV bit from the
+	// assertion just verified. It is what separates a multi-factor
+	// cryptographic authenticator from a key that only proved possession, and
+	// therefore AAL2 from AAL1. It does not separate AAL2 from AAL3: this
+	// service requests "none" attestation, so it cannot tell a hardware
+	// authenticator from a synced software passkey, and AALForMethods is capped
+	// at AAL2 for that reason.
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies,
+		service.MFACompletion{Method: service.MethodWebAuthn, UserVerified: credential.Flags.UserVerified}) {
 		return
 	}
 
@@ -368,6 +520,25 @@ func (h *WebAuthnHandler) DeleteCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Filed under the enrollment event with action=removed because the
+	// vocabulary in internal/audit has no removal constant; a query for factor
+	// changes must therefore read the action key rather than the event type
+	// alone.
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method":        "webauthn",
+		"action":        "removed",
+		"credential_id": credID,
+	})
+
+	// A credential is removed because it may be in someone else's hands. The
+	// sessions it opened are the thing being taken back, so containment runs on
+	// this path for the same reason it runs on a clone warning — only here the
+	// caller, not the sign counter, is the one raising the alarm.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "webauthn", "removed"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "credential_removed"})
 }
 
@@ -385,6 +556,33 @@ func modelCredsToWebAuthn(creds []*model.WebAuthnCredential) []webauthn.Credenti
 		}
 	}
 	return out
+}
+
+// credentialDescriptors renders stored credentials as the descriptor list the
+// browser needs to recognize a key the account already holds.
+func credentialDescriptors(creds []webauthn.Credential) []protocol.CredentialDescriptor {
+	out := make([]protocol.CredentialDescriptor, len(creds))
+	for i := range creds {
+		out[i] = creds[i].Descriptor()
+	}
+	return out
+}
+
+// userVerificationDowngraded reports whether a credential recorded as
+// user-verifying is being asserted without user verification.
+//
+// storedFlags is the raw authenticator flags byte kept for the credential.
+// A recorded 0 means the flags predate the column (see
+// adoptUnknownCredentialFlags) and carries no claim about user verification, so
+// it never triggers the gate; neither does a credential enrolled from a key
+// with no PIN, which reports UV=0 for its whole life and would otherwise be
+// locked out of an account that never had user verification to lose.
+func userVerificationDowngraded(storedFlags int, asserted webauthn.CredentialFlags) bool {
+	recorded := webauthn.CredentialFlagsFromMsgpByte(byte(storedFlags & 0xFF))
+	if recorded.ProtocolValue() == 0 {
+		return false
+	}
+	return recorded.UserVerified && !asserted.UserVerified
 }
 
 // adoptUnknownCredentialFlags fills in the authenticator flags of credentials

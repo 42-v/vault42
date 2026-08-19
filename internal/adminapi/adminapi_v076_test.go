@@ -148,9 +148,8 @@ func (m *fakeAdminRepo) Revoke(_ context.Context, id string) error {
 var _ repository.AdminUserRepository = (*fakeAdminRepo)(nil)
 
 type fakeSessionRepo struct {
-	sessions   map[string]*model.AdminSession
-	errCreate  error
-	errRevokeAll error
+	sessions  map[string]*model.AdminSession
+	errCreate error
 }
 
 func newFakeSessionRepo() *fakeSessionRepo {
@@ -191,12 +190,7 @@ func (m *fakeSessionRepo) Revoke(_ context.Context, id string) error {
 }
 
 func (m *fakeSessionRepo) RevokeAllForAdmin(_ context.Context, adminID string) error { return nil }
-func (m *fakeSessionRepo) RevokeAll(_ context.Context) error {
-	if m.errRevokeAll != nil {
-		return m.errRevokeAll
-	}
-	return nil
-}
+func (m *fakeSessionRepo) RevokeAll(_ context.Context) error                         { return nil }
 func (m *fakeSessionRepo) DeleteExpired(_ context.Context) (int64, error)            { return 0, nil }
 
 var _ repository.AdminSessionRepository = (*fakeSessionRepo)(nil)
@@ -212,7 +206,8 @@ func testAuditLog() *audit.Logger {
 // newTestHandler wires a Handler from injectable mocks. keyStore stays nil; the
 // key endpoints are exercised elsewhere via their 503 branch.
 func newTestHandler(admins repository.AdminUserRepository, users repository.UserRepository,
-	clients repository.ClientRepository, auditRepo repository.AuditRepository) *Handler {
+	clients repository.ClientRepository, auditRepo repository.AuditRepository,
+) *Handler {
 	if users == nil {
 		users = &mocks.MockUserRepo{}
 	}
@@ -321,13 +316,14 @@ func TestQueryAudit_IgnoresInvalidLimitAndTime(t *testing.T) {
 	}}
 	h := newTestHandler(nil, nil, nil, auditRepo)
 	rec := httptest.NewRecorder()
-	// limit out of range (>500), garbage offset, unparsable since → all defaults kept.
+	// An oversized limit is clamped to the gateway-wide cap rather than trusted;
+	// a garbage offset and an unparsable since fall back to their defaults.
 	h.QueryAudit(rec, httptest.NewRequest(http.MethodGet, "/admin/audit?limit=9999&offset=abc&since=notatime", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if captured.Limit != 50 || captured.Offset != 0 || captured.Since != nil {
-		t.Fatalf("invalid params should be ignored, got %+v", captured)
+	if captured.Limit != maxListLimit || captured.Offset != 0 || captured.Since != nil {
+		t.Fatalf("invalid params should be clamped or ignored, got %+v", captured)
 	}
 }
 
@@ -796,15 +792,18 @@ func TestTOTPVerify_Success(t *testing.T) {
 
 func TestEnsureFirstAdmin_CountErrorPropagates(t *testing.T) {
 	repo := &countErrAdminRepo{fakeAdminRepo: newFakeAdminRepo()}
-	if err := EnsureFirstAdmin(context.Background(), repo, ""); err == nil {
+	if err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), ""); err == nil {
 		t.Fatal("expected error when Count fails")
 	}
 }
 
 func TestEnsureFirstAdmin_CreateErrorPropagates(t *testing.T) {
+	// The sink matters: without it the bootstrap is abandoned at delivery and
+	// never reaches Create, so the test would pass while asserting nothing.
+	firstBootSink(t)
 	repo := newFakeAdminRepo()
 	repo.errCreate = errors.New("insert failed")
-	if err := EnsureFirstAdmin(context.Background(), repo, ""); err == nil {
+	if err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), ""); err == nil {
 		t.Fatal("expected error when Create fails")
 	}
 }
@@ -821,7 +820,7 @@ func (c *countErrAdminRepo) Count(_ context.Context) (int, error) {
 // ---------------------------------------------------------------------------
 
 func sessionAuthHandler(sessions repository.AdminSessionRepository, admins repository.AdminUserRepository) http.Handler {
-	return SessionAuth(sessions, admins)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return SessionAuth(sessions, admins, testAuditLog())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 }
@@ -937,7 +936,7 @@ func TestSessionAuth_HappyPathLoadsAdmin(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 	var sawAdmin *model.AdminUser
-	mw := SessionAuth(sessions, admins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw := SessionAuth(sessions, admins, testAuditLog())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawAdmin = GetAdmin(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -995,9 +994,9 @@ func TestLocalOnly_MalformedRemoteAddrForbidden(t *testing.T) {
 
 func TestHandler_ListKeys(t *testing.T) {
 	tests := []struct {
-		name   string
-		ks     *keystore.KeyStore
-		want   int
+		name string
+		ks   *keystore.KeyStore
+		want int
 	}{
 		{"nil keystore", nil, http.StatusServiceUnavailable},
 	}
@@ -1103,30 +1102,6 @@ func TestHandler_ListSessions(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r := withActor(httptest.NewRequest(http.MethodGet, "/admin/sessions", nil))
 			h.ListSessions(rec, r)
-			if rec.Code != tt.want {
-				t.Errorf("code=%d want=%d", rec.Code, tt.want)
-			}
-		})
-	}
-}
-
-func TestHandler_RevokeAllSessions(t *testing.T) {
-	tests := []struct {
-		name    string
-		sessErr error
-		want    int
-	}{
-		{"ok", nil, http.StatusOK},
-		{"repo error", errors.New("db"), http.StatusInternalServerError},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sr := &fakeSessionRepo{errRevokeAll: tt.sessErr}
-			h := newTestHandler(nil, nil, nil, nil)
-			h.sessions = sr
-			rec := httptest.NewRecorder()
-			r := withActor(httptest.NewRequest(http.MethodPost, "/admin/sessions/revoke-all", nil))
-			h.RevokeAllSessions(rec, r)
 			if rec.Code != tt.want {
 				t.Errorf("code=%d want=%d", rec.Code, tt.want)
 			}

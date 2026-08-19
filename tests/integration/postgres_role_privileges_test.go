@@ -50,15 +50,19 @@ func applyRealGrants(t *testing.T, adminPool *pgxpool.Pool) {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		for _, stmt := range strings.Split(string(raw), ";") {
-			// A statement carries the comment lines that preceded it, so strip them
-			// before deciding what it is — otherwise every grant introduced by a
-			// comment (which, in these migrations, is most of them) is skipped and
-			// the test silently proves nothing.
+		// Comments come off BEFORE the split, not after. Splitting first meant a
+		// semicolon inside a comment, which is ordinary English punctuation and is
+		// already present in several of these files, cut the statement it introduced in
+		// half, left the comment's own tail at the front of the second piece, and
+		// the prefix check below then skipped the grant. Silently: the suite went
+		// green while exercising a privilege model missing whatever those grants
+		// made. That is the exact failure mode this file exists to catch, so it
+		// must not be reintroduced by the fixture that catches it.
+		for _, stmt := range strings.Split(stripSQLComments(string(raw)), ";") {
 			var body []string
 			for _, line := range strings.Split(stmt, "\n") {
 				l := strings.TrimSpace(line)
-				if l == "" || strings.HasPrefix(l, "--") {
+				if l == "" {
 					continue
 				}
 				body = append(body, l)
@@ -73,6 +77,22 @@ func applyRealGrants(t *testing.T, adminPool *pgxpool.Pool) {
 			}
 		}
 	}
+}
+
+// stripSQLComments drops whole-line `--` comments. It is deliberately not a SQL
+// lexer: the migrations put every comment on its own line, and a parser that
+// also handled trailing comments would have to know about string literals and
+// dollar quoting to avoid eating a `--` inside one.
+func stripSQLComments(sql string) string {
+	lines := strings.Split(sql, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // appRolePool opens a pool authenticated as the real vault_app role.
@@ -191,7 +211,6 @@ func TestVaultAppRolePrivileges(t *testing.T) {
 	t.Run("the pseudonym-keyed stores", func(t *testing.T) {
 		pseudonymStoresUnderVaultApp(t, adminPool)
 	})
-
 }
 
 // writePathsUnderVaultApp: every write path the running server takes, executed as
@@ -217,6 +236,7 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 
 	now := time.Now().UTC()
 	deviceID, tokenID, socialID, credID := randomID(), randomID(), randomID(), randomID()
+	familyID := randomID()
 
 	devices := postgres.NewDeviceRepo(db)
 	tokens := postgres.NewRefreshTokenRepo(db)
@@ -236,7 +256,7 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 	}
 	if err := tokens.Create(ctx, &model.RefreshToken{
 		ID: tokenID, UserID: user.ID, TokenHash: randomID(),
-		FamilyID: randomID(), FingerprintHash: randomID(),
+		FamilyID: familyID, FingerprintHash: randomID(),
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
 	}); err != nil {
 		t.Fatalf("create refresh token: %v", err)
@@ -281,8 +301,11 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 		{"users.UpdatePassword", func() error { return users.UpdatePassword(ctx, user.ID, "$argon2id$new") }},
 		{"users.IncrementFailedLogin", func() error { return users.IncrementFailedLogin(ctx, user.ID) }},
 		{"users.ResetFailedLogin", func() error { return users.ResetFailedLogin(ctx, user.ID) }},
-		{"users.LockUntil", func() error { return users.LockUntil(ctx, user.ID, now.Add(time.Minute)) }},
-		{"users.Unlock", func() error { return users.Unlock(ctx, user.ID) }},
+		// users.LockUntil and users.Unlock are deliberately absent: migration 029
+		// revoked UPDATE(locked_until) from vault_app, so locking and unlocking are
+		// no longer vault_app write paths. They run on the admin gateway under
+		// vault_admin, and TestVaultAppCannotFlipThePrivilegedAccountStateColumns
+		// asserts vault_app is now refused the column.
 		{"users.VerifyEmail", func() error { return users.VerifyEmail(ctx, user.ID) }},
 		{"users.SetLastLogin", func() error { return users.SetLastLogin(ctx, user.ID) }},
 
@@ -294,6 +317,12 @@ func writePathsUnderVaultApp(t *testing.T, adminPool *pgxpool.Pool) {
 		{"tokens.RevokeByID", func() error { return tokens.RevokeByID(ctx, tokenID) }},
 		{"tokens.RevokeByDeviceID", func() error { return tokens.RevokeByDeviceID(ctx, deviceID) }},
 		{"tokens.RevokeAllForUser", func() error { return tokens.RevokeAllForUser(ctx, user.ID) }},
+		{"tokens.RevokeFamily", func() error { return tokens.RevokeFamily(ctx, familyID) }},
+		// RevokeAll takes the table rather than the rows, and a table lock above
+		// ACCESS SHARE is a privilege of its own. vault_app holds UPDATE, which
+		// is what grants it; nothing else in the suite would notice if that
+		// stopped being true, because the rest of it runs as the owner.
+		{"tokens.RevokeAll", func() error { return tokens.RevokeAll(ctx) }},
 		{"tokens.DeleteExpired", func() error { _, err := tokens.DeleteExpired(ctx); return err }},
 
 		{"webauthn.UpdateSignCount", func() error { return webauthn.UpdateSignCount(ctx, credID, 7) }},

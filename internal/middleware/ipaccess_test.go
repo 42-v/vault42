@@ -110,11 +110,15 @@ func TestIPAccessAllowlistBeforeBlocklist(t *testing.T) {
 
 func TestIPAccessGeoAllowlistMatchAllows(t *testing.T) {
 	resetIPAccess()
+	// A trusted peer, because these cases are about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, []string{"SK", "CZ"}, nil, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "SK")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -126,11 +130,15 @@ func TestIPAccessGeoAllowlistMatchAllows(t *testing.T) {
 
 func TestIPAccessGeoAllowlistNonMatchBlocks(t *testing.T) {
 	resetIPAccess()
+	// A trusted peer, because these cases are about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, []string{"SK", "CZ"}, nil, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "US")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -142,11 +150,15 @@ func TestIPAccessGeoAllowlistNonMatchBlocks(t *testing.T) {
 
 func TestIPAccessGeoBlocklistMatchBlocks(t *testing.T) {
 	resetIPAccess()
+	// A trusted peer, because these cases are about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, nil, []string{"CN", "RU"}, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "RU")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -158,11 +170,15 @@ func TestIPAccessGeoBlocklistMatchBlocks(t *testing.T) {
 
 func TestIPAccessGeoBlocklistNonMatchAllows(t *testing.T) {
 	resetIPAccess()
+	// A trusted peer, because these cases are about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, nil, []string{"CN", "RU"}, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "SK")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -172,30 +188,37 @@ func TestIPAccessGeoBlocklistNonMatchAllows(t *testing.T) {
 	}
 }
 
-func TestIPAccessGeoNoHeaderSkipsCheck(t *testing.T) {
+func TestIPAccessGeoNoHeaderIsDeniedUnderAnAllowlist(t *testing.T) {
 	resetIPAccess()
 	SetIPAccessLists(nil, nil, []string{"SK"}, nil, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
-	// No CF-IPCountry header → geo check skipped, should pass
+	// This test used to assert 200 and was named ...SkipsCheck. It pinned the
+	// defect: an allowlist says only these countries may reach this service, and
+	// omitting the header was a bypass that did not even require knowing which
+	// countries were on the list.
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 	req.RemoteAddr = "1.2.3.4:5555"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("no geo header: got %d, want 200 (skip geo check)", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no geo header under an allowlist: got %d, want 403", rec.Code)
 	}
 }
 
 func TestIPAccessGeoNoGeoHeaderConfigSkipsCheck(t *testing.T) {
 	// GeoAllowlist set but GeoIPHeader is empty → geo checks never run
 	resetIPAccess()
+	// A trusted peer, because this case is about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, []string{"SK"}, nil, "")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "CN") // should be ignored
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -283,11 +306,15 @@ func TestIPAccessInvalidCIDRSkipped(t *testing.T) {
 func TestIPAccessTorExitNode(t *testing.T) {
 	// Cloudflare uses "T1" for Tor exit nodes
 	resetIPAccess()
+	// A trusted peer, because this case is about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, nil, []string{"T1"}, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "T1")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -299,11 +326,15 @@ func TestIPAccessTorExitNode(t *testing.T) {
 
 func TestIPAccessGeoCaseInsensitive(t *testing.T) {
 	resetIPAccess()
+	// A trusted peer, because this case is about the list logic and the
+	// country is only believed from a hop the operator trusts.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, []string{"sk"}, nil, "CF-IPCountry")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("CF-IPCountry", "sk")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -394,11 +425,15 @@ func TestClientIPRealIPHeaderDisabled(t *testing.T) {
 func TestIPAccessCustomGeoHeader(t *testing.T) {
 	// Verify that a custom geo header name (e.g. X-Geo-Country) works
 	resetIPAccess()
+	// A trusted peer: the country is only believed from a hop the operator
+	// trusts, so a geo case has to declare one to be testing the list logic.
+	SetTrustedProxies([]string{"10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 	SetIPAccessLists(nil, nil, nil, []string{"CN"}, "X-Geo-Country")
 	h := IPAccess()(ok200)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
+	req.RemoteAddr = "10.0.0.7:5555"
 	req.Header.Set("X-Geo-Country", "CN")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

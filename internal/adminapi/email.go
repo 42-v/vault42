@@ -138,7 +138,7 @@ func (h *Handler) PutEmailBranding(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "admin:email_branding_set", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
-			map[string]any{"app": app}, 0)
+			map[string]any{"app": app})
 	}
 	if stored, err := h.emailBranding.Get(r.Context(), app); err == nil && stored != nil {
 		b = stored
@@ -163,7 +163,7 @@ func (h *Handler) DeleteEmailBranding(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "admin:email_branding_delete", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
-			map[string]any{"app": app}, 0)
+			map[string]any{"app": app})
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
@@ -298,7 +298,7 @@ func (h *Handler) PutEmailTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "admin:email_template_set", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
-			map[string]any{"app": app, "template": name, "enabled": enabled}, 0)
+			map[string]any{"app": app, "template": name, "enabled": enabled})
 	}
 	if stored, err := h.emailTemplates.Get(r.Context(), app, name); err == nil && stored != nil {
 		t = stored
@@ -323,7 +323,7 @@ func (h *Handler) DeleteEmailTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "admin:email_template_delete", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
-			map[string]any{"app": app, "template": name}, 0)
+			map[string]any{"app": app, "template": name})
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }

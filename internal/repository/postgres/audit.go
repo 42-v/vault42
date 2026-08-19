@@ -93,6 +93,14 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 		args = append(args, *filter.Until)
 		argIdx++
 	}
+	// Zero is absence, matching the field's contract: risk_score >= 0 is every
+	// row, so emitting the predicate for an unset filter would put a clause in
+	// the plan that selects nothing out and reads as though it did.
+	if filter.MinRiskScore > 0 {
+		conditions = append(conditions, fmt.Sprintf("risk_score >= $%d", argIdx))
+		args = append(args, filter.MinRiskScore)
+		argIdx++
+	}
 
 	query := "SELECT id, timestamp, event_type, COALESCE(user_id::text,''), COALESCE(client_id::text,''), COALESCE(ip,''), COALESCE(user_agent,''), COALESCE(fingerprint_hash,''), COALESCE(device_id::text,''), metadata, risk_score FROM audit.audit_log"
 	if len(conditions) > 0 {
@@ -148,7 +156,7 @@ func (r *AuditRepo) CountByUser(ctx context.Context, userID string) (int, error)
 	return count, nil
 }
 
-// auditRetentionLockKey is the advisory-lock key the retention sweep serialises
+// auditRetentionLockKey is the advisory-lock key the retention sweep serializes
 // on. Arbitrary but fixed: every replica must pick the same number.
 const auditRetentionLockKey int64 = 4242
 
@@ -177,8 +185,8 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 
 	interval := time.Since(olderThan)
 	if err := tx.QueryRow(ctx,
-		"SELECT audit.cleanup_old_entries($1::interval)",
-		fmt.Sprintf("%d seconds", int(interval.Seconds())),
+		"SELECT audit.cleanup_old_entries($1::interval, $2)",
+		fmt.Sprintf("%d seconds", int(interval.Seconds())), auditCleanupBatch,
 	).Scan(&deleted); err != nil {
 		return 0, true, fmt.Errorf("cleanup audit entries: %w", err)
 	}
@@ -187,6 +195,10 @@ func (r *AuditRepo) CleanupLocked(ctx context.Context, olderThan time.Time) (del
 	}
 	return deleted, true, nil
 }
+
+// auditCleanupBatch is the shared bound, declared on the repository interface so
+// the sweeper that loops over this call agrees with it.
+const auditCleanupBatch = repository.AuditCleanupBatch
 
 // Cleanup removes audit entries older than the given time using the
 // audit.cleanup_old_entries() SECURITY DEFINER function.

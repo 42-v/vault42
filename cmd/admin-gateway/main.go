@@ -8,12 +8,12 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 	"syscall"
 	"time"
 
@@ -23,6 +23,7 @@ import (
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/httputil"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/repository/postgres"
@@ -30,19 +31,31 @@ import (
 	"github.com/42-v/vault42/internal/service"
 )
 
+// Build stamps, set at link time with -ldflags -X. The defaults below are what
+// an unstamped local build reports, so a binary claiming "dev" did not come off
+// the release pipeline. They are printed by --version and nowhere else.
 var (
-	Version   = "dev"
+	// Version is the release version this binary was built from.
+	Version = "dev"
+	// GitCommit is the commit SHA this binary was built from.
 	GitCommit = "unknown"
+	// BuildTime is the UTC timestamp of the build.
 	BuildTime = "unknown"
 )
 
-var dbURLPattern = regexp.MustCompile(`postgres://[^\s]+@`)
-
+// sanitizeDBError strips connection-URL credentials from an error before it
+// reaches a log.
+//
+// It delegates to httputil.RedactDSN rather than carrying a pattern of its own.
+// This file used to hold a private copy of that regex, as did cmd/vault, which
+// is exactly the drift RedactDSN's doc comment says the helper exists to
+// prevent: an improvement to the shared pattern reached cmd/recover and left
+// both copies behind, silently, with the whole suite green. The name stays
+// because it is what this binary's call sites and tests use; the behavior now
+// has one definition. tests/spec/dsn_redaction_drift_test.go fails the build if
+// a private copy reappears.
 func sanitizeDBError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", dbURLPattern.ReplaceAllString(err.Error(), "postgres://***@"))
+	return httputil.RedactDSN(err)
 }
 
 func main() {
@@ -69,8 +82,7 @@ func main() {
 		if pw, err := loadSecret("DB_MIG_PASSWORD"); err == nil {
 			migPassword = pw
 		}
-		migURL := fmt.Sprintf("postgres://vault_mig:%s@%s:%s/%s?sslmode=%s",
-			migPassword, cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBSSLMode)
+		migURL := postgresURL("vault_mig", migPassword, cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBSSLMode)
 		migConn, err := pgx.Connect(ctx, migURL)
 		if err != nil {
 			log.Fatalf("admin-gateway: migration connect error: %v", sanitizeDBError(err))
@@ -83,7 +95,11 @@ func main() {
 	}
 
 	// Connect to PostgreSQL (vault_admin role)
-	db, err := postgres.New(ctx, cfg.DatabaseURL(), cfg.DBMaxConns)
+	db, err := postgres.NewWithOptions(ctx, cfg.DatabaseURL(), postgres.Options{
+		MaxConns:         cfg.DBMaxConns,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
+	})
 	if err != nil {
 		log.Fatalf("admin-gateway: database error: %v", sanitizeDBError(err))
 	}
@@ -113,13 +129,13 @@ func main() {
 	defer auditLogger.Close(ctx)
 
 	// First boot: create super_admin if none exist
-	if err := adminapi.EnsureFirstAdmin(ctx, adminUserRepo, cfg.Pepper); err != nil {
+	if err := adminapi.EnsureFirstAdmin(ctx, adminUserRepo, adminConfigRepo, cfg.Pepper); err != nil {
 		log.Printf("admin-gateway: first admin creation error: %v", err)
 	}
 
 	// Seed admin users from JSON file (idempotent — skips existing)
-	if cfg.SeedFile != "" {
-		sf, err := seed.Load(cfg.SeedFile)
+	if cfg.File != "" {
+		sf, err := seed.Load(cfg.File)
 		if err != nil {
 			log.Printf("admin-gateway: seed load error: %v", err)
 		} else {
@@ -141,25 +157,29 @@ func main() {
 	// on rotation. Pass these copies; never cfg.MasterKey.
 	masterKey := append([]byte(nil), cfg.MasterKey...)
 
-	// Initialize keystore (if master key available and DB-backed keys are configured)
-	var ks *keystore.KeyStore
-	if len(masterKey) == 32 {
-		retentionPeriod := time.Hour
-		ks, err = keystore.New(db.Pool, masterKey, retentionPeriod)
-		if err != nil {
-			log.Printf("admin-gateway: keystore init error (key management disabled): %v", err)
-		} else {
-			if err := ks.EnsureKey(ctx, nil); err != nil {
-				log.Printf("admin-gateway: keystore ensure key error: %v", err)
-			}
-			ks.StartRefreshLoop(ctx, 60*time.Second)
-			defer ks.Stop()
-		}
+	// LoadConfig already refused a non-32-byte key and keystore.New errors only
+	// on that length check, so this cannot fail today. The error is still read
+	// rather than discarded, because discarding it means that a second error
+	// path added to keystore.New later arrives here as a nil dereference on the
+	// following line, which is a crash reported from the wrong place. The branch
+	// is unreachable by construction and is excluded from coverage rather than
+	// reached by a test.
+	ks, err := keystore.New(db.Pool, masterKey, time.Hour)
+	if err != nil {
+		fatalAfterDrain(ctx, auditLogger, "admin-gateway: keystore init: %v", err)
 	}
+	if err := ks.EnsureKey(ctx, nil); err != nil {
+		log.Printf("admin-gateway: keystore ensure key error: %v", err)
+	}
+	ks.StartRefreshLoop(ctx, 60*time.Second)
+	defer ks.Stop()
 
-	if ks == nil {
-		log.Println("admin-gateway: keystore not initialized — key management endpoints will return 503")
-	}
+	// Reap expired admin sessions on a timer so the table does not accumulate
+	// spent rows and their token hash, IP and user-agent. Stop blocks on return,
+	// after the server has shut down, so the sweep cannot outlive the pool.
+	sessionReaper := service.NewAdminSessionRetention(adminSessionRepo)
+	sessionReaper.Start(ctx)
+	defer sessionReaper.Stop()
 
 	// Create handlers
 	authHandler := adminapi.NewAuthHandler(
@@ -167,8 +187,12 @@ func main() {
 		masterKey, cfg.Pepper, cfg.SessionTTL, cfg.MaxFailed, cfg.LockoutDur,
 	)
 
+	// refreshTokenRepo, not nil. It is built above and was already being handed
+	// to the seeding path; passing nil here left POST /admin/users/{id}/lock
+	// dereferencing it, so the lock committed and the request then panicked into
+	// a 500 with the user's sessions still alive and no audit row written.
 	apiHandler := adminapi.NewHandler(
-		userRepo, clientRepo, nil, auditRepo,
+		userRepo, clientRepo, refreshTokenRepo, auditRepo,
 		adminUserRepo, adminSessionRepo, adminConfigRepo,
 		ks, auditLogger, masterKey, cfg.Pepper,
 	)
@@ -184,19 +208,54 @@ func main() {
 	// stays disabled (returns 503). The recovery public key is optional — absent
 	// means erasure proceeds but is not recoverable.
 	if len(cfg.HMACSecret) > 0 {
+		// The secret being present is not the same as it being the right one.
+		// Every store this cascade clears by subject — identity.profiles,
+		// objects.blobs, objects.service_documents — is keyed by a pseudonym
+		// HMAC'd under it, so a gateway configured with a different secret than
+		// the vault plane deletes by strings no row ever carried: zero rows
+		// cleared, no error, an AccountErased audit row, and the subject's data
+		// still in the database. An Article 17 request answered with nothing.
+		//
+		// Fatal, not degraded. Refusing the whole gateway is the loud failure a
+		// silent under-erasure was not, and it is also the earlier one: the
+		// cascade tombstones the account and destroys its tokens BEFORE it
+		// reaches the pseudonym-keyed stores, so a check that fired mid-erasure
+		// would abort a deletion it had already half-performed. An unanswerable
+		// store is reported instead — the gateway's contract against a database
+		// whose schema is not ready is to log and keep serving, and a cascade
+		// running against that database fails loudly on its own.
+		verifyPlaneAgreement(ctx, adminConfigRepo, cfg.HMACSecret, auditLogger)
+
 		var recoveryPub *rsa.PublicKey
 		if len(cfg.RecoveryPublicKeyPEM) > 0 {
 			recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)
 			if err != nil {
-				_ = auditLogger.Close(ctx)
-				log.Fatalf("admin-gateway: failed to load recovery public key: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+				fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to load recovery public key: %v", err)
 			}
 		}
-		apiHandler.SetErasureService(service.NewErasureService(
+		erasureSvc := service.NewErasureService(
 			userRepo, identityRepo, blobRepo, deviceRepo, socialAccountRepo,
 			pwHistoryRepo, refreshTokenRepo, totpRepo, webauthnRepo, backupCodeRepo,
 			recoveryRepo, auditLogger, recoveryPub, cfg.HMACSecret,
-		))
+		)
+		// Documents other services filed about the user are personal data under
+		// Art. 4(1) whoever authored them, so the cascade has to reach them. This
+		// call was missing, and its absence was invisible from here: the erasure
+		// returned success and wrote an AccountErased audit row while every
+		// service document survived. migrations/014_service_documents.sql grants
+		// vault_admin SELECT and DELETE on the table for this exact cascade, so
+		// the privilege was provisioned for a wiring that did not exist.
+		//
+		// DELETE /admin/users/{id} is how an Art. 17 request is normally actioned,
+		// which made this the path that mattered most.
+		erasureSvc.SetServiceDocs(postgres.NewServiceDocumentRepo(db))
+		// The countries an account has signed in from are location data about a
+		// person. migrations/028 assumed its ON DELETE CASCADE erased them; the
+		// user row is tombstoned rather than deleted, so nothing did. The cascade
+		// reaches the table through auth.erase_login_countries() (migration 030),
+		// which both planes may execute.
+		erasureSvc.SetLoginCountries(postgres.NewLoginCountryRepo(db))
+		apiHandler.SetErasureService(erasureSvc)
 		// Same master key + HMAC secret as vault42 itself, so the pseudonym and
 		// the profile ciphertext an import writes are readable by the main server.
 		//
@@ -214,13 +273,11 @@ func main() {
 	// Load mTLS configuration
 	clientCA, err := os.ReadFile(cfg.ClientCAFile)
 	if err != nil {
-		_ = auditLogger.Close(ctx)
-		log.Fatalf("admin-gateway: failed to read client CA: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		fatalAfterDrain(ctx, auditLogger, "admin-gateway: failed to read client CA: %v", err)
 	}
 	clientCAPool := x509.NewCertPool()
 	if !clientCAPool.AppendCertsFromPEM(clientCA) {
-		_ = auditLogger.Close(ctx)
-		log.Fatal("admin-gateway: failed to parse client CA certificate")
+		fatalAfterDrain(ctx, auditLogger, "%s", "admin-gateway: failed to parse client CA certificate")
 	}
 
 	// Zero master key from config after passing to handlers
@@ -230,6 +287,13 @@ func main() {
 		MinVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		ClientCAs:  clientCAPool,
+	}
+
+	// Peer identity pinning and revocation (AR-9). ClientCAs above answers only
+	// "did our CA sign this"; without the policy below, every certificate that CA
+	// ever issued reaches POST /admin/login.
+	if policy := newClientIdentityPolicy(ctx, auditLogger, cfg, clientCA); policy.enabled() {
+		tlsCfg.VerifyConnection = policy.verifyConnection
 	}
 
 	srv := &http.Server{
@@ -249,7 +313,7 @@ func main() {
 
 	go func() {
 		log.Printf("admin-gateway: listening on %s (mTLS, loopback-only)", cfg.ListenAddr)
-		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("admin-gateway: listen error: %v", err)
 		}
 	}()
@@ -264,4 +328,39 @@ func main() {
 	}
 
 	log.Println("admin-gateway: stopped")
+}
+
+// fatalAfterDrain flushes the audit buffer and then exits.
+//
+// log.Fatalf calls os.Exit, which runs no deferred function, including the
+// auditLogger.Close deferred at startup. Every audit row buffered up to the
+// moment of the failure would leave with the process, and a gateway dying
+// during startup is exactly when the record of what it managed to do matters.
+//
+// It is a function rather than four copies so an unreachable call site costs one
+// statement instead of two. Three of the four sites are reachable and cover this
+// body, which leaves only the genuinely unreachable one to exclude.
+func fatalAfterDrain(ctx context.Context, auditLogger *audit.Logger, format string, v ...any) {
+	_ = auditLogger.Close(ctx)
+	log.Fatalf(format, v...) //nolint:gocritic // exitAfterDefer is intentional; we drained above
+}
+
+// verifyPlaneAgreement refuses to serve when this plane's HMAC_SECRET disagrees
+// with the one the vault plane already claimed.
+//
+// Fatal, not degraded. Refusing the whole gateway is the loud failure a silent
+// under-erasure was not, and it is also the earlier one: the cascade tombstones
+// the account and destroys its tokens BEFORE it reaches the pseudonym-keyed
+// stores, so a check that fired mid-erasure would abort a deletion it had
+// already half-performed. An unanswerable store is reported instead -- the
+// gateway's contract against a database whose schema is not ready is to log and
+// keep serving, and a cascade running against that database fails loudly on its
+// own.
+func verifyPlaneAgreement(ctx context.Context, store config.CrossPlaneConfigStore, secret []byte, auditLogger *audit.Logger) {
+	if err := config.VerifyHMACPlaneAgreement(ctx, store, secret); err != nil {
+		if errors.Is(err, config.ErrHMACPlaneMismatch) {
+			fatalAfterDrain(ctx, auditLogger, "admin-gateway: %v", err)
+		}
+		log.Printf("admin-gateway: WARNING: %v; erasure agreement with the vault plane is unverified", err)
+	}
 }

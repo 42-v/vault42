@@ -259,10 +259,22 @@ func TestDPoPJWKMismatchSignatureKey(t *testing.T) {
 	}
 }
 
-func TestDPoPValidProofECP384NotAllowed(t *testing.T) {
+// TestDPoPProofNamingES384IsRejectedByTheAlgorithmAllowlist pins that the
+// allowlist refuses ES384 outright, before any key is looked at.
+//
+// The name matters because this test cannot say anything about curves. The
+// proof is labeled ES384, so WithValidMethods rejects it while the P-384 key
+// below is still unread, and the test passes with the ES256 curve check deleted
+// entirely. It was previously named for the curve, which read as coverage of a
+// property nothing here exercises.
+//
+// The curve property lives in TestValidateDPoPProofRejectsAnES256ProofCarrying
+// AP384Key, where the proof claims ES256 and the key is the thing that has to be
+// caught.
+func TestDPoPProofNamingES384IsRejectedByTheAlgorithmAllowlist(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 
-	// Create a DPoP proof with P-384 (ES384 not in allowed methods)
+	// ES384 is not in the allowed methods, which is what this asserts.
 	claims := &DPoPClaims{
 		RegisteredClaims: vjwt.RegisteredClaims{
 			IssuedAt: vjwt.NewNumericDate(time.Now()),
@@ -387,29 +399,10 @@ func TestParseJWKHeaderValidECP256(t *testing.T) {
 	}
 }
 
-func TestParseJWKHeaderValidECP384(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	xPadded, yPadded := ecCoords(&key.PublicKey)
-
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-384",
-		"x":   base64.RawURLEncoding.EncodeToString(xPadded),
-		"y":   base64.RawURLEncoding.EncodeToString(yPadded),
-	}
-
-	pubKey, err := parseJWKHeader(jwk)
-	if err != nil {
-		t.Fatalf("valid EC P-384 JWK should parse: %v", err)
-	}
-	ecKey, ok := pubKey.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatal("should return *ecdsa.PublicKey")
-	}
-	if ecKey.Curve != elliptic.P384() {
-		t.Error("curve should be P-384")
-	}
-}
+// The P-384 case this test used to assert now lives in
+// TestParseJWKHeaderRejectsACurveNoDPoPAlgorithmCanVerify, which asserts the
+// opposite: parseJWKHeader admits only the curve the algorithms its single
+// caller allows can verify. See dpop_jose_test.go for why.
 
 func TestParseJWKHeaderMissingKTY(t *testing.T) {
 	jwk := map[string]interface{}{

@@ -1,0 +1,41 @@
+# Suppressions with a recorded reason, rather than edits that make a scanner
+# quiet by making the code worse.
+#
+# Every entry here has been checked against the rendered chart, not just the
+# template. Anything that turns out to be real gets fixed, not listed.
+misconfigurations:
+  - id: KSV-0109
+    paths:
+      - "charts/vault/templates/configmap.yaml"
+    statement: >-
+      VAULT_PASSWORD_MIN_LENGTH is an integer password-policy setting rendered
+      from .Values.passwordMinLength, not a credential. Trivy matches on the
+      substring PASSWORD in the key name. Moving an integer into a Secret to
+      satisfy the heuristic would make the chart worse and hide nothing. The
+      real secrets in this chart are in templates/secret.yaml.
+
+  - id: KSV-01010
+    paths:
+      - "charts/vault/templates/configmap.yaml"
+    statement: >-
+      VAULT_EMAIL_FROM, DB_PORT and the VAULT_BLOB_MIN_SIZE / MAX_SIZE /
+      QUOTA_BYTES limits are non-sensitive configuration. No user data and no
+      credential is involved. Same substring heuristic as KSV-0109.
+
+  # Below HIGH, so inert under the current severity filter. Recorded now so the
+  # reasoning survives if the filter is ever widened.
+  - id: DS-0026
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.admin-gateway"
+      - "Dockerfile.bridge"
+      - "Dockerfile.goreleaser"
+      - "Dockerfile.goreleaser.admin-gateway"
+      - "Dockerfile.goreleaser.bridge"
+      - "web/Dockerfile"
+    statement: >-
+      No HEALTHCHECK. These images run under Kubernetes, which ignores
+      HEALTHCHECK entirely and uses the chart's probes instead. The three
+      product images are distroless and have no shell, so a HEALTHCHECK would
+      have to be a health subcommand in the binary, added for the benefit of
+      Docker Compose users who do not exist.

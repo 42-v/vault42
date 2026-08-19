@@ -9,7 +9,7 @@ import (
 )
 
 // Refresh tokens are single-use: MarkUsed is the atomic compare-and-set that decides
-// whether this token has already been spent. Its bool is the whole replay defence.
+// whether this token has already been spent. Its bool is the whole replay defense.
 //
 // A DB failure that returned (true, nil) would mean a replayed refresh token is
 // accepted — the exact attack rotation exists to stop — and it would do so silently.
@@ -64,6 +64,14 @@ func TestRefreshTokenRepo_SurfacesDatabaseFailures(t *testing.T) {
 
 	if _, err := repo.DeleteExpired(ctx); err == nil {
 		t.Error("DeleteExpired reported success against an unreachable database")
+	}
+	// The second sweep, over rows that expired without ever being used or
+	// revoked. On an instance with churn those are the majority of the table, and
+	// the retention loop logs whatever count it is handed: a (0, nil) on failure
+	// is a job that reports a clean run forever while the table only grows.
+	if _, err := repo.DeleteExpiredUnused(ctx); err == nil {
+		t.Error("DeleteExpiredUnused reported success against an unreachable database — " +
+			"the retention sweep would log a clean run while every expired-unused row stayed")
 	}
 }
 
@@ -223,7 +231,7 @@ func TestWebAuthnRepo_SurfacesDatabaseFailures(t *testing.T) {
 }
 
 // The identity profile is the encrypted PII blob. UpsertCAS is the compare-and-set that
-// serialises concurrent writes: its bool means "I won the race and my write landed". A
+// serializes concurrent writes: its bool means "I won the race and my write landed". A
 // database failure that returned (true, nil) would report a write that never happened,
 // and the caller would stop retrying — which is precisely how a withdrawn marketing
 // consent gets silently reverted.

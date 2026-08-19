@@ -33,13 +33,13 @@ async function handleSubmit() {
         <p class="text-sm text-vault42-muted mb-6">
           {{ t('forgotPassword.checkEmailDesc') }}
         </p>
-        <router-link to="/login" class="text-sm text-vault42-primary hover:text-vault42-accent transition-colors">
+        <router-link to="/login" class="text-sm text-vault42-accent hover:text-vault42-text transition-colors">
           {{ t('forgotPassword.backToSignIn') }}
         </router-link>
       </div>
 
       <div v-else class="vault42-card">
-        <div v-if="error" class="vault42-alert-error mb-4">{{ friendlyError(error.code) }}</div>
+        <div v-if="error" class="vault42-alert-error mb-4" role="alert">{{ friendlyError(error.code) }}</div>
 
         <form class="space-y-5" @submit.prevent="handleSubmit">
           <div>
@@ -63,7 +63,7 @@ async function handleSubmit() {
 
         <p class="text-center text-sm text-vault42-muted mt-5">
           {{ t('forgotPassword.rememberPassword') }}
-          <router-link to="/login" class="text-vault42-primary hover:text-vault42-accent transition-colors">{{ t('common.signIn') }}</router-link>
+          <router-link to="/login" class="text-vault42-accent hover:text-vault42-text transition-colors">{{ t('common.signIn') }}</router-link>
         </p>
       </div>
     </div>

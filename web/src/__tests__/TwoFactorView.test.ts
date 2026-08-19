@@ -627,6 +627,86 @@ describe('TwoFactorView', () => {
     expect(buttonByText(wrapper, 'Copied!')).toBeDefined()
   })
 
+  it('does not claim success when the clipboard write is refused', async () => {
+    // writeText rejects in a non-secure context, when the document is not
+    // focused, or when permission is denied. The promise used to be dropped and
+    // "Copied!" shown regardless, so a user could believe their recovery codes
+    // were saved with nothing on the clipboard.
+    ;(navigator.clipboard.writeText as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'))
+    mockBackupCodes.value = ['aaaa-1111', 'bbbb-2222']
+    const wrapper = mountView()
+
+    await buttonByText(wrapper, 'Copy all')!.trigger('click')
+    await flushPromises()
+
+    expect(buttonByText(wrapper, 'Copied!')).toBeUndefined()
+    expect(buttonByText(wrapper, 'An error occurred')).toBeDefined()
+  })
+
+  it('selects the codes so they can still be copied by hand', async () => {
+    ;(navigator.clipboard.writeText as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error('denied'))
+    const addRange = vi.fn()
+    const removeAllRanges = vi.fn()
+    vi.spyOn(window, 'getSelection').mockReturnValue(
+      { addRange, removeAllRanges } as unknown as Selection,
+    )
+    mockBackupCodes.value = ['aaaa-1111', 'bbbb-2222']
+    const wrapper = mountView()
+
+    await buttonByText(wrapper, 'Copy all')!.trigger('click')
+    await flushPromises()
+
+    expect(removeAllRanges).toHaveBeenCalledOnce()
+    expect(addRange).toHaveBeenCalledOnce()
+    expect((addRange.mock.calls[0][0] as Range).toString()).toContain('aaaa-1111')
+    vi.mocked(window.getSelection).mockRestore()
+  })
+
+  it('survives a browser that offers no selection either', async () => {
+    ;(navigator.clipboard.writeText as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error('denied'))
+    vi.spyOn(window, 'getSelection').mockReturnValue(null)
+    mockBackupCodes.value = ['aaaa-1111']
+    const wrapper = mountView()
+
+    await buttonByText(wrapper, 'Copy all')!.trigger('click')
+    await flushPromises()
+
+    expect(buttonByText(wrapper, 'An error occurred')).toBeDefined()
+    vi.mocked(window.getSelection).mockRestore()
+  })
+
+  it('treats a missing Clipboard API as a failed copy rather than throwing', async () => {
+    // navigator.clipboard is undefined outright on an insecure origin.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true, writable: true })
+    mockBackupCodes.value = ['aaaa-1111']
+    const wrapper = mountView()
+
+    await buttonByText(wrapper, 'Copy all')!.trigger('click')
+    await flushPromises()
+
+    expect(buttonByText(wrapper, 'Copied!')).toBeUndefined()
+    expect(buttonByText(wrapper, 'An error occurred')).toBeDefined()
+  })
+
+  it('clears a previous copy failure when a later copy succeeds', async () => {
+    ;(navigator.clipboard.writeText as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('denied'))
+      .mockResolvedValueOnce(undefined)
+    mockBackupCodes.value = ['aaaa-1111']
+    const wrapper = mountView()
+
+    await buttonByText(wrapper, 'Copy all')!.trigger('click')
+    await flushPromises()
+    expect(buttonByText(wrapper, 'An error occurred')).toBeDefined()
+
+    await buttonByText(wrapper, 'An error occurred')!.trigger('click')
+    await flushPromises()
+    expect(buttonByText(wrapper, 'Copied!')).toBeDefined()
+  })
+
   it('reverts the copy acknowledgement to "Copy all" after two seconds', async () => {
     // Only setTimeout is faked so the component's own promises still settle normally.
     vi.useFakeTimers({ toFake: ['setTimeout'] })

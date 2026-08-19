@@ -356,5 +356,6 @@
   "error.forbidden": "No tiene permiso para hacer eso.",
   "error.code_already_used": "Este código ya se ha utilizado. Utilice uno nuevo.",
   "error.password_recently_used": "Ha utilizado esta contraseña recientemente. Elija una diferente.",
-  "error.no_webauthn_credentials": "No hay ninguna llave de seguridad registrada en esta cuenta."
+  "error.no_webauthn_credentials": "No hay ninguna llave de seguridad registrada en esta cuenta.",
+  "error.password_reset_required": "Esta cuenta debe restablecer su contraseña. Te hemos enviado un enlace por correo electrónico."
 }

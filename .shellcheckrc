@@ -1,0 +1,15 @@
+# shellcheck configuration for vault42.
+#
+# This file contains no rule suppressions. It only gives shellcheck the extra
+# information it asks for, so that findings are resolved rather than muted.
+
+# Follow `source`d files. Four scripts source scripts/lib/coverage-env.sh and
+# already carry a `# shellcheck source=...` directive; without this, shellcheck
+# reports SC1091 ("Not following: ... was not specified as input") on every one
+# of them. Enabling it makes shellcheck read the library and check the callers
+# against its real contents, which is strictly more analysis, not less.
+external-sources=true
+
+# Resolve `# shellcheck source=` directives that are written relative to the
+# repository root as well as relative to the sourcing script.
+source-path=SCRIPTDIR

@@ -27,6 +27,37 @@ var (
 	testPass    = "StressTest!Secure-15chars"
 )
 
+const stressRequiredEnv = "VAULT_STRESS_REQUIRED"
+
+// TestMain is the loud skip for a tagged build with no live vault. Per-test
+// skipIfUnreachable used to t.Skip each case, which still reported a passing
+// package after doing no work.
+func TestMain(m *testing.M) {
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- local dev
+		},
+	}
+	if _, err := client.Get(baseURL + "/healthz"); err != nil { // #nosec G107 -- test code
+		if os.Getenv(stressRequiredEnv) == "1" {
+			fmt.Fprintf(os.Stderr,
+				"FAIL stress: %s=1 but no vault42 answered at %s: %v\n"+
+					"This suite load-generates against a live deployment and uses kubectl + Mailpit.\n"+
+					"Point VAULT_STRESS_URL at one, or unset %s only where a skipped run is\n"+
+					"genuinely acceptable, which is not a release gate.\n",
+				stressRequiredEnv, baseURL, err, stressRequiredEnv)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr,
+			"SKIP stress: vault server not reachable at %s: %v\n"+
+				"Nothing in this suite ran. Set %s=1 to make this a failure.\n",
+			baseURL, err, stressRequiredEnv)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -78,8 +109,10 @@ func freshConnClient() *http.Client {
 	}
 }
 
-var emailCounter int64
-var emailMu sync.Mutex
+var (
+	emailCounter int64
+	emailMu      sync.Mutex
+)
 
 // spoofIP returns a unique fake IP via X-Forwarded-For to bypass per-IP rate limits.
 // The dev deployment trusts 10.0.0.0/8 as proxy network, so XFF is respected.

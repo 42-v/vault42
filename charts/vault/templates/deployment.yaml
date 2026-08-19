@@ -10,12 +10,44 @@ spec:
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
+    # Exactly vault.selectorLabels, and deliberately not one label more.
+    #
+    # spec.selector is the only immutable field this chart writes. Every other
+    # selector over these pods -- the Service, the NetworkPolicy, the PDB, the
+    # ServiceMonitor -- does name app.kubernetes.io/component: vault, because a
+    # selector is a subset match and without it they would also match the bridge
+    # and honeypot pods. All four are patchable in place; that was verified on a
+    # live cluster, where the failed upgrade below had still moved the Service
+    # and the PDB to the component-scoped form.
+    #
+    # This one is not. Adding the component label here made `helm upgrade` from
+    # every released chart fail outright:
+    #
+    #   Error: UPGRADE FAILED: cannot patch "v42-vault-auth" with kind
+    #   Deployment: ... spec.selector: Invalid value: ...: field is immutable
+    #
+    # and left the release `failed` with the Service and ConfigMap already
+    # patched -- a mixed state an operator has to roll back out of. The label
+    # bought nothing here either: the ReplicaSet a Deployment creates selects on
+    # pod-template-hash as well, and the bridge and honeypot pod templates hash
+    # differently, so no pod of theirs was ever selectable by this Deployment.
+    # What has to carry the label is the pod template below, and it has since
+    # v0.9.9 -- which is why dropping it here costs no pod churn on upgrade.
+    #
+    # If some future change genuinely needs a narrower selector, it is a
+    # breaking chart change: it needs the orphan-delete procedure in
+    # docs/UPGRADING.md written and released with it, not discovered afterwards.
     matchLabels:
       {{- include "vault.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.seed.enabled }}
+        # Hashed, never the values themselves: this annotation is readable by
+        # anything that can read the pod.
+        checksum/seed: {{ toJson .Values.seed | sha256sum }}
+        {{- end }}
       {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -39,6 +71,11 @@ spec:
             - name: http
               containerPort: {{ if and .Values.tls.enabled .Values.tls.certFile }}8443{{ else }}8080{{ end }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "vault.fullname" . }}
@@ -67,6 +104,55 @@ spec:
             - name: VAULT_PEPPER_FILE
               value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.pepper }}"
             {{- end }}
+            {{- /*
+            Optional credentials, each gating a whole capability that is
+            otherwise off with nothing to show for it: without kmsRootKey the
+            KMS envelope-unwrap endpoint is never mounted, without
+            recoveryPublicKey account erasure escrows nothing and an erased
+            account is gone for good, without smtpUser/smtpPass an
+            authenticating relay refuses every message, and without
+            sendgridApiKey the SendGrid provider silently is not the sender.
+            Every one is empty by default, so the Secret an existing release
+            already created is still the whole set its pod asks for.
+            */}}
+            {{- if .Values.secrets.keys.kmsRootKey }}
+            - name: KMS_ROOT_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.kmsRootKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.recoveryPublicKey }}
+            - name: VAULT_RECOVERY_PUBLIC_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.recoveryPublicKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.smtpUser }}
+            - name: SMTP_USER_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.smtpUser }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.smtpPass }}
+            - name: SMTP_PASS_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.smtpPass }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.sendgridApiKey }}
+            - name: SENDGRID_API_KEY_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.sendgridApiKey }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthGoogleClientSecret }}
+            - name: VAULT_OAUTH_GOOGLE_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthGoogleClientSecret }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthGithubClientSecret }}
+            - name: VAULT_OAUTH_GITHUB_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthGithubClientSecret }}"
+            {{- end }}
+            {{- if .Values.secrets.keys.oauthFacebookClientSecret }}
+            - name: VAULT_OAUTH_FACEBOOK_CLIENT_SECRET_FILE
+              value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.oauthFacebookClientSecret }}"
+            {{- end }}
+            {{- range .Values.oidcProviders }}
+            {{- if .secretKey }}
+            - name: VAULT_OIDC_{{ upper (replace "-" "_" .name) }}_CLIENT_SECRET_FILE
+              value: "{{ $.Values.secrets.mountPath }}/{{ .secretKey }}"
+            {{- end }}
+            {{- end }}
             {{- if and .Values.tls.enabled .Values.tls.certFile }}
             - name: VAULT_TLS_CERT_FILE
               value: {{ .Values.tls.certFile | quote }}
@@ -74,6 +160,7 @@ spec:
               value: {{ .Values.tls.keyFile | quote }}
             {{- end }}
           volumeMounts:
+            {{- include "vault.firstBootCredentialMount" . | nindent 12 }}
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
               readOnly: true
@@ -92,11 +179,16 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
       volumes:
+        {{- include "vault.firstBootCredentialVolume" . | nindent 8 }}
         - name: secrets
           secret:
             secretName: {{ include "vault.secretName" . }}
@@ -107,8 +199,9 @@ spec:
         {{- end }}
         {{- if .Values.seed.enabled }}
         - name: seed
-          configMap:
-            name: {{ include "vault.fullname" . }}-seed
+          secret:
+            secretName: {{ include "vault.seedSecretName" . }}
+            defaultMode: 0400
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

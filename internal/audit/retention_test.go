@@ -84,16 +84,16 @@ func TestRetention_StartSweepsImmediately(t *testing.T) {
 	}
 }
 
-// A cancelled context must end the loop — otherwise the sweeper outlives
+// A canceled context must end the loop — otherwise the sweeper outlives
 // shutdown and keeps issuing deletes against a closing pool.
 //
 // This deliberately does NOT call Stop. The loop parks in a select over stopCh,
 // ctx.Done and the ticker; Go chooses at random among the cases that are ready, so
-// cancelling the context *and* closing stopCh would leave the exit path a coin
+// canceling the context *and* closing stopCh would leave the exit path a coin
 // flip — and with it, which of the two return statements the coverage profile
 // records. That is not a cosmetic problem: it made the suite's own coverage total
 // vary by a statement between identical runs, so the number CI published could
-// disagree with the number in the docs. Cancelling alone leaves exactly one ready
+// disagree with the number in the docs. Canceling alone leaves exactly one ready
 // case, which is what makes this test assert the thing it claims to.
 func TestRetention_StopsOnContextCancel(t *testing.T) {
 	swept := make(chan struct{}, 1)
@@ -112,7 +112,7 @@ func TestRetention_StopsOnContextCancel(t *testing.T) {
 	r.Start(ctx)
 
 	// Wait for the immediate sweep, so the loop is known to have reached the select
-	// before the context is cancelled under it.
+	// before the context is canceled under it.
 	select {
 	case <-swept:
 	case <-time.After(2 * time.Second):
@@ -124,7 +124,7 @@ func TestRetention_StopsOnContextCancel(t *testing.T) {
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("sweeper did not exit when its context was cancelled — it would outlive shutdown")
+		t.Fatal("sweeper did not exit when its context was canceled — it would outlive shutdown")
 	}
 }
 
@@ -173,5 +173,59 @@ func TestRetention_ReplicaThatLosesTheLockReportsNoWork(t *testing.T) {
 	}
 	if deleted != 0 {
 		t.Errorf("deleted = %d, want 0 — this replica swept nothing and must not claim another's rows", deleted)
+	}
+}
+
+// Four of the six background sweepers guard Start with CompareAndSwap, and
+// internal/service/refresh_retention.go spells out why: two loops would share
+// one doneCh, and the second to exit would close an already-closed channel — a
+// panic raised from a deferred call in a background goroutine, which no handler
+// can catch and which takes the process with it.
+//
+// This one used Store(true), which reports nothing and skips nothing. No caller
+// starts it twice today, so the panic is latent; the sweeper that is safe only
+// because of how its single caller happens to be written is the one that breaks
+// when a second caller arrives.
+//
+// The observable difference is asserted directly rather than by waiting for the
+// panic, which surfaces only if the second goroutine happens to exit before the
+// test binary does. A second loop calls Cleanup immediately, exactly as the
+// first did, so parking the first sweep inside the store makes a second entry
+// the signal.
+func TestRetention_StartingTwiceStartsOneLoop(t *testing.T) {
+	repo := &mocks.MockAuditRepo{}
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	repo.CleanupFn = func(context.Context, time.Time) (int64, error) {
+		entered <- struct{}{}
+		<-release
+		return 0, nil
+	}
+
+	r := NewRetention(repo, 30*24*time.Hour)
+	r.Start(context.Background())
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the sweeper did not sweep once immediately")
+	}
+
+	r.Start(context.Background())
+	select {
+	case <-entered:
+		close(release)
+		t.Fatal("a second Start started a second sweep loop: both share one doneCh, and the " +
+			"second to exit closes an already-closed channel")
+	case <-time.After(time.Second):
+	}
+
+	close(release)
+	r.Stop()
+
+	select {
+	case <-r.Done():
+	default:
+		t.Error("Done is not closed, so Stop returned before the loop had exited")
 	}
 }

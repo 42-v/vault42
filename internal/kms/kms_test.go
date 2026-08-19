@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 )
 
 // testRoot returns a distinct 32-byte root seeded from b.
@@ -102,6 +104,78 @@ func TestWrap_EmptyKid(t *testing.T) {
 	}
 }
 
+// TestWrapRefusesAZeroBytePlaintext pins the rule that nothing vault42 seals is
+// allowed to be nothing. AES-GCM turns zero bytes into a well-formed 28-byte
+// envelope that authenticates and unwraps cleanly, so a caller whose key
+// generation silently produced nothing walks away with an artifact that looks
+// correct at every later checkpoint: it is valid base64, it decodes, it opens
+// under its kid, and POST /kms/unwrap answers 200 for it. The service that
+// consumes it boots with an empty key, and nothing in the trail points back at
+// the wrap that made it.
+//
+// The guard belongs here rather than in the CLI alone because Wrap is exported
+// and deploy tooling calls it directly, so a check that lives only in
+// `vault kms wrap` leaves every in-process producer able to seal nothing.
+func TestWrapRefusesAZeroBytePlaintext(t *testing.T) {
+	s := newService(t, 0x44)
+
+	for name, plaintext := range map[string][]byte{
+		"nil":         nil,
+		"empty slice": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, err := s.Wrap("life42-root-kek", plaintext)
+			if env != nil {
+				t.Fatalf("Wrap sealed %d bytes of nothing into an envelope: %x", len(env), env)
+			}
+			if !errors.Is(err, ErrEmptyPlaintext) {
+				t.Fatalf("Wrap with an empty plaintext: err = %v, want ErrEmptyPlaintext", err)
+			}
+		})
+	}
+
+	// A one-byte key is the smallest thing the guard must still let through.
+	// Rejecting it would be over-correction: length is not the service's
+	// business beyond the difference between something and nothing.
+	if _, err := s.Wrap("life42-root-kek", []byte{0x00}); err != nil {
+		t.Fatalf("Wrap of a single byte: %v", err)
+	}
+}
+
+// TestUnwrapStillOpensAnEnvelopeThatSealsZeroBytes is the deliberate other half
+// of the guard above, and it is asserted so a later change does not "finish the
+// job" by refusing these at unwrap too.
+//
+// Unwrap has to stay the exact inverse of every Wrap that ever ran. Envelopes
+// produced before the guard existed are still on disk in deploy artifacts, and
+// an operator holding one needs the endpoint to open it to confirm what it
+// actually carries. Refusing it there would report it as unwrap_failed, which is
+// the same answer a corrupted or tampered artifact gets, and would send the
+// incident after a bit-rot theory instead of an empty-secret one.
+func TestUnwrapStillOpensAnEnvelopeThatSealsZeroBytes(t *testing.T) {
+	s := newService(t, 0x55)
+	const kid = "life42-root-kek"
+
+	// Built through the AEAD directly because Wrap now refuses to produce one.
+	// This is byte-for-byte what an older `vault kms wrap` emitted.
+	kek, err := s.deriveKEK(kid)
+	if err != nil {
+		t.Fatalf("deriveKEK: %v", err)
+	}
+	legacy, err := vaultcrypto.Encrypt(nil, kek, []byte(kid))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	got, err := s.Unwrap(kid, legacy)
+	if err != nil {
+		t.Fatalf("Unwrap of a historical zero-byte envelope: %v, want it to open", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Unwrap returned %d bytes, want the zero bytes that were sealed", len(got))
+	}
+}
+
 func TestClose_WipesRoot(t *testing.T) {
 	root := make([]byte, 32)
 	for i := range root {
@@ -111,11 +185,26 @@ func TestClose_WipesRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	live, err := svc.Wrap("kid", []byte("x"))
+	if err != nil {
+		t.Fatalf("Wrap before Close: %v", err)
+	}
+
 	// Close must zero the service's internal copy of the root secret.
 	svc.Close()
-	// A wrap after Close derives from a zeroed root; it must still not panic and
-	// must produce a different envelope than one from the live root.
-	if _, err := svc.Wrap("kid", []byte("x")); err != nil {
-		t.Fatalf("Wrap after Close: %v", err)
+
+	// A wrap after Close must FAIL, and the reason is not tidiness. A wiped root
+	// is 32 zero bytes, which HKDF accepts, so the old behavior was to keep
+	// producing envelopes that looked correct and were sealed under a key anyone
+	// can reconstruct by building a Service over 32 zeros. Returning an envelope
+	// here is worse than returning nothing.
+	if _, err := svc.Wrap("kid", []byte("x")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Wrap after Close returned err=%v; a closed service must not seal anything", err)
 	}
+	// Unwrap collapses it into ErrUnwrap so the oracle property is preserved.
+	if _, err := svc.Unwrap("kid", live); !errors.Is(err, ErrUnwrap) {
+		t.Fatalf("Unwrap after Close returned err=%v, want ErrUnwrap", err)
+	}
+	// Close is called from more than one shutdown defer, so it must be idempotent.
+	svc.Close()
 }

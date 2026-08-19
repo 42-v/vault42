@@ -13,7 +13,7 @@ import (
 // An upload draws on crypto/rand three times: once for the blob ID, once for
 // the nonce that encrypts the payload and once for the nonce that encrypts the
 // label. Every one of those has an error return, and continuing past any of
-// them would store a row the service cannot honour: a blob keyed by an empty
+// them would store a row the service cannot honor: a blob keyed by an empty
 // ID, or a label sitting in the clear in a column the schema treats as
 // ciphertext. These tests starve the entropy source at each point and pin that
 // the upload fails closed with nothing written and nothing handed back.

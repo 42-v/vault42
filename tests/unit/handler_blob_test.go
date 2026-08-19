@@ -266,9 +266,12 @@ func TestBlobList_ResponseFields(t *testing.T) {
 	if !ok || len(blobs) != 1 {
 		t.Fatalf("expected 1 blob, got %v", resp["blobs"])
 	}
-	count := resp["count"].(float64)
-	if count != 1 {
-		t.Fatalf("expected count=1, got %v", count)
+	total, ok := resp["total"].(float64)
+	if !ok {
+		t.Fatalf("expected a total key in the list envelope, got %v", resp)
+	}
+	if total != 1 {
+		t.Fatalf("expected total=1, got %v", total)
 	}
 	if resp["quota"] == nil {
 		t.Fatal("expected quota field in response")

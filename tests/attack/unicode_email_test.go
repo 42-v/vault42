@@ -6,24 +6,36 @@ import (
 	"github.com/42-v/vault42/internal/sanitize"
 )
 
-// TestUnicodeEmail_HomoglyphAttacks verifies that unicode homoglyphs in email
-// addresses are either rejected by the validator or accepted as distinct
-// addresses (preventing silent aliasing with legitimate accounts).
+// TestUnicodeEmail_HomoglyphAttacks pins the validator's homoglyph contract.
+//
+// sanitize.Email is a validator, not a normalizer: it accepts any RFC 5322
+// address (net/mail.ParseAddress treats non-ASCII runes as valid atext) and
+// stores the exact bytes. A Cyrillic homoglyph is therefore accepted as a
+// distinct address, and that is safe here because nothing downstream folds it
+// onto the Latin original: registration and login apply only
+// strings.ToLower(strings.TrimSpace(email)) (Unicode case mapping preserves
+// script, so Cyrillic U+0430 never becomes Latin U+0061), and the lookup is an
+// exact-byte "WHERE email = $1" with no LOWER()/citext/ILIKE collation. The
+// byte-distinctness that keeps the two accounts separate is proven directly in
+// TestUnicodeEmail_ConsistentValidation. wantAccept below records the real,
+// intended behavior, and the test now fails if that behavior regresses in
+// either direction.
 func TestUnicodeEmail_HomoglyphAttacks(t *testing.T) {
 	cases := []struct {
 		name       string
 		email      string
-		wantAccept bool // false = should be rejected, true = may be accepted
+		wantAccept bool // must match the validator exactly
 	}{
-		// Cyrillic homoglyphs in local part
-		{"cyrillic a in local", "\u0430dmin@example.com", false},                     // Cyrillic а
-		{"cyrillic e in local", "\u0435xample@test.com", false},                      // Cyrillic е
-		{"cyrillic o in local", "\u043edmin@example.com", false},                     // Cyrillic о
-		{"full cyrillic local", "\u0430\u0434\u043c\u0438\u043d@example.com", false}, // "админ"
+		// Cyrillic homoglyphs in local part: accepted as valid RFC 5322
+		// addresses, kept distinct from their Latin lookalikes by byte value.
+		{"cyrillic a in local", "\u0430dmin@example.com", true},                     // Cyrillic а
+		{"cyrillic e in local", "\u0435xample@test.com", true},                      // Cyrillic е
+		{"cyrillic o in local", "\u043edmin@example.com", true},                     // Cyrillic о
+		{"full cyrillic local", "\u0430\u0434\u043c\u0438\u043d@example.com", true}, // "админ"
 
-		// Cyrillic homoglyphs in domain part
-		{"cyrillic in domain", "admin@\u0435xample.com", false}, // Cyrillic е in domain
-		{"mixed script domain", "user@ex\u0430mple.com", false}, // Cyrillic а in domain
+		// Cyrillic homoglyphs in domain part: same story, accepted and distinct.
+		{"cyrillic in domain", "admin@\u0435xample.com", true}, // Cyrillic е in domain
+		{"mixed script domain", "user@ex\u0430mple.com", true}, // Cyrillic а in domain
 
 		// Valid punycode IDN domain (ASCII-compatible)
 		{"punycode domain", "user@xn--e1afmapc.xn--p1ai", true}, // example.рф in punycode
@@ -33,13 +45,10 @@ func TestUnicodeEmail_HomoglyphAttacks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			valid := sanitize.Email(tc.email)
 			if tc.wantAccept && !valid {
-				t.Logf("Email %q rejected (stricter than expected, acceptable)", tc.email)
-				return
+				t.Errorf("email %q should be accepted, was rejected", tc.email)
 			}
 			if !tc.wantAccept && valid {
-				// Homoglyph was accepted — this is a potential issue, but only if
-				// the system doesn't normalize. Log it as a finding.
-				t.Logf("WARNING: Homoglyph email %q was accepted by validator — ensure downstream comparison prevents account confusion", tc.email)
+				t.Errorf("email %q should be rejected, was accepted", tc.email)
 			}
 		})
 	}
@@ -165,11 +174,9 @@ func TestUnicodeEmail_NullByte(t *testing.T) {
 
 	for _, email := range emails {
 		t.Run(email[:min(len(email), 20)], func(t *testing.T) {
-			valid := sanitize.Email(email)
-			if valid {
-				t.Logf("WARNING: Email with null byte accepted: %q", email)
+			if sanitize.Email(email) {
+				t.Errorf("email with null byte must be rejected, was accepted: %q", email)
 			}
-			// No panic is the minimum requirement
 		})
 	}
 }

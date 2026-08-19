@@ -79,7 +79,7 @@ func TestNew_RejectsMalformedConnString(t *testing.T) {
 }
 
 // The TOTP secret is the MFA seed. A write that fails must say so — a silent
-// failure here enrols a user in TOTP whose secret was never stored, locking them
+// failure here enrolls a user in TOTP whose secret was never stored, locking them
 // out of their own account at the next login.
 func TestTOTPRepo_SurfacesDatabaseFailures(t *testing.T) {
 	repo := NewTOTPRepo(deadPool(t))
@@ -166,6 +166,13 @@ func TestAdminConfigRepo_SurfacesDatabaseFailures(t *testing.T) {
 	}
 	if err := repo.Delete(ctx, "admin_token_hash"); err == nil {
 		t.Error("Delete reported success against an unreachable database")
+	}
+	// ClaimIfAbsent answers the cross-plane HMAC_SECRET check. Returning ("",
+	// nil) here would read as "the other plane recorded an empty fingerprint",
+	// a value no plane ever records, so the caller would report a disagreement
+	// that is really a database outage and refuse to start over it.
+	if _, err := repo.ClaimIfAbsent(ctx, "hmac_secret_fingerprint", "deadbeef"); err == nil {
+		t.Error("ClaimIfAbsent reported success against an unreachable database")
 	}
 }
 

@@ -35,6 +35,10 @@ func (h *EmailOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		// Code is the 6-digit email OTP. Required. Same shape check as
+		// TOTP (exactly 6 ASCII digits); anything else is 400
+		// invalid_code. A miss is 401 invalid_code and records an MFA
+		// failure.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &req); err != nil || !isValidTOTPCode(req.Code) {
@@ -49,7 +53,7 @@ func (h *EmailOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies, service.MFACompletion{Method: service.MethodEmailOTP}) {
 		return
 	}
 

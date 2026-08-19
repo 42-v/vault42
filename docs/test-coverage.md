@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-07-31 | Tests: 3115 | Total: 99.42% statement coverage
+Generated: 2026-08-19 | Tests: 5037 | Total: 99.60% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -13,36 +13,48 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `internal/server` | 100.00% |
 | `internal/seed` | 100.00% |
 | `internal/sanitize` | 100.00% |
+| `internal/redis` | 100.00% |
 | `internal/rbac` | 100.00% |
+| `internal/outbound` | 100.00% |
 | `internal/model` | 100.00% |
 | `internal/migrate` | 100.00% |
 | `internal/middleware` | 100.00% |
 | `internal/metrics` | 100.00% |
+| `internal/kms` | 100.00% |
+| `internal/ipintel` | 100.00% |
 | `internal/httputil` | 100.00% |
 | `internal/honeypot` | 100.00% |
 | `internal/frontend` | 100.00% |
+| `internal/dpop` | 100.00% |
+| `internal/deferwork` | 100.00% |
 | `internal/config` | 100.00% |
 | `internal/cli` | 100.00% |
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
-| `internal/adminapi` | 99.72% |
-| `internal/oauth2` | 99.71% |
-| `internal/handler` | 99.61% |
-| `internal/service` | 99.34% |
-| `internal/jwt` | 99.20% |
-| `internal/redis` | 99.11% |
-| `internal/repository/postgres` | 99.10% |
-| `internal/email` | 98.68% |
-| `internal/keystore` | 98.03% |
-| `internal/crypto` | 97.74% |
-| `internal/kms` | 91.67% |
+| `internal/alert` | 100.00% |
+| `internal/repository/postgres` | 99.91% |
+| `internal/adminapi` | 99.83% |
+| `internal/oauth2` | 99.74% |
+| `cmd/admin-gateway` | 99.72% |
+| `internal/handler` | 99.69% |
+| `internal/keystore` | 99.62% |
+| `internal/email` | 99.56% |
+| `cmd/bridge` | 99.55% |
+| `internal/service` | 99.28% |
+| `internal/jwt` | 99.22% |
+| `cmd/vault` | 98.39% |
+| `internal/crypto` | 98.36% |
+| `cmd/recover` | 98.15% |
+| `internal/firstboot` | 96.88% |
 
 ## Uncovered Functions
 
 | Function | File |
 |----------|------|
+| `main` | cmd/recover/main.go:134 |
 
 ## Low Coverage (1-74%)
 
 | Function | File | Coverage |
 |----------|------|----------|
+| `hardenProcess` | cmd/recover/harden_linux.go:23 | 66.7% |

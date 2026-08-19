@@ -356,5 +356,6 @@
   "error.forbidden": "Anda tiada kebenaran untuk berbuat demikian.",
   "error.code_already_used": "Kod ini telah digunakan. Sila gunakan kod baharu.",
   "error.password_recently_used": "Anda baru sahaja menggunakan kata laluan ini. Sila pilih yang lain.",
-  "error.no_webauthn_credentials": "Tiada kunci keselamatan didaftarkan pada akaun ini."
+  "error.no_webauthn_credentials": "Tiada kunci keselamatan didaftarkan pada akaun ini.",
+  "error.password_reset_required": "Akaun ini perlu menetapkan semula kata laluannya. Kami telah menghantar pautan tetapan semula melalui e-mel."
 }

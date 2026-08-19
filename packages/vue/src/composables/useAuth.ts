@@ -86,6 +86,20 @@ async function runInit(client: VaultClient): Promise<void> {
  * Safe to call from router guards and other non-component contexts.
  * Requires that useAuth() has been called at least once from a component
  * (which sets the module-level client reference).
+ *
+ * The refs are the same module-level ones {@link useAuth} exposes, so state
+ * observed here and in components is always identical.
+ *
+ * @returns A subset of the auth state safe to read outside a component:
+ * `isAuthenticated`, `initialized`, `user`, `isLoading`, `registrationEnabled`,
+ * and an `init` that restores the session.
+ *
+ * Guards should await `init()` and then read `isAuthenticated`. Reading it
+ * before `initialized` is true reports a signed-in user as anonymous, because
+ * the refresh that restores the session has not resolved yet.
+ *
+ * Unlike {@link useAuth} this does not throw when the plugin is missing; the
+ * returned `init` throws instead, and only when actually called.
  */
 export function getAuthState() {
   const isAuthenticated = computed(() => !!accessToken.value)
@@ -98,6 +112,57 @@ export function getAuthState() {
   return { isAuthenticated, initialized, init, user, isLoading, registrationEnabled }
 }
 
+/**
+ * Session state and the full sign-in surface: password login, registration, the
+ * five second-factor completions, logout and token refresh.
+ *
+ * All session state is module-level and shared. Every `useAuth()` call in the
+ * app reads and writes the same refs, so a login in one component is visible
+ * everywhere immediately, and unmounting a component does not reset anything.
+ * That is deliberate: a per-call state would let two components disagree about
+ * whether the user is signed in. The consequence is that the composable is a
+ * singleton per module instance, not per component, and it is never garbage
+ * collected. The only per-call state is the cross-tab `BroadcastChannel`, which
+ * is opened here and closed on unmount, so this must be called from `setup()`
+ * for that listener to be cleaned up.
+ *
+ * Errors are reported two ways and the split matters. `login`, `register` and
+ * every `verify2FA*` set `error` **and** rethrow, so a form can await them and
+ * branch on the throw. `refresh` and `logout` never throw: `refresh` records the
+ * failure in `error` and clears the session, `logout` discards its error because
+ * local sign-out has already happened.
+ *
+ * Calls `POST /auth/login`, `/auth/register`, `/auth/logout`, `/auth/refresh`,
+ * the `/auth/2fa/…` verification routes, `GET /auth/capabilities` and
+ * `GET /user/profile`.
+ *
+ * @returns Reactive session state and the actions that change it.
+ * - `user`: the signed-in profile, or null. Loaded after login and on `init()`.
+ * - `isAuthenticated`: computed, true while an access token is held.
+ * - `isLoading`: computed, true while any in-flight call is outstanding. It is
+ *   a counter underneath, so concurrent calls do not clear it early.
+ * - `error`: the last `VaultError`, or null. Not cleared on success of an
+ *   unrelated call.
+ * - `accessToken`: the raw bearer, or null.
+ * - `requires2FA`: true when the password step succeeded but a second factor is
+ *   outstanding. No credential is held in this state.
+ * - `challengeToken`: the short-lived token that authorises the second-factor
+ *   call only.
+ * - `availableMethods`: the factors the server will accept, e.g. `totp`,
+ *   `webauthn`, `backup_code`, `email_otp`.
+ * - `initialized`: true once `init()` has settled. Route guards must wait for
+ *   this, not for `isAuthenticated`, which is false during startup.
+ * - `registrationEnabled`: whether the server accepts new registrations.
+ * - `decodedToken`, `tokenExpiresIn`, `isTokenExpired`: computed views of the
+ *   token payload. `tokenExpiresIn` is evaluated on read and does not tick on
+ *   its own; a live countdown needs its own timer.
+ * - `login`, `register`, `logout`, `refresh`, `init`: session actions.
+ * - `verify2FA`, `verify2FABackupCode`, `verify2FAEmailOTP`,
+ *   `verify2FAWebAuthn`, `cancel2FA`: second-factor completion.
+ *
+ * @throws Error if called outside a component that can `inject()` the client,
+ * i.e. when `createVaultPlugin` was never installed.
+ */
 export function useAuth() {
   const client = useVaultClient()
   _client = client

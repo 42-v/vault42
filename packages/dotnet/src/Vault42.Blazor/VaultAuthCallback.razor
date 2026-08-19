@@ -55,6 +55,17 @@ else if (_error)
     private bool _processing = true;
     private bool _error;
 
+    /// <summary>
+    /// Completes the OAuth2 redirect: exchanges the authorization code, then either
+    /// navigates to <see cref="RedirectTo"/> or renders the error state.
+    /// </summary>
+    /// <returns>A task that completes once the exchange has settled and the outcome has been raised.</returns>
+    /// <remarks>
+    /// Runs once, on first render. The component reads the callback URI from the
+    /// <see cref="NavigationManager"/> itself, so it only works when routed to at the
+    /// registered redirect URI. A failure raises <see cref="OnError"/> and stays put; it does not
+    /// navigate, so the app can offer a retry.
+    /// </remarks>
     protected override async Task OnInitializedAsync()
     {
         var currentUri = Navigation.Uri;

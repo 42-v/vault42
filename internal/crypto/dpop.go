@@ -50,9 +50,9 @@ func ValidateDPoPProof(proofString, httpMethod, httpURI string, accessTokenHash 
 		return "", "", errors.New("dpop: invalid typ header")
 	}
 
-	// Must NOT have kid header (DPoP proofs carry the key in jwk header)
-	if _, hasKid := unverified.Header["kid"]; hasKid {
-		return "", "", errors.New("dpop: kid header not allowed in DPoP proof")
+	// No kid (RFC 9449 4.2) and no crit (RFC 7515 4.1.11); see dpop_jose.go.
+	if err := rejectDPoPJOSEHeaders(unverified.Header); err != nil {
+		return "", "", err
 	}
 
 	// Extract public key from jwk header
@@ -153,6 +153,13 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 		return nil, errors.New("invalid jwk header format")
 	}
 
+	// RFC 9449 4.3 step 7: the jwk header must not contain a private key. The
+	// struct below reads only the public members, so nothing else in this
+	// function would notice one. See jwkPrivateMember.
+	if member, private := jwkPrivateMember(jwkMap); private {
+		return nil, fmt.Errorf("jwk header carries private key material (%q)", member)
+	}
+
 	jwkBytes, err := json.Marshal(jwkMap)
 	if err != nil {
 		return nil, fmt.Errorf("marshal jwk: %w", err)
@@ -198,13 +205,13 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 			E: int(eBig.Int64()),
 		}, nil
 	case "EC":
-		var curve elliptic.Curve
-		switch jwk.CRV {
-		case "P-256":
-			curve = elliptic.P256()
-		case "P-384":
-			curve = elliptic.P384()
-		default:
+		// P-256 and nothing else. RFC 7518 3.4 assigns exactly that curve to
+		// ES256, and ES256 is the only EC algorithm ValidateDPoPProof allows, so
+		// a key on any other curve died one call later in VerifyES256, which
+		// pins the same curve. Building it here anyway left a branch whose only
+		// remaining effect was to go live unreviewed the day another EC
+		// algorithm joined that allowlist.
+		if jwk.CRV != "P-256" {
 			return nil, fmt.Errorf("unsupported curve: %s", jwk.CRV)
 		}
 		xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
@@ -216,7 +223,7 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 			return nil, fmt.Errorf("decode y: %w", err)
 		}
 		key := &ecdsa.PublicKey{
-			Curve: curve,
+			Curve: elliptic.P256(),
 			X:     new(big.Int).SetBytes(xBytes),
 			Y:     new(big.Int).SetBytes(yBytes),
 		}

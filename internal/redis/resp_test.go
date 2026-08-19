@@ -137,9 +137,9 @@ func TestReadReply_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var redisErr *RedisError
+	var redisErr *ServerError
 	if !errors.As(err, &redisErr) {
-		t.Fatalf("expected RedisError, got %T: %v", err, err)
+		t.Fatalf("expected ServerError, got %T: %v", err, err)
 	}
 	if redisErr.Msg != "ERR unknown command" {
 		t.Errorf("expected message 'ERR unknown command', got %q", redisErr.Msg)

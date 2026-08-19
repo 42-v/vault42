@@ -47,4 +47,3 @@ func TestBlobHandler_UploadNamed_NoClaims401(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
-

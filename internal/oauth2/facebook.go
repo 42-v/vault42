@@ -27,7 +27,7 @@ func (f *FacebookProvider) httpClient() *http.Client {
 	if f.client != nil {
 		return f.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // NewFacebookProvider creates a Facebook OAuth2 provider with the given credentials
@@ -87,7 +87,7 @@ func (f *FacebookProvider) Exchange(ctx context.Context, code, codeVerifier stri
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponse))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("facebook exchange: HTTP %d: %s", resp.StatusCode, string(body))
 	}
@@ -127,6 +127,12 @@ func (f *FacebookProvider) UserInfo(ctx context.Context, accessToken string) (*U
 		return nil, fmt.Errorf("facebook userinfo: %w", err)
 	}
 	defer resp.Body.Close()
+	// Same rule the exchange applies: a status other than 200 is not a profile.
+	// A Graph error body decodes into this struct with every field zeroed, which
+	// the caller would otherwise receive as a profile with a nil error.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("facebook userinfo: status %d", resp.StatusCode)
+	}
 
 	var info struct {
 		ID      string `json:"id"`
@@ -138,14 +144,32 @@ func (f *FacebookProvider) UserInfo(ctx context.Context, accessToken string) (*U
 			} `json:"data"`
 		} `json:"picture"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&info); err != nil {
 		return nil, fmt.Errorf("facebook userinfo: decode: %w", err)
 	}
 
 	return &UserInfo{
-		ID:            info.ID,
-		Email:         info.Email,
-		EmailVerified: info.Email != "",
+		ID:    info.ID,
+		Email: info.Email,
+		// Facebook publishes no per-address verification signal. The Graph user
+		// node documents `email` as the address listed on the profile, which is a
+		// string the account holder set, and the only `verified` field it ever had
+		// is deprecated and answers a different question: whether the account was
+		// confirmed by mobile or credit card, not whether anyone proved they own
+		// this address. There is nothing here to check, so nothing is claimed.
+		//
+		// This used to be `info.Email != ""`, which made a non-empty string the
+		// whole proof of ownership. Whoever could make Graph return a victim's
+		// address satisfied the both-sides-verified rule in
+		// internal/handler/oauth.go, had (facebook, their own provider id) linked
+		// to the victim's user, and received the victim's tokens on every later
+		// Facebook login. Google, GitHub and the OIDC providers each read an
+		// explicit verification answer instead; Facebook has none to read.
+		//
+		// Facebook logins still work: they sign in, create accounts, and link by
+		// (provider, provider_user_id). The single thing they cannot do is claim
+		// an existing local account by naming its address.
+		EmailVerified: false,
 		Name:          info.Name,
 		AvatarURL:     info.Picture.Data.URL,
 		Provider:      "facebook",

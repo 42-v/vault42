@@ -171,7 +171,9 @@ func TestEmailBranding_Unavailable(t *testing.T) {
 		name string
 		call func(w http.ResponseWriter)
 	}{
-		{"list", func(w http.ResponseWriter) { h.ListEmailBranding(w, adminReq(http.MethodGet, "/admin/email-branding", "")) }},
+		{"list", func(w http.ResponseWriter) {
+			h.ListEmailBranding(w, adminReq(http.MethodGet, "/admin/email-branding", ""))
+		}},
 		{"get", func(w http.ResponseWriter) {
 			h.GetEmailBranding(w, withPathValue(adminReq(http.MethodGet, "/x", ""), map[string]string{"app": "acme"}))
 		}},
@@ -566,4 +568,3 @@ func TestPreviewEmailTemplate(t *testing.T) {
 		}
 	})
 }
-

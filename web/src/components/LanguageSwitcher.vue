@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useT } from '@vault42/vue'
+import { applyDocumentLocale, loadLocale } from '../i18n'
 
 const { locale, setLocale, availableLocales } = useT()
 
@@ -60,11 +61,20 @@ const filtered = computed(() => {
   })
 })
 
-function select(loc: string) {
-  setLocale(loc)
-  localStorage.setItem('vault42-locale', loc)
+async function select(loc: string) {
   open.value = false
   search.value = ''
+
+  // Catalogues are fetched one chunk at a time, so the copy has to be in hand
+  // before the locale ref flips; switching first would render bare keys until a
+  // later re-render happened to pick the catalogue up. A chunk that fails to
+  // load leaves the current language in place rather than switching to one that
+  // would render nothing but keys.
+  if (!(await loadLocale(loc).catch(() => false))) return
+
+  setLocale(loc)
+  applyDocumentLocale(loc)
+  localStorage.setItem('vault42-locale', loc)
 }
 
 function toggle() {
@@ -104,7 +114,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <input
           v-model="search"
           type="text"
-          class="w-full bg-vault42-bg border border-vault42-border rounded px-2 py-1.5 text-xs text-vault42-text placeholder-vault42-muted outline-none focus:border-vault42-primary transition-colors"
+          class="w-full bg-vault42-bg border border-vault42-control rounded px-2 py-1.5 text-xs text-vault42-text placeholder-vault42-muted outline-none focus:border-vault42-accent transition-colors"
           placeholder="Search..."
           autofocus
           @click.stop
@@ -117,7 +127,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           :class="[
             'w-full text-left px-3 py-1.5 text-xs transition-colors',
             loc === locale
-              ? 'bg-vault42-primary/15 text-vault42-primary font-medium'
+              ? 'bg-vault42-primary/15 text-vault42-accent font-medium'
               : 'text-vault42-text hover:bg-vault42-border/50'
           ]"
           @click.stop="select(loc)"

@@ -23,6 +23,20 @@ spec:
     - ports:
         - port: 8080
           protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    # The metrics port. This rule is the mitigation the old in-code comment
+    # asked for and could not have: while /metrics was a path on 8080, a
+    # NetworkPolicy had no way to express it -- policies match ports, not paths,
+    # so "protect it with a NetworkPolicy" meant allowing 8080 to everything that
+    # needed the vault at all. On its own port it is finally expressible.
+    - ports:
+        - port: {{ .Values.metrics.port }}
+          protocol: TCP
+      {{- with .Values.metrics.networkPolicy.from }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
   egress:
     # PostgreSQL
     - to:
@@ -58,6 +72,42 @@ spec:
       ports:
         - port: {{ .Values.smtp.port | int }}
           protocol: TCP
+    {{- end }}
+    # Outbound HTTPS.
+    #
+    # Without this rule a default install runs with hibpCheck: true and no route
+    # to api.pwnedpasswords.com, so the breach check fails open on every password
+    # set and says nothing: HIBPClient.IsBreached returns false when the API is
+    # unreachable, by design, because an HIBP outage must not stop a user
+    # changing their password. A permanently unreachable API is indistinguishable
+    # from a permanent outage, so the control was on in configuration and absent
+    # in fact.
+    #
+    # The same rule carries the two other outbound calls the vault makes when
+    # they are configured: the OIDC/OAuth providers in internal/oauth2 and the
+    # SendGrid API. All three are 443, none is knowable as an in-cluster
+    # selector, and a hostname is not something a NetworkPolicy can express.
+    #
+    # httpsEgress.cidrs narrows it. Empty means any destination on 443, which is
+    # what "the breach check works out of the box" costs; a cluster that can
+    # enumerate its egress addresses should list them, and one that wants neither
+    # should set enabled: false and hibpCheck: false together, so that the
+    # configuration says what the network does.
+    {{- if .Values.networkPolicy.httpsEgress.enabled }}
+    {{- with .Values.networkPolicy.httpsEgress.cidrs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- else }}
+    - ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
     {{- end }}
 ---
 # PostgreSQL: only accept from vault
@@ -119,6 +169,73 @@ spec:
       {{- end }}
       ports:
         - port: 6379
+          protocol: TCP
+{{- end }}
+{{- if .Values.frontend.enabled }}
+---
+# Frontend: ingress on its own port, egress to DNS only.
+# It serves files off its own image and never calls the vault -- the browser does
+# that directly -- so a frontend reaching anything else in the namespace is a
+# frontend doing something it was not built to do. No `from`: the client is an
+# ingress controller whose namespace this chart cannot know.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 3000
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+{{- if .Values.mailpit.enabled }}
+---
+# Mailpit: ingress on SMTP and its web UI, egress to DNS only.
+# It is a development mail sink that must never deliver anywhere, so the absence
+# of any outbound rule but DNS is the point of this policy rather than an
+# oversight in it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vault.fullname" . }}-mailpit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vault.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mailpit
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 1025
+          protocol: TCP
+        - port: 8025
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
           protocol: TCP
 {{- end }}
 {{- if .Values.bridge.enabled }}

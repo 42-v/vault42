@@ -149,8 +149,13 @@ func TestJWT_OversizedToken(t *testing.T) {
 
 	tokenStr := signRawPayload(t, headerJSON, claimsJSON, key)
 
+	// The rejection assertion below only means anything if the token really is
+	// oversized. Skipping instead of failing turns a padding constant that no
+	// longer clears MaxJWTSize into a green run of a test that checked nothing.
 	if len(tokenStr) <= vaultcrypto.MaxJWTSize {
-		t.Skipf("Token size %d is not over MaxJWTSize %d, adjusting pad", len(tokenStr), vaultcrypto.MaxJWTSize)
+		t.Fatalf("this test built a %d-byte token, which does not exceed MaxJWTSize (%d), so the "+
+			"oversized-token rejection below would never be exercised. Raise padSize (currently "+
+			"%d) past the limit.", len(tokenStr), vaultcrypto.MaxJWTSize, padSize)
 	}
 
 	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")

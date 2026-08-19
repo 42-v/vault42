@@ -33,7 +33,12 @@ INCOMPLETE=0
 # exercises cmd/bridge rather than internal/, and stress measures throughput.
 # -p 1: each spins its own Postgres testcontainer; parallel package binaries
 # exhaust container/port resources and flake.
-go test -count=1 -v -p 1 ./tests/e2e/... ./tests/honeypot/... ./tests/stress/... >> "$TEST_FILE" 2>&1 || true
+#
+# honeypot/stress without their build tags, and admin without a live gateway,
+# now print a loud SKIP rather than compiling to "no test files". browser and
+# e2e-browser live outside this go test (nested module / Playwright) and are
+# invoked via scripts/t.sh so the same skip is visible there.
+go test -count=1 -v -p 1 ./tests/e2e/... ./tests/honeypot/... ./tests/stress/... ./tests/admin/... >> "$TEST_FILE" 2>&1 || true
 
 PASS=$(grep -c '^--- PASS' "$TEST_FILE" || true)
 FAIL=$(grep -c '^--- FAIL' "$TEST_FILE" || true)

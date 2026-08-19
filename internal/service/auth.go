@@ -6,11 +6,13 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -18,10 +20,14 @@ import (
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
+	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/deferwork"
+	"github.com/42-v/vault42/internal/dpop"
 	vaultemail "github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/honeypot"
 	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
@@ -72,16 +78,109 @@ var (
 	// fallback for accounts with no second factor when MFA is required.
 	ErrEmailOTPNotAllowed = errors.New("email OTP not permitted for this account")
 	ErrMFARequired        = errors.New("MFA verification required")
-	ErrChallengeConsumed  = errors.New("challenge token already consumed")
-	ErrTooManySessions    = errors.New("maximum concurrent sessions reached")
+	// ErrPasswordResetRequired is returned when the account carries
+	// must_reset_password: its stored password may not be used to sign in, a
+	// reset link has been mailed out of band, and no session was issued.
+	//
+	// It reaches a caller only when LoginInput.DiscloseStatus is set, which the
+	// transport sets only for a client that authenticated with client
+	// credentials carrying the login:status scope. Every other caller is
+	// answered with ErrInvalidCredentials from the same branch, after the same
+	// work, because a distinct outcome on an unauthenticated login says the
+	// address is registered (ASVS V2.1.1).
+	ErrPasswordResetRequired = errors.New("password reset required")
+	ErrChallengeConsumed     = errors.New("challenge token already consumed")
+	ErrTooManySessions       = errors.New("maximum concurrent sessions reached")
+	// ErrSessionExpired is returned when a refresh-token family has reached the
+	// absolute session lifetime and must reauthenticate regardless of activity
+	// (NIST SP 800-63B-4 §2.2.3). It wraps ErrTokenExpired so every transport that
+	// already maps an expired refresh token keeps its status code and its
+	// cookie-clearing behavior, and so the outcome is indistinguishable from an
+	// ordinary expiry to the client.
+	ErrSessionExpired = fmt.Errorf("session exceeded maximum lifetime: %w", ErrTokenExpired)
+	// ErrSessionAgeUnknown is the fail-closed outcome when a session bound is
+	// configured but the age it measures cannot be established — the family's
+	// origin for the absolute lifetime, or the presented token's issuance instant
+	// for the inactivity timeout. It wraps ErrTokenInvalid: an unbounded session
+	// must not be issued because a lookup failed.
+	ErrSessionAgeUnknown = fmt.Errorf("session age could not be determined: %w", ErrTokenInvalid)
+	// ErrSessionIdle is returned when a refresh-token family has gone unused for
+	// longer than the inactivity timeout and must reauthenticate (ASVS V7.3.1,
+	// NIST SP 800-63B-4 §2.2.3 and §5.2, NIST SP 800-53 Rev 5 AC-12). It wraps
+	// ErrTokenExpired for the same reason ErrSessionExpired does: every transport
+	// that already maps an expired refresh token keeps its status code and its
+	// cookie-clearing behavior, and the outcome stays indistinguishable from an
+	// ordinary expiry to the client.
+	ErrSessionIdle = fmt.Errorf("session exceeded the inactivity timeout: %w", ErrTokenExpired)
 )
 
-// Lockout defaults: 5 failures triggers a 15-minute lockout per user,
-// 20 failures per IP triggers a 15-minute IP-wide lockout.
+// familyOriginReader is the one capability the absolute session lifetime needs
+// from the refresh-token store: when the rotation family was created.
+//
+// It is asserted on repository.RefreshTokenRepository rather than added to it so
+// that a store which cannot answer is detected at the enforcement point and fails
+// closed there, instead of every implementation growing a method it does not use.
+type familyOriginReader interface {
+	FamilyOrigin(ctx context.Context, familyID string) (time.Time, error)
+}
+
+// Lockout defaults: 5 failures locks one (account, source address) pair for 15
+// minutes, 50 failures across all sources locks the account itself, and 20
+// failures from one address locks that address.
+//
+// The per-source key is what makes lockout a defense rather than a weapon. The
+// counter used to be keyed on the user id alone, so five wrong passwords from
+// one address denied logins to any account whose email the caller knew, for
+// fifteen minutes, at a cost of five HTTP requests and no credential. MFA verify
+// shared that counter, so the victim could not climb out with a second factor
+// either. Keying the hard lock on (user, source) means an attacker locks only
+// the path they are attacking from.
+//
+// distributedLockoutThreshold keeps the account-wide lock for what it was
+// actually for: a genuine distributed attack. Reaching it needs at least ten
+// distinct source addresses, because each is cut off at lockoutThreshold and the
+// per-IP lockout stops any one address at ipLockoutThreshold across all
+// accounts. This is an explicit trade, and it is the one NIST SP 800-63B 5.2.2
+// asks for: aggregate guesses against one account rise from 5 to 50 per window,
+// throttled from the sixth failure by loginThrottleDelay, in exchange for
+// removing a five-request remote denial of service against every account. 50 is
+// half the ">= 100 consecutive failures, with throttling" that guidance allows.
+//
+// The reset-from-email escape (handler/password.go) works from any state and
+// from every address, but it stopped being free when the hard lock moved to
+// (account, source). There is one counter per address and nothing can enumerate
+// them, so deleting the account-wide key — which is all the reset path did —
+// left the user still refused on the machine they were sitting at, for the rest
+// of the window, behind the same masked error a wrong password gets. A completed
+// reset now calls ClearAccountLockout, which retires all of them at once by
+// advancing the generation the source key is namespaced under.
 const (
-	lockoutThreshold   = 5
-	ipLockoutThreshold = 20
-	lockoutDuration    = 15 * time.Minute
+	lockoutThreshold            = 5
+	distributedLockoutThreshold = 50
+	ipLockoutThreshold          = 20
+	lockoutDuration             = 15 * time.Minute
+)
+
+// Progressive delay applied to every login attempt against an identity that has
+// recent failures, whether or not that identity exists.
+//
+// It is the throughput half of the lockout rework: the per-source hard lock
+// stops one address, and this stops a botnet from spending the account-wide
+// budget in a burst. The delay grows 100ms, 200ms, 400ms... and stops at 2s,
+// well inside the server's write timeout, costing a sleeping goroutine rather
+// than the 46 MiB the same request's argon2 hash costs.
+//
+// It is applied identically to every outcome — success, wrong password, unknown
+// address, locked, deleted — because a delay only existing accounts pay is an
+// enumeration oracle. The counter behind it is keyed on the submitted address
+// rather than on a user id for the same reason: an address with no account must
+// accrue and spend it exactly like one that has.
+//
+// Variables, not constants, so a test that has to drive dozens of failures
+// through the real Login path does not have to spend the real minutes.
+var (
+	loginThrottleBase = 100 * time.Millisecond
+	loginThrottleMax  = 2 * time.Second
 )
 
 // AuthService handles registration, login, and token operations.
@@ -100,6 +199,8 @@ type AuthService struct {
 	emailSender        vaultemail.Sender
 	mailer             *vaultemail.Mailer
 	honeypotAlert      *honeypot.Alerter
+	ipIntel            *ipintel.DB
+	loginCountries     repository.LoginCountryRepository
 	metrics            *metrics.Collector
 	maxSessionsPerUser int
 	origin             string
@@ -109,9 +210,16 @@ type AuthService struct {
 	hibpEnabled        bool
 	hmacSecret         []byte
 	strictSessionLimit bool
+
+	// lockoutCounterRefusedAt is the last instant a lockout counter could not be
+	// written, in Unix nanoseconds. Zero means never.
+	//
+	// It is what lets isAccountLocked tell a counter that says "no failures" from
+	// one that was never allowed to exist. See noteLockoutCounterRefused.
+	lockoutCounterRefusedAt atomic.Int64
 }
 
-// SetStrictSessionLimit controls checkSessionLimit's behaviour on a count-query
+// SetStrictSessionLimit controls checkSessionLimit's behavior on a count-query
 // error: true fails closed (rejects login + audits), false (default) fails open.
 func (s *AuthService) SetStrictSessionLimit(strict bool) {
 	s.strictSessionLimit = strict
@@ -181,6 +289,84 @@ func (s *AuthService) SetHoneypotAlerter(a *honeypot.Alerter) {
 	s.honeypotAlert = a
 }
 
+// SetIPIntel configures the IP-intelligence handle used to derive a coarse
+// country signal (and, in the rate limiter, VPN/hosting/Tor flags) from a
+// client address. When nil — the default — the new-location notice no-ops
+// entirely; the whole feature is gated on this handle being present.
+func (s *AuthService) SetIPIntel(db *ipintel.DB) {
+	s.ipIntel = db
+}
+
+// SetLoginCountryRepo configures the store that remembers which countries a user
+// has logged in from, backing the new-location notice. Without it (the default)
+// the notice no-ops: there is nothing to compare a login's country against.
+func (s *AuthService) SetLoginCountryRepo(r repository.LoginCountryRepository) {
+	s.loginCountries = r
+}
+
+// newLocationNotifyWindow throttles the new-location notice to at most one per
+// user per country per window, mirroring the once-per-window shape of the
+// account-lock notice.
+const newLocationNotifyWindow = 24 * time.Hour
+
+// notifyNewCountry records the country a successful login came from and, when it
+// is a NEW country for a user who already had at least one recorded country,
+// sends a throttled out-of-band notice. Country granularity only: the raw IP is
+// resolved to a country here and never leaves this function — not into the
+// store, not into the audit log, not into the email.
+//
+// It is fail-open and best-effort by construction: it is invoked in its own
+// goroutine from the login success paths, every error degrades to "no notice",
+// and nothing here can block or fail a login. When either the ipintel handle or
+// the country store is absent the feature no-ops.
+//
+// A first-ever login (the user had no recorded country) seeds the set silently:
+// the very first place someone logs in from is not a location change, so it must
+// not fire a notice.
+func (s *AuthService) notifyNewCountry(userID, emailAddr, ip, app string) {
+	if s.ipIntel == nil || s.loginCountries == nil {
+		return
+	}
+	cc := s.ipIntel.LookupString(ip).CountryCode
+	if cc == "" {
+		// Fail-open: an unknown/private/unparseable address yields no country, so
+		// there is nothing to compare or notify about.
+		return
+	}
+	ctx := context.Background()
+	wasNew, hadAny, err := s.loginCountries.UpsertAndWasNew(ctx, userID, cc)
+	if err != nil {
+		log.Printf("auth: login-country upsert failed for %s: %v", userID, err)
+		return
+	}
+	if !wasNew || !hadAny {
+		// Known country, or the first country ever recorded for this user.
+		return
+	}
+
+	// Audit the new-country event with the country only — never the IP.
+	if s.auditLog != nil {
+		s.auditLog.Log(ctx, audit.LoginNewCountry, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"country": cc})
+	}
+
+	// Throttle: one notice per user per country per window. Reuses the
+	// SetIfNotExists gate the account-lock notice uses.
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	notifyKey := fmt.Sprintf("newloc_notified:%s:%s", userID, cc)
+	if sent, _ := s.cache.SetIfNotExists(ctx, notifyKey, "1", newLocationNotifyWindow); !sent {
+		return
+	}
+	deferwork.Go(func(ctx context.Context) {
+		// Email is best-effort; pass ONLY the country, never the IP.
+		_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateNewLocation, emailAddr, vaultemail.TemplateData{
+			Country: cc,
+		})
+	})
+}
+
 // SetMetrics configures the metrics collector for login/token counters.
 func (s *AuthService) SetMetrics(m *metrics.Collector) {
 	s.metrics = m
@@ -193,9 +379,17 @@ func (s *AuthService) SetMaxSessionsPerUser(n int) {
 	s.maxSessionsPerUser = n
 }
 
+// MaxSessionsPerUser returns the configured concurrent-family cap, or 0 when
+// the bound is disabled. Login paths that persist a family themselves (the
+// OAuth callback) pass this into CreateWithinCap so the insert, not only the
+// CheckSessionLimit pre-check, is the hard bound.
+func (s *AuthService) MaxSessionsPerUser() int {
+	return s.maxSessionsPerUser
+}
+
 // SetRoleCatalog enables catalog-aware role validation. When set, JWT issuance
 // keeps only roles present in the auth.app_roles catalog (in addition to the
-// admin-reserved filter). Nil (the default) preserves the prior behaviour.
+// admin-reserved filter). Nil (the default) preserves the prior behavior.
 func (s *AuthService) SetRoleCatalog(c *RoleCatalog) {
 	s.roleCatalog = c
 }
@@ -214,7 +408,7 @@ func (s *AuthService) ChallengeFingerprintMatches(ctx context.Context, userID, c
 		return true
 	}
 	s.auditLog.Log(ctx, audit.FingerprintAnomaly, userID, "", ip, ua, requestFP, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"}, 70)
+		map[string]interface{}{"expected": challengeFP, "stage": "mfa_challenge"})
 	return false
 }
 
@@ -317,31 +511,50 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput, ip stri
 	}
 
 	s.auditLog.Log(ctx, audit.Registration, userID, "", ip, "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"email": maskEmail(email)}, 0)
+		map[string]interface{}{"email": maskEmail(email)})
 
-	// Send verification email (non-critical — log but don't fail registration)
-	if s.cache != nil && s.emailSender != nil {
-		app := vaultemail.AppFromContext(ctx)
-		go s.sendVerificationEmail(email, userID, app, sanitize.RedirectPath(input.RedirectTo)) // #nosec G118 -- intentionally uses Background ctx: email send outlives HTTP request
-	}
+	s.SendSignupVerification(ctx, email, userID, sanitize.RedirectPath(input.RedirectTo))
 
 	return &RegisterResult{UserID: userID, Email: email}, nil
 }
 
+// SendSignupVerification mails a verification link for an account that was just
+// created, and returns immediately. Delivery outlives the request and is best
+// effort: the row is already committed when this is called, so a mailer outage
+// must not turn a completed signup into a failure the caller reports.
+//
+// Every signup path goes through here so none of them can drift into its own
+// error convention. Password registration is one. A social login whose provider
+// does not vouch for the address is the other, and that one is not optional:
+// GET /auth/verify-email consumes a token it never issues, so an unverified
+// OAuth account that received no mail can never become verified, and because the
+// address is taken a later login through a provider that does verify it is
+// refused with 409.
+//
+// redirectTo is a sanitized relative path the verification link returns the user
+// to, or empty for the default landing page.
+func (s *AuthService) SendSignupVerification(ctx context.Context, to, userID, redirectTo string) {
+	if s.cache == nil || s.emailSender == nil {
+		return
+	}
+	app := vaultemail.AppFromContext(ctx)
+	deferwork.Go(func(ctx context.Context) { s.sendVerificationEmail(ctx, to, userID, app, redirectTo) })
+}
+
 // sendVerificationEmail generates a verification token, stores it, and sends the
 // email. app is the white-label tenant slug (may be empty for global branding).
-func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) {
-	ctx := context.Background()
-
+func (s *AuthService) sendVerificationEmail(ctx context.Context, to, userID, app, redirectTo string) {
 	token, err := vaultcrypto.RandomHex(32)
 	if err != nil {
 		log.Printf("auth: failed to generate verification token: %v", err)
+		s.auditVerificationNotSent(ctx, userID, to, "token_generation_failed")
 		return
 	}
 
 	tokenHash := vaultcrypto.SHA256Hex(token)
 	if err := s.cache.Set(ctx, "verify:"+tokenHash, userID, 24*time.Hour); err != nil {
 		log.Printf("auth: failed to store verification token: %v", err)
+		s.auditVerificationNotSent(ctx, userID, to, "token_store_failed")
 		return
 	}
 
@@ -353,44 +566,116 @@ func (s *AuthService) sendVerificationEmail(to, userID, app, redirectTo string) 
 	if err := s.emailMailer().Send(ctx, app, vaultemail.TemplateVerification, to, vaultemail.TemplateData{
 		URL: verifyURL,
 	}); err != nil {
-		log.Printf("auth: failed to send verification email to %s: %v", to, err)
+		log.Printf("auth: failed to send verification email to %s: %v", maskEmail(to), err)
+		s.auditVerificationNotSent(ctx, userID, to, "delivery_failed")
 	}
 }
 
-// sendImportClaimLink mints a one-time reset token (compatible with the
-// password reset-confirm flow) for an imported account and emails the magic
-// link. Fire-and-forget; failures are logged, not surfaced (anti-enumeration).
+// auditVerificationNotSent records that an account was left without the
+// verification link it needs. The send is deliberately non-fatal, which means
+// the only evidence it ever failed is this record plus the log line: the account
+// looks like any other unverified one, and an operator asked why a user cannot
+// log in has nothing else to read. The address is masked, matching the
+// Registration event the same signup already writes.
+func (s *AuthService) auditVerificationNotSent(ctx context.Context, userID, to, reason string) {
+	if s.auditLog == nil {
+		return
+	}
+	s.auditLog.Log(ctx, audit.Registration, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"action": "verification_email_not_sent",
+			"reason": reason,
+			"email":  maskEmail(to),
+		})
+}
+
+// importClaimTTL is how long a login-triggered reset link stays valid, and
+// therefore also how often a new one may be minted for the same account.
+const importClaimTTL = time.Hour
+
+// resetLinkKind is the difference between the two account states that mail a
+// reset link from the login path. Everything else about the two sends is
+// identical, which is why they share one implementation: they mint the same
+// token into the same keys, and a second copy of that would be a second place
+// for the throttle or the invalidation to be got wrong.
+type resetLinkKind struct {
+	// reserveKey prefixes the throttle reservation. The two states hold
+	// SEPARATE reservations on purpose. Sharing one would let whichever state
+	// mailed first suppress the other's mail for the rest of the window, and an
+	// account can be in both: an import is claimed through the claim link and
+	// can still be carrying a forced reset afterwards, which would then never be
+	// mailed and never be escapable.
+	reserveKey string
+	// urlSuffix is appended to the reset URL. The import claim carries import=1,
+	// which is what tells the frontend to word the page as claiming a migrated
+	// account rather than as an ordinary reset.
+	urlSuffix string
+	// label names the state in log lines.
+	label string
+}
+
+var (
+	importClaimLink = resetLinkKind{reserveKey: "import_claim_sent:", urlSuffix: "&import=1", label: "import claim"}
+	forcedResetLink = resetLinkKind{reserveKey: "forced_reset_sent:", urlSuffix: "", label: "forced password reset"}
+)
+
+// sendImportClaimLink mails the claim link for an unclaimed imported account.
 func (s *AuthService) sendImportClaimLink(userID, emailAddr, app string) {
+	s.sendResetLink(userID, emailAddr, app, importClaimLink)
+}
+
+// sendForcedResetLink mails the reset link for an account whose stored password
+// may no longer be used (model.User.MustResetPassword).
+func (s *AuthService) sendForcedResetLink(userID, emailAddr, app string) {
+	s.sendResetLink(userID, emailAddr, app, forcedResetLink)
+}
+
+// sendResetLink mints a one-time reset token (compatible with the password
+// reset-confirm flow) and emails the magic link. Fire-and-forget; failures are
+// logged, not surfaced (anti-enumeration).
+//
+// SECURITY INVARIANT: at most one link per account per state per importClaimTTL.
+// The caller is an unauthenticated login attempt, so without the throttle anyone
+// who knows the address holds two primitives: mail the account holder at will,
+// and invalidate whatever link they are in the middle of using, because each mint
+// revokes the previous one. The reservation is taken before any work so the
+// invalidation below cannot run more often than the send.
+func (s *AuthService) sendResetLink(userID, emailAddr, app string, kind resetLinkKind) {
 	if s.cache == nil || s.emailSender == nil {
 		return
 	}
-	go func() { // #nosec G118 -- intentional: email send outlives the HTTP request
-		ctx := context.Background()
-		// Invalidate any prior outstanding claim link so only the latest is valid
-		// (each login attempt issues a new one; don't leave stale tokens usable).
+	deferwork.Go(func(ctx context.Context) {
+		// Fail closed on a cache error: an unthrottled send is worse than a link
+		// the user re-requests, and the token needs this same cache to be stored
+		// at all.
+		reserved, err := s.cache.SetIfNotExists(ctx, kind.reserveKey+userID, "1", importClaimTTL)
+		if err != nil || !reserved {
+			return
+		}
+		// Invalidate any prior outstanding link so only the latest is valid.
 		if oldHash, err := s.cache.GetAndDelete(ctx, "pwreset_user:"+userID); err == nil && oldHash != "" {
 			s.cache.Delete(ctx, "reset:"+oldHash) // #nosec G104 -- best-effort invalidation
 		}
 		token, err := vaultcrypto.RandomHex(32)
 		if err != nil {
-			log.Printf("auth: import claim token gen failed: %v", err)
+			log.Printf("auth: %s token gen failed: %v", kind.label, err)
 			return
 		}
 		tokenHash := vaultcrypto.SHA256Hex(token)
 		// Same keys the password ResetConfirm handler consumes.
-		if err := s.cache.Set(ctx, "reset:"+tokenHash, userID, time.Hour); err != nil {
-			log.Printf("auth: import claim token store failed: %v", err)
+		if err := s.cache.Set(ctx, "reset:"+tokenHash, userID, importClaimTTL); err != nil {
+			log.Printf("auth: %s token store failed: %v", kind.label, err)
 			return
 		}
-		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, time.Hour) // #nosec G104 -- reverse map for invalidation, best-effort
+		s.cache.Set(ctx, "pwreset_user:"+userID, tokenHash, importClaimTTL) // #nosec G104 -- reverse map for invalidation, best-effort
 
-		claimURL := s.origin + "/reset-password?token=" + token + "&import=1"
+		resetURL := s.origin + "/reset-password?token=" + token + kind.urlSuffix
 		if err := s.emailMailer().Send(ctx, app, vaultemail.TemplatePasswordReset, emailAddr, vaultemail.TemplateData{
-			URL: claimURL,
+			URL: resetURL,
 		}); err != nil {
-			log.Printf("auth: failed to send import claim email to %s: %v", emailAddr, err)
+			log.Printf("auth: failed to send %s email to %s: %v", kind.label, maskEmail(emailAddr), err)
 		}
-	}()
+	})
 }
 
 // LoginInput is the login request payload.
@@ -400,6 +685,17 @@ type LoginInput struct {
 	RememberMe  bool   `json:"remember_me"`
 	ClientID    string `json:"client_id"`
 	Fingerprint vaultcrypto.FingerprintInput
+	// DiscloseStatus permits the one refusal that is allowed to say why:
+	// ErrPasswordResetRequired instead of ErrInvalidCredentials on an account
+	// carrying must_reset_password. Nothing else about the login changes with
+	// it, and no other outcome consults it.
+	//
+	// It is json:"-" and set by the transport after it has verified client
+	// credentials against auth.clients and found the login:status scope on that
+	// row. ClientID above is self-asserted body text and proves nothing, so it
+	// must never be what decides this. The login handler rejects unknown JSON
+	// fields, so a body naming this one is a 400 rather than a way in.
+	DiscloseStatus bool `json:"-"`
 }
 
 // LoginResult is the login response.
@@ -412,67 +708,127 @@ type LoginResult struct {
 	Requires2FA      bool     `json:"requires_2fa,omitempty"`
 	ChallengeToken   string   `json:"challenge_token,omitempty"`
 	AvailableMethods []string `json:"available_methods,omitempty"`
-	// ImportClaimRequired is set for an imported account on its first login: no
-	// password was verified; a magic reset link was emailed to claim the account.
+	// ImportClaimRequired is never set. It signaled an unclaimed imported account
+	// on its first login, which made that account distinguishable from every other
+	// login failure to an unauthenticated caller; Login now answers
+	// ErrInvalidCredentials there and mails the claim link out of band. The field
+	// is retained so the transport layer keeps compiling until its 202 branch is
+	// removed, and `omitempty` keeps it off the wire.
 	ImportClaimRequired bool `json:"import_claim_required,omitempty"`
+}
+
+// loginResultWire is the serialized form of LoginResult.
+//
+// The MFA challenge is emitted under both spellings, for the same reason
+// mfaStatusWire does it. mfa_required and mfa_methods are the canonical names:
+// they match ProfileResponse.mfa_methods and the MFAStatus response, and the
+// product has more than two factors, so "2fa" only survives in the URL paths
+// BeOn3 is live on. requires_2fa and available_methods are the pre-1.0.0 names,
+// kept as deprecated aliases for clients written against them; remove both at
+// the next major version.
+//
+// The alias was added to MFAStatus and not here, which left the two responses
+// of one login flow disagreeing about what the field is called. GET /mfa/status
+// answered a client reading mfa_methods and POST /auth/login did not, and the
+// login response is the one whose factor list changes what the client must do
+// next, so a client that had migrated saw an empty list exactly when it
+// mattered.
+type loginResultWire struct {
+	AccessToken         string   `json:"access_token"` // #nosec G117 -- OAuth2 response field name per RFC 6749
+	TokenType           string   `json:"token_type"`
+	ExpiresIn           int      `json:"expires_in"`
+	Requires2FA         bool     `json:"requires_2fa,omitempty"`
+	MFARequired         bool     `json:"mfa_required,omitempty"`
+	ChallengeToken      string   `json:"challenge_token,omitempty"`
+	AvailableMethods    []string `json:"available_methods,omitempty"`
+	MFAMethods          []string `json:"mfa_methods,omitempty"`
+	ImportClaimRequired bool     `json:"import_claim_required,omitempty"`
+}
+
+// MarshalJSON emits both spellings of the MFA challenge.
+//
+// Both stay omitempty and therefore appear and disappear together. The ordinary
+// single-step login is the overwhelming majority of responses, and adding
+// mfa_required:false plus an empty mfa_methods to every one of them would change
+// the shape of the common case for a client that tests for the key rather than
+// its value.
+//
+// RefreshToken and CookieMaxAge are absent by construction rather than by tag:
+// the refresh credential travels in a Set-Cookie header, and a wire type that
+// simply has no field for it cannot leak it into a response body.
+func (r LoginResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(loginResultWire{
+		AccessToken:         r.AccessToken,
+		TokenType:           r.TokenType,
+		ExpiresIn:           r.ExpiresIn,
+		Requires2FA:         r.Requires2FA,
+		MFARequired:         r.Requires2FA,
+		ChallengeToken:      r.ChallengeToken,
+		AvailableMethods:    r.AvailableMethods,
+		MFAMethods:          r.AvailableMethods,
+		ImportClaimRequired: r.ImportClaimRequired,
+	})
 }
 
 // Login authenticates a user and issues tokens.
 //
 //nolint:gocognit,gocyclo // login owns user-lockout, ip-lockout, anti-enumeration burns, MFA challenge, family rotation, audit, metrics — all coupled to one state machine
-func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string) (*LoginResult, error) {
+func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string) (result *LoginResult, err error) {
 	if s.metrics != nil {
 		s.metrics.RecordLoginAttempt()
 	}
 	email := strings.ToLower(strings.TrimSpace(input.Email))
+
+	// Every non-success outcome advances the identity throttle counter, in one
+	// place, for the same reason recordLoginFailure exists: the paths must not
+	// drift apart into distinguishable side effects. An unknown address, a
+	// wrong password, a locked account and a soft-deleted account all accrue the
+	// delay at the same rate, so the delay cannot be read as an oracle.
+	//
+	// ErrArgon2Overloaded is excluded. That branch is a 503 that mutates nothing
+	// by design, and counting it would let anyone who can push the semaphore
+	// over the edge throttle every address they know.
+	defer func() {
+		if err != nil && !errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			s.recordIdentityFailure(ctx, email)
+		}
+	}()
 	// White-label tenant for any auth email sent during this login (verification
 	// resend, import claim, lockout alert, email-OTP). Empty => global branding.
 	app := vaultemail.AppFromContext(ctx)
 
-	// Honeypot: trap user check — return fake tokens to deceive attackers
-	if s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email) {
-		// Run dummy Argon2id to maintain constant timing (identical to anti-enumeration path)
-		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
-			return nil, err // 503 — consistent with real-user path under load
-		}
+	// Honeypot: does this address match a planted trap credential?
+	//
+	// The answer is computed here but acted on below, because the branch used to
+	// sit above the IP-lockout gate and above the address lookup and return from
+	// there. That made the trap the one address in the deployment that still
+	// answered 200 from a locked-out IP, which an attacker reaches by burning the
+	// lockout and then walking their candidate list. It also meant the trap
+	// answered a successful login with no database round trips at all, so success
+	// came back faster than failure: the reverse of every real deployment, and an
+	// oracle needing no reference host to read.
+	trap := s.honeypotAlert != nil && s.honeypotAlert.IsTrapUser(email)
 
-		// Fire alert asynchronously (use Background — request ctx canceled after response)
-		go s.honeypotAlert.Alert(context.Background(), honeypot.HoneypotEvent{ // #nosec G118 -- intentional: honeypot alert outlives HTTP request
-			Timestamp: time.Now(),
-			EventType: "trap_login",
-			IP:        ip,
-			UserAgent: ua,
-			Email:     email,
-			RiskScore: 100,
-		})
-
-		fakeJWT, err := honeypot.GenerateFakeJWT()
-		if err != nil {
-			return nil, fmt.Errorf("honeypot: fake JWT: %w", err)
-		}
-		fakeRefresh, err := honeypot.GenerateFakeRefresh()
-		if err != nil {
-			return nil, fmt.Errorf("honeypot: fake refresh: %w", err)
-		}
-		return &LoginResult{
-			AccessToken:  fakeJWT,
-			TokenType:    "Bearer",
-			ExpiresIn:    int(s.tokenSvc.accessTokenTTL.Seconds()),
-			RefreshToken: fakeRefresh,
-			CookieMaxAge: int(s.tokenSvc.refreshTokenTTL.Seconds()),
-		}, nil
-	}
+	// Progressive delay for an address with recent failures. Applied before any
+	// lookup so success and every kind of failure pay it identically, and before
+	// the argon2 burn so a throttled caller holds a sleeping goroutine rather
+	// than 46 MiB of hashing memory.
+	s.throttleLogin(ctx, email)
 
 	// Check IP-wide lockout (prevents credential stuffing from a single IP)
 	if s.isIPLocked(ctx, ip) {
 		s.auditLog.Log(ctx, audit.LoginFailure, "", "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "ip_locked"}, 50)
+			map[string]interface{}{"reason": "ip_locked"})
 		return nil, ErrAccountLocked
 	}
 
 	user, err := s.users.GetByEmail(ctx, email)
 	if err != nil {
 		return nil, err
+	}
+
+	if trap {
+		return s.trapLogin(ctx, input, email, ip, ua)
 	}
 
 	// Constant-time: verify against dummy hash even if user not found (prevent timing leak).
@@ -487,54 +843,126 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			s.metrics.RecordLoginFailed()
 		}
 		s.auditLog.Log(ctx, audit.LoginFailure, "", "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "user_not_found"}, 10)
+			map[string]interface{}{"reason": "user_not_found"})
 		return nil, ErrInvalidCredentials
 	}
 
-	// Check account lock (DB-level admin lockout OR cache-based auto-lockout)
+	// Check account lock (DB-level admin lockout OR cache-based auto-lockout). A
+	// locked account is answered exactly like a wrong password: only an EXISTING
+	// account can reach the locked state (the per-user counter has no key for an
+	// unknown email), so a distinct ErrAccountLocked/403 would tell an
+	// unauthenticated caller the address is registered. Rotating the probe IP
+	// slips past the per-IP login limit, turning that 403-vs-401 into a reliable
+	// enumeration oracle. Return ErrInvalidCredentials instead, and burn the same
+	// dummy Argon2 the user==nil path burns so neither the status nor the timing
+	// distinguishes a locked account from an unknown one. The lockout still holds:
+	// no password is verified and no token is issued, and the audit row keeps the
+	// real reason. MFA verify and refresh may still surface the lock, because
+	// reaching them already proves the caller knows the account exists.
+	// Burn the dummy hash BEFORE any side effect, exactly like the user==nil and
+	// user.Deleted branches: an overloaded semaphore must short-circuit to
+	// ErrArgon2Overloaded (503) having mutated nothing. Then advance the per-IP
+	// failure counter the same way user==nil and a wrong password do. A locked
+	// branch that skipped recordFailedIP left the caller's IP counter frozen while
+	// an unknown address advanced it, so a run of probes trips the per-IP lockout
+	// (403 ip_locked) for an unknown address but never for a locked one: a
+	// 403-vs-401 progression that re-opens the very enumeration this branch closes.
+	// recordFailedIP runs after the overload check, so an overloaded semaphore
+	// still mutates nothing.
 	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_locked", "source": "admin"}, 30)
-		return nil, ErrAccountLocked
-	}
-	if s.isAccountLocked(ctx, user.ID) {
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_locked", "source": "auto"}, 30)
-		return nil, ErrAccountLocked
-	}
-
-	// Account-state gate (legacy-platform parity, migration 004). Reject banned/disabled/
-	// deleted accounts before password verification. A soft-deleted account is
-	// treated as "no such user" (ErrInvalidCredentials) to avoid revealing it.
-	if user.Deleted {
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_deleted"}, 20)
+			map[string]interface{}{"reason": "account_locked", "source": "admin"})
 		return nil, ErrInvalidCredentials
 	}
-	if user.Banned {
+	if s.isAccountLocked(ctx, user.ID, ip) {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.recordFailedIP(ctx, ip)
 		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_banned"}, 30)
-		return nil, ErrAccountBanned
-	}
-	if user.Disabled {
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "account_disabled"}, 30)
-		return nil, ErrAccountDisabled
+			map[string]interface{}{"reason": "account_locked", "source": "auto"})
+		return nil, ErrInvalidCredentials
 	}
 
-	// Imported account, first login: the password the user typed is meaningless
-	// (we never imported their credentials). Don't verify it — run a dummy hash
-	// for timing parity, email a magic reset link, and tell the client to claim
-	// the account. The existing reset-confirm flow then sets the Argon2 password
-	// and clears import_pending.
+	// Account-state gate (legacy-platform parity, migration 004). A soft-deleted
+	// account is masked as "no such user" (ErrInvalidCredentials) before the
+	// password is verified, so its existence never leaks. Banned and disabled are
+	// administrative denials a proven-password caller is entitled to see, so they
+	// are checked after VerifyPassword succeeds (below): checking them here, before
+	// the password, would answer a banned or disabled address with a distinct 403
+	// while an unknown address answers 401, telling an unauthenticated caller the
+	// address is registered.
+	if user.Deleted {
+		// Masked as "no such user" (ErrInvalidCredentials) to avoid revealing the
+		// soft delete. The timing must match too: the user==nil and ImportPending
+		// paths both burn a dummy Argon2 (~50ms), so returning here without one
+		// answered a soft-deleted address that much faster and re-revealed exactly
+		// what the masked error hides. Burn the same dummy hash, honoring overload.
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_deleted"})
+		return nil, ErrInvalidCredentials
+	}
+	// Imported account, first login: no credential was ever imported, so there is
+	// no password to verify and no session to issue.
+	//
+	// SECURITY INVARIANT (anti-enumeration, ASVS V2.1.1): this outcome must be
+	// indistinguishable from a wrong password. It previously answered with a
+	// distinct success-shaped result, which told an unauthenticated caller both
+	// that the address was registered and that the account was an unclaimed
+	// import, and mailed the account holder on demand. It now burns the same dummy
+	// Argon2id, runs the same failure bookkeeping (so lockout progresses at the
+	// same rate and locks with the same error), and returns the same
+	// ErrInvalidCredentials — the same choice already made for an unverified email
+	// below. The claim link travels out of band and throttled, so it is not a
+	// signal to the caller and not a mail-bomb primitive.
 	if user.ImportPending {
 		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
 			return nil, err
 		}
 		s.sendImportClaimLink(user.ID, user.Email, app)
-		s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"import_claim": true}, 0)
-		return &LoginResult{ImportClaimRequired: true}, nil
+		s.recordLoginFailure(ctx, user, ip, ua, app, "import_claim_required")
+		return nil, ErrInvalidCredentials
+	}
+
+	// Forced password reset (migration 039): the stored password may not be used
+	// to sign in, so there is nothing to verify and no session to issue. An
+	// account imported with a hash vault42 cannot parse is the motivating case;
+	// an operator may set the flag on any account.
+	//
+	// It is decided AFTER the import branch, deliberately, because an account can
+	// be in both states and they are not the same state. An unclaimed import has
+	// no credential at all and its mail has to carry import=1 so the page words
+	// itself as claiming a migrated account; a forced reset is about a credential
+	// that exists and must not be used. Taking the import first means this branch
+	// changes no outcome an imported account already had, and the reset-confirm
+	// handler clears both flags on the one round trip, so an account in both
+	// states leaves both at once.
+	//
+	// SECURITY INVARIANT (anti-enumeration, ASVS V2.1.1): every side effect here
+	// is the side effect of a wrong password, and the returned error is the same
+	// one unless the caller has proven it is a first-party client authorized for
+	// the status. The same dummy Argon2id burn (honoring overload, mutating
+	// nothing when it fires), the same recordLoginFailure bookkeeping so lockout
+	// progresses at the same rate, the same throttled out-of-band mail. Only the
+	// last line differs, and only for a caller that authenticated with client
+	// credentials carrying login:status.
+	if user.MustResetPassword {
+		if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+			return nil, err
+		}
+		s.sendForcedResetLink(user.ID, user.Email, app)
+		s.recordLoginFailure(ctx, user, ip, ua, app, "password_reset_required")
+		if input.DiscloseStatus {
+			return nil, ErrPasswordResetRequired
+		}
+		return nil, ErrInvalidCredentials
 	}
 
 	// Verify password
@@ -543,44 +971,59 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		return nil, err // 503 — propagate before recording failure (consistent with dummy hash path)
 	}
 	if err != nil || !valid {
-		// Failed-login counter is best-effort; lockout is enforced by isAccountLocked.
-		_ = s.users.IncrementFailedLogin(ctx, user.ID)
-		s.recordFailedAttempt(ctx, user.ID)
-		s.recordFailedIP(ctx, ip)
-		if s.metrics != nil {
-			s.metrics.RecordLoginFailed()
-		}
-		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "wrong_password"}, 20)
-
-		// Send lock notification email once per lockout window
-		if s.isAccountLocked(ctx, user.ID) && s.cache != nil && s.emailSender != nil {
-			lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
-			if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
-				go func() { // #nosec G118 -- intentional: email send outlives HTTP request
-					// Email is best-effort.
-					_ = s.emailMailer().Send(context.Background(), app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
-						IP: ip,
-					})
-				}()
-			}
-		}
-
+		s.recordLoginFailure(ctx, user, ip, ua, app, "wrong_password")
 		return nil, ErrInvalidCredentials
+	}
+
+	// Administrative-denial gate, after password proof. A banned or disabled
+	// account reaches here only by proving it owns the account, so revealing the
+	// denial is not an enumeration signal; a wrong password or an unknown address
+	// stayed masked as ErrInvalidCredentials above and never arrives. No failure is
+	// recorded and lockout does not progress: this refuses a valid credential by
+	// policy, it is not a credential failure.
+	if user.Banned {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_banned"})
+		return nil, ErrAccountBanned
+	}
+	if user.Disabled {
+		s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "account_disabled"})
+		return nil, ErrAccountDisabled
 	}
 
 	// Check email verified — return ErrInvalidCredentials (not ErrEmailNotVerified)
 	// to prevent user enumeration: an attacker cannot distinguish "unverified" from
 	// "wrong password" or "no such user".
+	//
+	// The failure bookkeeping runs too, and that is not hygiene, it is the
+	// anti-enumeration property itself. Returning early with the right error and
+	// none of the side effects left the lockout counter advancing only on WRONG
+	// passwords: a wrong guess reached lockoutThreshold and the endpoint started
+	// answering 403 account_locked, while the correct password answered 401
+	// forever because it incremented nothing. Six attempts therefore told an
+	// attacker whether their candidate was the real password, which is exactly
+	// the distinction the paragraph above claims cannot be made. It also let
+	// anyone holding the correct password of an unverified account guess against
+	// it indefinitely without ever locking out, writing no audit rows and
+	// leaving vault_login_failed_total flat.
 	if !user.EmailVerified {
+		s.recordLoginFailure(ctx, user, ip, ua, app, "email_not_verified")
 		return nil, ErrInvalidCredentials
 	}
 
-	// Reset failed login count (both DB and cache)
+	// Reset the durable failed-login count now the password is proven. Only the
+	// password path writes that column, so clearing it here cannot erase a
+	// second-factor failure. The cache lockout counter is NOT cleared yet: it is
+	// shared with the MFA path (RecordMFAFailure feeds the same key), and a first
+	// factor that still owes a second one must not reset the second factor's
+	// brute-force budget. Clearing it early let an attacker holding the password
+	// re-login between guesses to zero the counter, so the H2 lockout never
+	// tripped. It is cleared below on the single-step path, and by
+	// CompleteMFALogin once the second factor also succeeds.
 	if err := s.users.ResetFailedLogin(ctx, user.ID); err != nil {
 		log.Printf("auth: failed to reset login count for %s: %v", user.ID, err)
 	}
-	s.clearLockout(ctx, user.ID)
 
 	// Compute fingerprint
 	input.Fingerprint.IP = ip
@@ -591,17 +1034,22 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	if s.mfaSvc != nil {
 		status, err := s.mfaSvc.GetStatus(ctx, user.ID)
 		if err != nil {
+			// Fail closed: an undetermined MFA status must not fall through to the
+			// no-methods branch, which issues real tokens or downgrades to the
+			// email-OTP fallback. Refuse the login rather than skip a factor the
+			// account may hold but that a failed read could not see.
 			log.Printf("auth: MFA status check failed for %s: %v", user.ID, err)
+			return nil, fmt.Errorf("mfa status unavailable: %w", err)
 		}
 		hasMethods := status != nil && len(status.Methods) > 0
 		if hasMethods {
 			// Issue a short-lived challenge token instead of real tokens
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
 			s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"mfa_required": true}, 0)
+				map[string]interface{}{"mfa_required": true})
 			return &LoginResult{
 				Requires2FA:      true,
 				ChallengeToken:   challengePair,
@@ -609,13 +1057,13 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		} else if s.mfaSvc.IsRequired() {
 			// No MFA methods configured but MFA is required — email OTP fallback
-			go s.sendEmailOTP(user.ID, user.Email, app) // #nosec G118 -- intentional: email OTP send outlives HTTP request
-			challengePair, err := s.tokenSvc.IssueChallengeToken(user.ID, fp)
+			deferwork.Go(func(context.Context) { s.sendEmailOTP(user.ID, user.Email, app) })
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, user.ID, fp, MethodPassword)
 			if err != nil {
 				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
 			}
 			s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"mfa_required": true, "fallback": "email_otp"}, 0)
+				map[string]interface{}{"mfa_required": true, "fallback": "email_otp"})
 			return &LoginResult{
 				Requires2FA:      true,
 				ChallengeToken:   challengePair,
@@ -623,6 +1071,13 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 			}, nil
 		}
 	}
+
+	// Single-step login: no second factor is owed, so the login is complete and
+	// the shared lockout counter can be cleared (the MFA path defers this to
+	// CompleteMFALogin). The identity throttle goes too: a user who mistyped six
+	// times and then got in should not keep paying the delay.
+	s.clearLockout(ctx, user.ID, ip)
+	s.clearIdentityFailures(ctx, email)
 
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, user.ID); err != nil {
@@ -635,9 +1090,12 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 	// Issue tokens — use the user's persisted Roles, admin-filtered and
 	// catalog-validated, falling back to the historical default ["user"].
 	jwtRoles := s.effectiveRoles(ctx, user.Roles)
-	pair, err := s.tokenSvc.IssueTokenPair(
-		user.ID, jwtRoles, []string{"read", "write"},
+	// A single-step login completed on the memorized secret alone, so the token
+	// says AAL1 and names the one factor it saw (OIDC Core §2).
+	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
+		ctx, user.ID, jwtRoles, []string{"read", "write"},
 		input.ClientID, fp, "", input.RememberMe,
+		NewAuthContext(time.Now(), []string{MethodPassword}, false),
 	)
 	if err != nil {
 		return nil, err
@@ -656,7 +1114,11 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		s.metrics.RecordLoginSuccess()
 		s.metrics.RecordTokenIssued()
 	}
-	s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, deviceID, nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+	s.auditLog.Log(ctx, audit.LoginSuccess, user.ID, input.ClientID, ip, ua, fp, deviceID, nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
+
+	// New-location notice (AR-18): out of band, country granularity only, so it
+	// never blocks or fails the login.
+	deferwork.Go(func(context.Context) { s.notifyNewCountry(user.ID, user.Email, ip, app) })
 
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,
@@ -665,6 +1127,202 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput, ip, ua string
 		RefreshToken: pair.RefreshToken,
 		CookieMaxAge: int(time.Until(pair.RefreshExpAt).Seconds()),
 	}, nil
+}
+
+// trapLogin answers a planted credential the way a successful login answers a
+// real one.
+//
+// It repeats the round trips a success makes, because an attacker measures the
+// endpoint as well as reading it. The reads it repeats are the ones the
+// honeypot's own database can answer for a user id that is not in it, so none of
+// them writes a row or trips a foreign key. The two writes a real success makes
+// that would need the row to exist, the refresh-token insert and the device
+// insert, are left out; that residual is the one part of the timing gap this
+// path does not close.
+//
+// Every lookup is keyed by the same id the token's sub carries, so the honeypot
+// queries the account it claims to have authenticated.
+func (s *AuthService) trapLogin(ctx context.Context, input LoginInput, email, ip, ua string) (*LoginResult, error) {
+	// The dummy Argon2id burn every non-authenticating path shares.
+	if _, err := vaultcrypto.VerifyPassword(input.Password, vaultcrypto.DummyHash, s.pepper); errors.Is(err, vaultcrypto.ErrArgon2Overloaded) {
+		return nil, err // 503, the same status the real-user path answers with under load
+	}
+
+	// Fire the alert asynchronously: the request context is canceled once the
+	// response is written, and the caller must not be able to time the alert.
+	//
+	// On the bounded pool rather than a bare goroutine. A trap login is
+	// unauthenticated and attacker-triggered, and Alert opens an outbound
+	// connection to the operator's alerting endpoint, so a bare `go` let the
+	// attacker choose how many of those this process holds open at once.
+	event := honeypot.Event{
+		Timestamp: time.Now(),
+		EventType: "trap_login",
+		IP:        ip,
+		UserAgent: ua,
+		Email:     email,
+		RiskScore: 100,
+	}
+	deferwork.Go(func(ctx context.Context) { s.honeypotAlert.Alert(ctx, event) })
+
+	// The user id this address is answered with, on every login for the life of
+	// the process. It is both the token's subject and the key of the lookups
+	// below, so the two cannot drift apart.
+	sub, err := honeypot.TrapSubject(email)
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: trap subject: %w", err)
+	}
+
+	// The counter reset and lockout clear a success does. Every repository call
+	// on this path is issued for its round trip and its result is deliberately
+	// not consulted: there is no user row behind this id, so there is nothing a
+	// caller or an operator could do with the answer, and a log line per trap
+	// login would hand the attacker the honeypot's disk.
+	_ = s.users.ResetFailedLogin(ctx, sub)
+	s.clearLockout(ctx, sub, ip)
+	s.clearIdentityFailures(ctx, email)
+
+	input.Fingerprint.IP = ip
+	input.Fingerprint.UserAgent = ua
+	fp := vaultcrypto.ComputeFingerprint(input.Fingerprint)
+
+	// The second-factor gate. With VAULT_MFA_REQUIRED=true every login in the
+	// deployment answers with a challenge and no tokens, so a trap login that
+	// handed tokens straight back was the only login in the system that did not,
+	// and the attacker learns the deployment's policy from any other account.
+	//
+	// The email OTP a real fallback sends is deliberately not sent. The trap
+	// address is operator-configured and usually has no mailbox, the attacker
+	// cannot observe whether mail went out, and the real send is asynchronous, so
+	// omitting it costs neither realism nor time and avoids turning a login loop
+	// into a mail amplifier pointed at the operator.
+	if s.mfaSvc != nil {
+		status, _ := s.mfaSvc.GetStatus(ctx, sub)
+		hasMethods := status != nil && len(status.Methods) > 0
+		if hasMethods || s.mfaSvc.IsRequired() {
+			methods := []string{"email_otp"}
+			if hasMethods {
+				methods = status.Methods
+			}
+			challengePair, err := s.tokenSvc.IssueChallengeToken(ctx, sub, fp, MethodPassword)
+			if err != nil {
+				return nil, fmt.Errorf("issue 2FA challenge: %w", err)
+			}
+			s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"mfa_required": true})
+			return &LoginResult{
+				Requires2FA:      true,
+				ChallengeToken:   challengePair,
+				AvailableMethods: methods,
+			}, nil
+		}
+	}
+
+	if err := s.checkSessionLimit(ctx, sub); err != nil {
+		return nil, err
+	}
+	// The device lookup a success makes. The insert that follows it on a real
+	// success needs the user row to exist, so only the read is repeated.
+	_, _ = s.devices.GetByFingerprint(ctx, sub, fp)
+
+	fakeJWT, err := honeypot.GenerateFakeJWTForIdentity(honeypot.TrapCaller{
+		Identity:    email,
+		ClientID:    input.ClientID,
+		Fingerprint: fp,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: fake JWT: %w", err)
+	}
+	fakeRefresh, err := honeypot.GenerateFakeRefresh()
+	if err != nil {
+		return nil, fmt.Errorf("honeypot: fake refresh: %w", err)
+	}
+
+	_ = s.users.SetLastLogin(ctx, sub)
+
+	// /metrics is unauthenticated. Counting the attempt and not the success let
+	// an attacker scrape before and after a login they had just been handed
+	// tokens for and watch vault_login_success_total stand still, which says the
+	// endpoint did not consider it a login.
+	if s.metrics != nil {
+		s.metrics.RecordLoginSuccess()
+		s.metrics.RecordTokenIssued()
+	}
+	s.auditLog.Log(ctx, audit.LoginSuccess, sub, input.ClientID, ip, ua, fp, "", nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
+
+	return &LoginResult{
+		AccessToken:  fakeJWT,
+		TokenType:    "Bearer",
+		ExpiresIn:    int(s.tokenSvc.accessTokenTTL.Seconds()),
+		RefreshToken: fakeRefresh,
+		CookieMaxAge: s.trapCookieMaxAge(input.RememberMe),
+	}, nil
+}
+
+// trapCookieMaxAge is the refresh-cookie lifetime a real login would have
+// answered this caller with, remember-me and the absolute session bound
+// included.
+//
+// The trap used to answer with the ordinary refresh TTL whatever the caller
+// asked for. The two lifetimes are days apart and arrive in a Set-Cookie header,
+// so a remember_me login that comes back with the short cookie is read off one
+// response.
+func (s *AuthService) trapCookieMaxAge(rememberMe bool) int {
+	ttl := s.tokenSvc.refreshTokenTTL
+	if rememberMe {
+		ttl = s.tokenSvc.rememberMeTTL
+	}
+	// The same clamp IssueTokenPair applies to a new family.
+	if bound := s.tokenSvc.MaxSessionLifetime(); bound > 0 && bound < ttl {
+		ttl = bound
+	}
+	return int(ttl.Seconds())
+}
+
+// recordLoginFailure applies the bookkeeping every rejected login shares: the DB
+// and cache failure counters, the per-IP counter, the metric, an audit entry, and
+// the once-per-window account-locked notification.
+//
+// SECURITY INVARIANT (anti-enumeration): every post-lookup outcome that is not a
+// successful authentication goes through this one function, so the paths cannot
+// drift apart into distinguishable side effects — lockout advances at the same
+// rate and trips at the same threshold whatever the reason was. Only the audit
+// reason differs, and the audit log is not visible to the caller.
+//
+// The risk score used to differ too. loginFailureRiskScore lived here as a
+// constant, beside four other literals on the other login-failure paths -- 50
+// for a locked source address, 30 for a locked account, 20 for a wrong password,
+// 10 for an address that is not registered -- and its comment said a real score
+// belonged wherever alerting landed. Alerting has landed, and the answer turned
+// out to be that the reason must NOT reach the score: those five numbers were
+// the enumeration this function exists to prevent, re-encoded in a column an
+// operator can select ranges on. The reason stays in the metadata. The score is
+// audit.Severity(audit.LoginFailure), identical on every branch, and what the
+// alerting reads is the rate rather than the number.
+
+func (s *AuthService) recordLoginFailure(ctx context.Context, user *model.User, ip, ua, app, reason string) {
+	// Failed-login counter is best-effort; lockout is enforced by isAccountLocked.
+	_ = s.users.IncrementFailedLogin(ctx, user.ID)
+	s.recordFailedAttempt(ctx, user.ID, ip)
+	s.recordFailedIP(ctx, ip)
+	if s.metrics != nil {
+		s.metrics.RecordLoginFailed()
+	}
+	s.auditLog.Log(ctx, audit.LoginFailure, user.ID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{"reason": reason})
+
+	// Send lock notification email once per lockout window
+	if s.isAccountLocked(ctx, user.ID, ip) && s.cache != nil && s.emailSender != nil {
+		lockNotifyKey := fmt.Sprintf("lock_notified:%s", user.ID)
+		if sent, _ := s.cache.SetIfNotExists(ctx, lockNotifyKey, "1", lockoutDuration); sent {
+			deferwork.Go(func(ctx context.Context) {
+				// Email is best-effort.
+				_ = s.emailMailer().Send(ctx, app, vaultemail.TemplateAccountLocked, user.Email, vaultemail.TemplateData{
+					IP: ip,
+				})
+			})
+		}
+	}
 }
 
 // RefreshResult is the token refresh response.
@@ -697,13 +1355,28 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	if stored.Used {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID}, 90)
+			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID})
 		return nil, ErrReplayDetected
 	}
 
 	// Check expired
 	if time.Now().After(stored.ExpiresAt) {
 		return nil, ErrTokenExpired
+	}
+
+	// Absolute session lifetime: reject before the presented token is consumed,
+	// so an over-age family is terminated rather than rotated.
+	familyOrigin, err := s.enforceSessionLifetime(ctx, stored, ip, ua)
+	if err != nil {
+		return nil, err
+	}
+
+	// Inactivity timeout: the other reauthentication trigger, checked in the same
+	// window and for the same reason. The absolute bound goes first because it is
+	// the outer limit — a family past it is over regardless of how recently it
+	// was used, so that is the more accurate thing to tell the audit log.
+	if err := s.enforceSessionInactivity(ctx, stored, ip, ua); err != nil {
+		return nil, err
 	}
 
 	// Verify fingerprint
@@ -713,8 +1386,13 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	if stored.FingerprintHash != "" && !vaultcrypto.CompareFingerprints(stored.FingerprintHash, fp) {
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                                   // #nosec G104 -- best-effort revocation; returning ErrTokenInvalid regardless
 		s.auditLog.Log(ctx, audit.FingerprintAnomaly, stored.UserID, stored.ClientID, ip, ua, fp, "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"expected": stored.FingerprintHash}, 70)
+			map[string]interface{}{"expected": stored.FingerprintHash})
 		return nil, ErrTokenInvalid
+	}
+
+	// Verify the family's DPoP binding before the presented token is spent.
+	if err := s.enforceDPoPBinding(ctx, stored, ip, ua, fp); err != nil {
+		return nil, err
 	}
 
 	// Atomically mark old token as used (CAS: only succeeds if not already used)
@@ -726,56 +1404,27 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		// Concurrent request already consumed this token — treat as replay
 		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "concurrent_replay_detected", "family_id": stored.FamilyID}, 90)
+			map[string]interface{}{"reason": "concurrent_replay_detected", "family_id": stored.FamilyID})
 		return nil, ErrReplayDetected
 	}
 
 	// Issue new pair in same family — re-fetch the user to pick up the
 	// latest persisted Roles (refresh path must reflect role changes
 	// since the original login).
-	refreshUser, _ := s.users.GetByID(ctx, stored.UserID)
-	// Account state can change between login and refresh — a banned, disabled,
-	// deleted (or vanished) account must not mint new tokens. Revoke the whole
-	// family so the session is fully terminated, not just this rotation.
-	if refreshUser == nil || refreshUser.Deleted || refreshUser.Banned || refreshUser.Disabled {
-		s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
-		switch {
-		case refreshUser != nil && refreshUser.Banned:
-			return nil, ErrAccountBanned
-		case refreshUser != nil && refreshUser.Disabled:
-			return nil, ErrAccountDisabled
-		default:
-			return nil, ErrTokenInvalid
-		}
-	}
-	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
-	pair, err := s.tokenSvc.IssueTokenPair(
-		stored.UserID, refreshRoles, []string{"read", "write"},
-		stored.ClientID, fp, stored.FamilyID, false,
-	)
+	refreshUser, err := s.accountStillHoldsSessions(ctx, stored)
 	if err != nil {
 		return nil, err
 	}
-
-	// Store new refresh token
-	newHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
-	newID, err := vaultcrypto.RandomUUID()
+	refreshRoles := s.effectiveRoles(ctx, refreshUser.Roles)
+	pair, err := s.issueRotatedPair(ctx, stored, refreshRoles, fp, familyOrigin, ip, ua)
 	if err != nil {
-		return nil, fmt.Errorf("generate refresh token ID: %w", err)
-	}
-	if err := s.tokens.Create(ctx, &model.RefreshToken{
-		ID: newID, UserID: stored.UserID, ClientID: stored.ClientID,
-		TokenHash: newHash, FamilyID: stored.FamilyID,
-		DeviceID: stored.DeviceID, FingerprintHash: fp,
-		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
-	}); err != nil {
 		return nil, err
 	}
 
 	if s.metrics != nil {
 		s.metrics.RecordTokenRefreshed()
 	}
-	s.auditLog.Log(ctx, audit.TokenRefresh, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, nil, 0) // #nosec G104 -- audit is best-effort, never blocks auth flow
+	s.auditLog.Log(ctx, audit.TokenRefresh, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, nil) // #nosec G104 -- audit is best-effort, never blocks auth flow
 
 	return &RefreshResult{
 		AccessToken:  pair.AccessToken,
@@ -786,13 +1435,182 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	}, nil
 }
 
+// accountStillHoldsSessions re-reads the account behind a rotation and returns
+// it only while that account is allowed to hold a session. Otherwise it revokes
+// the whole family and returns the error the caller must surface.
+//
+// Account state can change between login and refresh — a banned, disabled,
+// deleted (or vanished) account must not mint new tokens. The family is revoked
+// so the session is fully terminated, not just this rotation.
+//
+// A lock counts, and its absence here made the documented response to a
+// suspected takeover ineffective. An operator locks the account; the attacker
+// keeps rotating a refresh token they already hold; the session survives for
+// the absolute session lifetime (720h by default, unbounded when
+// VAULT_MAX_SESSION_LIFETIME is 0) rather than the remaining access-token TTL
+// that docs/security.md AR-5 promised. Login has always rejected a lock, so
+// locking stopped exactly the sessions that had not started yet.
+//
+// It is a function of its own only because Refresh sits on gocyclo's ceiling and
+// the DPoP binding check had to go in front of MarkUsed. The logic is unchanged:
+// the early return is the De Morgan negation of the refusal condition it
+// replaced, and the switch below is the same switch.
+func (s *AuthService) accountStillHoldsSessions(ctx context.Context, stored *model.RefreshToken) (*model.User, error) {
+	// Re-fetched rather than carried from login, so the rotation reflects role
+	// changes made since (the returned user's Roles feed effectiveRoles).
+	user, _ := s.users.GetByID(ctx, stored.UserID)
+	locked := user != nil && user.LockedUntil != nil && time.Now().Before(*user.LockedUntil)
+	if user != nil && !user.Deleted && !user.Banned && !user.Disabled && !locked {
+		return user, nil
+	}
+
+	s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort; reject regardless
+	switch {
+	case user != nil && user.Banned:
+		return nil, ErrAccountBanned
+	case user != nil && user.Disabled:
+		return nil, ErrAccountDisabled
+	case locked:
+		return nil, ErrAccountLocked
+	default:
+		return nil, ErrTokenInvalid
+	}
+}
+
+// enforceDPoPBinding refuses a rotation of a sender-constrained family unless
+// the request proves possession of the key the family was bound to (RFC 9449
+// §5). An unbound family — every client that does not speak DPoP — is returned
+// unconditionally, which is what keeps this a no-op for them.
+//
+// SECURITY INVARIANT (sender constraint survives rotation): the binding is read
+// from the stored row, never from the request. Minting cnf.jkt from the current
+// proof made rotation a laundering step: script in the page steals only the
+// opaque refresh cookie — which is sent automatically, so it need not even be
+// read — presents a proof over a keypair it generated and can export, and is
+// handed a validly bound access token. A credential that was supposed to expire
+// with the page becomes portable. The fingerprint check above is not a
+// counter-measure to that: it is IP, User-Agent and Accept-Language, which a
+// script running in the victim's browser matches by construction.
+//
+// WHY THIS RUNS BEFORE MarkUsed. It is a precondition of the rotation, in the
+// same position as the fingerprint check, and it cannot move below the CAS.
+// MarkUsed spends the presented token; a refusal after it would leave the
+// victim's own next refresh presenting a token already marked used, which is
+// replay, which burns the family. The refusal would then terminate the session
+// it was defending, report replay_detected to the legitimate user, and hand the
+// cookie holder a one-request session kill. Refusing first leaves the row
+// unspent and the victim's session running.
+//
+// WHY THE FAMILY IS NOT BURNED. Reuse detection revokes the family because a
+// token demonstrably used twice is a fact about the credential. A binding
+// mismatch is a fact about the caller, and the caller can be a legitimate client
+// whose key store was cleared. Burning here buys nothing — the rotation is
+// already refused and no attacker can rotate without the key however many times
+// they try — while it would convert a failed attack into a working denial of
+// service: an attacker holding only the cookie goes from "can do nothing" to
+// "can end the victim's session on demand with one request". So the answer is a
+// refusal that leaves the family intact and the audit trail loud.
+//
+// Both failures — no proof at all, and a proof over the wrong key — return the
+// same ErrTokenInvalid the caller already gets for an unknown or expired token.
+// ErrReplayDetected would have been a distinguishable outcome, telling a prober
+// that the cookie is real AND that the family is DPoP-bound. The audit log
+// records which of the two happened; it is not visible to the caller.
+func (s *AuthService) enforceDPoPBinding(ctx context.Context, stored *model.RefreshToken, ip, ua, fp string) error {
+	if stored.DPoPJKT == "" {
+		return nil
+	}
+	presented := dpop.Thumbprint(ctx)
+	// The emptiness arm is stated rather than inferred. SecureCompare already
+	// returns false for an empty presented value, because the stored binding is
+	// non-empty by the time we get here and the lengths therefore differ, so the
+	// arm is redundant today. It stays because "a bound family requires a proof"
+	// is the requirement (RFC 9449 §5) and belongs at the site that enforces it,
+	// not as an emergent property of how a crypto helper treats unequal lengths.
+	// A helper that ever grew a fast path for empty input would otherwise turn
+	// this silently into "no proof required" — one of the two failures under test.
+	if presented != "" && vaultcrypto.SecureCompare(stored.DPoPJKT, presented) {
+		return nil
+	}
+	// The presented thumbprint is deliberately not logged. It is chosen by the
+	// caller, and the expected value plus "was a proof presented at all" is what
+	// an operator needs to tell a client that lost its key from one that never
+	// had it. Risk sits above the fingerprint anomaly's 70 because this is a
+	// cryptographic mismatch rather than a heuristic one, and below replay's 90
+	// because a cleared key store reaches it too.
+	s.auditLog.Log(ctx, audit.DPoPBindingMismatch, stored.UserID, stored.ClientID, ip, ua, fp, stored.DeviceID, // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"expected":        stored.DPoPJKT,
+			"proof_presented": presented != "",
+			"family_id":       stored.FamilyID,
+		})
+	return ErrTokenInvalid
+}
+
+// issueRotatedPair mints the successor of a consumed refresh token and persists
+// it in the same family.
+//
+// SECURITY INVARIANT (reuse detection): the store refuses to insert into a family
+// that has been revoked, and that refusal is reported as the replay it is. Two
+// requests presenting one stolen token both pass every check on the row they
+// read; one consumes it and the other, having lost that race, revokes the family.
+// The revocation only covers the rows that exist at that instant, so the winner's
+// successor is a token nothing has ever revoked. Treating the refused insert as a
+// successful rotation is what let the winner keep a rotating session for the rest
+// of the absolute session lifetime while the loser was told replay_detected and
+// the operator read the same in the audit log.
+func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.RefreshToken, roles []string, fp string, familyOrigin time.Time, ip, ua string) (*TokenPair, error) {
+	// The rotated access token's cnf.jkt comes from the FAMILY, not from this
+	// request. IssueTokenPairWithAuth reads dpop.Thumbprint(ctx), which the DPoP
+	// middleware set to whatever key signed the proof on this call — correct for
+	// a fresh login, where that proof is what establishes the binding, and the
+	// hole for a rotation, where it let the cookie holder name the key. Replacing
+	// the value here gives issuance one code path and each caller the right
+	// source, and an unbound family overwrites it with "", which is exactly the
+	// "not sender-constrained" that makes issuance omit cnf. Without the
+	// overwrite an unbound family would be upgraded to whatever key the caller
+	// presented, which is the same laundering wearing different clothes.
+	//
+	// enforceDPoPBinding has already refused this rotation unless the two agree,
+	// so on a bound family the value below is also the key the caller just proved
+	// possession of.
+	ctx = dpop.WithThumbprint(ctx, stored.DPoPJKT)
+	pair, err := s.tokenSvc.IssueRotatedPair(
+		ctx, stored.UserID, roles, []string{"read", "write"},
+		stored.ClientID, fp, stored.FamilyID, familyOrigin,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	newID, err := vaultcrypto.RandomUUID()
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token ID: %w", err)
+	}
+	if err := s.tokens.Create(ctx, &model.RefreshToken{
+		ID: newID, UserID: stored.UserID, ClientID: stored.ClientID,
+		TokenHash: vaultcrypto.SHA256Hex(pair.RefreshToken), FamilyID: stored.FamilyID,
+		DeviceID: stored.DeviceID, FingerprintHash: fp, DPoPJKT: stored.DPoPJKT,
+		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
+	}); err != nil {
+		if errors.Is(err, repository.ErrFamilyRevoked) {
+			s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
+			s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+				map[string]interface{}{"reason": "family_revoked_during_rotation", "family_id": stored.FamilyID})
+			return nil, ErrReplayDetected
+		}
+		return nil, err
+	}
+	return pair, nil
+}
+
 // Logout revokes all refresh tokens for a user.
 func (s *AuthService) Logout(ctx context.Context, userID, ip, ua string) error {
 	if err := s.tokens.RevokeAllForUser(ctx, userID); err != nil {
 		return err
 	}
 	s.auditLog.Log(ctx, audit.TokenRevoke, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"reason": "logout"}, 0)
+		map[string]interface{}{"reason": "logout"})
 	return nil
 }
 
@@ -805,10 +1623,31 @@ func (s *AuthService) RevokeAllTokensForUser(ctx context.Context, userID string)
 	return s.tokens.RevokeAllForUser(ctx, userID)
 }
 
+// MFACompletion describes the second factor that finished an MFA login and the
+// factors that preceded it, so the issued token can state the combination
+// rather than assume one.
+type MFACompletion struct {
+	// Method is the authenticator just verified.
+	Method string
+	// UserVerified is the WebAuthn user-verification flag from the assertion.
+	// It is false for every other authenticator, and it is what separates AAL3
+	// from AAL2 on the WebAuthn path.
+	UserVerified bool
+	// Prior lists the factors completed before the challenge was minted, read
+	// off the challenge token. Empty derives AAL1 rather than assuming a
+	// password: a federated login reaches this path too.
+	Prior []string
+}
+
+// methods is the full factor list the completed login presented.
+func (c MFACompletion) methods() []string {
+	return append(append([]string{}, c.Prior...), c.Method)
+}
+
 // CompleteMFALogin issues tokens after successful MFA verification.
 // Called by TOTP verify and WebAuthn verify handlers when a 2fa_challenge token is presented.
 // The jti parameter enforces single-use: once consumed, the same challenge token is rejected.
-func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint, ip, ua, jti string) (*LoginResult, error) {
+func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint, ip, ua, jti string, completion MFACompletion) (*LoginResult, error) {
 	// Enforce challenge token single-use via cache.
 	// SECURITY: fail closed — if cache is unavailable, reject the request.
 	if s.cache != nil && jti != "" {
@@ -821,8 +1660,10 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 			return nil, ErrChallengeConsumed
 		}
 	}
-	// Successful second factor clears the per-account failure counter (audit H2).
-	s.clearLockout(ctx, userID)
+	// Successful second factor clears this source's failure counter (audit H2).
+	// The account-wide counter is left to expire: it exists to see the other
+	// sources still guessing, and one success must not erase them.
+	s.clearLockout(ctx, userID, ip)
 	// Enforce session count limit (new family only)
 	if err := s.checkSessionLimit(ctx, userID); err != nil {
 		return nil, err
@@ -833,16 +1674,41 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 
 	// Issue tokens — same per-user roles flow as the password login
 	// path; 2FA verify shares the post-auth shape.
-	mfaUser, _ := s.users.GetByID(ctx, userID)
-	var mfaRoles []string
-	if mfaUser != nil {
-		mfaRoles = s.effectiveRoles(ctx, mfaUser.Roles)
-	} else {
-		mfaRoles = []string{"user"}
+	mfaUser, mfaErr := s.users.GetByID(ctx, userID)
+
+	// Account state is re-read here rather than trusted from the password step.
+	// Minutes pass between the two: the challenge TTL is the window, and it is
+	// exactly the window in which an operator reacting to a compromise bans,
+	// disables or locks the account. Without this gate the second factor issued a
+	// full session to a subject the platform had already cut off, and Login,
+	// Refresh and the OAuth callback all gate here, so its absence was an
+	// oversight rather than a policy.
+	//
+	// Fail closed when the subject cannot be resolved to a live account. A read
+	// fault (mfaErr) previously fell through as a nil user, skipping the gate
+	// below and minting a session with default roles for an account the fault hid
+	// the banned/disabled state of; a genuine no-row means the subject was deleted
+	// inside the challenge window. Refresh rejects both the same way. Issuing a
+	// second-factor session for an unresolvable subject is never correct.
+	if mfaErr != nil || mfaUser == nil {
+		return nil, ErrTokenInvalid
 	}
-	pair, err := s.tokenSvc.IssueTokenPair(
-		userID, mfaRoles, []string{"read", "write"},
+	switch {
+	case mfaUser.Deleted:
+		return nil, ErrTokenInvalid
+	case mfaUser.Banned:
+		return nil, ErrAccountBanned
+	case mfaUser.Disabled:
+		return nil, ErrAccountDisabled
+	case mfaUser.LockedUntil != nil && time.Now().Before(*mfaUser.LockedUntil):
+		return nil, ErrAccountLocked
+	}
+
+	mfaRoles := s.effectiveRoles(ctx, mfaUser.Roles)
+	pair, err := s.tokenSvc.IssueTokenPairWithAuth(
+		ctx, userID, mfaRoles, []string{"read", "write"},
 		"", fingerprint, "", false,
+		NewAuthContext(time.Now(), completion.methods(), completion.UserVerified),
 	)
 	if err != nil {
 		return nil, err
@@ -862,7 +1728,14 @@ func (s *AuthService) CompleteMFALogin(ctx context.Context, userID, fingerprint,
 		s.metrics.RecordTokenIssued()
 	}
 	s.auditLog.Log(ctx, audit.LoginSuccess, userID, "", ip, ua, fingerprint, deviceID, // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"mfa_completed": true}, 0)
+		map[string]interface{}{"mfa_completed": true})
+
+	// New-location notice (AR-18) also fires on the MFA-completion path, so a
+	// login that finishes via a second factor gets the same country signal as a
+	// single-step one. Out of band, country granularity only. mfaUser is the
+	// re-read account resolved above (non-nil past the account-state gate).
+	app := vaultemail.AppFromContext(ctx)
+	deferwork.Go(func(context.Context) { s.notifyNewCountry(userID, mfaUser.Email, ip, app) })
 
 	return &LoginResult{
 		AccessToken:  pair.AccessToken,
@@ -917,6 +1790,10 @@ func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr, app
 	if err != nil {
 		return fmt.Errorf("generate OTP: %w", err)
 	}
+	// The buffer is the OTP before it is decimalised, so it is the code. Clear it
+	// once the code is derived; the code itself is a Go string and cannot be
+	// cleared (AR-4), which is why its cache TTL is five minutes.
+	defer config.ZeroBytes(b)
 	code := fmt.Sprintf("%06d", binary.BigEndian.Uint32(b)%1000000)
 
 	sig := vaultcrypto.HMACSign([]byte(code), s.hmacSecret)
@@ -953,6 +1830,20 @@ func (s *AuthService) VerifyEmailOTP(ctx context.Context, userID, code string) e
 		return ErrInvalidCredentials
 	}
 	return nil
+}
+
+// FindOrCreateDevice resolves the device a session belongs to on behalf of a
+// login path that mints its refresh-token family outside Login and
+// CompleteMFALogin.
+//
+// The OAuth/social callback writes the refresh-token row itself, so it needs the
+// same device binding the password path applies. Without it the row carries a
+// NULL device_id, the session never shows in GET /user/sessions (which lists
+// devices), and RevokeByDeviceID cannot reach it because its WHERE device_id =
+// $1 never matches a NULL. Semantics match the password path, including the
+// non-critical, log-but-do-not-fail behavior of findOrCreateDevice.
+func (s *AuthService) FindOrCreateDevice(ctx context.Context, userID, fp, ip, ua string) string {
+	return s.findOrCreateDevice(ctx, userID, fp, ip, ua)
 }
 
 // findOrCreateDevice looks up a device by fingerprint or creates a new one.
@@ -992,67 +1883,347 @@ func (s *AuthService) findOrCreateDevice(ctx context.Context, userID, fp, ip, ua
 	return device.ID
 }
 
-// isAccountLocked checks the cache-based lockout counter.
-// When cache is unavailable, falls back to the DB failed_login_count field.
-func (s *AuthService) isAccountLocked(ctx context.Context, userID string) bool {
-	if s.cache == nil {
-		// Fallback: check DB-level failed login counter when cache is unavailable.
-		// This is coarser (never auto-resets by TTL) but prevents unlimited brute force.
-		user, err := s.users.GetByID(ctx, userID)
-		if err != nil || user == nil {
-			return false
-		}
-		if user.FailedLoginCount >= lockoutThreshold {
-			log.Printf("auth: lockout enforced via DB fallback for user %s (cache unavailable)", userID)
-			return true
-		}
+// lockedByStoredCount enforces the lockout threshold from the durable
+// failed_login_count column.
+//
+// It is coarser than the cache counter, because nothing expires it by TTL, and
+// that is the trade: it never auto-resets, but it cannot be erased by losing a
+// cache. A read failure here answers "not locked", since refusing every login
+// because the user table is unreachable would turn a database blip into a total
+// outage, and the caller cannot authenticate without that table anyway.
+func (s *AuthService) lockedByStoredCount(ctx context.Context, userID string) bool {
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil || user == nil {
 		return false
 	}
-	key := fmt.Sprintf("lockout:%s", userID)
+	if user.FailedLoginCount >= lockoutThreshold {
+		log.Printf("auth: lockout enforced from the stored count for user %s (cache unavailable)", userID)
+		return true
+	}
+	return false
+}
+
+// accountLockoutKey is the account-wide failure counter: every source, one key.
+// It is what the distributed threshold reads.
+func accountLockoutKey(userID string) string {
+	return fmt.Sprintf("lockout:%s", userID)
+}
+
+// sourceLockoutKey is the per-(account, source address) failure counter, and the
+// one the hard lock is enforced from.
+//
+// An unknown source ("" — a CLI call, a background task, a request that did not
+// come through the HTTP edge) gets its own shared bucket rather than being
+// silently exempted. Exempting it would let anyone who can reach the service
+// without a resolvable address bypass the lock entirely.
+// The generation namespaces the key. There is one counter per address and the
+// cache interface has no scan, so the only way to retire all of a user's
+// per-source counters at once — which is what a completed password reset has to
+// do — is to stop addressing the old ones. Advancing the generation does that in
+// one write, and the retired keys expire on their own within lockoutDuration.
+//
+// Generation zero renders the key exactly as it was rendered before generations
+// existed, byte for byte. That is deliberate and it is what keeps this change
+// contained: every account is at generation zero until its first reset, so
+// deploying this changes no key for anyone. Had the shape changed for the whole
+// fleet, the rollout would have zeroed every live per-source counter at once and
+// handed every in-flight attacker a fresh five guesses — the same objection that
+// rules out renaming accountLockoutKey, and it applies here too.
+func sourceLockoutKey(userID, ip string, generation int) string {
+	if generation == 0 {
+		return fmt.Sprintf("lockout:%s|%s", userID, ip)
+	}
+	return fmt.Sprintf("lockout:%s|g%d|%s", userID, generation, ip)
+}
+
+// lockoutGenerationKey holds the counter that namespaces a user's per-source
+// lockout keys. Absent means generation zero, which is where every account
+// starts and where almost all of them stay.
+func lockoutGenerationKey(userID string) string {
+	return fmt.Sprintf("lockout_gen:%s", userID)
+}
+
+// lockoutGenerationTTL keeps the generation alive strictly longer than any
+// counter written under an earlier one.
+//
+// The direction that matters is the generation falling BACK to a value whose
+// counters are still alive, which would resurrect a lockout a reset had already
+// cleared. Twice lockoutDuration makes that impossible: a counter written just
+// before the generation expires is itself dead a full lockoutDuration before
+// then. The other direction — counters orphaned under a generation nothing reads
+// any more — is harmless, and they expire regardless.
+const lockoutGenerationTTL = 2 * lockoutDuration
+
+// lockoutGeneration reads the user's current lockout generation, reporting
+// whether the cache could answer at all.
+//
+// A miss is generation zero and a successful read, on cachedCount's contract:
+// an account that has never reset its password has no generation key, and that
+// is nearly every account.
+func (s *AuthService) lockoutGeneration(ctx context.Context, userID string) (int, bool) {
+	return s.cachedCount(ctx, lockoutGenerationKey(userID))
+}
+
+// ClearAccountLockout retires every lockout counter standing against a user, and
+// is what a completed password reset calls.
+//
+// A free function over a cache rather than a method, because the caller is
+// handler.PasswordHandler, which holds a cache and has no reason to hold an
+// AuthService. What it must not do is what that handler used to do: build the
+// key itself from a literal. There are three pieces of lockout state and a
+// hand-rolled "lockout:"+id reached exactly one of them.
+//
+// The account-wide counter is deleted outright. The per-source counters cannot
+// be — one key per address, nothing to enumerate them — so the generation is
+// advanced instead, which makes every one of them unaddressable at once. The
+// durable failed_login_count is the caller's to reset; it lives in the user row,
+// not the cache.
+func ClearAccountLockout(ctx context.Context, c cache.Cache, userID string) error {
+	if c == nil {
+		return nil
+	}
+	if err := c.Delete(ctx, accountLockoutKey(userID)); err != nil {
+		return fmt.Errorf("clear the account-wide lockout counter: %w", err)
+	}
+	if _, err := c.Increment(ctx, lockoutGenerationKey(userID), lockoutGenerationTTL); err != nil {
+		// Not cosmetic. Without the advance, the per-source counters keep their
+		// keys and the user stays locked out on the address they were locked out
+		// on, which is the entire failure this function exists to prevent.
+		return fmt.Errorf("retire the per-source lockout counters: %w", err)
+	}
+	return nil
+}
+
+// cachedCount reads a counter key, reporting whether the cache could answer at
+// all.
+//
+// A key that is absent is a successful read of zero, not a failure. That is what
+// an account with no recent failures looks like, and it is the overwhelming
+// majority of logins: treating it as a failure would put a database read in
+// front of nearly every one of them to learn what the cache just answered
+// correctly. Only a real error — a refused connection, a timeout — falls back to
+// the durable count.
+func (s *AuthService) cachedCount(ctx context.Context, key string) (n int, ok bool) {
 	val, err := s.cache.Get(ctx, key)
-	if err != nil || val == "" {
-		return false
+	if errors.Is(err, cache.ErrNotFound) {
+		return 0, true
 	}
-	var n int
+	if err != nil {
+		return 0, false
+	}
+	if val == "" {
+		return 0, true
+	}
 	fmt.Sscanf(val, "%d", &n) // #nosec G104 -- parse failure returns 0, which means not locked
-	return n >= lockoutThreshold
+	return n, true
 }
 
-// recordFailedAttempt increments the lockout counter for the user.
-func (s *AuthService) recordFailedAttempt(ctx context.Context, userID string) {
+// isAccountLocked reports whether this account is locked to this source.
+//
+// Two counters, two thresholds. The per-source counter is the ordinary
+// brute-force control and trips at lockoutThreshold exactly as before, but it
+// only ever locks the address that earned it. The account-wide counter trips at
+// distributedLockoutThreshold, which no single source can reach on its own.
+//
+// Both fall back to the durable failed_login_count when the cache cannot answer,
+// because a lockout that stops holding the moment the cache breaks is not a
+// lockout — and a degraded cache still reports ready, so the pods stay in
+// rotation while it is down.
+func (s *AuthService) isAccountLocked(ctx context.Context, userID, ip string) bool {
+	if s.cache == nil {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	unwritable := s.lockoutCountersUnwritable()
+	// The generation is read without the zero-and-unwritable fallback the
+	// counters get. Zero is the generation of an account that has never reset a
+	// password, which is nearly every account, so treating it as unanswered
+	// during a cache-full episode would put a GetByID in front of the whole
+	// login path. A generation that could not be advanced is a reset that did
+	// not take, bounded by lockoutDuration, and ClearAccountLockout reports that
+	// to its caller rather than hiding it here.
+	generation, ok := s.lockoutGeneration(ctx, userID)
+	if !ok {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	perSource, ok := s.cachedCount(ctx, sourceLockoutKey(userID, ip, generation))
+	if !ok || (perSource == 0 && unwritable) {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	if perSource >= lockoutThreshold {
+		return true
+	}
+	account, ok := s.cachedCount(ctx, accountLockoutKey(userID))
+	if !ok || (account == 0 && unwritable) {
+		return s.lockedByStoredCount(ctx, userID)
+	}
+	return account >= distributedLockoutThreshold
+}
+
+// noteLockoutCounterRefused records that a lockout counter could not be written.
+//
+// The entry cap is the case this exists for. At memoryMaxEntries the cache
+// refuses a new key, Increment returns ErrCacheFull and creates nothing, and the
+// read that follows is an ordinary miss — a clean answer of zero, not an error.
+// Nothing in that sequence looks like a failure, so before this the durable
+// fallback was never reached and a saturated cache switched account lockout off
+// entirely, on the profile where memory is the only backend and in production
+// during exactly the Redis outage that makes the cache the fallback.
+//
+// A timestamp rather than a boolean, because the condition heals. A counter
+// refused at T is missing only for the window it would have lived, so the
+// fallback stays on until lockoutDuration past the last refusal and then stops
+// on its own, with no reset path to forget to call.
+func (s *AuthService) noteLockoutCounterRefused() {
+	s.lockoutCounterRefusedAt.Store(time.Now().UnixNano())
+}
+
+// lockoutCountersUnwritable reports whether a counter reading zero might be a
+// counter that was never written.
+//
+// Gated on an actual refusal rather than applied to every zero on purpose. A
+// zero is what an account with no recent failures looks like, which is nearly
+// every login; treating all of them as unanswered would put a GetByID in front
+// of the whole login path to learn what the cache just answered correctly, which
+// is the cost cachedCount's contract is written to avoid.
+func (s *AuthService) lockoutCountersUnwritable() bool {
+	at := s.lockoutCounterRefusedAt.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) < lockoutDuration
+}
+
+// recordFailedAttempt advances both lockout counters for the user: the one for
+// the source that failed, and the account-wide one the distributed threshold
+// reads.
+//
+// The advance is best-effort, but a failure to advance is not. A counter that
+// could not be written is a counter whose later zero means nothing, so the
+// refusal is latched for isAccountLocked to read; discarding it is what let the
+// entry cap disable the lockout silently.
+func (s *AuthService) recordFailedAttempt(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	key := fmt.Sprintf("lockout:%s", userID)
-	s.cache.Increment(ctx, key, lockoutDuration) // #nosec G104 -- best-effort lockout counter
+	// A generation that cannot be read is a counter that cannot be addressed,
+	// which is a counter that cannot be advanced — the same condition an outright
+	// write refusal creates, and latched the same way.
+	if generation, ok := s.lockoutGeneration(ctx, userID); !ok {
+		s.noteLockoutCounterRefused()
+	} else if _, err := s.cache.Increment(ctx, sourceLockoutKey(userID, ip, generation), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
+	if _, err := s.cache.Increment(ctx, accountLockoutKey(userID), lockoutDuration); err != nil {
+		s.noteLockoutCounterRefused()
+	}
 }
 
-// clearLockout resets the lockout counter on successful login.
-func (s *AuthService) clearLockout(ctx context.Context, userID string) {
+// clearLockout resets this source's lockout counter on successful login.
+//
+// The account-wide counter is deliberately NOT cleared. It exists to see a
+// distributed attack, and one successful login — which an attacker who has
+// guessed a password can produce — must not erase the evidence of the other
+// sources still guessing. It expires on its own after lockoutDuration.
+func (s *AuthService) clearLockout(ctx context.Context, userID, ip string) {
 	if s.cache == nil {
 		return
 	}
-	key := fmt.Sprintf("lockout:%s", userID)
-	s.cache.Delete(ctx, key) // #nosec G104 -- best-effort counter reset
+	generation, ok := s.lockoutGeneration(ctx, userID)
+	if !ok {
+		return
+	}
+	s.cache.Delete(ctx, sourceLockoutKey(userID, ip, generation)) // #nosec G104 -- best-effort counter reset
+}
+
+// identityThrottleKey is the failure counter behind the progressive login delay.
+//
+// Keyed on the submitted address, not on a user id, so an address with no
+// account accrues it identically — a throttle only real accounts pay would tell
+// an unauthenticated caller which addresses are registered. Peppered and hashed
+// so a reader of the cache cannot enumerate the addresses that have been tried.
+func (s *AuthService) identityThrottleKey(email string) string {
+	return "auththrottle:" + vaultcrypto.SHA256Hex(s.pepper+"|auththrottle|"+email)
+}
+
+// loginThrottleDelay is the delay owed for a given number of recent failures.
+// Zero up to lockoutThreshold, then doubling from loginThrottleBase, capped at
+// loginThrottleMax.
+func loginThrottleDelay(failures int) time.Duration {
+	if failures <= lockoutThreshold {
+		return 0
+	}
+	d := loginThrottleBase
+	for i := lockoutThreshold + 1; i < failures; i++ {
+		d *= 2
+		if d >= loginThrottleMax {
+			return loginThrottleMax
+		}
+	}
+	return d
+}
+
+// throttleLogin sleeps the delay this identity's recent failures have earned.
+//
+// Interruptible: a client that hangs up frees the goroutine immediately, so the
+// throttle cannot be turned into a way to pin server goroutines.
+func (s *AuthService) throttleLogin(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	n, ok := s.cachedCount(ctx, s.identityThrottleKey(email))
+	if !ok {
+		return
+	}
+	d := loginThrottleDelay(n)
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// recordIdentityFailure advances the throttle counter for a submitted address.
+func (s *AuthService) recordIdentityFailure(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Increment(ctx, s.identityThrottleKey(email), lockoutDuration) // #nosec G104 -- best-effort throttle counter
+}
+
+// clearIdentityFailures drops the throttle counter once the address has proven
+// the password, so a user who mistyped six times is not still paying for it.
+func (s *AuthService) clearIdentityFailures(ctx context.Context, email string) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Delete(ctx, s.identityThrottleKey(email)) // #nosec G104 -- best-effort counter reset
 }
 
 // MFAVerifyLocked reports whether the account is locked out from further auth
-// attempts. MFA verify endpoints MUST call this before checking a second factor:
-// the per-IP rate limit alone is defeated by IP rotation, so without a per-account
-// gate the second factor is brute-forceable within the challenge window (audit H2).
+// attempts by the caller's source. MFA verify endpoints MUST call this before
+// checking a second factor: the per-IP rate limit alone is defeated by IP
+// rotation, so without a per-account gate the second factor is brute-forceable
+// within the challenge window (audit H2).
+//
+// The source address comes from the request context rather than the signature,
+// so the four MFA handlers did not have to change. A context with no address
+// (a CLI call, a test) still gets a gate: it reads the shared unknown-source
+// bucket, never an exemption.
 func (s *AuthService) MFAVerifyLocked(ctx context.Context, userID string) bool {
-	return s.isAccountLocked(ctx, userID)
+	return s.isAccountLocked(ctx, userID, httputil.ClientIPFromContext(ctx))
 }
 
-// RecordMFAFailure counts a failed second-factor attempt toward the per-account
-// lockout (shared counter with the password path, so combined failures trip the
-// same lockoutThreshold/lockoutDuration) and audits it. Reset on success via
-// clearLockout in CompleteMFALogin (audit H2).
+// RecordMFAFailure counts a failed second-factor attempt toward the lockout for
+// this (account, source) pair and toward the account-wide distributed counter,
+// so password and MFA failures from one address still trip the same
+// lockoutThreshold within lockoutDuration. Reset on success via clearLockout in
+// CompleteMFALogin (audit H2).
 func (s *AuthService) RecordMFAFailure(ctx context.Context, userID, ip, ua string) {
-	s.recordFailedAttempt(ctx, userID)
+	s.recordFailedAttempt(ctx, userID, ip)
 	if s.auditLog != nil {
 		s.auditLog.Log(ctx, audit.LoginFailure, userID, "", ip, ua, "", "", // #nosec G104 -- audit is best-effort
-			map[string]interface{}{"reason": "mfa_failed"}, 30)
+			map[string]interface{}{"reason": "mfa_failed"})
 	}
 }
 
@@ -1108,10 +2279,169 @@ func (s *AuthService) recordFailedIP(ctx context.Context, ip string) {
 	s.cache.Increment(ctx, key, lockoutDuration) // #nosec G104 -- best-effort IP lockout counter
 }
 
-// storeRefreshToken hashes and persists a refresh token in the database.
+// CheckSessionLimit applies the concurrent-session-family cap on behalf of a
+// login path that mints a family outside Login and CompleteMFALogin.
+//
+// The OAuth/social callback issues a pair and writes the refresh-token row
+// itself, so without this call the cap is enforced on the password path and not
+// on the social one, and a user is capped or uncapped depending on how they chose
+// to sign in. The client-credentials grant is deliberately not a caller: it
+// returns an access token only and never writes a refresh-token row, so it
+// creates no family for CountActiveFamilies to count.
+//
+// This is the same soft pre-check Login runs before storeRefreshToken. The
+// hard bound is CreateWithinCap on the insert, which the OAuth callback must
+// also use: a pre-check alone is the race documented on checkSessionLimit.
+func (s *AuthService) CheckSessionLimit(ctx context.Context, userID string) error {
+	return s.checkSessionLimit(ctx, userID)
+}
+
+// enforceSessionLifetime applies the absolute session lifetime to a rotation and
+// returns the family's origin so the reissued token can be clamped to it.
+//
+// SECURITY INVARIANT (NIST SP 800-63B-4 §2.2.3, NIST SP 800-53 Rev 5 AC-12):
+// a refresh-token family is terminated once it reaches maxSessionLifetime,
+// measured from the family's creation and unaffected by how often it was
+// refreshed. Rotation issues a fresh refresh TTL every time, so without this the
+// TTL is a sliding window and a continuously-refreshing client is never asked to
+// reauthenticate.
+//
+// Every branch that cannot prove the family is inside the bound fails closed.
+//
+// The origin is looked up whether or not a bound is configured, because it is
+// two things at once: the instant the bound is measured from, and the
+// authentication instant a rotation puts in auth_time (see IssueRotatedPair).
+// Only the REFUSALS are gated on maxLifetime. Short-circuiting the whole
+// function when the bound was off meant a documented, supported setting
+// (VAULT_MAX_SESSION_LIFETIME=0) silently dropped auth_time from every token
+// after the login one — two independent features coupled by one early return.
+//
+// So with no bound configured, a store that cannot date a family costs that
+// deployment its auth_time claim and nothing else. Refusing there would turn an
+// unconfigured feature into a total rejection of refresh.
+func (s *AuthService) enforceSessionLifetime(ctx context.Context, stored *model.RefreshToken, ip, ua string) (time.Time, error) {
+	if s.tokenSvc == nil {
+		return time.Time{}, nil
+	}
+	maxLifetime := s.tokenSvc.MaxSessionLifetime()
+	bounded := maxLifetime > 0
+
+	reader, ok := s.tokens.(familyOriginReader)
+	if !ok {
+		if !bounded {
+			return time.Time{}, nil
+		}
+		// A bound was configured against a store that cannot date a family.
+		// Refusing is the only outcome that is not a silent no-op.
+		log.Printf("auth: refresh token store cannot report family origin; absolute session lifetime unenforceable")
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "store_unsupported"})
+		return time.Time{}, ErrSessionAgeUnknown
+	}
+
+	origin, err := reader.FamilyOrigin(ctx, stored.FamilyID)
+	if err != nil || origin.IsZero() {
+		if !bounded {
+			return time.Time{}, nil
+		}
+		log.Printf("auth: family origin lookup failed for family %s: %v", stored.FamilyID, err)
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "lookup_failed"})
+		return time.Time{}, ErrSessionAgeUnknown
+	}
+
+	if bounded && !time.Now().Before(origin.Add(maxLifetime)) {
+		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; rejecting regardless
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{
+				"reason":    "session_lifetime_exceeded",
+				"family_id": stored.FamilyID,
+				"age":       time.Since(origin).String(),
+			})
+		return time.Time{}, ErrSessionExpired
+	}
+
+	return origin, nil
+}
+
+// enforceSessionInactivity terminates a refresh-token family that has gone unused
+// for longer than the inactivity timeout.
+//
+// SECURITY INVARIANT (ASVS V7.3.1, NIST SP 800-63B-4 §2.2.3 and §5.2, NIST SP
+// 800-53 Rev 5 AC-12): a session that stops being used is ended, and the user
+// must present a full authentication again rather than a rotation. This is the
+// half of reauthentication the absolute bound does not cover — that one ends a
+// session that is in constant use, this one ends a session that is not.
+//
+// WHY THE PRESENTED TOKEN'S OWN created_at IS THE ACTIVITY SIGNAL, and why there
+// is no last_activity_at column:
+//
+// A refresh-token family only advances by rotating, and a rotation writes a new
+// row whose created_at is that instant. The row the caller is presenting is by
+// construction the newest generation of its family — its predecessor was marked
+// used before this one was inserted — so created_at is exactly "when this family
+// last did something". A dedicated column would be written at the same moment,
+// from the same clock, to the same value, and would then need a migration, a
+// backfill, an extra bound parameter on the hot insert and its own invariant
+// that nothing else may move it. It would be a second copy of a fact the row
+// already carries, with a second way to be wrong.
+//
+// It also costs nothing to read. GetByTokenHash already selects created_at, so
+// this check adds no query, no write and no round trip to the refresh path.
+// Stamping activity on every authenticated request would have done the opposite:
+// it would turn a read-mostly table into a write on every call, on the hottest
+// path in the service.
+//
+// WHAT THIS MEASURES, EXACTLY: time since the last ROTATION, not time since the
+// last request. Between rotations a client works from an access token, so its
+// real last-request instant can be up to AccessTokenTTL later than the value
+// used here. The error is one-directional — this check can only conclude a
+// session is idler than it is, never fresher — so it fails safe. It is also why
+// the configured timeout must stay well above the access token TTL, which
+// cmd/vault warns about at startup.
+//
+// Fail-closed, the same way the absolute bound is: a bound that silently no-ops
+// when the store cannot answer is not a bound. Only the REFUSALS are gated on
+// the timeout being configured, so a deployment with no inactivity bound is
+// unaffected either way.
+func (s *AuthService) enforceSessionInactivity(ctx context.Context, stored *model.RefreshToken, ip, ua string) error {
+	if s.tokenSvc == nil {
+		return nil
+	}
+	idleTimeout := s.tokenSvc.InactivityTimeout()
+	if idleTimeout <= 0 {
+		return nil
+	}
+
+	// A zero created_at is "unknown", never "epoch". The column is NOT NULL in
+	// every migration, so this is a store that stopped reporting it rather than
+	// a row that lacks it — and reading it as the epoch would make every session
+	// infinitely idle, which is a different failure and a louder one.
+	if stored.CreatedAt.IsZero() {
+		log.Printf("auth: refresh token %s carries no issuance instant; inactivity timeout unenforceable", stored.ID)
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{"reason": "session_age_unavailable", "cause": "issued_at_missing"})
+		return ErrSessionAgeUnknown
+	}
+
+	if !time.Now().Before(stored.CreatedAt.Add(idleTimeout)) {
+		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; rejecting regardless
+		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{
+				"reason":    "session_inactivity_exceeded",
+				"family_id": stored.FamilyID,
+				"idle":      time.Since(stored.CreatedAt).String(),
+			})
+		return ErrSessionIdle
+	}
+
+	return nil
+}
+
 // checkSessionLimit verifies that the user has not exceeded the maximum number of
 // concurrent refresh token families. Returns ErrTooManySessions if the limit is reached.
 // A maxSessionsPerUser of 0 disables the check.
+//
 // checkSessionLimit is a soft, best-effort cap on concurrent session families.
 // It is intentionally NOT atomic with the subsequent token insert: concurrent
 // logins by the SAME user can each pass this check and then insert, briefly
@@ -1132,7 +2462,7 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 		if s.strictSessionLimit {
 			// Fail closed (audit L1): a count error must not silently disable the cap.
 			s.auditLog.Log(ctx, audit.RateLimit, userID, "", "", "", "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-				map[string]interface{}{"reason": "session_limit_count_failed"}, 80)
+				map[string]interface{}{"reason": "session_limit_count_failed"})
 			return ErrTooManySessions
 		}
 		return nil // fail open (default) — don't block login if the count query fails
@@ -1143,16 +2473,36 @@ func (s *AuthService) checkSessionLimit(ctx context.Context, userID string) erro
 	return nil
 }
 
+// storeRefreshToken hashes and persists a refresh token in the database.
+//
+// This is a login, so it is where a DPoP binding is established: the thumbprint
+// on ctx is the one the middleware validated for this request, and the same
+// value issuance just wrote into the access token's cnf.jkt. Recording it on the
+// family's first row is what gives every later rotation something to check
+// against — without it the binding existed only inside one signed token and
+// rotation had no choice but to take the caller's word for it. An empty
+// thumbprint means no proof was presented and the family is an ordinary bearer
+// session, which is the majority of them.
 func (s *AuthService) storeRefreshToken(ctx context.Context, userID, clientID, deviceID, fp string, pair *TokenPair) error {
 	tokenHash := vaultcrypto.SHA256Hex(pair.RefreshToken)
 	rtID, err := vaultcrypto.RandomUUID()
 	if err != nil {
 		return fmt.Errorf("generate refresh token ID: %w", err)
 	}
-	return s.tokens.Create(ctx, &model.RefreshToken{
+	// The concurrent-session cap is enforced atomically here, not only by the
+	// earlier checkSessionLimit pre-check: CreateWithinCap counts the user's
+	// active families and inserts under one per-user lock, so simultaneous logins
+	// cannot each pass the pre-check and overshoot the cap (ASVS V2.3.4). A cap of
+	// zero disables the bound. ErrSessionLimitReached is the race-loser's outcome
+	// and is the same rejection the pre-check returns.
+	err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{
 		ID: rtID, UserID: userID, ClientID: clientID,
 		TokenHash: tokenHash, FamilyID: pair.FamilyID,
-		DeviceID: deviceID, FingerprintHash: fp,
+		DeviceID: deviceID, FingerprintHash: fp, DPoPJKT: dpop.Thumbprint(ctx),
 		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
-	})
+	}, s.maxSessionsPerUser)
+	if errors.Is(err, repository.ErrSessionLimitReached) {
+		return ErrTooManySessions
+	}
+	return err
 }

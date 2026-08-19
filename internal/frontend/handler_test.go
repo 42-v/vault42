@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+// servedIndex drives the handler and returns the body it produced for path.
+//
+// These tests used to assert the body contained the brand string "The Vault".
+// That coupled them to the wording of a page rather than to the behavior of the
+// handler, and it broke the moment the embedded placeholder was rewritten to
+// explain itself instead of impersonating a real build. What the handler
+// actually promises is that every non-asset path is answered with the SAME
+// embedded document, which is what makes client-side routing work, so that is
+// what is asserted now.
+func servedIndex(t *testing.T, h http.Handler, path string) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", path, w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<!DOCTYPE html>") || !strings.Contains(body, "</html>") {
+		t.Fatalf("GET %s did not return an HTML document: %.120q", path, body)
+	}
+	return body
+}
+
 func TestHandlerServesIndexHTML(t *testing.T) {
 	h := Handler()
 	req := httptest.NewRequest("GET", "/", nil)
@@ -16,9 +41,8 @@ func TestHandlerServesIndexHTML(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("GET / status = %d, want 200", w.Code)
 	}
-	body := w.Body.String()
-	if !strings.Contains(body, "The Vault") {
-		t.Error("GET / should return index.html containing 'The Vault'")
+	if !strings.Contains(w.Body.String(), "<!DOCTYPE html>") {
+		t.Error("GET / should return the embedded index.html")
 	}
 }
 
@@ -32,9 +56,8 @@ func TestHandlerSPAFallback(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("GET /login status = %d, want 200 (SPA fallback)", w.Code)
 	}
-	body := w.Body.String()
-	if !strings.Contains(body, "The Vault") {
-		t.Error("SPA fallback should return index.html")
+	if !strings.Contains(w.Body.String(), "<!DOCTYPE html>") {
+		t.Error("SPA fallback should return the embedded index.html")
 	}
 }
 
@@ -59,8 +82,92 @@ func TestHandlerDeepSPARoute(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("GET /settings/security/2fa status = %d, want 200 (SPA fallback)", w.Code)
 	}
-	body := w.Body.String()
-	if !strings.Contains(body, "The Vault") {
-		t.Error("deep SPA route should return index.html")
+	if !strings.Contains(w.Body.String(), "<!DOCTYPE html>") {
+		t.Error("deep SPA route should return the embedded index.html")
+	}
+}
+
+// The SPA fallback is only useful if every client-side route receives byte for
+// byte the same document. A handler that answered "/" from the embedded file and
+// a deep route from somewhere else would pass each test above individually and
+// still break routing.
+func TestHandlerServesTheSameDocumentForEveryClientRoute(t *testing.T) {
+	h := Handler()
+	root := servedIndex(t, h, "/")
+	for _, path := range []string{"/login", "/settings/security/2fa", "/a/b/c/d"} {
+		if got := servedIndex(t, h, path); got != root {
+			t.Errorf("GET %s returned a different document from GET /; client-side "+
+				"routing needs one entry point", path)
+		}
+	}
+}
+
+// The SPA fallback must answer the request without editing it.
+//
+// internal/middleware/logger.go and internal/honeypot/honeypot.go both read
+// r.URL.Path AFTER next.ServeHTTP returns. A fallback that rewrites the path in
+// place to reach index.html therefore erases the only record of what was asked
+// for: every scan probe against an unrouted path lands here, so
+// "GET /wp-admin/setup-config.php" and "GET /.env" are written to the access log
+// as "GET /". The honeypot profile turns this handler on precisely to collect
+// those paths, so the loss is total there.
+func TestSPAFallbackLeavesTheRequestPathIntactForTheAccessLog(t *testing.T) {
+	h := Handler()
+	for _, path := range []string{
+		"/login",
+		"/.env",
+		"/wp-admin/setup-config.php",
+		"/settings/security/2fa",
+	} {
+		req := httptest.NewRequest("GET", path, nil)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+
+		if req.URL.Path != path {
+			t.Errorf("after serving the SPA fallback for %s, r.URL.Path = %q; the "+
+				"surrounding logger reads this field after the handler returns and "+
+				"would record the wrong path", path, req.URL.Path)
+		}
+	}
+}
+
+// The same property stated the way it actually bites: what a wrapping middleware
+// observes once the handler has run. A handler that restored the path only for
+// its own bookkeeping would still pass the assertion above if it restored it too
+// late, so the observation is taken from where the real logger takes it.
+func TestSPAFallbackIsTransparentToWrappingMiddleware(t *testing.T) {
+	var logged string
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Handler().ServeHTTP(w, r)
+		logged = r.URL.Path
+	})
+
+	const probe = "/.git/config"
+	wrapped.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", probe, nil))
+
+	if logged != probe {
+		t.Errorf("middleware wrapping the SPA fallback saw r.URL.Path = %q, want %q; "+
+			"the access log and the honeypot log both read the path at this point",
+			logged, probe)
+	}
+}
+
+// The placeholder that ships when the SPA has not been built must not reference
+// asset files that are not embedded alongside it.
+//
+// The previous placeholder was a copy of a real build's index.html, so it
+// pointed at /assets/index-<hash>.js and /assets/index-<hash>.css. Those files
+// are gitignored, so every go install and every release archive served a page
+// that 404ed on its own script and stylesheet: a blank screen with two console
+// errors and nothing explaining why. A placeholder has to be self-contained.
+func TestPlaceholderReferencesNoUnembeddedAssets(t *testing.T) {
+	body := servedIndex(t, Handler(), "/")
+	if !strings.Contains(body, "dashboard is not in this binary") {
+		t.Skip("a real SPA build is embedded; this test guards the placeholder only")
+	}
+	for _, ref := range []string{"/assets/", "src=\"/", "href=\"/assets"} {
+		if strings.Contains(body, ref) {
+			t.Errorf("the placeholder references %q, which is not embedded with it; "+
+				"it must be self-contained", ref)
+		}
 	}
 }

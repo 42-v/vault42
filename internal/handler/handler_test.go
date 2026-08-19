@@ -20,6 +20,7 @@ import (
 	vjwt "github.com/42-v/vault42/internal/jwt"
 	"github.com/42-v/vault42/internal/middleware"
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/sanitize"
 	"github.com/42-v/vault42/internal/service"
 	"github.com/42-v/vault42/tests/mocks"
@@ -51,6 +52,13 @@ func newTestTokenService(t *testing.T) (*service.TokenService, *rsa.PrivateKey) 
 // newTestAuditLogger creates an audit logger backed by a no-op mock repo.
 func newTestAuditLogger() *audit.Logger {
 	return audit.NewLogger(&mocks.MockAuditRepo{}, 0)
+}
+
+// newTestAuditLoggerWithRepo creates an audit logger over a repo the caller can
+// inspect. The flush interval is zero, so a row is written straight through and
+// is observable as soon as the handler returns.
+func newTestAuditLoggerWithRepo(repo *mocks.MockAuditRepo) *audit.Logger {
+	return audit.NewLogger(repo, 0)
 }
 
 // setAuthContext sets VaultClaims on the request context for authenticated endpoints.
@@ -259,7 +267,7 @@ func newTestAuthHandler(t *testing.T, users *mocks.MockUserRepo) (*AuthHandler, 
 		nil,   // hmacSecret
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 	return h, mockCache
 }
 
@@ -479,10 +487,46 @@ func TestLoginAccountLocked(t *testing.T) {
 
 	h.Login(rec, req)
 
+	// A locked account must be indistinguishable from a wrong password or an
+	// unknown email at the login endpoint: only an existing account can reach the
+	// locked state, so a distinct 403 account_locked leaks that the address is
+	// registered (the login-lockout enumeration fix). The lockout still holds
+	// server side; the caller just cannot observe it.
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	decodeResponse(t, rec, &result)
+	if result["error"] != "invalid_credentials" {
+		t.Fatalf("expected error=invalid_credentials, got %q", result["error"])
+	}
+}
+
+// A login from a locked-out IP still answers 403 account_locked. The per-IP
+// lockout is IP-scoped and reveals nothing about any specific account, so unlike
+// the per-user lock it keeps its distinct status. It is now the only login path
+// that reaches ErrAccountLocked at the handler, so this test is what covers that
+// arm of the login error switch.
+func TestLoginHandler_IPLockedReturns403(t *testing.T) {
+	users := &mocks.MockUserRepo{
+		GetByEmailFn: func(context.Context, string) (*model.User, error) { return nil, nil },
+	}
+	h, mockCache := newTestAuthHandler(t, users)
+	// Every lockout counter, including lockout_ip:<ip>, reads over threshold, so
+	// the IP lockout trips before any user lookup.
+	mockCache.GetFn = func(_ context.Context, _ string) (string, error) { return "999", nil }
+
+	body := jsonBody(t, map[string]string{"email": "whoever@example.com", "password": "x"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", body)
+	req.RemoteAddr = "203.0.113.7:5000"
+	rec := httptest.NewRecorder()
+
+	h.Login(rec, req)
+
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status 403, got %d; body: %s", rec.Code, rec.Body.String())
 	}
-
 	var result map[string]string
 	decodeResponse(t, rec, &result)
 	if result["error"] != "account_locked" {
@@ -635,7 +679,17 @@ func TestSessionsList(t *testing.T) {
 		},
 	}
 
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
+	// One live family per device, because the listing is family-based: a device
+	// with no family is not a session (TestSessionsListsFamiliesNotDevices).
+	tokens := &mocks.MockRefreshTokenRepo{
+		ListActiveFamiliesFn: func(context.Context, string) ([]*repository.ActiveFamily, error) {
+			return []*repository.ActiveFamily{
+				{FamilyID: "family-1", DeviceID: "device-1", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+				{FamilyID: "family-2", DeviceID: "device-2", CreatedAt: now, LastUsedAt: now, ExpiresAt: now.Add(time.Hour)},
+			}, nil
+		},
+	}
+	h := NewUserHandler(&mocks.MockUserRepo{}, devices, tokens, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/user/sessions", nil)
 	req = setAuthContext(req, "user-123")
@@ -852,6 +906,58 @@ func TestResetRequestNonexistentEmail(t *testing.T) {
 	// Must still return 200 to prevent user enumeration
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A deleted, banned or disabled account must not receive a reset link: the
+// address exists, so the old code minted and mailed a token for it. The response
+// stays an indistinguishable 200, but no token is stored and no mail is sent.
+func TestResetRequest_IneligibleAccountsGetNoLink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		user *model.User
+	}{
+		{name: "deleted", user: &model.User{ID: "u1", Email: "u@example.com", Deleted: true}},
+		{name: "banned", user: &model.User{ID: "u1", Email: "u@example.com", Banned: true}},
+		{name: "disabled", user: &model.User{ID: "u1", Email: "u@example.com", Disabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			users := &mocks.MockUserRepo{
+				GetByEmailFn: func(context.Context, string) (*model.User, error) { return tc.user, nil },
+			}
+			storedResetKey := false
+			cacheSpy := &mocks.MockCache{
+				SetFn: func(_ context.Context, key, _ string, _ time.Duration) error {
+					if strings.HasPrefix(key, "reset:") {
+						storedResetKey = true
+					}
+					return nil
+				},
+				GetFn: func(context.Context, string) (string, error) { return "", cache.ErrNotFound },
+			}
+			mailed := false
+			mailer := &mocks.MockEmailSender{
+				SendFn: func(context.Context, string, string, string, string) error { mailed = true; return nil },
+			}
+			h := NewPasswordHandler(users, &mocks.MockPasswordHistoryRepo{}, &mocks.MockRefreshTokenRepo{},
+				mailer, newTestAuditLogger(), cacheSpy, "https://vault.test", "TestVault", "", 15, nil, false)
+
+			body := jsonBody(t, map[string]string{"email": "u@example.com"})
+			req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", body)
+			req.RemoteAddr = "127.0.0.1:9999"
+			rec := httptest.NewRecorder()
+			h.ResetRequest(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: an ineligible account must not be distinguishable", rec.Code)
+			}
+			if storedResetKey {
+				t.Errorf("a %s account had a reset token stored; ineligible accounts must not get a link", tc.name)
+			}
+			if mailed {
+				t.Errorf("a %s account was mailed a reset link", tc.name)
+			}
+		})
 	}
 }
 
@@ -1399,7 +1505,7 @@ func TestVerifyEmail_Success(t *testing.T) {
 		"https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token="+token, nil)
 	req.RemoteAddr = "127.0.0.1:9999"
@@ -1442,7 +1548,7 @@ func TestVerifyEmail_InvalidToken(t *testing.T) {
 		"https://vault.test", "TestVault", "", 15, false, nil,
 	)
 
-	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false)
+	h := NewAuthHandler(authSvc, users, mockCache, auditLog, "", false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/verify-email?token=bad-token", nil)
 	rec := httptest.NewRecorder()
@@ -1698,19 +1804,10 @@ func TestWellKnown_OpenIDConfig(t *testing.T) {
 	if result["jwks_uri"] != "https://vault.test/.well-known/jwks.json" {
 		t.Fatalf("expected jwks_uri=https://vault.test/.well-known/jwks.json, got %v", result["jwks_uri"])
 	}
-	if result["authorization_endpoint"] == nil {
-		t.Fatal("expected authorization_endpoint in discovery document")
-	}
-	if result["token_endpoint"] == nil {
-		t.Fatal("expected token_endpoint in discovery document")
-	}
-	if result["userinfo_endpoint"] == nil {
-		t.Fatal("expected userinfo_endpoint in discovery document")
-	}
 
-	algValues, ok := result["id_token_signing_alg_values_supported"].([]interface{})
+	algValues, ok := result["access_token_signing_alg_values_supported"].([]interface{})
 	if !ok || len(algValues) == 0 {
-		t.Fatal("expected id_token_signing_alg_values_supported array")
+		t.Fatal("expected access_token_signing_alg_values_supported array")
 	}
 	if algValues[0] != "RS256" {
 		t.Fatalf("expected RS256 in signing alg values, got %v", algValues[0])

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"testing"
@@ -29,7 +30,7 @@ func newTestTokenService(t *testing.T) (*TokenService, *rsa.PrivateKey) {
 func TestIssueTokenPair(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", []string{"user"}, []string{"read"}, "client-1", "fp-hash", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", []string{"user"}, []string{"read"}, "client-1", "fp-hash", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestIssueTokenPair(t *testing.T) {
 func TestIssueTokenPairClaims(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-42", []string{"admin", "user"}, []string{"read", "write"}, "client-x", "fp-abc", "fam-1", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-42", []string{"admin", "user"}, []string{"read", "write"}, "client-x", "fp-abc", "fam-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +124,7 @@ func TestIssueTokenPairClaims(t *testing.T) {
 func TestIssueTokenPairNewFamily(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "client-1", "fp", "", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "client-1", "fp", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestIssueTokenPairNewFamily(t *testing.T) {
 func TestIssueTokenPairExistingFamily(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 
-	pair, err := svc.IssueTokenPair("user-1", nil, nil, "client-1", "fp", "existing-family-id", false)
+	pair, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "client-1", "fp", "existing-family-id", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,13 +153,13 @@ func TestIssueTokenPairRememberMe(t *testing.T) {
 	svc, _ := newTestTokenService(t)
 
 	// Without rememberMe
-	pairNormal, err := svc.IssueTokenPair("user-1", nil, nil, "client-1", "fp", "fam", false)
+	pairNormal, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "client-1", "fp", "fam", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// With rememberMe
-	pairRemember, err := svc.IssueTokenPair("user-1", nil, nil, "client-1", "fp", "fam", true)
+	pairRemember, err := svc.IssueTokenPair(context.Background(), "user-1", nil, nil, "client-1", "fp", "fam", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func TestIssueTokenPairRememberMe(t *testing.T) {
 func TestIssueChallengeToken(t *testing.T) {
 	svc, key := newTestTokenService(t)
 
-	token, err := svc.IssueChallengeToken("user-1", "fp-challenge")
+	token, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp-challenge")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestUpdateSigningKey(t *testing.T) {
 	svc, oldKey := newTestTokenService(t)
 
 	// Issue a token with the original key
-	token1, err := svc.IssueChallengeToken("user-1", "fp")
+	token1, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +243,7 @@ func TestUpdateSigningKey(t *testing.T) {
 	svc.UpdateSigningKey(newKey, testKID2)
 
 	// Issue a token with the new key
-	token2, err := svc.IssueChallengeToken("user-1", "fp")
+	token2, err := svc.IssueChallengeToken(context.Background(), "user-1", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}

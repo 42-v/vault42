@@ -129,10 +129,10 @@ func TestDecryptTOTPSecret_RejectsLegacyCiphertext(t *testing.T) {
 
 func TestAuthHandler_Status(t *testing.T) {
 	tests := []struct {
-		name       string
-		admin      *model.AdminUser
-		wantCode   int
-		wantHasID  bool
+		name      string
+		admin     *model.AdminUser
+		wantCode  int
+		wantHasID bool
 	}{
 		{"no admin in ctx", nil, http.StatusUnauthorized, false},
 		{"with admin", &model.AdminUser{ID: "adm-xyz", Username: "bob", Role: "viewer", TOTPVerified: true}, http.StatusOK, true},
@@ -191,8 +191,9 @@ func TestAuthHandler_Logout(t *testing.T) {
 }
 
 func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
+	firstBootSink(t)
 	repo := newFakeAdminRepo()
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestEnsureFirstAdmin_NoAdmins(t *testing.T) {
 func TestEnsureFirstAdmin_AlreadyExists(t *testing.T) {
 	repo := newFakeAdminRepo()
 	repo.users["existing"] = &model.AdminUser{ID: "existing", Username: "admin"}
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestEnsureFirstAdmin_AlreadyExists(t *testing.T) {
 func TestEnsureFirstAdmin_CountError(t *testing.T) {
 	repo := newFakeAdminRepo()
 	repo.errCount = errors.New("count fail")
-	err := EnsureFirstAdmin(context.Background(), repo, "")
+	err := EnsureFirstAdmin(context.Background(), repo, newStoringAdminConfig(), "")
 	if err == nil || !strings.Contains(err.Error(), "count admins") {
 		t.Errorf("expected count error, got %v", err)
 	}
@@ -236,4 +237,3 @@ func (f *fakeSessionRepoWithErr) Revoke(ctx context.Context, id string) error {
 }
 
 var _ repository.AdminSessionRepository = (*fakeSessionRepoWithErr)(nil)
-

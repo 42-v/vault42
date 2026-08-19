@@ -61,12 +61,22 @@ spec:
         app: honeypot-postgres
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # This pod had no securityContext of any kind: no user, no seccomp profile,
+      # no dropped capabilities, no resource bounds. It is the database behind the
+      # honeypot, which is the one component in this chart an attacker is invited
+      # to reach, and it was the least confined thing in it.
+      securityContext:
+        {{- include "vault.podSecurityContext" (dict "uid" 70 "gid" 70) | nindent 8 }}
       containers:
         - name: postgres
-          image: "{{ .Values.postgres.image.repository | default "postgres" }}:{{ .Values.postgres.image.tag | default "17-alpine" }}"
+          image: "{{ include "vault.image" (dict "image" .Values.postgres.image "repository" "postgres" "tag" "17-alpine") }}"
+          securityContext:
+            {{- include "vault.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
           ports:
             - containerPort: 5432
+              name: postgres
           env:
             - name: POSTGRES_DB
               value: {{ .Values.honeypotInstance.database.name | quote }}
@@ -75,10 +85,17 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "vault.secretName" . }}
+                  name: {{ include "vault.honeypotSecretName" . }}
                   key: {{ .Values.secrets.keys.dbMigPassword }}
             - name: POSTGRES_INITDB_ARGS
               value: "--auth-host=scram-sha-256"
+            # A subdirectory, matching the real postgres StatefulSet. The mount
+            # root arrives owned by the volume's original uid with fsGroup as its
+            # group, so a non-root postgres cannot chmod it to the 0700 initdb
+            # insists on; a subdirectory it creates itself is owned by it. Without
+            # this the pod starts as uid 70 and then fails to initialise.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
@@ -87,6 +104,26 @@ spec:
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml (.Values.honeypotInstance.postgres.resources | default dict) | nindent 12 }}
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "vault_mig", "-d", {{ .Values.honeypotInstance.database.name | quote }}]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "vault_mig", "-d", {{ .Values.honeypotInstance.database.name | quote }}]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "vault_mig", "-d", {{ .Values.honeypotInstance.database.name | quote }}]
+            periodSeconds: 10
+            failureThreshold: 6
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -95,9 +132,15 @@ spec:
           configMap:
             name: {{ include "vault.fullname" . }}-honeypot-postgres-init
             defaultMode: 0755
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        # The honeypot database's own credentials. This mounted the production
+        # Secret, so the decoy's database held the password to the real one.
         - name: secrets
           secret:
-            secretName: {{ include "vault.secretName" . }}
+            secretName: {{ include "vault.honeypotSecretName" . }}
             items:
               - key: {{ .Values.secrets.keys.dbAppPassword }}
                 path: db-app-password

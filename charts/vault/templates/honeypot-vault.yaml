@@ -23,12 +23,27 @@ data:
   DB_PORT: {{ .Values.database.port | quote }}
   DB_NAME: {{ .Values.honeypotInstance.database.name | quote }}
   DB_SSLMODE: "disable"
+  # The honeypot Postgres is a sibling pod on a private link, so the
+  # unencrypted mode above is deliberate and says so.
+  VAULT_ALLOW_PLAINTEXT_DB: "true"
   DB_MAX_CONNS: "10"
   VAULT_RATE_LIMIT_ENABLED: "true"
   CACHE_BACKEND: "memory"
   VAULT_SERVE_FRONTEND: "true"
   {{- if .Values.forceSecureCookies }}
   VAULT_FORCE_SECURE_COOKIES: {{ .Values.forceSecureCookies | quote }}
+  {{- end }}
+  {{- if .Values.honeypotInstance.trapUsers }}
+  # The trap accounts, and where an alert about one goes. Both are read only in
+  # the honeypot profile, and this is the only workload the chart renders with
+  # that profile, so they live here rather than in the release ConfigMap.
+  # Without the webhook the alerter has nowhere to post: an attacker reaches a
+  # trap account and the deployment notices and tells nobody, which is the
+  # component not doing the one thing it exists for.
+  VAULT_HONEYPOT_TRAP_USERS: {{ join "," .Values.honeypotInstance.trapUsers | quote }}
+  {{- end }}
+  {{- if .Values.honeypotInstance.webhookURL }}
+  VAULT_HONEYPOT_WEBHOOK: {{ .Values.honeypotInstance.webhookURL | quote }}
   {{- end }}
 ---
 # Honeypot Vault Deployment
@@ -58,12 +73,13 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: vault-honeypot
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "vault.image" (dict "image" .Values.image "tag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -93,6 +109,14 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.honeypotInstance.resources | nindent 12 }}
+          # VAULT_AUTO_MIGRATE is hardcoded true in this profile's ConfigMap, so
+          # the first boot runs the schema migration before anything answers.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /healthz
@@ -106,9 +130,11 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:
+        # The honeypot's own credentials, never the production Secret. See
+        # vault.honeypotSecretName.
         - name: secrets
           secret:
-            secretName: {{ include "vault.secretName" . }}
+            secretName: {{ include "vault.honeypotSecretName" . }}
 ---
 # Honeypot Vault Service
 apiVersion: v1

@@ -4,6 +4,7 @@ package mocks
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/42-v/vault42/internal/model"
@@ -15,6 +16,7 @@ var (
 	_ repository.UserRepository            = (*MockUserRepo)(nil)
 	_ repository.RefreshTokenRepository    = (*MockRefreshTokenRepo)(nil)
 	_ repository.DeviceRepository          = (*MockDeviceRepo)(nil)
+	_ repository.LoginCountryRepository    = (*MockLoginCountryRepo)(nil)
 	_ repository.ClientRepository          = (*MockClientRepo)(nil)
 	_ repository.TOTPRepository            = (*MockTOTPRepo)(nil)
 	_ repository.WebAuthnRepository        = (*MockWebAuthnRepo)(nil)
@@ -47,6 +49,8 @@ type MockUserRepo struct {
 	SetLastLoginFn         func(ctx context.Context, id string) error
 	CreateImportedFn       func(ctx context.Context, user *model.User) error
 	ClearImportPendingFn   func(ctx context.Context, id string) error
+	ClearMustResetPwFn     func(ctx context.Context, id string) error
+	SetMustResetPwFn       func(ctx context.Context, id string, required bool) error
 	SoftDeleteScrubFn      func(ctx context.Context, id, tombstoneEmail string) error
 }
 
@@ -74,6 +78,20 @@ func (m *MockUserRepo) CreateImported(ctx context.Context, user *model.User) err
 func (m *MockUserRepo) ClearImportPending(ctx context.Context, id string) error {
 	if m.ClearImportPendingFn != nil {
 		return m.ClearImportPendingFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) ClearMustResetPassword(ctx context.Context, id string) error {
+	if m.ClearMustResetPwFn != nil {
+		return m.ClearMustResetPwFn(ctx, id)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) SetMustResetPassword(ctx context.Context, id string, required bool) error {
+	if m.SetMustResetPwFn != nil {
+		return m.SetMustResetPwFn(ctx, id, required)
 	}
 	return nil
 }
@@ -154,6 +172,7 @@ func (m *MockUserRepo) VerifyEmail(ctx context.Context, id string) error {
 
 type MockRefreshTokenRepo struct {
 	CreateFn              func(ctx context.Context, token *model.RefreshToken) error
+	CreateWithinCapFn     func(ctx context.Context, token *model.RefreshToken, maxFamilies int) error
 	GetByTokenHashFn      func(ctx context.Context, hash string) (*model.RefreshToken, error)
 	MarkUsedFn            func(ctx context.Context, id string) (bool, error)
 	RevokeByIDFn          func(ctx context.Context, id string) error
@@ -163,10 +182,21 @@ type MockRefreshTokenRepo struct {
 	DeleteAllForUserFn    func(ctx context.Context, userID string) error
 	RevokeAllFn           func(ctx context.Context) error
 	CountActiveFamiliesFn func(ctx context.Context, userID string) (int, error)
+	ListActiveFamiliesFn  func(ctx context.Context, userID string) ([]*repository.ActiveFamily, error)
 	DeleteExpiredFn       func(ctx context.Context) (int64, error)
 }
 
 func (m *MockRefreshTokenRepo) Create(ctx context.Context, token *model.RefreshToken) error {
+	if m.CreateFn != nil {
+		return m.CreateFn(ctx, token)
+	}
+	return nil
+}
+
+func (m *MockRefreshTokenRepo) CreateWithinCap(ctx context.Context, token *model.RefreshToken, maxFamilies int) error {
+	if m.CreateWithinCapFn != nil {
+		return m.CreateWithinCapFn(ctx, token, maxFamilies)
+	}
 	if m.CreateFn != nil {
 		return m.CreateFn(ctx, token)
 	}
@@ -234,6 +264,13 @@ func (m *MockRefreshTokenRepo) CountActiveFamilies(ctx context.Context, userID s
 		return m.CountActiveFamiliesFn(ctx, userID)
 	}
 	return 0, nil
+}
+
+func (m *MockRefreshTokenRepo) ListActiveFamilies(ctx context.Context, userID string) ([]*repository.ActiveFamily, error) {
+	if m.ListActiveFamiliesFn != nil {
+		return m.ListActiveFamiliesFn(ctx, userID)
+	}
+	return nil, nil
 }
 
 func (m *MockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
@@ -319,6 +356,57 @@ func (m *MockDeviceRepo) DeleteAllForUser(ctx context.Context, userID string) er
 	if m.DeleteAllForUserFn != nil {
 		return m.DeleteAllForUserFn(ctx, userID)
 	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// MockLoginCountryRepo
+// ---------------------------------------------------------------------------
+
+// MockLoginCountryRepo is an in-memory stub of
+// repository.LoginCountryRepository. When UpsertAndWasNewFn is nil it behaves
+// like a real store: it remembers the countries seen per user, so wasNew and
+// hadAny follow the first-seen semantics without a database.
+type MockLoginCountryRepo struct {
+	UpsertAndWasNewFn  func(ctx context.Context, userID, cc string) (bool, bool, error)
+	DeleteAllForUserFn func(ctx context.Context, userID string) error
+
+	mu   sync.Mutex
+	seen map[string]map[string]bool
+}
+
+func (m *MockLoginCountryRepo) UpsertAndWasNew(ctx context.Context, userID, cc string) (bool, bool, error) {
+	if m.UpsertAndWasNewFn != nil {
+		return m.UpsertAndWasNewFn(ctx, userID, cc)
+	}
+	// The login success path calls this from a goroutine, so the default store
+	// is mutex-guarded to stay race-free under -race.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen == nil {
+		m.seen = make(map[string]map[string]bool)
+	}
+	countries := m.seen[userID]
+	hadAny := len(countries) > 0
+	if countries == nil {
+		countries = make(map[string]bool)
+		m.seen[userID] = countries
+	}
+	wasNew := !countries[cc]
+	countries[cc] = true
+	return wasNew, hadAny, nil
+}
+
+// DeleteAllForUser drops a user's countries from the default in-memory store, so
+// a test that seeds through UpsertAndWasNew and then erases observes the same
+// before/after the database shows.
+func (m *MockLoginCountryRepo) DeleteAllForUser(ctx context.Context, userID string) error {
+	if m.DeleteAllForUserFn != nil {
+		return m.DeleteAllForUserFn(ctx, userID)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, userID)
 	return nil
 }
 
@@ -531,10 +619,10 @@ func (m *MockBackupCodeRepo) PurgeAllForUser(ctx context.Context, userID string)
 // ---------------------------------------------------------------------------
 
 type MockAuditRepo struct {
-	InsertFn      func(ctx context.Context, entry *model.AuditEntry) error
-	InsertBatchFn func(ctx context.Context, entries []*model.AuditEntry) error
-	QueryFn       func(ctx context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error)
-	CountByUserFn func(ctx context.Context, userID string) (int, error)
+	InsertFn        func(ctx context.Context, entry *model.AuditEntry) error
+	InsertBatchFn   func(ctx context.Context, entries []*model.AuditEntry) error
+	QueryFn         func(ctx context.Context, filter repository.AuditFilter) ([]*model.AuditEntry, error)
+	CountByUserFn   func(ctx context.Context, userID string) (int, error)
 	CleanupFn       func(ctx context.Context, olderThan time.Time) (int64, error)
 	CleanupLockedFn func(ctx context.Context, olderThan time.Time) (int64, bool, error)
 }
@@ -701,10 +789,11 @@ func (m *MockRateLimitRepo) DeleteExpired(ctx context.Context, before time.Time)
 // ---------------------------------------------------------------------------
 
 type MockAdminConfigRepo struct {
-	ListFn   func(ctx context.Context) (map[string]string, error)
-	GetFn    func(ctx context.Context, key string) (string, error)
-	SetFn    func(ctx context.Context, key, value string) error
-	DeleteFn func(ctx context.Context, key string) error
+	ListFn          func(ctx context.Context) (map[string]string, error)
+	GetFn           func(ctx context.Context, key string) (string, error)
+	SetFn           func(ctx context.Context, key, value string) error
+	ClaimIfAbsentFn func(ctx context.Context, key, value string) (string, error)
+	DeleteFn        func(ctx context.Context, key string) error
 }
 
 func (m *MockAdminConfigRepo) List(ctx context.Context) (map[string]string, error) {
@@ -719,6 +808,15 @@ func (m *MockAdminConfigRepo) Get(ctx context.Context, key string) (string, erro
 		return m.GetFn(ctx, key)
 	}
 	return "", nil
+}
+
+// ClaimIfAbsent defaults to winning the claim, which is the single-process case
+// every test that does not set ClaimIfAbsentFn is describing.
+func (m *MockAdminConfigRepo) ClaimIfAbsent(ctx context.Context, key, value string) (string, error) {
+	if m.ClaimIfAbsentFn != nil {
+		return m.ClaimIfAbsentFn(ctx, key, value)
+	}
+	return value, nil
 }
 
 func (m *MockAdminConfigRepo) Set(ctx context.Context, key, value string) error {

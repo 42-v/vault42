@@ -31,12 +31,36 @@ var (
 	logoutToken      string // separate session for TestLogout
 )
 
+const adminRequiredEnv = "VAULT_ADMIN_E2E_REQUIRED"
+
+func adminSkipNotice() string {
+	return fmt.Sprintf(
+		"SKIP admin: ADMIN_FIRST_PASSWORD not set.\n"+
+			"This suite needs a running admin gateway with mTLS client certs and the first-boot\n"+
+			"super_admin password from the pod logs. A GitHub Actions ubuntu-latest job has none\n"+
+			"of those.\n"+
+			"Nothing in this suite ran. Set %s=1 to make this a failure.\n",
+		adminRequiredEnv)
+}
+
+// TestMain gates the suite on a reachable mTLS gateway. A missing password
+// used to log one line and os.Exit(0), which is a green result for doing
+// nothing. The required-env pattern matches tests/e2e/e2e_test.go.
 func TestMain(m *testing.M) {
 	sharedURL = envOr("ADMIN_GW_URL", "https://localhost:9443")
 
 	pw := os.Getenv("ADMIN_FIRST_PASSWORD")
 	if pw == "" {
-		log.Println("ADMIN_FIRST_PASSWORD not set — skipping E2E tests")
+		if os.Getenv(adminRequiredEnv) == "1" {
+			fmt.Fprintf(os.Stderr,
+				"FAIL admin: %s=1 but ADMIN_FIRST_PASSWORD is unset.\n"+
+					"This suite needs a running admin gateway with mTLS. Bring one up with\n"+
+					"scripts/deploy-dev.sh, or unset %s only where a skipped run is genuinely\n"+
+					"acceptable, which is not a release gate.\n",
+				adminRequiredEnv, adminRequiredEnv)
+			os.Exit(1)
+		}
+		fmt.Fprint(os.Stderr, adminSkipNotice())
 		os.Exit(0)
 	}
 
@@ -77,6 +101,23 @@ func TestMain(m *testing.M) {
 // ---------------------------------------------------------------------------
 // Env / URL helpers
 // ---------------------------------------------------------------------------
+
+func TestAdminSkipNoticeNamesRequiredEnv(t *testing.T) {
+	// Why: a live run still checks the skip text, because TestMain exits
+	// before m.Run when ADMIN_FIRST_PASSWORD is unset and so cannot host
+	// this assertion on the CI skip path. If the notice stops naming the
+	// env var, a gate cannot turn the skip into a failure.
+	msg := adminSkipNotice()
+	if !strings.Contains(msg, adminRequiredEnv) {
+		t.Fatalf("skip notice must name %s so a gate can make the skip fatal", adminRequiredEnv)
+	}
+	if !strings.Contains(msg, "Nothing in this suite ran") {
+		t.Fatal("skip notice must say that nothing ran, otherwise a green result looks like a real run")
+	}
+	if !strings.Contains(msg, "ADMIN_FIRST_PASSWORD") {
+		t.Fatal("skip notice must name the env var that unlocks the suite")
+	}
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -123,16 +164,6 @@ func makeClient() (*http.Client, error) {
 			return http.ErrUseLastResponse
 		},
 	}, nil
-}
-
-// newClient creates a fresh mTLS client for tests that need one.
-func newClient(t *testing.T) *http.Client {
-	t.Helper()
-	c, err := makeClient()
-	if err != nil {
-		t.Fatalf("create client: %v", err)
-	}
-	return c
 }
 
 // ---------------------------------------------------------------------------
@@ -264,27 +295,6 @@ func generateTOTPAt(secret string, t time.Time) (string, error) {
 	return fmt.Sprintf("%06d", code%1000000), nil
 }
 
-// login authenticates and returns the session token (for tests needing a separate session).
-// Uses the shared TOTP secret if set.
-func login(t *testing.T, client *http.Client, username, password string) string {
-	t.Helper()
-	token, _, err := doLogin(client, username, password, sharedTOTPSecret)
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
-	return token
-}
-
-// getAdminPassword returns the first-boot admin password from env.
-func getAdminPassword(t *testing.T) string {
-	t.Helper()
-	pw := os.Getenv("ADMIN_FIRST_PASSWORD")
-	if pw == "" {
-		t.Skip("ADMIN_FIRST_PASSWORD not set")
-	}
-	return pw
-}
-
 // ---------------------------------------------------------------------------
 // Authenticated request helpers
 // ---------------------------------------------------------------------------
@@ -320,20 +330,6 @@ func authedPost(t *testing.T, client *http.Client, token, path string, body any)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
-	}
-	return resp
-}
-
-func authedDelete(t *testing.T, client *http.Client, token, path string) *http.Response {
-	t.Helper()
-	req, err := http.NewRequest("DELETE", baseURL()+path, nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("DELETE %s: %v", path, err)
 	}
 	return resp
 }

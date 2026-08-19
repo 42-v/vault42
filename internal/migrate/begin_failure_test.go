@@ -198,7 +198,9 @@ func cliconfigConnect(t *testing.T, s *cliconfigFakePG) *pgx.Conn {
 // even be opened. Run has to stop at the first file, name it, and leave the
 // remaining files untouched so a re-run picks up exactly where it stopped.
 func TestRun_TransactionCannotBeStarted(t *testing.T) {
-	s := cliconfigStartFakePG(t, 2)
+	// Four queries reach the backend before the first BEGIN: the advisory lock,
+	// the CREATE TABLE, the applied-versions SELECT, and then the BEGIN itself.
+	s := cliconfigStartFakePG(t, 3)
 	conn := cliconfigConnect(t, s)
 
 	dir := t.TempDir()

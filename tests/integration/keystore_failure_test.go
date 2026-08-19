@@ -154,14 +154,15 @@ func TestKeyStoreWriteFailures(t *testing.T) {
 		defer ks.Stop()
 
 		// Every column is NOT NULL or scanned into a pointer, so a scan failure
-		// needs the constraint relaxed. expires_at stays NULL so Refresh's WHERE
-		// clause keeps the row.
+		// needs the constraint relaxed. The retired key carries a future expiry so
+		// Refresh's WHERE clause keeps it (migration 027 forbids a retired row with
+		// a NULL expiry).
 		if _, err := pool.Exec(ctx, `ALTER TABLE auth.signing_keys ALTER COLUMN algorithm DROP NOT NULL`); err != nil {
 			t.Fatalf("drop NOT NULL: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at)
-			VALUES ('kid-null-alg', $1, $2, NULL, 'retired', NOW())
+			INSERT INTO auth.signing_keys (kid, private_key, public_key, algorithm, status, created_at, expires_at)
+			VALUES ('kid-null-alg', $1, $2, NULL, 'retired', NOW(), NOW() + INTERVAL '1 hour')
 		`, []byte("unused"), []byte("unused")); err != nil {
 			t.Fatalf("insert NULL-algorithm row: %v", err)
 		}

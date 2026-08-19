@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/middleware"
@@ -28,11 +29,21 @@ func NewSocialHandler(social repository.SocialAccountRepository, auditLog *audit
 // socialAccountView is the safe projection of a link. The encrypted provider
 // tokens are deliberately absent: the user needs to know a provider is linked,
 // not hold its credentials.
+//
+// CreatedAt is a time.Time so it encodes exactly like every other timestamp in
+// the API. Hand-formatting it truncated the value to whole seconds, which made
+// this the one endpoint whose timestamps a client had to parse differently.
 type socialAccountView struct {
-	ID        string `json:"id"`
-	Provider  string `json:"provider"`
-	Email     string `json:"email,omitempty"`
-	CreatedAt string `json:"created_at"`
+	// ID is the link UUID. DELETE /user/social/{id} addresses it.
+	ID string `json:"id"`
+	// Provider is the configured IdP name (google, github, ...).
+	Provider string `json:"provider"`
+	// Email is the address the IdP asserted at link time. Omitted when
+	// the provider released none.
+	Email string `json:"email,omitempty"`
+	// CreatedAt is when the link was stored, RFC3339 UTC. Encoded as
+	// time.Time so it matches every other timestamp in the API.
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // List handles GET /user/social — the linked providers for the caller.
@@ -55,10 +66,10 @@ func (h *SocialHandler) List(w http.ResponseWriter, r *http.Request) {
 			ID:        a.ID,
 			Provider:  a.Provider,
 			Email:     a.Email,
-			CreatedAt: a.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			CreatedAt: a.CreatedAt.UTC(),
 		})
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"accounts": out})
+	WriteJSON(w, http.StatusOK, map[string]any{"accounts": out, "total": len(out)})
 }
 
 // Unlink handles DELETE /user/social/{id} — removes one federated link and the
@@ -88,7 +99,7 @@ func (h *SocialHandler) Unlink(w http.ResponseWriter, r *http.Request) {
 
 	if h.auditLog != nil {
 		h.auditLog.Log(r.Context(), "social_unlink", claims.Subject, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort
-			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"link_id": id}, 0)
+			r.Header.Get("User-Agent"), "", "", map[string]interface{}{"link_id": id})
 	}
 
 	WriteJSON(w, http.StatusOK, StatusResponse{Status: "unlinked"})

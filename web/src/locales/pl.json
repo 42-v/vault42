@@ -356,5 +356,6 @@
   "error.forbidden": "Nie masz uprawnień do tej operacji.",
   "error.code_already_used": "Ten kod został już użyty. Użyj nowego.",
   "error.password_recently_used": "Niedawno używałeś tego hasła. Wybierz inne.",
-  "error.no_webauthn_credentials": "Do tego konta nie przypisano żadnych kluczy bezpieczeństwa."
+  "error.no_webauthn_credentials": "Do tego konta nie przypisano żadnych kluczy bezpieczeństwa.",
+  "error.password_reset_required": "To konto musi zresetować hasło. Wysłaliśmy Ci e-mailem link do resetowania."
 }

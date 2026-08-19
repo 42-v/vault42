@@ -72,7 +72,7 @@ func (r *BackupCodeRepo) MarkUsed(ctx context.Context, id string) (bool, error) 
 
 // DeleteAllForUser invalidates all backup codes for a user by marking them used.
 //
-// This is the regeneration path: the rows are kept so a used//spent code cannot be
+// This is the regeneration path: the rows are kept so a used/spent code cannot be
 // replayed and the history stays visible. It does NOT remove the code hashes, so
 // it is not sufficient for erasure — see PurgeAllForUser.
 func (r *BackupCodeRepo) DeleteAllForUser(ctx context.Context, userID string) error {

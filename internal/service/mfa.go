@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/42-v/vault42/internal/repository"
@@ -28,9 +29,13 @@ const (
 	AAL2 AuthenticatorAssuranceLevel = 2
 
 	// AAL3 — multi-factor authentication using a hardware-based, phishing-
-	// resistant authenticator (WebAuthn / FIDO2 security key or platform
-	// authenticator). Requires proof of possession of a key via a cryptographic
-	// protocol and verifier impersonation resistance. NIST SP 800-63B §4.3.
+	// resistant authenticator. Requires proof of possession of a key via a
+	// cryptographic protocol and verifier impersonation resistance. NIST SP
+	// 800-63B §4.3.
+	//
+	// vault42 never reaches this level and AALForMethods never returns it. The
+	// constant stays because the vocabulary is what makes the ceiling legible:
+	// see AALForMethods for what would have to be built first.
 	AAL3 AuthenticatorAssuranceLevel = 3
 )
 
@@ -42,40 +47,137 @@ const (
 	MethodEmailOTP   = "email_otp"   // one-time code delivered out-of-band by email
 	MethodBackupCode = "backup_code" // pre-shared single-use recovery code
 	MethodWebAuthn   = "webauthn"    // WebAuthn / FIDO2 phishing-resistant authenticator
+	// MethodFederated is an assertion from an upstream identity provider. It is
+	// a first factor like a password — the IdP verified the user by some means
+	// vault42 did not observe — and it is never a second one.
+	MethodFederated = "federated"
 )
 
-// AALForMethods maps a set of completed authenticator methods to the NIST SP
-// 800-63B assurance level they satisfy. It applies the §5.2.4 combination rules:
-//
-//   - WebAuthn / FIDO2 present                  → AAL3 (phishing-resistant MFA)
-//   - password + TOTP or password + email-OTP   → AAL2 (multi-factor)
-//   - password (or any single factor) only      → AAL1 (single-factor)
-//   - no recognized factor                       → AAL1 (lowest)
-//
-// This is a documentation-grade helper: it derives the assurance level from the
-// factors already verified elsewhere and changes no authentication behavior.
-func AALForMethods(methods []string) AuthenticatorAssuranceLevel {
-	var hasPassword, hasTOTP, hasEmailOTP, hasWebAuthn bool
+// RFC 8176 authentication method reference values vault42 emits in "amr".
+const (
+	amrPassword     = "pwd"  // memorized secret
+	amrOTP          = "otp"  // one-time password: TOTP, the email code, a backup code
+	amrHardwareKey  = "hwk"  // proof of possession of a hardware-backed key
+	amrUserVerified = "user" // the authenticator verified the user (WebAuthn UV)
+	amrMultiFactor  = "mfa"  // two or more distinct factor types were presented
+)
+
+// factorSet is which of the recognized authenticators a login presented.
+type factorSet struct {
+	password, totp, emailOTP, backupCode, webAuthn, federated bool
+}
+
+func factorsFrom(methods []string) factorSet {
+	var f factorSet
 	for _, m := range methods {
 		switch m {
 		case MethodPassword:
-			hasPassword = true
+			f.password = true
 		case MethodTOTP:
-			hasTOTP = true
+			f.totp = true
 		case MethodEmailOTP:
-			hasEmailOTP = true
+			f.emailOTP = true
+		case MethodBackupCode:
+			f.backupCode = true
 		case MethodWebAuthn:
-			hasWebAuthn = true
+			f.webAuthn = true
+		case MethodFederated:
+			f.federated = true
 		}
 	}
+	return f
+}
+
+// AALForMethods maps a set of completed authenticator methods to the NIST SP
+// 800-63B assurance level they satisfy, applying the §5.2.4 combination rules:
+//
+//   - WebAuthn with the authenticator's user-verification flag set → AAL2.
+//     That is a multi-factor cryptographic authenticator on its own: possession
+//     of the key plus the PIN or biometric that unlocked it.
+//   - a first factor (password or an upstream IdP assertion) plus any
+//     possession factor → AAL2.
+//   - anything else → AAL1.
+//
+// This function returns AAL3 for nothing, and the ceiling is deliberate rather
+// than an omission.
+//
+// It used to return AAL3 for user-verified WebAuthn, and that level was rendered
+// into the acr claim of every issued access token (ACRForAAL, NewAuthContext,
+// token.go). A signed token is the strongest form a claim can take, and vault42
+// cannot support this one. SP 800-63B-4 §2.2.4 requires an AAL3 authenticator to
+// be hardware-based and verifier-impersonation-resistant, and §5.2.4 requires
+// the verifier to establish that it is. This service requests "none" attestation
+// (internal/handler/webauthn.go:218 says so, and adoptUnknownCredentialFlags at
+// :603 depends on it), stores no AAGUID and no attestation statement, and has no
+// metadata service: nothing anywhere in the tree can distinguish a FIDO2
+// security key from a passkey synced through a consumer cloud account. Both
+// present exactly one self-asserted UV bit. So AAL3 was asserted on evidence
+// that does not separate it from AAL2, over a synced software credential, while
+// docs/COMPLIANCE.md recorded AAL3 as claimed nowhere and the register carried
+// 63B-4 §3.2.4 (Attestation) as Not Applicable.
+//
+// The ceiling lifts when the evidence exists, not before: persist the AAGUID and
+// attestation statement at registration, verify it against FIDO MDS, and gate a
+// third branch on the result. Until then AAL2 is the true answer, and it is what
+// a relying party reading the token gets.
+//
+// userVerified is the WebAuthn UV flag from the assertion that completed the
+// login, and it is the reason this takes two arguments. A discoverable-
+// credential assertion with UV clear proves possession of a key and nothing
+// else: it is single-factor, and reporting it as multi-factor would assert a
+// second factor no ceremony performed.
+func AALForMethods(methods []string, userVerified bool) AuthenticatorAssuranceLevel {
+	f := factorsFrom(methods)
+	firstFactor := f.password || f.federated
+	possession := f.totp || f.emailOTP || f.backupCode || f.webAuthn
 	switch {
-	case hasWebAuthn:
-		return AAL3
-	case hasPassword && (hasTOTP || hasEmailOTP):
+	case f.webAuthn && userVerified:
+		return AAL2
+	case firstFactor && possession:
 		return AAL2
 	default:
 		return AAL1
 	}
+}
+
+// ACRForAAL renders an assurance level as the OIDC Core §2 "acr" value.
+//
+// OIDC leaves the acr value space to the issuer ("parties using this claim will
+// need to agree upon the meanings of the values used"), so this is vault42's
+// own URN and it means the NIST SP 800-63B AAL of the same number. It is
+// deliberately not one of the idmanagement.gov URLs, which belong to a US
+// federal assurance program vault42 has not been assessed under.
+func ACRForAAL(aal AuthenticatorAssuranceLevel) string {
+	return fmt.Sprintf("urn:vault42:aal:%d", aal)
+}
+
+// AMRForMethods renders the completed methods as RFC 8176 "amr" values.
+//
+// Each value describes something this server verified. A federated first factor
+// contributes none: the upstream provider performed that authentication and RFC
+// 8176 registers no value for "an assertion from another issuer", so claiming
+// one would describe a check vault42 did not make. "mfa" is appended whenever
+// the combination reaches AAL2 or above, per RFC 8176 §2, which allows the
+// specific methods to be listed alongside it.
+func AMRForMethods(methods []string, userVerified bool) []string {
+	f := factorsFrom(methods)
+	var amr []string
+	if f.password {
+		amr = append(amr, amrPassword)
+	}
+	if f.totp || f.emailOTP || f.backupCode {
+		amr = append(amr, amrOTP)
+	}
+	if f.webAuthn {
+		amr = append(amr, amrHardwareKey)
+		if userVerified {
+			amr = append(amr, amrUserVerified)
+		}
+	}
+	if AALForMethods(methods, userVerified) >= AAL2 {
+		amr = append(amr, amrMultiFactor)
+	}
+	return amr
 }
 
 // MFAService handles MFA policy decisions.
@@ -98,20 +200,59 @@ func (s *MFAService) IsRequired() bool {
 	return s.mfaRequired
 }
 
-// MFAStatus describes the MFA state for a user.
+// MFAStatus describes the MFA state for a user. Its wire shape is defined by
+// mfaStatusWire below, which MarshalJSON produces; the tags here describe the
+// same fields for readers.
 type MFAStatus struct {
 	TOTPEnabled     bool     `json:"totp_enabled"`
 	WebAuthnEnabled bool     `json:"webauthn_enabled"`
 	BackupCodes     int      `json:"backup_codes_remaining"`
-	Methods         []string `json:"available_methods"`
+	Methods         []string `json:"mfa_methods"`
 	Required        bool     `json:"mfa_required"`
+}
+
+// mfaStatusWire is the serialized form of MFAStatus.
+//
+// The configured-factor list is emitted twice. mfa_methods is the canonical
+// name: it matches mfa_required, mfa_enabled and ProfileResponse.mfa_methods,
+// and the product has more than two factors, so "2fa" only survives in the URL
+// paths that BeOn3 is live on. available_methods is the pre-1.0.0 name and is
+// kept as a deprecated alias for clients written against it; remove it at the
+// next major version.
+type mfaStatusWire struct {
+	TOTPEnabled      bool     `json:"totp_enabled"`
+	WebAuthnEnabled  bool     `json:"webauthn_enabled"`
+	BackupCodes      int      `json:"backup_codes_remaining"`
+	Methods          []string `json:"mfa_methods"`
+	AvailableMethods []string `json:"available_methods"`
+	Required         bool     `json:"mfa_required"`
+}
+
+// MarshalJSON emits both method keys and guarantees the list is a JSON array.
+// A user with no factor configured has a nil Methods slice, and encoding that
+// directly yields null, which every strongly-typed client has to special-case.
+// Doing this here rather than at the call site means the invariant holds for
+// every MFAStatus, not only the ones GetStatus builds.
+func (s MFAStatus) MarshalJSON() ([]byte, error) {
+	methods := s.Methods
+	if methods == nil {
+		methods = []string{}
+	}
+	return json.Marshal(mfaStatusWire{
+		TOTPEnabled:      s.TOTPEnabled,
+		WebAuthnEnabled:  s.WebAuthnEnabled,
+		BackupCodes:      s.BackupCodes,
+		Methods:          methods,
+		AvailableMethods: methods,
+		Required:         s.Required,
+	})
 }
 
 // GetStatus returns the MFA status for a user.
 // Returns an error if the primary MFA methods (TOTP, WebAuthn) cannot be determined,
 // to ensure callers fail closed rather than silently skipping MFA.
 func (s *MFAService) GetStatus(ctx context.Context, userID string) (*MFAStatus, error) {
-	status := &MFAStatus{Required: s.mfaRequired}
+	status := &MFAStatus{Required: s.mfaRequired, Methods: []string{}}
 
 	totp, totpErr := s.totpRepo.GetByUserID(ctx, userID)
 	if totp != nil && totp.Verified {
@@ -125,8 +266,13 @@ func (s *MFAService) GetStatus(ctx context.Context, userID string) (*MFAStatus, 
 		status.Methods = append(status.Methods, "webauthn")
 	}
 
-	// If both primary MFA lookups failed, return error to fail closed
-	if totpErr != nil && credsErr != nil {
+	// Fail closed if EITHER primary lookup failed. A single failed read means a
+	// method may exist that this call cannot see: for a passkey-only account, a
+	// webauthn read error while the totp read succeeds-empty would otherwise
+	// return an empty method set with no error, and the login path reads that as
+	// "no second factor" and issues tokens or downgrades to email OTP. The
+	// caller must treat an undetermined status as MFA-owed, not MFA-absent.
+	if totpErr != nil || credsErr != nil {
 		return nil, fmt.Errorf("mfa: unable to determine MFA status: totp: %w, webauthn: %w", totpErr, credsErr)
 	}
 

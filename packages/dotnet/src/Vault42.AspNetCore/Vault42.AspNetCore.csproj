@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Vault42.AspNetCore</RootNamespace>
     <PackageId>Vault42.AspNetCore</PackageId>
-    <Version>0.2.0</Version>
+    <Version>1.0.0</Version>
     <Authors>42-v</Authors>
     <Description>ASP.NET Core authentication middleware for Vault42 — a production-grade Go JWT auth service. Validates RS256 JWTs via JWKS with auto-refresh, claim mapping, fingerprint validation, and authorization policies.</Description>
     <PackageTags>vault42;jwt;authentication;authorization;aspnetcore;jwks</PackageTags>
@@ -17,6 +17,7 @@
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <EnablePackageValidation>true</EnablePackageValidation>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>

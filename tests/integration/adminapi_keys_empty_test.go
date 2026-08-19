@@ -15,7 +15,7 @@ import (
 
 // A keystore with no keys in it is a legitimate state — a vault that has not booted far
 // enough to mint one. Listing it must answer with an empty array rather than a JSON null,
-// which is what a nil slice serialises to and what an admin UI would choke on.
+// which is what a nil slice serializes to and what an admin UI would choke on.
 func TestAdminAPIListKeys_EmptyKeystoreSerialisesAsEmptyArray(t *testing.T) {
 	pool, _, cleanup := setupPostgres(t)
 	defer cleanup()
@@ -47,9 +47,9 @@ func TestAdminAPIListKeys_EmptyKeystoreSerialisesAsEmptyArray(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, "null") {
-		t.Errorf("an empty keystore serialised as null rather than []: %s", body)
+		t.Errorf("an empty keystore serialized as null rather than []: %s", body)
 	}
 	if !strings.Contains(body, "[]") {
-		t.Errorf("an empty keystore did not serialise as []: %s", body)
+		t.Errorf("an empty keystore did not serialize as []: %s", body)
 	}
 }

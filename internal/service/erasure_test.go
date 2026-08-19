@@ -160,7 +160,7 @@ func TestDeleteAccount_MFADeleteFailureAborts(t *testing.T) {
 				t.Errorf("error did not wrap the cause: %v", err)
 			}
 			// The account MUST already be tombstoned when the cascade dies. There is
-			// no transaction spanning the nine stores, so a failure always leaves the
+			// no transaction spanning the ten stores, so a failure always leaves the
 			// erasure half-done — the only question is which half. Scrubbing first
 			// means the account has already stopped authenticating, and the remaining
 			// deletes are idempotent and can simply be re-run. Scrubbing last would
@@ -263,7 +263,10 @@ func TestDeleteAccount_EscrowsAndCascades(t *testing.T) {
 	if string(appended.Payload) == "" {
 		t.Fatal("empty recovery payload")
 	}
-	plain, err := vaultcrypto.DecryptRecovery(priv, appended.Payload)
+	// Decrypted with the binding rebuilt from the record the service produced,
+	// which is exactly what cmd/recover does from the row's own columns.
+	plain, err := vaultcrypto.DecryptRecovery(priv, appended.Payload,
+		vaultcrypto.RecoveryBinding(appended.ID, appended.Pseudonym))
 	if err != nil {
 		t.Fatalf("decrypt recovery: %v", err)
 	}
@@ -366,5 +369,61 @@ func TestDeleteAccount_RecoveryDisabledStillDeletes(t *testing.T) {
 	}
 	if !scrubbed {
 		t.Error("user should still be scrubbed when escrow is disabled")
+	}
+}
+
+// The countries an account has signed in from are location data about a person
+// and must go with the account. migrations/028 declared ON DELETE CASCADE and
+// concluded erasure cleared them "automatically with no bespoke cascade step";
+// the user row is tombstoned with an UPDATE and never deleted, so the cascade
+// never fires and the history outlived every erasure. Same trap the MFA tables
+// are already annotated for.
+func TestDeleteAccount_ErasesLoginCountries(t *testing.T) {
+	m := newErasureMocks()
+	countries := &mocks.MockLoginCountryRepo{}
+
+	var erased string
+	countries.DeleteAllForUserFn = func(_ context.Context, userID string) error {
+		erased = userID
+		return nil
+	}
+
+	svc := newErasureService(t, nil, m)
+	svc.SetLoginCountries(countries)
+	if err := svc.DeleteAccount(context.Background(), "user-1", "self", "user request"); err != nil {
+		t.Fatalf("DeleteAccount: %v", err)
+	}
+
+	if erased != "user-1" {
+		t.Errorf("login countries not erased: got %q, want %q", erased, "user-1")
+	}
+}
+
+// A failure to clear the login countries must abort the erasure the same way an
+// MFA failure does. Swallowing it would report a completed Art. 17 erasure with
+// the location history still on disk.
+func TestDeleteAccount_LoginCountryFailureAborts(t *testing.T) {
+	boom := errors.New("db down")
+	m := newErasureMocks()
+	scrubbed := false
+	m.users.SoftDeleteScrubFn = func(context.Context, string, string) error {
+		scrubbed = true
+		return nil
+	}
+	countries := &mocks.MockLoginCountryRepo{
+		DeleteAllForUserFn: func(context.Context, string) error { return boom },
+	}
+
+	svc := newErasureService(t, nil, m)
+	svc.SetLoginCountries(countries)
+	err := svc.DeleteAccount(context.Background(), "user-1", "self", "user request")
+	if err == nil {
+		t.Fatal("expected erasure to fail when the login-country delete fails")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error did not wrap the cause: %v", err)
+	}
+	if !scrubbed {
+		t.Error("account must be tombstoned before the PII cascade, so a mid-cascade failure cannot leave a live account")
 	}
 }

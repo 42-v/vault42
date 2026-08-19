@@ -1,14 +1,13 @@
 package compliance
 
 import (
-	"context"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
-	"github.com/42-v/vault42/internal/middleware"
+	"github.com/42-v/vault42/internal/service"
 )
 
 // =============================================================================
@@ -265,28 +264,75 @@ func TestASVS_V3_5_1_JWTMustHaveIssuerAndAudience(t *testing.T) {
 
 // --- V3.7: Defenses Against Session Management Exploits ---
 
+// TestASVS_V3_7_1_AccountLockoutPreventsEnumeration is the register's evidence
+// for CR-19: the lockout stops brute force without becoming an oracle that
+// answers "is this address registered?".
+//
+// Both halves have to hold at once, and only one of them used to be checked.
+// This test drove middleware.CheckAccountLockout — a counter with no callers in
+// the binary — incremented it ten times and asserted it had counted to ten. It
+// could not observe an error code, because it never went near the login path
+// that returns one.
+//
+// The oracle is the harder half. Only an EXISTING account can reach the locked
+// state (there is no counter keyed on an address nobody registered), so a
+// distinct "account locked" answer tells an unauthenticated caller the address
+// is real. Rotating the probe address slips past the per-IP login limit, which
+// turns that one distinguishable answer into a reliable enumeration primitive.
 func TestASVS_V3_7_1_AccountLockoutPreventsEnumeration(t *testing.T) {
-	// V3.7.1: Verify that the application uses rate limiting or account lockout
-	// to prevent session guessing/brute force attacks.
-	mc := cache.NewMemoryCache()
-	defer mc.Close()
-	ctx := context.Background()
-
-	threshold := 10
-	lockDuration := 15 * time.Minute
-
-	// Simulate brute force against a session
-	for i := 0; i < threshold; i++ {
-		locked, _ := middleware.CheckAccountLockout(ctx, mc, "brute-session-target", threshold, lockDuration)
-		if locked {
-			t.Fatalf("V3.7.1: Locked too early at attempt %d", i+1)
+	const (
+		registered = "locked-target@example.com"
+		unknown    = "nobody-here@example.com"
+		attackerIP = "198.51.100.44"
+	)
+	// Brute force until the source is cut off, and keep the exact answer it was
+	// cut off with. The limit is discovered here rather than borrowed from
+	// perSourceAttemptLimit, because that helper classifies the answer and the
+	// answer is this test's whole subject.
+	//
+	// Each trial runs against a fresh service: a successful login clears the
+	// counter for the source that made it, so probing after every failure on one
+	// service would hold the counter at one forever and the search would run into
+	// a different control.
+	var (
+		lockedAnswer  error
+		unknownAnswer error
+		spent         int
+	)
+	for spent = 1; spent <= perSourceSearchCeiling; spent++ {
+		f := newLockoutFixture(t)
+		f.account(registered)
+		for i := 0; i < spent; i++ {
+			f.fail(registered, attackerIP)
+		}
+		if lockedAnswer = f.login(registered, lockoutPassword, attackerIP); lockedAnswer != nil {
+			// Ask the same service, from the same address, about an address it
+			// has never heard of. Same question, and the two answers have to be
+			// the same answer.
+			unknownAnswer = f.login(unknown, lockoutPassword, attackerIP)
+			break
 		}
 	}
 
-	// After threshold, must be locked
-	locked, _ := middleware.CheckAccountLockout(ctx, mc, "brute-session-target", threshold, lockDuration)
-	if !locked {
-		t.Fatal("V3.7.1: Should be locked after exceeding threshold")
+	// Half one: the control works. The correct password stops getting in.
+	if lockedAnswer == nil {
+		t.Fatalf("V3.7.1: %d failures did not stop the attacking source; there is no brute-force "+
+			"control on this path", perSourceSearchCeiling)
+	}
+
+	// Half two: the control is not an oracle.
+	if !errors.Is(lockedAnswer, service.ErrInvalidCredentials) {
+		t.Errorf("V3.7.1: after %d failures a locked account answered %v rather than the masked "+
+			"ErrInvalidCredentials. Only a registered address can be locked, so a distinct answer "+
+			"here enumerates accounts.", spent, lockedAnswer)
+	}
+	if !errors.Is(unknownAnswer, service.ErrInvalidCredentials) {
+		t.Errorf("V3.7.1: an unregistered address answered %v rather than the masked "+
+			"ErrInvalidCredentials", unknownAnswer)
+	}
+	if !errors.Is(lockedAnswer, unknownAnswer) || !errors.Is(unknownAnswer, lockedAnswer) {
+		t.Errorf("V3.7.1: locked answered %v and unknown answered %v. Two different answers to the same "+
+			"question is the enumeration oracle CR-19 closed.", lockedAnswer, unknownAnswer)
 	}
 }
 

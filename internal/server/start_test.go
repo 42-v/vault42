@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -261,5 +262,32 @@ func TestStart_TLSServesTLS13ThenShutsDownCleanly(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("TLS server did not shut down on SIGTERM")
+	}
+}
+
+// A listener that stops serving for any reason other than a shutdown must
+// surface as an error.
+//
+// Start distinguishes exactly two outcomes after the listener returns:
+// http.ErrServerClosed, which means Shutdown was called and the drain is under
+// way, and everything else, which is a failure the caller has to see. Without
+// the second, a TLS listener that cannot read its own certificate would report
+// the same as a clean stop, and a pod whose certificate was rotated out from
+// under it would look like it had been asked to exit.
+func TestStart_AServeFailureIsReportedRatherThanTreatedAsAShutdown(t *testing.T) {
+	deps := startTestDeps(t, "127.0.0.1:0")
+	deps.Config.TLSEnabled = true
+	deps.Config.TLSCertFile = filepath.Join(t.TempDir(), "absent.crt")
+	deps.Config.TLSKeyFile = filepath.Join(t.TempDir(), "absent.key")
+
+	err := New(deps).Start()
+	if err == nil {
+		t.Fatal("Start returned nil when ServeTLS could not read its certificate")
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		t.Errorf("a certificate failure was reported as a clean shutdown: %v", err)
+	}
+	if !strings.Contains(err.Error(), "server:") {
+		t.Errorf("the error is not attributed to the server: %v", err)
 	}
 }

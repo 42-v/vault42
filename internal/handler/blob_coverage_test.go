@@ -255,9 +255,22 @@ func TestBlobList_Success(t *testing.T) {
 	if len(blobs) != 2 {
 		t.Fatalf("expected 2 blobs, got %d", len(blobs))
 	}
-	count := result["count"].(float64)
-	if count != 2 {
-		t.Fatalf("expected count=2, got %v", count)
+	// total is the standard list-envelope key; count is the pre-1.0.0 name the
+	// published Vue SDK reads and is kept until the next major version. Both
+	// must be present and must agree.
+	total, ok := result["total"].(float64)
+	if !ok {
+		t.Fatalf("expected a total key in the list envelope, got %v", result)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2, got %v", total)
+	}
+	count, ok := result["count"].(float64)
+	if !ok {
+		t.Fatalf("the deprecated count alias is gone, which breaks the published SDK: %v", result)
+	}
+	if count != total {
+		t.Fatalf("count=%v disagrees with total=%v", count, total)
 	}
 }
 

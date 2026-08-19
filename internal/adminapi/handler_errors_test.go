@@ -49,7 +49,7 @@ func TestAdminListEndpoints_SurfaceRepositoryFailures(t *testing.T) {
 }
 
 // An empty result is not a failure, and must not be reported as one — nor may it
-// serialise as a null that a client would choke on.
+// serialize as a null that a client would choke on.
 func TestAdminListEndpoints_EmptyIsNotAnError(t *testing.T) {
 	t.Run("ListSessions", func(t *testing.T) {
 		h := &Handler{
@@ -64,7 +64,7 @@ func TestAdminListEndpoints_EmptyIsNotAnError(t *testing.T) {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
 		if body := rec.Body.String(); !contains(body, "[]") {
-			t.Errorf("empty session list did not serialise as []: %s", body)
+			t.Errorf("empty session list did not serialize as []: %s", body)
 		}
 	})
 }
@@ -78,9 +78,11 @@ func (s *stubAdminSessionRepo) Create(context.Context, *model.AdminSession) erro
 func (s *stubAdminSessionRepo) GetByTokenHash(context.Context, string) (*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (s *stubAdminSessionRepo) ListByAdmin(context.Context, string) ([]*model.AdminSession, error) {
 	return nil, nil
 }
+
 func (s *stubAdminSessionRepo) ListActive(ctx context.Context) ([]*model.AdminSession, error) {
 	if s.listActiveFn != nil {
 		return s.listActiveFn(ctx)

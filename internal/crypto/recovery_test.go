@@ -6,7 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"testing"
 )
@@ -31,8 +33,9 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 	}
 
 	plaintext := []byte(`{"email":"user@example.com","roles":["user"]}`)
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
 
-	blob, err := EncryptRecovery(&priv.PublicKey, plaintext)
+	blob, err := EncryptRecovery(&priv.PublicKey, plaintext, binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -40,7 +43,7 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 		t.Fatal("ciphertext leaks plaintext")
 	}
 
-	got, err := DecryptRecovery(priv, blob)
+	got, err := DecryptRecovery(priv, blob, binding)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
@@ -49,16 +52,62 @@ func TestEncryptRecoveryRoundTrip(t *testing.T) {
 	}
 }
 
+// EncryptRecovery draws its one-time AES key with crypto/rand.Read, which has no
+// error return to check on this toolchain: a Reader failure calls the runtime
+// fatal handler and terminates the process. The property the removed check was
+// nominally guarding is asserted here directly instead, by unwrapping the RSA
+// envelope and looking at the key itself: it is full length, never a zero
+// buffer, and never repeated. A zero or repeated escrow key would let anyone
+// holding one recovered blob decrypt every other one.
+func TestEncryptRecoveryUsesFreshNonZeroAESKey(t *testing.T) {
+	priv, err := GenerateRSAKeyPair()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+	unwrap := func() []byte {
+		t.Helper()
+		blob, err := EncryptRecovery(&priv.PublicKey, []byte("user@example.com"), binding)
+		if err != nil {
+			t.Fatalf("encrypt: %v", err)
+		}
+		// The wrapped-key length prefix sits after the magic and the version
+		// byte, and the OAEP label is the binding: unwrapping by hand has to
+		// agree with the framing EncryptRecovery writes, which is half of what
+		// this test is checking.
+		wrappedLen := binary.BigEndian.Uint32(blob[recoveryHeaderLen:])
+		wrapped := blob[recoveryHeaderLen+4 : recoveryHeaderLen+4+int(wrappedLen)]
+		key, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, wrapped, recoveryLabel(binding))
+		if err != nil {
+			t.Fatalf("unwrap aes key: %v", err)
+		}
+		return key
+	}
+
+	k1, k2 := unwrap(), unwrap()
+	if len(k1) != recoveryAESKeySize {
+		t.Errorf("aes key is %d bytes, want %d: rand.Read returned a short fill", len(k1), recoveryAESKeySize)
+	}
+	if bytes.Equal(k1, make([]byte, recoveryAESKeySize)) {
+		t.Error("aes key is all zero: the buffer was never filled with entropy")
+	}
+	if bytes.Equal(k1, k2) {
+		t.Error("two escrow blobs share an aes key")
+	}
+}
+
 func TestDecryptRecoveryWrongKeyFails(t *testing.T) {
 	priv1, _ := GenerateRSAKeyPair()
 	priv2, _ := GenerateRSAKeyPair()
 
-	blob, err := EncryptRecovery(&priv1.PublicKey, []byte("user@example.com"))
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+	blob, err := EncryptRecovery(&priv1.PublicKey, []byte("user@example.com"), binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 
-	if _, err := DecryptRecovery(priv2, blob); err == nil {
+	if _, err := DecryptRecovery(priv2, blob, binding); err == nil {
 		t.Fatal("expected decryption with a different key to fail")
 	}
 }
@@ -85,11 +134,12 @@ func TestLoadRSAPublicAndPrivateKeyPEM(t *testing.T) {
 	}
 
 	// End-to-end through the parsed keys.
-	blob, err := EncryptRecovery(loadedPub, []byte("user@example.com"))
+	binding := RecoveryBinding("11111111-2222-4333-8444-555555555555", "pseudonym-a")
+	blob, err := EncryptRecovery(loadedPub, []byte("user@example.com"), binding)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	got, err := DecryptRecovery(loadedPriv, blob)
+	got, err := DecryptRecovery(loadedPriv, blob, binding)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}

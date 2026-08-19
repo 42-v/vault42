@@ -6,8 +6,11 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,8 +28,6 @@ type Config struct {
 	ListenAddr string
 	// Origin is the public-facing URL, used for CORS, JWKS issuer, and cookie domain (VAULT_ORIGIN).
 	Origin string
-	// LogLevel controls log verbosity (LOG_LEVEL). Default: "warn" (production), "debug" (dev).
-	LogLevel string
 
 	// TLSEnabled enables HTTPS (VAULT_TLS_ENABLED). Default: true.
 	TLSEnabled bool
@@ -45,6 +46,14 @@ type Config struct {
 	DBSSLMode string
 	// DBMaxConns is the maximum number of database connections (DB_MAX_CONNS). Default: 25 (production), 5 (embedded).
 	DBMaxConns int
+	// DBStatementTimeout is the server-side ceiling on a single statement
+	// (DB_STATEMENT_TIMEOUT). Default 10s; zero disables it. Without it,
+	// DBMaxConns pathological queries pin the whole pool and the service stops
+	// serving with no error anywhere.
+	DBStatementTimeout time.Duration
+	// DBLockTimeout is the server-side ceiling on waiting for a lock
+	// (DB_LOCK_TIMEOUT). Default 3s; zero disables it.
+	DBLockTimeout time.Duration
 
 	// DBMigPassword is the password for the vault_mig migration role (DB_MIG_PASSWORD_FILE).
 	DBMigPassword string
@@ -58,8 +67,6 @@ type Config struct {
 	// When empty the KMS endpoint is not mounted. Kept cryptographically separate
 	// from MasterKey (which encrypts data at rest) via HKDF domain separation.
 	KMSRootKey []byte
-	// AdminTokenHash is the Argon2id hash of the admin CLI token (ADMIN_TOKEN_FILE).
-	AdminTokenHash string
 	// Pepper is a server-side secret added to password hashes (VAULT_PEPPER_FILE).
 	Pepper string
 	// HMACSecret is the key used for HMAC-SHA256 signatures (HMAC_SECRET_FILE). Must be at least 32 bytes in non-dev profiles.
@@ -100,6 +107,12 @@ type Config struct {
 	SMTPUser string
 	// SMTPPass is the SMTP authentication password (SMTP_PASS_FILE).
 	SMTPPass string
+	// SMTPAllowPlaintext permits delivery to an SMTP server that does not
+	// advertise STARTTLS (VAULT_SMTP_ALLOW_PLAINTEXT). Default: false — every
+	// message carries a bearer secret, so a relay that cannot be upgraded is a
+	// failed send. Outside dev the opt-out is accepted only for a loopback
+	// SMTP_HOST, which is the one hop that never leaves the machine.
+	SMTPAllowPlaintext bool
 	// EmailFrom is the sender address for outgoing emails (VAULT_EMAIL_FROM).
 	EmailFrom string
 
@@ -119,6 +132,20 @@ type Config struct {
 	// OIDCProviders holds generic OpenID Connect providers (Okta, Auth0, Keycloak,
 	// Entra, …) registered via VAULT_OIDC_PROVIDERS + per-name env vars.
 	OIDCProviders []OIDCProviderConfig
+
+	// OutboundAllowedHosts extends the set of hosts an issuer's discovery
+	// document may name beyond the issuer's own domain
+	// (VAULT_OUTBOUND_ALLOWED_HOSTS). Empty is the common case; the list exists
+	// for a provider whose endpoints legitimately span domains, such as an
+	// accounts.google.com issuer serving its keys from www.googleapis.com.
+	OutboundAllowedHosts []string
+	// OutboundAllowPrivate permits outbound calls that resolve inside the
+	// deployment -- loopback, RFC 1918, IPv6 unique-local, RFC 6598
+	// (VAULT_OUTBOUND_ALLOW_PRIVATE). Defaults to true in the dev profile,
+	// where the issuer runs on the local host, and false everywhere else. A
+	// deployment whose identity provider is a pod in the same cluster needs it
+	// on, and warnOnDegradedControls says so at startup.
+	OutboundAllowPrivate bool
 
 	// PasswordMinLength is the minimum password length (VAULT_PASSWORD_MIN_LENGTH). Default: 15 (NIST SP 800-63B).
 	PasswordMinLength int
@@ -252,6 +279,82 @@ type Config struct {
 	// Default: false.
 	DPoPEnabled bool
 
+	// MaxSessionLifetime bounds the total age of a refresh-token family, measured
+	// from its creation and independent of how often it is refreshed
+	// (VAULT_MAX_SESSION_LIFETIME). Without it, rotation grants a fresh full TTL
+	// every time and a continuously-refreshing client holds a session forever.
+	// Default 720h, matching RememberMeTTL so a session may live as long as the
+	// longest single token and never longer. NIST SP 800-63B-4 §2.2.3 says the
+	// overall timeout SHOULD be no more than 24h at AAL2; that is a deployment
+	// decision, not the default. 0 disables the bound.
+	MaxSessionLifetime time.Duration
+
+	// InactivityTimeout bounds how long a refresh-token family may go unused
+	// before it must reauthenticate (VAULT_INACTIVITY_TIMEOUT). It is the other
+	// half of MaxSessionLifetime: that bound ends a session that is in constant
+	// use, this one ends a session that has stopped being used.
+	//
+	// Default 1h, the figure NIST SP 800-63B-4 §2.2.3 says the AAL2 inactivity
+	// timeout SHOULD not exceed. It is measured from the family's last rotation,
+	// so it has to stay comfortably above AccessTokenTTL: a client in normal use
+	// rotates about once per access-token lifetime, and a value at or below that
+	// would terminate sessions that never went idle. 0 disables the bound.
+	InactivityTimeout time.Duration
+
+	// MintEnabled mounts POST /mint (VAULT_MINT_ENABLED). Off by default: the endpoint
+	// signs assertions for subjects vault42 never authenticated, so enabling it by
+	// accident is an authentication bypass rather than a degraded control. When false
+	// the route is not registered at all.
+	MintEnabled bool
+
+	// MintAudience is the aud claim stamped on minted tokens (VAULT_MINT_AUDIENCE).
+	// Required when MintEnabled, and MUST differ from Origin: a minted token carrying
+	// vault42's own audience would authenticate against vault42 itself, turning the
+	// oracle into account takeover for every user.
+	MintAudience string
+
+	// MintTokenTTL is the lifetime of a minted token when the caller names none
+	// (VAULT_MINT_TOKEN_TTL). Default 5m. Minted tokens cannot be revoked, so the
+	// lifetime is the only bound on a leaked one.
+	MintTokenTTL time.Duration
+
+	// MintMaxTTL caps the caller-requested lifetime (VAULT_MINT_MAX_TTL). Default 5m,
+	// with a hard 15m ceiling enforced in service.NewMintService. A request above the
+	// cap is refused rather than clamped, so a misconfigured caller is visible.
+	MintMaxTTL time.Duration
+
+	// MintAllowedRoles is the allow-list of roles a minted token may carry
+	// (VAULT_MINT_ROLES, comma-separated). Empty by default, meaning no role may be
+	// minted. The admin-reserved names are refused at construction regardless.
+	MintAllowedRoles []string
+
+	// MintAllowedScopes is the allow-list of scopes a minted token may carry
+	// (VAULT_MINT_SCOPES, comma-separated). Empty by default. Capability scopes such
+	// as kms:unwrap and mint:token are refused regardless of configuration.
+	MintAllowedScopes []string
+
+	// SvcDocEnabled mounts the service-scoped JSON document store (VAULT_SVCDOC_ENABLED).
+	// Off by default: it is new surface reachable by every existing client-credentials
+	// holder, so enabling it is an explicit operator decision.
+	SvcDocEnabled bool
+
+	// SvcDocSharedEnabled allows a service to publish a document readable by all other
+	// services (VAULT_SVCDOC_SHARED_ENABLED). Off by default; documents are private to
+	// the writing service unless this is set and the write asks for it.
+	SvcDocSharedEnabled bool
+
+	// SvcDocMaxSize is the per-document ceiling in bytes (VAULT_SVCDOC_MAX_SIZE).
+	// Default 65536.
+	SvcDocMaxSize int
+
+	// SvcDocMaxPerSubject is the document count ceiling per (subject, service)
+	// (VAULT_SVCDOC_MAX_PER_SUBJECT). Default 32.
+	SvcDocMaxPerSubject int
+
+	// SvcDocQuotaBytes is the total stored-byte ceiling per subject
+	// (VAULT_SVCDOC_QUOTA_BYTES). Default 1 MiB.
+	SvcDocQuotaBytes int
+
 	// MetricsEnabled enables the Prometheus-compatible /metrics endpoint (VAULT_METRICS_ENABLED).
 	// When enabled, operational counters (argon2 semaphore, login, token) are exposed in
 	// Prometheus text exposition format. Protect with NetworkPolicy in production.
@@ -289,23 +392,36 @@ type Config struct {
 	// (VAULT_KEY_REFRESH_INTERVAL). Default: 60s.
 	KeyRefreshInterval time.Duration
 
-	// SeedFile is the path to a JSON seed file for declarative user and client
+	// File is the path to a JSON seed file for declarative user and client
 	// creation at startup (VAULT_SEED_FILE). Empty = no seeding.
-	SeedFile string
+	File string
 }
 
 // Load reads configuration from environment variables and secret files,
 // applies profile-specific defaults, and returns a validated Config.
 // Secrets are loaded via the _FILE suffix convention (see [LoadSecret]).
 //
-//nolint:gocognit // each env var is one branch; splitting hides defaults across files
+// The body stays one long straight line of assignments on purpose: every
+// setting and its default are readable in the order they are applied, and
+// splitting that across functions would scatter the defaults. What is
+// extracted is only the parsing that repeats (see envList).
 func Load() (*Config, error) {
+	// Ahead of everything, including the secret files: VAULT_SECRET_FILE_CONSUME
+	// makes the first read of a secret destructive, so a config that is going to
+	// be refused must be refused before it deletes the operator's key material.
+	if err := checkEnvValues(); err != nil {
+		return nil, err
+	}
+	profile, err := parseProfile(envOr("VAULT_PROFILE", "production"))
+	if err != nil {
+		return nil, err
+	}
+
 	c := &Config{
-		Profile: Profile(envOr("VAULT_PROFILE", "production")),
+		Profile: profile,
 
 		ListenAddr: os.Getenv("LISTEN_ADDR"),
 		Origin:     os.Getenv("VAULT_ORIGIN"),
-		LogLevel:   os.Getenv("LOG_LEVEL"),
 
 		TLSEnabled:  envBool("VAULT_TLS_ENABLED"),
 		TLSCertFile: os.Getenv("VAULT_TLS_CERT_FILE"),
@@ -317,6 +433,9 @@ func Load() (*Config, error) {
 		DBSSLMode:  envOr("DB_SSLMODE", "require"),
 		DBMaxConns: envInt("DB_MAX_CONNS", 0),
 
+		DBStatementTimeout: envDuration("DB_STATEMENT_TIMEOUT", 10*time.Second),
+		DBLockTimeout:      envDuration("DB_LOCK_TIMEOUT", 3*time.Second),
+
 		CacheBackend: os.Getenv("CACHE_BACKEND"),
 		RedisAddr:    os.Getenv("REDIS_ADDR"),
 
@@ -324,6 +443,8 @@ func Load() (*Config, error) {
 		SMTPHost:      os.Getenv("SMTP_HOST"),
 		SMTPPort:      envOr("SMTP_PORT", "587"),
 		EmailFrom:     os.Getenv("VAULT_EMAIL_FROM"),
+
+		SMTPAllowPlaintext: envBool("VAULT_SMTP_ALLOW_PLAINTEXT"),
 
 		OAuthGoogleClientID:   os.Getenv("VAULT_OAUTH_GOOGLE_CLIENT_ID"),
 		OAuthGitHubClientID:   os.Getenv("VAULT_OAUTH_GITHUB_CLIENT_ID"),
@@ -371,6 +492,20 @@ func Load() (*Config, error) {
 		DPoPEnabled:    envBool("VAULT_DPOP_ENABLED"),
 		MetricsEnabled: envBool("VAULT_METRICS_ENABLED"),
 
+		MaxSessionLifetime: envDuration("VAULT_MAX_SESSION_LIFETIME", 720*time.Hour),
+		InactivityTimeout:  envDuration("VAULT_INACTIVITY_TIMEOUT", 1*time.Hour),
+
+		MintEnabled:  envBool("VAULT_MINT_ENABLED"),
+		MintAudience: strings.TrimSpace(os.Getenv("VAULT_MINT_AUDIENCE")),
+		MintTokenTTL: envDuration("VAULT_MINT_TOKEN_TTL", 5*time.Minute),
+		MintMaxTTL:   envDuration("VAULT_MINT_MAX_TTL", 5*time.Minute),
+
+		SvcDocEnabled:       envBool("VAULT_SVCDOC_ENABLED"),
+		SvcDocSharedEnabled: envBool("VAULT_SVCDOC_SHARED_ENABLED"),
+		SvcDocMaxSize:       envInt("VAULT_SVCDOC_MAX_SIZE", 64*1024),
+		SvcDocMaxPerSubject: envInt("VAULT_SVCDOC_MAX_PER_SUBJECT", 32),
+		SvcDocQuotaBytes:    envInt("VAULT_SVCDOC_QUOTA_BYTES", 1024*1024),
+
 		KeyRotationDB:      envBool("VAULT_KEY_ROTATION_DB"),
 		KeyRetentionPeriod: envDuration("VAULT_KEY_RETENTION_PERIOD", time.Hour),
 
@@ -379,28 +514,14 @@ func Load() (*Config, error) {
 
 		KeyRefreshInterval: envDuration("VAULT_KEY_REFRESH_INTERVAL", 60*time.Second),
 
-		SeedFile: os.Getenv("VAULT_SEED_FILE"),
+		File: os.Getenv("VAULT_SEED_FILE"),
 	}
 
 	// Load honeypot trap users from comma-separated list
-	if tu := os.Getenv("VAULT_HONEYPOT_TRAP_USERS"); tu != "" {
-		for _, entry := range strings.Split(tu, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.HoneypotTrapUsers = append(c.HoneypotTrapUsers, strings.ToLower(entry))
-			}
-		}
-	}
+	c.HoneypotTrapUsers = envListFold("VAULT_HONEYPOT_TRAP_USERS", strings.ToLower)
 
 	// Load trusted proxies from comma-separated CIDR/IP list
-	if tp := os.Getenv("TRUSTED_PROXIES"); tp != "" {
-		for _, entry := range strings.Split(tp, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.TrustedProxies = append(c.TrustedProxies, entry)
-			}
-		}
-	}
+	c.TrustedProxies = envList("TRUSTED_PROXIES")
 
 	// Real IP header (proxy-specific, e.g. "CF-Connecting-IP")
 	c.RealIPHeader = strings.TrimSpace(os.Getenv("REAL_IP_HEADER"))
@@ -411,55 +532,41 @@ func Load() (*Config, error) {
 	// TLS fingerprint header (proxy-specific, e.g. "X-TLS-Fingerprint")
 	c.TLSFingerprintHeader = strings.TrimSpace(os.Getenv("VAULT_TLS_FINGERPRINT_HEADER"))
 
+	// Mint allow-lists. Absent means empty, which denies every role and scope: a
+	// signing oracle that grants nothing is the safe failure, so no default is
+	// substituted here.
+	c.MintAllowedRoles = envList("VAULT_MINT_ROLES")
+	c.MintAllowedScopes = envList("VAULT_MINT_SCOPES")
+
 	// Load IP allowlist/blocklist from comma-separated CIDR/IP list
-	if v := os.Getenv("IP_ALLOWLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.IPAllowlist = append(c.IPAllowlist, entry)
-			}
-		}
-	}
-	if v := os.Getenv("IP_BLOCKLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry != "" {
-				c.IPBlocklist = append(c.IPBlocklist, entry)
-			}
-		}
-	}
+	c.IPAllowlist = envList("IP_ALLOWLIST")
+	c.IPBlocklist = envList("IP_BLOCKLIST")
 
 	// Load geo allowlist/blocklist (uppercase country codes)
-	if v := os.Getenv("GEO_ALLOWLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(strings.ToUpper(entry))
-			if entry != "" {
-				c.GeoAllowlist = append(c.GeoAllowlist, entry)
-			}
-		}
-	}
-	if v := os.Getenv("GEO_BLOCKLIST"); v != "" {
-		for _, entry := range strings.Split(v, ",") {
-			entry = strings.TrimSpace(strings.ToUpper(entry))
-			if entry != "" {
-				c.GeoBlocklist = append(c.GeoBlocklist, entry)
-			}
-		}
-	}
+	c.GeoAllowlist = envListFold("GEO_ALLOWLIST", strings.ToUpper)
+	c.GeoBlocklist = envListFold("GEO_BLOCKLIST", strings.ToUpper)
 
 	// Apply profile defaults for any unset values
 	applyProfileDefaults(c)
+
+	// Outbound destination policy. Read after the profile is resolved, because
+	// the default for the private-address rule is the one thing here that
+	// depends on it: a dev deployment's issuer is on the local host, and a
+	// production deployment's provider that is also inside the network is a
+	// deliberate topology its operator can state.
+	c.OutboundAllowedHosts = envListFold("VAULT_OUTBOUND_ALLOWED_HOSTS", strings.ToLower)
+	c.OutboundAllowPrivate = envBoolDefault("VAULT_OUTBOUND_ALLOW_PRIVATE", c.Profile == ProfileDev)
 
 	// Embedded-trust shortcut: when an operator sets
 	// VAULT_EMBEDDED_TRUSTED_UPSTREAM=true, vault42 is running behind a
 	// sibling proxy on the same private network (typical Hermod/k8s pod
 	// pattern). Auto-trust RFC1918 ranges so X-Forwarded-For from that
-	// upstream is honoured for ClientIP() — required for per-attacker
+	// upstream is honored for ClientIP() — required for per-attacker
 	// rate-limit + audit attribution. Explicit TRUSTED_PROXIES /
 	// REAL_IP_HEADER env values always win; this only fills the gaps.
 	if c.EmbeddedTrustedUpstream {
 		// Fail closed: this shortcut auto-trusts whole RFC1918 + loopback ranges
-		// and blindly honours X-Forwarded-For, collapsing per-IP rate-limit and
+		// and blindly honors X-Forwarded-For, collapsing per-IP rate-limit and
 		// audit attribution on a flat network. Only the embedded sidecar profile
 		// may use it; anywhere else, set TRUSTED_PROXIES/REAL_IP_HEADER explicitly
 		// (audit M7).
@@ -492,12 +599,43 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid VAULT_PRIMARY_COLOR %q: must be hex format #RRGGBB", c.PrimaryColor)
 	}
 
+	// The password floor is the only length control on registration and reset:
+	// AuthService.Register and PasswordHandler both compare the rune count
+	// against this number and nothing downstream enforces a minimum of its own,
+	// so a deployment that sets it to 4 accepts a password an offline attacker
+	// enumerates in seconds. Dev gets a lower floor, not an absent one; a local
+	// login is not a deployment, but a build that accepts a four-character
+	// password is not a password check either.
+	// The plaintext-SMTP opt-out is scoped to the relay it was meant for. An
+	// operator who sets it against a remote host is not accepting a local hop,
+	// they are mailing one-time codes across a network in cleartext.
+	if c.SMTPAllowPlaintext && c.Profile != ProfileDev && !isLoopbackSMTPHost(c.SMTPHost) {
+		return nil, fmt.Errorf("VAULT_SMTP_ALLOW_PLAINTEXT is accepted only for a loopback SMTP_HOST in %s profile (got %q)", c.Profile, c.SMTPHost)
+	}
+
+	if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor {
+		return nil, fmt.Errorf("VAULT_PASSWORD_MIN_LENGTH must be at least %d in %s profile (got %d)", floor, c.Profile, c.PasswordMinLength)
+	}
+
 	// Enforce HMAC secret minimum length in non-dev profiles
 	if len(c.HMACSecret) > 0 && len(c.HMACSecret) < 32 {
 		if c.Profile != ProfileDev {
 			return nil, fmt.Errorf("HMAC secret must be at least 32 bytes (got %d)", len(c.HMACSecret))
 		}
 		log.Println("SECURITY WARNING: HMAC secret is shorter than 32 bytes")
+	}
+
+	// LOG_LEVEL is read here only to announce that it does nothing. It used to be
+	// parsed into a Config field, defaulted per profile and documented as "log
+	// verbosity" while no vault42 binary ever read it, so LOG_LEVEL=error and
+	// LOG_LEVEL=debug produced byte-for-byte identical output and an operator who
+	// set it to cut log exposure got none. Rejecting the variable outright would
+	// be the worse failure: docs/spec.md records LOG_LEVEL among the unprefixed
+	// names a co-located deployment is likely to have already set for other
+	// software, so a hard error would turn an inherited variable into a boot loop.
+	// One line at startup is what keeps the no-op from being silent again.
+	if os.Getenv("LOG_LEVEL") != "" {
+		log.Println("NOTICE: LOG_LEVEL is set but vault42 has no log-verbosity control; it is ignored and every log line is emitted")
 	}
 
 	return c, nil
@@ -510,6 +648,17 @@ func Load() (*Config, error) {
 // signing), empty pepper (weakens password hashing), empty origin (disables JWT
 // issuer/audience binding), or plaintext serving (drops the Secure cookie flag).
 func (c *Config) Validate() error {
+	// Checked ahead of the dev short-circuit, for the reason checkMintAudience
+	// documents.
+	if err := c.checkMintAudience(); err != nil {
+		return err
+	}
+	// Also checked ahead of the dev short-circuit. A dev operator who mounts an
+	// admin token and gets a generated one instead learns the wrong thing about
+	// where the credential comes from, and carries that into production.
+	if err := c.checkAdminTokenFile(); err != nil {
+		return err
+	}
 	if c.Profile == ProfileDev {
 		return nil
 	}
@@ -519,6 +668,15 @@ func (c *Config) Validate() error {
 	if len(c.Pepper) < 32 {
 		return fmt.Errorf("VAULT_PEPPER_FILE required (>=32 bytes) in %s profile (got %d)", c.Profile, len(c.Pepper))
 	}
+	// Production is the only profile that must have a master key at boot.
+	// HMAC and pepper already refuse to start without theirs; the master key
+	// is the one secret that used to be checked only when something first
+	// tried to encrypt, so a production vault42 would come up with no key
+	// and TOTP, identity, blobs and service documents would fail at request
+	// time. Embedded, honeypot and dev keep that trade-off.
+	if c.Profile == ProfileProduction && len(c.MasterKey) != 32 {
+		return fmt.Errorf("MASTER_KEY_FILE required (32 bytes) in %s profile (got %d)", c.Profile, len(c.MasterKey))
+	}
 	if c.Origin == "" {
 		return fmt.Errorf("VAULT_ORIGIN required in %s profile", c.Profile)
 	}
@@ -527,6 +685,30 @@ func (c *Config) Validate() error {
 	if !c.RateLimitEnabled && !envBool("VAULT_ALLOW_RATE_LIMIT_DISABLED") {
 		return fmt.Errorf("refusing to disable rate limiting in %s profile; set VAULT_ALLOW_RATE_LIMIT_DISABLED=true to override", c.Profile)
 	}
+	// The rate limiter above only limits what it can see. Production defaults
+	// CACHE_BACKEND to redis, and the cache is where every cross-pod control
+	// lives: the login and password-reset limiters, the KMS unwrap budget, the
+	// OAuth state written by one pod and read by another, and the TOTP replay
+	// guard. An unset REDIS_ADDR failed the ping, main logged one line and
+	// substituted an in-process memory cache, and the server reported itself
+	// healthy while every one of those silently became per-pod. With four
+	// replicas the login limiter admits four times its configured attempts and
+	// an OAuth callback landing on the wrong pod cannot find its own state.
+	//
+	// Production only. The embedded profile is a single process, where the
+	// memory cache is not a downgrade but the same thing by another name, and
+	// nothing there is shared across replicas to lose.
+	if c.Profile == ProfileProduction && c.CacheBackend == "redis" && c.RedisAddr == "" {
+		return fmt.Errorf("REDIS_ADDR required when CACHE_BACKEND=redis in %s profile; without it the cache falls back to per-process memory and every shared-state control degrades by the replica count", c.Profile)
+	}
+	// M5 and M4 stay inline rather than moving to a checkTLSTermination helper
+	// like the guards above and below them. Two compliance gates read the text of
+	// Validate itself and fail if the TLS refusals are not in it:
+	// TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults reads only as far
+	// as the next func, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride
+	// wants VAULT_ALLOW_PLAINTEXT under this signature. Extracting them passes the
+	// linter and silently converts a checked claim into an unchecked one.
+	//
 	// M5: refuse to silently disable TLS.
 	if !c.TLSEnabled && !c.ForceSecureCookies && !envBool("VAULT_ALLOW_PLAINTEXT") {
 		return fmt.Errorf("refusing to disable TLS in %s profile; set VAULT_ALLOW_PLAINTEXT=true (e.g. behind a TLS-terminating proxy) to override", c.Profile)
@@ -536,25 +718,276 @@ func (c *Config) Validate() error {
 	if c.TLSEnabled && (c.TLSCertFile == "" || c.TLSKeyFile == "") && !c.ForceSecureCookies {
 		return fmt.Errorf("VAULT_TLS_CERT_FILE and VAULT_TLS_KEY_FILE required when TLS is enabled in %s profile (or set VAULT_FORCE_SECURE_COOKIES=true for proxy termination)", c.Profile)
 	}
+	if err := c.checkGeoFence(); err != nil {
+		return err
+	}
+	if err := c.checkDatabaseLink(); err != nil {
+		return err
+	}
+	c.warnOnDegradedControls()
+	return nil
+}
+
+// checkMintAudience refuses a mint oracle whose tokens authenticate against
+// vault42 itself.
+//
+// A mint audience equal to the issuer makes every minted token valid against
+// vault42, so the oracle becomes account takeover for any subject. Validate
+// runs this ahead of the dev short-circuit because that is not a
+// production-only hazard, and a dev deployment that teaches the wrong
+// configuration gets copied.
+func (c *Config) checkMintAudience() error {
+	if !c.MintEnabled {
+		return nil
+	}
+	if c.MintAudience == "" {
+		return fmt.Errorf("VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set")
+	}
+	if c.MintAudience == c.Origin {
+		return fmt.Errorf("VAULT_MINT_AUDIENCE must differ from VAULT_ORIGIN; a minted token carrying vault42's own audience authenticates against vault42")
+	}
+	return nil
+}
+
+// warnOnDegradedControls reports the settings that cost a deployment a control
+// without costing it a boot. Each one refuses to hard-fail on purpose: the
+// effect is a weaker deployment rather than an open door, and a deployment
+// already running this way must not stop booting on upgrade.
+func (c *Config) warnOnDegradedControls() {
+	// An empty TRUSTED_PROXIES makes ClientIP return the peer address, which
+	// behind an ingress is the controller's pod IP for every request in the
+	// deployment. Every client then shares one rate-limit bucket, one lockout
+	// counter and one address in the audit log.
+	//
+	// The lockout consequence is the sharp one, and it is why this warns on the
+	// setting itself rather than only on the two headers that depend on it. The
+	// per-source lockout is keyed on (account, source): with one source for the
+	// whole deployment it collapses back to an account-wide lock at the low
+	// threshold, which is the five-request, no-credential denial of service
+	// against any account whose email is known that the two-threshold scheme was
+	// built to remove — while the account-wide threshold above it becomes
+	// unreachable, because there is never a second source to reach it with.
+	//
+	// The shipped chart defaults to empty and sets neither header, so keying this
+	// off the headers meant the one deployment that most needed the warning was
+	// the one deployment that never got it. It stays a warning rather than a
+	// hard failure because the effect is a weaker deployment, not an open door,
+	// and a cluster already running this way must not stop booting on upgrade.
+	if len(c.TrustedProxies) == 0 {
+		log.Printf("SECURITY WARNING: TRUSTED_PROXIES is empty, so every client is attributed to the address of the hop in front of vault42; behind an ingress that is one address for the whole deployment, which collapses per-source rate limiting and per-source account lockout into a single shared counter")
+		for _, h := range []struct{ name, value string }{
+			{"REAL_IP_HEADER", c.RealIPHeader},
+			{"VAULT_TLS_FINGERPRINT_HEADER", c.TLSFingerprintHeader},
+		} {
+			if h.value != "" {
+				log.Printf("SECURITY WARNING: %s is set but TRUSTED_PROXIES is empty, so the header is never read", h.name)
+			}
+		}
+	}
 	// Recovery escrow is recommended but not mandatory: without it, an accidental
 	// or malicious account deletion is unrecoverable. Warn rather than hard-fail so
 	// operators can opt out deliberately.
 	if len(c.RecoveryPublicKeyPEM) == 0 {
 		log.Printf("SECURITY WARNING: VAULT_RECOVERY_PUBLIC_KEY_FILE not set — account erasures will not be recoverable")
 	}
+	// The outbound destination policy warns on the widenings, not on the strict
+	// case, because the strict case is the default and needs no configuration.
+	// Neither refuses to boot: both are legitimate topologies, and a deployment
+	// already running one must not stop starting on upgrade. What is not
+	// acceptable is running one without it appearing anywhere an operator looks.
+	if c.OutboundAllowPrivate && c.Profile != ProfileDev {
+		log.Printf("SECURITY WARNING: VAULT_OUTBOUND_ALLOW_PRIVATE is set in %s profile, so an identity provider's discovery document can point vault42 at an address inside this deployment; the link-local range cloud instance metadata answers on stays refused either way", c.Profile)
+	}
+	for _, h := range c.OutboundAllowedHosts {
+		log.Printf("SECURITY WARNING: VAULT_OUTBOUND_ALLOWED_HOSTS names %q, so a provider's discovery document may direct vault42 there even though it is outside the issuer's own domain", h)
+	}
+}
+
+// checkDatabaseLink refuses a non-dev database connection that is not
+// encrypted.
+//
+// The connection carries the role password in the startup packet and every
+// row of every table after it, including the encrypted TOTP secrets and the
+// password hashes. Three of the six legal modes do not guarantee it is
+// encrypted, and "prefer" is the one to watch: it negotiates TLS and falls
+// back to plaintext without telling anyone.
+//
+// This refuses rather than warns, and it refuses for the same reason Validate's
+// M5 guard refuses a disabled listener: an unencrypted link is a control that
+// is absent, and a SECURITY WARNING that boots anyway is indistinguishable from
+// no control at all once the log scrolls. Deployments that run Postgres in the
+// same pod legitimately want "disable"
+// (charts/vault/values-{bridge,embedded,honeypot,local}.yaml), so they say so
+// in the manifest with VAULT_ALLOW_PLAINTEXT_DB — the shape
+// VAULT_ALLOW_PLAINTEXT and VAULT_ALLOW_RATE_LIMIT_DISABLED already use, which
+// keeps the posture visible where an operator reviews it.
+//
+// Only the modes that are explicitly unencrypted refuse. An empty DBSSLMode
+// is unreachable through Load (envOr defaults it to "require" and the enum
+// check rejects every other spelling) and keeps the warning, so a Config
+// assembled in code is judged on what it says rather than on what it omits.
+func (c *Config) checkDatabaseLink() error {
+	if slices.Contains(unencryptedSSLModes, c.DBSSLMode) && !envBool("VAULT_ALLOW_PLAINTEXT_DB") {
+		return fmt.Errorf("refusing to use an unencrypted database connection in %s profile: DB_SSLMODE=%s carries the role password and every row in cleartext; set VAULT_ALLOW_PLAINTEXT_DB=true when the link is private (same-pod or loopback Postgres)", c.Profile, c.DBSSLMode)
+	}
+	if !slices.Contains(encryptedSSLModes, c.DBSSLMode) {
+		log.Printf("SECURITY WARNING: DB_SSLMODE=%s does not guarantee an encrypted database connection in %s profile; role passwords and every row travel in cleartext unless the link is private", c.DBSSLMode, c.Profile)
+	}
 	return nil
 }
 
+// checkGeoFence refuses a geo-fence that cannot fire.
+//
+// middleware.IPAccess runs the geo ladder only when GEO_IP_HEADER is set, and
+// reads the country only from a hop listed in TRUSTED_PROXIES. Miss either and
+// the country is never established: a blocklist then refuses nobody while the
+// operator's config records the countries they believe are banned, and an
+// allowlist refuses everybody. Both halves are configured in the same place and
+// neither used to be checked anywhere.
+func (c *Config) checkGeoFence() error {
+	if len(c.GeoAllowlist) == 0 && len(c.GeoBlocklist) == 0 {
+		return nil
+	}
+	if c.GeoIPHeader == "" {
+		return fmt.Errorf("GEO_IP_HEADER required when GEO_ALLOWLIST or GEO_BLOCKLIST is set in %s profile; without it the country is never read and the geo fence never fires", c.Profile)
+	}
+	if len(c.TrustedProxies) == 0 {
+		return fmt.Errorf("TRUSTED_PROXIES required when GEO_IP_HEADER is set in %s profile; the country is believed only from a trusted hop, so with no trusted proxy the geo fence never fires", c.Profile)
+	}
+	return nil
+}
+
+// isLoopbackSMTPHost reports whether SMTP_HOST names a relay on this machine.
+// "localhost" is accepted by name because that is how a sidecar relay is
+// usually addressed; everything else has to resolve to a loopback literal.
+func isLoopbackSMTPHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
+// outside dev, and it is the figure docs/COMPLIANCE.md and README.md publish.
+// NIST SP 800-63B-4 §3.1.1.2 raised the floor for a password used as the only
+// authenticator from 8 to 15 characters, and vault42 permits single-factor
+// login (MFA is configurable), so 15 is the number an operator may not go
+// under. It equals the package default deliberately: a claim that the product
+// enforces 15 is false the moment the enforced floor is lower than the figure.
+const passwordMinLengthFloor = 15
+
+// devPasswordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted
+// in the dev profile. Dev deliberately sits below the published floor so a
+// seeded local account does not need a 15-character secret, but it is still a
+// floor: NIST SP 800-63B-4 §3.1.1.1 requires a verifier to accept memorized
+// secrets of at least 8 characters, and a build that accepts fewer is not
+// exercising the password path the deployment profiles run.
+const devPasswordMinLengthFloor = 8
+
+// passwordFloorFor returns the shortest VAULT_PASSWORD_MIN_LENGTH the profile
+// accepts. Every profile has one; dev's is merely lower.
+func passwordFloorFor(p Profile) int {
+	if p == ProfileDev {
+		return devPasswordMinLengthFloor
+	}
+	return passwordMinLengthFloor
+}
+
+// argon2idPrefix marks the PHC-encoded form of an Argon2id hash. Its presence
+// is what tells ADMIN_TOKEN_FILE's two accepted forms apart: a hash, which is
+// stored verbatim, or a plaintext token, which cli.InitAdminToken hashes before
+// storing. A random token cannot collide with it.
+const argon2idPrefix = "$argon2id$"
+
+// adminTokenMinLength is the shortest plaintext ADMIN_TOKEN_FILE accepted
+// outside dev. The admin CLI can add clients and revoke every session, and
+// nothing rate limits it, so a token an operator could type is a bad one.
+// scripts/generate-secrets.sh writes 64 hex characters.
+const adminTokenMinLength = 16
+
+// checkAdminTokenFile refuses to start on an ADMIN_TOKEN_FILE the admin CLI
+// could never use.
+//
+// That file is the operator's only way to choose the admin credential rather
+// than have one minted on first boot and printed to stdout, which under systemd
+// is the journal (docs/localhost-profile.md §4.5 counts that on its threat
+// table). Every way of getting it wrong used to be silent, because the value
+// was parsed into a config field that nothing read: an absent mount, an empty
+// file or a truncated hash all produced a server that started clean and then
+// rejected the operator's token with "Admin authentication required."
+//
+// The file is read here without consuming it. internal/cli performs the real
+// read, and VAULT_SECRET_FILE_CONSUME makes the first read destructive, so a
+// LoadSecret call here would delete the file before its only consumer saw it.
+func (c *Config) checkAdminTokenFile() error {
+	path := os.Getenv("ADMIN_TOKEN_FILE")
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- path from operator env var (_FILE convention), cleaned with filepath.Clean
+	if err != nil {
+		// A file this deployment destroys on read is not a file whose absence
+		// means a broken mount. internal/cli performs the consuming read, so
+		// under VAULT_SECRET_FILE_CONSUME the first boot removes exactly this
+		// path and every boot after it arrived here and refused to start:
+		// "read ADMIN_TOKEN_FILE ...: no such file or directory". The token is
+		// not lost with the file -- its hash went into auth.admin_config on the
+		// first boot and is what authenticates from then on. Said out loud
+		// rather than skipped silently, because an absent mount and a consumed
+		// one look identical from here and only one of them is fine.
+		if os.IsNotExist(err) && SecretFilesAreConsumed() {
+			log.Printf("ADMIN_TOKEN_FILE %q is absent and VAULT_SECRET_FILE_CONSUME is set: "+
+				"treating it as consumed by an earlier boot. The admin token in force is the "+
+				"hash already recorded in auth.admin_config; this mount is not read again.", path)
+			return nil
+		}
+		return fmt.Errorf("read ADMIN_TOKEN_FILE %q: %w", path, err)
+	}
+
+	secret := strings.TrimSpace(string(data))
+	switch {
+	case secret == "":
+		return fmt.Errorf("ADMIN_TOKEN_FILE %q is empty; it must hold either the admin token or its Argon2id hash", path)
+	case strings.HasPrefix(secret, argon2idPrefix):
+		if !isArgon2idHash(secret) {
+			return fmt.Errorf("ADMIN_TOKEN_FILE %q holds a malformed Argon2id hash; no token can ever verify against it", path)
+		}
+	case len(secret) < adminTokenMinLength:
+		if c.Profile != ProfileDev {
+			return fmt.Errorf("admin token in ADMIN_TOKEN_FILE %q is %d characters; %s profile requires at least %d", path, len(secret), c.Profile, adminTokenMinLength)
+		}
+		log.Printf("SECURITY WARNING: admin token in ADMIN_TOKEN_FILE is shorter than %d characters", adminTokenMinLength)
+	}
+	return nil
+}
+
+// isArgon2idHash reports whether s has the full PHC layout
+// $argon2id$v=..$m=..,t=..,p=..$salt$hash. A prefix-only check would admit a
+// truncated hash, which parses as nothing and locks the CLI out for good.
+func isArgon2idHash(s string) bool {
+	parts := strings.Split(s, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+	for _, p := range parts[2:] {
+		if p == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Config) loadSecrets() {
-	if mk, err := LoadSecret("MASTER_KEY"); err == nil {
-		c.MasterKey = []byte(mk)
+	if mk, err := LoadSecretBinary("MASTER_KEY", 32); err == nil {
+		c.MasterKey = mk
 	}
 	if kr, err := LoadSecret("KMS_ROOT_KEY"); err == nil {
 		c.KMSRootKey = []byte(kr)
 	}
-	if at, err := LoadSecret("ADMIN_TOKEN"); err == nil {
-		c.AdminTokenHash = at
-	}
+	// ADMIN_TOKEN is deliberately absent: cli.New reads it, the same way
+	// cmd/vault reads SIGNING_KEY. Loading it here consumed the file (see
+	// VAULT_SECRET_FILE_CONSUME) on behalf of a field nothing ever read.
 	if p, err := LoadSecret("VAULT_PEPPER"); err == nil {
 		c.Pepper = p
 	}
@@ -648,12 +1081,31 @@ func (c *Config) DatabaseURL(role string) string {
 	if c.Profile == ProfileDev {
 		sslmode = "disable"
 	}
+	// timezone is a startup runtime parameter, so pgx sends it in the startup
+	// packet and every session the pool opens is already in UTC.
+	//
+	// docs/spec.md promises RFC 3339 in UTC for every timestamp the API emits,
+	// and nothing enforced it. Postgres renders a timestamptz in the session's
+	// TimeZone, pgx builds a time.Time carrying that offset, and the handlers
+	// marshal it through unchanged, so the offset in a response body was
+	// whatever zone the database server happened to run in. Both spellings name
+	// the same instant and both are valid RFC 3339, which is why nothing ever
+	// failed; what breaks is comparing timestamps as strings, and a client
+	// slicing the first ten characters for a date gets the wrong day for two
+	// hours every night.
+	//
+	// Setting it on the connection is one place rather than dozens of marshal
+	// sites, and a handler added later returning a new timestamp inherits it.
+	q := url.Values{}
+	q.Set("sslmode", sslmode)
+	q.Set("timezone", "UTC")
+
 	u := &url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(user, password),
 		Host:     c.DBHost + ":" + c.DBPort,
 		Path:     c.DBName,
-		RawQuery: "sslmode=" + sslmode,
+		RawQuery: q.Encode(),
 	}
 	return u.String()
 }
@@ -675,8 +1127,8 @@ func (c *Config) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "profile=%s listen=%s origin=%s\n", c.Profile, c.ListenAddr, c.Origin)
 	fmt.Fprintf(&b, "tls=%v db=%s:%s/%s cache=%s\n", c.TLSEnabled, c.DBHost, c.DBPort, c.DBName, c.CacheBackend)
-	fmt.Fprintf(&b, "master_key=%s kms_root_key=%s admin_token=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
-		redact(c.MasterKey), redact(c.KMSRootKey), redactStr(c.AdminTokenHash), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
+	fmt.Fprintf(&b, "master_key=%s kms_root_key=%s pepper=%s hmac=%s recovery_pubkey=%s\n",
+		redact(c.MasterKey), redact(c.KMSRootKey), redactStr(c.Pepper), redact(c.HMACSecret), presence(c.RecoveryPublicKeyPEM))
 	fmt.Fprintf(&b, "db_mig_pass=%s db_app_pass=%s redis_pass=%s\n",
 		redactStr(c.DBMigPassword), redactStr(c.DBAppPassword), redactStr(c.RedisPass))
 	fmt.Fprintf(&b, "sendgrid_key=%s smtp_user=%s smtp_pass=%s\n",
@@ -740,6 +1192,34 @@ func splitTrimLower(s string) []string {
 	return out
 }
 
+// envList reads a comma-separated environment variable. Blank entries are
+// dropped rather than kept as empty strings, so a trailing comma or a list
+// wrapped over lines in a manifest does not add a member that matches nothing
+// but still makes the list non-empty — and a non-empty allowlist is the
+// difference between "no restriction" and "only these" for the IP and geo
+// fences. An unset variable yields nil, matching the append-based form this
+// replaced.
+func envList(key string) []string {
+	var out []string
+	for _, entry := range strings.Split(os.Getenv(key), ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// envListFold is envList for the lists whose members are compared without
+// regard to case: trap usernames are held lowercase and country codes
+// uppercase, folded once here so no comparison downstream has to remember to.
+func envListFold(key string, fold func(string) string) []string {
+	out := envList(key)
+	for i, entry := range out {
+		out[i] = fold(entry)
+	}
+	return out
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -747,17 +1227,19 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// envBool and envBoolDefault answer with the profile default when the value is
+// one parseBoolEnv refuses. Load rejects those before any of this runs, so the
+// fallback only covers a Config assembled without Load.
 func envBool(key string) bool {
-	v := os.Getenv(key)
-	return v == "true" || v == "1" || v == "yes"
+	return envBoolDefault(key, false)
 }
 
 func envBoolDefault(key string, def bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
+	v, set, err := parseBoolEnv(key)
+	if err != nil || !set {
 		return def
 	}
-	return v == "true" || v == "1" || v == "yes"
+	return v
 }
 
 func envInt(key string, def int) int {

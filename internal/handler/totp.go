@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/middleware"
@@ -22,11 +23,39 @@ type TOTPHandler struct {
 	cache         cache.Cache
 	authSvc       *service.AuthService
 	secureCookies bool
+	auditLog      *audit.Logger
 }
 
 // NewTOTPHandler creates a new TOTP handler.
 func NewTOTPHandler(repo repository.TOTPRepository, masterKey []byte, issuer string, c cache.Cache, authSvc *service.AuthService, secureCookies bool) *TOTPHandler {
 	return &TOTPHandler{totpRepo: repo, masterKey: masterKey, issuer: issuer, cache: c, authSvc: authSvc, secureCookies: secureCookies}
+}
+
+// SetAuditLog attaches the audit logger. Called once at wiring time; a nil
+// logger is ignored.
+func (h *TOTPHandler) SetAuditLog(l *audit.Logger) {
+	if l != nil {
+		h.auditLog = l
+	}
+}
+
+// logEvent records a TOTP lifecycle event against the user's trail.
+//
+// Enrolling a second factor, proving it and taking it away are the three moves
+// an account takeover makes, and none of them used to leave a row: only MFA
+// failures were recorded, as login_failure with reason mfa_failed. So a stolen
+// session could bind its own authenticator to the account and the trail ran
+// straight from the last successful login to the owner's lockout with nothing
+// in between, which reads as an account that was never touched.
+//
+// Best-effort on purpose. A trail that can refuse a factor the user just proved
+// would convert an audit outage into an authentication outage.
+func (h *TOTPHandler) logEvent(r *http.Request, event, userID string, meta map[string]interface{}) {
+	if h.auditLog == nil {
+		return
+	}
+	h.auditLog.Log(r.Context(), event, userID, "", middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", meta)
 }
 
 // Setup handles POST /auth/2fa/totp/setup.
@@ -80,6 +109,11 @@ func (h *TOTPHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "totp", "enrolled"); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
 	otpURL := vaultcrypto.BuildOTPAuthURL(secret, h.issuer, claims.Subject)
 
 	WriteJSON(w, http.StatusOK, TOTPSetupResponse{
@@ -105,6 +139,11 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input struct {
+		// Code is the 6-digit TOTP value from the authenticator.
+		// Required. Not exactly 6 ASCII digits is 400 invalid_code. A
+		// wrong value records an MFA failure and returns 401
+		// invalid_code. Reuse of the same step is 429
+		// totp_code_already_used.
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &input); err != nil || !isValidTOTPCode(input.Code) {
@@ -155,10 +194,25 @@ func (h *TOTPHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	if !totp.Verified {
 		// Next verify attempt will retry; not a security concern.
 		_ = h.totpRepo.MarkVerified(r.Context(), totp.ID)
+		// This is the moment the factor starts guarding the account, so it is
+		// the enrollment an investigator looks for after a takeover. Setup
+		// alone proves nothing: an unverified secret never gates a login and is
+		// deleted by the next setup call.
+		h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+			"method": "totp",
+			"action": "enrolled",
+		})
 	}
 
+	// Recorded before the login is completed and regardless of how it ends. The
+	// code was proved here; whether the session that follows is issued or
+	// refused by account policy is a separate fact the login path records for
+	// itself, and folding the two together would lose every verification that
+	// happened against a banned or locked account.
+	h.logEvent(r, audit.TwoFAVerify, claims.Subject, map[string]interface{}{"method": "totp"})
+
 	// If this is a 2FA challenge (login flow), issue real tokens
-	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies) {
+	if completeMFAIfChallenge(w, r, claims, h.authSvc, h.secureCookies, service.MFACompletion{Method: service.MethodTOTP}) {
 		return
 	}
 
@@ -181,6 +235,23 @@ func (h *TOTPHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.totpRepo.DeleteByUserID(r.Context(), claims.Subject); err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	// Stripping a factor off an account is the step that turns a borrowed
+	// session into a permanent one, so it needs a row of its own. It is filed
+	// under the enrollment event with action=removed because the vocabulary in
+	// internal/audit has no removal constant; a query for factor changes must
+	// therefore read the action key rather than the event type alone.
+	h.logEvent(r, audit.TwoFASetup, claims.Subject, map[string]interface{}{
+		"method": "totp",
+		"action": "removed",
+	})
+
+	// After the trail, so a factor removal is recorded whether or not the
+	// containment behind it lands.
+	if err := revokeSessionsAfterFactorChange(r, h.authSvc, claims.Subject, "totp", "removed"); err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}

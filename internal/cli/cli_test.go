@@ -81,18 +81,20 @@ type mockUserRepo struct {
 	UnlockFn    func(ctx context.Context, id string) error
 }
 
-func (m *mockUserRepo) Create(context.Context, *model.User) error               { return nil }
-func (m *mockUserRepo) GetByID(context.Context, string) (*model.User, error)    { return nil, nil }
-func (m *mockUserRepo) GetByEmail(context.Context, string) (*model.User, error) { return nil, nil }
-func (m *mockUserRepo) Update(context.Context, *model.User) error               { return nil }
-func (m *mockUserRepo) UpdatePassword(context.Context, string, string) error    { return nil }
-func (m *mockUserRepo) IncrementFailedLogin(context.Context, string) error      { return nil }
-func (m *mockUserRepo) ResetFailedLogin(context.Context, string) error          { return nil }
-func (m *mockUserRepo) VerifyEmail(context.Context, string) error               { return nil }
-func (m *mockUserRepo) SetLastLogin(context.Context, string) error              { return nil }
-func (m *mockUserRepo) CreateImported(context.Context, *model.User) error       { return nil }
-func (m *mockUserRepo) ClearImportPending(context.Context, string) error        { return nil }
-func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error   { return nil }
+func (m *mockUserRepo) Create(context.Context, *model.User) error                { return nil }
+func (m *mockUserRepo) GetByID(context.Context, string) (*model.User, error)     { return nil, nil }
+func (m *mockUserRepo) GetByEmail(context.Context, string) (*model.User, error)  { return nil, nil }
+func (m *mockUserRepo) Update(context.Context, *model.User) error                { return nil }
+func (m *mockUserRepo) UpdatePassword(context.Context, string, string) error     { return nil }
+func (m *mockUserRepo) IncrementFailedLogin(context.Context, string) error       { return nil }
+func (m *mockUserRepo) ResetFailedLogin(context.Context, string) error           { return nil }
+func (m *mockUserRepo) VerifyEmail(context.Context, string) error                { return nil }
+func (m *mockUserRepo) SetLastLogin(context.Context, string) error               { return nil }
+func (m *mockUserRepo) CreateImported(context.Context, *model.User) error        { return nil }
+func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
+func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error     { return nil }
+func (m *mockUserRepo) SetMustResetPassword(context.Context, string, bool) error { return nil }
+func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 func (m *mockUserRepo) LockUntil(ctx context.Context, id string, until time.Time) error {
 	if m.LockUntilFn != nil {
 		return m.LockUntilFn(ctx, id, until)
@@ -115,6 +117,10 @@ type mockRefreshTokenRepo struct {
 }
 
 func (m *mockRefreshTokenRepo) Create(context.Context, *model.RefreshToken) error { return nil }
+func (m *mockRefreshTokenRepo) CreateWithinCap(context.Context, *model.RefreshToken, int) error {
+	return nil
+}
+
 func (m *mockRefreshTokenRepo) GetByTokenHash(context.Context, string) (*model.RefreshToken, error) {
 	return nil, nil
 }
@@ -142,6 +148,10 @@ func (m *mockRefreshTokenRepo) CountActiveFamilies(_ context.Context, _ string) 
 	return 0, nil
 }
 
+func (m *mockRefreshTokenRepo) ListActiveFamilies(_ context.Context, _ string) ([]*repository.ActiveFamily, error) {
+	return nil, nil
+}
+
 func (m *mockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error) {
 	if m.DeleteExpiredFn != nil {
 		return m.DeleteExpiredFn(ctx)
@@ -151,10 +161,20 @@ func (m *mockRefreshTokenRepo) DeleteExpired(ctx context.Context) (int64, error)
 
 // mockAdminConfigRepo implements repository.AdminConfigRepository for tests.
 type mockAdminConfigRepo struct {
-	ListFn   func(ctx context.Context) (map[string]string, error)
-	GetFn    func(ctx context.Context, key string) (string, error)
-	SetFn    func(ctx context.Context, key, value string) error
-	DeleteFn func(ctx context.Context, key string) error
+	ListFn          func(ctx context.Context) (map[string]string, error)
+	GetFn           func(ctx context.Context, key string) (string, error)
+	SetFn           func(ctx context.Context, key, value string) error
+	ClaimIfAbsentFn func(ctx context.Context, key, value string) (string, error)
+	DeleteFn        func(ctx context.Context, key string) error
+}
+
+// ClaimIfAbsent defaults to winning the claim, which is what a single process
+// against an empty table sees.
+func (m *mockAdminConfigRepo) ClaimIfAbsent(ctx context.Context, key, value string) (string, error) {
+	if m.ClaimIfAbsentFn != nil {
+		return m.ClaimIfAbsentFn(ctx, key, value)
+	}
+	return value, nil
 }
 
 func (m *mockAdminConfigRepo) List(ctx context.Context) (map[string]string, error) {
@@ -432,15 +452,16 @@ func TestVerifyAdminToken(t *testing.T) {
 
 func TestInitAdminToken(t *testing.T) {
 	t.Run("success first boot", func(t *testing.T) {
+		sink := firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		var storedKey, storedValue string
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil // no existing token
 		}
-		admin.SetFn = func(_ context.Context, key, value string) error {
+		admin.ClaimIfAbsentFn = func(_ context.Context, key, value string) (string, error) {
 			storedKey = key
 			storedValue = value
-			return nil
+			return value, nil
 		}
 
 		out := captureStdout(t, func() {
@@ -458,8 +479,8 @@ func TestInitAdminToken(t *testing.T) {
 		if !strings.Contains(out, "FIRST BOOT") {
 			t.Error("expected FIRST BOOT message in output")
 		}
-		if !strings.Contains(out, "Admin token:") {
-			t.Error("expected Admin token in output")
+		if !strings.Contains(out, sink) {
+			t.Error("expected the output to name where the token was delivered")
 		}
 	})
 
@@ -468,27 +489,54 @@ func TestInitAdminToken(t *testing.T) {
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "existing-hash-value", nil
 		}
-		setCalled := false
-		admin.SetFn = func(_ context.Context, _, _ string) error {
-			setCalled = true
-			return nil
+		claimCalled := false
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, value string) (string, error) {
+			claimCalled = true
+			return value, nil
 		}
 
 		if err := c.InitAdminToken(context.Background()); err != nil {
 			t.Fatalf("InitAdminToken: %v", err)
 		}
-		if setCalled {
-			t.Error("Set should not be called when token already exists")
+		if claimCalled {
+			t.Error("the claim should not be attempted when a token already exists")
 		}
 	})
 
-	t.Run("repo Set error", func(t *testing.T) {
+	// The losing replica of a first-boot race. ClaimIfAbsent hands it the
+	// incumbent hash, and it must deliver nothing: a second credential in a
+	// second pod's sink authenticates as nothing and is indistinguishable from
+	// the one that works.
+	t.Run("a lost claim delivers nothing", func(t *testing.T) {
+		sink := firstBootSink(t)
+		c, _, _, _, admin := newTestCLI()
+		admin.GetFn = func(_ context.Context, _ string) (string, error) { return "", nil }
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, _ string) (string, error) {
+			return "$argon2id$incumbent-from-another-replica", nil
+		}
+
+		out := captureStdout(t, func() {
+			if err := c.InitAdminToken(context.Background()); err != nil {
+				t.Fatalf("InitAdminToken: %v", err)
+			}
+		})
+
+		if body, err := os.ReadFile(sink); err == nil && strings.Contains(string(body), "VAULT_ADMIN_TOKEN=") {
+			t.Errorf("the losing replica delivered a credential that is not in force: %q", body)
+		}
+		if !strings.Contains(out, "another replica") {
+			t.Errorf("the losing replica said nothing about why it minted no token: %q", out)
+		}
+	})
+
+	t.Run("repo claim error", func(t *testing.T) {
+		firstBootSink(t)
 		c, _, _, _, admin := newTestCLI()
 		admin.GetFn = func(_ context.Context, _ string) (string, error) {
 			return "", nil
 		}
-		admin.SetFn = func(_ context.Context, _, _ string) error {
-			return errors.New("write failed")
+		admin.ClaimIfAbsentFn = func(_ context.Context, _, _ string) (string, error) {
+			return "", errors.New("write failed")
 		}
 
 		// Capture stdout to prevent output leaking
@@ -531,6 +579,7 @@ func setupAuthenticatedCLI(t *testing.T) (*CLI, *mockClientRepo, *mockUserRepo, 
 
 func TestAddClient(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		var created *model.Client
 		clients.CreateFn = func(_ context.Context, cl *model.Client) error {
@@ -564,8 +613,11 @@ func TestAddClient(t *testing.T) {
 		if !strings.Contains(out, "Client created:") {
 			t.Error("expected 'Client created:' in output")
 		}
-		if !strings.Contains(out, "Secret:") {
-			t.Error("expected secret in output")
+		if !strings.Contains(out, "Secret written to:") {
+			t.Error("expected the output to name where the secret was delivered")
+		}
+		if strings.Contains(out, "Secret: ") {
+			t.Error("the client secret was printed rather than delivered")
 		}
 	})
 
@@ -598,6 +650,9 @@ func TestAddClient(t *testing.T) {
 	})
 
 	t.Run("repo create error", func(t *testing.T) {
+		// The sink matters: without it the command stops at delivery and never
+		// reaches Create, so the assertion below would pass on the wrong error.
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		clients.CreateFn = func(_ context.Context, _ *model.Client) error {
 			return errors.New("duplicate client")
@@ -618,6 +673,7 @@ func TestAddClient(t *testing.T) {
 	})
 
 	t.Run("empty scopes", func(t *testing.T) {
+		firstBootSink(t)
 		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
 		var created *model.Client
 		clients.CreateFn = func(_ context.Context, cl *model.Client) error {
@@ -718,296 +774,62 @@ func TestListClients(t *testing.T) {
 // TestRevokeClient
 // ---------------------------------------------------------------------------
 
-func TestRevokeClient(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		var deactivatedID string
-		clients.DeactivateFn = func(_ context.Context, id string) error {
-			deactivatedID = id
-			return nil
-		}
+func TestRevokeClient_RetiredDoesNotWriteAndPointsAtAdminPlane(t *testing.T) {
+	c, clients, _, _, _, token := setupAuthenticatedCLI(t)
+	called := false
+	clients.DeactivateFn = func(_ context.Context, _ string) error {
+		called = true
+		return nil
+	}
 
-		args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "client-123"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if deactivatedID != "client-123" {
-			t.Errorf("deactivated ID = %q, want %q", deactivatedID, "client-123")
-		}
-		if !strings.Contains(out, "revoked") {
-			t.Error("expected 'revoked' in output")
+	args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "client-123"}
+	stderr := captureStderr(t, func() {
+		if handled := c.Run(context.Background(), args); !handled {
+			t.Error("revoke-client must stay a recognized command so it does not fall through to booting the server")
 		}
 	})
 
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "revoke-client", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true (usage printed)")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.DeactivateFn = func(_ context.Context, _ string) error {
-			return errors.New("not found")
-		}
-
-		args := []string{"vault", "revoke-client", "--admin-token", token, "--id", "bad-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
+	if called {
+		t.Error("revoke-client issued a vault_app Deactivate write; client revocation must not run from cmd/vault")
+	}
+	if !strings.Contains(stderr, "/admin/clients") || !strings.Contains(stderr, "revoke") {
+		t.Errorf("revoke-client did not point the operator at the admin route: %q", stderr)
+	}
 }
 
 // ---------------------------------------------------------------------------
 // TestRotateClientSecret
 // ---------------------------------------------------------------------------
 
-func TestRotateClientSecret(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-			return &model.Client{ID: id, Name: "frontend", Active: true}, nil
-		}
-		var updatedClient *model.Client
-		clients.UpdateFn = func(_ context.Context, cl *model.Client) error {
-			updatedClient = cl
-			return nil
-		}
+func TestRotateClientSecret_RetiredDoesNotWriteAndPointsAtAdminPlane(t *testing.T) {
+	c, clients, _, _, _, token := setupAuthenticatedCLI(t)
+	getCalled, updateCalled := false, false
+	clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
+		getCalled = true
+		return &model.Client{ID: id, Name: "frontend"}, nil
+	}
+	clients.UpdateFn = func(_ context.Context, _ *model.Client) error {
+		updateCalled = true
+		return nil
+	}
 
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if updatedClient == nil {
-			t.Fatal("client was not updated")
-		}
-		if updatedClient.SecretHash == "" {
-			t.Error("expected new secret hash")
-		}
-		if !strings.Contains(out, "New secret for frontend:") {
-			t.Error("expected new secret in output")
+	args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
+	stderr := captureStderr(t, func() {
+		if handled := c.Run(context.Background(), args); !handled {
+			t.Error("rotate-client-secret must stay a recognized command so it does not fall through to booting the server")
 		}
 	})
 
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("client not found", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, _ string) (*model.Client, error) {
-			return nil, nil // not found
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "missing-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "client not found") {
-			t.Error("expected 'client not found' error")
-		}
-	})
-
-	t.Run("GetByID error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, _ string) (*model.Client, error) {
-			return nil, errors.New("db error")
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "err-id"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "client not found") {
-			t.Error("expected 'client not found' error")
-		}
-	})
-
-	t.Run("Update error", func(t *testing.T) {
-		c, clients, _, _, _, token := setupAuthenticatedCLI(t)
-		clients.GetByIDFn = func(_ context.Context, id string) (*model.Client, error) {
-			return &model.Client{ID: id, Name: "svc"}, nil
-		}
-		clients.UpdateFn = func(_ context.Context, _ *model.Client) error {
-			return errors.New("update failed")
-		}
-
-		args := []string{"vault", "rotate-client-secret", "--admin-token", token, "--id", "client-1"}
-		stderr := captureStderr(t, func() {
-			captureStdout(t, func() {
-				result := c.Run(context.Background(), args)
-				if !result {
-					t.Error("expected true")
-				}
-			})
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
+	if getCalled || updateCalled {
+		t.Error("rotate-client-secret touched the clients repository; secret rotation must not run from cmd/vault")
+	}
+	if !strings.Contains(stderr, "/admin/clients") || !strings.Contains(stderr, "rotate") {
+		t.Errorf("rotate-client-secret did not point the operator at the admin route: %q", stderr)
+	}
 }
 
-// ---------------------------------------------------------------------------
-// TestLockUser
-// ---------------------------------------------------------------------------
-
-func TestLockUser(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		var lockedID string
-		users.LockUntilFn = func(_ context.Context, id string, _ time.Time) error {
-			lockedID = id
-			return nil
-		}
-
-		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "user-42"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if lockedID != "user-42" {
-			t.Errorf("locked ID = %q, want %q", lockedID, "user-42")
-		}
-		if !strings.Contains(out, "User user-42 locked") {
-			t.Error("expected lock confirmation in output")
-		}
-	})
-
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "lock-user", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true (usage printed)")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		users.LockUntilFn = func(_ context.Context, _ string, _ time.Time) error {
-			return errors.New("user not found")
-		}
-
-		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "missing-user"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// TestUnlockUser
-// ---------------------------------------------------------------------------
-
-func TestUnlockUser(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		var unlockedID string
-		users.UnlockFn = func(_ context.Context, id string) error {
-			unlockedID = id
-			return nil
-		}
-
-		args := []string{"vault", "unlock-user", "--admin-token", token, "--id", "user-42"}
-		out := captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if unlockedID != "user-42" {
-			t.Errorf("unlocked ID = %q, want %q", unlockedID, "user-42")
-		}
-		if !strings.Contains(out, "unlocked") {
-			t.Error("expected unlock confirmation")
-		}
-	})
-
-	t.Run("missing id flag", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "unlock-user", "--admin-token", token}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "Usage:") {
-			t.Error("expected usage message")
-		}
-	})
-
-	t.Run("repo error", func(t *testing.T) {
-		c, _, users, _, _, token := setupAuthenticatedCLI(t)
-		users.UnlockFn = func(_ context.Context, _ string) error {
-			return errors.New("user not found")
-		}
-
-		args := []string{"vault", "unlock-user", "--admin-token", token, "--id", "bad-user"}
-		stderr := captureStderr(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-		if !strings.Contains(stderr, "ERROR:") {
-			t.Error("expected ERROR on stderr")
-		}
-	})
-}
+// lock-user and unlock-user are retired (they no longer write via vault_app);
+// their contract is pinned in cli_lock_retired_test.go.
 
 // ---------------------------------------------------------------------------
 // TestRevokeAllSessions
@@ -1091,6 +913,7 @@ func TestRevokeAllSessions(t *testing.T) {
 
 func TestRotateAdminToken(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
+		sink := firstBootSink(t)
 		c, _, _, _, admin, token := setupAuthenticatedCLI(t)
 		var storedHash string
 		admin.SetFn = func(_ context.Context, key, value string) error {
@@ -1111,11 +934,8 @@ func TestRotateAdminToken(t *testing.T) {
 		if storedHash == "" {
 			t.Error("expected new hash to be stored")
 		}
-		if !strings.Contains(out, "New admin token:") {
-			t.Error("expected new token in output")
-		}
-		if !strings.Contains(out, "shown ONCE") {
-			t.Error("expected 'shown ONCE' warning")
+		if !strings.Contains(out, sink) {
+			t.Error("expected the output to name where the new token was delivered")
 		}
 	})
 
@@ -1196,13 +1016,20 @@ func TestRun(t *testing.T) {
 			return nil
 		}
 
+		// lock-user is retired: dispatch reaches the retirement handler, which
+		// prints the admin-route redirect and issues no vault_app write.
 		args := []string{"vault", "lock-user", "--admin-token", token, "--id", "u1"}
-		captureStdout(t, func() {
-			c.Run(context.Background(), args)
+		stderr := captureStderr(t, func() {
+			if !c.Run(context.Background(), args) {
+				t.Error("expected lock-user to be routed (handled), not fall through to the server")
+			}
 		})
 
-		if !lockCalled {
-			t.Error("expected lock-user to be routed")
+		if lockCalled {
+			t.Error("retired lock-user must not issue a vault_app LockUntil write")
+		}
+		if !strings.Contains(stderr, "/admin/users") {
+			t.Errorf("expected lock-user to point at the admin route, got %q", stderr)
 		}
 	})
 
@@ -1244,26 +1071,8 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("routes to cleanup-audit", func(t *testing.T) {
-		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		cleanupCalled := false
-		c.audit.(*mockAuditRepo).CleanupFn = func(_ context.Context, _ time.Time) (int64, error) {
-			cleanupCalled = true
-			return 0, nil
-		}
-
-		args := []string{"vault", "cleanup-audit", "--admin-token", token, "--retention-days", "30"}
-		captureStdout(t, func() {
-			result := c.Run(context.Background(), args)
-			if !result {
-				t.Error("expected true")
-			}
-		})
-
-		if !cleanupCalled {
-			t.Error("expected cleanup-audit to be routed")
-		}
-	})
+	// cleanup-audit is retired (it no longer deletes via vault_app); its routing
+	// and inertness are pinned in cli_cleanup_audit_retired_test.go.
 
 	t.Run("routes to export-audit", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
@@ -1292,67 +1101,32 @@ func TestRun(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRotateJWKS(t *testing.T) {
-	t.Run("success stdout", func(t *testing.T) {
+	// The stdout path is retired. A PKCS#1 private key printed by a rotation Job
+	// lands in the pod log next to the tokens it signs, and there is no safe way
+	// to print it — only the 0600 file --output already wrote. What used to be
+	// asserted about that stdout key is now asserted about the file, one subtest
+	// down.
+	t.Run("refuses to mint a key it cannot deliver to a file", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
 
 		args := []string{"vault", "rotate-jwks", "--admin-token", token}
 		var stdout, stderr string
 		stderr = captureStderr(t, func() {
 			stdout = captureStdout(t, func() {
-				result := c.Run(context.Background(), args)
-				if !result {
+				if !c.Run(context.Background(), args) {
 					t.Error("expected true")
 				}
 			})
 		})
 
-		// Should contain kid line
-		if !strings.Contains(stdout, "kid: ") {
-			t.Error("expected 'kid:' in stdout")
+		if strings.Contains(stdout, "PRIVATE KEY") || strings.Contains(stderr, "PRIVATE KEY") {
+			t.Errorf("rotate-jwks printed a private key\nstdout: %s\nstderr: %s", stdout, stderr)
 		}
-
-		// Should contain PEM-encoded private key
-		if !strings.Contains(stdout, "-----BEGIN RSA PRIVATE KEY-----") {
-			t.Error("expected PEM block in stdout")
+		if strings.Contains(stdout, "kid: ") {
+			t.Error("a key was minted although there was nowhere to put it")
 		}
-		if !strings.Contains(stdout, "-----END RSA PRIVATE KEY-----") {
-			t.Error("expected PEM end block in stdout")
-		}
-
-		// kid should be a valid UUID format (hex + dashes)
-		lines := strings.Split(stdout, "\n")
-		var kidValue string
-		for _, line := range lines {
-			if strings.HasPrefix(line, "kid: ") {
-				kidValue = strings.TrimPrefix(line, "kid: ")
-				break
-			}
-		}
-		if kidValue == "" {
-			t.Fatal("kid value not found in output")
-		}
-		if len(kidValue) < 32 {
-			t.Errorf("kid too short: %q", kidValue)
-		}
-
-		// Verify the PEM key is valid by parsing it
-		pemStart := strings.Index(stdout, "-----BEGIN RSA PRIVATE KEY-----")
-		pemData := stdout[pemStart:]
-		block, _ := pem.Decode([]byte(pemData))
-		if block == nil {
-			t.Fatal("failed to decode PEM block from output")
-		}
-		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			t.Fatalf("failed to parse private key: %v", err)
-		}
-		if key.N.BitLen() != 2048 {
-			t.Errorf("key size = %d bits, want 2048", key.N.BitLen())
-		}
-
-		// Should contain operational note on stderr
-		if !strings.Contains(stderr, "NOTE:") {
-			t.Error("expected NOTE on stderr about key usage")
+		if !strings.Contains(stderr, "--output") {
+			t.Errorf("stderr does not name the required flag: %q", stderr)
 		}
 	})
 
@@ -1436,10 +1210,14 @@ func TestRotateJWKS(t *testing.T) {
 
 	t.Run("unique kid per invocation", func(t *testing.T) {
 		c, _, _, _, _, token := setupAuthenticatedCLI(t)
-		args := []string{"vault", "rotate-jwks", "--admin-token", token}
+		dir := t.TempDir()
 
 		var kids []string
 		for i := 0; i < 3; i++ {
+			args := []string{
+				"vault", "rotate-jwks", "--admin-token", token,
+				"--output", filepath.Join(dir, fmt.Sprintf("key-%d.pem", i)),
+			}
 			var stdout string
 			captureStderr(t, func() {
 				stdout = captureStdout(t, func() {

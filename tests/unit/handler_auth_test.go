@@ -74,7 +74,7 @@ func setupAuthHandler(t *testing.T) *authTestEnv {
 		"", 15, false, nil, // pepper="", minPwLength=15, hibpEnabled=false, hmacSecret=nil
 	)
 
-	h := handler.NewAuthHandler(authSvc, userRepo, nil, auditLogger, "", false)
+	h := handler.NewAuthHandler(authSvc, userRepo, nil, auditLogger, "", false, nil)
 	return &authTestEnv{
 		handler:   h,
 		userRepo:  userRepo,
@@ -378,13 +378,16 @@ func TestLoginHandler_LockedAccount(t *testing.T) {
 
 	env.handler.Login(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	// A locked account is answered like a wrong password or an unknown email:
+	// only an existing account can reach the locked state, so a distinct 403
+	// account_locked would leak that the address is registered.
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
 	}
 
 	resp := decodeResponse(t, w)
-	if resp["error"] != "account_locked" {
-		t.Fatalf("expected error %q, got %q", "account_locked", resp["error"])
+	if resp["error"] != "invalid_credentials" {
+		t.Fatalf("expected error %q, got %q", "invalid_credentials", resp["error"])
 	}
 }
 

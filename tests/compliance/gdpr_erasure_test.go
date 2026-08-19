@@ -160,6 +160,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	webauthn := postgres.NewWebAuthnRepo(db)
 	backupCodes := postgres.NewBackupCodeRepo(db)
 	recovery := postgres.NewAccountRecoveryRepo(db)
+	loginCountries := postgres.NewLoginCountryRepo(db)
 	// flushEvery=0 selects immediate (unbuffered) mode, so every audit write has
 	// hit the table before the next assertion runs.
 	auditLog := audit.NewLogger(postgres.NewAuditRepo(db), 0)
@@ -169,6 +170,10 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		totp, webauthn, backupCodes,
 		recovery, auditLog, &recoveryKey.PublicKey, hmacSecret,
 	)
+	// The login-country store is attached by setter, not by constructor. Both
+	// production planes call this; a suite that skipped it would assert Art. 17
+	// against a cascade the product does not run.
+	svc.SetLoginCountries(loginCountries)
 
 	// --- Fixture: a user with data in every user-linked store ---
 
@@ -279,13 +284,22 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 			t.Fatalf("seed refresh token %d: %v", i, err)
 		}
 	}
+	// Two login countries. Location data about the person: migration 028 assumed
+	// its ON DELETE CASCADE cleared these on erasure, which a tombstoned parent row
+	// never triggers, so they survived every erasure until migration 030.
+	for _, cc := range []string{"DE", "FR"} {
+		if _, _, err := loginCountries.UpsertAndWasNew(ctx, userID, cc); err != nil {
+			t.Fatalf("seed login country %s: %v", cc, err)
+		}
+	}
+
 	// A pre-erasure audit entry. Art. 17(3)(b)/(e) exempts these; clause 5
 	// asserts it survives the erasure untouched.
-	if err := auditLog.Log(ctx, audit.LoginSuccess, userID, "", "203.0.113.7", "ua", fpHash, deviceID, nil, 0); err != nil {
+	if err := auditLog.Log(ctx, audit.LoginSuccess, userID, "", "203.0.113.7", "ua", fpHash, deviceID, nil); err != nil {
 		t.Fatalf("seed audit entry: %v", err)
 	}
 
-	// The nine stores DeleteAccount cascades over, in the order it runs them.
+	// The ten stores DeleteAccount cascades over, in the order it runs them.
 	// The seeded counts double as the vacuous-pass guard: a store that never had
 	// rows would make its post-erasure zero meaningless.
 	erasableStores := []struct {
@@ -299,6 +313,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		{"auth.devices", `SELECT COUNT(*) FROM auth.devices WHERE user_id=$1`, userID, 1},
 		{"auth.social_accounts", `SELECT COUNT(*) FROM auth.social_accounts WHERE user_id=$1`, userID, 1},
 		{"auth.password_history", `SELECT COUNT(*) FROM auth.password_history WHERE user_id=$1`, userID, 2},
+		{"auth.login_countries", `SELECT COUNT(*) FROM auth.login_countries WHERE user_id=$1`, userID, 2},
 		{"auth.totp_secrets", `SELECT COUNT(*) FROM auth.totp_secrets WHERE user_id=$1`, userID, 1},
 		{"auth.webauthn_credentials", `SELECT COUNT(*) FROM auth.webauthn_credentials WHERE user_id=$1`, userID, 2},
 		{"auth.backup_codes", `SELECT COUNT(*) FROM auth.backup_codes WHERE user_id=$1`, userID, 3},
@@ -323,7 +338,7 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	tombstoneEmail := "deleted-" + userID + "@deleted.invalid"
 
 	// GDPR Art. 17(1): erasure of personal data means every user-linked store,
-	// not just the account row. Each of the nine cascade targets in
+	// not just the account row. Each of the ten cascade targets in
 	// ErasureService.DeleteAccount must be empty, by row count.
 	t.Run("art_17_1_every_user_linked_store_erased", func(t *testing.T) {
 		for _, s := range erasableStores {
@@ -496,22 +511,30 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 	// HMAC(userID + ":recovery") so the plaintext identity never hits the table.
 	// Only the offline private key can read it back.
 	t.Run("recovery_escrow_written_hmac_keyed", func(t *testing.T) {
-		var pseudonym, gotDeletedBy, gotReason string
+		var recordID, pseudonym, gotDeletedBy, gotReason string
 		var payload []byte
 		if err := pool.QueryRow(ctx,
-			`SELECT pseudonym, payload, deleted_by, reason FROM auth.account_recovery WHERE pseudonym=$1`,
-			recoveryPseudonym).Scan(&pseudonym, &payload, &gotDeletedBy, &gotReason); err != nil {
+			`SELECT id::text, pseudonym, payload, deleted_by, reason FROM auth.account_recovery WHERE pseudonym=$1`,
+			recoveryPseudonym).Scan(&recordID, &pseudonym, &payload, &gotDeletedBy, &gotReason); err != nil {
 			t.Fatalf("escrow record keyed by the service's HMAC pseudonym must exist: %v", err)
 		}
 		if gotDeletedBy != deletedBy || gotReason != reason {
 			t.Errorf("escrow provenance = (%q, %q), want (%q, %q)", gotDeletedBy, gotReason, deletedBy, reason)
 		}
 
-		plaintext, err := vaultcrypto.DecryptRecovery(recoveryKey, payload)
+		// The binding is rebuilt from the columns as they came BACK out of
+		// PostgreSQL, which is the round trip that matters: the record id is
+		// written as a Go string and read back through the UUID type, and if
+		// those two spellings ever disagreed every escrow record in the database
+		// would be unrecoverable.
+		binding := vaultcrypto.RecoveryBinding(recordID, pseudonym)
+		plaintext, err := vaultcrypto.DecryptRecovery(recoveryKey, payload, binding)
 		if err != nil {
 			t.Fatalf("escrow payload does not decrypt with the recovery private key: %v", err)
 		}
 		var rec struct {
+			Version     int      `json:"v"`
+			UserID      string   `json:"user_id"`
 			Email       string   `json:"email"`
 			Roles       []string `json:"roles"`
 			DisplayName string   `json:"display_name"`
@@ -524,6 +547,22 @@ func TestGDPR_Art17_AccountErasure(t *testing.T) {
 		}
 		if rec.DisplayName != displayName {
 			t.Errorf("recovered display_name = %q, want %q", rec.DisplayName, displayName)
+		}
+		if rec.UserID != userID {
+			t.Errorf("recovered user_id = %q, want %q: a record that does not name its subject "+
+				"cannot be restored, because the row identifies it only by HMAC", rec.UserID, userID)
+		}
+
+		// The payload is sealed to THIS row and to no other. A second escrow row
+		// exists in this database (the retry case above), and the two must not be
+		// interchangeable.
+		if _, err := vaultcrypto.DecryptRecovery(recoveryKey, payload,
+			vaultcrypto.RecoveryBinding(recordID, pseudonym+"x")); err == nil {
+			t.Error("the escrow payload opened under a foreign pseudonym: it can be moved between rows")
+		}
+		if _, err := vaultcrypto.DecryptRecovery(recoveryKey, payload,
+			vaultcrypto.RecoveryBinding("00000000-0000-4000-8000-000000000000", pseudonym)); err == nil {
+			t.Error("the escrow payload opened under a foreign record id: it can be moved between rows")
 		}
 	})
 }

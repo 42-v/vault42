@@ -161,6 +161,56 @@ func TestPostgresAuditRepo(t *testing.T) {
 		}
 	})
 
+	// AU-6 asks for review AND analysis. Analysis needs the severity signal to be
+	// selectable, and before this predicate existed repository.AuditFilter
+	// carried user, event type and time window only: there was no WHERE clause
+	// an operator could write that said "show me everything that mattered", so
+	// the one severity signal in the store could not be reviewed at all.
+	t.Run("Query by MinRiskScore selects on severity", func(t *testing.T) {
+		low := &model.AuditEntry{
+			ID: randomID(), Timestamp: baseTime.Add(20 * time.Second),
+			EventType: "login_success", UserID: userID1, RiskScore: 0,
+		}
+		high := &model.AuditEntry{
+			ID: randomID(), Timestamp: baseTime.Add(21 * time.Second),
+			EventType: "honeypot_trigger", UserID: userID1, RiskScore: 100,
+		}
+		if err := repo.InsertBatch(ctx, []*model.AuditEntry{low, high}); err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+
+		entries, err := repo.Query(ctx, repository.AuditFilter{MinRiskScore: 75})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Fatal("no entries at or above severity 75, but one was just written at 100")
+		}
+		var sawHigh bool
+		for _, e := range entries {
+			if e.RiskScore < 75 {
+				t.Errorf("entry %s scored %d and came back for MinRiskScore=75", e.EventType, e.RiskScore)
+			}
+			if e.ID == high.ID {
+				sawHigh = true
+			}
+		}
+		if !sawHigh {
+			t.Error("the severity-100 entry did not come back for MinRiskScore=75")
+		}
+
+		// Zero is absence, not a floor of zero: an unset filter must not turn
+		// into a predicate that quietly excludes nothing while looking set.
+		all, err := repo.Query(ctx, repository.AuditFilter{})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(all) <= len(entries) {
+			t.Errorf("an unfiltered query returned %d entries and a severity-filtered one %d; "+
+				"the predicate is either always on or never on", len(all), len(entries))
+		}
+	})
+
 	t.Run("Query by EventType", func(t *testing.T) {
 		entries, err := repo.Query(ctx, repository.AuditFilter{EventType: "token_refresh"})
 		if err != nil {

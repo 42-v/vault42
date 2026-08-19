@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,18 +24,28 @@ import (
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/service"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
 // =============================================================================
 // NIST SP 800-63B Integration Tests — Database & Concurrency Verification
 // =============================================================================
 
-// skipIfNoDocker skips integration tests when Docker is unavailable.
+// skipIfNoDocker skips integration tests when no container runtime is reachable.
+//
+// Probing rather than only honoring SKIP_INTEGRATION matters for the
+// compliance suite specifically: a reviewer who clones the repo and runs
+// `go test ./tests/compliance/` must get a clean result showing which
+// requirements are proven container-free and which need a database, not a wall
+// of connection errors that makes the whole report look broken.
+//
+// "Reachable" was os.Stat on the socket path, which answers a different
+// question than the one the skip message claims: a rootless podman that has
+// stopped serving keeps its socket file, so the suite reported a runtime,
+// started a container against it and hung. testutil probes the API instead.
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
+	testutil.RequireContainerRuntime(t)
 }
 
 // setupPostgres starts a PostgreSQL testcontainer and runs the initial migration.
@@ -85,20 +96,39 @@ func setupPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 		t.Fatalf("connect for migrations: %v", err)
 	}
 
-	migSQL, err := os.ReadFile("../../migrations/001_initial_schema.sql")
+	// Every migration, in order, not just the initial schema. Pinning this
+	// fixture to 001 meant the tests ran against a schema the application no
+	// longer writes: migration 013 added auth.refresh_tokens.family_created_at,
+	// and the refresh-token INSERT names it, so a 001-only fixture failed on a
+	// column error rather than on anything it was asserting.
+	migEntries, err := os.ReadDir("../../migrations")
 	if err != nil {
 		migConn.Close(ctx) //nolint:errcheck
 		pool.Close()
 		pgContainer.Terminate(ctx) //nolint:errcheck
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read migrations dir: %v", err)
 	}
-
-	migStr := stripRoleGrantsInteg(string(migSQL))
-	if _, err := migConn.Exec(ctx, migStr); err != nil {
-		migConn.Close(ctx) //nolint:errcheck
-		pool.Close()
-		pgContainer.Terminate(ctx) //nolint:errcheck
-		t.Fatalf("run migration: %v", err)
+	var migFiles []string
+	for _, e := range migEntries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			migFiles = append(migFiles, e.Name())
+		}
+	}
+	sort.Strings(migFiles)
+	for _, f := range migFiles {
+		migSQL, err := os.ReadFile("../../migrations/" + f)
+		if err != nil {
+			migConn.Close(ctx) //nolint:errcheck
+			pool.Close()
+			pgContainer.Terminate(ctx) //nolint:errcheck
+			t.Fatalf("read migration %s: %v", f, err)
+		}
+		if _, err := migConn.Exec(ctx, stripRoleGrantsInteg(string(migSQL))); err != nil {
+			migConn.Close(ctx) //nolint:errcheck
+			pool.Close()
+			pgContainer.Terminate(ctx) //nolint:errcheck
+			t.Fatalf("run migration %s: %v", f, err)
+		}
 	}
 	migConn.Close(ctx) //nolint:errcheck
 
@@ -142,7 +172,7 @@ func stripRoleGrantsInteg(sql string) string {
 // --- Test 1: HIBP Breach Check SHA-1 Prefix Logic ---
 
 func TestNIST_HIBPBreachCheck(t *testing.T) {
-	// NIST 800-63B Section 5.1.1.1: Check passwords against breach databases.
+	// NIST 800-63B Section 3.1.1.1: Check passwords against breach databases.
 	// The HIBP client uses k-anonymity: SHA-1 hash is split into a 5-char prefix
 	// and 35-char suffix. Only the prefix is sent to the API. We verify the
 	// SHA-1 prefix/suffix logic and mock suffix matching independently, since
@@ -506,8 +536,11 @@ func TestNIST_EmailVerificationEnforcement(t *testing.T) {
 			service.ErrInvalidCredentials,
 			service.ErrAccountLocked,
 		}
-		// ErrAccountLocked is the only other auth-related error exposed,
-		// and it's only returned AFTER successful credential validation.
+		// ErrAccountLocked is the only other auth-related error exposed. It is
+		// returned by the per-IP lockout (before any user lookup, so it reveals
+		// nothing about a specific account); the per-user login lock now answers
+		// ErrInvalidCredentials so a locked account cannot be told from an unknown
+		// one.
 		for _, e := range errs {
 			if e == nil {
 				t.Fatal("auth error should not be nil")

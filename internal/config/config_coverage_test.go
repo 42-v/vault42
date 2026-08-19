@@ -170,7 +170,11 @@ func TestEnvBool(t *testing.T) {
 		{"false", "false", false},
 		{"0", "0", false},
 		{"empty", "", false},
-		{"random string", "on", false},
+		{"on", "on", true},
+		{"shouted true", "TRUE", true},
+		// An unrecognized value answers false here and Load refuses to start on
+		// it, so a control the operator switched on can never end up off.
+		{"unrecognized", "ture", false},
 	}
 
 	for _, tt := range tests {
@@ -326,7 +330,6 @@ func TestLoadSecretsFromFiles(t *testing.T) {
 	t.Setenv("VAULT_PROFILE", "dev")
 
 	writeSecret("MASTER_KEY", "01234567890123456789012345678901")
-	writeSecret("ADMIN_TOKEN", "admin-hash-value")
 	writeSecret("VAULT_PEPPER", "pepper-value")
 	writeSecret("HMAC_SECRET", "01234567890123456789012345678901") // 32 bytes
 	writeSecret("DB_MIG_PASSWORD", "mig-pass")
@@ -340,9 +343,8 @@ func TestLoadSecretsFromFiles(t *testing.T) {
 	if string(cfg.MasterKey) != "01234567890123456789012345678901" {
 		t.Errorf("MasterKey not loaded: %q", cfg.MasterKey)
 	}
-	if cfg.AdminTokenHash != "admin-hash-value" {
-		t.Errorf("AdminTokenHash not loaded: %q", cfg.AdminTokenHash)
-	}
+	// ADMIN_TOKEN is not in this list on purpose: cli.New owns that read. See
+	// TestLoadLeavesAdminTokenFileForTheCLI.
 	if cfg.Pepper != "pepper-value" {
 		t.Errorf("Pepper not loaded: %q", cfg.Pepper)
 	}
@@ -458,8 +460,12 @@ func TestLoadCustomTokenTTLs(t *testing.T) {
 	}
 }
 
-func TestLoadUnknownProfileFallsBackToProduction(t *testing.T) {
-	t.Setenv("VAULT_PROFILE", "staging")
+// An unset profile is the one that falls back to production. A profile name
+// that is set and unknown is a typo, and the fallback used to hide it: the
+// honeypot profile is the case where production is not the strict choice,
+// because server.go mounts the honeypot alerter only on the exact name.
+func TestLoadUnsetProfileFallsBackToProduction(t *testing.T) {
+	t.Setenv("VAULT_PROFILE", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -467,7 +473,7 @@ func TestLoadUnknownProfileFallsBackToProduction(t *testing.T) {
 	}
 
 	if cfg.Profile != ProfileProduction {
-		t.Errorf("unknown profile should fall back to production, got %q", cfg.Profile)
+		t.Errorf("unset profile should fall back to production, got %q", cfg.Profile)
 	}
 	if !cfg.TLSEnabled {
 		t.Error("should have production TLS defaults")

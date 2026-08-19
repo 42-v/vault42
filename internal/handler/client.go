@@ -25,12 +25,54 @@ func NewClientHandler(clients repository.ClientRepository, tokenSvc *service.Tok
 	return &ClientHandler{clients: clients, tokenSvc: tokenSvc, auditLog: auditLog}
 }
 
+// clientAuthFailureIDLimit caps the attempted client id written to the audit
+// record. The id is attacker-controlled on the unknown-client path, and an
+// unbounded one lets anyone write arbitrarily large rows into the audit table
+// at one row per request.
+const clientAuthFailureIDLimit = 128
+
+// auditClientAuthFailure records a rejected client-credentials grant.
+//
+// Every rejection was silent. audit.ClientAuth was emitted only after a
+// successful grant, so the four failure paths (unparseable credentials, unknown
+// client, inactive client, wrong secret) wrote a 401 and nothing else. The only
+// other control on this endpoint is a 10/minute IP-keyed limiter, so a
+// distributed brute force against a service client's secret, the credential
+// that gates kms:unwrap, mint:token and the service-document store, produced no
+// audit trail at all: nothing to alert on, and nothing to reconstruct
+// afterwards.
+//
+// The reason is recorded because the audit log is not visible to the caller.
+// Distinguishing an unknown client from a wrong secret is exactly what the 401
+// must not do and exactly what an investigator needs.
+//
+// It is a function rather than a method because POST /auth/login authenticates
+// client credentials too, optionally, to decide whether the caller may be told
+// why a login was refused. That path rejects with the same four reasons and must
+// leave the same trail: a guess against a first-party client secret is the same
+// attack whichever endpoint it is aimed at, and an investigator reading
+// client_auth rows should not have to know which one was used.
+func auditClientAuthFailure(auditLog *audit.Logger, r *http.Request, clientID, reason string) {
+	if auditLog == nil {
+		return
+	}
+	if len(clientID) > clientAuthFailureIDLimit {
+		clientID = clientID[:clientAuthFailureIDLimit]
+	}
+	auditLog.Log(r.Context(), audit.ClientAuth, "", clientID, middleware.ClientIP(r), // #nosec G104 -- audit is best-effort, never blocks auth flow
+		r.Header.Get("User-Agent"), "", "", map[string]interface{}{
+			"result": "failure",
+			"reason": reason,
+		})
+}
+
 // Token handles POST /client/token (client credentials grant).
 func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 8192) // explicit limit for gosec G120 visibility
 
 	clientID, clientSecret, ok := parseClientCredentials(r)
 	if !ok {
+		auditClientAuthFailure(h.auditLog, r, "", "unparseable_credentials")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -42,6 +84,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
+		auditClientAuthFailure(h.auditLog, r, clientID, "unknown_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -52,6 +95,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusServiceUnavailable, "server_busy")
 			return
 		}
+		auditClientAuthFailure(h.auditLog, r, client.ID, "inactive_client")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
@@ -63,13 +107,16 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if verifyErr != nil || !valid {
+		auditClientAuthFailure(h.auditLog, r, client.ID, "wrong_secret")
 		WriteError(w, http.StatusUnauthorized, "invalid_client_credentials")
 		return
 	}
 
-	// Parse requested scopes
+	// Parse requested scopes. PostFormValue for the same reason the credentials
+	// use it: the grant is a body-only request, so a proxy that inspects bodies
+	// sees the whole of it and no component can be smuggled past in the URL.
 	var requestedScopes []string
-	if scopeStr := r.FormValue("scope"); scopeStr != "" {
+	if scopeStr := r.PostFormValue("scope"); scopeStr != "" {
 		requestedScopes = strings.Split(scopeStr, " ")
 	}
 
@@ -84,7 +131,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pair, err := h.tokenSvc.IssueTokenPair(
-		client.ID, []string{client.Role}, grantedScopes,
+		r.Context(), client.ID, []string{client.Role}, grantedScopes,
 		client.ID, "", "", false,
 	)
 	if err != nil {
@@ -98,7 +145,7 @@ func (h *ClientHandler) Token(w http.ResponseWriter, r *http.Request) {
 			r.Header.Get("User-Agent"), "", "", map[string]interface{}{
 				"client_name": client.Name,
 				"scopes":      strings.Join(grantedScopes, " "),
-			}, 0)
+			})
 	}
 
 	WriteJSON(w, http.StatusOK, ClientTokenResponse{
@@ -122,9 +169,23 @@ func parseClientCredentials(r *http.Request) (clientID, clientSecret string, ok 
 		}
 	}
 
-	// Try request body
-	clientID = r.FormValue("client_id")
-	clientSecret = r.FormValue("client_secret")
+	// Try request body.
+	//
+	// PostFormValue, not FormValue: FormValue calls ParseForm, which merges the
+	// URL query into r.Form, so it answers with the query value whenever the body
+	// omits the key. That made
+	// POST /client/token?client_id=..&client_secret=.. authenticate, which RFC
+	// 6749 2.3.1 forbids ("MUST NOT be included in the request URI") because a
+	// URL is retained by every component on the path that a body is not: the
+	// TLS-terminating ingress access log, any CDN or WAF, Referer on a later
+	// navigation, shell history, APM traces. The credential this endpoint takes
+	// gates kms:unwrap, mint:token and the service-document store and is
+	// long-lived, so the exposure is neither small nor short. vault42's own
+	// logger drops the query (internal/middleware/logger.go), which is exactly
+	// why the server has to refuse the parameter rather than rely on scrubbing:
+	// the leak lands outside vault42.
+	clientID = r.PostFormValue("client_id")
+	clientSecret = r.PostFormValue("client_secret")
 	if clientID != "" && clientSecret != "" {
 		return clientID, clientSecret, true
 	}

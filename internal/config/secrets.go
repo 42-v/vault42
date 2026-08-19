@@ -25,18 +25,85 @@ func LoadSecret(envKey string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
-	if os.Getenv("VAULT_SECRET_FILE_CONSUME") == "true" {
-		// path comes from an operator-controlled env var. Quote it, and the error
-		// text repeating it, so CR/LF cannot forge extra log records (CWE-117).
-		safePath := strconv.Quote(path)
-		if werr := os.WriteFile(path, make([]byte, len(data)), 0o400); werr != nil { // #nosec G104,G306 -- best-effort zeroing; path from operator env var
-			log.Printf("WARNING: failed to zero secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(werr.Error()))
-		}
-		if rerr := os.Remove(path); rerr != nil {
-			log.Printf("WARNING: failed to remove secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(rerr.Error()))
-		}
-	}
+	consumeSecretFile(path, len(data))
 	return strings.TrimSpace(string(data)), nil
+}
+
+// LoadSecretBinary reads a fixed-length binary secret without trimming it.
+//
+// LoadSecret trims whitespace, which is right for the text secrets written by
+// `openssl rand -hex` and wrong for a key that is raw bytes. scripts/generate-secrets.sh
+// writes the master key as 32 raw bytes from `openssl rand 32`. Six of the 256
+// possible byte values are ASCII whitespace, so a correctly generated key whose
+// first or last byte happens to be one of them lost that byte to the trim: about
+// one key in twenty-two. The file on disk was exactly 32 bytes and exactly right,
+// and the process refused to start with "MASTER_KEY_FILE is required (32 bytes
+// for AES-256)", which reads as a missing mount rather than a mangled read.
+//
+// A trailing newline is still tolerated, because an operator who writes a key
+// with a shell redirect or an editor gets one and their key is not wrong. Exactly
+// one is stripped, and only when doing so produces the expected length, so a raw
+// key that genuinely ends in 0x0A is kept rather than truncated.
+//
+// The consume-on-read behavior is identical to LoadSecret.
+func LoadSecretBinary(envKey string, wantLen int) ([]byte, error) {
+	path := os.Getenv(envKey + "_FILE")
+	if path == "" {
+		return nil, fmt.Errorf("%s_FILE not set", envKey)
+	}
+	path = filepath.Clean(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path from operator env var (_FILE convention), cleaned with filepath.Clean
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	consumeSecretFile(path, len(data))
+
+	switch {
+	case len(data) == wantLen:
+		return data, nil
+	case len(data) == wantLen+1 && data[len(data)-1] == '\n':
+		return data[:wantLen], nil
+	case len(data) == wantLen+2 && data[len(data)-2] == '\r' && data[len(data)-1] == '\n':
+		return data[:wantLen], nil
+	default:
+		return nil, fmt.Errorf("%s_FILE holds %d bytes, want %d", envKey, len(data), wantLen)
+	}
+}
+
+// SecretFilesAreConsumed reports whether a secret file is destroyed by the read
+// that consumes it.
+//
+// The one boolean in this package that is deliberately not resolved through
+// parseBoolEnv, and so the one where an unrecognized spelling is silently false.
+// Every other setting is a control whose absence is the hazard, so guessing
+// wrong there costs a security property; this one destroys the operator's key
+// material on a writable mount, so guessing wrong costs the deployment. Exactly
+// "true" is what docs/config.md documents and what cmd/vault/startup_test.go
+// pins in both directions.
+//
+// Exported because the answer decides more than whether to wipe: a file that
+// this process is expected to have destroyed cannot also be a file whose absence
+// means a broken mount, and the two readers of that distinction are in different
+// packages.
+func SecretFilesAreConsumed() bool {
+	return os.Getenv("VAULT_SECRET_FILE_CONSUME") == "true"
+}
+
+// consumeSecretFile applies the opt-in zero-and-remove wipe shared by LoadSecret
+// and LoadSecretBinary.
+func consumeSecretFile(path string, size int) {
+	if !SecretFilesAreConsumed() {
+		return
+	}
+	// path comes from an operator-controlled env var. Quote it, and the error
+	// text repeating it, so CR/LF cannot forge extra log records (CWE-117).
+	safePath := strconv.Quote(path)
+	if werr := os.WriteFile(path, make([]byte, size), 0o400); werr != nil { // #nosec G104,G306 -- best-effort zeroing; path from operator env var
+		log.Printf("WARNING: failed to zero secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(werr.Error()))
+	}
+	if rerr := os.Remove(path); rerr != nil {
+		log.Printf("WARNING: failed to remove secret file %s (defense-in-depth wipe skipped): %s", safePath, strconv.Quote(rerr.Error()))
+	}
 }
 
 // LoadSecretOptional is like LoadSecret but returns empty string if not set.

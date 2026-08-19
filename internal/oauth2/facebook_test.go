@@ -409,21 +409,29 @@ func TestFacebookUserInfo_PictureNested(t *testing.T) {
 	}
 }
 
+// TestFacebookUserInfo_EmailVerified pins the fail-closed mapping. The Graph
+// user node returns `email` as the address listed on the profile and publishes
+// no per-address verification field, so a Facebook login never claims a
+// verified address whatever the response contains.
+//
+// This test used to assert the opposite, under the case name "email present
+// means verified". That expectation made a non-empty string the entire proof of
+// ownership: whoever could make Graph return victim@example.com reached the
+// branch in internal/handler/oauth.go that links a social identity to the
+// existing local account of that address, and every later Facebook login minted
+// the victim's tokens without a password. Restoring it restores that.
 func TestFacebookUserInfo_EmailVerified(t *testing.T) {
 	tests := []struct {
-		name         string
-		email        string
-		wantVerified bool
+		name  string
+		email string
 	}{
 		{
-			name:         "email present means verified",
-			email:        "user@example.com",
-			wantVerified: true,
+			name:  "address on the profile is not an ownership proof",
+			email: "user@example.com",
 		},
 		{
-			name:         "no email means not verified",
-			email:        "",
-			wantVerified: false,
+			name:  "no address at all",
+			email: "",
 		},
 	}
 
@@ -445,10 +453,51 @@ func TestFacebookUserInfo_EmailVerified(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if info.EmailVerified != tt.wantVerified {
-				t.Errorf("EmailVerified = %v, want %v", info.EmailVerified, tt.wantVerified)
+			if info.EmailVerified {
+				t.Errorf("EmailVerified = true for email %q; Facebook publishes no verification "+
+					"signal, so vault42 has nothing to base that on and must not let the login "+
+					"link to an existing account by address", tt.email)
 			}
 		})
+	}
+}
+
+// TestFacebookUserInfo_EmailIsNotOwnershipProof walks the takeover attempt. The
+// attacker authorizes the app from their own Facebook account and arranges for
+// the profile to carry the victim's address; the provider id is the attacker's
+// throughout, which is what makes the resulting link permanent.
+//
+// The email carries no ownership claim, so EmailVerified stays false and the
+// handler's linking rule refuses. Sign-in and linking by provider id are
+// untouched: only linking by address is denied.
+func TestFacebookUserInfo_EmailIsNotOwnershipProof(t *testing.T) {
+	const victimEmail = "victim@vault42.test"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"attacker-fb-id","name":"Somebody","email":"` + victimEmail + `"}`))
+	}))
+	defer srv.Close()
+
+	p := &FacebookProvider{clientID: "cid", userInfoURL: srv.URL}
+	info, err := p.UserInfo(context.Background(), "attacker-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Email != victimEmail {
+		t.Fatalf("Email = %q, want %q: the fixture is not exercising the attack", info.Email, victimEmail)
+	}
+	if info.ID != "attacker-fb-id" {
+		t.Fatalf("ID = %q, want the attacker's provider id", info.ID)
+	}
+
+	// internal/handler/oauth.go links to an existing local account only when
+	// this flag and the account's own flag are both set. False here is what
+	// keeps the victim's user id out of reach.
+	if info.EmailVerified {
+		t.Error("EmailVerified = true for an address the attacker merely typed into their own " +
+			"profile; the callback would attach (facebook, attacker-fb-id) to the victim's user " +
+			"id and issue the victim's tokens on this and every later Facebook login")
 	}
 }
 

@@ -130,7 +130,9 @@ describe('createI18nPlugin repeated installation', () => {
     appA.use(p)
     appB.use(p)
 
-    appA.config.globalProperties.$t // touch, then switch from A's instance
+    // Resolve A's $t before switching locale, so the assertion below is about
+    // B seeing the change and not about either app having never read it.
+    expect(appA.config.globalProperties.$t).toBeTypeOf('function')
     p.instance.setLocale('de')
 
     expect(appB.config.globalProperties.$t('common.signIn')).toBe('Anmelden')

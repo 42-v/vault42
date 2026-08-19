@@ -140,7 +140,12 @@ while IFS= read -r line; do
     dario.cat/mergo*|gopkg.in/yaml.v3*) continue ;;
   esac
 
-  DISPLAY_VER=$(echo "$VER" | sed 's/v0\.0\.0-[0-9]*-/v0.0.0-/')
+  # Shorten a Go pseudo-version by dropping its timestamp segment:
+  # v0.0.0-20240101120000-abcdef123456 -> v0.0.0-abcdef123456.
+  DISPLAY_VER="$VER"
+  if [[ "$VER" =~ ^v0\.0\.0-[0-9]*-(.*)$ ]]; then
+    DISPLAY_VER="v0.0.0-${BASH_REMATCH[1]}"
+  fi
   NOTE=$(dep_note "$MOD")
   REPO=$(gh_repo "$MOD")
 
@@ -200,7 +205,6 @@ while IFS= read -r owner; do
   if [ -n "$gh_json" ]; then
     gh_type=$(echo "$gh_json" | grep -oP '"type"\s*:\s*"[^"]*"' | grep -oP '"[^"]*"$' | tr -d '"')
     gh_repos=$(echo "$gh_json" | grep -oP '"public_repos"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
-    gh_followers=$(echo "$gh_json" | grep -oP '"followers"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
     gh_created=$(echo "$gh_json" | grep -oP '"created_at"\s*:\s*"[^"]*"' | grep -oP '\d{4}-\d{2}-\d{2}')
 
     if [ "$gh_type" = "Organization" ]; then
@@ -223,15 +227,44 @@ done < <(cut -f1 "$CREATOR_TMP" | sort -u)
 # ═══════════════════════════════════════════════════════════════
 COV_NUM=$(echo "$TOTAL_COV" | tr -d '%')
 
+# Reachable coverage comes from the same tool the release gate uses, so the badge
+# cannot claim a figure the gate would reject. Excluded statements are the ones no
+# test can reach; .coverage-exclusions.json records why, per statement.
+#
+# cov-gaps' exit code is load-bearing here. Discarding it and falling back to raw
+# total coverage gives a broken exclusion set a badge in the same shape as every
+# other run's, with nothing anywhere saying the set the figure is a claim about no
+# longer resolves: the badge could not fail, only quietly mean something else.
+# Either the set verifies against this profile or no badge is written.
+COV_JSON=$(python3 scripts/cov-gaps.py "$COVER_FILE" --json) || {
+  echo "ERROR: the exclusion set does not resolve against $COVER_FILE (see above)." >&2
+  echo "Run: python3 scripts/cov-gaps.py $COVER_FILE --verify-exclusions" >&2
+  echo "Refusing to publish a reachable-coverage badge no exclusion set backs." >&2
+  exit 1
+}
+REACHABLE_COV=$(printf '%s' "$COV_JSON" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+reach = d["total_statements"] - d["excluded_statements"]
+if reach <= 0:
+    sys.exit("every instrumented statement is excluded; there is no reachable figure")
+print("%.2f" % (100.0 * d["covered_statements"] / reach))
+')
+
+VERSION_STR=$(cat VERSION 2>/dev/null || echo "0.0.0")
+
 mkdir -p docs
 
 cat > docs/badges.json <<EOF
 {
   "schemaVersion": 1,
+  "version": "${VERSION_STR}",
   "tests": ${PASSED},
   "passed": "${PASSED} passed",
   "coverage": "${TOTAL_COV}",
   "coverageNum": ${COV_NUM},
+  "reachableCoverage": "${REACHABLE_COV}%",
+  "reachableCoverageNum": ${REACHABLE_COV},
   "packages": ${PKGS},
   "goFiles": ${GO_FILES},
   "goLines": ${GO_LINES},
@@ -244,9 +277,25 @@ EOF
 # ═══════════════════════════════════════════════════════════════
 # 8. Generate docs/deps.md
 # ═══════════════════════════════════════════════════════════════
+# Every row set is normalised to carry no trailing newline, and every blank
+# line in the document comes from the template below rather than from whichever
+# variable happened to end in one.
+#
+# They did not agree before. DIRECT_ROWS, INDIRECT_ROWS and CREATOR_ROWS are
+# built by appending literal newlines and so ended with one, while
+# COVERAGE_ROWS comes from a command substitution, which strips them. The
+# result was a heading pressed against the end of a table (MD022, MD058) and a
+# double blank line at the end of the file (MD012) -- emitted afresh on every
+# regeneration, so the markdownlint findings a previous commit cleared came
+# straight back.
+DIRECT_ROWS="${DIRECT_ROWS%"${DIRECT_ROWS##*[!$'\n']}"}"
+INDIRECT_ROWS="${INDIRECT_ROWS%"${INDIRECT_ROWS##*[!$'\n']}"}"
+CREATOR_ROWS="${CREATOR_ROWS%"${CREATOR_ROWS##*[!$'\n']}"}"
+
 COVERAGE_BLOCK=""
 if [ -n "$COVERAGE_ROWS" ]; then
   COVERAGE_BLOCK="
+
 ## Coverage by Package
 
 | Package | Coverage |
@@ -257,6 +306,7 @@ fi
 CREATORS_BLOCK=""
 if [ -n "$CREATOR_ROWS" ]; then
   CREATORS_BLOCK="
+
 ## Maintainers
 
 ${CREATOR_COUNT} maintainers behind Vault's dependency tree.
@@ -276,6 +326,7 @@ ${DIRECT_COUNT} direct dependencies. Everything else — TOTP, CORS, JWKS, confi
 | Dependency | Version | Purpose | Stars | Updated |
 |---|---|---|---|---|
 ${DIRECT_ROWS}
+
 ## Transitive (${INDIRECT_COUNT} pulled by the above)
 
 | Dependency | Version | Pulled by | Stars | Updated |
@@ -293,11 +344,28 @@ else
   (cd web && npx vitest run 2>&1) > "$FE_OUT" || true
   (cd packages/vue && npx vitest run 2>&1) >> "$FE_OUT" || true
   FE_TESTS=$({ grep -oP '\d+(?= passed)' "$FE_OUT" || true; } | awk '{s+=$1}END{print s+0}')
+  # Both runs above are `|| true`, and awk turns "no matches" into 0, so a
+  # frontend suite that cannot run at all -- no node_modules, no registry, a
+  # renamed reporter -- used to publish a Vue_Tests badge reading 0 and a Total
+  # counting only Go. That is the failure this repository spent a release
+  # removing: a suite that cannot run reporting a number instead of saying so.
+  # The Go side already refuses through cov_check_failures; this is the same
+  # rule for the half that runs under node.
+  if [ "$FE_TESTS" -eq 0 ]; then
+    echo "ERROR: the frontend suites reported no passing tests." >&2
+    echo "  Neither web nor packages/vue produced a '<n> passed' line, so there is no measurement" >&2
+    echo "  to publish. Install the workspace (pnpm install --frozen-lockfile) and re-run, or pass" >&2
+    echo "  VUE_TESTS=<n> from a run that did measure. Publishing 0 here would put a false count in" >&2
+    echo "  the README badge and understate the total." >&2
+    sed -n '1,20p' "$FE_OUT" >&2
+    rm -f "$FE_OUT"
+    exit 1
+  fi
   rm -f "$FE_OUT"
 fi
 
 FE_LINES="${VUE_LINES:-$(find web/src packages/vue/src \( -name '*.vue' -o -name '*.ts' \) -not -path '*__tests__*' -not -name '*.test.*' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')}"
-FE_LOCALES="${VUE_LOCALES:-$(ls web/src/locales/*.json 2>/dev/null | wc -l | tr -d ' ')}"
+FE_LOCALES="${VUE_LOCALES:-$(find web/src/locales -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')}"
 FE_DEPS=$(python3 -c "
 import json
 web = json.load(open('web/package.json'))
@@ -312,7 +380,10 @@ print(len(deps))
 #     Uses sentinel: <!-- badges -->...<!-- /badges -->
 # ═══════════════════════════════════════════════════════════════
 if [ -f README.md ]; then
-  COV_ENCODED=$(echo "$TOTAL_COV" | sed 's/%/%25/')
+  # The badge reports reachable coverage and says so, because the bare figure is
+  # the one a reader will quote back. The unqualified total is in docs/badges.json
+  # and docs/test-coverage.md for anyone who wants to check the difference.
+  COV_ENCODED="${REACHABLE_COV}%25_reachable"
   if [ "$(echo "$COV_NUM >= 80" | bc)" -eq 1 ]; then
     COV_COLOR="155724"
   elif [ "$(echo "$COV_NUM >= 60" | bc)" -eq 1 ]; then
@@ -321,8 +392,14 @@ if [ -f README.md ]; then
     COV_COLOR="red"
   fi
 
-  GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
-  NODE_VER=$(node --version 2>/dev/null | tr -d 'v' | cut -d. -f1)
+  # Report what ships, not the floor the module declares it can build against. The
+  # two differ exactly when it matters: a security bump moves `toolchain` and leaves
+  # the `go` directive alone, so deriving from `go` published Go-1.26.0 on releases
+  # cut specifically to clear a toolchain CVE.
+  GO_VER=$(grep '^toolchain ' go.mod | awk '{print $2}' | sed 's/^go//')
+  if [ -z "$GO_VER" ]; then
+    GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
+  fi
   VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
   TOTAL_TESTS=$((PASSED + FE_TESTS))
 

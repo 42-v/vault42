@@ -11,7 +11,7 @@ func TestHasPermission_ViewerBasics(t *testing.T) {
 	}
 
 	denied := []Permission{
-		KeysRotate, KeysRevoke, UsersLock, UsersUnlock, UsersDelete,
+		KeysRotate, KeysRevoke, UsersLock, UsersUnlock, UsersReset, UsersDelete,
 		SessionsRevoke, ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigWrite, AdminsManage, AdminsCreate, AdminsRevoke,
 	}
@@ -31,7 +31,7 @@ func TestHasPermission_OperatorInheritsViewer(t *testing.T) {
 	}
 
 	// Operator-specific permissions
-	for _, p := range []Permission{KeysRotate, UsersLock, UsersUnlock, SessionsRevoke, ClientsList, ClientsRead} {
+	for _, p := range []Permission{KeysRotate, UsersLock, UsersUnlock, UsersReset, SessionsRevoke, ClientsList, ClientsRead} {
 		if !HasPermission(RoleOperator, p) {
 			t.Errorf("operator should have permission %s", p)
 		}
@@ -48,7 +48,7 @@ func TestHasPermission_OperatorInheritsViewer(t *testing.T) {
 func TestHasPermission_SuperAdminHasAll(t *testing.T) {
 	all := []Permission{
 		KeysList, KeysRotate, KeysRevoke, AuditRead,
-		UsersList, UsersRead, UsersLock, UsersUnlock, UsersDelete,
+		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersDelete,
 		SessionsList, SessionsRevoke,
 		ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigRead, ConfigWrite, MetricsRead,
@@ -88,11 +88,11 @@ func TestPermissionsForRole_Counts(t *testing.T) {
 	if len(viewerPerms) != 9 {
 		t.Errorf("viewer should have 9 permissions, got %d", len(viewerPerms))
 	}
-	if len(operatorPerms) != 15 {
-		t.Errorf("operator should have 15 permissions, got %d", len(operatorPerms))
+	if len(operatorPerms) != 16 {
+		t.Errorf("operator should have 16 permissions, got %d", len(operatorPerms))
 	}
-	if len(superAdminPerms) != 29 {
-		t.Errorf("super_admin should have 29 permissions, got %d", len(superAdminPerms))
+	if len(superAdminPerms) != 30 {
+		t.Errorf("super_admin should have 30 permissions, got %d", len(superAdminPerms))
 	}
 
 	// Hierarchy: each higher role has strictly more permissions

@@ -51,7 +51,7 @@ func TestWriteCommand_WriteError(t *testing.T) {
 }
 
 // mockRedisErr always replies with a Redis server error. exec must classify
-// this as a RedisError and return the connection to the pool (not remove it).
+// this as a ServerError and return the connection to the pool (not remove it).
 type mockRedisErr struct {
 	ln   net.Listener
 	done chan struct{}
@@ -130,7 +130,7 @@ func (m *mockRedisErr) handle(c net.Conn) {
 	}
 }
 
-// A server error (-WRONGTYPE) is a RedisError: exec returns it AND keeps the
+// A server error (-WRONGTYPE) is a ServerError: exec returns it AND keeps the
 // connection healthy in the pool. A follow-up command must still work.
 func TestClient_Exec_RedisErrorKeepsConnection(t *testing.T) {
 	m := newMockRedisErr(t)
@@ -141,16 +141,16 @@ func TestClient_Exec_RedisErrorKeepsConnection(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := c.Incr(ctx, "k")
-	var redisErr *RedisError
+	var redisErr *ServerError
 	if !errors.As(err, &redisErr) {
-		t.Fatalf("expected RedisError, got %T: %v", err, err)
+		t.Fatalf("expected ServerError, got %T: %v", err, err)
 	}
 
 	// Connection was returned to the pool (put, not remove): the next command
 	// reuses it and gets another server error rather than a dial error.
 	_, err = c.Incr(ctx, "k2")
 	if !errors.As(err, &redisErr) {
-		t.Fatalf("second call: expected RedisError, got %T: %v", err, err)
+		t.Fatalf("second call: expected ServerError, got %T: %v", err, err)
 	}
 
 	if total := c.pool.total; total != 1 {

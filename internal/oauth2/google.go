@@ -27,7 +27,7 @@ func (g *GoogleProvider) httpClient() *http.Client {
 	if g.client != nil {
 		return g.client
 	}
-	return http.DefaultClient
+	return fallbackClient
 }
 
 // NewGoogleProvider creates a Google OAuth2/OIDC provider with the given
@@ -84,7 +84,7 @@ func (g *GoogleProvider) Exchange(ctx context.Context, code, codeVerifier string
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponse))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("google exchange: status %d: %s", resp.StatusCode, body)
 	}
@@ -130,6 +130,13 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		return nil, fmt.Errorf("google userinfo: %w", err)
 	}
 	defer resp.Body.Close()
+	// Same rule the exchange applies: a status other than 200 is not a profile.
+	// Google's error bodies decode cleanly into this struct and leave every field
+	// zeroed, which is a UserInfo carrying no subject and email_verified false
+	// returned with a nil error.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("google userinfo: status %d", resp.StatusCode)
+	}
 
 	var info struct {
 		ID            string `json:"id"`
@@ -138,7 +145,7 @@ func (g *GoogleProvider) UserInfo(ctx context.Context, accessToken string) (*Use
 		Name          string `json:"name"`
 		Picture       string `json:"picture"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponse)).Decode(&info); err != nil {
 		return nil, fmt.Errorf("google userinfo: decode: %w", err)
 	}
 

@@ -37,7 +37,7 @@ function onForgotPasswordClick() {
         <p class="text-sm text-vault42-muted mt-1">{{ t('login.subtitle') }}</p>
       </div>
 
-      <div v-if="route.query.reason === 'password_changed'" class="vault42-alert-success mb-4">
+      <div v-if="route.query.reason === 'password_changed'" class="vault42-alert-success mb-4" role="status">
         {{ t('password.changedPleaseLogin') }}
       </div>
 

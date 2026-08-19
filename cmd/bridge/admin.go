@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -70,22 +71,27 @@ func (ah *AdminHandler) flagIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.IP == "" {
+	ip := strings.TrimSpace(req.IP)
+	if ip == "" {
 		http.Error(w, "ip is required", http.StatusBadRequest)
+		return
+	}
+	if net.ParseIP(ip) == nil {
+		http.Error(w, "ip is invalid", http.StatusBadRequest)
 		return
 	}
 	if req.Reason == "" {
 		req.Reason = "manual flag"
 	}
 
-	ah.flags.Flag(req.IP, req.Reason, 100)
-	log.Printf("bridge: admin flagged %s reason=%q", req.IP, req.Reason)
+	ah.flags.Flag(ip, req.Reason, 100)
+	log.Printf("bridge: admin flagged %s reason=%q", obfuscatedIP(ip), req.Reason)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{ // #nosec G104 -- HTTP response encoding best-effort
 		"status": "flagged",
-		"ip":     req.IP,
+		"ip":     ip,
 	})
 }
 
@@ -108,7 +114,7 @@ func (ah *AdminHandler) unflagIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("bridge: admin unflagged %s", req.IP)
+	log.Printf("bridge: admin unflagged %s", obfuscatedIP(req.IP))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ // #nosec G104 -- HTTP response encoding best-effort

@@ -117,7 +117,7 @@ func TestWellKnown_JWKS_KeyFields(t *testing.T) {
 // OpenIDConfig tests
 // ---------------------------------------------------------------------------
 
-func TestWellKnown_OpenIDConfig_Endpoints(t *testing.T) {
+func TestWellKnown_OpenIDConfig_TruthfulKeysOnly(t *testing.T) {
 	h := NewWellKnownHandler(nil, "https://auth.example.com")
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
@@ -132,24 +132,27 @@ func TestWellKnown_OpenIDConfig_Endpoints(t *testing.T) {
 	var result map[string]interface{}
 	decodeResponse(t, rec, &result)
 
-	expected := map[string]string{
-		"issuer":                 "https://auth.example.com",
-		"authorization_endpoint": "https://auth.example.com/auth/oauth2/authorize",
-		"token_endpoint":         "https://auth.example.com/auth/login",
-		"userinfo_endpoint":      "https://auth.example.com/user/profile",
-		"jwks_uri":               "https://auth.example.com/.well-known/jwks.json",
-		"registration_endpoint":  "https://auth.example.com/auth/register",
+	if got, _ := result["issuer"].(string); got != "https://auth.example.com" {
+		t.Errorf("issuer = %q, want https://auth.example.com", got)
+	}
+	if got, _ := result["jwks_uri"].(string); got != "https://auth.example.com/.well-known/jwks.json" {
+		t.Errorf("jwks_uri = %q, want https://auth.example.com/.well-known/jwks.json", got)
 	}
 
-	for key, want := range expected {
-		got, _ := result[key].(string)
-		if got != want {
-			t.Fatalf("expected %s=%s, got %s", key, want, got)
-		}
+	algs, ok := result["access_token_signing_alg_values_supported"].([]interface{})
+	if !ok || len(algs) != 1 || algs[0] != "RS256" {
+		t.Fatalf("access_token_signing_alg_values_supported = %v, want [RS256]", result["access_token_signing_alg_values_supported"])
+	}
+
+	if len(result) != 3 {
+		t.Errorf("discovery document has %d keys, want exactly 3: %v", len(result), result)
 	}
 }
 
-func TestWellKnown_OpenIDConfig_ScopesSupported(t *testing.T) {
+// vault42 is not an OIDC provider. Advertising a capability at 1.0.0 and
+// retracting it later is a breaking change, so these keys must stay absent
+// until the behavior behind each one exists.
+func TestWellKnown_OpenIDConfig_RetractedKeysAbsent(t *testing.T) {
 	h := NewWellKnownHandler(nil, "https://vault.test")
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
@@ -160,66 +163,25 @@ func TestWellKnown_OpenIDConfig_ScopesSupported(t *testing.T) {
 	var result map[string]interface{}
 	decodeResponse(t, rec, &result)
 
-	scopes, ok := result["scopes_supported"].([]interface{})
-	if !ok || len(scopes) == 0 {
-		t.Fatal("expected scopes_supported array")
+	retracted := []string{
+		"authorization_endpoint",
+		"token_endpoint",
+		"userinfo_endpoint",
+		"registration_endpoint",
+		"scopes_supported",
+		"response_types_supported",
+		"grant_types_supported",
+		"subject_types_supported",
+		"id_token_signing_alg_values_supported",
+		"token_endpoint_auth_methods_supported",
+		"code_challenge_methods_supported",
+		"dpop_signing_alg_values_supported",
 	}
 
-	scopeSet := make(map[string]bool)
-	for _, s := range scopes {
-		scopeSet[s.(string)] = true
-	}
-	for _, expected := range []string{"openid", "profile", "email"} {
-		if !scopeSet[expected] {
-			t.Fatalf("expected scope %q in scopes_supported", expected)
+	for _, key := range retracted {
+		if _, present := result[key]; present {
+			t.Errorf("discovery document advertises %q, which this server does not implement", key)
 		}
-	}
-}
-
-func TestWellKnown_OpenIDConfig_GrantTypes(t *testing.T) {
-	h := NewWellKnownHandler(nil, "https://vault.test")
-
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
-	rec := httptest.NewRecorder()
-
-	h.OpenIDConfig(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-
-	grantTypes, ok := result["grant_types_supported"].([]interface{})
-	if !ok || len(grantTypes) == 0 {
-		t.Fatal("expected grant_types_supported array")
-	}
-
-	grantSet := make(map[string]bool)
-	for _, g := range grantTypes {
-		grantSet[g.(string)] = true
-	}
-	for _, expected := range []string{"authorization_code", "refresh_token", "client_credentials"} {
-		if !grantSet[expected] {
-			t.Fatalf("expected grant type %q in grant_types_supported", expected)
-		}
-	}
-}
-
-func TestWellKnown_OpenIDConfig_PKCE(t *testing.T) {
-	h := NewWellKnownHandler(nil, "https://vault.test")
-
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
-	rec := httptest.NewRecorder()
-
-	h.OpenIDConfig(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-
-	methods, ok := result["code_challenge_methods_supported"].([]interface{})
-	if !ok || len(methods) == 0 {
-		t.Fatal("expected code_challenge_methods_supported array")
-	}
-	if methods[0] != "S256" {
-		t.Fatalf("expected S256 in code_challenge_methods, got %v", methods[0])
 	}
 }
 
@@ -240,65 +202,6 @@ func TestWellKnown_OpenIDConfig_ContentType(t *testing.T) {
 // ---------------------------------------------------------------------------
 // UpdateKeys tests
 // ---------------------------------------------------------------------------
-
-func TestWellKnown_UpdateKeys(t *testing.T) {
-	key1 := newTestRSAKey(t)
-	h := NewWellKnownHandler(map[string]*rsa.PublicKey{
-		"old-kid": &key1.PublicKey,
-	}, "https://vault.test")
-
-	// Verify we start with 1 key
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec := httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-	keysArr := result["keys"].([]interface{})
-	if len(keysArr) != 1 {
-		t.Fatalf("expected 1 key before update, got %d", len(keysArr))
-	}
-
-	// Update with 2 new keys
-	key2 := newTestRSAKey(t)
-	key3 := newTestRSAKey(t)
-	h.UpdateKeys(map[string]*rsa.PublicKey{
-		"new-kid-1": &key2.PublicKey,
-		"new-kid-2": &key3.PublicKey,
-	})
-
-	// Verify we now have 2 keys
-	req = httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec = httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	decodeResponse(t, rec, &result)
-	keysArr = result["keys"].([]interface{})
-	if len(keysArr) != 2 {
-		t.Fatalf("expected 2 keys after update, got %d", len(keysArr))
-	}
-}
-
-func TestWellKnown_UpdateKeys_Empty(t *testing.T) {
-	key := newTestRSAKey(t)
-	h := NewWellKnownHandler(map[string]*rsa.PublicKey{
-		"kid": &key.PublicKey,
-	}, "https://vault.test")
-
-	// Replace with empty key set
-	h.UpdateKeys(map[string]*rsa.PublicKey{})
-
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec := httptest.NewRecorder()
-	h.JWKS(rec, req)
-
-	var result map[string]interface{}
-	decodeResponse(t, rec, &result)
-	keysArr := result["keys"].([]interface{})
-	if len(keysArr) != 0 {
-		t.Fatalf("expected 0 keys after clearing, got %d", len(keysArr))
-	}
-}
 
 func TestWellKnown_OpenIDConfig_TableDriven(t *testing.T) {
 	tests := []struct {

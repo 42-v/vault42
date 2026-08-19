@@ -356,5 +356,6 @@
   "error.forbidden": "この操作を行う権限がありません。",
   "error.code_already_used": "このコードはすでに使用されています。新しいコードをご使用ください。",
   "error.password_recently_used": "このパスワードは最近使用されています。別のパスワードを選んでください。",
-  "error.no_webauthn_credentials": "このアカウントにはセキュリティキーが登録されていません。"
+  "error.no_webauthn_credentials": "このアカウントにはセキュリティキーが登録されていません。",
+  "error.password_reset_required": "このアカウントはパスワードの再設定が必要です。再設定用のリンクをメールでお送りしました。"
 }

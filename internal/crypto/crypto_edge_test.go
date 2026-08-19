@@ -677,19 +677,21 @@ func TestHMAC_KeyDifference(t *testing.T) {
 }
 
 // ===========================================================================
-// SecureCompare / SecureCompareBytes edge cases
+// SecureCompare edge cases
 // ===========================================================================
 
-// TestSecureCompare_NilBytes tests SecureCompareBytes with nil inputs.
-func TestSecureCompare_NilBytes(t *testing.T) {
-	if !SecureCompareBytes(nil, nil) {
-		t.Fatal("nil vs nil should be equal")
+// TestSecureCompare_EmptyAndSingleByte covers the boundaries the byte-slice
+// sibling used to cover with nil inputs. SecureCompare is the string form and
+// the only one production calls.
+func TestSecureCompare_EmptyAndSingleByte(t *testing.T) {
+	if !SecureCompare("", "") {
+		t.Fatal("empty vs empty should be equal")
 	}
-	if !SecureCompareBytes(nil, []byte{}) {
-		t.Fatal("nil vs empty should be equal (both zero length)")
+	if SecureCompare("", "\x00") {
+		t.Fatal("empty vs one NUL byte should not be equal")
 	}
-	if SecureCompareBytes(nil, []byte{0}) {
-		t.Fatal("nil vs non-empty should not be equal")
+	if !SecureCompare("\x00", "\x00") {
+		t.Fatal("NUL vs NUL should be equal")
 	}
 }
 
@@ -728,19 +730,6 @@ func TestSHA256Base64URL_Format(t *testing.T) {
 	}
 	if len(h) != 43 { // 32 bytes base64url-encoded without padding = 43 chars
 		t.Fatalf("SHA256Base64URL should be 43 chars, got %d", len(h))
-	}
-}
-
-// TestSHA256Bytes_NilInput tests SHA256 of nil.
-func TestSHA256Bytes_NilInput(t *testing.T) {
-	h := SHA256Bytes(nil)
-	if len(h) != 32 {
-		t.Fatalf("SHA256 of nil should be 32 bytes, got %d", len(h))
-	}
-	// Should match SHA256 of empty string
-	hEmpty := SHA256Bytes([]byte{})
-	if !SecureCompareBytes(h, hEmpty) {
-		t.Fatal("SHA256(nil) should equal SHA256(empty)")
 	}
 }
 

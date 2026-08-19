@@ -1,3 +1,30 @@
+<!--
+  VaultLoginForm: a ready-made sign-in form covering the password step and all
+  four second factors (TOTP, WebAuthn, backup code, email OTP).
+
+  Props:
+    redirectUrl        where to send the user after a completed sign-in
+    showRegisterLink   render the "create account" link (default true)
+    errorMessages      per-code copy overrides, merged over the built-in map
+
+  Emits:
+    success               (user)  sign-in completed, second factor included
+    error                 (err)   sign-in failed
+    register-click                the register link was activated
+    forgot-password-click         the reset link was activated
+
+  The form drives the whole two-step flow itself: on a `requires_2fa` response
+  it switches to the factor the server offered, so `success` fires only once the
+  user is fully authenticated. Which factors appear is decided by the server's
+  `available_methods`, with WebAuthn additionally gated on browser support.
+
+  Translates through the i18n plugin when one is installed and falls back to
+  built-in English copy otherwise, so it renders standalone.
+
+  Server error codes are mapped to fixed copy and the raw code is never
+  rendered. The account-state codes deliberately share one neutral message, so
+  the form does not disclose a distinction the server withheld.
+-->
 <script setup lang="ts">
 import { ref, computed, inject } from 'vue'
 
@@ -12,7 +39,16 @@ const props = withDefaults(
     showRegisterLink?: boolean
     errorMessages?: Record<string, string>
   }>(),
-  { showRegisterLink: true },
+  // `redirectUrl` and `errorMessages` are optional by design, but Vue compiles a
+  // prop with no declared default to `undefined` at runtime while the type says
+  // it may be absent. Declaring them keeps the runtime and the published .d.ts
+  // saying the same thing, and `errorMessages` gets a factory so every instance
+  // holds its own object rather than sharing one.
+  {
+    redirectUrl: undefined,
+    showRegisterLink: true,
+    errorMessages: () => ({}),
+  },
 )
 
 // Optional: the form renders standalone, without app.use(createI18nPlugin(...)).
@@ -197,7 +233,7 @@ async function handleWebAuthnVerify() {
       <h2>{{ t('common.signIn', 'Sign In') }}</h2>
     </slot>
 
-    <div v-if="error" class="vault42-login-form__error">
+    <div v-if="error" id="vault42-login-form-error" class="vault42-login-form__error" role="alert">
       <slot name="error" :error="error">
         <p>{{ error.code ? friendlyError(error.code) : t('login.failed', 'Login failed') }}</p>
       </slot>
@@ -230,7 +266,7 @@ async function handleWebAuthnVerify() {
 
       <!-- WebAuthn primary (when user has security keys) -->
       <div v-else-if="hasWebAuthn && !showTOTPFallback" class="vault42-login-form__2fa-section">
-        <p v-if="webauthnError" class="vault42-login-form__error">{{ friendlyError(webauthnError) }}</p>
+        <p v-if="webauthnError" class="vault42-login-form__error" role="alert">{{ friendlyError(webauthnError) }}</p>
         <button
           type="button"
           :disabled="webauthnLoading"
@@ -320,6 +356,8 @@ async function handleWebAuthnVerify() {
           v-model="email"
           type="email"
           autocomplete="email"
+          :aria-invalid="error ? 'true' : undefined"
+          :aria-describedby="error ? 'vault42-login-form-error' : undefined"
           required
         />
       </div>
@@ -330,6 +368,8 @@ async function handleWebAuthnVerify() {
           v-model="password"
           type="password"
           autocomplete="current-password"
+          :aria-invalid="error ? 'true' : undefined"
+          :aria-describedby="error ? 'vault42-login-form-error' : undefined"
           required
         />
       </div>

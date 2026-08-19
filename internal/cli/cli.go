@@ -1,8 +1,12 @@
 // Package cli implements administrative CLI commands for The Vault.
-// All commands require authentication via --admin-token. Available commands:
-// add-client, list-clients, revoke-client, rotate-client-secret, lock-user,
-// unlock-user, revoke-all-sessions, rotate-admin-token, rotate-jwks, seed,
-// cleanup-audit, cleanup-recovery, and export-audit.
+// All commands require the admin credential, taken from ADMIN_TOKEN_FILE or,
+// with a warning that it is disclosed through argv, from --admin-token.
+// Available commands:
+// add-client, list-clients, revoke-all-sessions, rotate-admin-token,
+// rotate-jwks, seed, cleanup-recovery, and export-audit.
+// The revoke-client, rotate-client-secret, lock-user, unlock-user and
+// cleanup-audit subcommands are retired stubs that print an error and redirect
+// to the plane that owns the capability; they issue no database write.
 package cli
 
 import (
@@ -10,13 +14,18 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/firstboot"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/seed"
@@ -38,11 +47,31 @@ type CLI struct {
 	// pepper is forwarded to seed.Run so CLI-driven seeding produces hashes
 	// that match the runtime auth-service's pepper. Empty = no pepper.
 	pepper string
+	// provisionedAdminToken is the admin credential the operator mounted at
+	// ADMIN_TOKEN_FILE, either an Argon2id hash or the plaintext token. It seeds
+	// admin_token_hash on first boot so the credential never has to be minted
+	// and printed to stdout.
+	provisionedAdminToken string
+	// provisionedAdminErr defers a failed read to InitAdminToken, the only
+	// caller that can report it: New has no error return, and dropping the error
+	// would restore the silent fall-through to a generated token that the mount
+	// was supposed to replace.
+	provisionedAdminErr error
 }
 
 // New creates a new CLI handler with the given repositories.
 func New(clients repository.ClientRepository, users repository.UserRepository, tokens repository.RefreshTokenRepository, adminConfig repository.AdminConfigRepository, audit repository.AuditRepository, pepper string) *CLI {
-	return &CLI{clients: clients, users: users, tokens: tokens, adminConfig: adminConfig, audit: audit, pepper: pepper}
+	token, err := loadProvisionedAdminToken()
+	return &CLI{
+		clients:               clients,
+		users:                 users,
+		tokens:                tokens,
+		adminConfig:           adminConfig,
+		audit:                 audit,
+		pepper:                pepper,
+		provisionedAdminToken: token,
+		provisionedAdminErr:   err,
+	}
 }
 
 // WithRecoveryPruner attaches the account-recovery escrow pruner that
@@ -67,10 +96,12 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 			adminToken = args[i+1]
 		}
 	}
+	if adminToken != "" {
+		warnAdminTokenInArgv()
+	}
 
-	// Verify admin token
-	if !c.verifyAdminToken(ctx, adminToken) {
-		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required.")
+	if !c.authenticate(ctx, adminToken) {
+		fmt.Fprintln(os.Stderr, "ERROR: Admin authentication required. Set ADMIN_TOKEN_FILE to a file holding the admin token, or pass --admin-token, which discloses it through /proc/<pid>/cmdline.")
 		exitProcess(1)
 	}
 
@@ -104,6 +135,41 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 	default:
 		return false
 	}
+}
+
+// authenticate resolves the admin credential, preferring ADMIN_TOKEN_FILE.
+//
+// A flag is the one delivery mechanism for a secret that cannot be made safe:
+// every argument of a running process is readable through /proc/<pid>/cmdline by
+// anything running as the same uid, it appears in `ps` and in container process
+// listings, and the shell keeps it in history afterwards. cmd/recover says the
+// same about --dsn and warns; the difference here is that the safe path is now
+// the default one, following the _FILE convention this repo already uses for
+// ADMIN_TOKEN, BRIDGE_ADMIN_TOKEN and VAULT_PEPPER.
+//
+// The mounted file is tried first and the flag is the fallback rather than the
+// other way round, so an operator who has done nothing gets the safe path, and a
+// mount that is no longer the credential in force does not lock them out of a
+// command they authenticated correctly.
+func (c *CLI) authenticate(ctx context.Context, flagToken string) bool {
+	if c.provisionedAdminToken != "" {
+		if storedHash, err := c.adminConfig.Get(ctx, "admin_token_hash"); err == nil && storedHash != "" {
+			if c.provisionedTokenMatches(storedHash) {
+				return true
+			}
+		}
+	}
+	return c.verifyAdminToken(ctx, flagToken)
+}
+
+// warnAdminTokenInArgv says out loud that a credential passed on the command
+// line is already disclosed. The process cannot rewrite its own argv, so this is
+// the only move left, and it is worth making while the operator is still at the
+// keyboard.
+func warnAdminTokenInArgv() {
+	fmt.Fprintln(os.Stderr, "WARNING: --admin-token puts the admin credential in this process's argv, where it is "+
+		"readable by every process on this host via /proc/<pid>/cmdline, shows in `ps` and container process listings, "+
+		"and is kept in shell history. Set ADMIN_TOKEN_FILE to a file holding the token instead, and rotate this one.")
 }
 
 func (c *CLI) verifyAdminToken(ctx context.Context, token string) bool {
@@ -159,12 +225,21 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 		UpdatedAt:  now,
 	}
 
+	// Delivered before the row is created: only the Argon2id hash is stored, so
+	// a secret that could not be handed over leaves a client nobody can
+	// authenticate as and no command can repair.
+	dest, err := firstboot.Deliver("VAULT_CLIENT_SECRET_"+name, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
+
 	if err := c.clients.Create(ctx, client); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
 
-	fmt.Printf("Client created:\n  ID: %s\n  Secret: %s\n  (secret shown ONCE — save it now)\n", clientID, secret)
+	fmt.Printf("Client created:\n  ID: %s\n  Secret written to: %s (not shown here, and not shown again)\n", clientID, dest)
 	return true
 }
 
@@ -184,80 +259,54 @@ func (c *CLI) listClients(ctx context.Context) bool {
 	return true
 }
 
-func (c *CLI) revokeClient(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault revoke-client --admin-token <token> --id <client-id>")
-		return true
-	}
-	if err := c.clients.Deactivate(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("Client %s revoked.\n", id)
-	}
+// revokeClient is retired. Deactivating a client from cmd/vault ran as the
+// vault_app role, which holds only SELECT and INSERT on auth.clients (migration
+// 001): the UPDATE that clears active failed with 42501 insufficient_privilege,
+// so the command has been dead since the schema was first cut, and even had it
+// run it would leave no audit trail. Client revocation belongs on the admin
+// gateway, which audits the action and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) revokeClient(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: revoke-client is retired. Revoke a client on the admin gateway: POST /admin/clients/{id}/revoke (operator role, mTLS loopback). The vault CLI no longer writes client state.")
 	return true
 }
 
-func (c *CLI) rotateClientSecret(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault rotate-client-secret --admin-token <token> --id <client-id>")
-		return true
-	}
-
-	client, err := c.clients.GetByID(ctx, id)
-	if err != nil || client == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: client not found")
-		return true
-	}
-
-	newSecret, err := vaultcrypto.RandomHex(32)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	newHash, err := hashPassword(newSecret)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	client.SecretHash = newHash
-	client.UpdatedAt = time.Now()
-
-	if err := c.clients.Update(ctx, client); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("New secret for %s: %s\n(shown ONCE — save it now)\n", client.Name, newSecret)
-	}
+// rotateClientSecret is retired for the same reason as revokeClient: rotating a
+// secret from cmd/vault ran as the vault_app role, whose SELECT+INSERT-only grant
+// on auth.clients (migration 001) fails the UPDATE with 42501, and it printed a
+// fresh secret to stdout with no audit trail. Secret rotation belongs on the
+// admin gateway, which audits the action and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not fall through
+// to booting the server. It issues no database write.
+func (c *CLI) rotateClientSecret(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: rotate-client-secret is retired. Rotate a client secret on the admin gateway: POST /admin/clients/{id}/rotate (operator role, mTLS loopback). The vault CLI no longer writes client state.")
 	return true
 }
 
-func (c *CLI) lockUser(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault lock-user --admin-token <token> --id <user-id>")
-		return true
-	}
-	until := time.Now().Add(365 * 24 * time.Hour) // lock for 1 year
-	if err := c.users.LockUntil(ctx, id, until); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("User %s locked until %s\n", id, until)
-	}
+// lockUser is retired. Locking an account from cmd/vault ran as the vault_app
+// role and set auth.users.locked_until directly: no audit row, no session
+// revocation, and — because vault_app writes the same column the admin plane
+// uses for containment — it could silently release or override a lock an admin
+// had imposed. Account containment belongs on the admin gateway, which audits
+// the action, revokes the target's refresh tokens, and runs as vault_admin.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) lockUser(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: lock-user is retired. Lock accounts on the admin gateway: POST /admin/users/{id}/lock (operator role, mTLS loopback). The vault CLI no longer writes account locks.")
 	return true
 }
 
-func (c *CLI) unlockUser(ctx context.Context, args []string) bool {
-	id := getFlag(args, "--id")
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault unlock-user --admin-token <token> --id <user-id>")
-		return true
-	}
-	if err := c.users.Unlock(ctx, id); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-	} else {
-		fmt.Printf("User %s unlocked.\n", id)
-	}
+// unlockUser is retired for the same reason as lockUser: a vault_app Unlock here
+// could release a lock the admin plane set, with no audit trail. Use the admin
+// gateway's unlock route instead.
+func (c *CLI) unlockUser(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: unlock-user is retired. Unlock accounts on the admin gateway: POST /admin/users/{id}/unlock (operator role, mTLS loopback). The vault CLI no longer writes account unlocks.")
 	return true
 }
 
@@ -290,16 +339,35 @@ func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
+	// Delivered before the hash is installed, for the same reason as
+	// InitAdminToken: a rotation the operator cannot receive locks every
+	// administrative subcommand out of the deployment.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", newToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		return true
+	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
-	fmt.Printf("New admin token: %s\n(shown ONCE — save it now)\n", newToken)
+	fmt.Printf("Admin token rotated; the new token was written to %s and is not shown here.\n", dest)
 	return true
 }
 
+// rotateJWKS mints a signing key. --output is required: without it the command
+// wrote a PKCS#1 RSA private key to stdout, and that key signs every access
+// token the deployment issues. Run from a Job or an init container — which is
+// how key rotation is actually driven — stdout is the pod log, so the private
+// half of the signing key ended up in the aggregator alongside the tokens it
+// signs. There is no safe way to print it, only a safe file to put it in, which
+// is what --output already was.
 func (c *CLI) rotateJWKS(args []string) bool {
 	output := getFlag(args, "--output")
+	if output == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: rotate-jwks requires --output <path>: the private key is written to that file at mode 0600 and is never printed.")
+		return true
+	}
 
 	// Generate new RSA-2048 key pair
 	privateKey, err := vaultcrypto.GenerateRSAKeyPair()
@@ -323,28 +391,113 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	}
 	pemBytes := pem.EncodeToMemory(pemBlock)
 
-	if output != "" {
-		if err := os.WriteFile(output, pemBytes, 0o600); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
-			return true
-		}
-		fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
-	} else {
-		fmt.Printf("kid: %s\n%s", kid, pemBytes)
+	if err := writeKeyFileExclusive(output, pemBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
+		return true
 	}
+	fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
 
 	fmt.Fprintln(os.Stderr, "NOTE: Vault generates JWKS keys in memory at startup. To use this key,")
 	fmt.Fprintln(os.Stderr, "configure the key file path and restart the service.")
 	return true
 }
 
-// InitAdminToken generates and stores the initial admin token on first boot.
-// If a token hash already exists in the database, this is a no-op. The
-// generated token is printed to stdout once and never shown again.
+// writeKeyFileExclusive writes a private key to a path the process must create
+// itself.
+//
+// O_EXCL rather than os.WriteFile, on the model of cmd/recover's openOutput: it
+// refuses to follow a symlink planted at the path, because open(2) with
+// O_CREAT|O_EXCL fails with EEXIST on a symlink whether or not its target
+// exists, and os.WriteFile would otherwise have written the signing key through
+// it at whatever mode the attacker's file already carried. It also refuses to
+// truncate a key that is already there, which would leave the previous key's
+// mode in place and the previous key gone.
+func writeKeyFileExclusive(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- the operator names their own key file
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	return errors.Join(werr, f.Close())
+}
+
+// argon2idPrefix marks the PHC-encoded form of an Argon2id hash and is what
+// tells ADMIN_TOKEN_FILE's two accepted forms apart. Config.Validate has
+// already refused to start on anything carrying this prefix that is not a
+// complete hash.
+const argon2idPrefix = "$argon2id$"
+
+// loadProvisionedAdminToken reads the admin credential the operator mounted at
+// ADMIN_TOKEN_FILE, or returns "" when there is none.
+//
+// Read here rather than carried on config.Config, following how cmd/vault reads
+// SIGNING_KEY: this is the secret's only consumer, and under
+// VAULT_SECRET_FILE_CONSUME the read destroys the file, so a second reader
+// would get nothing. Config parsed this file for its whole life and stored it
+// in a field no code path ever read, which is what let a mounted admin token be
+// silently replaced by a generated one.
+func loadProvisionedAdminToken() (string, error) {
+	if os.Getenv("ADMIN_TOKEN_FILE") == "" {
+		return "", nil
+	}
+	token, err := config.LoadSecret("ADMIN_TOKEN")
+	// This read is the one that destroys the file, so a boot that finds it gone
+	// under VAULT_SECRET_FILE_CONSUME is looking at its own earlier work, not at
+	// a mount that never arrived. Nothing is lost with the file: the hash went
+	// into auth.admin_config on the boot that consumed it and is what
+	// authenticates from then on. Without this arm every later boot reported
+	// "Admin token init error: read ADMIN_TOKEN_FILE ..." on a healthy
+	// deployment, and config.checkAdminTokenFile refused to start at all.
+	if err != nil && errors.Is(err, fs.ErrNotExist) && config.SecretFilesAreConsumed() {
+		return "", nil
+	}
+	return token, err
+}
+
+// InitAdminToken installs the initial admin token on first boot.
+//
+// ADMIN_TOKEN_FILE wins when set: the operator has already chosen the
+// credential and knows its plaintext, so nothing needs to be minted and nothing
+// secret reaches stdout. Only when no file is mounted is a token generated and
+// printed once.
+//
+// If a hash already exists in the database it is left alone, because it may be
+// the result of rotate-admin-token and re-seeding from the file would silently
+// undo that rotation on the next restart.
 func (c *CLI) InitAdminToken(ctx context.Context) error {
+	if c.provisionedAdminErr != nil {
+		return fmt.Errorf("read ADMIN_TOKEN_FILE: %w", c.provisionedAdminErr)
+	}
+
 	existing, _ := c.adminConfig.Get(ctx, "admin_token_hash")
 	if existing != "" {
-		return nil // already initialized
+		// Not fatal, but not silent either: an operator whose mounted file is no
+		// longer the credential in force will otherwise keep authenticating with
+		// it and blame the CLI.
+		if c.provisionedAdminToken != "" && !c.provisionedTokenMatches(existing) {
+			fmt.Fprintln(os.Stderr, "WARNING: the admin token in ADMIN_TOKEN_FILE is not the one in force; the database already holds a different hash. Run rotate-admin-token to change the admin token.")
+		}
+		return nil
+	}
+
+	if c.provisionedAdminToken != "" {
+		hash := c.provisionedAdminToken
+		if !strings.HasPrefix(hash, argon2idPrefix) {
+			// The file may hold the plaintext token instead of its hash, which is
+			// what scripts/generate-secrets.sh writes and what
+			// charts/vault/templates/NOTES.txt tells operators to cat into
+			// --admin-token. Only the hash is ever stored.
+			var err error
+			hash, err = hashPassword(hash)
+			if err != nil {
+				return fmt.Errorf("hash admin token from ADMIN_TOKEN_FILE: %w", err)
+			}
+		}
+		if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
+			return err
+		}
+		fmt.Println("Admin token taken from ADMIN_TOKEN_FILE.")
+		return nil
 	}
 
 	token, err := vaultcrypto.RandomHex(32)
@@ -355,11 +508,60 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hash admin token: %w", err)
 	}
-	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
+	// Claim first, deliver second, and deliver only if the claim was won.
+	//
+	// The Get above and a Set here are two statements, and cmd/vault runs this on
+	// every boot of every replica: the chart ships three. Each reads an empty
+	// key, each mints, and the last write wins, so the operator is handed three
+	// credentials of which exactly one authenticates -- reproduced 15 times out
+	// of 15 -- with nothing marking which. That was survivable while the
+	// credential went to a shared log an operator could search. It is not now
+	// that it goes to a per-pod memory volume that dies with its pod, while the
+	// hash persists and every subcommand that could rotate it is behind the
+	// token itself.
+	//
+	// ClaimIfAbsent is one statement, and the loser is handed the incumbent hash
+	// rather than its own.
+	claimed, err := c.adminConfig.ClaimIfAbsent(ctx, "admin_token_hash", hash)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("\n=== FIRST BOOT ===\nAdmin token: %s\nSave this token — it will NOT be shown again.\n================\n\n", token)
+	if claimed != hash {
+		// Another replica minted the token that is in force. Delivering this one
+		// would hand the operator a second credential that authenticates as
+		// nothing, in a sink where it cannot be told from the real one.
+		fmt.Println("FIRST BOOT: another replica minted the admin token first; this one is not in force and was discarded.")
+		return nil
+	}
+
+	// The hash is committed and the token is still nobody's, which is the one
+	// window this ordering opens. Release the claim before refusing, or the next
+	// boot finds a hash it will not mint past and no admin token exists again.
+	// The refusal is firstboot's, and it does not return.
+	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", token)
+	if err != nil {
+		if delErr := c.adminConfig.Delete(ctx, "admin_token_hash"); delErr != nil {
+			log.Printf("CRITICAL: the admin token could not be delivered and its hash could not "+
+				"be withdrawn either (%v). admin_token_hash now holds the hash of a token nobody "+
+				"has; delete that row by hand before the next boot, or no admin token can ever "+
+				"be minted again.", delErr)
+		}
+		return firstboot.Refuse(fmt.Errorf("deliver admin token: %w", err))
+	}
+	fmt.Printf("FIRST BOOT: an admin token was generated and written to %s; it is not in this output and will not be shown again.\n", dest)
 	return nil
+}
+
+// provisionedTokenMatches reports whether ADMIN_TOKEN_FILE still describes the
+// credential stored in the database. The plaintext form costs one Argon2id
+// verification per boot, which is the price of telling an operator the truth
+// about whether their mount is in force.
+func (c *CLI) provisionedTokenMatches(storedHash string) bool {
+	if strings.HasPrefix(c.provisionedAdminToken, argon2idPrefix) {
+		return c.provisionedAdminToken == storedHash
+	}
+	ok, _ := vaultcrypto.VerifyPassword(c.provisionedAdminToken, storedHash)
+	return ok
 }
 
 func (c *CLI) runSeed(ctx context.Context, args []string) bool {
@@ -375,7 +577,7 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 		return true
 	}
 
-	if err := seed.Run(ctx, sf, seed.Deps{Users: c.users, Clients: c.clients, Pepper: c.pepper}); err != nil {
+	if err := seed.Run(ctx, sf, seed.Deps{Users: c.users, Clients: c.clients}, c.pepper); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		return true
 	}
@@ -384,35 +586,42 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 	return true
 }
 
-func (c *CLI) cleanupAudit(ctx context.Context, args []string) bool {
-	daysStr := getFlag(args, "--retention-days")
-	if daysStr == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault cleanup-audit --admin-token <token> --retention-days <N>")
-		return true
-	}
-	days, err := strconv.Atoi(daysStr)
-	if err != nil || days < 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: --retention-days must be a positive integer")
-		return true
-	}
-	if c.audit == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: audit repository not available")
-		return true
-	}
-	olderThan := time.Now().AddDate(0, 0, -days)
-	deleted, err := c.audit.Cleanup(ctx, olderThan)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
-	}
-	fmt.Printf("Deleted %d audit entries older than %d days.\n", deleted, days)
+// cleanupAudit is retired (F-17). It reached a capability the RBAC model grants
+// no admin, behind a gate the role running it can rewrite.
+//
+// internal/rbac/rbac.go says audit access "is read-only by design: there is no
+// corresponding write or delete permission, because an admin who can edit the
+// audit trail can erase their own actions", and no admin tier holds an
+// audit-delete permission. Migration 018 grants EXECUTE on
+// audit.cleanup_old_entries to vault_app and deliberately not to vault_admin, so
+// the admin plane cannot run this at all — while cmd/vault, running as vault_app,
+// could, gated only by admin_token_hash in auth.admin_config, a table migration
+// 001 grants vault_app SELECT, INSERT and UPDATE on. The caller could overwrite
+// its own gate, which makes the token operator convenience and not an
+// authorization boundary.
+//
+// Retiring rather than promoting it to the admin gateway is the honest
+// resolution. Promoting would mean granting vault_admin EXECUTE on the purge
+// function and minting the audit-delete permission rbac refuses on purpose —
+// a migration, and a reversal of a decision the codebase argues for.
+//
+// Nothing is lost. Audit retention is VAULT_AUDIT_RETENTION_DAYS, swept in
+// process by internal/audit.Retention through the same SECURITY DEFINER
+// function: declarative, part of the deployment rather than of whoever holds the
+// CLI token, and not aimable at an arbitrary cutoff.
+//
+// The command stays recognized (returns true) so cmd/vault does not treat it as
+// an unknown argument and fall through to booting the server. It issues no
+// database write.
+func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
+	fmt.Fprintln(os.Stderr, "ERROR: cleanup-audit is retired. Audit retention is set with VAULT_AUDIT_RETENTION_DAYS, which the server sweeps at startup and every 6h. No admin tier holds an audit-delete permission, and the vault CLI no longer deletes audit entries on demand.")
 	return true
 }
 
 // cleanupRecovery purges account-recovery escrow records past a horizon. It is
 // the on-demand half of VAULT_RECOVERY_RETENTION_DAYS, and the only supported
 // way to remove an escrow record: the table is append-only and both application
-// roles have DELETE revoked, so an Operator honouring a later erasure of the
+// roles have DELETE revoked, so an Operator honoring a later erasure of the
 // escrow itself has nothing else to reach for.
 func (c *CLI) cleanupRecovery(ctx context.Context, args []string) bool {
 	daysStr := getFlag(args, "--retention-days")

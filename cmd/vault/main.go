@@ -5,27 +5,32 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/42-v/vault42/internal/alert"
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/cache"
 	"github.com/42-v/vault42/internal/cli"
 	"github.com/42-v/vault42/internal/config"
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
+	"github.com/42-v/vault42/internal/deferwork"
 	"github.com/42-v/vault42/internal/email"
 	"github.com/42-v/vault42/internal/handler"
 	"github.com/42-v/vault42/internal/honeypot"
+	"github.com/42-v/vault42/internal/httputil"
+	"github.com/42-v/vault42/internal/ipintel"
 	"github.com/42-v/vault42/internal/keystore"
 	"github.com/42-v/vault42/internal/kms"
 	"github.com/42-v/vault42/internal/metrics"
 	"github.com/42-v/vault42/internal/migrate"
 	"github.com/42-v/vault42/internal/oauth2"
+	"github.com/42-v/vault42/internal/outbound"
 	"github.com/42-v/vault42/internal/repository/postgres"
 	"github.com/42-v/vault42/internal/seed"
 	"github.com/42-v/vault42/internal/server"
@@ -39,14 +44,19 @@ var (
 	BuildTime = "unknown"
 )
 
-// sanitizeDBError strips connection URLs (which may contain passwords) from error messages.
-var dbURLPattern = regexp.MustCompile(`postgres://[^\s]+@`)
-
+// sanitizeDBError strips connection-URL credentials from an error before it
+// reaches a log.
+//
+// It delegates to httputil.RedactDSN rather than carrying a pattern of its own.
+// This file used to hold a private copy of that regex, as did cmd/admin-gateway, which
+// is exactly the drift RedactDSN's doc comment says the helper exists to
+// prevent: an improvement to the shared pattern reached cmd/recover and left
+// both copies behind, silently, with the whole suite green. The name stays
+// because it is what this binary's call sites and tests use; the behavior now
+// has one definition. tests/spec/dsn_redaction_drift_test.go fails the build if
+// a private copy reappears.
 func sanitizeDBError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", dbURLPattern.ReplaceAllString(err.Error(), "postgres://***@"))
+	return httputil.RedactDSN(err)
 }
 
 //nolint:gocognit,gocyclo // entry-point wires every subsystem; refactor would scatter fail-fast init across helpers
@@ -106,17 +116,36 @@ func main() {
 	hmacSecret := append([]byte(nil), cfg.HMACSecret...)
 
 	// Connect to PostgreSQL (vault_app role)
-	db, err := postgres.New(ctx, cfg.DatabaseURL("app"), cfg.DBMaxConns)
+	db, err := postgres.NewWithOptions(ctx, cfg.DatabaseURL("app"), postgres.Options{
+		MaxConns:         cfg.DBMaxConns,
+		StatementTimeout: cfg.DBStatementTimeout,
+		LockTimeout:      cfg.DBLockTimeout,
+	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", sanitizeDBError(err))
 	}
 	defer db.Close()
 
-	// Initialize cache
+	// Initialize cache.
+	//
+	// cacheDegraded is remembered rather than only logged, because the fallback
+	// changes what this process can enforce. The shared cache holds the login
+	// and password-reset limiters, the KMS unwrap budget, the OAuth state
+	// written on /authorize and read back on the callback, the email OTP codes,
+	// and the TOTP replay guard. On the memory fallback all of them become
+	// per-pod: with four replicas the login limiter admits four times its
+	// configured attempts and an OAuth callback routed to another pod cannot
+	// find its own state. /readyz reports this, so the condition is visible for
+	// as long as it lasts rather than in one line at startup that has scrolled
+	// away by the time anyone looks.
+	cacheDegraded := false
 	appCache, err := cache.NewCache(cfg.CacheBackend, cfg.RedisAddr, cfg.RedisPass, db.Pool)
 	if err != nil {
-		log.Printf("Cache init failed, falling back to memory: %v", err)
+		log.Printf("WARNING: cache init failed, falling back to per-process memory: %v. "+
+			"Cross-replica rate limiting, OAuth state and TOTP replay protection are degraded "+
+			"until the cache returns; /readyz reports cache=degraded.", err)
 		appCache = cache.NewMemoryCache()
+		cacheDegraded = true
 	}
 	defer func() { _ = appCache.Close() }()
 
@@ -134,12 +163,44 @@ func main() {
 	socialAccountRepo := postgres.NewSocialAccountRepo(db)
 	identityRepo := postgres.NewIdentityRepo(db)
 	blobRepo := postgres.NewBlobRepo(db)
+	serviceDocRepo := postgres.NewServiceDocumentRepo(db)
 	recoveryRepo := postgres.NewAccountRecoveryRepo(db)
 	rateLimitRepo := postgres.NewRateLimitRepo(db)
+	loginCountryRepo := postgres.NewLoginCountryRepo(db)
 
 	// Initialize audit logger
 	auditLogger := audit.NewLoggerWithBufferSize(auditRepo, cfg.AuditFlushInterval, cfg.AuditBufferSize)
+	// Detection, on every profile and behind no switch.
+	//
+	// The gap CR-15 recorded was not missing code. honeypot.Alerter existed, with
+	// a rate limit and an audit trail of its own; it was built only under
+	// config.ProfileHoneypot, so on a production deployment the only outbound
+	// alert channel in the tree was never constructed. Installing this one
+	// conditionally would reproduce that exactly, which is why tests/spec fails
+	// the build if the call moves inside an if.
+	//
+	// There is no key to turn it off with, deliberately. Thresholds and windows
+	// are security decisions rather than deployment ones, and the one setting an
+	// operator would reach for -- "quieter" -- is the setting that reopens the
+	// finding. Delivery is a process-log record on the SECURITY ALERT prefix,
+	// which is the channel this deployment already routes: the chart's
+	// NetworkPolicy admits no 443 egress, so a webhook would have been a feature
+	// that could not work on the topology vault42 ships.
+	auditLogger.SetDetector(alert.NewDetector(alert.LogSink{}, alert.DefaultMaxKeys))
 	defer auditLogger.Close(ctx)
+	// Registered LAST of the four shutdown defers, so LIFO drains the pool FIRST.
+	// A job still running needs the audit logger (notifyNewCountry writes a row),
+	// the cache (a deferred send writes its token, then mails the link) and the pool
+	// behind both. deferwork.Close stated that rule for the cache and the pool and
+	// left the logger out, so the logger closed first and a job's row went into a
+	// buffer nothing would flush. TestShutdownDefersRunInDependencyOrder gates it.
+	defer func() {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer drainCancel()
+		if err := deferwork.Close(drainCtx); err != nil {
+			log.Printf("WARNING: deferred email drain incomplete: %v", err)
+		}
+	}()
 
 	// CLI commands (check before starting server)
 	cliHandler := cli.New(clientRepo, userRepo, refreshTokenRepo, adminConfigRepo, auditRepo, cfg.Pepper).
@@ -150,21 +211,50 @@ func main() {
 		log.Printf("Admin token init error: %v", err)
 	}
 
-	// Declarative seeding from VAULT_SEED_FILE (idempotent)
-	if cfg.SeedFile != "" {
-		sf, err := seed.Load(cfg.SeedFile)
+	// Check if this is a CLI invocation
+	if cliHandler.Run(ctx, os.Args) {
+		return
+	}
+
+	// Cross-plane agreement on HMAC_SECRET, before this process serves anything.
+	//
+	// The admin gateway derives the same subject pseudonyms from the same secret
+	// and erases by them. Two planes holding different secrets produce different
+	// pseudonyms, so an admin erasure clears zero rows from identity.profiles,
+	// objects.blobs and objects.service_documents and reports success anyway.
+	// Nothing downstream can notice: clearing no rows is also what erasing an
+	// account that held no profile looks like.
+	//
+	// Placed after the CLI branch so a subcommand an operator runs to diagnose
+	// the disagreement still works, and fatal rather than degraded because every
+	// pseudonym this server writes from here on would be unreachable by the other
+	// plane. A store that cannot answer is a different matter: this process is
+	// about to depend on that same pool for everything and its own errors will
+	// say so, so an unanswered check is reported rather than made fatal.
+	if err := config.VerifyHMACPlaneAgreement(ctx, adminConfigRepo, hmacSecret); err != nil {
+		if errors.Is(err, config.ErrHMACPlaneMismatch) {
+			_ = auditLogger.Close(ctx)
+			log.Fatalf("%v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		}
+		log.Printf("WARNING: %v; erasure agreement with the admin gateway is unverified", err)
+	}
+
+	// Declarative seeding from VAULT_SEED_FILE (idempotent).
+	//
+	// Applied only once we know this is the server and not a CLI invocation:
+	// running it above the CLI check made every `vault list-clients` create
+	// the declared clients and users as a side effect, and a broken seed file
+	// killed an unrelated admin subcommand with log.Fatalf. The retention
+	// sweepers sit below for the same reason.
+	if cfg.File != "" {
+		sf, err := seed.Load(cfg.File)
 		if err != nil {
 			_ = auditLogger.Close(ctx)
 			log.Fatalf("Failed to load seed file: %v", err) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
 		}
-		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}); err != nil {
+		if err := seed.Run(ctx, sf, seed.Deps{Users: userRepo, Clients: clientRepo}, cfg.Pepper); err != nil {
 			log.Fatalf("Seeding failed: %v", err)
 		}
-	}
-
-	// Check if this is a CLI invocation
-	if cliHandler.Run(ctx, os.Args) {
-		return
 	}
 
 	// Audit retention sweeper (Art. 5(1)(e)). No-op unless
@@ -180,6 +270,13 @@ func main() {
 		defer auditRetention.Stop()
 		log.Printf("audit retention: purging entries older than %s", cfg.AuditRetentionPeriod)
 	}
+
+	// Refresh-token reaping. Nothing on the server path ran it before: the only
+	// caller of DeleteExpired was the CLI, so the table grew until an operator
+	// remembered a subcommand.
+	refreshRetention := service.NewRefreshTokenRetention(refreshTokenRepo)
+	refreshRetention.Start(ctx)
+	defer refreshRetention.Stop()
 
 	// Account-recovery escrow retention (Art. 5(1)(e)). No-op unless
 	// VAULT_RECOVERY_RETENTION_DAYS is set. Started here for the same reason as
@@ -277,7 +374,8 @@ func main() {
 		emailSender = email.NewSendGridSender(cfg.SendGridAPIKey, cfg.EmailFrom)
 		log.Println("Email: SendGrid provider configured")
 	case cfg.SMTPHost != "":
-		emailSender = email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom)
+		emailSender = email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom,
+			email.AllowPlaintext(cfg.SMTPAllowPlaintext))
 		log.Println("Email: SMTP provider configured")
 	case cfg.SendGridAPIKey != "":
 		// Fallback: SMTP not configured but SendGrid API key is available
@@ -313,6 +411,33 @@ func main() {
 	authSvc.SetRateLimitRepo(rateLimitRepo)
 	authSvc.SetMaxSessionsPerUser(cfg.MaxSessionsPerUser)
 	authSvc.SetStrictSessionLimit(cfg.StrictSessionLimit)
+	tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)
+	tokenSvc.SetInactivityTimeout(cfg.InactivityTimeout)
+
+	// The inactivity timeout is measured from the family's last rotation, and a
+	// client in normal use rotates about once per access-token lifetime. Set at
+	// or below that TTL it stops being an idle bound and becomes a hard cap on
+	// every session, idle or not, so the misconfiguration has to be visible
+	// before users start being logged out mid-use.
+	if cfg.InactivityTimeout > 0 && cfg.InactivityTimeout <= cfg.AccessTokenTTL {
+		log.Printf("WARNING: VAULT_INACTIVITY_TIMEOUT (%s) is not longer than the access token TTL (%s); "+
+			"sessions in active use will be terminated as if they were idle",
+			cfg.InactivityTimeout, cfg.AccessTokenTTL)
+	}
+
+	// IP-intelligence: prefers VAULT_IPINTEL_DATA, else the embedded blob. Load
+	// is fail-open — a corrupt embedded blob (a build-time defect) must not stop
+	// the service, so degrade to an empty table and continue. The empty table
+	// makes both dependent features (the new-location notice and VPN rate-limit
+	// scrutiny) inert rather than erroring. Wired into the auth service for the
+	// new-location notice and into the server (deps below) for rate-limit weight.
+	ipIntelDB, err := ipintel.Default()
+	if err != nil {
+		log.Printf("WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)", err)
+		ipIntelDB = ipintel.NewEmpty()
+	}
+	authSvc.SetIPIntel(ipIntelDB)
+	authSvc.SetLoginCountryRepo(loginCountryRepo)
 	// Catalog-aware role validation: JWT issuance keeps only roles defined in
 	// auth.app_roles (in addition to the admin-reserved filter).
 	authSvc.SetRoleCatalog(service.NewRoleCatalog(postgres.NewAppRoleRepo(db), 60*time.Second))
@@ -355,10 +480,40 @@ func main() {
 	if cfg.Profile == config.ProfileHoneypot {
 		honeypotAlerter = honeypot.NewAlerter(cfg.HoneypotWebhookURL, cfg.HoneypotTrapUsers, auditLogger)
 		authSvc.SetHoneypotAlerter(honeypotAlerter)
-		// Set fake JWT claims to match real server config so honeypot tokens
-		// are indistinguishable from real ones in their iss/aud fields.
-		honeypot.ConfigureFakeJWT(cfg.Origin, cfg.Origin)
-		log.Printf("Honeypot mode active: %d trap users configured", len(cfg.HoneypotTrapUsers))
+		// iss, aud and the access-token lifetime all come from this deployment's
+		// own configuration. The lifetime is here because the login body quotes
+		// it as expires_in while the token carries its own exp: a trap minting
+		// against a hardcoded default disagreed with its own response on every
+		// deployment that had set VAULT_ACCESS_TOKEN_TTL.
+		honeypot.ConfigureFakeJWT(cfg.Origin, cfg.Origin, cfg.AccessTokenTTL)
+
+		// Publish the trap's signing key in the JWKS this instance serves.
+		//
+		// The trap token has to verify against the document its own issuer
+		// publishes, or the first relying party the attacker feeds it to reports
+		// the forgery for them. The key is generated in this process, is never
+		// persisted, and is not the deployment's signing key: signing trap tokens
+		// with the real key would make them valid on any instance sharing it,
+		// which under the bridge topology is the production vault.
+		//
+		// Generating it here rather than on the first trap login also keeps that
+		// login from being several hundred milliseconds slower than every one
+		// after it.
+		trapKID, trapPub, err := honeypot.TrapSigningKey()
+		if err != nil {
+			log.Fatalf("Failed to generate the honeypot signing key: %v", err)
+		}
+		keys[trapKID] = trapPub
+		if ks != nil {
+			// The keystore serves JWKS from its own table, so the map above is
+			// not what this instance publishes and the trap key would be absent
+			// from the document. Honeypot deployments run with
+			// VAULT_KEY_ROTATION_DB unset, which is why this is a warning rather
+			// than a fatal.
+			log.Printf("WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) "+
+				"is not published in the keystore-backed JWKS, so trap tokens will not verify against it", trapKID)
+		}
+		log.Printf("Honeypot mode active: %d trap users configured (trap kid=%s)", len(cfg.HoneypotTrapUsers), trapKID)
 	}
 
 	// Initialize metrics collector (if enabled)
@@ -369,8 +524,47 @@ func main() {
 			vaultcrypto.Argon2RejectedCount,
 			vaultcrypto.Argon2MaxConcurrent,
 		)
+		metricsCollector.SetArgon2Queue(
+			vaultcrypto.Argon2WaitingCount,
+			vaultcrypto.Argon2WaitNanos,
+		)
+		metricsCollector.SetHIBPShed(hibpClient.ShedCount)
 		authSvc.SetMetrics(metricsCollector)
-		log.Println("Prometheus metrics enabled at GET /metrics")
+		// The address is announced by the server when the listener binds. Saying
+		// "at GET /metrics" alone would now be misleading: the collector is not
+		// on the public listener, and an operator reading this line needs to
+		// know it is looking for a different port.
+		log.Println("Prometheus metrics enabled on the dedicated metrics listener (VAULT_METRICS_ADDR)")
+	}
+
+	// Mint is built here rather than in setupRoutes because an unsafe mint policy
+	// must abort startup and setupRoutes cannot return an error. When minting is
+	// off this stays nil and the route is never registered.
+	var mintSvc *service.MintService
+	if cfg.MintEnabled {
+		signer := func() (*rsa.PrivateKey, string) { return signingKey, kid }
+		if ks != nil {
+			signer = ks.ActiveKey
+		}
+		// A nil *metrics.Collector must be passed as a nil interface, not as a
+		// typed nil: the latter is non-nil at the interface and panics on first
+		// use, so a deployment with metrics off would crash on its first mint.
+		var mintMetrics service.MintMetrics
+		if metricsCollector != nil {
+			mintMetrics = metricsCollector
+		}
+		mintSvc, err = service.NewMintService(signer, service.MintConfig{
+			Issuer:        cfg.Origin,
+			Audience:      cfg.MintAudience,
+			DefaultTTL:    cfg.MintTokenTTL,
+			MaxTTL:        cfg.MintMaxTTL,
+			AllowedRoles:  cfg.MintAllowedRoles,
+			AllowedScopes: cfg.MintAllowedScopes,
+		}, mintMetrics)
+		if err != nil {
+			log.Fatalf("Failed to initialize mint service: %v", err)
+		}
+		log.Printf("Mint enabled: signing for audience %q", cfg.MintAudience)
 	}
 
 	// Initialize OAuth2 providers
@@ -394,11 +588,21 @@ func main() {
 		)
 	}
 	// Generic OpenID Connect providers (Okta, Auth0, Keycloak, Entra, …).
+	//
+	// These are the only providers that take a destination from data: the four
+	// endpoints their discovery document names. The others reach compiled-in
+	// literals. outbound.Policy holds those four to the issuer's own domain
+	// with no configuration at all; what the deployment supplies here is the
+	// operator's widenings of it, and the dial-time address check that a
+	// transport is the only place to put.
+	outboundPolicy := outbound.New(cfg.OutboundAllowedHosts, cfg.OutboundAllowPrivate)
 	for _, op := range cfg.OIDCProviders {
-		oauthProviders[op.Name] = oauth2.NewOIDCProvider(
+		provider := oauth2.NewOIDCProvider(
 			op.Name, op.Issuer, op.ClientID, op.ClientSecret,
 			cfg.Origin+"/auth/oauth2/callback/"+op.Name, op.Scopes,
 		)
+		provider.SetGuard(outboundPolicy)
+		oauthProviders[op.Name] = provider
 		log.Printf("oauth: registered OIDC provider %q (issuer=%s)", op.Name, op.Issuer)
 	}
 
@@ -412,6 +616,50 @@ func main() {
 		})
 		ks.StartRefreshLoop(ctx, cfg.KeyRefreshInterval)
 		defer ks.Stop()
+
+		// Expired-key sweeper. Retired keys leave the verification set at their
+		// expiry and stayed in the table forever afterwards, each one holding the
+		// encrypted private half of a key that no longer verifies anything.
+		//
+		// Below the CLI check for the same reason as the audit and recovery
+		// sweepers: the sweep runs immediately on start, so above it every
+		// `vault list-clients` would reap signing key rows as a side effect of
+		// listing clients.
+		keyRetention := keystore.NewRetention(ks)
+		keyRetention.Start(ctx)
+		defer keyRetention.Stop()
+
+		// Scheduled rotation. Nothing rotated the signing key before this: the
+		// draft spec called for every 30 days, the shipped spec redefined rotation
+		// as an admin endpoint plus a CLI command, and a default install therefore
+		// signed every token it ever issued under one key. Below the CLI check for
+		// the same reason as the three sweepers above it — the first check runs
+		// immediately, so above it every `vault list-clients` would be a chance to
+		// rotate the signing key as a side effect of listing clients.
+		//
+		// Stop is deferred above the pool's Close and blocks until the loop has
+		// exited, so a rotation cannot still be inside its transaction when the
+		// pool goes.
+		keyRotation := keystore.NewRotation(ks, config.KeyRotationInterval())
+		if keyRotation.Enabled() {
+			keyRotation.Start(ctx)
+			defer keyRotation.Stop()
+			log.Printf("keystore rotation: rotating the signing key once it is older than %s", config.KeyRotationInterval())
+		} else {
+			log.Printf("WARNING: VAULT_KEY_ROTATION_INTERVAL is not positive; the signing key will never rotate on its own, " +
+				"so every token this deployment issues stays verifiable under one private key for the life of the install")
+		}
+
+		// A retention period shorter than the access token TTL strands tokens on
+		// every rotation: the key stops verifying while tokens it signed are still
+		// inside their lifetime. That was survivable while the row lingered, since
+		// an operator could push expires_at back out and recover. Reaping makes it
+		// permanent, so the misconfiguration has to be visible before it bites.
+		if cfg.KeyRetentionPeriod < cfg.AccessTokenTTL {
+			log.Printf("WARNING: VAULT_KEY_RETENTION_PERIOD (%s) is shorter than the access token TTL (%s); "+
+				"rotation will strand tokens that are still within their lifetime",
+				cfg.KeyRetentionPeriod, cfg.AccessTokenTTL)
+		}
 	}
 
 	// Readiness dependencies
@@ -420,6 +668,41 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			return db.Pool.Ping(ctx)
+		},
+		// The cache probe reports two different losses through one signal.
+		//
+		// cacheDegraded is set when NewCache failed at startup and this process
+		// is running on the per-process memory fallback. Nothing else announces
+		// that: the fallback is one log line, and every cross-replica control
+		// silently becomes per-pod, so the login and password-reset limiters
+		// multiply by the replica count, OAuth state written on one pod cannot
+		// be read on another, and the TOTP replay guard only blocks a replay
+		// that lands on the pod that saw the first use.
+		//
+		// The round trip below catches the other case, where the cache was fine
+		// at boot and has since gone away. It writes and reads its own key so a
+		// backend that accepts writes and returns nothing is not reported
+		// healthy.
+		//
+		// A failing probe reports "degraded" and deliberately still answers 200,
+		// which is pinned in internal/handler. Taking every replica out of
+		// rotation the moment Redis blinks is worse for an auth service than
+		// running degraded and saying so.
+		PingCache: func() error {
+			if cacheDegraded {
+				return errors.New("cache fell back to per-process memory at startup")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			const probeKey = "readyz:probe"
+			if err := appCache.Set(ctx, probeKey, "1", 10*time.Second); err != nil {
+				return fmt.Errorf("cache write: %w", err)
+			}
+			if _, err := appCache.Get(ctx, probeKey); err != nil {
+				return fmt.Errorf("cache read back: %w", err)
+			}
+			return nil
 		},
 	}
 
@@ -451,6 +734,7 @@ func main() {
 		HIBPEnabled:       cfg.HIBPCheck,
 		ReadyDeps:         readyDeps,
 		HoneypotAlerter:   honeypotAlerter,
+		IPIntel:           ipIntelDB,
 		Metrics:           metricsCollector,
 		KeyStore:          ks,
 		KMS:               kmsSvc,
@@ -459,6 +743,9 @@ func main() {
 		Recovery:          recoveryRepo,
 		RecoveryPublicKey: recoveryPub,
 		AuditEvents:       auditRepo,
+		ServiceDocs:       serviceDocRepo,
+		LoginCountries:    loginCountryRepo,
+		Mint:              mintSvc,
 	}
 
 	srv := server.New(deps)

@@ -14,7 +14,7 @@ func TestAlerter_MalformedWebhookURLDoesNotPanic(t *testing.T) {
 	a := NewAlerter("://not-a-url", []string{"trap@example.com"}, nil)
 
 	// Must not panic and must not block.
-	a.Alert(context.Background(), HoneypotEvent{
+	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "203.0.113.1",
 	})
@@ -27,11 +27,11 @@ func TestAlerter_TrapUserMatching(t *testing.T) {
 	a := NewAlerter("", []string{"trap@example.com", "admin@example.com"}, nil)
 
 	if !a.IsTrapUser("trap@example.com") {
-		t.Error("a configured trap user was not recognised — the attacker would get a real error instead of the honeypot")
+		t.Error("a configured trap user was not recognized, so the attacker gets a real error instead of the honeypot")
 	}
 	if a.IsTrapUser("real-user@example.com") {
 		t.Error("a real user was treated as a trap account and served a fake session")
 	}
 
-	a.Alert(context.Background(), HoneypotEvent{EventType: "trap_login"}) // no webhook: must be inert
+	a.Alert(context.Background(), Event{EventType: "trap_login"}) // no webhook: must be inert
 }

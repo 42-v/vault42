@@ -356,5 +356,6 @@
   "error.forbidden": "K této akci nemáte oprávnění.",
   "error.code_already_used": "Tento kód už byl použit. Použijte prosím nový.",
   "error.password_recently_used": "Toto heslo jste nedávno použili. Zvolte prosím jiné.",
-  "error.no_webauthn_credentials": "K tomuto účtu nejsou registrovány žádné bezpečnostní klíče."
+  "error.no_webauthn_credentials": "K tomuto účtu nejsou registrovány žádné bezpečnostní klíče.",
+  "error.password_reset_required": "Tento účet si musí obnovit heslo. Poslali jsme vám e-mailem odkaz pro obnovení."
 }

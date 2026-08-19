@@ -23,33 +23,103 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
 
+      # tests/spec renders the chart and asserts on the rendered manifests. With
+      # no helm on PATH those assertions skip, and a skipped assertion reports
+      # green, which is indistinguishable from one that ran and passed. Three
+      # separate gates in this repository turned out to be incapable of failing;
+      # a silent skip is the same defect wearing a different hat.
+      #
+      # The version matches the chart jobs so CI renders with one helm, not two.
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      # setup-helm failing soft would put us straight back to silent skips.
+      - name: helm is on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v helm >/dev/null || {
+            echo "::error::helm is not on PATH; the rendered-manifest assertions" \
+                 "in tests/spec would skip and report green"
+            exit 1
+          }
+          helm version --short
+
       - name: Vet
         run: go vet ./...
 
+      # -coverpkg attributes coverage to the internal packages under test rather
+      # than to the test binary, which is what makes the profile comparable with
+      # the canonical run in coverage-gate.
+      # Every step in this job pipes into tee, and a step with no `shell:` key
+      # runs under GitHub's default `bash -e {0}`, which does NOT set pipefail.
+      # The status of the pipeline is tee's, so `go test` could fail, or fail to
+      # compile, and the step still exited 0. This job could not go red.
+      # `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`, which is
+      # the difference. scripts/lib/coverage-env.sh already works around this on
+      # the coverage path with cov_check_failures; the Tests job never did.
       - name: Unit + handler + middleware + service tests
-        run: go test ./internal/... -count=1 -race -v -coverprofile=coverage.out 2>&1 | tee test-output.txt
+        shell: bash
+        run: |
+          go test ./internal/... -count=1 -race -v \
+            -coverprofile=coverage-unit.out -coverpkg=./internal/... \
+            2>&1 | tee test-output.txt
 
-      - name: Attack tests
-        run: go test ./tests/attack/... -count=1 -v -timeout 300s 2>&1 | tee -a test-output.txt
+      # The race detector used to see ./internal/... and nothing else, which is
+      # backwards: the suites that actually drive concurrency live under tests/.
+      # backup_code_race, cache_atomicity, semaphore_enumeration, the handler
+      # backpressure tests and the two-replica keystore tests were all written to
+      # provoke races and were all run without the detector.
+      #
+      # Measured on this tree before wiring it up, so the timeouts are numbers
+      # rather than guesses: attack 36s, unit 24s, fuzz 2s, spec 1s, and the
+      # container-backed integration 458s plus compliance 48s. Zero races across
+      # every one of them, so this starts green and stays honest about it.
+      #
+      # tests/unit was not run by this job at all. It reached CI only through
+      # coverage-gate, which is skipped when no Go file changed.
+      - name: Attack, unit, fuzz and spec tests (race)
+        shell: bash
+        run: |
+          go test ./tests/attack/... ./tests/unit/... ./tests/fuzz/... ./tests/spec/... \
+            -count=1 -race -v -timeout 600s \
+            2>&1 | tee -a test-output.txt
 
-      - name: Compliance tests
-        run: go test ./tests/compliance/... -count=1 -v 2>&1 | tee -a test-output.txt
+      # -p 1 matches the canonical coverage run: integration and compliance each
+      # start their own Postgres, and in parallel they contend for ports.
+      - name: Integration and compliance tests (race)
+        shell: bash
+        run: |
+          go test ./tests/integration/... ./tests/compliance/... \
+            -count=1 -p 1 -race -v -timeout 1800s \
+            2>&1 | tee -a test-output.txt
 
-      - name: E2E tests (skipped if no server)
-        run: go test ./tests/e2e/... -count=1 -v 2>&1 | tee -a test-output.txt
+      # tests/e2e/multireplica runs here: it starts its own containers. The outer
+      # tests/e2e suite needs a deployed cluster and skips without one, which is
+      # why VAULT_E2E_REQUIRED is deliberately NOT set. That skip is a real gap
+      # rather than a passing gate, and the step name says so.
+      - name: E2E tests (multireplica only; the cluster suite skips here)
+        shell: bash
+        run: |
+          go test ./tests/e2e/... -count=1 -race -v -timeout 1800s \
+            2>&1 | tee -a test-output.txt
 
-      - name: Upload coverage
+      - name: Upload unit coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage
-          path: coverage.out
+          name: coverage-unit
+          path: coverage-unit.out
 
       - name: Upload test output
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -58,11 +128,114 @@ jobs:
           name: test-output
           path: test-output.txt
 
+  # The coverage number is the version number: 0.9.2 was 92.42%, 0.9.9 was
+  # 99.42%. Until this job existed nothing checked it: the profile was uploaded
+  # as an artifact and release-check.sh printed the total and passed regardless.
+  coverage-gate:
+    name: Go coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # tests/spec renders the chart and asserts on the rendered manifests. With
+      # no helm on PATH those assertions skip, and a skipped assertion reports
+      # green, which is indistinguishable from one that ran and passed. Three
+      # separate gates in this repository turned out to be incapable of failing;
+      # a silent skip is the same defect wearing a different hat.
+      #
+      # The version matches the chart jobs so CI renders with one helm, not two.
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      # setup-helm failing soft would put us straight back to silent skips.
+      - name: helm is on PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v helm >/dev/null || {
+            echo "::error::helm is not on PATH; the rendered-manifest assertions" \
+                 "in tests/spec would skip and report green"
+            exit 1
+          }
+          helm version --short
+
+      # The canonical package set from scripts/lib/coverage-env.sh, so this
+      # profile, docs/test-coverage.md and the README badge always describe the
+      # same run. Includes the DB-backed suites, which need a container runtime.
+      - name: Canonical coverage run
+        shell: bash
+        run: |
+          set -eo pipefail
+          source scripts/lib/coverage-env.sh
+          cov_require_runtime
+          cov_run coverage.out coverage-test-output.txt
+          cov_check_failures coverage-test-output.txt
+
+      - name: Gate
+        run: scripts/release-check.sh --coverage-only coverage.out
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage-test-output.txt
+
+  # A conditional job reports "skipped", and branch protection counts skipped as
+  # green, so the required check for coverage cannot be the conditional job
+  # itself: "Go coverage gate" would show green on a run where it never
+  # executed. That is the same shape as a gate that exits 0 having measured
+  # nothing. This one always runs and inspects the result.
+  #
+  # Make THIS the required status check in branch protection, not the job it
+  # watches.
+  coverage-gate-required:
+    name: Go coverage gate (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, coverage-gate]
+    if: always()
+    steps:
+      - name: Assert the gate ran when it had to
+        shell: bash
+        env:
+          NEEDED: ${{ needs.changes.outputs.go_changed }}
+          RESULT: ${{ needs.coverage-gate.result }}
+        run: |
+          set -eo pipefail
+          if [ "$NEEDED" != 'true' ]; then
+            echo "no coverage-relevant change in this PR; the gate was not required"
+            exit 0
+          fi
+          if [ "$RESULT" != 'success' ]; then
+            echo "coverage gate result is '$RESULT' on a change that requires it" >&2
+            exit 1
+          fi
+          echo "coverage gate ran and passed"
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
+      # fetch-depth: 0 was here for the `git diff` in the changed-files lint.
+      # That step is gone and nothing else in this job reads history, so the
+      # checkout is shallow again.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -88,13 +261,225 @@ jobs:
       - name: Test web
         run: pnpm -C web test:coverage
 
+      # Two steps used to live here: a blocking lint scoped to the files a pull
+      # request touched, and a whole-tree run with `continue-on-error: true`
+      # that only printed a table. That shape existed because the tree carried
+      # 53 errors and 23 warnings, and it is also what let them accumulate: a
+      # gate that cannot fail is not a gate, and a changed-files gate cannot see
+      # a regression in a file the pull request did not touch.
+      #
+      # The tree is at zero on both counts now, so one honest whole-tree gate
+      # replaces both. `pnpm lint` is `eslint . --max-warnings 0`, so the
+      # standard lives in package.json where a developer runs the same command,
+      # rather than being restated here.
+      - name: Lint
+        run: pnpm lint
+
+      # The release notes claim the frontend went from eight high-severity
+      # advisories to none, and that was true when it was measured -- and held in
+      # place by nothing. The overrides in package.json that produced it are
+      # ordinary dependency pins, so the next lockfile update can undo them
+      # silently. Auditing at high and above rather than at every severity keeps
+      # the gate on the findings the claim is about, so a new low advisory in a
+      # transitive dev dependency does not block a release.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
+
+  # .golangci.yml is 119 lines of tuned configuration that no workflow, script or
+  # hook has ever invoked. `revive: exported` is on now, and it is the check that
+  # catches undocumented exported API, so the tree starts with a backlog. New
+  # findings block; the backlog is reported and burned down.
+  golangci:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    # github.base_ref is a branch name in the base repository, and it was
+    # interpolated straight into the args string the lint action hands to a
+    # shell. Exploiting that needs push access to the base repo to create a
+    # branch whose name carries shell metacharacters, so it is not a fork-PR
+    # vector, but binding the value and checking its shape removes the class.
+    # It is empty on a push, which is what the fallback covers.
+    env:
+      BASE_REF: ${{ github.base_ref || 'main' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Base ref is a plain branch name
+        run: |
+          set -eu
+          printf '%s' "$BASE_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+            || { echo "::error::refusing to pass base ref '$BASE_REF' to golangci-lint"; exit 1; }
+
+      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.6.2
+          # Build golangci-lint from source with the runner's Go toolchain rather
+          # than pulling the prebuilt release binary. The v2.6.2 release binary is
+          # built with go1.25, and golangci-lint refuses to load a config whose
+          # target Go (1.26, from go.mod) is newer than the Go it was built with.
+          # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
+          # target-Go match.
+          install-mode: goinstall
+          args: --timeout 15m --new-from-merge-base=origin/${{ env.BASE_REF }}
+
+      # This used to be `continue-on-error: true` with a summary table, which is
+      # how the tree reached 109 findings: a step that cannot fail records a
+      # backlog, it does not hold one. It is a ratchet now. Each linter's count
+      # may fall and may not rise, so the backlog can only shrink while it is
+      # being burned down, and the step still prints the same table.
+      #
+      # This does not replace --new-from-merge-base above, it covers the other
+      # half: that gate requires the diff to be clean, this one requires the
+      # rest of the tree not to get worse behind it.
+      #
+      # When .golangci-baseline.json reaches zero everywhere, delete it and make
+      # this a plain `golangci-lint run ./...`.
+      - name: Full run
+        shell: bash
+        run: |
+          set -uo pipefail
+          golangci-lint run --timeout 15m --output.json.path=golangci.json ./... || true
+          if [ ! -s golangci.json ]; then
+            echo "::error::golangci-lint produced no report. That is a failed run," \
+                 "not a clean one."
+            exit 1
+          fi
+          python3 - golangci.json .golangci-baseline.json <<'PY'
+          import collections, json, os, sys
+
+          try:
+              with open(sys.argv[1]) as fh:
+                  report = json.load(fh)
+          except json.JSONDecodeError as exc:
+              sys.exit(f"golangci report is not valid JSON, so the run did not complete: {exc}")
+
+          issues = report.get("Issues")
+          if issues is None:
+              sys.exit("golangci report has no Issues key; the format changed or the run aborted")
+
+          baseline = json.load(open(sys.argv[2]))["findings_by_linter"]
+          counts = collections.Counter(i["FromLinter"] for i in issues)
+          by_pkg = collections.Counter(os.path.dirname(i["Pos"]["Filename"]) for i in issues)
+
+          summary = open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a")
+          print(f"### golangci-lint: {len(issues)} findings "
+                f"(baseline {sum(baseline.values())})\n", file=summary)
+          print("| linter | count | baseline |\n|---|---|---|", file=summary)
+          for k in sorted(set(counts) | set(baseline)):
+              print(f"| `{k}` | {counts.get(k, 0)} | {baseline.get(k, 0)} |", file=summary)
+          print("\n| package | count |\n|---|---|", file=summary)
+          for k, n in by_pkg.most_common(25):
+              print(f"| `{k}` | {n} |", file=summary)
+
+          worse = {k: (n, baseline.get(k, 0)) for k, n in counts.items()
+                   if n > baseline.get(k, 0)}
+          for linter, (now, was) in sorted(worse.items()):
+              print(f"::error::golangci-lint {linter} rose from {was} to {now}")
+              for i in issues:
+                  if i["FromLinter"] == linter:
+                      pos = i["Pos"]
+                      print(f"    {pos['Filename']}:{pos['Line']} {i['Text']}")
+
+          better = {k: (counts.get(k, 0), n) for k, n in baseline.items()
+                    if counts.get(k, 0) < n}
+          if better:
+              for linter, (now, was) in sorted(better.items()):
+                  print(f"golangci-lint {linter} fell from {was} to {now}; lower the baseline")
+              print("replacement for findings_by_linter:")
+              print(json.dumps(dict(sorted(counts.items())), indent=2))
+
+          if worse:
+              sys.exit(f"{len(worse)} linter(s) regressed against .golangci-baseline.json")
+          print(f"golangci-lint at or below baseline ({len(issues)} vs {sum(baseline.values())})")
+          PY
+
+  # govulncheck, gosec and Trivy used to run only at 03:00 UTC on main, so a PR
+  # could introduce a HIGH CVE and merge green.
+  #
+  # The image scans were still nightly-only, because `full_scan` defaults to
+  # false on workflow_call: a pull request that repointed a base image could
+  # introduce a HIGH or CRITICAL base-image CVE and merge green, and the first
+  # thing to notice was the release. image_scan turns them on for the pull
+  # requests that can actually change what is in an image, and leaves them off
+  # for the ones that cannot.
+  security:
+    name: Security
+    needs: [changes]
+    uses: ./.github/workflows/nightly-security.yml
+    with:
+      image_scan: ${{ needs.changes.outputs.image_inputs_changed == 'true' }}
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.16.3
+
+      - name: Lint
+        run: helm lint charts/vault
+
+      - name: Render every values file
+        shell: bash
+        run: |
+          set -eu
+          helm template ci charts/vault > /dev/null
+          for values in charts/vault/values-*.yaml; do
+            echo "rendering $values"
+            helm template ci charts/vault -f "$values" > /dev/null
+          done
+
+      # values.yaml leaves image.tag empty and deployment.yaml:36 falls back to
+      # .Chart.AppVersion, so an appVersion naming a tag that was never published
+      # is an ImagePullBackOff on every default install. That was the state from
+      # 0.4.2 to 0.9.9.
+      - name: Default install resolves a published tag
+        shell: bash
+        run: |
+          set -eu
+          rendered=$(helm template ci charts/vault | grep -oE 'ghcr\.io/42-v/vault42:[^"]+' | head -1)
+          appversion=$(grep -oE '^appVersion: "?[^"]+' charts/vault/Chart.yaml | sed 's/^appVersion: "\?//')
+          echo "rendered=$rendered appVersion=$appversion"
+          [ "$rendered" = "ghcr.io/42-v/vault42:${appversion}" ]
+
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Every manifest agrees with VERSION
+        run: scripts/version-bump.sh --check
+
   changes:
     name: Detect Go changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       go_changed: ${{ steps.filter.outputs.go }}
+      goreleaser_changed: ${{ steps.filter.outputs.goreleaser }}
+      image_inputs_changed: ${{ steps.filter.outputs.image_inputs }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
@@ -103,14 +488,68 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+              # The coverage gate is gated on this filter, and every ratchet it
+              # enforces lives in files that are not Go. A PR adding an exclusion
+              # entry, raising a baseline, or editing the gate itself would
+              # otherwise skip the one job that checks it.
+              - '.coverage-exclusions.json'
+              - 'scripts/cov-gaps.py'
+              - 'scripts/release-check.sh'
+              - 'scripts/coverage.sh'
+              - 'scripts/lib/coverage-env.sh'
+            # The release config is not a Go file, so an edit that touched only
+            # it left goreleaser-config skipped and the first parse of the file
+            # happened on the tag push, with the tag already published and the
+            # image jobs already running.
+            goreleaser:
+              - '.goreleaser.yaml'
+              - '.goreleaser.yml'
+            # What can change the vulnerability surface of a built image: the
+            # base image pin, the dependency manifests the image installs from,
+            # and the script that builds it. Deliberately NOT '**/*.go': editing
+            # a handler changes the binary but adds no CVE, and putting Go
+            # source here would run three container builds on nearly every pull
+            # request to learn nothing.
+            image_inputs:
+              - 'Dockerfile'
+              - 'Dockerfile.*'
+              - 'web/Dockerfile'
+              - 'go.mod'
+              - 'go.sum'
+              - 'pnpm-lock.yaml'
+              - 'scripts/ci-build-image.sh'
+
+  modules:
+    name: Go module hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go mod verify
+        run: go mod verify
+
+      - name: go mod tidy is a no-op
+        run: go mod tidy -diff
 
   fuzz:
     name: Fuzz Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [test, changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -122,18 +561,25 @@ jobs:
         run: go test -fuzz=FuzzArgon2Verify -fuzztime=1m ./tests/fuzz/...
       - name: Fuzz TOTP
         run: go test -fuzz=FuzzValidateTOTP -fuzztime=1m ./tests/fuzz/...
+      # FuzzEmailValidation was deleted with the dummy validator it fuzzed. The
+      # step kept naming it: `go test -fuzz=<no match>` prints "no fuzz tests to
+      # fuzz" and exits 0, so the job stayed green while fuzzing nothing.
+      # tests/spec/fuzz_targets_test.go fails when a -fuzz= name has no target.
       - name: Fuzz email
-        run: go test -fuzz=FuzzEmailValidation -fuzztime=1m ./tests/fuzz/...
+        run: go test -fuzz=FuzzSanitizeEmail -fuzztime=1m ./tests/fuzz/...
       - name: Fuzz DPoP
         run: go test -fuzz=FuzzDPoPProof -fuzztime=1m ./tests/fuzz/...
 
   build-binaries:
     name: Build All Binaries
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -148,9 +594,161 @@ jobs:
       - name: Build admin-gateway
         run: CGO_ENABLED=0 go build -o /dev/null ./cmd/admin-gateway
 
+  # The release artifacts are built by goreleaser, not by the Dockerfiles, so a
+  # config error surfaces here rather than after a tag is already pushed.
+  #
+  # `check` parses the config and reports schema errors and deprecations without
+  # running the before-hooks, which install pnpm dependencies and build the SPA
+  # into internal/frontend/dist. That is what keeps this affordable on every
+  # edit to the config itself.
+  goreleaser-config:
+    name: GoReleaser config
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.go_changed == 'true' || needs.changes.outputs.goreleaser_changed == 'true'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: check
+
+  # Five suites were invoked by no workflow at all: tests/admin (admin-gateway
+  # mTLS + RBAC), tests/browser (its own go.mod, which the root ./... never
+  # enters), tests/honeypot, tests/stress and tests/e2e-browser (19 Playwright
+  # files, 160 tests). Between them they hold the only coverage of several real
+  # security properties.
+  #
+  # None of them can actually RUN here: they need a deployed vault, mTLS client
+  # certs, kubectl, Mailpit, Chromium, or five containers that must reach each
+  # other on host-mapped ports. Every one already carries a skip notice and a
+  # VAULT_*_REQUIRED env var that turns the skip into a failure, and all of that
+  # machinery was correct and unreachable, because nothing invoked it.
+  #
+  # So this job does the two things that are possible, and refuses to be quiet
+  # about the third:
+  #
+  #   1. Compiles all five, with the build tags that hide most of them, so a
+  #      rename in internal/ cannot silently break a suite for months.
+  #   2. Runs each in skip mode with -v and ASSERTS the notice appeared. Without
+  #      -v, `go test` swallows the notice entirely and prints `ok` — which is
+  #      how a suite that ran nothing looks identical to one that passed.
+  #   3. Writes the whole list to the run summary, so "did not run" is on the
+  #      screen of anyone reading a green build.
+  unrunnable-suites:
+    name: Suites CI cannot run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The tagged files are the ones at risk: nothing else in the repository
+      # ever compiles them, so they drift silently against internal/ and against
+      # their own module.
+      - name: Compile every suite, tags included
+        shell: bash
+        run: |
+          set -euo pipefail
+          go vet ./tests/admin/...
+          go vet -tags honeypot_e2e ./tests/honeypot/...
+          go vet -tags stress ./tests/stress/...
+          ( cd tests/browser && go vet -tags browser ./... )
+
+      # --list type-resolves and collects all 19 spec files without a browser
+      # download and without a reachable vault, which is the Playwright
+      # equivalent of the compile check above.
+      - name: Collect the Playwright suite
+        run: pnpm -C tests/e2e-browser exec playwright test --list
+
+      - name: Report what did not run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sum() { printf '%s\n' "$*" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"; }
+
+          failed=0
+          report() {
+            name=$1 envvar=$2 log=$3 rc=$4
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::$name exited $rc in skip mode; it must skip cleanly or run"
+              sum "| \`$name\` | **exited $rc** | \`$envvar\` |"
+              failed=1
+              return
+            fi
+            if ! grep -q 'Nothing in this suite ran' "$log"; then
+              echo "::error::$name printed no skip notice, so a green result here is" \
+                   "indistinguishable from a run that actually happened"
+              sum "| \`$name\` | **no notice** | \`$envvar\` |"
+              failed=1
+              return
+            fi
+            sum "| \`$name\` | did not run | \`$envvar\` |"
+          }
+
+          sum '### Suites that did not run'
+          sum ''
+          sum 'Each needs a deployment, a browser or a container topology a GitHub'
+          sum 'Actions runner does not have. They are compiled on every run so they'
+          sum 'cannot rot, and each prints why it did not run. Set the env var to'
+          sum 'make its skip fatal.'
+          sum ''
+          sum '| suite | status | make the skip fatal with |'
+          sum '|---|---|---|'
+
+          go test ./tests/admin/... -count=1 -v > admin.log 2>&1 && rc=0 || rc=$?
+          report tests/admin VAULT_ADMIN_E2E_REQUIRED admin.log "$rc"
+
+          go test ./tests/honeypot/... -count=1 -v > honeypot.log 2>&1 && rc=0 || rc=$?
+          report tests/honeypot VAULT_HONEYPOT_E2E_REQUIRED honeypot.log "$rc"
+
+          go test ./tests/stress/... -count=1 -v > stress.log 2>&1 && rc=0 || rc=$?
+          report tests/stress VAULT_STRESS_REQUIRED stress.log "$rc"
+
+          ( cd tests/browser && go test ./... -count=1 -v ) > browser.log 2>&1 && rc=0 || rc=$?
+          report tests/browser VAULT_BROWSER_REQUIRED browser.log "$rc"
+
+          tests/e2e-browser/run.sh > e2e-browser.log 2>&1 && rc=0 || rc=$?
+          report tests/e2e-browser VAULT_E2E_BROWSER_REQUIRED e2e-browser.log "$rc"
+
+          for f in admin honeypot stress browser e2e-browser; do
+            echo "===== $f ====="
+            cat "$f.log"
+          done
+
+          [ "$failed" -eq 0 ] || {
+            echo "::error::a suite neither ran nor explained itself"
+            exit 1
+          }
+
   lint:
     name: Hadolint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         dockerfile:
@@ -160,8 +758,72 @@ jobs:
           - Dockerfile.goreleaser
           - Dockerfile.goreleaser.bridge
           - Dockerfile.goreleaser.admin-gateway
+          - web/Dockerfile
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: ${{ matrix.dockerfile }}
+
+  lint-non-go:
+    # shellcheck, ruff, markdownlint and yamllint each have a configuration file
+    # in this repository, each was driven to zero by hand, and none of them ran
+    # in any workflow or precommit hook. "At zero" therefore described a moment
+    # rather than a property, and two of the four had already drifted back:
+    # yamllint had a line-length error in .golangci.yml, and markdownlint had
+    # four findings, three of which docs/deps.md's generator re-emitted on every
+    # regeneration -- so a commit that cleared 119 findings was followed by a
+    # regeneration that put some of them straight back.
+    #
+    # Versions are pinned for the same reason the actions are: a linter that
+    # picks up a new rule on its own turns an unrelated pull request red, which
+    # is how a gate stops being trusted.
+    name: Lint (non-Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install linters
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check \
+            'ruff==0.16.3' 'yamllint==1.38.0'
+          npm install --no-save --no-audit --no-fund 'markdownlint-cli2@0.23.2'
+
+      # shellcheck ships on the GitHub-hosted Ubuntu image, so it needs no
+      # install step. The file list comes from git rather than from find, so a
+      # vendored or generated script cannot silently widen the corpus.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files '*.sh')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "::error::no shell scripts found; this gate has stopped seeing what it guards"
+            exit 1
+          fi
+          printf 'checking %d shell scripts\n' "${#scripts[@]}"
+          shellcheck "${scripts[@]}"
+
+      # ruff check only. ruff.toml configures the rule set this repository holds
+      # at zero and says so; the formatter is a separate opinion the two scripts
+      # have never been run through, and adopting it here would be a reformat
+      # wearing a gate's clothes.
+      - name: ruff
+        run: ruff check --no-cache .
+
+      - name: markdownlint
+        run: npx --no-install markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
+
+      - name: yamllint
+        run: yamllint --strict .

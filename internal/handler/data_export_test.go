@@ -30,7 +30,7 @@ func newTestDataExportHandler(
 		MaxBlobsPerUser: 10,
 		QuotaBytes:      10 * 1024 * 1024,
 	})
-	return NewDataExportHandler(users, devices, social, auditEvents, idSvc, blobSvc, newTestAuditLogger())
+	return NewDataExportHandler(users, devices, social, auditEvents, idSvc, blobSvc, nil, newTestAuditLogger())
 }
 
 func TestDataExport_Aggregate(t *testing.T) {

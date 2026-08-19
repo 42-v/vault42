@@ -24,6 +24,7 @@ type seedClientRepo struct {
 func (m *seedClientRepo) Create(ctx context.Context, c *model.Client) error {
 	return m.create(ctx, c)
 }
+
 func (m *seedClientRepo) GetByName(ctx context.Context, n string) (*model.Client, error) {
 	return m.getByName(ctx, n)
 }
@@ -43,9 +44,23 @@ type seedAdminRepo struct {
 	repository.AdminUserRepository
 	getByUsername func(context.Context, string) (*model.AdminUser, error)
 	create        func(context.Context, *model.AdminUser) error
+	list          func(context.Context) ([]*model.AdminUser, error)
 }
 
-func (m *seedAdminRepo) Create(ctx context.Context, a *model.AdminUser) error { return m.create(ctx, a) }
+func (m *seedAdminRepo) Create(ctx context.Context, a *model.AdminUser) error {
+	return m.create(ctx, a)
+}
+
+// List is what seedAdmin consults to attribute a seeded row to a creator, which
+// migration 016 requires once any admin exists. A nil list stands for an empty
+// table, so the seeded admin goes in unattributed the way first boot does.
+func (m *seedAdminRepo) List(ctx context.Context) ([]*model.AdminUser, error) {
+	if m.list == nil {
+		return nil, nil
+	}
+	return m.list(ctx)
+}
+
 func (m *seedAdminRepo) GetByUsername(ctx context.Context, u string) (*model.AdminUser, error) {
 	return m.getByUsername(ctx, u)
 }
@@ -62,6 +77,7 @@ func TestSeedClient(t *testing.T) {
 	cs := ClientSeed{Name: "frontend", Role: "frontend", Scopes: []string{"user:read"}}
 
 	t.Run("creates a new client", func(t *testing.T) {
+		firstBootSink(t)
 		created := false
 		if err := seedClient(ctx, cs, okClientRepo(&created)); err != nil {
 			t.Fatalf("seedClient: %v", err)
@@ -84,6 +100,7 @@ func TestSeedClient(t *testing.T) {
 	})
 
 	t.Run("propagates lookup and create errors", func(t *testing.T) {
+		firstBootSink(t)
 		lookupErr := &seedClientRepo{getByName: func(context.Context, string) (*model.Client, error) { return nil, errors.New("db") }}
 		if err := seedClient(ctx, cs, lookupErr); err == nil {
 			t.Error("expected lookup error")
@@ -147,7 +164,7 @@ func TestSeedUser(t *testing.T) {
 
 func TestRunAdmins(t *testing.T) {
 	ctx := context.Background()
-	sf := &SeedFile{Admins: []AdminSeed{{Username: "root", Password: "correct-horse-battery", Role: "super_admin"}}}
+	sf := &File{Admins: []AdminSeed{{Username: "root", Password: "correct-horse-battery", Role: "super_admin"}}}
 
 	t.Run("creates a new admin", func(t *testing.T) {
 		created := false
@@ -188,13 +205,57 @@ func TestRunAdmins(t *testing.T) {
 			t.Error("expected create error")
 		}
 	})
+
+	// A seed file names a role and never an actor. Migration 016 refuses an admin
+	// row that outranks its creator and refuses an unattributed one once any admin
+	// exists, so a seeded super_admin must be attributed to an account that can
+	// carry it or the insert dies at the database.
+	t.Run("attributes the seeded admin to the highest-ranked existing one", func(t *testing.T) {
+		var got *model.AdminUser
+		repo := &seedAdminRepo{
+			getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
+			create:        func(_ context.Context, a *model.AdminUser) error { got = a; return nil },
+			list: func(context.Context) ([]*model.AdminUser, error) {
+				return []*model.AdminUser{
+					nil,
+					{ID: "viewer-id", Role: "viewer"},
+					{ID: "boss-id", Role: "super_admin"},
+					{ID: "unknown-id", Role: "not-a-role"},
+					{ID: "op-id", Role: "operator"},
+				}, nil
+			},
+		}
+		if err := RunAdmins(ctx, sf, repo, ""); err != nil {
+			t.Fatalf("RunAdmins: %v", err)
+		}
+		if got == nil {
+			t.Fatal("the seeded admin was never created")
+		}
+		if got.CreatedBy != "boss-id" {
+			t.Fatalf("CreatedBy = %q, want the super_admin's id", got.CreatedBy)
+		}
+	})
+
+	t.Run("a failed creator lookup stops the seed", func(t *testing.T) {
+		repo := &seedAdminRepo{
+			getByUsername: func(context.Context, string) (*model.AdminUser, error) { return nil, nil },
+			create: func(context.Context, *model.AdminUser) error {
+				t.Fatal("must not create without a creator")
+				return nil
+			},
+			list: func(context.Context) ([]*model.AdminUser, error) { return nil, errors.New("db") },
+		}
+		if err := RunAdmins(ctx, sf, repo, ""); err == nil {
+			t.Error("expected the list error to propagate")
+		}
+	})
 }
 
 func TestRun_PropagatesErrors(t *testing.T) {
 	ctx := context.Background()
-	sf := &SeedFile{Clients: []ClientSeed{{Name: "x", Role: "frontend"}}}
+	sf := &File{Clients: []ClientSeed{{Name: "x", Role: "frontend"}}}
 	deps := Deps{Clients: &seedClientRepo{getByName: func(context.Context, string) (*model.Client, error) { return nil, errors.New("db") }}}
-	if err := Run(ctx, sf, deps); err == nil {
+	if err := Run(ctx, sf, deps, ""); err == nil {
 		t.Error("Run should propagate a client seed error")
 	}
 }
@@ -203,19 +264,19 @@ func TestValidate_Errors(t *testing.T) {
 	long := "correct-horse-battery-staple"
 	cases := []struct {
 		name string
-		sf   SeedFile
+		sf   File
 	}{
-		{"client missing name", SeedFile{Clients: []ClientSeed{{Role: "frontend"}}}},
-		{"client missing role", SeedFile{Clients: []ClientSeed{{Name: "a"}}}},
-		{"duplicate client name", SeedFile{Clients: []ClientSeed{{Name: "a", Role: "r"}, {Name: "a", Role: "r"}}}},
-		{"user missing email", SeedFile{Users: []UserSeed{{Password: long}}}},
-		{"user invalid email", SeedFile{Users: []UserSeed{{Email: "nope", Password: long}}}},
-		{"user missing password", SeedFile{Users: []UserSeed{{Email: "u@test.com"}}}},
-		{"user short password", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: "short"}}}},
-		{"duplicate email", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: long}, {Email: "u@test.com", Password: long}}}},
-		{"user with reserved admin role", SeedFile{Users: []UserSeed{{Email: "u@test.com", Password: long, Roles: []string{"super_admin"}}}}},
-		{"admin missing username", SeedFile{Admins: []AdminSeed{{Password: long}}}},
-		{"admin missing password", SeedFile{Admins: []AdminSeed{{Username: "root"}}}},
+		{"client missing name", File{Clients: []ClientSeed{{Role: "frontend"}}}},
+		{"client missing role", File{Clients: []ClientSeed{{Name: "a"}}}},
+		{"duplicate client name", File{Clients: []ClientSeed{{Name: "a", Role: "r"}, {Name: "a", Role: "r"}}}},
+		{"user missing email", File{Users: []UserSeed{{Password: long}}}},
+		{"user invalid email", File{Users: []UserSeed{{Email: "nope", Password: long}}}},
+		{"user missing password", File{Users: []UserSeed{{Email: "u@test.com"}}}},
+		{"user short password", File{Users: []UserSeed{{Email: "u@test.com", Password: "short"}}}},
+		{"duplicate email", File{Users: []UserSeed{{Email: "u@test.com", Password: long}, {Email: "u@test.com", Password: long}}}},
+		{"user with reserved admin role", File{Users: []UserSeed{{Email: "u@test.com", Password: long, Roles: []string{"super_admin"}}}}},
+		{"admin missing username", File{Admins: []AdminSeed{{Password: long}}}},
+		{"admin missing password", File{Admins: []AdminSeed{{Username: "root"}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,7 +287,7 @@ func TestValidate_Errors(t *testing.T) {
 	}
 
 	t.Run("valid file passes", func(t *testing.T) {
-		sf := SeedFile{
+		sf := File{
 			Clients: []ClientSeed{{Name: "frontend", Role: "frontend"}},
 			Users:   []UserSeed{{Email: "u@test.com", Password: long}},
 			Admins:  []AdminSeed{{Username: "root", Password: long, Role: "super_admin"}},

@@ -12,11 +12,30 @@ tls:
 
 forceSecureCookies: true
 
+# The vault's own trusted-proxy list, which is the one the server reads
+# (VAULT_TRUSTED_PROXIES via configmap.yaml). This profile set bridge.trustedProxies
+# and left this at the values.yaml default of "", so the vault did not trust the
+# bridge in front of it: ClientIP ignored the bridge's X-Real-IP and XFF, and every
+# request in the deployment resolved to the bridge pod's single address. Per-IP rate
+# limits, the fail-closed login limiter, audit attribution and IP allow/block all
+# keyed on that one address, so one attacker tripping the login limiter locked out
+# everybody and every audit row named the bridge.
+#
+# Setting it is only safe alongside the bridge stripping the client's own
+# upstream-trust headers. Without that strip, trusting the bridge's hop means
+# trusting anything a client puts in X-Vault-App, the JA4 fingerprint header or
+# REAL_IP_HEADER, which is worse than the misattribution it fixes. The two are one
+# change: do not ship this line into a cluster whose bridge image predates it.
+trustedProxies: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
 database:
   host: vault-postgres
   port: "5432"
   name: vault
   sslmode: disable
+  # In-cluster Postgres on a private link: the connection is unencrypted on
+  # purpose, so the override says so where an operator reviews it.
+  allowPlaintext: true
   maxConns: "25"
 
 cache:

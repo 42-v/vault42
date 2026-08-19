@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
@@ -144,5 +145,66 @@ func TestSocialList_RepoFailure(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+// The linked-provider list hand-formatted its timestamp to whole seconds, so it
+// was the one endpoint in the API whose created_at was encoded differently from
+// every other created_at. A client parsing timestamps had to know which
+// endpoint it was talking to.
+func TestSocialList_TimestampMatchesTheRestOfTheAPI(t *testing.T) {
+	created := time.Date(2026, 8, 10, 12, 34, 56, 123456000, time.UTC)
+
+	social := &mocks.MockSocialAccountRepo{
+		ListByUserFn: func(context.Context, string) ([]*model.SocialAccount, error) {
+			return []*model.SocialAccount{{ID: "link-1", Provider: "google", CreatedAt: created}}, nil
+		},
+	}
+	h := NewSocialHandler(social, newTestAuditLogger())
+
+	rec := httptest.NewRecorder()
+	h.List(rec, socialAuthedRequest(http.MethodGet, "/user/social", "user-1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp struct {
+		Accounts []struct {
+			CreatedAt string `json:"created_at"`
+		} `json:"accounts"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(resp.Accounts))
+	}
+	if resp.Total != 1 {
+		t.Errorf("total = %d, want 1", resp.Total)
+	}
+
+	want, err := created.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal reference time: %v", err)
+	}
+	if got := `"` + resp.Accounts[0].CreatedAt + `"`; got != string(want) {
+		t.Errorf("created_at = %s, want %s: sub-second precision was dropped", got, want)
+	}
+}
+
+// An account with no linked provider gets an empty array, not null.
+func TestSocialList_NoLinksIsAnEmptyArray(t *testing.T) {
+	social := &mocks.MockSocialAccountRepo{
+		ListByUserFn: func(context.Context, string) ([]*model.SocialAccount, error) { return nil, nil },
+	}
+	h := NewSocialHandler(social, newTestAuditLogger())
+
+	rec := httptest.NewRecorder()
+	h.List(rec, socialAuthedRequest(http.MethodGet, "/user/social", "user-1"))
+
+	if body := rec.Body.String(); !strings.Contains(body, `"accounts":[]`) {
+		t.Errorf("an account with no links did not serialize accounts as []: %s", body)
 	}
 }

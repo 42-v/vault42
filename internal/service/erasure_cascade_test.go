@@ -9,7 +9,7 @@ import (
 	"github.com/42-v/vault42/internal/model"
 )
 
-// The cascade spans nine stores and the repositories are pool-backed, so there is
+// The cascade spans ten stores and the repositories are pool-backed, so there is
 // no transaction to roll back with — every step must surface its own failure. A
 // swallowed error anywhere here is the worst outcome this service has: DeleteAccount
 // returns nil, the caller reports the account erased, the audit log records an

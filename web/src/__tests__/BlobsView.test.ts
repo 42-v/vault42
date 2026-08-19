@@ -285,14 +285,14 @@ describe('BlobsView', () => {
     mockQuota.value = { used_bytes: 9961472, max_bytes: 10485760, used_count: 45, max_count: 50 }
     const wrapper = mountView()
     const progressBar = wrapper.findAll('div').find(d => d.classes().includes('h-2') && d.classes().includes('rounded-full') && d.attributes('style'))
-    expect(progressBar?.classes()).toContain('bg-red-500')
+    expect(progressBar?.classes()).toContain('bg-vault42-error')
   })
 
   it('applies primary color to quota bar when under 90%', () => {
     mockQuota.value = { used_bytes: 1048576, max_bytes: 10485760, used_count: 1, max_count: 50 }
     const wrapper = mountView()
     const progressBar = wrapper.findAll('div').find(d => d.classes().includes('h-2') && d.classes().includes('rounded-full') && d.attributes('style'))
-    expect(progressBar?.classes()).toContain('bg-vault42-primary')
+    expect(progressBar?.classes()).toContain('bg-vault42-accent')
   })
 
   it('does not show quota bar when quota is null', () => {
@@ -504,7 +504,7 @@ describe('BlobsView', () => {
     const progressBar = wrapper.findAll('div').find(d => d.classes().includes('h-2') && d.attributes('style') !== undefined)
     expect(progressBar!.attributes('style')).toContain('0%')
     expect(progressBar!.attributes('style')).not.toContain('NaN')
-    expect(progressBar!.classes()).toContain('bg-vault42-primary')
+    expect(progressBar!.classes()).toContain('bg-vault42-accent')
   })
 
   it('names the download after the blob label when the server response carries none', async () => {
@@ -583,5 +583,23 @@ describe('BlobsView', () => {
     await cancelBtn!.trigger('click')
 
     expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+  })
+
+  it('closes the delete modal on Escape without deleting', async () => {
+    mockBlobs.value = [
+      { id: 'blob-1', label: 'doc.pdf', size_bytes: 1024, stored_bytes: 800, checksum: 'sha256:abc', created_at: '2026-02-24T10:00:00Z' },
+    ]
+    const wrapper = mountView()
+
+    await wrapper.findAll('button').filter(b => b.text() === 'Delete')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+
+    expect(wrapper.find('.vault42-modal-overlay').exists()).toBe(false)
+    expect(mockDeleteBlob).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

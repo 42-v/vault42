@@ -7,7 +7,7 @@
       "xmlHeader": false,
       "fileNamingConvention": "metadata",
       "documentationCulture": "en-US",
-      "documentExposedElements": false,
+      "documentExposedElements": true,
       "documentInternalElements": false,
       "documentInterfaces": false,
       "documentPrivateElements": false,

@@ -15,14 +15,18 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/42-v/vault42/internal/redis"
+	"github.com/42-v/vault42/tests/testutil"
 )
 
-// skipIfNoDocker skips the test if Docker is not available.
+// skipIfNoDocker skips the test unless a container daemon answers.
+//
+// It used to check nothing but SKIP_INTEGRATION and leave detection to
+// testcontainers, whose own auto-detection selects a socket on presence. On a
+// host with a wedged rootless podman socket that meant every test in this suite
+// dialed a daemon that never answered and the package ran to its timeout.
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
-	if os.Getenv("SKIP_INTEGRATION") == "1" {
-		t.Skip("SKIP_INTEGRATION=1")
-	}
+	testutil.RequireContainerRuntime(t)
 }
 
 // setupPostgres starts a PostgreSQL testcontainer and runs the initial migration.

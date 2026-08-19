@@ -19,18 +19,58 @@ spec:
         app: frontend
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      serviceAccountName: {{ include "vault.serviceAccountName" . }}
       automountServiceAccountToken: false
+      # The same hardening the main Deployment gets. This pod had none: it ran as
+      # root on a writable root filesystem, which made the one container in the
+      # chart that serves attacker-reachable static content the softest thing in
+      # it. 101 is the nginx user in nginx-unprivileged, the base web/Dockerfile
+      # builds on and the uid it declares with USER 101.
+      securityContext:
+        {{- include "vault.podSecurityContext" (dict "uid" 101 "gid" 101) | nindent 8 }}
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default "latest" }}"
+          image: "{{ include "vault.image" (dict "image" .Values.frontend.image "tag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- include "vault.containerSecurityContext" (dict "readOnlyRootFilesystem" true) | nindent 12 }}
           ports:
             - containerPort: 3000
               name: http
-          {{- with .Values.frontend.resources }}
+          # web/nginx.conf serves the SPA from / and declares no separate health
+          # route, so / is the probe: it is the response a browser gets, which
+          # makes it the one worth checking.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          # nginx writes its cache, its pid and its request temp files at
+          # runtime, so a read-only root needs these three writable. They are
+          # emptyDir rather than a persistent volume because none of it survives
+          # a restart by design.
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
           resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- toYaml (.Values.frontend.resources | default dict) | nindent 12 }}
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

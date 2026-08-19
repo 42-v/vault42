@@ -49,7 +49,7 @@ func TestAuth_MalformedAuthorizationHeaders(t *testing.T) {
 		{"token_scheme", "Token abc123", http.StatusUnauthorized, "invalid_authorization"},
 		{"negotiate_scheme", "Negotiate base64data", http.StatusUnauthorized, "invalid_authorization"},
 
-		// Case sensitivity — only "Bearer" and "DPoP" are accepted
+		// Case sensitivity — only "Bearer" is accepted
 		{"lowercase_bearer", "bearer valid-token", http.StatusUnauthorized, "invalid_authorization"},
 		{"uppercase_bearer", "BEARER valid-token", http.StatusUnauthorized, "invalid_authorization"},
 		{"mixed_case_bearer", "BeArEr valid-token", http.StatusUnauthorized, "invalid_authorization"},
@@ -65,7 +65,7 @@ func TestAuth_MalformedAuthorizationHeaders(t *testing.T) {
 		{"bearer_empty_token", "Bearer ", http.StatusUnauthorized, "invalid_token"},
 		{"bearer_single_char", "Bearer x", http.StatusUnauthorized, "invalid_token"},
 		{"bearer_null_byte", "Bearer \x00", http.StatusUnauthorized, "invalid_token"},
-		{"dpop_garbage", "DPoP not-a-jwt", http.StatusUnauthorized, "invalid_token"},
+		{"dpop_scheme_rejected", "DPoP not-a-jwt", http.StatusUnauthorized, "invalid_authorization"},
 	}
 
 	for _, tc := range cases {
@@ -552,57 +552,6 @@ func TestConfirmed_WithConfirmation(t *testing.T) {
 	}
 	if !called {
 		t.Error("handler should be called when user is confirmed")
-	}
-}
-
-// ===========================================================================
-// IsAccountLocked / RecordFailedAttempt edge cases
-// ===========================================================================
-
-// TestIsAccountLocked_NoFailures tests that a fresh user is not locked.
-func TestIsAccountLocked_NoFailures(t *testing.T) {
-	c := cache.NewMemoryCache()
-	defer c.Close()
-
-	locked, err := IsAccountLocked(context.Background(), c, "fresh-user", 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if locked {
-		t.Error("fresh user should not be locked")
-	}
-}
-
-// TestRecordFailedAttempt_ThenCheck tests recording failures and checking lockout.
-func TestRecordFailedAttempt_ThenCheck(t *testing.T) {
-	c := cache.NewMemoryCache()
-	defer c.Close()
-
-	ctx := context.Background()
-	userID := "lockout-test-user"
-
-	// Record 5 failures (threshold is 5, so count must exceed)
-	for i := 0; i < 5; i++ {
-		RecordFailedAttempt(ctx, c, userID, time.Minute)
-	}
-
-	// At exactly 5 failures, should NOT be locked (count > threshold, not >=)
-	locked, err := IsAccountLocked(ctx, c, userID, 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if locked {
-		t.Error("should not be locked at exactly threshold")
-	}
-
-	// One more failure should trigger lockout
-	RecordFailedAttempt(ctx, c, userID, time.Minute)
-	locked, err = IsAccountLocked(ctx, c, userID, 5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !locked {
-		t.Error("should be locked after exceeding threshold")
 	}
 }
 

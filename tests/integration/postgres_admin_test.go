@@ -67,7 +67,12 @@ func TestPostgresAdminUserRepo(t *testing.T) {
 	})
 
 	t.Run("Count and List", func(t *testing.T) {
-		if err := repo.Create(ctx, makeAdmin("viewer1", "viewer")); err != nil {
+		// created_by is not decoration: migration 016 refuses an admin row that
+		// outranks its creator, and refuses one with no creator at all once the
+		// first admin exists. "root" above is that first admin.
+		viewer := makeAdmin("viewer1", "viewer")
+		viewer.CreatedBy = admin.ID
+		if err := repo.Create(ctx, viewer); err != nil {
 			t.Fatalf("Create viewer1: %v", err)
 		}
 		n, err := repo.Count(ctx)
@@ -143,6 +148,7 @@ func TestPostgresAdminUserRepo(t *testing.T) {
 
 	t.Run("Revoke removes the admin", func(t *testing.T) {
 		target := makeAdmin("doomed", "viewer")
+		target.CreatedBy = admin.ID
 		if err := repo.Create(ctx, target); err != nil {
 			t.Fatalf("Create: %v", err)
 		}

@@ -38,15 +38,15 @@
   /* Primary button */
   .vault42-btn {
     @apply px-4 py-2.5 bg-vault42-primary text-white font-medium rounded-lg
-           hover:bg-vault42-accent transition-all duration-200
+           hover:bg-vault42-primary-hover transition-all duration-200
            disabled:opacity-50 disabled:cursor-not-allowed
-           focus:outline-none focus:ring-2 focus:ring-vault42-primary/50;
+           focus:outline-none focus:ring-2 focus:ring-vault42-accent;
   }
 
   .vault42-btn-outline {
-    @apply px-4 py-2.5 border border-vault42-border text-vault42-text font-medium rounded-lg
-           hover:border-vault42-primary hover:text-vault42-primary transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-vault42-primary/50;
+    @apply px-4 py-2.5 border border-vault42-control text-vault42-text font-medium rounded-lg
+           hover:border-vault42-accent hover:text-vault42-accent transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-vault42-accent;
   }
 
   /* Aliases for semantic naming */
@@ -61,7 +61,7 @@
   .vault42-btn-danger {
     @apply px-4 py-2.5 bg-vault42-error/10 text-vault42-error font-medium rounded-lg
            hover:bg-vault42-error/20 transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-vault42-error/50;
+           focus:outline-none focus:ring-2 focus:ring-vault42-error;
   }
 
   .vault42-btn-sm {
@@ -70,9 +70,9 @@
 
   /* Input */
   .vault42-input {
-    @apply w-full px-3 py-2.5 bg-vault42-bg border border-vault42-border rounded-lg
-           text-vault42-text placeholder-vault42-muted/50
-           focus:outline-none focus:border-vault42-primary focus:ring-1 focus:ring-vault42-primary/50
+    @apply w-full px-3 py-2.5 bg-vault42-bg border border-vault42-control rounded-lg
+           text-vault42-text placeholder-vault42-muted
+           focus:outline-none focus:border-vault42-accent focus:ring-1 focus:ring-vault42-accent
            transition-colors duration-200;
   }
 
@@ -160,8 +160,11 @@
 }
 
 .vault42-login-form__field--checkbox input[type="checkbox"] {
-  @apply w-4 h-4 rounded border-vault42-border bg-vault42-bg text-vault42-primary
-         focus:ring-vault42-primary/50 focus:ring-offset-0;
+  /* accent-color, not text-color: `text-*` on a native checkbox sets `color`,
+     which no browser paints the tick with. This is the utility that actually
+     colours the control, and white on `primary` is 6.29:1. */
+  @apply w-4 h-4 rounded border-vault42-control bg-vault42-bg accent-vault42-primary
+         focus:ring-vault42-accent focus:ring-offset-0;
 }
 
 .vault42-login-form button[type="submit"],
@@ -183,7 +186,7 @@
 }
 
 .vault42-login-form__register-link a {
-  @apply text-vault42-primary hover:text-vault42-accent transition-colors;
+  @apply text-vault42-accent hover:text-vault42-text transition-colors;
 }
 
 /* Token debug panel */
@@ -217,7 +220,7 @@
   to { transform: rotate(360deg); }
 }
 .vault42-spinner {
-  @apply inline-block w-5 h-5 border-2 border-vault42-border border-t-vault42-primary rounded-full;
+  @apply inline-block w-5 h-5 border-2 border-vault42-control border-t-vault42-accent rounded-full;
   animation: vault42-spin 0.6s linear infinite;
 }
 .vault42-spinner-lg {

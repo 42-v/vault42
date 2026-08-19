@@ -68,9 +68,10 @@ linters:
       rules:
         - name: var-naming   # default; "crypto" package name conflict is intentional (imports use vaultcrypto alias)
         - name: exported
-          disabled: true     # spec.md docs the API; not every internal exported type needs a doc
+        # HTTP handler and middleware signatures intentionally name parameters
+        # they do not use; unparam covers the cases that are really dead.
         - name: unused-parameter
-          disabled: true     # HTTP handler / middleware signatures intentionally name unused params; unparam covers the real cases
+          disabled: true
         - name: redefines-builtin-id
         - name: empty-block
         - name: superfluous-else
@@ -80,6 +81,9 @@ linters:
       disabled-checks:
         - ifElseChain      # often clearer than switch in our auth flow code
     misspell:
+      # The tree is predominantly US spelling; switching this to UK raises the
+      # finding count from 115 to 413. The remaining 115 are British spellings in
+      # recently written prose and are tracked as backlog, not silenced here.
       locale: US
     staticcheck:
       checks:
@@ -98,6 +102,9 @@ linters:
       - path: tests/fuzz/
         linters:
           - errcheck
+      - path: tests/mocks/
+        linters:
+          - revive         # test doubles mirror the interfaces they stand in for; doc comments belong on the real type
       - path: tests/e2e/
         linters:
           - bodyclose      # short-lived e2e test process; body leaks bounded by test runtime
