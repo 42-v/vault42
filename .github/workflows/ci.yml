@@ -40,7 +40,7 @@ jobs:
       # a silent skip is the same defect wearing a different hat.
       #
       # The version matches the chart jobs so CI renders with one helm, not two.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
@@ -153,7 +153,7 @@ jobs:
       # a silent skip is the same defect wearing a different hat.
       #
       # The version matches the chart jobs so CI renders with one helm, not two.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
@@ -427,7 +427,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
