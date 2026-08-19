@@ -116,7 +116,7 @@ func readNotes(t *testing.T) string {
 // renaming the value moves this gate with it instead of past it.
 func credentialPathToken(t *testing.T, notes string) string {
 	t.Helper()
-	const token = "{{ .Values.firstBootCredential.path }}"
+	const token = "{{ .Values.firstBootCredential.path }}" // #nosec G101 -- a Helm template expression, not a credential
 	if !strings.Contains(notes, token) {
 		t.Fatalf("NOTES.txt no longer renders the credential path from %s, so this gate cannot "+
 			"tell which commands touch the credential", token)

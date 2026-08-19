@@ -300,7 +300,7 @@ func copyInto(t *testing.T, from, to string) {
 
 func writeProbeFile(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil { // #nosec G703 -- path is always under t.TempDir()
 		t.Fatalf("write %s: %v", path, err)
 	}
 }

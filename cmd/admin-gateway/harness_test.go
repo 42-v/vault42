@@ -454,7 +454,7 @@ func (p *pki) tlsClientConfig() *tls.Config {
 
 func writeFile(t *testing.T, path string, data []byte) string {
 	t.Helper()
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil { // #nosec G703 -- path is always under t.TempDir()
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path

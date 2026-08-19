@@ -143,7 +143,7 @@ func TestShippedSecretBearingTemplatesSurviveBothDoors(t *testing.T) {
 				t.Fatalf("read shipped template: %v", err)
 			}
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, name+".html"), data, 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, name+".html"), data, 0o600); err != nil { // #nosec G703 -- dir is t.TempDir()
 				t.Fatalf("write override: %v", err)
 			}
 			r, err := NewTemplateRenderer(dir)

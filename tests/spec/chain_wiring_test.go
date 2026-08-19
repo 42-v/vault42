@@ -820,7 +820,7 @@ func TestTheAdminRouterPinsTheMaxBodyCap(t *testing.T) {
 //
 // An empty value means the route is authenticated by session only, with no
 // permission gate; those four are deliberate and named rather than absent.
-var chainAdminRoutePerms = map[string]string{
+var chainAdminRoutePerms = map[string]string{ // #nosec G101 -- route to RBAC permission names, no credentials
 	"POST /admin/auth/logout":           "",
 	"GET /admin/status":                 "",
 	"POST /admin/admins/me/totp/setup":  "",

@@ -17,14 +17,14 @@ import (
 // asserts recover does too.
 func TestRun_ConnectErrorDoesNotPrintTheDSNPassword(t *testing.T) {
 	tests := map[string]struct{ password, dsn string }{
-		"postgres": {
+		"postgres": { // #nosec G101 -- fixture the redaction is asserted to remove
 			password: "sup3r-s3cret-db-passw0rd",
 			dsn:      "postgres://vault_recover:sup3r-s3cret-db-passw0rd@db.internal:5432/vault",
 		},
 		// pgx accepts the longer spelling and DATABASE_URL is operator-supplied,
 		// so a pattern that only knows postgres:// leaks every DSN written this
 		// way.
-		"postgresql": {
+		"postgresql": { // #nosec G101 -- fixture the redaction is asserted to remove
 			password: "sup3r-s3cret-db-passw0rd",
 			dsn:      "postgresql://vault_recover:sup3r-s3cret-db-passw0rd@db.internal:5432/vault",
 		},

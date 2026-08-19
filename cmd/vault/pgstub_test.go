@@ -708,7 +708,7 @@ func pgBindParams(body []byte) [][]byte {
 		if len(body) < 2 {
 			return 0, false
 		}
-		v := int(int16(binary.BigEndian.Uint16(body[:2])))
+		v := int(int16(binary.BigEndian.Uint16(body[:2]))) // #nosec G115 -- int16 is the width the pg wire protocol defines here
 		body = body[2:]
 		return v, true
 	}
@@ -732,7 +732,7 @@ func pgBindParams(body []byte) [][]byte {
 		if len(body) < 4 {
 			return nil
 		}
-		size := int(int32(binary.BigEndian.Uint32(body[:4])))
+		size := int(int32(binary.BigEndian.Uint32(body[:4]))) // #nosec G115 -- int32 is the width the pg wire protocol defines; -1 is SQL NULL
 		body = body[4:]
 		if size < 0 { // SQL NULL
 			params = append(params, nil)

@@ -243,7 +243,7 @@ func parseArgon2Params(t *testing.T, paramStr string) argon2TestParams {
 // the ones the derivation used. Editing the encoded m without changing the
 // derivation, or the reverse, breaks this.
 func TestArgon2Params_TheEncodedParametersAreTheOnesTheHashWasComputedWith(t *testing.T) {
-	const password = "test-argon2-parameter-honesty"
+	const password = "test-argon2-parameter-honesty" // #nosec G101 -- test input to HashPassword, authenticates nothing
 	hash, err := vaultcrypto.HashPassword(password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
