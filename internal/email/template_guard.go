@@ -74,12 +74,18 @@ type guardCanary struct {
 }
 
 var (
-	guardCanaryA = guardCanary{
+	// The two canary sets share no character in any field, which is what makes a
+	// difference between the two renders mean "the body depended on the value"
+	// rather than "the value changed". They are not credentials and can never be
+	// one: nothing authenticates with them, they are substituted out of the
+	// document before it is inspected, and their host is under .invalid, which
+	// RFC 2606 reserves precisely so it can never resolve.
+	guardCanaryA = guardCanary{ // #nosec G101 -- fixed test vector for the differential render, never a secret
 		url:   "https://a1a1a1a1a1a1a1a1.invalid/a1a1a1a1a1a1a1a1",
 		token: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
 		code:  "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
 	}
-	guardCanaryB = guardCanary{
+	guardCanaryB = guardCanary{ // #nosec G101 -- the disjoint counterpart to guardCanaryA, same reasoning
 		url:   "https://d4d4d4d4d4d4d4d4.invalid/d4d4d4d4d4d4d4d4",
 		token: "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
 		code:  "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6",

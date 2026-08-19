@@ -269,10 +269,18 @@ func IsAutomationUA(ua string) bool {
 const (
 	// EventCredentialPresented is a caller spending something they believe is a
 	// credential against the trap.
-	EventCredentialPresented = "honeypot_credential_presented"
+	//
+	// The value is an audit event name, not a credential. gosec matches on the
+	// identifier rather than the contents, and an event that reports a
+	// credential being presented cannot be named without the word.
+	EventCredentialPresented = "honeypot_credential_presented" // #nosec G101 -- audit event name, not a credential
 	// EventTrapTokenReplayed is a token this process minted arriving back at it.
 	// It is not an inference about intent: the bait was taken and spent.
-	EventTrapTokenReplayed = "honeypot_trap_token_replayed"
+	//
+	// The value is an audit event name, not a token. gosec matches the
+	// identifier rather than the contents, and every event name this package
+	// raises has to say what happened, so the word is not removable.
+	EventTrapTokenReplayed = "honeypot_trap_token_replayed" // #nosec G101 -- audit event name, not a credential
 )
 
 // Risk scores on the 0-100 scale internal/audit already uses, so an alert from
