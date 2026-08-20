@@ -24,12 +24,19 @@ COPY web/package.json web/
 # manager that builds a release image is itself hash-verified.
 ARG COREPACK_VERSION=0.35.0
 ARG COREPACK_SHA256=f62535fc7be1f77e4b12cd1e420b8542b8e895cbb14178926963a41a9232a4fe
+#
+# The checksum goes to a file rather than through a pipe into `sha256sum -c -`.
+# The pipe was safe -- echo cannot fail and sha256sum was last, so its status was
+# the pipeline's -- but hadolint's DL4006 cannot know that, and the fix it asks
+# for is to change SHELL for the whole stage. Not building a pipe is the smaller
+# change and leaves nothing to reason about.
 RUN set -eu; \
     wget -qO /tmp/corepack.tgz \
       "https://registry.npmjs.org/corepack/-/corepack-${COREPACK_VERSION}.tgz"; \
-    echo "${COREPACK_SHA256}  /tmp/corepack.tgz" | sha256sum -c -; \
+    printf '%s  /tmp/corepack.tgz\n' "${COREPACK_SHA256}" > /tmp/corepack.sha256; \
+    sha256sum -c /tmp/corepack.sha256; \
     npm install -g /tmp/corepack.tgz; \
-    rm /tmp/corepack.tgz; \
+    rm /tmp/corepack.tgz /tmp/corepack.sha256; \
     corepack enable; \
     pnpm install --frozen-lockfile
 COPY packages/vue/ packages/vue/
