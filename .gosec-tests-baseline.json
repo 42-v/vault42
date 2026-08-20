@@ -180,12 +180,6 @@
     },
     {
       "rule": "G101",
-      "file": "internal/handler/oauth_authtime_test.go",
-      "line_text": "oidcCallbackTokenIssuer = \"https://vault.test\"",
-      "count": 1
-    },
-    {
-      "rule": "G101",
       "file": "internal/handler/oauth_test.go",
       "line_text": "const testOAuthCSRFToken = \"test-csrf-token-fixed\"",
       "count": 1
@@ -216,32 +210,44 @@
     },
     {
       "rule": "G101",
+      "file": "internal/middleware/fuzz_dpop_test.go",
+      "line_text": "fuzzDPoPAccessToken = \"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.notasignature\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/middleware/fuzz_dpop_test.go",
+      "line_text": "fuzzDPoPTokenPath = \"/auth/login\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
       "file": "internal/migrate/migrate_test.go",
-      "line_text": "275: 276: sqls := map[string]string{ 277: \"001_create_schema.sql\": \"CREATE SCHEMA IF NOT EXISTS auth;\", 278: \"002_create_users.sql\": \"CREATE TABLE auth.users (id UUID PRIMARY KEY, email TEXT NOT NULL);\", 279: \"003_create_tokens.sql\": \"CREATE TABLE auth.refresh_tokens (id UUID PRIMARY KEY, user_id UUID NOT NULL);\", 280: } 281:",
+      "line_text": "286: 287: sqls := map[string]string{ 288: \"001_create_schema.sql\": \"CREATE SCHEMA IF NOT EXISTS auth;\", 289: \"002_create_users.sql\": \"CREATE TABLE auth.users (id UUID PRIMARY KEY, email TEXT NOT NULL);\", 290: \"003_create_tokens.sql\": \"CREATE TABLE auth.refresh_tokens (id UUID PRIMARY KEY, user_id UUID NOT NULL);\", 291: } 292:",
       "count": 1
     },
     {
       "rule": "G101",
       "file": "internal/oauth2/facebook_test.go",
-      "line_text": "281: func TestFacebookExchange_ConnectionRefused(t *testing.T) { 282: p := &FacebookProvider{ 283: clientID: \"cid\", 284: clientSecret: \"csec\", 285: redirectURI: \"https://example.com/cb\", 286: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 287: } 288: _, err := p.Exchange(context.Background(), \"code\", \"\")",
+      "line_text": "282: func TestFacebookExchange_ConnectionRefused(t *testing.T) { 283: p := &FacebookProvider{ 284: clientID: \"cid\", 285: clientSecret: \"csec\", 286: redirectURI: \"https://example.com/cb\", 287: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 288: } 289: _, err := p.Exchange(context.Background(), \"code\", \"\")",
       "count": 1
     },
     {
       "rule": "G101",
       "file": "internal/oauth2/github_test.go",
-      "line_text": "275: func TestGitHubExchange_ConnectionRefused(t *testing.T) { 276: p := &GitHubProvider{ 277: clientID: \"cid\", 278: clientSecret: \"csec\", 279: redirectURI: \"https://example.com/cb\", 280: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 281: } 282: _, err := p.Exchange(context.Background(), \"code\", \"\")",
+      "line_text": "274: func TestGitHubExchange_ConnectionRefused(t *testing.T) { 275: p := &GitHubProvider{ 276: clientID: \"cid\", 277: clientSecret: \"csec\", 278: redirectURI: \"https://example.com/cb\", 279: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 280: } 281: _, err := p.Exchange(context.Background(), \"code\", \"\")",
       "count": 1
     },
     {
       "rule": "G101",
       "file": "internal/oauth2/google_test.go",
-      "line_text": "140: }{ 141: { 142: name: \"success with all fields\", 143: statusCode: http.StatusOK, 144: body: `{\"access_token\":\"ya29.abc\",\"refresh_token\":\"1//refresh\",\"id_token\":\"eyJ.header.sig\",\"token_type\":\"Bearer\",\"expires_in\":3600}`, 145: wantToken: \"ya29.abc\", 146: wantRefresh: \"1//refresh\", 147: wantIDToken: \"eyJ.header.sig\", 148: wantType: \"Bearer\", 149: wantExpires: 3600, 150: }, 151: {",
+      "line_text": "139: }{ 140: { 141: name: \"success with all fields\", 142: statusCode: http.StatusOK, 143: body: `{\"access_token\":\"ya29.abc\",\"refresh_token\":\"1//refresh\",\"id_token\":\"eyJ.header.sig\",\"token_type\":\"Bearer\",\"expires_in\":3600}`, 144: wantToken: \"ya29.abc\", 145: wantRefresh: \"1//refresh\", 146: wantIDToken: \"eyJ.header.sig\", 147: wantType: \"Bearer\", 148: wantExpires: 3600, 149: }, 150: {",
       "count": 1
     },
     {
       "rule": "G101",
       "file": "internal/oauth2/google_test.go",
-      "line_text": "279: func TestGoogleExchange_ConnectionRefused(t *testing.T) { 280: p := &GoogleProvider{ 281: clientID: \"gcid\", 282: clientSecret: \"gsec\", 283: redirectURI: \"https://example.com/cb\", 284: tokenURL: \"http://127.0.0.1:1\", 285: } 286: _, err := p.Exchange(context.Background(), \"code\", \"verifier\")",
+      "line_text": "278: func TestGoogleExchange_ConnectionRefused(t *testing.T) { 279: p := &GoogleProvider{ 280: clientID: \"gcid\", 281: clientSecret: \"gsec\", 282: redirectURI: \"https://example.com/cb\", 283: tokenURL: \"http://127.0.0.1:1\", 284: } 285: _, err := p.Exchange(context.Background(), \"code\", \"verifier\")",
       "count": 1
     },
     {
@@ -552,6 +558,12 @@
     },
     {
       "rule": "G115",
+      "file": "internal/middleware/fuzz_dpop_test.go",
+      "line_text": "f.Add(h, c, \"Bearer \"+fuzzDPoPAccessToken, uint8(i*len(fuzzDPoPClaimSeeds)+j), (i+j)%2 == 0)",
+      "count": 1
+    },
+    {
+      "rule": "G115",
       "file": "internal/migrate/begin_failure_test.go",
       "line_text": "binary.BigEndian.PutUint32(out[1:], uint32(len(payload)+4))",
       "count": 1
@@ -707,6 +719,6 @@
       "count": 2
     }
   ],
-  "lines": 114,
-  "total": 125
+  "lines": 116,
+  "total": 127
 }
