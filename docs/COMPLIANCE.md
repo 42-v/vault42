@@ -8,7 +8,7 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **456 requirements in scope across 11 standards: 389 Met, 19 Accepted Risk,
+> **456 requirements in scope across 11 standards: 390 Met, 18 Accepted Risk,
 > 48 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -197,7 +197,7 @@ than being retired on a technicality.
 
 | Standard | Met | Accepted Risk | N/A | Total |
 |---|---:|---:|---:|---:|
-| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 214 | 7 | 42 | 263 |
+| OWASP ASVS 5.0.0 (L1 + L2, plus recorded L3 decisions) | 215 | 6 | 42 | 263 |
 | NIST SP 800-63B-4 | 28 | 1 | 2 | 31 |
 | NIST SP 800-53 Rev 5 (Release 5.2.0) | 32 | 1 | 1 | 34 |
 | OWASP Top 10:2025 | 10 | 0 | 0 | 10 |
@@ -208,9 +208,9 @@ than being retired on a technicality.
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
 | OpenSSF Scorecard v5.5.0 | 15 | 4 | 1 | 20 |
 | SLSA 1.1 Build Track | 6 | 1 | 0 | 7 |
-| **Total** | **389** | **19** | **48** | **456** |
+| **Total** | **390** | **18** | **48** | **456** |
 
-The 19 Accepted Risk rows collapse to **14 distinct accepted risks**: several
+The 18 Accepted Risk rows collapse to **13 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused

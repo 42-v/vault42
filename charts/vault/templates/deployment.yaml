@@ -96,6 +96,20 @@ spec:
             - name: REDIS_PASS_FILE
               value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.redisPassword }}"
             {{- end }}
+            {{- /*
+            The root CA pool for the TLS dial to Redis, here rather than in the
+            ConfigMap for the reason every _FILE variable above is here: it
+            names a file, and the same value that names it is what mounts the
+            bundle at that path further down, so there is no way to render one
+            without the other. Unset leaves the pool to the host trust store,
+            which the distroless runtime image fills with public roots only --
+            enough for a managed Redis with a publicly trusted certificate, and
+            not enough for an in-cluster issuer.
+            */}}
+            {{- if .Values.redis.tls.caFile }}
+            - name: REDIS_TLS_CA_FILE
+              value: {{ .Values.redis.tls.caFile | quote }}
+            {{- end }}
             {{- if .Values.secrets.keys.signingKey }}
             - name: SIGNING_KEY_FILE
               value: "{{ .Values.secrets.mountPath }}/{{ .Values.secrets.keys.signingKey }}"
@@ -169,6 +183,12 @@ spec:
               mountPath: /etc/vault-tls
               readOnly: true
             {{- end }}
+            {{- if .Values.redis.tls.caFile }}
+            - name: redis-ca
+              mountPath: {{ .Values.redis.tls.caFile | quote }}
+              subPath: ca.pem
+              readOnly: true
+            {{- end }}
             {{- if .Values.seed.enabled }}
             - name: seed
               mountPath: /etc/vault/seed.json
@@ -196,6 +216,32 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if .Values.redis.tls.caFile }}
+        {{- if and .Values.redis.tls.caSecretName .Values.redis.tls.caConfigMapName }}
+        {{- fail "redis.tls.caSecretName and redis.tls.caConfigMapName are both set, and the CA bundle is mounted from exactly one volume. Pick the Secret or the ConfigMap; silently preferring one is how an operator ends up debugging a root CA they are certain they replaced." }}
+        {{- end }}
+        {{- if not .Values.redis.tls.caKey }}
+        {{- fail "redis.tls.caFile is set and redis.tls.caKey is empty, so the volume would project no key and nothing would be mounted at that path. The binary opens REDIS_TLS_CA_FILE and refuses the cache connection when it cannot read it, which is a pod that never becomes Ready. Name the key holding the PEM bundle." }}
+        {{- end }}
+        # The bundle gets a volume of its own rather than a key in the
+        # credentials Secret: a root CA is public material, and it is mounted at
+        # the path redis.tls.caFile names, which is the same value
+        # REDIS_TLS_CA_FILE carries above.
+        - name: redis-ca
+          {{- if .Values.redis.tls.caConfigMapName }}
+          configMap:
+            name: {{ .Values.redis.tls.caConfigMapName }}
+            items:
+              - key: {{ .Values.redis.tls.caKey }}
+                path: ca.pem
+          {{- else }}
+          secret:
+            secretName: {{ .Values.redis.tls.caSecretName | default (include "vault.secretName" .) }}
+            items:
+              - key: {{ .Values.redis.tls.caKey }}
+                path: ca.pem
+          {{- end }}
         {{- end }}
         {{- if .Values.seed.enabled }}
         - name: seed

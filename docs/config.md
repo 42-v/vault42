@@ -280,6 +280,13 @@ The blocklist is published as an atomic pointer, so reads on the request path ta
 | `CACHE_BACKEND` | string | *(profile sets)* | No | Cache implementation: `redis`, `memory`, or `postgres`. Profile defaults: `redis` (production/dev), `memory` (embedded). |
 | `REDIS_ADDR` | string | *(none)* | Conditional | Redis server address (e.g., `redis:6379`). Required when `CACHE_BACKEND=redis`. |
 | `REDIS_PASS_FILE` | string | *(none)* | No | Path to file containing the Redis password. See [Secret Loading](#secret-loading-_file-convention). |
+| `REDIS_TLS` | bool | `false` | No | Dial Redis over TLS. Off by default, so an existing deployment is unchanged until it is set. |
+| `REDIS_TLS_CA_FILE` | string | *(none)* | No | Path to a PEM bundle used as the root CA pool for that connection. Empty verifies against the host trust store, which in the distroless runtime image means public roots only -- enough for a managed Redis with a publicly trusted certificate, and not enough for an in-cluster issuer, so a private CA has to be named here. |
+| `REDIS_TLS_SERVER_NAME` | string | *(host part of `REDIS_ADDR`)* | No | Expected server name on the Redis certificate. Empty uses the host part of `REDIS_ADDR`, which is what a certificate issued for the Service name already carries. Set it when the address is an IP, or a name the certificate does not include. |
+
+`REDIS_TLS` is a client setting: it says how vault42 dials a cache, not how a server terminates one. **The Redis the Helm chart can deploy (`redis.enabled`) does not terminate TLS.** It serves plaintext, and its liveness and readiness probes run a bare `redis-cli ping`, which a TLS-only server refuses -- that instance is for development. Turning `REDIS_TLS` on therefore expects an operator-supplied Redis that terminates TLS itself, and the chart fails the render on `redis.enabled` and `redis.tls.enabled` together rather than shipping a cache pod that CrashLoopBackOffs.
+
+`REDIS_TLS_CA_FILE` or `REDIS_TLS_SERVER_NAME` set without `REDIS_TLS` is refused at startup rather than ignored -- both describe a connection that is not being made, and silently accepting them would leave the cache link cleartext while the configuration said otherwise. The chart moves that refusal to render time, so the operator is told which value to change at install instead of one line deep in a CrashLoopBackOff.
 
 Cache degradation is graceful -- authentication never fails because the cache is down. The system falls back to database lookups.
 
@@ -856,6 +863,9 @@ Key Helm values and their corresponding env vars:
 | `database.maxConns` | `DB_MAX_CONNS` |
 | `cache.backend` | `CACHE_BACKEND` |
 | `redis.addr` | `REDIS_ADDR` |
+| `redis.tls.enabled` | `REDIS_TLS` (the render fails when it is set alongside `redis.enabled`, which deploys a plaintext Redis) |
+| `redis.tls.caFile` | `REDIS_TLS_CA_FILE` (in the Deployment, rendered only when set, beside the volume that mounts the bundle at that path from `redis.tls.caSecretName` or `.caConfigMapName`, key `redis.tls.caKey`) |
+| `redis.tls.serverName` | `REDIS_TLS_SERVER_NAME` (rendered only when set; empty lets the binary use the host part of `redis.addr`) |
 | `smtp.host` | `SMTP_HOST` |
 | `smtp.port` | `SMTP_PORT` |
 | `tlsFingerprintHeader` | `VAULT_TLS_FINGERPRINT_HEADER` |

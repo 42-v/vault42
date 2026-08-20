@@ -113,6 +113,23 @@ data:
   VAULT_RATE_LIMIT_ENABLED: {{ .Values.rateLimitEnabled | quote }}
   CACHE_BACKEND: {{ .Values.cache.backend | quote }}
   REDIS_ADDR: {{ .Values.redis.addr | quote }}
+  {{- if and .Values.redis.enabled .Values.redis.tls.enabled }}
+  {{- fail "redis.enabled and redis.tls.enabled are both true. The Redis this chart deploys serves plaintext, and its liveness and readiness probes run a bare `redis-cli ping`, which a TLS-only server refuses -- so that pod would CrashLoopBackOff and the vault could not dial it either. The bundled instance is for development; the production topology is an operator-supplied Redis. Point redis.addr at one that terminates TLS and leave redis.enabled false." }}
+  {{- end }}
+  {{- if and (not .Values.redis.tls.enabled) (or .Values.redis.tls.caFile .Values.redis.tls.serverName) }}
+  {{- fail "redis.tls.caFile or redis.tls.serverName is set while redis.tls.enabled is false. Both are read only on a TLS dial, so the render would mount a CA bundle and name a server name that nothing consults, while the cache connection stayed plaintext and the values file said otherwise. Set redis.tls.enabled=true, or clear the two settings that describe a connection this release does not make." }}
+  {{- end }}
+  # TLS for the cache connection. Client settings only: the chart configures how
+  # this deployment dials Redis, never how a server terminates it. REDIS_TLS is
+  # rendered unconditionally at the binary's own default, so an existing release
+  # is byte-for-byte the deployment it was. REDIS_TLS_CA_FILE is set in the
+  # Deployment instead, beside the volume that fills the path, because a path
+  # this ConfigMap named and no volume filled is a cache connection that reports
+  # configured and refuses every dial.
+  REDIS_TLS: {{ .Values.redis.tls.enabled | quote }}
+  {{- if .Values.redis.tls.serverName }}
+  REDIS_TLS_SERVER_NAME: {{ .Values.redis.tls.serverName | quote }}
+  {{- end }}
   {{- if .Values.serveFrontend }}
   VAULT_SERVE_FRONTEND: {{ .Values.serveFrontend | quote }}
   {{- end }}

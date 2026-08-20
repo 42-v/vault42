@@ -593,6 +593,41 @@ redis:
     limits:
       cpu: 500m
       memory: 192Mi
+  # -- TLS for the connection to Redis. These are client settings: they say how
+  # this deployment dials a cache, not how a server terminates it. The Redis
+  # that `enabled` above deploys serves plaintext, and its liveness and
+  # readiness probes run a bare `redis-cli ping`, which a TLS-only server
+  # refuses, so that workload stays what it is for -- development. Turning this
+  # on expects an operator-supplied Redis that terminates TLS itself, and the
+  # chart refuses the pair rather than rendering a cache pod that
+  # CrashLoopBackOffs.
+  tls:
+    # -- Dial Redis over TLS (REDIS_TLS). Rendered unconditionally at the
+    # binary's own default, so adding it changes nothing for an existing
+    # release and turning it off again is expressible rather than impossible.
+    enabled: false
+    # -- Container path of the PEM bundle used as the root CA pool
+    # (REDIS_TLS_CA_FILE). Empty verifies against the host trust store, which in
+    # the distroless runtime image is public roots only -- an in-cluster issuer
+    # is not in it, so a Redis with a private CA needs this. Setting it is what
+    # mounts the bundle at that path: there is no bare path setting here, for
+    # the reason secrets.keys gives. Keep it outside secrets.mountPath, because
+    # the bundle gets a volume of its own rather than joining the credentials.
+    caFile: ""
+    # -- Secret holding that bundle. Empty means the release Secret, the same
+    # one secrets.keys names its files in.
+    caSecretName: ""
+    # -- ConfigMap holding that bundle instead. A root CA is public material and
+    # is often already in one. Mutually exclusive with caSecretName; the chart
+    # fails the render when both are set rather than preferring one in silence.
+    caConfigMapName: ""
+    # -- Key inside that Secret or ConfigMap holding the PEM bundle.
+    caKey: redis-ca.pem
+    # -- Expected server name on the Redis certificate (REDIS_TLS_SERVER_NAME).
+    # Empty uses the host part of redis.addr, which is what a certificate issued
+    # for the Service name already carries. Set it when the address is an IP, or
+    # a name the certificate does not include.
+    serverName: ""
 
 # ---- SMTP ----
 smtp:

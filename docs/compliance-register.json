@@ -191,7 +191,7 @@
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:847 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
-      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:481) and the chart ships serveFrontend: false, so the single-origin topology is opt-in; the honeypot profile is the one place that forces it on. The Content-Security-Policy applied when the frontend is served names script-src 'self' with no unsafe-inline, so even in the shared-origin shape a script the SPA did not author does not execute.\n\nThe chart offers the separated topology rather than shipping it, and the earlier wording did not make that distinction: charts/vault/templates/frontend.yaml deploys the SPA as its own nginx workload, but frontend.enabled is false by default and the template carries no hostname of its own. The separate hostname comes from ingress.hosts, which the operator supplies. So the preferred topology is available and configured, not default.",
+      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:505) and the chart ships serveFrontend: false, so the single-origin topology is opt-in; the honeypot profile is the one place that forces it on. The Content-Security-Policy applied when the frontend is served names script-src 'self' with no unsafe-inline, so even in the shared-origin shape a script the SPA did not author does not execute.\n\nThe chart offers the separated topology rather than shipping it, and the earlier wording did not make that distinction: charts/vault/templates/frontend.yaml deploys the SPA as its own nginx workload, but frontend.enabled is false by default and the template carries no hostname of its own. The separate hostname comes from ingress.hosts, which the operator supplies. So the preferred topology is available and configured, not default.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
       "cost_of_closing": "The earlier estimate said nothing to build, and that was optimistic in a way worth naming: no amount of documentation makes the requirement true, because the topology is the operator's to choose and vault42 can only offer one and say which it supports. docs/deployment-guide.md now carries that section -- the two shapes, the two settings that are both off by default and both needed, and what the single-origin shape is relying on when it is used anyway. The row stays accepted because a deployment can still be single-origin, and a register that marked it Met would be describing a default rather than a guarantee."
@@ -207,18 +207,6 @@
       "residual_risk": "The validator is bespoke, so a gap in it is a gap nobody else is fuzzing. That sentence was the sharpest thing in this entry, and 1.0.3 acted on it and found it was literally true: the first fuzz target ever pointed at the guard found three accepted beacons and an unrecovered panic, the first of them inside a second.\n\nAll four were the same mistake, in the step that decides where a link starts. It searched a lowercased copy of the document and then sliced the original at the offsets it found, and strings.ToLower is neither length-preserving nor class-preserving. It also read the byte after a protocol-relative // out of the masked document, where a secret is a placeholder rather than a host byte, so a template beginning //{{.Token}}@evil.test was accepted while //x{{.Token}}@evil.test was refused -- one literal byte was the whole difference. Fixed in the same release, and the fuzz target stays.\n\nThe residual that remains is the one this demonstrates rather than removes: four defects sat in a hand-written validator until somebody pointed a fuzzer at it, and the reason the swap in cost_of_closing is still refused is that no available library performs this check at all, not that this implementation is beyond reproach.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
       "cost_of_closing": "Measured rather than estimated, and the answer is that the change this entry used to prescribe is a regression.\n\nIt said to replace the document walk with bluemonday and keep the differential render in front, on the grounds that the differential defeats a construct split across a template action. The differential does not defeat the plain beacon: an img whose src is a constant host with the secret appended renders identically under both canaries once the secrets are masked, so the differential accepts it and only the walk's secret-in-attribute check rejects it. Implemented as written, the swap re-admits a split-CSS beacon and stops four of the shipped templates validating, because the guard masks secrets to control characters and no HTML sanitiser will round-trip a control-character sentinel -- it deletes the anchor that carries it. Entity normalisation defeats the reject-if-changed wrapper for the same reason.\n\nMore fundamentally a sanitiser strips and returns a string; it cannot refuse, and silently storing a different template than the administrator wrote is a worse failure for a service whose mail carries reset links. bluemonday also has no notion of a secret, so it leaves img src=\"https://evil/?t=LIVE-TOKEN\" untouched: it solves cross-site scripting, and this is not a cross-site scripting problem. It would add four modules against a policy that treats a new dependency as a security decision, and its call path reaches a known vulnerability in golang.org/x/net that the pull-request govulncheck would fail on.\n\nThere is no cheap way to close this row. The requirement asks for a named library and the named libraries do not do this job."
-    },
-    "CR-34": {
-      "title": "The Redis cache link has no TLS option",
-      "severity": "Low",
-      "accepted_by": "Project maintainer (vault42)",
-      "accepted_on": "2026-08-18",
-      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1811).",
-      "compensating_control": "The AUTH secret is read from REDIS_PASS_FILE rather than from the environment, so it is not in the pod's environment block, and no cached value is a bearer credential: the email one-time code is stored as an HMAC rather than raw.\n\nThe network argument is weaker than the earlier wording claimed and the difference matters. That wording said the chart deploys Redis as a workload beside vault with a NetworkPolicy admitting 6379 only from the vault pods. The chart can do that, and by default does not: cache.backend is redis while redis.enabled is false, so the shipped production configuration expects a Redis the operator supplies and the chart hardens a workload it did not deploy. The NetworkPolicy survives only because the default address is a bare in-namespace Service name and the policies key off an app: redis label. An operator who repoints redis.addr at a managed cache gets no policy protection and is also blocked by vault's own egress rule, which is a configuration they have to notice.",
-      "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
-      "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
-      "cost_of_closing": "Wrong in both directions in the earlier estimate, which said internal/redis does not change and that the chart needs a Redis capable of terminating TLS.\n\ninternal/redis does change for the realistic case. pool.go builds its tls.Config inline with MinVersion and ServerName and no RootCAs, so verification falls to the host trust store; the runtime image is distroless-static, which carries the public roots, so a publicly trusted Redis certificate would verify and an in-cluster issuer would not. A private CA therefore needs a new field on Options and a change to the dial path. Client certificates for mutual TLS are not representable at all today.\n\nThe image is not the obstacle. redis:7-alpine is built with TLS support and refuses to start only for want of a certificate, which was checked by running it. What the chart actually needs is certificate issuance, a port and NetworkPolicy move off 6379, and new probe arguments -- the liveness and readiness probes run a bare redis-cli ping, which fails against a TLS-only server and would put the pod in CrashLoopBackOff.\n\nThe change is also wider than the dial path: the chart wiring test refuses any environment variable internal/config reads that the chart cannot set, and the boolean registry test refuses an unregistered boolean, so REDIS_TLS cannot be added to the Go side alone."
     },
     "CR-35": {
       "title": "No OpenSSF Best Practices badge",
@@ -597,7 +585,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:607"
+        "internal/config/config.go:631"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -1868,15 +1856,15 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:439",
-        "internal/config/config.go:744",
-        "internal/config/config.go:878"
+        "internal/config/config.go:477",
+        "internal/config/config.go:772",
+        "internal/config/config.go:1006"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestASVS_V2_1_1_PasswordMinLengthConfigured"
       ],
-      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:878) is 15 and a non-dev profile refuses to start below it (:616); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:432, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
+      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:1006) is 15 and a non-dev profile refuses to start below it (:616); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:453, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
     },
     {
       "standard": "OWASP ASVS",
@@ -2717,13 +2705,13 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:574",
+        "internal/config/config.go:598",
         "internal/service/auth.go:2407"
       ],
       "tests": [
         "TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes"
       ],
-      "notes": "Met, all three clauses. Both timeouts are documented in docs/config.md and both are configurable: VAULT_MAX_SESSION_LIFETIME (default 720h) and VAULT_INACTIVITY_TIMEOUT (default 1h, internal/config/config.go:574). They are appropriate in combination -- the inactivity window is four access-token lifetimes wide, so a session in normal use never approaches it, and the absolute bound is the outer limit that a rotating client cannot slide. The deviation clause is satisfied and is the reason this row is not simply inherited from the two settings: docs/config.md states the NIST SP 800-63B-4 section 2.2.3 figures (24 hours overall, 1 hour of inactivity), says which one this deployment meets and which it deviates from, and says why. The entry previously cited 12 hours as the AAL2 figure, which is the withdrawn Rev 3 number; a merge reintroduced it after it was first corrected, and TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes now fails if it comes back. That test also parses both documented defaults out of the published table and compares them with what config.Load produces, so the document cannot drift from the code in either direction."
+      "notes": "Met, all three clauses. Both timeouts are documented in docs/config.md and both are configurable: VAULT_MAX_SESSION_LIFETIME (default 720h) and VAULT_INACTIVITY_TIMEOUT (default 1h, internal/config/config.go:598). They are appropriate in combination -- the inactivity window is four access-token lifetimes wide, so a session in normal use never approaches it, and the absolute bound is the outer limit that a rotating client cannot slide. The deviation clause is satisfied and is the reason this row is not simply inherited from the two settings: docs/config.md states the NIST SP 800-63B-4 section 2.2.3 figures (24 hours overall, 1 hour of inactivity), says which one this deployment meets and which it deviates from, and says why. The entry previously cited 12 hours as the AAL2 figure, which is the withdrawn Rev 3 number; a merge reintroduced it after it was first corrected, and TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes now fails if it comes back. That test also parses both documented defaults out of the published table and compares them with what config.Load produces, so the document cannot drift from the code in either direction."
     },
     {
       "standard": "OWASP ASVS",
@@ -2736,12 +2724,12 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:88"
+        "internal/config/config.go:109"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "VAULT_MAX_SESSIONS_PER_USER and the 429 too_many_sessions behaviour are documented; AccessTokenTTL and RefreshTokenTTL carry their own documented defaults (internal/config/config.go:88). Note that docs/config.md previously described eviction of the oldest session, which does not happen; correcting that is on the documentation stream."
+      "notes": "VAULT_MAX_SESSIONS_PER_USER and the 429 too_many_sessions behaviour are documented; AccessTokenTTL and RefreshTokenTTL carry their own documented defaults (internal/config/config.go:109). Note that docs/config.md previously described eviction of the oldest session, which does not happen; correcting that is on the documentation stream."
     },
     {
       "standard": "OWASP ASVS",
@@ -2877,7 +2865,7 @@
       "evidence": [
         "internal/service/token.go:290",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:414"
+        "cmd/vault/main.go:424"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -3611,13 +3599,13 @@
       "evidence": [
         "internal/service/token.go:290",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:414"
+        "cmd/vault/main.go:424"
       ],
       "tests": [
         "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented"
       ],
-      "notes": "Met: sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin (family_created_at, NOT NULL with a default) so the deadline cannot be reset by rotation or by pruning a spent row; TokenService clamps a rotated pair to origin plus the configured maximum and AuthService.enforceSessionLifetime refuses a family past it; cmd/vault/main.go:414 configures the bound. The test that used to back this row could never fail: it searched migrations/001_initial_schema.sql for a column that landed in 013_session_lifetime.sql. Its replacement reads every migration."
+      "notes": "Met: sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin (family_created_at, NOT NULL with a default) so the deadline cannot be reset by rotation or by pruning a spent row; TokenService clamps a rotated pair to origin plus the configured maximum and AuthService.enforceSessionLifetime refuses a family past it; cmd/vault/main.go:424 configures the bound. The test that used to back this row could never fail: it searched migrations/001_initial_schema.sql for a column that landed in 013_session_lifetime.sql. Its replacement reads every migration."
     },
     {
       "standard": "OWASP ASVS",
@@ -4213,7 +4201,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:653"
+        "internal/config/config.go:681"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -4249,17 +4237,18 @@
         "v4.0.3-1.9.1",
         "v4.0.3-9.2.2"
       ],
-      "status": "Accepted Risk",
-      "accepted_risk": "CR-34",
+      "status": "Met",
       "evidence": [
-        "internal/cache/redis.go:19",
-        "internal/redis/pool.go:184",
-        "internal/email/smtp.go:111"
+        "internal/config/config.go:462",
+        "internal/cache/redis.go:55",
+        "internal/redis/pool.go",
+        "charts/vault/templates/configmap.yaml"
       ],
       "tests": [
+        "TestASVS_V12_3_1_TheCacheLinkCanBeEncrypted",
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Accepted risk CR-34. The outbound-mail half closed: internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation that upgrades when the relay advertises STARTTLS, returns ErrSMTPNoSTARTTLS when it does not, and pins tls.VersionTLS12; the opt-out is accepted outside dev only for a loopback SMTP host. Every other outbound destination is encrypted by construction: SendGrid, the HIBP range API and the three social providers are hardcoded https, and fetchableEndpoint refuses an OIDC issuer or any endpoint its discovery document names unless it is https or loopback http. Inbound listeners pin TLS 1.3 and Postgres defaults to sslmode=require, refusing disable, allow and prefer without an explicit override. What is left is the Redis link. The dial path can negotiate TLS (internal/redis/pool.go:184), but internal/cache/redis.go:19 builds the Options without it and no configuration key sets it, so the cache connection is cleartext and an operator has no way to change that. It carries the Redis AUTH password, rate-limit and lockout keys bearing client IP addresses and user identifiers, and the jti that binds a password-confirmation window; the email one-time code is not exposed, because it is stored as an HMAC. The previous reason on this row described opportunistic STARTTLS, which has not been the behaviour since d530d6c."
+      "notes": "Met as of 1.0.3. REDIS_TLS turns on TLS for the cache connection, REDIS_TLS_CA_FILE supplies a root CA pool for an issuer the runtime image does not trust, and REDIS_TLS_SERVER_NAME overrides the name the certificate is verified against when it does not match the address. All three reach the pod through the chart.\n\nWhat was wrong before is worth keeping on the record, because it is the failure mode this register is built to catch. internal/redis had a TLS dial path from the beginning, pinning TLS 1.2 and verifying the server name, and nothing in production ever set the flag that reached it: cache.NewRedisCache built its options from an address, a password and a database number, no environment variable supplied anything else, and the branch was unreachable code that read as a control. Four releases of tests asked whether the client constructs and none asked what it negotiates.\n\nTwo things the closing change had to add that the accepted risk said it would not. The dial built its tls.Config inline with no RootCAs, so verification fell to the host trust store, and the runtime image is distroless-static, which carries public roots only: an in-cluster issuer could not have been used at all. And the TLS path used tls.DialWithDialer, which takes no context, so unlike the plaintext path it ignored cancellation; that is fixed with it.\n\nThe behaviour is held by tests that drive a real TLS listener rather than reading source: a completed handshake at the pinned version and expected name, the AUTH password absent from the plaintext bytes the listener saw before it, a refusal rather than a silent downgrade against a plaintext server, a refusal without the issuing CA, and honoured cancellation. The compliance gate holds the wiring, which those cannot see: environment to config to options to chart.\n\nThe chart's own bundled Redis does not terminate TLS and is not meant to. It is redis.enabled: false by default and exists for development; its probes run a bare redis-cli ping, which fails against a TLS-only server. The production topology is an operator-supplied Redis, and that is what these settings are for."
     },
     {
       "standard": "OWASP ASVS",
@@ -4290,12 +4279,12 @@
       "status": "Met",
       "evidence": [
         "internal/redis/pool.go:190",
-        "internal/config/config.go:498"
+        "internal/config/config.go:522"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
       ],
-      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:498). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
+      "notes": "Redis TLS is available, and the Postgres DSN defaults to DBSSLMode \"require\" (internal/config/config.go:522). A profile configuring an SSL mode outside the encrypted set logs a security warning naming what travels in cleartext. Dev substitutes sslmode=disable deliberately, against a loopback database."
     },
     {
       "standard": "OWASP ASVS",
@@ -4353,7 +4342,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:672",
+        "internal/config/config.go:700",
         "migrations/001_initial_schema.sql:354"
       ],
       "tests": [
@@ -5516,8 +5505,8 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/config/config.go:495",
-        "internal/config/config.go:496",
+        "internal/config/config.go:519",
+        "internal/config/config.go:520",
         "internal/service/auth.go:2407",
         "migrations/013_session_lifetime.sql"
       ],
@@ -5565,16 +5554,16 @@
       "requirement": "Password Authenticators",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:439",
-        "internal/config/config.go:744",
-        "internal/config/config.go:886"
+        "internal/config/config.go:477",
+        "internal/config/config.go:772",
+        "internal/config/config.go:1014"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestNIST_NoCompositionRules",
         "TestNIST_NoForcedPasswordExpiration"
       ],
-      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:886), and every other profile enforces 15. The evidence previously cited internal/config/config.go:432, a doc comment on an unrelated field."
+      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:1014), and every other profile enforces 15. The evidence previously cited internal/config/config.go:453, a doc comment on an unrelated field."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5584,10 +5573,10 @@
       "requirement": "Password Verifiers",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:439",
-        "internal/config/config.go:744",
-        "internal/config/config.go:878",
-        "internal/config/config.go:886"
+        "internal/config/config.go:477",
+        "internal/config/config.go:772",
+        "internal/config/config.go:1006",
+        "internal/config/config.go:1014"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5596,7 +5585,7 @@
         "TestNIST_PasswordNoTruncation",
         "TestNIST_SaltLength"
       ],
-      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:878) equals the default (:453), and a deployment configuring less is refused at startup (:616). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:886), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
+      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:1006) equals the default (:453), and a deployment configuring less is refused at startup (:616). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:1014), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -6648,7 +6637,7 @@
       "requirement": "Security Logging and Alerting Failures",
       "status": "Met",
       "evidence": [
-        "cmd/vault/main.go:190",
+        "cmd/vault/main.go:200",
         "internal/alert/alert.go:160",
         "internal/audit/audit.go:397"
       ],
@@ -8038,7 +8027,7 @@
       "requirement": "HostPath Volumes: hostPath volumes must be forbidden",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/deployment.yaml:103"
+        "charts/vault/templates/deployment.yaml:117"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
@@ -8148,7 +8137,7 @@
       "requirement": "Volume Types: only the listed volume types may be used",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/deployment.yaml:103",
+        "charts/vault/templates/deployment.yaml:117",
         "charts/vault/templates/postgres.yaml:9"
       ],
       "tests": [
@@ -8620,14 +8609,15 @@
     "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
-    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:878) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
+    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:1006) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
     "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:276, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made. What keeps it closed: TestRFC9700_4_10_1_SenderConstrainedDPoP holds the binding, and TestBlobServiceZeroesEveryDecryptedBuffer holds the wipe.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice. What keeps it closed: TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege fails on a default render that takes a host namespace, and TestK8sPSS_Restricted_ThereAreNoDeviationsLeft fails if an exemption is reintroduced.",
-    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:686). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34. What keeps it closed: TestSendRefusesAServerThatDoesNotOfferSTARTTLS and TestSendUpgradesWheneverSTARTTLSIsAdvertised drive a fake relay through both branches, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride holds the config-side refusal.",
+    "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:714). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34. What keeps it closed: TestSendRefusesAServerThatDoesNotOfferSTARTTLS and TestSendUpgradesWheneverSTARTTLSIsAdvertised drive a fake relay through both branches, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride holds the config-side refusal.",
     "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
     "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:185 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
     "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:221 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee. What keeps it closed: TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType, TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer and TestASVS_V5_1_1_TheDocumentationSaysHowStoredObjectsAreMadeSafeToDownload, one per row rather than one cited three times, for the reason above.",
-    "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk. What keeps it closed: TestNIST80053_AU_6_ACorrelatedRunRaisesOneAlertAndAQuietOneRaisesNone for the windowing and the cooldown, TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile for the install, and TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten for the score being a filter rather than a field."
+    "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk. What keeps it closed: TestNIST80053_AU_6_ACorrelatedRunRaisesOneAlertAndAQuietOneRaisesNone for the windowing and the cooldown, TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile for the install, and TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten for the score being a filter rather than a field.",
+    "CR-34": "Closed. The cache link can be encrypted: REDIS_TLS, REDIS_TLS_CA_FILE and REDIS_TLS_SERVER_NAME reach internal/cache/redis.go:55 and the dial path at internal/redis/pool.go, and all three are settable from the chart. The risk was accurate about the defect -- a TLS branch nothing could reach -- and wrong in both directions about the cost of closing it. It said internal/redis would not change, and it had to, because the dial passed no RootCAs and the distroless runtime carries public roots only, so no in-cluster issuer would have verified. It said the obstacle was a Redis that could terminate TLS, and redis:7-alpine already can; the obstacle was certificate issuance and the probe arguments, which is why the bundled development Redis is deliberately left plaintext rather than half-converted. Its compensating control also credited a NetworkPolicy protecting a workload the chart does not deploy by default. What keeps it closed: TestASVS_V12_3_1_TheCacheLinkCanBeEncrypted for the wiring, and TestPool_TLSDialCompletesAVerifiedHandshakeAndHidesTheAUTHPassword, TestPool_TLSAgainstAPlaintextServerFailsRatherThanDowngrading, TestPool_TLSWithoutTheIssuingCAIsRefused and TestPool_TLSDialHonorsContextCancellation for the behaviour."
   }
 }

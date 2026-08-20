@@ -111,6 +111,18 @@ class Reanchorer:
             return None
 
         hits = [i + 1 for i, line_text in enumerate(cur) if line_text == text]
+
+        # gofmt re-aligns a struct literal's values when a longer field name
+        # joins it, so a citation into one can be invalidated by a change that
+        # did not touch its line at all: "CacheBackend: x" became
+        # "CacheBackend:       x" and matched nothing. Fall back to comparing
+        # with runs of whitespace collapsed, which survives realignment and
+        # still will not match a different statement.
+        if not hits:
+            want = " ".join(text.split())
+            hits = [i + 1 for i, line_text in enumerate(cur)
+                    if " ".join(line_text.split()) == want]
+
         if len(hits) == 1:
             self.moved.append((path, line, hits[0], text.strip()[:70]))
             return hits[0]

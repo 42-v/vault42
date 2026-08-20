@@ -44,6 +44,7 @@ import (
 // if a call site names a variable that is missing here.
 var boolEnvVars = []string{
 	"CORS_ALLOW_ALL",
+	"REDIS_TLS",
 	"VAULT_ALLOW_PLAINTEXT",
 	"VAULT_ALLOW_PLAINTEXT_DB",
 	"VAULT_ALLOW_RATE_LIMIT_DISABLED",
