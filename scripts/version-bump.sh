@@ -37,6 +37,11 @@ RULES=(
   "web package::web/package.json::^  \"version\": \"::\",?\$"
   "root package::package.json::^  \"version\": \"::\",?\$"
   "badges.json::docs/badges.json::\"version\": \"::\""
+  # The register states the version it assessed. It read 1.0.0 three releases
+  # later, because nothing propagated it and nothing checked it: the register
+  # is full of gates pointed at the rest of the repository and had none
+  # pointed at its own header.
+  "register version::docs/compliance-register.json::\"version\": \"::\","
   "AspNetCore csproj::packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj::<Version>::</Version>"
   "Blazor csproj::packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj::<Version>::</Version>"
   "site helm command::site/index.html::--set image\.tag=::"

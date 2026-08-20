@@ -2,8 +2,8 @@
   "$schema_version": "1",
   "meta": {
     "product": "vault42",
-    "version": "1.0.0",
-    "assessment_date": "2026-08-10",
+    "version": "1.0.3",
+    "assessment_date": "2026-08-20",
     "assessment_type": "self-assessment",
     "assessor": "vault42 maintainers",
     "third_party_audit": false,
@@ -96,7 +96,8 @@
       "short_name": "NIST SP 800-218",
       "revision": "1.1",
       "source": "https://csrc.nist.gov/pubs/sp/800/218/final",
-      "verified": "Practice and task identifiers taken from the SP 800-218 v1.1 table on csrc.nist.gov on 2026-08-18. SSDF describes practices, not controls; every row here names the workflow job or tracked file that performs the practice."
+      "verified": "Practice and task identifiers taken from the official SSDF 1.1 table (nist.sp.800-218.ssdf-table.xlsx) on csrc.nist.gov, parsed on 2026-08-20: four practice groups, 19 practices, 42 tasks. PW.3 and PW.4.3 are absent because v1.1 removed them, not because they were skipped. All 42 tasks are classified. Through 1.0.2 only 17 were, which the register did not say -- a denominator nobody states is a denominator nobody checks, and meta.claim asserted every requirement in scope was classified. SP 800-218 Rev. 1 (SSDF 1.2) exists as an initial public draft released 2025-12-17 whose comment period closed 2026-01-30; v1.1 remains the final publication and is what this register assesses against.",
+      "revision_date": "2022-02-03"
     },
     {
       "name": "Kubernetes Pod Security Standards — restricted profile",
@@ -262,6 +263,28 @@
       "compensating_control": "The half of the requirement about secret material is fully met: signing is keyless, no long-lived key is ever present on a runner, and the certificate is bound to the workflow's OIDC identity and logged in Rekor, so a forged attestation would have to be produced by a run of this workflow and would be publicly visible in the transparency log. The digest an attestation names is the one docker/build-push-action reported for the image it just pushed, taken from that step's output rather than recomputed. Release runs are reachable only through an annotated tag, tag creation is restricted to the repository admin by ruleset, and the tagged commit must already be an ancestor of main -- so reaching the build step at all means passing branch protection and thirteen required checks first.",
       "residual_risk": "An attacker who could already execute arbitrary steps inside the release job could obtain an attestation naming an artifact of their choosing. That attacker has already won -- they are inside the job that builds and pushes the real artifacts -- so the attestation is not the weakest link; it is one that would fail to catch them.",
       "revisit_when": "GitHub's attestation service derives subjects in its own control plane rather than taking them as inputs, or the release moves to a build platform that does."
+    },
+    "CR-39": {
+      "title": "SSDF PO.2 assumes an organization, and vault42 has one maintainer",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "SSDF PO.2.2 asks for role-based training with a periodic review of proficiency, and PO.2.3 for a commitment to secure development obtained from upper management and conveyed to everyone in a development role. Both assume an organization: someone to assign the training, someone else to assess whether it took, and an authority above the developer that a release under time pressure can be escalated to. vault42 is maintained by one person, so each of those would be the same individual on both sides of the transaction, which is not a control. Marking the two tasks Not Applicable was the alternative and was rejected: the register's Not Applicable vocabulary covers a role vault42 does not occupy or a capability the code does not have, and neither describes this. The practice is genuinely not performed, so it is recorded as a gap.",
+      "compensating_control": "The practices these two tasks exist to produce are performed by mechanism instead of by instruction. Secure coding is enforced by .golangci.yml as a merge gate rather than taught; the compliance register performs the requirements-tracking that training is meant to instil; and the authority a management commitment would supply is replaced by the gates being unwaivable in silence, since disabling a required check is a visible repository setting change rather than a decision taken during a release. Eighteen CI jobs, two coverage gates and the compliance suite run on every pull request regardless of who opened it or how urgent it is.",
+      "residual_risk": "Nobody is checking that the maintainer's security knowledge is current, and there is no second party who can insist a release wait. A practice that the automation does not encode is a practice that depends entirely on one person continuing to know about it.",
+      "revisit_when": "A second maintainer joins, or the project acquires any governance structure above the maintainer."
+    },
+    "CR-40": {
+      "title": "The development endpoint is outside the boundary this register can assess",
+      "severity": "Medium",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "SSDF PO.5.2 asks that development endpoints be secured and hardened. The environments that build, test and release vault42 satisfy the sibling task PO.5.1 and are assertable here: every workflow job runs on a GitHub-hosted label, so each is a fresh virtual machine discarded afterwards, no self-hosted runner is registered, and release builds take no Actions cache. The endpoint where code is written is a personal machine, and its configuration is neither in the repository nor checkable by a reader with a clone of it. Claiming it hardened would be exactly the unverifiable assertion this register was restructured to remove, and claiming the task inapplicable would be false, since the endpoint exists and the task addresses it.",
+      "compensating_control": "Nothing signed on that machine is trusted on the strength of the machine. Release artifacts are signed by Sigstore against the release workflow's OIDC identity rather than by a key held locally, so a compromised workstation cannot produce a signature that verifies as a release. Commits reach main only through a pull request with eighteen required checks; direct pushes are refused; and the tag namespace is protected, so publishing a release takes a push a repository rule permits rather than local access alone. A compromised endpoint could still author malicious source, which is what CR-36 already records as unreviewed.",
+      "residual_risk": "Source authored on a compromised development endpoint would pass every gate that checks how a change is built and released, because none of them check who wrote it or on what. The signing and provenance chain establishes that the release workflow built this commit, not that the commit was intended.",
+      "revisit_when": "The project adopts a hardened, attestable development environment whose configuration is itself in the repository, or commit signing is required and enforced on main."
     }
   },
   "requirements": [
@@ -7286,7 +7309,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PO.1.1",
       "requirement": "Define security requirements for software development",
       "status": "Met",
@@ -7302,7 +7325,37 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.1.2",
+      "requirement": "Identify and document all security requirements for organization-developed software to meet, and maintain the requirements over time",
+      "status": "Met",
+      "evidence": [
+        "docs/compliance-register.json",
+        "docs/spec.md",
+        "docs/security.md"
+      ],
+      "tests": [
+        "TestComplianceRegister_ScopeAndSelfAssessmentAreDeclared",
+        "TestComplianceRegister_EveryMetRequirementNamesAnExistingTest"
+      ],
+      "notes": "Met: the requirements this software is held to are ASVS 5.0.0 at L1 and L2, declared in meta.scope and classified row by row in this register, alongside the behavioural specification in docs/spec.md. Maintenance over time is the part usually missing, and here it is mechanical rather than intended: every Met row names a test that runs on each build, so a requirement stops being met the moment the behaviour changes, without anybody re-reading the document."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.1.3",
+      "requirement": "Communicate requirements to all third parties who will provide commercial software components to the organization for reuse by the organization's own software",
+      "status": "Not Applicable",
+      "na_basis": "role",
+      "evidence": [],
+      "tests": [],
+      "notes": "Not applicable: this task addresses an acquirer that obtains components through a supplier relationship, and can therefore state requirements to the supplier as a condition of supply. vault42 reuses open-source components published to public registries under their own licences, where the acquirer is one of many downstream consumers and the channel a requirement would travel down runs the other way. The obligation that survives is to check what arrives rather than to specify it in advance, and that is classified under PW.4.1 and PW.4.4."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PO.2.1",
       "requirement": "Create new roles and alter responsibilities to encompass the SDLC",
       "status": "Met",
@@ -7317,7 +7370,35 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.2.2",
+      "requirement": "Provide role-based training for all personnel with responsibilities that contribute to secure development, and periodically review personnel proficiency",
+      "status": "Accepted Risk",
+      "accepted_risk": "CR-39",
+      "evidence": [
+        "docs/compliance-register.json"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-39. This task assumes an organization with roles to assign training to and a reviewer to assess proficiency against. vault42 is maintained by one person, so training and the review of it would be the same individual on both sides, which is not a control. Recorded as a risk rather than dismissed as inapplicable: the gap it describes is real, and calling it out of scope would be a claim about vault42's shape standing in for a claim about its practice."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.2.3",
+      "requirement": "Obtain upper management or authorizing official commitment to secure development, and convey that commitment to all with development-related roles and responsibilities",
+      "status": "Accepted Risk",
+      "accepted_risk": "CR-39",
+      "evidence": [
+        "docs/compliance-register.json"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-39, for the reason above. The commitment this task asks for is an authority above the developer that can be appealed to when a release is under time pressure, and in a single-maintainer project no such authority exists. What stands in for it is that the gates cannot be waived silently: the required checks are branch-protected and disabling one is a visible repository setting change."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PO.3.1",
       "requirement": "Specify which tools are to be included in each toolchain",
       "status": "Met",
@@ -7334,7 +7415,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PO.3.2",
       "requirement": "Follow recommended security practices to deploy and maintain tools and toolchains",
       "status": "Met",
@@ -7351,7 +7432,91 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.3.3",
+      "requirement": "Configure tools to generate artifacts of their support of secure software development practices",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:119",
+        ".github/workflows/release.yml",
+        "docs/test-coverage.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked",
+        "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
+      ],
+      "notes": "Met: the tools are configured to leave something behind. CI uploads the coverage profile and the test output as artifacts; the release emits a syft SBOM and a build-provenance attestation per artifact class, plus BuildKit's own provenance and SBOM inside each image index; scripts/coverage.sh keeps the profile at a fixed path rather than in a temporary directory deleted on exit. That last one was a real change of behaviour, not a configuration preference: a run that deletes its profile leaves the generated report as the only record, at package granularity, and destroys the evidence for its own headline figure."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.4.1",
+      "requirement": "Define criteria for software security checks and track throughout the SDLC",
+      "status": "Met",
+      "evidence": [
+        ".coverage-exclusions.json",
+        "CONTRIBUTING.md",
+        "scripts/dotnet-coverage.py:78"
+      ],
+      "tests": [
+        "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked",
+        "TestSSDF_800_218_TheDocumentedCIGatesAreTheOnesThatRun"
+      ],
+      "notes": "Met: the criteria are numbers a build fails against rather than intentions. Go is measured as 100% of reachable statements, where the denominator is a frozen 51-entry exclusion set in which every entry is confirmed and justified; the .NET SDKs against a floor of 100.00 with no exclusions file at all; the two frontend packages against thresholds declared in their own vite configs. Tracking through the lifecycle is the eighteen-job table in CONTRIBUTING.md, which a test now holds to the workflow: it had drifted three jobs behind, and the drift told a contributor that two gates which had just started running did not."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.4.2",
+      "requirement": "Implement processes, mechanisms, etc. to gather and safeguard the necessary information in support of the criteria",
+      "status": "Met",
+      "evidence": [
+        "scripts/coverage.sh",
+        "scripts/cov-gaps.py",
+        ".coverage-exclusions.json"
+      ],
+      "tests": [
+        "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked"
+      ],
+      "notes": "Met: the coverage profile outlives the run that produced it, which is what makes the criterion in PO.4.1 checkable by somebody else. scripts/cov-gaps.py reads that profile to answer which statements are uncovered and to verify the exclusion set against it, asserting covered + excluded == total, so the set cannot grow without the arithmetic failing. The gate also refuses a profile whose counters were compiled from a different version of a file, which is the failure mode that makes a stale figure look like a passing one."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.5.1",
+      "requirement": "Separate and protect each environment involved in software development",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        "TestSLSA_BuildsRunOnTheHostedPlatform",
+        "TestSLSA_NoSharedBuildCacheBetweenRuns"
+      ],
+      "notes": "Met for the environments that build and test the software: every job in every workflow runs on a GitHub-hosted label, so each one is a fresh VM discarded afterwards, and no self-hosted runner is registered. Release builds additionally take no Actions cache, because a cache entry is writable by any run on the default branch and a tag build could otherwise be assembled from layers that never came from the tagged commit. The maintainer's own workstation is a development environment this task also covers, and that half is CR-40."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PO.5.2",
+      "requirement": "Secure and harden development endpoints to perform development-related tasks",
+      "status": "Accepted Risk",
+      "accepted_risk": "CR-40",
+      "evidence": [
+        "docs/compliance-register.json"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-40. The build and test environments are hosted and ephemeral, which PO.5.1 records. The endpoint where code is written is a personal machine outside the repository, so nothing about its configuration can be asserted here or checked by a reader, and an assertion a reader cannot check is exactly what this register exists to avoid."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PS.1.1",
       "requirement": "Store all forms of code based on the principle of least privilege",
       "status": "Met",
@@ -7367,7 +7532,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PS.2.1",
       "requirement": "Make software integrity verification information available to software acquirers",
       "status": "Met",
@@ -7383,7 +7548,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PS.3.1",
       "requirement": "Securely archive the necessary files and supporting data to be retained for each release",
       "status": "Met",
@@ -7400,7 +7565,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PS.3.2",
       "requirement": "Collect, safeguard, maintain and share provenance data for all components",
       "status": "Met",
@@ -7416,7 +7581,74 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.1.1",
+      "requirement": "Use forms of risk modeling to help assess the security risk for the software",
+      "status": "Met",
+      "evidence": [
+        "tests/attack",
+        "docs/security.md",
+        "docs/architecture.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_DesignAndRiskDecisionsAreRecorded"
+      ],
+      "notes": "Met, and in executable form. docs/architecture.md documents the flows that carry a credential, docs/security.md records eighteen accepted risks each arguing its own residual, and tests/attack holds 376 tests that each encode an attack which either used to work or must never work. That last is the difference between a threat model and a threat-model document: removing a mitigation fails the build rather than contradicting a diagram nobody re-reads."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.1.2",
+      "requirement": "Track and maintain the software's security requirements, risks, and design decisions",
+      "status": "Met",
+      "evidence": [
+        "docs/security.md",
+        "docs/compliance-register.json",
+        "CHANGELOG.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_DesignAndRiskDecisionsAreRecorded",
+        "TestComplianceRegister_AcceptedRisksAreFullyArgued"
+      ],
+      "notes": "Met: every accepted risk carries a rationale, a compensating control, a residual-risk statement, a revisit condition and a named accepting party, and a test rejects an entry missing any of the five. Design decisions that did not become risks are recorded in the changelog, which states what was wrong and what changed rather than what was released. Requirements are the register itself."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.1.3",
+      "requirement": "Where appropriate, build in support for using standardized security features and services",
+      "status": "Met",
+      "evidence": [
+        "internal/service/token.go",
+        "internal/handler/oauth.go"
+      ],
+      "tests": [
+        "TestNIST_OAuth2_PKCE_S256",
+        "TestIETF_RFC6238_TOTPAppendixBKnownAnswerVectors",
+        "TestIETF_RFC8725_s38_VerifierRejectsInboundKeySourceHeaders"
+      ],
+      "notes": "Met: the security-relevant mechanisms are the standardized ones rather than bespoke equivalents, and the tests check conformance against the specifications rather than against the implementation. OAuth 2.0 with PKCE S256, OpenID Connect discovery, JWT under the RFC 8725 best-current-practice rules, TOTP verified against RFC 6238's own appendix B vectors, WebAuthn, and argon2id for password storage. The IETF and OpenID rows in this register are that verification in detail."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.2.1",
+      "requirement": "Have a qualified person who was not involved with the design, and/or automated processes in the toolchain, review the software design to verify compliance with security requirements and risk information",
+      "status": "Accepted Risk",
+      "accepted_risk": "CR-36",
+      "evidence": [
+        "docs/compliance-register.json"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-36. The task offers two routes and vault42 has one of them. The automated half is real and substantial -- eighteen CI jobs, two coverage gates, the compliance suite -- but automation reviews behaviour against requirements that were already written down, and a design review is what catches the requirement nobody thought to write. The independent-person half is structurally unavailable in a single-maintainer project, so this row records the gap rather than claiming the automation closes it."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PW.4.1",
       "requirement": "Acquire and maintain well-secured software components from commercial, open-source and other third-party developers",
       "status": "Met",
@@ -7433,7 +7665,92 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.4.2",
+      "requirement": "Create and maintain well-secured software components in-house following SDLC processes to meet common internal needs",
+      "status": "Met",
+      "evidence": [
+        "internal/",
+        ".coverage-exclusions.json",
+        "docs/test-coverage.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked",
+        "TestSSDF_800_218_SecureCodingStandardIsEnforcedByTools"
+      ],
+      "notes": "Met: the in-house components are the packages under internal/, and the SDLC process they follow is the same one applied to everything else -- the reachable-coverage gate, the linter set held against a ratcheting baseline, the attack suite, and the compliance rows that name a test each. The exclusion set is what makes the coverage claim about these components specific rather than aggregate: each of the 51 excluded statements names the file, the line and the reason."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.4.4",
+      "requirement": "Verify that acquired third-party software components comply with the requirements",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:366",
+        ".github/workflows/nightly-security.yml:57",
+        "docs/deps.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
+        "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned"
+      ],
+      "notes": "Met: go mod verify checks every module against its recorded hash and go mod tidy -diff fails when the manifest and the imports disagree, both on every pull request touching Go; the frontend resolves through a frozen lockfile that pins by integrity. Nightly govulncheck reports at symbol level rather than module level, so a vulnerable package that is present but never called is reported as such instead of as a finding to argue about, and Trivy scans the source, the images and the frontend base separately."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.5.1",
+      "requirement": "Follow all secure coding practices that are appropriate to the development languages and environment",
+      "status": "Met",
+      "evidence": [
+        ".golangci.yml:10",
+        ".github/workflows/ci.yml:292",
+        "CONTRIBUTING.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_SecureCodingStandardIsEnforcedByTools"
+      ],
+      "notes": "Met: the standard is .golangci.yml, and it is a standard rather than a preference because a pull request that violates it does not merge. The enabled set is chosen for classes of defect rather than for style -- bodyclose for leaked connections, errorlint for equality comparisons that stop matching once an error is wrapped, nilerr for a nil error returned from the branch that only runs when the error was not nil, sqlclosecheck for unclosed rows. The whole-tree run is held against a baseline that only ratchets down, so a finding in untouched code cannot sit there indefinitely."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.6.1",
+      "requirement": "Use compiler, interpreter, and build tools that offer features to improve executable security",
+      "status": "Met",
+      "evidence": [
+        ".goreleaser.yaml:51",
+        "Dockerfile:74"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags"
+      ],
+      "notes": "Met: CGO_ENABLED=0 so the result is a static binary with no dependency on the builder's libc, -trimpath so no absolute build path is recorded, -buildvcs=false and -buildid= so the output does not vary with the state of the tree or the toolchain cache, and a distroless nonroot base with no shell for the binary to land in. The archives are reproducible bit for bit; the images are not, because the Dockerfiles use BuildKit cache mounts, and the register says so rather than letting the stronger claim cover both."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.6.2",
+      "requirement": "Determine which compiler, interpreter, and build tool features should be used and how each should be configured, then implement and use the approved configurations",
+      "status": "Met",
+      "evidence": [
+        ".goreleaser.yaml:31",
+        "Dockerfile:63"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags"
+      ],
+      "notes": "Met, and this row is why the task is separate from PW.6.1. vault42 ships the same three programs twice, by two routes: goreleaser compiles the archives and three Dockerfiles compile the images. Through 1.0.2 they did not agree -- the goreleaser builds set -trimpath and -buildvcs=false and the Dockerfiles set neither -- so the published image binary recorded absolute build paths the published archive binary did not, for the same program at the same tag. Nothing caught it because nothing compared them, and both were individually plausible. The named test is that comparison, scoped to the go build invocation so that a flag mentioned only in the comment explaining it does not satisfy the gate."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PW.7.1",
       "requirement": "Determine whether code review or automated analysis should be used",
       "status": "Met",
@@ -7450,7 +7767,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PW.7.2",
       "requirement": "Perform the code review and/or code analysis based on the organization's secure coding standards",
       "status": "Met",
@@ -7466,7 +7783,24 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.8.1",
+      "requirement": "Determine whether executable code testing should be performed to find vulnerabilities not identified by previous reviews, analysis, or testing and, if so, which types",
+      "status": "Met",
+      "evidence": [
+        "CONTRIBUTING.md",
+        ".github/workflows/ci.yml:23"
+      ],
+      "tests": [
+        "TestSSDF_800_218_TheDocumentedCIGatesAreTheOnesThatRun",
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met: the decision is recorded as the job table in CONTRIBUTING.md, which names each of the eighteen checks and what it does, and the types chosen are unit, integration under a real database, attack, fuzz over the parsers, and end-to-end. A test holds that table to the workflow in both directions, because the decision is only evidence while it describes what runs -- and it had already drifted three jobs behind, always in the direction of describing fewer checks than happen."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "PW.8.2",
       "requirement": "Design the software to meet security requirements and mitigate security risks",
       "status": "Met",
@@ -7482,7 +7816,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "PW.9.1",
       "requirement": "Configure software to have secure settings by default",
       "status": "Met",
@@ -7499,7 +7833,25 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
+      "requirement_id": "PW.9.2",
+      "requirement": "Implement the default settings, and document each setting for software administrators",
+      "status": "Met",
+      "evidence": [
+        "charts/vault/values.yaml:36",
+        "charts/vault/values.yaml:51",
+        "docs/config.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_ShippedDefaultsAreDocumentedAndRestrictive",
+        "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
+      ],
+      "notes": "Met: a default install runs as a non-root numeric user on a read-only root filesystem with all capabilities dropped, privilege escalation refused and the RuntimeDefault seccomp profile named, and docs/config.md documents the environment variables, the profile mechanism that fills in what an operator did not set, and the _FILE convention for secrets. The pairing is what this task asks for and what the test checks: a default is only a default while the document an administrator reads agrees with the file the cluster reads."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
       "requirement_id": "RV.1.1",
       "requirement": "Gather information from software acquirers, users and public sources on potential vulnerabilities",
       "status": "Met",
@@ -7515,7 +7867,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "RV.1.2",
       "requirement": "Review, analyze and/or test the software's code to identify or confirm the presence of previously undetected vulnerabilities",
       "status": "Met",
@@ -7531,7 +7883,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "RV.1.3",
       "requirement": "Have a policy that addresses vulnerability disclosure and remediation",
       "status": "Met",
@@ -7546,7 +7898,7 @@
     {
       "standard": "NIST SP 800-218",
       "revision": "1.1",
-      "revision_date": "",
+      "revision_date": "2022-02-03",
       "requirement_id": "RV.2.1",
       "requirement": "Analyze each vulnerability to gather sufficient information to plan its remediation",
       "status": "Met",
@@ -7558,6 +7910,91 @@
         "TestSSDF_800_218_GovernanceArtifactsExist"
       ],
       "notes": "Met: SECURITY.md names the channel a report arrives by, and this register plus docs/security.md are where the analysis of an accepted residual is written down, with a compensating control, a residual statement and a revisit condition rather than a status."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "RV.2.2",
+      "requirement": "Plan and implement risk responses for vulnerabilities",
+      "status": "Met",
+      "evidence": [
+        "SECURITY.md:40",
+        "CHANGELOG.md"
+      ],
+      "tests": [
+        "TestSSDF_800_218_VulnerabilityResponseProcessIsDocumented"
+      ],
+      "notes": "Met: SECURITY.md sets out what happens after a valid report -- fixed privately with nothing in the public tracker describing the vulnerability before the fix is out, shipped in a normal release rather than as a patch attached to an email, described in a Security section of the changelog that says what was wrong and what an attacker could do, and raised as an advisory when a deployed instance is affected. The response timeline and the supported-version policy are in the same document, because a plan that does not say when, or for which versions, is not one a reporter can rely on."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "RV.3.1",
+      "requirement": "Analyze identified vulnerabilities to determine their root causes",
+      "status": "Met",
+      "evidence": [
+        "CHANGELOG.md",
+        "docs/security.md",
+        "docs/compliance-register.json"
+      ],
+      "tests": [
+        "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed",
+        "TestComplianceRegister_AcceptedRisksAreFullyArgued"
+      ],
+      "notes": "Met: each retired risk in this register states what the cause actually was rather than what the symptom looked like, and the changelog does the same for defects that never became risks. The distinction matters in the entries themselves -- the SMTP finding's cause was that net/smtp.SendMail reports success after sending in cleartext, not that TLS was off; the register's own citation drift was caused by line numbers being maintained by hand, not by a wrong line."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "RV.3.2",
+      "requirement": "Analyze the root causes over time to identify patterns, such as a secure coding practice not being followed consistently",
+      "status": "Met",
+      "evidence": [
+        "docs/compliance-register.json",
+        "tests/compliance/register_gates_test.go"
+      ],
+      "tests": [
+        "TestComplianceRegister_NotApplicableNonExistenceClaimsNameAnExistingTest",
+        "TestComplianceRegister_EvidenceIsRelevantAndNotJustResolvable"
+      ],
+      "notes": "Met: the register's own gates are the output of this analysis, and each was written after the same mistake appeared more than once. Twenty-one rows were classified Not Applicable on a rationale that read like a scope statement and was in fact a false claim about the code, so na_basis became a closed vocabulary that forces the author to say which kind of reason they mean and to prove an absence with a test. Twenty-eight evidence citations had drifted onto a line that no longer said anything, so the relevance gate rejects a citation resolving to a blank line or a closing brace. The pattern, in both cases, was prose asserting something no mechanism checked."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "RV.3.3",
+      "requirement": "Review the software for similar vulnerabilities to eradicate a class of vulnerabilities, and proactively fix them rather than waiting for external reports",
+      "status": "Met",
+      "evidence": [
+        "docs/compliance-register.json",
+        "tests/compliance/register_retired_risks_test.go"
+      ],
+      "tests": [
+        "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed"
+      ],
+      "notes": "Met: fixing the instance is where this task starts and not where it ends, so every retired risk names the test that keeps its class closed, and a gate resolves that name against the tree. Seven of the twelve already named one by habit; the other five named source lines, which is a citation to a position rather than to a behaviour and stops being true the moment the file moves. The reviews that found these were internal rather than reported: none of the twelve arrived from outside."
+    },
+    {
+      "standard": "NIST SP 800-218",
+      "revision": "1.1",
+      "revision_date": "2022-02-03",
+      "requirement_id": "RV.3.4",
+      "requirement": "Review the SDLC process, and update it if appropriate to prevent the root cause recurring",
+      "status": "Met",
+      "evidence": [
+        "tests/compliance/register_gates_test.go",
+        "tests/compliance/nist_ssdf_800_218_test.go",
+        ".github/workflows/ci.yml:847"
+      ],
+      "tests": [
+        "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed",
+        "TestSSDF_800_218_TheDocumentedCIGatesAreTheOnesThatRun"
+      ],
+      "notes": "Met: each class of defect found has left a gate behind rather than a resolution to be careful. Four linter configurations had been driven to zero by hand and run in no workflow, which described a moment rather than a property and had already drifted back for two of the four, so a job now runs them. The .NET SDKs were published to nuget.org and compiled by nothing until the tag, so a required job builds and measures them on every pull request. The image and archive builds disagreed on hardening flags, so a test compares them. In each case the process changed, not the intention."
     },
     {
       "standard": "Kubernetes PSS",

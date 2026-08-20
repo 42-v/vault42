@@ -8,8 +8,8 @@ revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **431 requirements in scope across 11 standards: 369 Met, 15 Accepted Risk,
-> 47 Not Applicable. 0 unclassified.**
+> **456 requirements in scope across 11 standards: 389 Met, 19 Accepted Risk,
+> 48 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
 runs on every CI build. Every **Accepted Risk** carries a rationale, a
@@ -204,13 +204,13 @@ than being retired on a technicality.
 | GDPR (EU) 2016/679 | 13 | 2 | 1 | 16 |
 | RFC family and OpenID Connect | 13 | 0 | 0 | 13 |
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
-| NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
+| NIST SP 800-218 (SSDF v1.1) | 37 | 4 | 1 | 42 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
 | OpenSSF Scorecard v5.5.0 | 15 | 4 | 1 | 20 |
 | SLSA 1.1 Build Track | 6 | 1 | 0 | 7 |
-| **Total** | **369** | **15** | **47** | **431** |
+| **Total** | **389** | **19** | **48** | **456** |
 
-The 15 Accepted Risk rows collapse to **12 distinct accepted risks**: several
+The 19 Accepted Risk rows collapse to **14 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
@@ -325,7 +325,7 @@ of the list:
 | Added | Why it fits |
 |---|---|
 | **OWASP API Security Top 10:2023** | Its top two categories are object-level and function-level authorization, which is where an authentication service lives or dies. All ten Met. API7 was carried as an accepted risk alongside ASVS V1.3.6 until the four destinations an OIDC discovery document supplies -- the only ones vault42 takes from data -- were held to the issuer's own domain and judged again at dial time; see CR-17, retired. API9 is asserted rather than described: all 51 mounted routes must appear in `docs/api.md`, checked on every build. |
-| **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. PO.3.2 is an accepted risk, CR-32: there is no dependency-update automation, and a nightly scanner is not one. |
+| **NIST SP 800-218 (SSDF v1.1)** | Almost every practice was already performed and cited nowhere. Every row names a workflow job or a tracked file, and the test asserts the named thing exists -- a practice nobody automated is a practice nobody performs on the release that happens at 2am. Assessed at 17 of the framework's 42 tasks until 1.0.3, which is a denominator the register never stated; all 42 are classified now. Four are accepted risks and three of those are the same fact twice over: SSDF's PO.2 and PW.2 tasks assume an organization with roles, a trainer and an authority above the developer, and a single-maintainer project has none of them (CR-36, CR-39). The fourth is the development endpoint, which is a personal machine outside anything a reader could check (CR-40). |
 | **Kubernetes Pod Security Standards, restricted** | Workload-scoped, which is what a Helm chart can be held to. All ten controls Met across every workload the chart deploys, with no exclusions and no deviations. |
 
 **Not added, and why.**
