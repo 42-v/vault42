@@ -8,7 +8,17 @@ WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/vue/package.json packages/vue/
 COPY web/package.json web/
-RUN corepack enable && pnpm install --frozen-lockfile
+# corepack is no longer bundled with the node image; Node stopped shipping it
+# before 26, so `corepack enable` is "not found" rather than a no-op and the
+# whole frontend stage fails at exit 127. Installing it explicitly keeps the
+# property that made corepack worth using here: it reads `packageManager` from
+# package.json, which pins pnpm by version AND by SHA-512, so the package
+# manager that builds a release image is hash-verified rather than whatever
+# `npm i -g pnpm` resolves on the day. The corepack version is pinned for the
+# same reason every other tool in this build is.
+RUN npm install -g corepack@0.35.0 \
+    && corepack enable \
+    && pnpm install --frozen-lockfile
 COPY packages/vue/ packages/vue/
 COPY web/ web/
 RUN pnpm --filter @vault42/vue build && pnpm --filter @vault42/web build
