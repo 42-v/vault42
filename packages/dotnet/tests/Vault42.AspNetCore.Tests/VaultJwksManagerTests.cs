@@ -210,9 +210,21 @@ public class VaultJwksManagerTests
 
         var first = manager.InitializeAsync();
 
-        // The first fetch is parked inside the response body, holding the lock.
-        var second = manager.ResolveKeyAsync("kid-unknown");
-        Assert.Null(await second);
+        // Wait for the request to be dispatched rather than assuming it has
+        // been. RefreshInternalAsync takes the lock before it calls GetAsync, so
+        // a dispatched request means the lock is held -- without this the second
+        // caller can win the lock, fetch first, and the stub answers a request
+        // it has no canned response for.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (http.Calls == 0)
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("the first fetch never reached the transport");
+            await Task.Delay(10);
+        }
+
+        // The first fetch is now parked inside the response body, holding the lock.
+        Assert.Null(await manager.ResolveKeyAsync("kid-unknown"));
         Assert.Equal(1, http.Calls);
 
         gate.SetResult();

@@ -128,7 +128,10 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 {
     private readonly Queue<Func<HttpResponseMessage>> _responses = new ();
 
-    internal int Calls { get; private set; }
+    private int _calls;
+
+    /// <summary>Requests dispatched so far. Read from another task, so interlocked.</summary>
+    internal int Calls => Volatile.Read(ref _calls);
 
     internal StubHttpMessageHandler Enqueue(HttpStatusCode status, string body = "", long? contentLength = null)
     {
@@ -178,7 +181,7 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        Calls++;
+        Interlocked.Increment(ref _calls);
         if (_responses.Count == 0)
             throw new InvalidOperationException($"unexpected request: {request.RequestUri}");
         return Task.FromResult(_responses.Dequeue()());
