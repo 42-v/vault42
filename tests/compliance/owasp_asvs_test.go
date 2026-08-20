@@ -329,29 +329,62 @@ func TestASVS_V3_5_3_JWTAlgorithmWhitelist(t *testing.T) {
 	}
 }
 
+// V3.5.3: Verify that JWTs reject dangerous headers.
+//
+// This asserted the wrong direction. It signed a token with vault42's own
+// signer and checked the header it produced carried no jku/x5u/x5c/jwk, which
+// no caller can influence and which stays true however permissive the verifier
+// becomes. The requirement is about INBOUND tokens: an attacker who can name
+// the key source picks the key. So the token is forged here with the dangerous
+// header present and a valid signature over it, and ParseAndValidate has to
+// refuse it. A clean token is parsed first so a verifier that refuses
+// everything cannot pass either.
 func TestASVS_V3_5_3_RejectDangerousHeaders(t *testing.T) {
-	// V3.5.3: Verify that JWTs reject dangerous headers.
-	// SignToken explicitly removes jku, x5u, x5c, jwk from headers.
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
+	keyFunc := func(_ *vjwt.Token) (any, error) { return &key.PublicKey, nil }
 
-	tokenStr, _ := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
+	claims := &vaultcrypto.VaultClaims{
 		RegisteredClaims: vjwt.RegisteredClaims{
 			Subject: "u1", Issuer: "test", Audience: vjwt.ClaimStrings{"test"},
 			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
 			IssuedAt:  vjwt.NewNumericDate(time.Now()),
 		},
-	}, key, kid)
+	}
 
-	// Parse the token header to verify no dangerous headers
-	parts := strings.SplitN(tokenStr, ".", 3)
-	headerJSON, _ := base64.RawURLEncoding.DecodeString(parts[0])
-	header := string(headerJSON)
+	clean, err := vjwt.SignRS256WithHeader(map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}, claims, key)
+	if err != nil {
+		t.Fatalf("V3.5.3: signing the control token failed: %v", err)
+	}
+	if _, err := vaultcrypto.ParseAndValidate(clean, keyFunc, "test", "test"); err != nil {
+		t.Fatalf("V3.5.3: a token with no dangerous header was rejected, so every refusal below "+
+			"would prove nothing: %v", err)
+	}
 
-	for _, dangerous := range []string{"jku", "x5u", "x5c", "jwk"} {
-		if strings.Contains(header, dangerous) {
-			t.Fatalf("V3.5.3: Signed token contains dangerous header %q", dangerous)
-		}
+	for _, dangerous := range []struct {
+		name  string
+		value any
+	}{
+		{"jku", "https://attacker.example/jwks.json"},
+		{"x5u", "https://attacker.example/cert.pem"},
+		{"x5c", []any{"MIIB-attacker-chain"}},
+		{"jwk", map[string]any{"kty": "RSA", "n": "attacker-modulus", "e": "AQAB"}},
+	} {
+		t.Run(dangerous.name, func(t *testing.T) {
+			forged, err := vjwt.SignRS256WithHeader(
+				map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid, dangerous.name: dangerous.value},
+				claims, key)
+			if err != nil {
+				t.Fatalf("V3.5.3: signing a token carrying %q failed: %v", dangerous.name, err)
+			}
+			if _, err := vaultcrypto.ParseAndValidate(forged, keyFunc, "test", "test"); err == nil {
+				t.Fatalf("V3.5.3: an inbound token carrying the %q header was accepted; the caller "+
+					"chose the verification key", dangerous.name)
+			} else if !strings.Contains(err.Error(), dangerous.name) {
+				t.Fatalf("V3.5.3: the token carrying %q was rejected for some other reason (%v), so "+
+					"this does not show the header is what refused it", dangerous.name, err)
+			}
+		})
 	}
 }
 

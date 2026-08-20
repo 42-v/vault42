@@ -11,41 +11,18 @@ import (
 	vjwt "github.com/42-v/vault42/internal/jwt"
 )
 
-// TestJWTEdge_EmptyToken tests that empty string tokens are rejected.
-func TestJWTEdge_EmptyToken(t *testing.T) {
-	key, _ := setupTestKeys(t)
-	_, err := ParseAndValidate("", keyFunc(key), testIssuer, testAudience)
-	if err == nil {
-		t.Fatal("Empty token should be rejected")
-	}
-}
-
-// TestJWTEdge_SingleDot tests that a token with only one dot is rejected.
-func TestJWTEdge_SingleDot(t *testing.T) {
-	key, _ := setupTestKeys(t)
-	_, err := ParseAndValidate("header.payload", keyFunc(key), testIssuer, testAudience)
-	if err == nil {
-		t.Fatal("Token with only 2 parts should be rejected")
-	}
-}
-
-// TestJWTEdge_ThreeDots tests that a token with too many dots is rejected.
-func TestJWTEdge_ThreeDots(t *testing.T) {
-	key, _ := setupTestKeys(t)
-	_, err := ParseAndValidate("a.b.c.d", keyFunc(key), testIssuer, testAudience)
-	if err == nil {
-		t.Fatal("Token with 4 parts should be rejected")
-	}
-}
-
-// TestJWTEdge_EmptyParts tests tokens with empty header/payload/signature parts.
-func TestJWTEdge_EmptyParts(t *testing.T) {
+// Anything that is not three non-empty base64url segments must be refused
+// before a key is ever consulted.
+func TestJWTEdge_MalformedShape(t *testing.T) {
 	key, _ := setupTestKeys(t)
 
-	empties := []struct {
+	malformed := []struct {
 		name  string
 		token string
 	}{
+		{"empty_token", ""},
+		{"two_parts", "header.payload"},
+		{"four_parts", "a.b.c.d"},
 		{"empty_header", ".eyJzdWIiOiIxMjMifQ.sig"},
 		{"empty_payload", "eyJhbGciOiJSUzI1NiJ9..sig"},
 		{"empty_signature", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ."},
@@ -53,11 +30,11 @@ func TestJWTEdge_EmptyParts(t *testing.T) {
 		{"dots_only", "..."},
 	}
 
-	for _, tc := range empties {
+	for _, tc := range malformed {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseAndValidate(tc.token, keyFunc(key), testIssuer, testAudience)
 			if err == nil {
-				t.Fatalf("Token %q should be rejected", tc.name)
+				t.Fatalf("ParseAndValidate(%q) accepted a token that is not a well-formed JWT", tc.token)
 			}
 		})
 	}

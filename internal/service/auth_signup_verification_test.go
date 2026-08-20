@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/model"
@@ -72,9 +73,39 @@ func TestAnUndeliveredVerificationMailWithoutAnAuditSinkDoesNotCrash(t *testing.
 // service wired without a mailer has to be a no-op there rather than a nil
 // dereference: the deployment that disables email still registers users.
 func TestSignupVerificationIsSkippedWhenNoMailerIsConfigured(t *testing.T) {
-	svc := &AuthService{cache: &mocks.MockCache{}}
-	svc.SendSignupVerification(context.Background(), "user@example.com", "user-123", "")
+	// Half a mailer is still no mailer: with only a cache there is nothing to
+	// send with, and with only a sender the token has nowhere to live, so a
+	// mailed link would be dead on arrival. Neither half may be used alone.
+	t.Run("no email sender", func(t *testing.T) {
+		var cached bool
+		svc := &AuthService{cache: &mocks.MockCache{
+			SetFn: func(context.Context, string, string, time.Duration) error {
+				cached = true
+				return nil
+			},
+		}}
+		svc.SendSignupVerification(context.Background(), "user@example.com", "user-123", "")
 
-	svc = &AuthService{emailSender: &mocks.MockEmailSender{}}
-	svc.SendSignupVerification(context.Background(), "user@example.com", "user-123", "")
+		time.Sleep(100 * time.Millisecond) // the send is fire-and-forget
+		if cached {
+			t.Error("a verification token was stored for a link that can never be sent")
+		}
+	})
+
+	t.Run("no cache", func(t *testing.T) {
+		sent := make(chan struct{}, 1)
+		svc := &AuthService{emailSender: &mocks.MockEmailSender{
+			SendFn: func(context.Context, string, string, string, string) error {
+				sent <- struct{}{}
+				return nil
+			},
+		}}
+		svc.SendSignupVerification(context.Background(), "user@example.com", "user-123", "")
+
+		select {
+		case <-sent:
+			t.Error("a verification email was sent with no cache to store the token in")
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
 }

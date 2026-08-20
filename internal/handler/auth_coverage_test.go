@@ -39,37 +39,41 @@ func TestRegister_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestRegister_EmptyEmail(t *testing.T) {
-	h, _ := newTestAuthHandler(t, &mocks.MockUserRepo{})
+// The two halves of an incomplete registration leave by different branches: an
+// address that fails sanitize.Email is invalid_input, an empty password is only
+// ever too short. Pinning the code keeps a rejected address from being reported
+// to the caller as a password-length problem.
+func TestRegister_IncompleteCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		email     string
+		password  string
+		wantError string
+	}{
+		{"empty email", "", "aVeryStrongP@ssw0rd!", "invalid_input"},
+		{"empty password", "user@example.com", "", "password_too_short"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newTestAuthHandler(t, &mocks.MockUserRepo{})
 
-	body := jsonBody(t, map[string]string{
-		"email":    "",
-		"password": "aVeryStrongP@ssw0rd!",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", body)
-	rec := httptest.NewRecorder()
+			body := jsonBody(t, map[string]string{
+				"email":    tc.email,
+				"password": tc.password,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/auth/register", body)
+			rec := httptest.NewRecorder()
 
-	h.Register(rec, req)
+			h.Register(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestRegister_EmptyPassword(t *testing.T) {
-	h, _ := newTestAuthHandler(t, &mocks.MockUserRepo{})
-
-	body := jsonBody(t, map[string]string{
-		"email":    "user@example.com",
-		"password": "",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", body)
-	rec := httptest.NewRecorder()
-
-	h.Register(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != tc.wantError {
+				t.Fatalf("error = %q, want %q", result["error"], tc.wantError)
+			}
+		})
 	}
 }
 

@@ -125,52 +125,59 @@ func TestClientToken_FormBody_Success(t *testing.T) {
 	}
 }
 
-func TestClientToken_MissingCredentials(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
+// Every way of presenting credentials the endpoint cannot read ends in the same
+// 401 with the same code, and ends there before the client is looked up: a half
+// credential that reached the repository would turn the client table into an
+// existence oracle, and the answer would differ by timing even if the body did
+// not.
+func TestClientToken_UnusableCredentialsAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		authHeader string
+		form       string
+	}{
+		{name: "nothing presented"},
+		{name: "basic auth without a colon", authHeader: "Basic " + base64.StdEncoding.EncodeToString([]byte("onlyid"))},
+		{name: "basic auth that is not base64", authHeader: "Basic !!!invalid-base64!!!"},
+		{name: "bearer instead of basic", authHeader: "Bearer some-bearer-token"},
+		{name: "form body with only client_id", form: "client_id=some-id"},
+		{name: "form body with only client_secret", form: "client_secret=some-secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookups := 0
+			h := newTestClientHandler(t, &mocks.MockClientRepo{
+				GetByIDFn: func(context.Context, string) (*model.Client, error) {
+					lookups++
+					return nil, nil
+				},
+			})
 
-	req := httptest.NewRequest(http.MethodPost, "/client/token", nil)
-	rec := httptest.NewRecorder()
+			var req *http.Request
+			if tc.form != "" {
+				req = httptest.NewRequest(http.MethodPost, "/client/token", strings.NewReader(tc.form))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else {
+				req = httptest.NewRequest(http.MethodPost, "/client/token", nil)
+			}
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			rec := httptest.NewRecorder()
 
-	h.Token(rec, req)
+			h.Token(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "invalid_client_credentials" {
-		t.Fatalf("expected error=invalid_client_credentials, got %q", result["error"])
-	}
-}
-
-func TestClientToken_InvalidBasicAuth_NoParts(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
-
-	req := httptest.NewRequest(http.MethodPost, "/client/token", nil)
-	// Set Basic auth with only one part (no colon)
-	creds := base64.StdEncoding.EncodeToString([]byte("onlyid"))
-	req.Header.Set("Authorization", "Basic "+creds)
-	rec := httptest.NewRecorder()
-
-	h.Token(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestClientToken_InvalidBasicAuth_BadBase64(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
-
-	req := httptest.NewRequest(http.MethodPost, "/client/token", nil)
-	req.Header.Set("Authorization", "Basic !!!invalid-base64!!!")
-	rec := httptest.NewRecorder()
-
-	h.Token(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != "invalid_client_credentials" {
+				t.Fatalf("error = %q, want %q", result["error"], "invalid_client_credentials")
+			}
+			if lookups != 0 {
+				t.Fatalf("the client was looked up %d time(s) for credentials that could not be read", lookups)
+			}
+		})
 	}
 }
 
@@ -405,50 +412,6 @@ func TestClientToken_NilAuditLog(t *testing.T) {
 	}
 }
 
-func TestClientToken_OnlyClientID_NoSecret_InFormBody(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
-
-	body := strings.NewReader("client_id=some-id")
-	req := httptest.NewRequest(http.MethodPost, "/client/token", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-
-	h.Token(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestClientToken_OnlySecret_NoID_InFormBody(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
-
-	body := strings.NewReader("client_secret=some-secret")
-	req := httptest.NewRequest(http.MethodPost, "/client/token", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-
-	h.Token(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestClientToken_BearerAuth_NotAccepted(t *testing.T) {
-	h := newTestClientHandler(t, &mocks.MockClientRepo{})
-
-	req := httptest.NewRequest(http.MethodPost, "/client/token", nil)
-	req.Header.Set("Authorization", "Bearer some-bearer-token")
-	rec := httptest.NewRecorder()
-
-	h.Token(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestClientToken_BasicAuth_WithColonInPassword(t *testing.T) {
 	clientSecret := "secret:with:colons"
 	client := makeClientWithSecret(t, "client-colon", "colontest", clientSecret, "frontend", []string{"read"}, true)
@@ -481,83 +444,77 @@ func TestClientToken_BasicAuth_WithColonInPassword(t *testing.T) {
 // parseClientCredentials tests
 // ---------------------------------------------------------------------------
 
-func TestParseClientCredentials_BasicAuth(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	creds := base64.StdEncoding.EncodeToString([]byte("myid:mysecret"))
-	req.Header.Set("Authorization", "Basic "+creds)
+func TestParseClientCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// basic is the raw "id:secret" pair, base64-encoded into an
+		// Authorization header when set.
+		basic      string
+		form       string
+		wantID     string
+		wantSecret string
+		wantOK     bool
+	}{
+		{
+			name:       "basic auth",
+			basic:      "myid:mysecret",
+			wantID:     "myid",
+			wantSecret: "mysecret",
+			wantOK:     true,
+		},
+		{
+			name:       "form body",
+			form:       "client_id=formid&client_secret=formsecret",
+			wantID:     "formid",
+			wantSecret: "formsecret",
+			wantOK:     true,
+		},
+		{
+			name: "neither",
+		},
+		{
+			// Basic auth wins so a form body cannot smuggle a second identity
+			// past the one the header authenticated.
+			name:       "basic auth alongside a form body",
+			basic:      "basicid:basicsecret",
+			form:       "client_id=formid&client_secret=formsecret",
+			wantID:     "basicid",
+			wantSecret: "basicsecret",
+			wantOK:     true,
+		},
+		{
+			// RFC 7617: the password may contain colons, so only the first one
+			// separates the pair.
+			name:       "colons inside the secret",
+			basic:      "myid:secret:with:colons",
+			wantID:     "myid",
+			wantSecret: "secret:with:colons",
+			wantOK:     true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req *http.Request
+			if tc.form != "" {
+				req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.form))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else {
+				req = httptest.NewRequest(http.MethodPost, "/", nil)
+			}
+			if tc.basic != "" {
+				req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(tc.basic)))
+			}
 
-	id, secret, ok := parseClientCredentials(req)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if id != "myid" {
-		t.Fatalf("expected id=myid, got %q", id)
-	}
-	if secret != "mysecret" {
-		t.Fatalf("expected secret=mysecret, got %q", secret)
-	}
-}
+			id, secret, ok := parseClientCredentials(req)
 
-func TestParseClientCredentials_FormBody(t *testing.T) {
-	body := strings.NewReader("client_id=formid&client_secret=formsecret")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	id, secret, ok := parseClientCredentials(req)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if id != "formid" {
-		t.Fatalf("expected id=formid, got %q", id)
-	}
-	if secret != "formsecret" {
-		t.Fatalf("expected secret=formsecret, got %q", secret)
-	}
-}
-
-func TestParseClientCredentials_Empty(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-
-	_, _, ok := parseClientCredentials(req)
-	if ok {
-		t.Fatal("expected ok=false for empty request")
-	}
-}
-
-func TestParseClientCredentials_BasicAuthPriority(t *testing.T) {
-	// When both Basic auth and form body are present, Basic auth should take priority
-	body := strings.NewReader("client_id=formid&client_secret=formsecret")
-	req := httptest.NewRequest(http.MethodPost, "/", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	creds := base64.StdEncoding.EncodeToString([]byte("basicid:basicsecret"))
-	req.Header.Set("Authorization", "Basic "+creds)
-
-	id, secret, ok := parseClientCredentials(req)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if id != "basicid" {
-		t.Fatalf("expected id=basicid (from Basic auth), got %q", id)
-	}
-	if secret != "basicsecret" {
-		t.Fatalf("expected secret=basicsecret (from Basic auth), got %q", secret)
-	}
-}
-
-func TestParseClientCredentials_ColonInSecret(t *testing.T) {
-	// RFC 7617: password may contain colons
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	creds := base64.StdEncoding.EncodeToString([]byte("myid:secret:with:colons"))
-	req.Header.Set("Authorization", "Basic "+creds)
-
-	id, secret, ok := parseClientCredentials(req)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if id != "myid" {
-		t.Fatalf("expected id=myid, got %q", id)
-	}
-	if secret != "secret:with:colons" {
-		t.Fatalf("expected secret=secret:with:colons, got %q", secret)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if id != tc.wantID {
+				t.Errorf("id = %q, want %q", id, tc.wantID)
+			}
+			if secret != tc.wantSecret {
+				t.Errorf("secret = %q, want %q", secret, tc.wantSecret)
+			}
+		})
 	}
 }

@@ -30,6 +30,9 @@ func guardCall(t *testing.T, name string, fn http.HandlerFunc, method, target, b
 	})
 }
 
+// Every assertion for this test lives in guardCall: the handlers are built with
+// nil dependencies, so any of them that failed to reject would panic on the
+// service it never should have reached.
 func TestAuthenticatedHandlers_RejectWithoutClaims(t *testing.T) {
 	account := &AccountHandler{}
 	guardCall(t, "AccountHandler.Delete", account.Delete, http.MethodDelete, "/user/account", `{"password":"x"}`)

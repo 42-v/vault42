@@ -261,51 +261,30 @@ func TestTemplateRendererRelativeOverrideDirIsSkipped(t *testing.T) {
 	}
 }
 
-func TestTemplateRendererRejectsUnsafeScript(t *testing.T) {
-	dir := t.TempDir()
-	unsafe := `{{define "subject"}}Bad{{end}}
-{{define "content"}}<script>alert('xss')</script>{{end}}`
-	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
+// An override that fails validation must take the renderer down with it rather
+// than be loaded and mailed: construction is the only place the operator finds
+// out. Each case is refused at construction, not at render.
+func TestTemplateRendererRejectsUnsafeOverrides(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"script tag", `<script>alert('xss')</script>`},
+		{"event handler", `<img onerror="alert(1)" src="x">`},
+		{"iframe", `<iframe src="https://evil.com"></iframe>`},
+		{"call directive", `{{call .URL}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			unsafe := `{{define "subject"}}Bad{{end}}` + "\n" +
+				`{{define "content"}}` + tc.content + `{{end}}`
+			os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
 
-	_, err := NewTemplateRenderer(dir)
-	if err == nil {
-		t.Error("should reject template with <script> tag")
-	}
-}
-
-func TestTemplateRendererRejectsUnsafeEventHandler(t *testing.T) {
-	dir := t.TempDir()
-	unsafe := `{{define "subject"}}Bad{{end}}
-{{define "content"}}<img onerror="alert(1)" src="x">{{end}}`
-	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
-
-	_, err := NewTemplateRenderer(dir)
-	if err == nil {
-		t.Error("should reject template with event handlers")
-	}
-}
-
-func TestTemplateRendererRejectsUnsafeIframe(t *testing.T) {
-	dir := t.TempDir()
-	unsafe := `{{define "subject"}}Bad{{end}}
-{{define "content"}}<iframe src="https://evil.com"></iframe>{{end}}`
-	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
-
-	_, err := NewTemplateRenderer(dir)
-	if err == nil {
-		t.Error("should reject template with <iframe>")
-	}
-}
-
-func TestTemplateRendererRejectsCallDirective(t *testing.T) {
-	dir := t.TempDir()
-	unsafe := `{{define "subject"}}Bad{{end}}
-{{define "content"}}{{call .URL}}{{end}}`
-	os.WriteFile(filepath.Join(dir, "verification.html"), []byte(unsafe), 0o644)
-
-	_, err := NewTemplateRenderer(dir)
-	if err == nil {
-		t.Error("should reject template with {{call}}")
+			_, err := NewTemplateRenderer(dir)
+			if err == nil {
+				t.Fatalf("NewTemplateRenderer accepted an override carrying %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), "unsafe template") {
+				t.Errorf("err = %v, want the override refused as unsafe", err)
+			}
+		})
 	}
 }
 

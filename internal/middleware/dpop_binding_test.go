@@ -229,6 +229,9 @@ func TestABoundTokenIsRefusedWithNoProof(t *testing.T) {
 	if reached {
 		t.Fatal("a sender-constrained token was accepted with no proof")
 	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
 	if body := rec.Body.String(); !contains(body, "dpop_proof_required") {
 		t.Errorf("body = %q, want dpop_proof_required", body)
 	}

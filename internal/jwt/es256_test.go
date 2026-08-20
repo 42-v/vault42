@@ -29,13 +29,19 @@ func signES256ASN1(t *testing.T, msg string, key *ecdsa.PrivateKey) []byte {
 	return sig
 }
 
+// signES256ASN1 produces the ASN.1 DER encoding, which is one of the two
+// signature shapes VerifyES256 has to accept; TestES256_RawRS_Format covers the
+// raw R||S one a JWS carries. A second DER test stood below this one and was
+// this test again with a different message literal, so it is gone; it is not
+// named here because a comment naming a test that does not exist is what the
+// gate-liveness check refuses.
 func TestES256_Verify(t *testing.T) {
 	key := mustGenECKey(t)
 	msg := "header.payload"
 	sig := signES256ASN1(t, msg, key)
 
 	if err := VerifyES256(msg, sig, &key.PublicKey); err != nil {
-		t.Fatalf("verify: %v", err)
+		t.Fatalf("verify ASN.1 DER: %v", err)
 	}
 }
 
@@ -92,17 +98,6 @@ func TestES256_RawRS_Format(t *testing.T) {
 
 	if err := VerifyES256(msg, rawSig, &key.PublicKey); err != nil {
 		t.Fatalf("verify raw R||S: %v", err)
-	}
-}
-
-func TestES256_ASN1DER_Format(t *testing.T) {
-	key := mustGenECKey(t)
-	msg := "test.data"
-	sig := signES256ASN1(t, msg, key)
-
-	// ASN1 DER should work directly
-	if err := VerifyES256(msg, sig, &key.PublicKey); err != nil {
-		t.Fatalf("verify ASN1 DER: %v", err)
 	}
 }
 

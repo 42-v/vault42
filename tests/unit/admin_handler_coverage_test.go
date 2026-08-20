@@ -83,26 +83,25 @@ func TestAdminHandler_RevokeKey_503WhenNoKeystore(t *testing.T) {
 	}
 }
 
-func TestAdminHandler_ListUsers_EmptyQueryReturnsEmpty(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().ListUsers, http.MethodGet, "/admin/users", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestAdminHandler_ListUsers_UUIDQuery(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().ListUsers, http.MethodGet,
-		"/admin/users?q=00000000-0000-0000-0000-000000000001", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestAdminHandler_ListUsers_EmailQuery(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().ListUsers, http.MethodGet,
-		"/admin/users?q=test@example.com", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+// ListUsers reads ?q= and branches on the shape it finds. The row names are the
+// branch each query is here to reach; the status is the same 200 for all of
+// them, which is why the query has to stay legible rather than being folded
+// into one "search works" case.
+func TestAdminHandler_ListUsers_QueryShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{name: "no query", url: "/admin/users"},
+		{name: "a UUID", url: "/admin/users?q=00000000-0000-0000-0000-000000000001"},
+		{name: "an email address", url: "/admin/users?q=test@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := runHandler(adminHandlerEnv().ListUsers, http.MethodGet, tc.url, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s answered %d, want 200: %s", tc.url, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -431,45 +430,34 @@ func sessionAuthGuard(sessions *mockAdminSessionRepo, admins *mockAdminUserRepo)
 	}))
 }
 
-func TestSessionAuth_MissingHeader401(t *testing.T) {
-	h := sessionAuthGuard(newMockAdminSessionRepo(), newMockAdminUserRepo())
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/status", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-}
-
-func TestSessionAuth_NonBearer401(t *testing.T) {
-	h := sessionAuthGuard(newMockAdminSessionRepo(), newMockAdminUserRepo())
-	r := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
-	r.Header.Set("Authorization", "Basic xyz")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-}
-
-func TestSessionAuth_OversizeToken401(t *testing.T) {
-	h := sessionAuthGuard(newMockAdminSessionRepo(), newMockAdminUserRepo())
-	r := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
-	r.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 300))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-}
-
-func TestSessionAuth_UnknownToken401(t *testing.T) {
-	h := sessionAuthGuard(newMockAdminSessionRepo(), newMockAdminUserRepo())
-	r := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
-	r.Header.Set("Authorization", "Bearer not-a-real-token")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
+// Four ways an Authorization header fails to name a live admin session. They
+// take different paths through the guard -- absent, wrong scheme, refused on
+// length before any lookup, and looked up and not found -- and all four have to
+// end at 401, because a guard that answered 400 or 404 to any of them would be
+// telling an unauthenticated caller which one it was.
+func TestSessionAuth_UnauthenticatedRequestsAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// header is the Authorization value; empty means the header is absent.
+		header string
+	}{
+		{name: "no Authorization header"},
+		{name: "a scheme other than Bearer", header: "Basic xyz"},
+		{name: "a token past the length bound", header: "Bearer " + strings.Repeat("a", 300)},
+		{name: "a well-formed token no session matches", header: "Bearer not-a-real-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := sessionAuthGuard(newMockAdminSessionRepo(), newMockAdminUserRepo())
+			r := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+			if tc.header != "" {
+				r.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s answered %d, want 401", tc.name, rec.Code)
+			}
+		})
 	}
 }
 

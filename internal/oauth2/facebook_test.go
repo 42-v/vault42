@@ -30,9 +30,10 @@ func TestFacebookName(t *testing.T) {
 	}
 }
 
-func TestFacebookImplementsProvider(t *testing.T) {
-	var _ Provider = (*FacebookProvider)(nil)
-}
+// Compile-time conformance. This was a test function whose body was this line,
+// so it ran, asserted nothing, and reported the same result whether or not the
+// package still compiled -- the compiler had already decided by then.
+var _ Provider = (*FacebookProvider)(nil)
 
 func TestFacebookAuthURL(t *testing.T) {
 	tests := []struct {

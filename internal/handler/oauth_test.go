@@ -237,92 +237,51 @@ func TestOAuth_Authorize_NilAuditLog(t *testing.T) {
 // Callback tests
 // ---------------------------------------------------------------------------
 
-func TestOAuth_Callback_UnknownProvider(t *testing.T) {
-	providers := map[string]oauth2.Provider{
-		"google": &mockProvider{name: "google"},
-	}
+// The callback refuses these before it talks to the provider or the cache, and
+// each refusal has to keep its own code: a state the server never signed and a
+// state that is simply absent are different failures, and collapsing them would
+// hide a broken signature check behind a missing-parameter message. None of them
+// may redirect either, since a redirect off an unvalidated callback is where an
+// open redirect would live.
+func TestOAuth_Callback_RefusalsBeforeTheExchange(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		provider  string
+		query     string
+		wantError string
+	}{
+		{"provider is not configured", "facebook", "", "unknown_provider"},
+		{"provider reported a failure", "google", "?error=access_denied&error_description=user+denied", "provider_denied"},
+		{"no state at all", "google", "", "missing_state"},
+		{"state carries no signature", "google", "?state=no-dots-in-state", "invalid_state"},
+		{"state signature does not verify", "google", "?state=google.nonce.12345.badsignature", "invalid_state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			providers := map[string]oauth2.Provider{
+				"google": &mockProvider{name: "google"},
+			}
 
-	h := newTestOAuthHandler(t, providers)
+			h := newTestOAuthHandler(t, providers)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/facebook", nil)
-	req.AddCookie(testOAuthCookie())
-	req.SetPathValue("provider", "facebook")
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/"+tc.provider+tc.query, nil)
+			req.AddCookie(testOAuthCookie())
+			req.SetPathValue("provider", tc.provider)
+			rec := httptest.NewRecorder()
 
-	h.Callback(rec, req)
+			h.Callback(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "unknown_provider" {
-		t.Fatalf("expected error=unknown_provider, got %q", result["error"])
-	}
-}
-
-func TestOAuth_Callback_MissingState(t *testing.T) {
-	providers := map[string]oauth2.Provider{
-		"google": &mockProvider{name: "google"},
-	}
-
-	h := newTestOAuthHandler(t, providers)
-
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google", nil)
-	req.AddCookie(testOAuthCookie())
-	req.SetPathValue("provider", "google")
-	rec := httptest.NewRecorder()
-
-	h.Callback(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "missing_state" {
-		t.Fatalf("expected error=missing_state, got %q", result["error"])
-	}
-}
-
-func TestOAuth_Callback_InvalidState_NoSignature(t *testing.T) {
-	providers := map[string]oauth2.Provider{
-		"google": &mockProvider{name: "google"},
-	}
-
-	h := newTestOAuthHandler(t, providers)
-
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=no-dots-in-state", nil)
-	req.AddCookie(testOAuthCookie())
-	req.SetPathValue("provider", "google")
-	rec := httptest.NewRecorder()
-
-	h.Callback(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestOAuth_Callback_InvalidState_BadHMAC(t *testing.T) {
-	providers := map[string]oauth2.Provider{
-		"google": &mockProvider{name: "google"},
-	}
-
-	h := newTestOAuthHandler(t, providers)
-
-	// State with dots but bad HMAC signature
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?state=google.nonce.12345.badsignature", nil)
-	req.AddCookie(testOAuthCookie())
-	req.SetPathValue("provider", "google")
-	rec := httptest.NewRecorder()
-
-	h.Callback(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != tc.wantError {
+				t.Fatalf("error = %q, want %q", result["error"], tc.wantError)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("a refused callback redirected to %q", loc)
+			}
+		})
 	}
 }
 
@@ -1149,35 +1108,6 @@ func TestOAuth_Callback_CrossProviderStateRejected(t *testing.T) {
 	decodeResponse(t, rec, &result)
 	if result["error"] != "invalid_state" {
 		t.Fatalf("cross-provider: expected error=invalid_state, got %q", result["error"])
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Provider error response test
-// ---------------------------------------------------------------------------
-
-func TestOAuth_Callback_ProviderError(t *testing.T) {
-	providers := map[string]oauth2.Provider{
-		"google": &mockProvider{name: "google"},
-	}
-
-	h := newTestOAuthHandler(t, providers)
-
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth2/callback/google?error=access_denied&error_description=user+denied", nil)
-	req.AddCookie(testOAuthCookie())
-	req.SetPathValue("provider", "google")
-	rec := httptest.NewRecorder()
-
-	h.Callback(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "provider_denied" {
-		t.Fatalf("expected error=provider_denied, got %q", result["error"])
 	}
 }
 

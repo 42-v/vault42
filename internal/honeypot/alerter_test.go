@@ -3,6 +3,9 @@ package honeypot
 import (
 	"context"
 	"testing"
+
+	"github.com/42-v/vault42/internal/audit"
+	"github.com/42-v/vault42/internal/model"
 )
 
 // The honeypot alerter fires on a trap-account login — the clearest signal there is that
@@ -10,14 +13,31 @@ import (
 // design and must never take the request path down with it: a malformed webhook URL is an
 // operator typo in an env var, and the correct response is a log line, not a panic in the
 // middle of an attack.
+// What makes the typo survivable is that it never reaches http.NewRequest: the
+// scheme gate drops it at construction, so Alert takes the audit-only path. The
+// trigger still has to be recorded, because that row is the only evidence the
+// trap fired and it must not depend on the operator having spelled the webhook
+// correctly.
 func TestAlerter_MalformedWebhookURLDoesNotPanic(t *testing.T) {
-	a := NewAlerter("://not-a-url", []string{"trap@example.com"}, nil)
+	var entries []*model.AuditEntry
+	a := NewAlerter("://not-a-url", []string{"trap@example.com"}, apAuditSpy(&entries))
+
+	if a.webhookURL != "" {
+		t.Fatalf("webhookURL = %q, want it dropped at construction", a.webhookURL)
+	}
 
 	// Must not panic and must not block.
 	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "203.0.113.1",
 	})
+
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want the trap trigger recorded exactly once", len(entries))
+	}
+	if entries[0].EventType != audit.HoneypotTrigger {
+		t.Errorf("audit event type = %q, want %q", entries[0].EventType, audit.HoneypotTrigger)
+	}
 }
 
 // With no webhook configured the alerter is inert, which is the default. It still has to

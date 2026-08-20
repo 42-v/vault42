@@ -238,21 +238,32 @@ func TestMigrationAppliedNoneSkipped(t *testing.T) {
 // These test the error formatting without a real DB connection.
 // ---------------------------------------------------------------------------
 
-func TestRunWithNonexistentDir(t *testing.T) {
-	// Call Run with nil conn and a nonexistent directory.
-	// Run will fail at the first conn.Exec (create table) with nil pointer.
-	// This test verifies we can't accidentally pass a nil conn.
-	defer func() {
-		// Either a panic (caught here) or an error return is acceptable —
-		// the test only verifies the function doesn't crash unexpectedly.
-		_ = recover()
-	}()
-
-	err := Run(context.TODO(), nil, "/nonexistent/path")
-	if err == nil {
-		// If it returned without error with nil conn, that would be a problem.
-		// But the function will fail at conn.Exec, so either panic or error is expected.
-		t.Log("Run returned nil error with nil conn (unexpected but not critical)")
+// Run takes the advisory lock before it looks at anything else, so a nil
+// connection stops it at the first statement and the directory never matters --
+// both spellings below are here to say that, not because the paths differ.
+//
+// What must not happen is a nil return. cmd/vault treats a nil from Run as
+// "schema is at head" and goes on to serve, so a runner that reported success
+// against a connection it never had would put the API in front of an unmigrated
+// database. Failing loudly is the only safe answer, and these two used to
+// recover the panic and log instead of asserting it.
+func TestRunWithoutAConnectionNeverReportsSuccess(t *testing.T) {
+	for _, dir := range []struct{ name, path string }{
+		{"nonexistent directory", "/nonexistent/path"},
+		{"readable empty directory", ""},
+	} {
+		t.Run(dir.name, func(t *testing.T) {
+			path := dir.path
+			if path == "" {
+				path = t.TempDir()
+			}
+			defer func() {
+				if recover() == nil {
+					t.Error("Run returned with a nil connection; cmd/vault reads that as a migrated schema and starts serving")
+				}
+			}()
+			_ = Run(context.TODO(), nil, path)
+		})
 	}
 }
 
@@ -470,28 +481,28 @@ CREATE INDEX idx_users_email ON auth.users (email);`
 	}
 }
 
-// TestMigrationNameEdges_Table covers additional edges.
+// Edge-case filenames against the same suffix predicate Run selects with. Like
+// its siblings above it checks the predicate rather than Run itself, which is
+// what keeps it runnable without a database; tests/integration covers Run. The
+// want column used to be read into the blank identifier, so every case passed,
+// including the ones the predicate would have got wrong.
 func TestMigrationNameEdges_Table(t *testing.T) {
 	tests := []struct {
-		f   string
-		has bool
+		f    string
+		want bool
 	}{
 		{"001.sql", true},
 		{"notsql.txt", false},
 		{"", false},
 		{"abc_001_init.sql", true},
+		{"migration.SQL", false},
+		{"001.sql.bak", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.f, func(t *testing.T) {
-			_ = strings.HasSuffix(tt.f, ".sql")
-			_ = tt.has
+			if got := strings.HasSuffix(tt.f, ".sql"); got != tt.want {
+				t.Errorf("selecting %q as a migration = %v, want %v", tt.f, got, tt.want)
+			}
 		})
 	}
-}
-
-// TestMigrate_Run_NilConn_CoversStatements calls Run to cover early statements in migrate.Run
-// (panics inside recovered; pure logic paths already replicated in other tests).
-func TestMigrate_Run_NilConn_CoversStatements(t *testing.T) {
-	defer func() { _ = recover() }()
-	_ = Run(context.Background(), nil, t.TempDir())
 }

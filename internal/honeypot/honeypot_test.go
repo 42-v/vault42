@@ -73,8 +73,13 @@ func TestAlertSendsWebhook(t *testing.T) {
 	}
 }
 
+// The default deployment wires in neither a webhook nor an audit logger, so
+// every nil-guard in Alert has to hold at once. Completing without panicking is
+// the whole assertion here: with both collaborators absent there is nothing
+// observable to check, and what would break is a nil dereference on the request
+// path. TestAlert_AuditOnlyNoWebhook covers the audit-only variant, which does
+// leave something behind to assert on.
 func TestAlertNoWebhookURL(t *testing.T) {
-	// Should not panic with empty webhook URL
 	a := NewAlerter("", nil, nil)
 	a.Alert(context.Background(), Event{
 		EventType: "test",

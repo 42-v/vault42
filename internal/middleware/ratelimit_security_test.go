@@ -1,8 +1,6 @@
 package middleware
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -41,70 +39,24 @@ func TestStripPortIPv6(t *testing.T) {
 	}
 }
 
-func TestClientIPNoTrustedProxies(t *testing.T) {
-	// When no trusted proxies are configured, XFF should be ignored
-	SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "1.2.3.4:1234"
-	req.Header.Set("X-Forwarded-For", "10.0.0.1, 192.168.1.1")
-
-	ip := ClientIP(req)
-	if ip != "1.2.3.4" {
-		t.Errorf("ClientIP should return RemoteAddr when no proxies configured, got %q", ip)
-	}
-}
-
-func TestClientIPTrustedProxy(t *testing.T) {
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "10.0.0.1:1234"
-	req.Header.Set("X-Forwarded-For", "203.0.113.50, 10.0.0.2")
-
-	ip := ClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("ClientIP should return first non-trusted IP from XFF, got %q", ip)
-	}
-}
-
-func TestClientIPUntrustedDirectConnection(t *testing.T) {
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "203.0.113.50:1234" // Not a trusted proxy
-	req.Header.Set("X-Forwarded-For", "10.0.0.1")
-
-	ip := ClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("ClientIP should return RemoteAddr when remote is not trusted, got %q", ip)
-	}
-}
-
-func TestClientIPIPv6RemoteAddr(t *testing.T) {
-	SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "[::1]:8080"
-
-	ip := ClientIP(req)
-	if ip != "::1" {
-		t.Errorf("ClientIP should handle IPv6 RemoteAddr, got %q", ip)
-	}
-}
+// The ClientIP cases that used to sit here are rows in TestClientIP
+// (ratelimit_coverage_test.go), which is the one table for address resolution.
 
 func TestSetTrustedProxiesInvalidEntry(t *testing.T) {
-	// Should not panic on invalid entries, just skip them
 	SetTrustedProxies([]string{"invalid-not-a-cidr", "10.0.0.0/8"})
+	defer SetTrustedProxies(nil)
 
-	// Only the valid entry should be stored
-	if len(loadTrustedProxyCIDRs()) != 1 {
-		t.Errorf("expected 1 trusted proxy CIDR, got %d", len(loadTrustedProxyCIDRs()))
+	if n := len(loadTrustedProxyCIDRs()); n != 1 {
+		t.Errorf("stored %d trusted proxy CIDRs, want 1: the unparseable entry should be dropped", n)
 	}
-
-	SetTrustedProxies(nil)
+	if !isTrustedProxy("10.1.2.3") {
+		t.Error("the valid entry stopped working because an unparseable neighbor was in the list")
+	}
+	// A parse failure that widened the list instead of dropping the entry would
+	// make every peer a trusted proxy, which is leftmost XFF trust for anyone.
+	if isTrustedProxy("203.0.113.1") {
+		t.Error("an address outside the one valid CIDR is trusted, so the invalid entry was not dropped")
+	}
 }
 
 func TestSetTrustedProxiesBareIPv6(t *testing.T) {

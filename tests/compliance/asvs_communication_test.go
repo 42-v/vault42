@@ -211,7 +211,7 @@ func TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride(t *testing.T) {
 // rather than what it negotiates.
 //
 // So this asserts the wiring end to end and in the direction that fails when it
-// is undone. The behaviour -- a real handshake, a refusal to downgrade against a
+// is undone. The behavior -- a real handshake, a refusal to downgrade against a
 // plaintext server, a refusal without the issuing CA -- is held by the tests in
 // internal/redis and internal/cache, which drive a TLS listener rather than
 // reading source. What is left for a structural gate is the part those cannot

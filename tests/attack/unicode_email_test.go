@@ -1,6 +1,7 @@
 package attack
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/42-v/vault42/internal/sanitize"
@@ -91,58 +92,81 @@ func TestUnicodeEmail_ConsistentValidation(t *testing.T) {
 	}
 }
 
-// TestUnicodeEmail_RTLOverride verifies that right-to-left override characters
-// in email addresses are handled safely.
+// TestUnicodeEmail_RTLOverride pins what the validator does with bidi controls.
+//
+// sanitize.Email validates, it does not normalize (the reasoning is on
+// TestUnicodeEmail_HomoglyphAttacks above), and net/mail.ParseAddress treats a
+// bidi control as ordinary atext, so every payload here is accepted as an
+// address in its own right. That is safe for authentication because the stored
+// bytes stay distinct from the address being imitated, and the lookup key is
+// strings.ToLower(strings.TrimSpace(email)) with no further folding. Both
+// halves are asserted below.
+//
+// The test used to log a warning and pass either way, so the one change that
+// would actually merge two accounts, folding these onto the plain address,
+// would have gone through green. Rendering is a separate problem: whatever
+// displays an address has to neutralize the controls itself.
 func TestUnicodeEmail_RTLOverride(t *testing.T) {
 	rtlPayloads := []struct {
-		name  string
-		email string
+		name       string
+		email      string
+		wantAccept bool // must match the validator exactly
 	}{
-		{"RTL override in local", "admin\u202eevil@example.com"},
-		{"RTL override in domain", "admin@example\u202e.com"},
-		{"RTL embedding", "admin\u202bevil@example.com"},
-		{"LTR override", "admin\u202devil@example.com"},
-		{"RTL mark", "admin\u200f@example.com"},
-		{"LTR mark", "admin\u200e@example.com"},
+		{"RTL override in local", "admin\u202eevil@example.com", true},
+		{"RTL override in domain", "admin@example\u202e.com", true},
+		{"RTL embedding", "admin\u202bevil@example.com", true},
+		{"LTR override", "admin\u202devil@example.com", true},
+		{"RTL mark", "admin\u200f@example.com", true},
+		{"LTR mark", "admin\u200e@example.com", true},
 	}
 
 	for _, tc := range rtlPayloads {
 		t.Run(tc.name, func(t *testing.T) {
-			valid := sanitize.Email(tc.email)
-			if valid {
-				t.Logf("WARNING: Email with RTL/bidi control char accepted: %q — ensure display is safe", tc.email)
-			}
-			// Either accept or reject is fine — the test verifies no panic
+			assertEmailStaysDistinct(t, tc.email, tc.wantAccept)
 		})
 	}
 }
 
-// TestUnicodeEmail_ZeroWidthChars verifies that zero-width characters in
-// email addresses don't create visually identical but distinct addresses.
+// TestUnicodeEmail_ZeroWidthChars pins the same contract for the invisible
+// characters, the ones that make a spoofed address indistinguishable on screen
+// from admin@example.com. They are accepted, and they do not fold onto the
+// address they imitate, which is what keeps the two accounts apart.
 func TestUnicodeEmail_ZeroWidthChars(t *testing.T) {
 	cases := []struct {
-		name  string
-		email string
+		name       string
+		email      string
+		wantAccept bool
 	}{
-		{"zero-width space", "adm\u200bin@example.com"},
-		{"zero-width joiner", "adm\u200din@example.com"},
-		{"zero-width non-joiner", "adm\u200cin@example.com"},
-		{"word joiner", "adm\u2060in@example.com"},
-		{"soft hyphen", "adm\u00adin@example.com"},
+		{"zero-width space", "adm\u200bin@example.com", true},
+		{"zero-width joiner", "adm\u200din@example.com", true},
+		{"zero-width non-joiner", "adm\u200cin@example.com", true},
+		{"word joiner", "adm\u2060in@example.com", true},
+		{"soft hyphen", "adm\u00adin@example.com", true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			valid := sanitize.Email(tc.email)
-			if valid {
-				// Accepted — verify it would not match "admin@example.com" in storage
-				// (byte-level comparison ensures distinctness)
-				t.Logf("Email with zero-width char accepted: %q — byte-level comparison prevents collision", tc.email)
-			} else {
-				t.Logf("Email with zero-width char rejected: %q (stricter validation)", tc.email)
-			}
-			// No panic is the minimum requirement
+			assertEmailStaysDistinct(t, tc.email, tc.wantAccept)
 		})
+	}
+}
+
+// assertEmailStaysDistinct checks the validator's verdict against the recorded
+// one and, for an accepted address, that it does not collapse onto the plain
+// address under the only normalization the login path applies.
+func assertEmailStaysDistinct(t *testing.T, email string, wantAccept bool) {
+	t.Helper()
+	const plain = "admin@example.com"
+
+	valid := sanitize.Email(email)
+	if valid != wantAccept {
+		t.Fatalf("sanitize.Email(%q) = %v, want %v", email, valid, wantAccept)
+	}
+	if !valid {
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(email)) == plain {
+		t.Errorf("%q folds onto %q under the lookup key, so the two accounts would collide", email, plain)
 	}
 }
 

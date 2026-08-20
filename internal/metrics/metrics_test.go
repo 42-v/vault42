@@ -281,9 +281,19 @@ func TestNewCollector_AndHandler_Edge(t *testing.T) {
 	}
 }
 
+// The three accessors NewCollector takes are required wiring, unlike the ones
+// SetHIBPShed and the other setters install: those read through gaugeOrZero and
+// report zero when absent, which is the right answer for a counter nobody wired.
+// It is the wrong answer for these three. A fabricated vault_argon2_active 0 is
+// indistinguishable from an idle hasher, so a collector built without them has
+// to fail the scrape rather than publish a number that means nothing.
 func TestCollector_NilAccessors_Recovered(t *testing.T) {
 	c := NewCollector(nil, nil, nil)
-	defer func() { _ = recover() }()
+	defer func() {
+		if recover() == nil {
+			t.Error("the scrape completed with no argon2 accessors wired; a zero here reads as an idle hasher")
+		}
+	}()
 	rec := httptest.NewRecorder()
 	c.Handler()(rec, httptest.NewRequest("GET", "/", nil))
 }

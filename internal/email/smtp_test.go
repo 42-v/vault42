@@ -76,6 +76,9 @@ func TestNewSMTPSenderReturnsNonNil(t *testing.T) {
 	}
 }
 
+// The assertion here is the assignment itself: if *SMTPSender ever stops
+// satisfying Sender the package no longer builds, so there is nothing to check
+// at run time.
 func TestNewSMTPSenderImplementsSenderInterface(t *testing.T) {
 	var _ Sender = (*SMTPSender)(nil)
 }
@@ -154,25 +157,32 @@ func TestBuildMIMEMessageMultipartAlternative(t *testing.T) {
 	}
 }
 
-func TestBuildMIMEMessageTextPart(t *testing.T) {
-	msg := buildMIMEMessage("s@e.com", "r@e.com", "Sub", "<b>html</b>", "plain text body here")
-	if !strings.Contains(msg, "Content-Type: text/plain; charset=utf-8") {
-		t.Error("missing text/plain content type")
-	}
-	// The body is base64-encoded (Content-Transfer-Encoding: base64), so it must
-	// appear encoded, not verbatim.
-	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("plain text body here"))) {
-		t.Error("missing base64-encoded text body content")
-	}
-}
+// Both alternative parts carry their own content type, and both bodies are
+// base64-encoded (Content-Transfer-Encoding: base64), so each must appear
+// encoded rather than verbatim.
+func TestBuildMIMEMessageParts(t *testing.T) {
+	const (
+		html = "<h1>Hello World</h1>"
+		text = "plain text body here"
+	)
+	msg := buildMIMEMessage("s@e.com", "r@e.com", "Sub", html, text)
 
-func TestBuildMIMEMessageHTMLPart(t *testing.T) {
-	msg := buildMIMEMessage("s@e.com", "r@e.com", "Sub", "<h1>Hello World</h1>", "text")
-	if !strings.Contains(msg, "Content-Type: text/html; charset=utf-8") {
-		t.Error("missing text/html content type")
-	}
-	if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte("<h1>Hello World</h1>"))) {
-		t.Error("missing base64-encoded HTML body content")
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        string
+	}{
+		{"text part", "Content-Type: text/plain; charset=utf-8", text},
+		{"html part", "Content-Type: text/html; charset=utf-8", html},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(msg, tc.contentType) {
+				t.Errorf("message has no %q header", tc.contentType)
+			}
+			if !strings.Contains(msg, base64.StdEncoding.EncodeToString([]byte(tc.body))) {
+				t.Errorf("message does not carry %q base64-encoded", tc.body)
+			}
+		})
 	}
 }
 
@@ -456,45 +466,48 @@ func TestSendMessageContainsSubject(t *testing.T) {
 	}
 }
 
-func TestSendMessageContainsHTMLBody(t *testing.T) {
+// Both bodies travel base64-encoded on the wire (Content-Transfer-Encoding:
+// base64), so neither appears verbatim in the DATA the server received.
+func TestSendMessageContainsBothBodies(t *testing.T) {
+	const (
+		html = "<h1>Hello HTML</h1>"
+		text = "Plain text content"
+	)
 	srv := newMockSMTPServer(t)
 	defer srv.close()
 
 	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
-	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<h1>Hello HTML</h1>", "text")
+	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", html, text)
 
 	msgs := srv.messages()
 	if len(msgs) < 1 {
 		t.Fatal("no messages received")
 	}
-	if !strings.Contains(msgs[0].data, base64.StdEncoding.EncodeToString([]byte("<h1>Hello HTML</h1>"))) {
-		t.Error("message data should contain the base64-encoded HTML body")
+	for _, tc := range []struct{ name, body string }{
+		{"html body", html},
+		{"text body", text},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(msgs[0].data, base64.StdEncoding.EncodeToString([]byte(tc.body))) {
+				t.Errorf("message data does not carry %q base64-encoded", tc.body)
+			}
+		})
 	}
 }
 
-func TestSendMessageContainsTextBody(t *testing.T) {
-	srv := newMockSMTPServer(t)
-	defer srv.close()
-
-	sender := NewSMTPSender("127.0.0.1", srv.port(), "", "", "s@t.com", AllowPlaintext(true))
-	sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "Plain text content")
-
-	msgs := srv.messages()
-	if len(msgs) < 1 {
-		t.Fatal("no messages received")
-	}
-	// The body is base64-encoded on the wire (Content-Transfer-Encoding: base64).
-	if !strings.Contains(msgs[0].data, base64.StdEncoding.EncodeToString([]byte("Plain text content"))) {
-		t.Error("message data should contain the base64-encoded text body")
-	}
-}
-
-func TestSendConnectionRefused(t *testing.T) {
-	// Use a port that is not listening
-	sender := NewSMTPSender("127.0.0.1", "1", "", "", "s@t.com")
-	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
-	if err == nil {
-		t.Error("Send should fail when connection is refused")
+// A server that cannot be reached must surface as an error rather than as a
+// message the caller believes was delivered, whichever way the dial fails.
+func TestSendUnreachableServer(t *testing.T) {
+	for _, tc := range []struct{ name, host, port string }{
+		{"connection refused", "127.0.0.1", "1"},
+		{"host does not resolve", "nonexistent.invalid.host.example", "587"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := NewSMTPSender(tc.host, tc.port, "", "", "s@t.com")
+			if err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t"); err == nil {
+				t.Errorf("Send to %s:%s returned nil; an undelivered message reported success", tc.host, tc.port)
+			}
+		})
 	}
 }
 
@@ -577,30 +590,9 @@ func TestSendMultipleMessages(t *testing.T) {
 	}
 }
 
-func TestSendInvalidHost(t *testing.T) {
-	sender := NewSMTPSender("nonexistent.invalid.host.example", "587", "", "", "s@t.com")
-	err := sender.Send(context.Background(), Address{}, "r@t.com", "Sub", "<b>h</b>", "t")
-	if err == nil {
-		t.Error("Send should fail with invalid host")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Template rendering additional tests (~5 subtests)
 // ---------------------------------------------------------------------------
-
-func TestRenderTemplateUnknownTemplate(t *testing.T) {
-	subject, html, text := currentRenderer().Render("nonexistent_template", TemplateData{AppName: "TestApp"})
-	if subject != "Notification" {
-		t.Errorf("unknown template subject = %q, want Notification", subject)
-	}
-	if !strings.Contains(html, "TestApp") {
-		t.Error("unknown template HTML should contain app name")
-	}
-	if !strings.Contains(text, "TestApp") {
-		t.Error("unknown template text should contain app name")
-	}
-}
 
 func TestRenderTemplate2FASetup(t *testing.T) {
 	subject, html, text := currentRenderer().Render(Template2FASetup, TemplateData{

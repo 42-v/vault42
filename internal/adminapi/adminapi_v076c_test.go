@@ -114,11 +114,18 @@ func TestLockUser_CustomDuration200(t *testing.T) {
 	}
 }
 
+// An unparseable duration falls back to the 24h default rather than refusing.
+// The fallback is the part worth pinning: a 200 on its own would also come back
+// from a handler that locked for no time at all, which is an operator who
+// believes an account is locked and an account that is not.
 func TestLockUser_InvalidDurationFallsBackTo200(t *testing.T) {
-	users := &mocks.MockUserRepo{LockUntilFn: func(_ context.Context, _ string, _ time.Time) error {
+	var gotUntil time.Time
+	users := &mocks.MockUserRepo{LockUntilFn: func(_ context.Context, _ string, until time.Time) error {
+		gotUntil = until
 		return nil
 	}}
 	h := newTestHandler(nil, users, nil, nil)
+	before := time.Now()
 	// Garbage duration → ParseDuration fails → 24h default, still locks OK.
 	r := withActor(jsonReq(http.MethodPost, "/admin/users/u1/lock", `{"duration":"not-a-duration"}`))
 	r.SetPathValue("id", "u1")
@@ -126,6 +133,11 @@ func TestLockUser_InvalidDurationFallsBackTo200(t *testing.T) {
 	h.LockUser(rec, r)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// Bounded on both sides, so a fallback that quietly became a week, or zero,
+	// fails here instead of passing as "some time in the future".
+	if gotUntil.Before(before.Add(23*time.Hour)) || gotUntil.After(before.Add(25*time.Hour)) {
+		t.Errorf("lock until = %v, want roughly 24h after %v", gotUntil, before)
 	}
 }
 

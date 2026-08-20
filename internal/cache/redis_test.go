@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -27,6 +26,7 @@ func TestNewRedisCache_ErrorCases(t *testing.T) {
 		{"high_db", "invalid:99999", "", 15},
 		{"with_password", "invalid:99999", "secret", 0},
 		{"with_db", "invalid:99999", "", 5},
+		{"unresolvable_host", "bad:1", "", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,29 +54,42 @@ func TestNewRedisCache_TimeoutBehavior(t *testing.T) {
 	}
 }
 
-func TestRedisCacheStruct_ImplementsInterface(t *testing.T) {
-	// Compile-time check that RedisCache satisfies Cache.
-	var _ Cache = (*RedisCache)(nil)
-}
+// Compile-time conformance. This was a test function whose body was this line,
+// so it ran, asserted nothing, and reported the same result whether or not the
+// package still compiled -- the compiler had already decided by then.
+var _ Cache = (*RedisCache)(nil)
 
-// TestRedisCache_Methods_NilClient covers the redis cache method bodies for coverage (early deref panics recovered).
+// A RedisCache holding no client cannot be built through NewRedisCache, so this
+// is reaching past the constructor to run the method bodies. What it pins is
+// that they fail loudly: a wrapper that swallowed the nil and returned a zero
+// value would hand a rate limiter ("", ErrNotFound) or (0, nil), which reads as
+// "no attempts recorded yet" and admits the request. Close is on the list for
+// the same reason -- it is the one method a caller might expect to tolerate a
+// half-built cache.
 func TestRedisCache_Methods_NilClient(t *testing.T) {
 	rc := &RedisCache{client: (*vredis.Client)(nil)}
 	ctx := context.Background()
-	cases := []func(){
-		func() { _, _ = rc.Get(ctx, "k") },
-		func() { _ = rc.Set(ctx, "k", "v", time.Second) },
-		func() { _ = rc.Delete(ctx, "k") },
-		func() { _, _ = rc.GetAndDelete(ctx, "k") },
-		func() { _, _ = rc.SetIfNotExists(ctx, "k", "v", time.Second) },
-		func() { _, _ = rc.Increment(ctx, "k", time.Second) },
-		func() { _, _ = rc.Exists(ctx, "k") },
-		func() { rc.Close() },
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{"Get", func() { _, _ = rc.Get(ctx, "k") }},
+		{"Set", func() { _ = rc.Set(ctx, "k", "v", time.Second) }},
+		{"Delete", func() { _ = rc.Delete(ctx, "k") }},
+		{"GetAndDelete", func() { _, _ = rc.GetAndDelete(ctx, "k") }},
+		{"SetIfNotExists", func() { _, _ = rc.SetIfNotExists(ctx, "k", "v", time.Second) }},
+		{"Increment", func() { _, _ = rc.Increment(ctx, "k", time.Second) }},
+		{"Exists", func() { _, _ = rc.Exists(ctx, "k") }},
+		{"Close", func() { _ = rc.Close() }},
 	}
-	for i, c := range cases {
-		t.Run(fmt.Sprintf("rc_%d", i), func(t *testing.T) {
-			defer func() { _ = recover() }()
-			c()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s returned a value with no client behind it; a caller cannot tell that from a real answer", tc.name)
+				}
+			}()
+			tc.call()
 		})
 	}
 }

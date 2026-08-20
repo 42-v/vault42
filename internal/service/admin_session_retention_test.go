@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,12 +95,24 @@ func TestAdminSessionRetention_StartSweepsImmediatelyThenStops(t *testing.T) {
 	}
 }
 
+// A sweep that cannot run is invisible otherwise: the loop swallows the error
+// and keeps ticking, so the log line is the only evidence an operator ever gets
+// that expired admin sessions are not being reaped.
 func TestAdminSessionRetention_SweepErrorIsLogged(t *testing.T) {
-	repo := &fakeAdminSessionRepo{deleteErr: errors.New("boom")} // exercises the error log branch
+	var logBuf claimLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	repo := &fakeAdminSessionRepo{deleteErr: errors.New("boom")}
 	r := NewAdminSessionRetention(repo)
 	r.Start(context.Background())
 	waitForSweep(t, repo)
-	r.Stop()
+	r.Stop() // blocks until the loop exits, so the log line is already written
+
+	if got := logBuf.String(); !strings.Contains(got, "admin session retention: sweep failed: boom") {
+		t.Errorf("sweep failure log = %q, want it to name the failing sweep and its cause", got)
+	}
 }
 
 func TestAdminSessionRetention_ContextCancelStopsTheLoop(t *testing.T) {
@@ -116,6 +130,9 @@ func TestAdminSessionRetention_ContextCancelStopsTheLoop(t *testing.T) {
 	r.Stop() // safe after the loop has already exited on ctx cancel
 }
 
+// Reaching the end of this test is the assertion. Stop waits on doneCh, which
+// only the sweep loop closes, so a Stop that did not check whether Start ever
+// ran would block here until the test binary's timeout.
 func TestAdminSessionRetention_StopBeforeStartIsSafe(t *testing.T) {
 	NewAdminSessionRetention(&fakeAdminSessionRepo{}).Stop()
 }

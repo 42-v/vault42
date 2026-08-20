@@ -130,14 +130,21 @@ func TestOversizedJWT(t *testing.T) {
 	for i := range claims.Scopes {
 		claims.Scopes[i] = fmt.Sprintf("scope-%d-with-extra-padding-to-make-it-big-%d", i, i*999)
 	}
-	tokenStr, _ := SignToken(claims, key, kid)
+	tokenStr, err := SignToken(claims, key, kid)
+	if err != nil {
+		t.Fatalf("sign oversized token: %v", err)
+	}
+	// This used to t.Skip. A skip here reports green for exactly the case the
+	// test exists to catch: a signing failure returns the empty string, which is
+	// under the limit, and so did any future rise in MaxJWTSize.
 	if len(tokenStr) <= MaxJWTSize {
-		t.Skip("token not large enough to test")
+		t.Fatalf("test token is %d bytes, not over the %d-byte limit it is supposed to breach",
+			len(tokenStr), MaxJWTSize)
 	}
 
-	_, err := ParseAndValidate(tokenStr, keyFunc(key), testIssuer, testAudience)
+	_, err = ParseAndValidate(tokenStr, keyFunc(key), testIssuer, testAudience)
 	if err == nil {
-		t.Error("oversized JWT should be rejected")
+		t.Fatal("oversized JWT should be rejected")
 	}
 	if !strings.Contains(err.Error(), "maximum size") {
 		t.Errorf("error should mention size: %v", err)

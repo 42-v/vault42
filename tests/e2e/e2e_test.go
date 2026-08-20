@@ -79,6 +79,24 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// skipRateLimited handles a 429 from the deployment under test.
+//
+// A rate-limited endpoint means the request never reached the behavior the test
+// is about, so there is nothing to assert -- but skipping is only the right
+// answer where a skipped run is acceptable, and VAULT_E2E_REQUIRED marks the
+// runs where it is not. Without this the release gate could set the variable,
+// get a reachable server, and still watch these tests skip themselves one by
+// one while the suite reported success.
+func skipRateLimited(t *testing.T, endpoint string) {
+	t.Helper()
+
+	const fix = "deploy with rateLimitEnabled: false for E2E"
+	if os.Getenv("VAULT_E2E_REQUIRED") == "1" {
+		t.Fatalf("%s answered 429, so this test asserted nothing: %s", endpoint, fix)
+	}
+	t.Skipf("skipping: rate limited on %s (%s)", endpoint, fix)
+}
+
 // clearTestState resets rate-limit/lockout counters in Redis and clears Mailpit messages
 // so that previous test runs don't pollute the current run.
 func clearTestState() {
@@ -710,7 +728,7 @@ func TestLoginWrongPassword(t *testing.T) {
 		"email": email, "password": testPassword, "display_name": "Test",
 	})
 	if regStatus == 429 {
-		t.Skip("skipping: rate limited on /auth/register (deploy with rateLimitEnabled: false for E2E)")
+		skipRateLimited(t, "/auth/register")
 	}
 	verifyEmail(t, email)
 
@@ -719,7 +737,7 @@ func TestLoginWrongPassword(t *testing.T) {
 		"email": email, "password": "WrongPassword12345!",
 	})
 	if status == 429 {
-		t.Skip("skipping: rate limited on /auth/login")
+		skipRateLimited(t, "/auth/login")
 	}
 	if status != 401 {
 		t.Fatalf("wrong password status = %d, want 401", status)
@@ -757,7 +775,7 @@ func TestPasswordTooShort(t *testing.T) {
 		"email": email, "password": "short123", "display_name": "Test",
 	})
 	if status == 429 {
-		t.Skip("skipping: rate limited on /auth/register (deploy with rateLimitEnabled: false for E2E)")
+		skipRateLimited(t, "/auth/register")
 	}
 	if status != 400 {
 		t.Fatalf("short password status = %d, want 400, body = %v", status, body)

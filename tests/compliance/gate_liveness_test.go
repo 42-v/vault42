@@ -52,10 +52,6 @@ var failureCalls = map[string]struct{}{
 // not be added without an argument that the runtime, not testing.T, is what
 // fails it. None of these is cited as evidence by the compliance register.
 var assertionFreeByDesign = map[string]string{
-	"TestTOTPAttack_MeasureLengthMismatchTiming": "a measurement. It logs median compare times " +
-		"per input length to show the time tracks the attacker's input rather than the secret. " +
-		"A threshold here would be a timing flake on shared CI, which is a worse gate than none: " +
-		"the timing property itself is asserted by SecureCompare's own tests",
 	"TestKMSAttack_CloseRacesWrapOnRootSecret": "fails through the runtime, not through " +
 		"testing.T: 64 goroutines wrap while Close runs, so the failure it hunts is a panic on a " +
 		"released root secret or a -race report, and both fail the test without an assertion",
@@ -1026,13 +1022,9 @@ var skipsByDesign = map[string]skipRule{
 		reason: "a timing measurement, meaningless under -race and skipped in -short",
 	},
 	"tests/attack/atk_crypto_dpop_totp_test.go:TestTOTPAttack_MeasureLengthMismatchTiming": {
-		reason: "a timing measurement, meaningless under -race and skipped in -short. Also in " +
-			"assertionFreeByDesign, with the argument for why it asserts nothing",
-	},
-	"tests/attack/totp_replay_test.go:TestTOTPWrongCode": {
-		reason: "the wrong-code path is driven with random six-digit codes, and roughly one in a " +
-			"million is the right one. Skipping the coincidence is correct: asserting a rejection " +
-			"on a code that is genuinely valid would be asserting the wrong behavior",
+		reason: "the medians it logs are meaningless under -race and it is skipped in -short. " +
+			"It is no longer assertion-free: it asserts that no candidate compares equal, which " +
+			"is the part that does not flake, and leaves the timings as logs",
 	},
 }
 

@@ -174,8 +174,12 @@ func TestSendImportClaimLink_ThrottledPerAccount(t *testing.T) {
 func TestSendImportClaimLink_FailsClosedWhenReservationErrors(t *testing.T) {
 	svc, o := importPendingService(t)
 
+	// The reservation is reported as TAKEN alongside the error, so the error is
+	// the only thing that can stop the send. With (false, err) the test would
+	// pass just as well against a version that ignored the error and refused on
+	// the bool, which is the version this pins the difference from.
 	o.cache.SetIfNotExistsFn = func(_ context.Context, _, _ string, _ time.Duration) (bool, error) {
-		return false, errors.New("cache down")
+		return true, errors.New("cache down")
 	}
 	sends := make(chan struct{}, 4)
 	o.emailSender.SendFn = func(_ context.Context, _, _, _, _ string) error {

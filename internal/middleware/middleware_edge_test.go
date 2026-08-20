@@ -555,52 +555,5 @@ func TestConfirmed_WithConfirmation(t *testing.T) {
 	}
 }
 
-// ===========================================================================
-// ClientIP edge cases
-// ===========================================================================
-
-// TestClientIP_XFFWithGarbage tests ClientIP with garbage in X-Forwarded-For.
-func TestClientIP_XFFWithGarbage(t *testing.T) {
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "10.0.0.1:1234"
-	req.Header.Set("X-Forwarded-For", "not-a-valid-ip")
-
-	ip := ClientIP(req)
-	// "not-a-valid-ip" is not an IP, so it is discarded rather than returned as
-	// the rightmost non-trusted entry: RemoteAddr is the fallback.
-	if ip != "10.0.0.1" {
-		t.Errorf("ClientIP with garbage XFF = %q, want %q", ip, "10.0.0.1")
-	}
-}
-
-// TestClientIP_EmptyRemoteAddr tests ClientIP with empty RemoteAddr.
-func TestClientIP_EmptyRemoteAddr(t *testing.T) {
-	SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = ""
-
-	ip := ClientIP(req)
-	if ip != "" {
-		t.Errorf("ClientIP with empty RemoteAddr = %q, want empty", ip)
-	}
-}
-
-// TestClientIP_UntrustedProxyDoesNotTrustXFF tests that when the direct
-// connection is not from a trusted proxy, XFF is completely ignored.
-func TestClientIP_UntrustedProxyDoesNotTrustXFF(t *testing.T) {
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "203.0.113.50:1234" // Not trusted
-	req.Header.Set("X-Forwarded-For", "192.168.1.1, 10.0.0.1")
-
-	ip := ClientIP(req)
-	if ip != "203.0.113.50" {
-		t.Errorf("ClientIP = %q, want 203.0.113.50 (should ignore XFF from untrusted source)", ip)
-	}
-}
+// The ClientIP cases that used to close this file are rows in TestClientIP
+// (ratelimit_coverage_test.go), which is the one table for address resolution.

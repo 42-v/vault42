@@ -531,30 +531,37 @@ func TestASVS_V6_2_7_Argon2idMemoryHardness(t *testing.T) {
 	}
 }
 
-func TestASVS_V6_2_7_Argon2idSaltSize(t *testing.T) {
-	// V6.2.7: Salt must be at least 128 bits (16 bytes).
-	hash, _ := vaultcrypto.HashPassword("salt-size-test!")
-	parts := strings.Split(hash, "$")
-
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+// V6.2.7 bounds two fields of the same PHC string: the salt at 128 bits and the
+// derived key at 256. They were two functions that hashed a password, split on
+// "$" and length-checked one field each, differing only in which index and
+// which floor.
+func TestASVS_V6_2_7_Argon2idSaltAndOutputSizes(t *testing.T) {
+	hash, err := vaultcrypto.HashPassword("v6-2-7-field-sizes!")
 	if err != nil {
-		t.Fatalf("V6.2.7: Failed to decode salt: %v", err)
+		t.Fatalf("V6.2.7: HashPassword failed: %v", err)
 	}
-	if len(salt) < 16 {
-		t.Fatalf("V6.2.7: Salt must be >= 128 bits (16 bytes), got %d bytes", len(salt))
-	}
-}
-
-func TestASVS_V6_2_7_Argon2idOutputSize(t *testing.T) {
-	// V6.2.7: Hash output must be at least 256 bits (32 bytes).
-	hash, _ := vaultcrypto.HashPassword("output-size-test!")
 	parts := strings.Split(hash, "$")
-
-	output, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		t.Fatalf("V6.2.7: Failed to decode hash output: %v", err)
+	if len(parts) < 6 {
+		t.Fatalf("V6.2.7: the PHC string has %d fields, so neither size can be read: %q", len(parts), hash)
 	}
-	if len(output) < 32 {
-		t.Fatalf("V6.2.7: Hash output must be >= 256 bits (32 bytes), got %d bytes", len(output))
+
+	for _, tc := range []struct {
+		field    string
+		index    int
+		minBytes int
+	}{
+		{field: "salt", index: 4, minBytes: 16},
+		{field: "derived key", index: 5, minBytes: 32},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			raw, err := base64.RawStdEncoding.DecodeString(parts[tc.index])
+			if err != nil {
+				t.Fatalf("V6.2.7: decoding the %s failed: %v", tc.field, err)
+			}
+			if len(raw) < tc.minBytes {
+				t.Fatalf("V6.2.7: the %s is %d bytes (%d bits), want at least %d bytes (%d bits)",
+					tc.field, len(raw), len(raw)*8, tc.minBytes, tc.minBytes*8)
+			}
+		})
 	}
 }

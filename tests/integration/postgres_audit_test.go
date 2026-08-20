@@ -281,8 +281,11 @@ func TestPostgresAuditRepo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Query all: %v", err)
 		}
+		// The subtests above insert five rows into a fresh schema, so a count
+		// below three is Query losing rows -- which is the defect this subtest
+		// exists to catch. Skipping on it reported green for exactly that.
 		if len(allEntries) < 3 {
-			t.Skip("need at least 3 entries for offset test")
+			t.Fatalf("Query returned %d entries; the fixture inserted 5, so the offset case has nothing left to prove", len(allEntries))
 		}
 
 		offsetEntries, err := repo.Query(ctx, repository.AuditFilter{Limit: 100, Offset: 2})

@@ -112,23 +112,35 @@ func TestDPoPValidProofEC(t *testing.T) {
 	}
 }
 
-func TestDPoPMethodMismatch(t *testing.T) {
-	key, _ := rsa.GenerateKey(crand.Reader, 2048)
-	proof := createDPoPProof(t, key, "POST", "https://vault.example.com/auth/token")
-
-	_, _, err := ValidateDPoPProof(proof, "GET", "https://vault.example.com/auth/token", "")
-	if err == nil {
-		t.Error("HTTP method mismatch should be rejected")
+// A proof commits to one method and one URI. Presenting it anywhere else is the
+// forwarding attack the htm/htu claims exist to stop: a proof captured at one
+// endpoint replayed against another, or against another host entirely.
+func TestDPoPProofIsBoundToOneEndpoint(t *testing.T) {
+	key, err := rsa.GenerateKey(crand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
 	}
-}
 
-func TestDPoPURIMismatch(t *testing.T) {
-	key, _ := rsa.GenerateKey(crand.Reader, 2048)
-	proof := createDPoPProof(t, key, "POST", "https://vault.example.com/auth/token")
+	const (
+		method = "POST"
+		uri    = "https://vault.example.com/auth/token"
+	)
+	proof := createDPoPProof(t, key, method, uri)
 
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://evil.example.com/auth/token", "")
-	if err == nil {
-		t.Error("URI mismatch should be rejected (forwarding attack)")
+	tests := []struct {
+		name        string
+		method, uri string
+	}{
+		{name: "another method on the same URI", method: "GET", uri: uri},
+		{name: "the same path on another host", method: method, uri: "https://evil.example.com/auth/token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, err := ValidateDPoPProof(proof, tt.method, tt.uri, ""); err == nil {
+				t.Errorf("a proof for %s %s validated against %s %s", method, uri, tt.method, tt.uri)
+			}
+		})
 	}
 }
 

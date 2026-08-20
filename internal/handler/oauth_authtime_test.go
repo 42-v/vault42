@@ -28,8 +28,8 @@ const oidcCallbackAuthTimeNonce = "authtime-nonce"
 // The issuer and audience the access token under test is minted for and read
 // back with.
 const (
-	oidcCallbackTokenIssuer   = "https://vault.test"
-	oidcCallbackTokenAudience = "vault42"
+	oidcCallbackIssuer   = "https://vault.test"
+	oidcCallbackAudience = "vault42"
 )
 
 // oidcCallbackClaims drives the OIDC callback to completion against an issuer
@@ -106,7 +106,7 @@ func oidcCallbackClaims(t *testing.T, mutate func(vjwt.MapClaims)) *vaultcrypto.
 	// newTestTokenService picks is not, so the service is built here.
 	signingKey := newTestRSAKey(t)
 	tokenSvc := service.NewTokenService(signingKey, "aabbccdd-11223344",
-		oidcCallbackTokenIssuer, oidcCallbackTokenAudience, 5*time.Minute, 24*time.Hour, 30*24*time.Hour)
+		oidcCallbackIssuer, oidcCallbackAudience, 5*time.Minute, 24*time.Hour, 30*24*time.Hour)
 	auditLog := newTestAuditLogger()
 	hmacSecret := []byte("test-hmac-secret-32-bytes-long!!")
 	authSvc := service.NewAuthService(
@@ -138,7 +138,7 @@ func oidcCallbackClaims(t *testing.T, mutate func(vjwt.MapClaims)) *vaultcrypto.
 	}
 	claims, err := vaultcrypto.ParseAndValidate(accessToken, func(*vjwt.Token) (any, error) {
 		return &signingKey.PublicKey, nil
-	}, oidcCallbackTokenIssuer, oidcCallbackTokenAudience)
+	}, oidcCallbackIssuer, oidcCallbackAudience)
 	if err != nil {
 		t.Fatalf("parse issued access token: %v", err)
 	}

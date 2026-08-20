@@ -155,41 +155,38 @@ func TestFingerprintManipulation_VeryLongComponents(t *testing.T) {
 	}
 }
 
-// TestFingerprintManipulation_SeparatorCollision verifies that the length-prefixed
-// hashing prevents separator collision attacks.
-func TestFingerprintManipulation_SeparatorCollision(t *testing.T) {
-	// If fingerprint used simple concatenation with a separator like "|",
-	// these two inputs could produce the same hash:
-	// IP="a|b" UA="c" vs IP="a" UA="b|c"
-	// Length-prefixed hashing prevents this.
-
-	fp1 := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
-		IP:        "1.2.3.4|5.6.7.8",
-		UserAgent: "Mozilla",
-	})
-	fp2 := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
-		IP:        "1.2.3.4",
-		UserAgent: "5.6.7.8|Mozilla",
-	})
-	if vaultcrypto.CompareFingerprints(fp1, fp2) {
-		t.Fatal("Separator collision attack: different field distributions produced same fingerprint")
+// TestFingerprintManipulation_CrossFieldCollision verifies that the
+// length-prefixed hashing keeps field boundaries unambiguous. Plain
+// concatenation would hash both rows of each pair to the same value: with a
+// separator, an attacker who can put the separator in a field steals bytes from
+// the next one, and without one, "abc"+"def" is indistinguishable from
+// "ab"+"cdef". Either collision would let a session bound to one fingerprint be
+// replayed under another.
+func TestFingerprintManipulation_CrossFieldCollision(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b vaultcrypto.FingerprintInput
+	}{
+		{
+			"separator smuggled into the IP field",
+			vaultcrypto.FingerprintInput{IP: "1.2.3.4|5.6.7.8", UserAgent: "Mozilla"},
+			vaultcrypto.FingerprintInput{IP: "1.2.3.4", UserAgent: "5.6.7.8|Mozilla"},
+		},
+		{
+			"characters moved across the field boundary",
+			vaultcrypto.FingerprintInput{IP: "abc", UserAgent: "def"},
+			vaultcrypto.FingerprintInput{IP: "ab", UserAgent: "cdef"},
+		},
 	}
-}
 
-// TestFingerprintManipulation_FieldBoundaryCollision tests that moving characters
-// between adjacent fields produces different fingerprints.
-func TestFingerprintManipulation_FieldBoundaryCollision(t *testing.T) {
-	// Without length prefixing: concat("abc", "def") == concat("ab", "cdef")
-	fp1 := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
-		IP:        "abc",
-		UserAgent: "def",
-	})
-	fp2 := vaultcrypto.ComputeFingerprint(vaultcrypto.FingerprintInput{
-		IP:        "ab",
-		UserAgent: "cdef",
-	})
-	if vaultcrypto.CompareFingerprints(fp1, fp2) {
-		t.Fatal("Field boundary collision: moving chars between fields produced same fingerprint")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp1 := vaultcrypto.ComputeFingerprint(tc.a)
+			fp2 := vaultcrypto.ComputeFingerprint(tc.b)
+			if vaultcrypto.CompareFingerprints(fp1, fp2) {
+				t.Fatalf("%+v and %+v hashed to the same fingerprint %s", tc.a, tc.b, fp1)
+			}
+		})
 	}
 }
 

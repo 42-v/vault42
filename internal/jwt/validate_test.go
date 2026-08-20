@@ -163,8 +163,14 @@ func TestValidate_EmptyAudience_Expected(t *testing.T) {
 	}
 }
 
+// An empty expectedAud means the caller is not checking audience, so a token
+// that carries one has to pass unexamined. The claims used to carry no aud at
+// all, which made this a second copy of TestValidate_ValidExpiration: same
+// branch, same outcome, and it would have kept passing if the check had started
+// refusing every audience it was not asked about.
 func TestValidate_NoAudienceRequired(t *testing.T) {
 	claims := RegisteredClaims{
+		Audience:  ClaimStrings{"some-other-api"},
 		ExpiresAt: NewNumericDate(time.Now().Add(time.Hour)),
 	}
 	err := validateClaims(claims, &validationConfig{})

@@ -16,34 +16,47 @@ import (
 	"github.com/42-v/vault42/internal/middleware"
 )
 
-// TestDPoPHostHeaderInjection_SpoofedHostIgnored tests that the DPoP middleware
-// uses the server-configured origin (not r.Host) to construct the validation URI.
-// A spoofed Host header has no effect: the proof is validated against origin + path.
-func TestDPoPHostHeaderInjection_SpoofedHostIgnored(t *testing.T) {
+// TestDPoPHostHeaderInjection_HostHeaderIsIgnored pins the rule the whole file
+// rests on: the middleware builds the validation URI from the configured origin
+// plus the request path, so nothing a client puts in Host can steer it. Each
+// row sends the same valid proof for the configured origin under a different
+// hostile Host, and every one has to reach the handler.
+func TestDPoPHostHeaderInjection_HostHeaderIsIgnored(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
+	proof := makeDPoPProof(t, key, "POST", "https://vault.example.com/auth/token")
 
-	realURI := "https://vault.example.com/auth/token"
-	proof := makeDPoPProof(t, key, "POST", realURI)
+	cases := []struct {
+		name string
+		host string
+	}{
+		{"unrelated host", "evil.com"},
+		{"configured host with a port", "vault.example.com:8443"},
+		{"subdomain of the configured host", "sub.vault.example.com"},
+	}
 
-	called := false
-	handler := middleware.DPoP(nil, "https://vault.example.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			handler := middleware.DPoP(nil, "https://vault.example.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+			}))
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
-	req.Host = "evil.com"
-	req.TLS = &tls.ConnectionState{}
-	req.Header.Set("DPoP", proof)
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
+			req.Host = tc.host
+			req.TLS = &tls.ConnectionState{}
+			req.Header.Set("DPoP", proof)
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
-	if !called {
-		t.Fatal("Handler should be called: DPoP uses configured origin, not Host header")
+			if !called {
+				t.Fatalf("Host %q reached the middleware and stopped the request with %d; DPoP validates against the configured origin, not Host", tc.host, rec.Code)
+			}
+		})
 	}
 }
 
@@ -75,35 +88,6 @@ func TestDPoPHostHeaderInjection_CorrectHostAccepted(t *testing.T) {
 
 	if !called {
 		t.Fatal("Handler should be called when DPoP proof matches request URI")
-	}
-}
-
-// TestDPoPHostHeaderInjection_PortMismatchInHostIgnored verifies that the
-// DPoP middleware ignores r.Host (including port) and uses the configured origin.
-func TestDPoPHostHeaderInjection_PortMismatchInHostIgnored(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	proof := makeDPoPProof(t, key, "POST", "https://vault.example.com/auth/token")
-
-	called := false
-	handler := middleware.DPoP(nil, "https://vault.example.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
-	req.Host = "vault.example.com:8443"
-	req.TLS = &tls.ConnectionState{}
-	req.Header.Set("DPoP", proof)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if !called {
-		t.Fatal("Handler should be called: DPoP uses configured origin, Host port is irrelevant")
 	}
 }
 
@@ -190,36 +174,6 @@ func TestDPoPHostHeaderInjection_SchemeFromOriginNotTLS(t *testing.T) {
 
 	if !called {
 		t.Fatal("Handler should be called: DPoP uses origin scheme, not request TLS state")
-	}
-}
-
-// TestDPoPHostHeaderInjection_SubdomainInHostIgnored verifies that the DPoP
-// middleware ignores r.Host and uses the configured origin, so a subdomain
-// in the Host header has no effect on DPoP validation.
-func TestDPoPHostHeaderInjection_SubdomainInHostIgnored(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	proof := makeDPoPProof(t, key, "POST", "https://vault.example.com/auth/token")
-
-	called := false
-	handler := middleware.DPoP(nil, "https://vault.example.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodPost, "/auth/token", nil)
-	req.Host = "sub.vault.example.com"
-	req.TLS = &tls.ConnectionState{}
-	req.Header.Set("DPoP", proof)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if !called {
-		t.Fatal("Handler should be called: DPoP uses configured origin, Host header is irrelevant")
 	}
 }
 

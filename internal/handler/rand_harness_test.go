@@ -40,6 +40,8 @@ var _ io.Reader = handlerRandSwitch{}
 // handlerRandReal is the genuine entropy source, captured before it is replaced.
 var handlerRandReal io.Reader
 
+// TestMain asserts nothing of its own by design: it is the package harness, and
+// the result it reports is whatever m.Run made of the tests.
 func TestMain(m *testing.M) {
 	handlerRandReal = rand.Reader
 	handlerRandCurrent.Store(&handlerRandSource{reader: handlerRandReal})

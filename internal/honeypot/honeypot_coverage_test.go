@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/42-v/vault42/internal/audit"
+	"github.com/42-v/vault42/internal/model"
 )
 
 // ---------------------------------------------------------------------------
@@ -86,43 +89,56 @@ func TestErr_EmptyMessage(t *testing.T) {
 // Alert with webhook error status
 // ---------------------------------------------------------------------------
 
-func TestAlert_WebhookReturnsErrorStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
+// An error status back from the webhook is the operator's endpoint being broken,
+// not the attack going away. The dispatch still happened, so it still owes an
+// audit row carrying the status the endpoint answered with -- that row is what an
+// operator reads to tell "nobody attacked us" from "the alert channel is down".
+// The status must not propagate: Alert is called from the request path.
+func TestAlert_WebhookErrorStatusIsAuditedNotPropagated(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		event  Event
+	}{
+		{"client error", http.StatusBadRequest, Event{EventType: "trap_login", IP: "10.0.0.1", UserAgent: "test-agent", RiskScore: 80}},
+		{"server error", http.StatusInternalServerError, Event{EventType: "scan_detected", IP: "10.0.0.2", RiskScore: 50}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var posted int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				posted++
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
 
-	a := NewAlerter(srv.URL, nil, nil)
+			var entries []*model.AuditEntry
+			a := NewAlerter(srv.URL, nil, apAuditSpy(&entries))
+			a.Alert(context.Background(), tc.event)
 
-	// Should not panic; the error status is logged but not propagated.
-	a.Alert(context.Background(), Event{
-		EventType: "trap_login",
-		IP:        "10.0.0.1",
-		UserAgent: "test-agent",
-		RiskScore: 80,
-	})
-}
-
-func TestAlert_WebhookReturns500(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	a := NewAlerter(srv.URL, nil, nil)
-
-	// Should not panic.
-	a.Alert(context.Background(), Event{
-		EventType: "scan_detected",
-		IP:        "10.0.0.2",
-		RiskScore: 50,
-	})
+			if posted != 1 {
+				t.Fatalf("webhook posts = %d, want 1", posted)
+			}
+			if len(entries) != 2 {
+				t.Fatalf("audit entries = %d, want the trigger and the dispatch", len(entries))
+			}
+			if entries[1].EventType != audit.HoneypotAlert {
+				t.Errorf("dispatch audit event = %q, want %q", entries[1].EventType, audit.HoneypotAlert)
+			}
+			if got := entries[1].Metadata["webhook_status"]; got != tc.status {
+				t.Errorf("audited webhook_status = %v, want %d", got, tc.status)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Alert with failed webhook connection
 // ---------------------------------------------------------------------------
 
+// A webhook that cannot be reached at all must leave the trigger row and nothing
+// else. The dispatch row is written only after client.Do returns a response, so
+// its absence is what says the alert never left the host -- recording one anyway
+// would tell the operator an alert was delivered when the socket never opened.
 func TestAlert_WebhookConnectionFailed(t *testing.T) {
 	// Use a URL that will fail to connect (closed server).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +147,8 @@ func TestAlert_WebhookConnectionFailed(t *testing.T) {
 	url := srv.URL
 	srv.Close() // Close immediately so the connection fails.
 
-	a := NewAlerter(url, nil, nil)
+	var entries []*model.AuditEntry
+	a := NewAlerter(url, nil, apAuditSpy(&entries))
 
 	// Should not panic; connection errors are logged but not propagated.
 	a.Alert(context.Background(), Event{
@@ -139,10 +156,13 @@ func TestAlert_WebhookConnectionFailed(t *testing.T) {
 		IP:        "10.0.0.3",
 		RiskScore: 90,
 	})
+
+	assertTriggerOnly(t, entries)
 }
 
 func TestAlert_WebhookUnresolvableHost(t *testing.T) {
-	a := NewAlerter("http://this-host-does-not-exist.invalid:9999/webhook", nil, nil)
+	var entries []*model.AuditEntry
+	a := NewAlerter("http://this-host-does-not-exist.invalid:9999/webhook", nil, apAuditSpy(&entries))
 
 	// Should not panic; DNS resolution failure is logged.
 	a.Alert(context.Background(), Event{
@@ -150,58 +170,55 @@ func TestAlert_WebhookUnresolvableHost(t *testing.T) {
 		IP:        "10.0.0.4",
 		RiskScore: 20,
 	})
+
+	assertTriggerOnly(t, entries)
+}
+
+// assertTriggerOnly reports that Alert recorded the trap firing and did not
+// record a webhook dispatch.
+func assertTriggerOnly(t *testing.T, entries []*model.AuditEntry) {
+	t.Helper()
+
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want only the trigger: a dispatch that never reached the endpoint must not be audited as one", len(entries))
+	}
+	if entries[0].EventType != audit.HoneypotTrigger {
+		t.Errorf("audit event type = %q, want %q", entries[0].EventType, audit.HoneypotTrigger)
+	}
 }
 
 // ---------------------------------------------------------------------------
 // NewAlerter with invalid URL scheme
 // ---------------------------------------------------------------------------
 
-func TestNewAlerter_InvalidScheme(t *testing.T) {
-	a := NewAlerter("ftp://example.com/webhook", []string{"trap@test.com"}, nil)
+// The webhook URL arrives from an operator-set env var, so this gate is the only
+// thing between a typo and the process issuing requests to whatever the typo
+// names. Anything that is not http:// or https:// is dropped to empty, which
+// makes Alert audit-only rather than an SSRF primitive an attacker could aim by
+// getting a scheme past the check.
+func TestNewAlerter_OnlyHTTPSchemesSurviveTheWebhookGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, url, want string
+	}{
+		{"ftp is not a transport this process speaks", "ftp://example.com/webhook", ""},
+		{"file:// would read the local disk", "file:///etc/passwd", ""},
+		{"javascript: is not fetchable at all", "javascript:alert(1)", ""},
+		{"https is kept verbatim", "https://hooks.example.com/alert", "https://hooks.example.com/alert"},
+		{"http is kept verbatim", "http://localhost:8080/webhook", "http://localhost:8080/webhook"},
+		{"unset means audit-only", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewAlerter(tc.url, []string{"trap@test.com"}, nil)
 
-	// webhookURL should be sanitized to empty.
-	if a.webhookURL != "" {
-		t.Errorf("webhookURL should be empty for invalid scheme, got %q", a.webhookURL)
-	}
-
-	// Trap users should still work.
-	if !a.IsTrapUser("trap@test.com") {
-		t.Error("trap user should still be configured")
-	}
-}
-
-func TestNewAlerter_FileScheme(t *testing.T) {
-	a := NewAlerter("file:///etc/passwd", nil, nil)
-	if a.webhookURL != "" {
-		t.Errorf("webhookURL should be empty for file:// scheme, got %q", a.webhookURL)
-	}
-}
-
-func TestNewAlerter_JavascriptScheme(t *testing.T) {
-	a := NewAlerter("javascript:alert(1)", nil, nil)
-	if a.webhookURL != "" {
-		t.Errorf("webhookURL should be empty for javascript: scheme, got %q", a.webhookURL)
-	}
-}
-
-func TestNewAlerter_ValidHTTPS(t *testing.T) {
-	a := NewAlerter("https://hooks.example.com/alert", nil, nil)
-	if a.webhookURL != "https://hooks.example.com/alert" {
-		t.Errorf("webhookURL = %q, want https://hooks.example.com/alert", a.webhookURL)
-	}
-}
-
-func TestNewAlerter_ValidHTTP(t *testing.T) {
-	a := NewAlerter("http://localhost:8080/webhook", nil, nil)
-	if a.webhookURL != "http://localhost:8080/webhook" {
-		t.Errorf("webhookURL = %q, want http://localhost:8080/webhook", a.webhookURL)
-	}
-}
-
-func TestNewAlerter_EmptyURL(t *testing.T) {
-	a := NewAlerter("", nil, nil)
-	if a.webhookURL != "" {
-		t.Errorf("webhookURL should be empty, got %q", a.webhookURL)
+			if a.webhookURL != tc.want {
+				t.Errorf("NewAlerter(%q).webhookURL = %q, want %q", tc.url, a.webhookURL, tc.want)
+			}
+			// A rejected URL costs the webhook and nothing else: the trap list is
+			// what decides who gets served the fake session.
+			if !a.IsTrapUser("trap@test.com") {
+				t.Errorf("NewAlerter(%q) lost the trap list along with the URL", tc.url)
+			}
+		})
 	}
 }
 
@@ -275,25 +292,17 @@ func TestCollectHeaders_MultiValueHeader(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Alert without webhook (audit-only path, no webhook URL)
-// ---------------------------------------------------------------------------
-
-func TestAlert_NoWebhook_NoPanic(t *testing.T) {
-	a := NewAlerter("", []string{"trap@test.com"}, nil)
-	a.Alert(context.Background(), Event{
-		EventType: "trap_login",
-		IP:        "192.168.1.1",
-		Email:     "trap@test.com",
-		RiskScore: 100,
-	})
-}
-
-// ---------------------------------------------------------------------------
 // Alert with invalid-scheme alerter (webhook URL was sanitized away)
 // ---------------------------------------------------------------------------
 
+// The scheme gate is only worth anything if Alert then behaves as though no
+// webhook were configured. The dispatch row is written after a response comes
+// back, so exactly one audit entry -- the trigger -- is the evidence that nothing
+// was sent to the ftp:// host the operator (or an attacker who reached the
+// config) wrote down.
 func TestAlert_SanitizedScheme_NoWebhookSent(t *testing.T) {
-	a := NewAlerter("ftp://evil.com/exfil", nil, nil)
+	var entries []*model.AuditEntry
+	a := NewAlerter("ftp://evil.com/exfil", nil, apAuditSpy(&entries))
 
 	// Should not panic and should not attempt to send to ftp://.
 	a.Alert(context.Background(), Event{
@@ -301,4 +310,6 @@ func TestAlert_SanitizedScheme_NoWebhookSent(t *testing.T) {
 		IP:        "10.0.0.5",
 		RiskScore: 10,
 	})
+
+	assertTriggerOnly(t, entries)
 }

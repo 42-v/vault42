@@ -19,43 +19,35 @@ import (
 // ResetRequest edge cases
 // ---------------------------------------------------------------------------
 
-func TestResetRequest_InvalidJSON(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
+// A body with no usable address is the one input ResetRequest answers with an
+// error at all: every well-formed request gets the same neutral 200 so the
+// response is not an enumeration signal.
+func TestResetRequest_RejectsBodyWithoutAnAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"not json at all", "not json"},
+		{"empty email", `{"email":""}`},
+		{"no email field", "{}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", strings.NewReader("not json"))
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
 
-	h.ResetRequest(rec, req)
+			h.ResetRequest(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestResetRequest_EmptyEmail(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
-
-	body := jsonBody(t, map[string]string{"email": ""})
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", body)
-	rec := httptest.NewRecorder()
-
-	h.ResetRequest(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestResetRequest_MissingEmailField(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
-
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset", strings.NewReader("{}"))
-	rec := httptest.NewRecorder()
-
-	h.ResetRequest(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != "invalid_request" {
+				t.Fatalf("error = %q, want %q", result["error"], "invalid_request")
+			}
+		})
 	}
 }
 
@@ -63,56 +55,36 @@ func TestResetRequest_MissingEmailField(t *testing.T) {
 // ResetConfirm edge cases
 // ---------------------------------------------------------------------------
 
-func TestResetConfirm_InvalidJSON(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
+// Both halves of the confirm body are mandatory. The error code is part of the
+// assertion because a missing field that fell through to the token lookup would
+// also answer 400, as invalid_or_expired_token, having burnt a one-shot token on
+// the way.
+func TestResetConfirm_RejectsIncompleteBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"not json at all", "not json"},
+		{"no token", `{"token":"","password":"validpassword12345"}`},
+		{"no password", `{"token":"some-token","password":""}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset/confirm", strings.NewReader("not json"))
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/password/reset/confirm", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
 
-	h.ResetConfirm(rec, req)
+			h.ResetConfirm(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "invalid_request" {
-		t.Fatalf("expected error=invalid_request, got %q", result["error"])
-	}
-}
-
-func TestResetConfirm_MissingToken(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
-
-	body := jsonBody(t, map[string]string{
-		"token":    "",
-		"password": "validpassword12345",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset/confirm", body)
-	rec := httptest.NewRecorder()
-
-	h.ResetConfirm(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestResetConfirm_MissingPassword(t *testing.T) {
-	h := newTestPasswordHandler(t, &mocks.MockUserRepo{}, &mocks.MockPasswordHistoryRepo{})
-
-	body := jsonBody(t, map[string]string{
-		"token":    "some-token",
-		"password": "",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/auth/password/reset/confirm", body)
-	rec := httptest.NewRecorder()
-
-	h.ResetConfirm(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != "invalid_request" {
+				t.Fatalf("error = %q, want %q", result["error"], "invalid_request")
+			}
+		})
 	}
 }
 

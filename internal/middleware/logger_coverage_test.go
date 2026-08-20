@@ -76,12 +76,23 @@ func TestStatusRecorder_Flush_DelegatesToFlusher(t *testing.T) {
 	}
 }
 
+// The assertion here is that the call returns at all: a statusRecorder wrapping
+// a writer with no Flush must swallow the call rather than type-assert its way
+// into a panic, which would turn any flush on a non-flushable writer into a 500
+// from Recovery. The status check afterwards pins the other half, that a
+// swallowed flush does not quietly write a header.
 func TestStatusRecorder_Flush_NoopWithoutFlusher(t *testing.T) {
 	pw := newPlainWriter()
 	rec := &statusRecorder{ResponseWriter: pw, status: 200}
 
-	// Should not panic when the underlying writer does not implement http.Flusher.
 	rec.Flush()
+
+	if pw.statusCode != 0 {
+		t.Errorf("underlying writer got status %d, want none written by a no-op flush", pw.statusCode)
+	}
+	if len(pw.written) != 0 {
+		t.Errorf("underlying writer got %d bytes, want none written by a no-op flush", len(pw.written))
+	}
 }
 
 // ---------------------------------------------------------------------------

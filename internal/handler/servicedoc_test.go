@@ -378,30 +378,30 @@ func TestServiceDocumentHandler_ErrorMapping(t *testing.T) {
 }
 
 // The route prefix is exempt from the global 8 KiB body cap, so the handler has
-// to bound the body itself or the exemption is an unbounded-body hole.
+// to bound the body itself or the exemption is an unbounded-body hole. Both ends
+// of that bound are here: a body past the reader's slack, which the reader
+// itself cuts off, and one just past the configured cap but inside the slack,
+// which only the service can refuse. If those two limits ever disagree, the
+// second case is what says so.
 func TestServiceDocumentHandler_EnforcesItsOwnBodyLimit(t *testing.T) {
-	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
-		cfg.MaxDocumentBytes = 2048
-	})
-	oversize := `{"pad":"` + strings.Repeat("x", 8192) + `"}`
-	rec := httptest.NewRecorder()
-	h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "prefs", "", oversize), svcDocHandlerClientA, nil))
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status %d, want 413 (%s)", rec.Code, rec.Body.String())
-	}
-}
-
-// A document larger than the cap but inside the reader's slack must still be
-// refused by the service, so the two limits cannot disagree.
-func TestServiceDocumentHandler_RefusesDocumentsInsideTheReaderSlack(t *testing.T) {
-	h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
-		cfg.MaxDocumentBytes = 2048
-	})
-	oversize := `{"pad":"` + strings.Repeat("x", 2200) + `"}`
-	rec := httptest.NewRecorder()
-	h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "prefs", "", oversize), svcDocHandlerClientA, nil))
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status %d, want 413 (%s)", rec.Code, rec.Body.String())
+	for _, tc := range []struct {
+		name string
+		pad  int
+	}{
+		{"past the reader's slack", 8192},
+		{"past the cap but inside the reader's slack", 2200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newDocHandler(t, newTestAuditLogger(), func(cfg *service.DocumentConfig) {
+				cfg.MaxDocumentBytes = 2048
+			})
+			oversize := `{"pad":"` + strings.Repeat("x", tc.pad) + `"}`
+			rec := httptest.NewRecorder()
+			h.Put(rec, asClient(docRequest(http.MethodPut, "user-1", "prefs", "", oversize), svcDocHandlerClientA, nil))
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status %d, want 413 (%s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

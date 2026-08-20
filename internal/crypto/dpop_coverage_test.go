@@ -34,149 +34,175 @@ func sha384Hash(data []byte) []byte {
 // ValidateDPoPProof edge cases
 // ---------------------------------------------------------------------------
 
-func TestDPoPProofTooLarge(t *testing.T) {
-	// Proof exceeding DPoPMaxSize (4096 bytes)
-	oversized := strings.Repeat("A", DPoPMaxSize+1)
-	_, _, err := ValidateDPoPProof(oversized, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("oversized proof should be rejected")
+// A proof that is not a JWT at all never reaches the claim checks, so the size
+// guard and the parse failure are pinned on raw strings.
+func TestValidateDPoPProofRejectsNonJWTInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		proof string
+		// wantErr is the message the case must produce; wantNotErr is one it must
+		// not, for the boundary case that has to fail for a different reason.
+		wantErr, wantNotErr string
+	}{
+		{
+			name:    "one byte over the size cap",
+			proof:   strings.Repeat("A", DPoPMaxSize+1),
+			wantErr: "exceeds maximum size",
+		},
+		{
+			// Exactly at the cap is still garbage, but it must be refused for being
+			// unparseable rather than for its length, or the cap is off by one.
+			name:       "exactly at the size cap",
+			proof:      strings.Repeat("A", DPoPMaxSize),
+			wantNotErr: "exceeds maximum size",
+		},
+		{name: "three segments that are not base64 JWT parts", proof: "not.a.jwt"},
+		{name: "the empty string", proof: ""},
 	}
-	if !strings.Contains(err.Error(), "exceeds maximum size") {
-		t.Errorf("error should mention max size, got: %v", err)
-	}
-}
 
-func TestDPoPProofExactMaxSize(t *testing.T) {
-	// A string of exactly DPoPMaxSize — won't be valid JWT but should not be rejected for size
-	exact := strings.Repeat("A", DPoPMaxSize)
-	_, _, err := ValidateDPoPProof(exact, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("invalid JWT should still fail, just not for size")
-	}
-	if strings.Contains(err.Error(), "exceeds maximum size") {
-		t.Error("exactly DPoPMaxSize should not trigger size error")
-	}
-}
-
-func TestDPoPMalformedJWT(t *testing.T) {
-	_, _, err := ValidateDPoPProof("not.a.jwt", "GET", "https://example.com/", "")
-	if err == nil {
-		t.Error("malformed JWT should be rejected")
-	}
-}
-
-func TestDPoPMissingTypHeader(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	// Create a proof without the typ header
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			delete(header, "typ")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := ValidateDPoPProof(tt.proof, "POST", "https://example.com/token", "")
+			if err == nil {
+				t.Fatal("ValidateDPoPProof accepted something that is not a proof")
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want one mentioning %q", err, tt.wantErr)
+			}
+			if tt.wantNotErr != "" && strings.Contains(err.Error(), tt.wantNotErr) {
+				t.Errorf("error = %v, want one NOT mentioning %q", err, tt.wantNotErr)
+			}
 		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("missing typ header should be rejected")
-	}
-	if !strings.Contains(err.Error(), "invalid typ") {
-		t.Errorf("error should mention typ, got: %v", err)
 	}
 }
 
-func TestDPoPWrongTypHeader(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+// Every dimension a DPoP proof commits to gets its own row: the typ and kid and
+// jwk headers, the jti, the iat window, and the htm/htu the proof is bound to.
+// They are separate rows and not one "malformed proof" case because each is a
+// different attack -- a reused jti is a replay, a wrong htu is the proof being
+// forwarded to another endpoint, and a missing jwk is no binding at all.
+//
+// One key for the whole table: the cases are about the claims, and the twelve
+// separate 2048-bit generations this replaced were the slowest thing in the
+// package's unit tests.
+func TestValidateDPoPProofRejectsBadClaims(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			header["typ"] = "JWT" // wrong typ
+	const uri = "https://example.com/token"
+
+	tests := []struct {
+		name string
+		// proofMethod and proofURI are what the proof commits to; method and uri
+		// are what it is presented against. They differ only in the htm/htu rows.
+		proofMethod, proofURI string
+		method, uri           string
+		ath                   string
+		mutate                func(header map[string]any, claims *DPoPClaims)
+		wantErr               string
+	}{
+		{
+			name:    "no typ header",
+			mutate:  func(h map[string]any, _ *DPoPClaims) { delete(h, "typ") },
+			wantErr: "invalid typ",
+		},
+		{
+			// A plain "JWT" typ is what an attacker gets by replaying an ordinary
+			// token in the DPoP header slot.
+			name:    "a typ of JWT rather than dpop+jwt",
+			mutate:  func(h map[string]any, _ *DPoPClaims) { h["typ"] = "JWT" },
+			wantErr: "invalid typ",
+		},
+		{
+			// kid points at a key the server holds; the proof key must be the one
+			// carried in jwk and nothing else.
+			name:    "a kid header",
+			mutate:  func(h map[string]any, _ *DPoPClaims) { h["kid"] = "some-kid" },
+			wantErr: "kid header not allowed",
+		},
+		{
+			name:    "no jwk header",
+			mutate:  func(h map[string]any, _ *DPoPClaims) { delete(h, "jwk") },
+			wantErr: "missing jwk",
+		},
+		{
+			// Without a jti there is nothing to record, so every proof replays.
+			name:    "no jti claim",
+			mutate:  func(_ map[string]any, c *DPoPClaims) { c.ID = "" },
+			wantErr: "missing jti",
+		},
+		{
+			name: "an iat in the future",
+			mutate: func(_ map[string]any, c *DPoPClaims) {
+				c.IssuedAt = vjwt.NewNumericDate(time.Now().Add(10 * time.Minute))
+			},
+			wantErr: "too old or too far in future",
+		},
+		{
+			name: "an iat just past the age limit",
+			mutate: func(_ map[string]any, c *DPoPClaims) {
+				c.IssuedAt = vjwt.NewNumericDate(time.Now().Add(-(DPoPMaxAge + 10*time.Second)))
+			},
+			wantErr: "too old or too far in future",
+		},
+		{
+			name:        "an htm differing only in case",
+			proofMethod: "post",
+		},
+		{
+			name:     "an htu naming another path on the same host",
+			proofURI: "https://example.com/auth/token",
+			uri:      "https://example.com/auth/refresh",
+		},
+		{
+			// http vs https matters: a proof minted for the plaintext endpoint must
+			// not be replayable against the TLS one.
+			name:     "an htu differing only in scheme",
+			proofURI: "http://example.com/token",
+		},
+		{
+			// ath binds the proof to one access token; a mismatch means the proof
+			// was minted for a different token than the one presented.
+			name:    "an ath over a different access token",
+			ath:     "bbbb",
+			mutate:  func(_ map[string]any, c *DPoPClaims) { c.ATH = "aaaa" },
+			wantErr: "ath mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proofMethod, proofURI := tt.proofMethod, tt.proofURI
+			if proofMethod == "" {
+				proofMethod = "POST"
+			}
+			if proofURI == "" {
+				proofURI = uri
+			}
+			method, wantURI := tt.method, tt.uri
+			if method == "" {
+				method = "POST"
+			}
+			if wantURI == "" {
+				wantURI = uri
+			}
+
+			var opts []func(map[string]any, *DPoPClaims)
+			if tt.mutate != nil {
+				opts = append(opts, tt.mutate)
+			}
+			proof := createDPoPProof(t, key, proofMethod, proofURI, opts...)
+
+			_, _, err := ValidateDPoPProof(proof, method, wantURI, tt.ath)
+			if err == nil {
+				t.Fatalf("ValidateDPoPProof accepted a proof with %s", tt.name)
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want one mentioning %q", err, tt.wantErr)
+			}
 		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("wrong typ header should be rejected")
-	}
-}
-
-func TestDPoPKidHeaderRejected(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			header["kid"] = "some-kid"
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("kid header should not be allowed in DPoP proof")
-	}
-	if !strings.Contains(err.Error(), "kid header not allowed") {
-		t.Errorf("error should mention kid, got: %v", err)
-	}
-}
-
-func TestDPoPMissingJWKHeader(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			delete(header, "jwk")
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("missing jwk header should be rejected")
-	}
-	if !strings.Contains(err.Error(), "missing jwk") {
-		t.Errorf("error should mention missing jwk, got: %v", err)
-	}
-}
-
-func TestDPoPMissingJTIClaim(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			claims.ID = ""
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("missing jti should be rejected")
-	}
-	if !strings.Contains(err.Error(), "missing jti") {
-		t.Errorf("error should mention jti, got: %v", err)
-	}
-}
-
-func TestDPoPProofFutureIAT(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			claims.IssuedAt = vjwt.NewNumericDate(time.Now().Add(10 * time.Minute))
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("proof with future iat should be rejected")
-	}
-	if !strings.Contains(err.Error(), "too old or too far in future") {
-		t.Errorf("error should mention age, got: %v", err)
-	}
-}
-
-func TestDPoPProofJustExpired(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	// iat just over 5 minutes ago
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			claims.IssuedAt = vjwt.NewNumericDate(time.Now().Add(-(DPoPMaxAge + 10*time.Second)))
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("proof just over max age should be rejected")
 	}
 }
 
@@ -192,36 +218,6 @@ func TestDPoPProofFreshIAT(t *testing.T) {
 	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
 	if err != nil {
 		t.Errorf("proof within max age should be accepted: %v", err)
-	}
-}
-
-func TestDPoPHTMCaseSensitive(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "post", "https://example.com/token")
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("htm comparison should be case-sensitive")
-	}
-}
-
-func TestDPoPHTUPathMismatch(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/auth/token")
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/auth/refresh", "")
-	if err == nil {
-		t.Error("different path should fail htu check")
-	}
-}
-
-func TestDPoPHTUSchemeMismatch(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "http://example.com/token")
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "")
-	if err == nil {
-		t.Error("scheme mismatch should fail htu check")
 	}
 }
 
@@ -306,23 +302,6 @@ func TestDPoPProofNamingES384IsRejectedByTheAlgorithmAllowlist(t *testing.T) {
 	}
 }
 
-func TestDPoPATHMismatchConstantTime(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	proof := createDPoPProof(t, key, "POST", "https://example.com/token",
-		func(header map[string]any, claims *DPoPClaims) {
-			claims.ATH = "aaaa"
-		})
-
-	_, _, err := ValidateDPoPProof(proof, "POST", "https://example.com/token", "bbbb")
-	if err == nil {
-		t.Error("ath mismatch should be rejected")
-	}
-	if !strings.Contains(err.Error(), "ath mismatch") {
-		t.Errorf("error should mention ath, got: %v", err)
-	}
-}
-
 func TestDPoPValidECProofThumbprintDeterministic(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
@@ -347,6 +326,9 @@ func TestDPoPValidECProofThumbprintDeterministic(t *testing.T) {
 // parseJWKHeader tests
 // ---------------------------------------------------------------------------
 
+// The round-trip variants of these two used to sit further down the file with
+// the same key generation and the same N/E and x/y comparisons; they are the
+// same case, so they are gone rather than duplicated.
 func TestParseJWKHeaderValidRSA(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	jwk := map[string]interface{}{
@@ -404,260 +386,102 @@ func TestParseJWKHeaderValidECP256(t *testing.T) {
 // opposite: parseJWKHeader admits only the curve the algorithms its single
 // caller allows can verify. See dpop_jose_test.go for why.
 
-func TestParseJWKHeaderMissingKTY(t *testing.T) {
-	jwk := map[string]interface{}{
-		"n": base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}),
-		"e": base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+// The jwk header is the attacker's half of a DPoP proof: whatever key it names
+// becomes the key the signature is checked against and the key the thumbprint is
+// taken over. Every malformed shape has to be refused outright, because the one
+// that slips through is a proof carrying a key nobody validated.
+//
+// The specific message is asserted where the parser has one, since these
+// branches sit in a chain and a case that failed for the wrong reason would
+// still return an error and still look green.
+func TestParseJWKHeaderRejectsMalformedKeys(t *testing.T) {
+	b64 := base64.RawURLEncoding.EncodeToString
+	zeros := func(n int) string { return b64(make([]byte, n)) }
+
+	tests := []struct {
+		name    string
+		jwk     interface{}
+		wantErr string
+	}{
+		{name: "not a map at all", jwk: "not-a-map", wantErr: "invalid jwk header format"},
+		{name: "nil", jwk: nil, wantErr: "invalid jwk header format"},
+		{name: "an integer", jwk: 42, wantErr: "invalid jwk header format"},
+		{name: "a slice", jwk: []string{"not", "a", "map"}, wantErr: "invalid jwk header format"},
+		{name: "an empty map", jwk: map[string]interface{}{}, wantErr: "unsupported key type"},
+		{
+			name:    "no kty",
+			jwk:     map[string]interface{}{"n": b64([]byte{1, 2, 3}), "e": b64([]byte{1, 0, 1})},
+			wantErr: "unsupported key type",
+		},
+		{
+			// OKP/Ed25519 is a real JWK type, just not one any DPoP algorithm here
+			// can verify.
+			name:    "a kty outside RSA and EC",
+			jwk:     map[string]interface{}{"kty": "OKP", "crv": "Ed25519", "x": b64([]byte{1, 2, 3})},
+			wantErr: "unsupported key type",
+		},
+		{
+			// Absent n leaves a zero modulus, caught by the 2048-bit minimum.
+			name: "RSA with no modulus",
+			jwk:  map[string]interface{}{"kty": "RSA", "e": b64([]byte{1, 0, 1})},
+		},
+		{
+			// Absent e leaves a zero exponent, and the token modulus is undersized too.
+			name: "RSA with no exponent",
+			jwk:  map[string]interface{}{"kty": "RSA", "n": b64([]byte{1, 2, 3})},
+		},
+		{
+			name:    "RSA with a modulus that is not base64",
+			jwk:     map[string]interface{}{"kty": "RSA", "n": "!!!invalid-base64!!!", "e": b64([]byte{1, 0, 1})},
+			wantErr: "decode n",
+		},
+		{
+			name:    "RSA with an exponent that is not base64",
+			jwk:     map[string]interface{}{"kty": "RSA", "n": b64([]byte{1, 2, 3}), "e": "!!!invalid-base64!!!"},
+			wantErr: "decode e",
+		},
+		{
+			// A zero coordinate is not a point on P-256, so the IsOnCurve check
+			// catches an absent x or y rather than admitting the origin.
+			name: "EC with no x coordinate",
+			jwk:  map[string]interface{}{"kty": "EC", "crv": "P-256", "y": zeros(32)},
+		},
+		{
+			name: "EC with no y coordinate",
+			jwk:  map[string]interface{}{"kty": "EC", "crv": "P-256", "x": zeros(32)},
+		},
+		{
+			name:    "EC with an x coordinate that is not base64",
+			jwk:     map[string]interface{}{"kty": "EC", "crv": "P-256", "x": "!!!bad-base64!!!", "y": zeros(32)},
+			wantErr: "decode x",
+		},
+		{
+			name:    "EC with a y coordinate that is not base64",
+			jwk:     map[string]interface{}{"kty": "EC", "crv": "P-256", "x": zeros(32), "y": "!!!bad-base64!!!"},
+			wantErr: "decode y",
+		},
+		{
+			name:    "EC on a curve no DPoP algorithm can verify",
+			jwk:     map[string]interface{}{"kty": "EC", "crv": "P-521", "x": zeros(66), "y": zeros(66)},
+			wantErr: "unsupported curve",
+		},
+		{
+			name:    "EC with no crv",
+			jwk:     map[string]interface{}{"kty": "EC", "x": zeros(32), "y": zeros(32)},
+			wantErr: "unsupported curve",
+		},
 	}
 
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("missing kty should fail")
-	}
-	if !strings.Contains(err.Error(), "unsupported key type") {
-		t.Errorf("error should mention key type, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderInvalidKTY(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "OKP",
-		"crv": "Ed25519",
-		"x":   base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}),
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("unsupported kty should fail")
-	}
-	if !strings.Contains(err.Error(), "unsupported key type") {
-		t.Errorf("error should mention unsupported, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderRSAMissingN(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "RSA",
-		"e":   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
-	}
-
-	// Missing N produces a zero-bit RSA key, which is now correctly rejected
-	// by the minimum 2048-bit key size validation (H-2 fix).
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("empty N should error due to RSA key size validation")
-	}
-}
-
-func TestParseJWKHeaderRSAMissingE(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "RSA",
-		"n":   base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}),
-	}
-
-	// Missing E produces a zero exponent (and the small N also fails size check),
-	// both of which are now correctly rejected by validation (H-2/H-4 fix).
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("empty E with small N should error due to key validation")
-	}
-}
-
-func TestParseJWKHeaderRSAMalformedN(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "RSA",
-		"n":   "!!!invalid-base64!!!",
-		"e":   base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("malformed N base64 should fail")
-	}
-	if !strings.Contains(err.Error(), "decode n") {
-		t.Errorf("error should mention n decode, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderRSAMalformedE(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "RSA",
-		"n":   base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3}),
-		"e":   "!!!invalid-base64!!!",
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("malformed E base64 should fail")
-	}
-	if !strings.Contains(err.Error(), "decode e") {
-		t.Errorf("error should mention e decode, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderECMissingX(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-256",
-		"y":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-	}
-
-	// Zero X is not on the curve — IsOnCurve check rejects it
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("missing X should error due to invalid EC point")
-	}
-}
-
-func TestParseJWKHeaderECMissingY(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-	}
-
-	// Zero Y is not on the curve — IsOnCurve check rejects it
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("missing Y should error due to invalid EC point")
-	}
-}
-
-func TestParseJWKHeaderECMalformedX(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   "!!!bad-base64!!!",
-		"y":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("malformed X base64 should fail")
-	}
-	if !strings.Contains(err.Error(), "decode x") {
-		t.Errorf("error should mention x decode, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderECMalformedY(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-		"y":   "!!!bad-base64!!!",
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("malformed Y base64 should fail")
-	}
-	if !strings.Contains(err.Error(), "decode y") {
-		t.Errorf("error should mention y decode, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderUnsupportedCurve(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-521",
-		"x":   base64.RawURLEncoding.EncodeToString(make([]byte, 66)),
-		"y":   base64.RawURLEncoding.EncodeToString(make([]byte, 66)),
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("unsupported curve should fail")
-	}
-	if !strings.Contains(err.Error(), "unsupported curve") {
-		t.Errorf("error should mention unsupported curve, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderECMissingCRV(t *testing.T) {
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"x":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-		"y":   base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
-	}
-
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("missing crv should fail")
-	}
-	if !strings.Contains(err.Error(), "unsupported curve") {
-		t.Errorf("error should mention curve, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderNotAMap(t *testing.T) {
-	_, err := parseJWKHeader("not-a-map")
-	if err == nil {
-		t.Error("non-map input should fail")
-	}
-	if !strings.Contains(err.Error(), "invalid jwk header format") {
-		t.Errorf("error should mention format, got: %v", err)
-	}
-}
-
-func TestParseJWKHeaderNilInput(t *testing.T) {
-	_, err := parseJWKHeader(nil)
-	if err == nil {
-		t.Error("nil input should fail")
-	}
-}
-
-func TestParseJWKHeaderEmptyMap(t *testing.T) {
-	jwk := map[string]interface{}{}
-	_, err := parseJWKHeader(jwk)
-	if err == nil {
-		t.Error("empty map should fail (no kty)")
-	}
-}
-
-func TestParseJWKHeaderRSARoundTrip(t *testing.T) {
-	// Generate key, encode to JWK, parse back, verify match
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	jwk := map[string]interface{}{
-		"kty": "RSA",
-		"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-		"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
-	}
-
-	pubKey, err := parseJWKHeader(jwk)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rsaPub := pubKey.(*rsa.PublicKey)
-	if rsaPub.N.Cmp(key.N) != 0 {
-		t.Error("round-trip N mismatch")
-	}
-	if rsaPub.E != key.E {
-		t.Error("round-trip E mismatch")
-	}
-}
-
-func TestParseJWKHeaderECRoundTrip(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	xPadded, yPadded := ecCoords(&key.PublicKey)
-
-	jwk := map[string]interface{}{
-		"kty": "EC",
-		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(xPadded),
-		"y":   base64.RawURLEncoding.EncodeToString(yPadded),
-	}
-
-	pubKey, err := parseJWKHeader(jwk)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ecPub := pubKey.(*ecdsa.PublicKey)
-	roundX, roundY := ecCoords(ecPub)
-	if !bytes.Equal(roundX, xPadded) || !bytes.Equal(roundY, yPadded) {
-		t.Error("round-trip EC coordinates mismatch")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := parseJWKHeader(tt.jwk)
+			if err == nil {
+				t.Fatalf("parseJWKHeader returned key %T for a malformed jwk header", key)
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want one mentioning %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -705,27 +529,6 @@ func TestComputeJWKThumbprintECSameKeyStable(t *testing.T) {
 	tp2, _ := ComputeJWKThumbprint(&key.PublicKey)
 	if tp1 != tp2 {
 		t.Error("same P-384 key should produce same thumbprint")
-	}
-}
-
-func TestDPoPProofEmptyString(t *testing.T) {
-	_, _, err := ValidateDPoPProof("", "GET", "https://example.com/", "")
-	if err == nil {
-		t.Error("empty proof string should be rejected")
-	}
-}
-
-func TestParseJWKHeaderIntegerInput(t *testing.T) {
-	_, err := parseJWKHeader(42)
-	if err == nil {
-		t.Error("integer input should fail")
-	}
-}
-
-func TestParseJWKHeaderSliceInput(t *testing.T) {
-	_, err := parseJWKHeader([]string{"not", "a", "map"})
-	if err == nil {
-		t.Error("slice input should fail")
 	}
 }
 

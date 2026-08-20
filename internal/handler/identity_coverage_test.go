@@ -273,83 +273,44 @@ func TestIdentityPut_EmptyBody(t *testing.T) {
 	}
 }
 
-func TestIdentityPut_InvalidCountry(t *testing.T) {
-	h := newTestIdentityHandler(&mocks.MockIdentityRepo{})
+// Country codes are ISO 3166-1 alpha-2 upper case and dates of birth are
+// ISO 8601 and in the past. A field that fails either rule must stop the whole
+// profile write: this is an upsert, so a partial accept would persist the rest
+// of the body alongside the value that was rejected.
+func TestIdentityPut_RejectsInvalidFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"country is not a real alpha-2 code", `{"country":"XYZ"}`},
+		{"country in lower case", `{"country":"sk"}`},
+		{"date of birth is not ISO 8601", `{"date_of_birth":"15/01/1990"}`},
+		{"date of birth is in the future", `{"date_of_birth":"2099-01-01"}`},
+		{"billing country is not a real alpha-2 code", `{"billing":{"country":"INVALID"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var written int
+			h := newTestIdentityHandler(&mocks.MockIdentityRepo{
+				UpsertFn: func(context.Context, *model.IdentityProfile) error {
+					written++
+					return nil
+				},
+			})
 
-	body := `{"country":"XYZ"}`
-	req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = setAuthContext(req, "user-123")
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req = setAuthContext(req, "user-123")
+			rec := httptest.NewRecorder()
 
-	h.Put(rec, req)
+			h.Put(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestIdentityPut_InvalidCountry_Lowercase(t *testing.T) {
-	h := newTestIdentityHandler(&mocks.MockIdentityRepo{})
-
-	body := `{"country":"sk"}`
-	req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = setAuthContext(req, "user-123")
-	rec := httptest.NewRecorder()
-
-	h.Put(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestIdentityPut_InvalidDateOfBirth_Format(t *testing.T) {
-	h := newTestIdentityHandler(&mocks.MockIdentityRepo{})
-
-	body := `{"date_of_birth":"15/01/1990"}`
-	req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = setAuthContext(req, "user-123")
-	rec := httptest.NewRecorder()
-
-	h.Put(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestIdentityPut_InvalidDateOfBirth_Future(t *testing.T) {
-	h := newTestIdentityHandler(&mocks.MockIdentityRepo{})
-
-	body := `{"date_of_birth":"2099-01-01"}`
-	req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = setAuthContext(req, "user-123")
-	rec := httptest.NewRecorder()
-
-	h.Put(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestIdentityPut_InvalidBillingCountry(t *testing.T) {
-	h := newTestIdentityHandler(&mocks.MockIdentityRepo{})
-
-	body := `{"billing":{"country":"INVALID"}}`
-	req := httptest.NewRequest(http.MethodPut, "/user/identity", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = setAuthContext(req, "user-123")
-	rec := httptest.NewRecorder()
-
-	h.Put(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if written != 0 {
+				t.Fatalf("the profile was written %d time(s) despite the 400", written)
+			}
+		})
 	}
 }
 

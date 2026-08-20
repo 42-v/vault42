@@ -57,30 +57,44 @@ func TestJWT_AudienceNull(t *testing.T) {
 	}
 }
 
-// TestJWT_AudienceDuplicates verifies that aud:["test","test"] still matches.
-func TestJWT_AudienceDuplicates(t *testing.T) {
+// TestJWT_AudienceExtraEntries checks the aud lists that carry more than the
+// audience being validated for. A match anywhere in the list is enough, so both
+// rows must parse; a validator that compared the whole list, or that tripped
+// over the empty entry, fails one of them.
+func TestJWT_AudienceExtraEntries(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
 	keyFunc := func(tok *vjwt.Token) (any, error) {
 		return &key.PublicKey, nil
 	}
 
-	tokenStr, err := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "test",
-			Audience:  vjwt.ClaimStrings{"test", "test"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key, kid)
-	if err != nil {
-		t.Fatalf("SignToken failed: %v", err)
+	cases := []struct {
+		name     string
+		audience vjwt.ClaimStrings
+	}{
+		{"duplicate entries", vjwt.ClaimStrings{"test", "test"}},
+		{"empty string alongside the match", vjwt.ClaimStrings{"", "test"}},
 	}
 
-	_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
-	if err != nil {
-		t.Fatalf("Token with duplicate aud entries should still match: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tokenStr, err := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
+				RegisteredClaims: vjwt.RegisteredClaims{
+					Subject:   "user-123",
+					Issuer:    "test",
+					Audience:  tc.audience,
+					ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
+					IssuedAt:  vjwt.NewNumericDate(time.Now()),
+				},
+			}, key, kid)
+			if err != nil {
+				t.Fatalf("SignToken failed: %v", err)
+			}
+
+			if _, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test"); err != nil {
+				t.Fatalf("aud %v contains \"test\" and must match: %v", tc.audience, err)
+			}
+		})
 	}
 }
 
@@ -106,33 +120,6 @@ func TestJWT_AudienceSingleString(t *testing.T) {
 	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
 	if err != nil {
 		t.Fatalf("Token with single string aud should parse (ClaimStrings handles both): %v", err)
-	}
-}
-
-// TestJWT_AudienceEmptyStringInArray verifies that aud:["","test"] matches on "test".
-func TestJWT_AudienceEmptyStringInArray(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-	keyFunc := func(tok *vjwt.Token) (any, error) {
-		return &key.PublicKey, nil
-	}
-
-	tokenStr, err := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "test",
-			Audience:  vjwt.ClaimStrings{"", "test"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key, kid)
-	if err != nil {
-		t.Fatalf("SignToken failed: %v", err)
-	}
-
-	_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
-	if err != nil {
-		t.Fatalf("Token with empty string + valid aud should match on 'test': %v", err)
 	}
 }
 

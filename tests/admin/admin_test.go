@@ -16,6 +16,7 @@ package admin_test
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -53,113 +54,70 @@ func TestDashboardRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestDashboardPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Dashboard")
-	requireContains(t, body, "keyCount")
-	requireContains(t, body, "sessionCount")
-	requireContains(t, body, "adminCount")
-	requireContains(t, body, "clientCount")
-}
+// TestUIPages walks every server-rendered page behind the session token. The
+// markers are the ids the page's own JavaScript binds to, so a template that
+// still answers 200 while having lost the table it exists to fill is caught
+// here instead of by a human loading the page.
+func TestUIPages(t *testing.T) {
+	cases := []struct {
+		name  string
+		path  string
+		wants []string
+	}{
+		{"dashboard", "/admin/", []string{"Dashboard", "keyCount", "sessionCount", "adminCount", "clientCount"}},
+		{"users", "/admin/ui/users", []string{"Users", "userSearch", "usersBody"}},
+		{"keys", "/admin/ui/keys", []string{"Signing Keys", "keysBody"}},
+		{"sessions", "/admin/ui/sessions", []string{"Admin Sessions", "sessionsBody"}},
+		{"audit", "/admin/ui/audit", []string{"Audit Log", "auditEventType", "auditBody"}},
+		{"clients", "/admin/ui/clients", []string{"Service Clients", "clientsBody", "createClientForm"}},
+		{"admins", "/admin/ui/admins", []string{"Admin Accounts", "adminsBody", "createAdminForm"}},
+		{"config", "/admin/ui/config", []string{"Configuration", "configBody", "addConfigForm"}},
+	}
 
-func TestUsersPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/users")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Users")
-	requireContains(t, body, "userSearch")
-	requireContains(t, body, "usersBody")
-}
-
-func TestKeysPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/keys")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Signing Keys")
-	requireContains(t, body, "keysBody")
-}
-
-func TestSessionsPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/sessions")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Admin Sessions")
-	requireContains(t, body, "sessionsBody")
-}
-
-func TestAuditPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/audit")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Audit Log")
-	requireContains(t, body, "auditEventType")
-	requireContains(t, body, "auditBody")
-}
-
-func TestClientsPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/clients")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Service Clients")
-	requireContains(t, body, "clientsBody")
-	requireContains(t, body, "createClientForm")
-}
-
-func TestAdminsPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/admins")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Admin Accounts")
-	requireContains(t, body, "adminsBody")
-	requireContains(t, body, "createAdminForm")
-}
-
-func TestConfigPage(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/ui/config")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "Configuration")
-	requireContains(t, body, "configBody")
-	requireContains(t, body, "addConfigForm")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := authedGet(t, sharedClient, sharedToken, tc.path)
+			defer resp.Body.Close()
+			requireStatus(t, resp, http.StatusOK)
+			body := readBody(t, resp)
+			for _, want := range tc.wants {
+				requireContains(t, body, want)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Static Assets
 // ---------------------------------------------------------------------------
 
-func TestStaticCSS(t *testing.T) {
-	resp, err := sharedClient.Get(baseURL() + "/admin/static/style.css")
-	if err != nil {
-		t.Fatalf("GET style.css: %v", err)
+// TestStaticAssets checks that the embedded assets are served with a
+// content type a browser will execute or apply. A stylesheet served as
+// text/plain renders an unstyled page, and a script served as text/plain does
+// not run at all, in both cases behind a 200.
+func TestStaticAssets(t *testing.T) {
+	cases := []struct {
+		name      string
+		path      string
+		wantBody  string
+		wantCtype string
+	}{
+		{"stylesheet", "/admin/static/style.css", "--green", "text/css"},
+		{"script", "/admin/static/admin.js", "data-action", "javascript"},
 	}
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "--green")
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
-		t.Errorf("expected text/css content-type, got %s", ct)
-	}
-}
 
-func TestStaticJS(t *testing.T) {
-	resp, err := sharedClient.Get(baseURL() + "/admin/static/admin.js")
-	if err != nil {
-		t.Fatalf("GET admin.js: %v", err)
-	}
-	requireStatus(t, resp, http.StatusOK)
-	body := readBody(t, resp)
-	requireContains(t, body, "data-action")
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
-		t.Errorf("expected javascript content-type, got %s", ct)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := sharedClient.Get(baseURL() + tc.path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.path, err)
+			}
+			requireStatus(t, resp, http.StatusOK)
+			if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, tc.wantCtype) {
+				t.Errorf("%s: Content-Type %q, want one containing %q", tc.path, ct, tc.wantCtype)
+			}
+			requireContains(t, readBody(t, resp), tc.wantBody)
+		})
 	}
 }
 
@@ -215,37 +173,51 @@ func TestLoginSuccess(t *testing.T) {
 	}
 }
 
-func TestLoginInvalidCredentials(t *testing.T) {
-	body := `{"username":"admin","password":"wrong_password_1234567890"}`
-	resp, err := sharedClient.Post(baseURL()+"/admin/auth/login", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
+// TestLoginRefusesBadCredentials pins the two ways a login fails and the fact
+// that they look identical from outside. A wrong password and an unknown
+// username have to answer with the same status and the same error, otherwise
+// the endpoint tells an attacker which usernames exist.
+func TestLoginRefusesBadCredentials(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+		password string
+	}{
+		{"wrong password", "admin", "wrong_password_1234567890"},
+		{"unknown user", "nonexistent_user_xyz", "some_password_1234567890"},
 	}
 
-	var lr loginResponse
-	decodeJSON(t, resp, &lr)
-	if lr.Token != "" {
-		t.Error("should not return token for invalid credentials")
-	}
-	if lr.Error == "" {
-		t.Error("expected error for invalid credentials")
-	}
-}
+	answers := make(map[string]string, len(cases))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"username":%q,"password":%q}`, tc.username, tc.password)
+			resp, err := sharedClient.Post(baseURL()+"/admin/auth/login", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("POST login: %v", err)
+			}
+			status := resp.StatusCode
 
-func TestLoginNonexistentUser(t *testing.T) {
-	body := `{"username":"nonexistent_user_xyz","password":"some_password_1234567890"}`
-	resp, err := sharedClient.Post(baseURL()+"/admin/auth/login", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST login: %v", err)
+			var lr loginResponse
+			decodeJSON(t, resp, &lr)
+			if status != http.StatusUnauthorized {
+				t.Errorf("got %d, want 401", status)
+			}
+			if lr.Token != "" {
+				t.Error("a refused login handed back a token")
+			}
+			if lr.Error == "" {
+				t.Error("a refused login gave no error to show the operator")
+			}
+			answers[tc.name] = fmt.Sprintf("%d %s", status, lr.Error)
+		})
 	}
 
-	var lr loginResponse
-	decodeJSON(t, resp, &lr)
-	if lr.Token != "" {
-		t.Error("should not return token for nonexistent user")
-	}
-	if lr.Error == "" {
-		t.Error("expected error for nonexistent user")
+	if len(answers) == len(cases) {
+		wrongPassword, unknownUser := answers[cases[0].name], answers[cases[1].name]
+		if wrongPassword != unknownUser {
+			t.Errorf("wrong password answered %q, unknown user answered %q; the two must be indistinguishable or the endpoint enumerates admins",
+				wrongPassword, unknownUser)
+		}
 	}
 }
 
@@ -267,7 +239,14 @@ func TestStatusEndpoint(t *testing.T) {
 
 func TestLogout(t *testing.T) {
 	if logoutToken == "" {
-		t.Skip("no logout token available (TOTP not configured)")
+		// Not a resource this suite can be missing. TestMain enrolls TOTP
+		// whenever the gateway answers requires_2fa, which a first-boot admin
+		// always does, and a gateway that already has TOTP fails the very first
+		// login instead of reaching here. An empty token means the gateway
+		// reported TOTP as configured and then accepted a login with no code,
+		// which is the bug this suite would exist to catch. Skipping it would
+		// report that as green.
+		t.Fatal("logoutToken is empty: the gateway accepted a login without a TOTP code while reporting TOTP as configured")
 	}
 	token := logoutToken
 
@@ -289,91 +268,66 @@ func TestLogout(t *testing.T) {
 // Data API Tests — all use shared session (no extra logins)
 // ---------------------------------------------------------------------------
 
-func TestKeysAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/keys")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
+// TestDataAPIs reads every collection the admin UI fetches. Each row names the
+// field the page's JavaScript indexes into, so a handler that renamed or
+// dropped it fails here rather than in a browser; wantNonEmpty is set only
+// where the suite itself guarantees a row exists, since the session doing the
+// asking is one of them.
+func TestDataAPIs(t *testing.T) {
+	cases := []struct {
+		name         string
+		path         string
+		field        string // "" means only that the body parses as a JSON object
+		wantNonEmpty bool
+	}{
+		{"keys", "/admin/keys", "keys", false},
+		{"sessions", "/admin/sessions", "sessions", true},
+		{"audit", "/admin/audit?limit=5", "entries", false},
+		{"clients", "/admin/clients", "clients", false},
+		{"admins", "/admin/admins", "admins", true},
+		{"user search", "/admin/users?q=dev@vault.localhost", "users", false},
+		{"config", "/admin/config", "", false},
+		{"metrics", "/admin/metrics", "", false},
+	}
 
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	if _, ok := result["keys"]; !ok {
-		t.Error("response missing 'keys' field")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := authedGet(t, sharedClient, sharedToken, tc.path)
+			defer resp.Body.Close()
+			requireStatus(t, resp, http.StatusOK)
+
+			var result map[string]any
+			decodeJSON(t, resp, &result)
+			if tc.field == "" {
+				return
+			}
+
+			value, ok := result[tc.field]
+			if !ok {
+				t.Fatalf("GET %s: response has no %q field, only %v", tc.path, tc.field, mapKeys(result))
+			}
+			if tc.wantNonEmpty {
+				arr, ok := value.([]any)
+				if !ok {
+					t.Fatalf("GET %s: %q is %T, want a list", tc.path, tc.field, value)
+				}
+				if len(arr) == 0 {
+					t.Errorf("GET %s: %q is empty, and this suite's own session or admin should be in it", tc.path, tc.field)
+				}
+			}
+		})
 	}
 }
 
-func TestSessionsAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/sessions")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	sessions, ok := result["sessions"]
-	if !ok {
-		t.Error("response missing 'sessions' field")
+// mapKeys names what a response did carry, so a renamed field is one line of
+// output away from being obvious.
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-	if arr, ok := sessions.([]any); ok && len(arr) == 0 {
-		t.Error("expected at least one active session")
-	}
-}
-
-func TestAuditAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/audit?limit=5")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	if _, ok := result["entries"]; !ok {
-		t.Error("response missing 'entries' field")
-	}
-}
-
-func TestClientsAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/clients")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	if _, ok := result["clients"]; !ok {
-		t.Error("response missing 'clients' field")
-	}
-}
-
-func TestAdminsAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/admins")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	admins, ok := result["admins"]
-	if !ok {
-		t.Error("response missing 'admins' field")
-	}
-	if arr, ok := admins.([]any); ok && len(arr) == 0 {
-		t.Error("expected at least one admin")
-	}
-}
-
-func TestConfigAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/config")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	// Config may be empty, but the response should parse successfully.
-}
-
-func TestMetricsAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/metrics")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
+	sort.Strings(keys)
+	return keys
 }
 
 // ---------------------------------------------------------------------------
@@ -431,18 +385,6 @@ func TestClientCreateAndRevoke(t *testing.T) {
 		t.Fatalf("revoke client: %d %s", resp3.StatusCode, body)
 	}
 	resp3.Body.Close()
-}
-
-func TestUserSearchAPI(t *testing.T) {
-	resp := authedGet(t, sharedClient, sharedToken, "/admin/users?q=dev@vault.localhost")
-	defer resp.Body.Close()
-	requireStatus(t, resp, http.StatusOK)
-
-	var result map[string]any
-	decodeJSON(t, resp, &result)
-	if _, ok := result["users"]; !ok {
-		t.Error("response missing 'users' field")
-	}
 }
 
 // ---------------------------------------------------------------------------
