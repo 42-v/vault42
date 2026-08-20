@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { nextTick, onBeforeUnmount, watch, type Ref, type ShallowRef } from 'vue'
 
 /**
  * Elements a browser will move focus to with Tab.
@@ -17,11 +17,17 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
-/** What {@link useModalFocus} hands back to the component. */
-export interface ModalFocus {
-  /** Bind to the dialog element with `ref="…"`, or assign it directly. */
-  dialogRef: Ref<HTMLElement | null>
-}
+/**
+ * Any ref that yields the dialog element, whether from `useTemplateRef` (which
+ * is read-only and shallow) or from a plain `ref` in a test harness.
+ *
+ * The composable only ever reads it, so accepting the read-only shape as well
+ * costs nothing and is what lets a component keep ownership of its own element
+ * ref rather than receive one it then has to bind by name.
+ */
+export type DialogElementRef =
+  | Ref<HTMLElement | null>
+  | Readonly<ShallowRef<HTMLElement | null>>
 
 /**
  * Traps focus inside an open dialog, restores it on close, and closes on Escape.
@@ -39,17 +45,36 @@ export interface ModalFocus {
  * Escape and Tab before anything inside the dialog can stop them, and it is
  * scoped to the open state so a closed dialog costs nothing.
  *
+ * The component owns the element ref and hands it in. It used to be the other
+ * way round: the composable created the ref, returned it, and the template
+ * bound it by name with `ref="dialogRef"`. That left the component holding a
+ * value it never mentioned again, joined to the element only by a string
+ * happening to match a variable, and nothing checked the match.
+ *
+ * `useTemplateRef` closes that. Called without a type argument it resolves the
+ * name against the template, so a misspelling is a compile error naming the
+ * refs that do exist, and the element type is inferred from the tag rather
+ * than asserted. Supplying the type argument turns both off, which is why
+ * these call sites do not.
+ *
  * @param isOpen - Reactive open state. The dialog is expected to be `v-if`-ed on it.
  * @param close - Called when the user presses Escape. Should flip `isOpen` false.
- * @returns The ref to bind to the dialog element.
+ * @param dialogRef - Ref to the dialog element, from `useTemplateRef`.
  *
  * @example
  * ```ts
- * const { dialogRef } = useModalFocus(showDeleteConfirm, () => { showDeleteConfirm.value = false })
+ * const dialogRef = useTemplateRef('dialog')
+ * useModalFocus(showDeleteConfirm, () => { showDeleteConfirm.value = false }, dialogRef)
+ * ```
+ * ```vue
+ * <div v-if="showDeleteConfirm" ref="dialog" role="dialog" aria-modal="true">
  * ```
  */
-export function useModalFocus(isOpen: Ref<boolean | unknown>, close: () => void): ModalFocus {
-  const dialogRef = ref<HTMLElement | null>(null)
+export function useModalFocus(
+  isOpen: Ref<boolean | unknown>,
+  close: () => void,
+  dialogRef: DialogElementRef,
+): void {
   let restoreTo: HTMLElement | null = null
 
   function focusableItems(): HTMLElement[] {
@@ -124,6 +149,4 @@ export function useModalFocus(isOpen: Ref<boolean | unknown>, close: () => void)
   )
 
   onBeforeUnmount(detach)
-
-  return { dialogRef }
 }

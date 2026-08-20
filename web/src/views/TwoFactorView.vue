@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, useTemplateRef } from 'vue'
 import { use2FA, useWebAuthn, useConfirm, VaultAuthGuard, useT } from '@vault42/vue'
 import QRCode from 'qrcode'
 import { friendlyError } from '../errorMessages'
@@ -82,7 +82,8 @@ function cancelConfirm() {
   confirmPassword.value = ''
 }
 
-const { dialogRef } = useModalFocus(showConfirmDialog, cancelConfirm)
+const dialogRef = useTemplateRef('dialog')
+useModalFocus(showConfirmDialog, cancelConfirm, dialogRef)
 
 async function handleVerify() {
   if (code.value.length !== 6) return
@@ -186,7 +187,7 @@ async function copyBackupCodes() {
         <!-- Confirmation Dialog -->
         <Teleport to="body">
           <div v-if="showConfirmDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-            <div ref="dialogRef" class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+            <div ref="dialog" class="vault42-card w-full max-w-sm space-y-4" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
               <h3 id="confirm-dialog-title" class="text-lg font-semibold">{{ t('twoFactor.confirmPassword') }}</h3>
               <p class="text-sm text-vault42-muted">
                 {{ t('twoFactor.confirmPasswordDesc') }}

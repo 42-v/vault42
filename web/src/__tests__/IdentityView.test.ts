@@ -612,6 +612,31 @@ describe('IdentityView', () => {
     expect((wrapper.find('#identity-given-name').element as HTMLInputElement).value).toBe('Jane')
   })
 
+  // The three real dialogs bind their element with `ref="dialog"` in the
+  // template and read it back with `useTemplateRef('dialog')`, which is the
+  // whole of the wiring between a view and its focus trap. Nothing else in the
+  // suite exercises it: useModalFocus.test.ts uses a render-function harness
+  // that hands the ref object straight to `ref:`, and the Escape test below
+  // passes whether or not the element was ever bound, because closing on Escape
+  // does not need the element. Focus does. If `dialogRef.value` is null the
+  // trap finds no focusable items and focus stays on the button behind the
+  // overlay, which is the bug the trap exists to fix.
+  it('moves focus into the delete dialog, so the template ref is really bound', async () => {
+    mockIdentity.value = { given_name: 'Jane' }
+    const wrapper = mount(IdentityView, { attachTo: document.body })
+
+    const outerDeleteBtn = wrapper.findAll('button[type="button"]').find(b => b.text() === 'Delete')
+    ;(outerDeleteBtn!.element as HTMLElement).focus()
+    await outerDeleteBtn!.trigger('click')
+    await flushPromises()
+
+    const dialog = document.querySelector('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog!.contains(document.activeElement)).toBe(true)
+
+    wrapper.unmount()
+  })
+
   it('closes the delete dialog on Escape without deleting', async () => {
     mockIdentity.value = { given_name: 'Jane' }
     const wrapper = mountView()
