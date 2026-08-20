@@ -338,6 +338,22 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The action is pinned by digest and the tool it installs was not, so
+          # cosign floated to v3.0.6 and the v1.0.3 release failed on it: cosign
+          # v3 removed --output-certificate and --output-signature, and defaults
+          # --new-bundle-format to true with an empty --bundle, so signing the
+          # checksum file died with "create bundle file: open : no such file or
+          # directory". A version this workflow does not choose is a dependency
+          # nobody reviewed.
+          #
+          # Staying on v2 is deliberate rather than lazy. SECURITY.md tells
+          # consumers to verify with --signature <file>.sig and --certificate
+          # <file>.pem, which is what sign-blob produces here; v3 bundles are a
+          # different artifact and a different verification command, so moving
+          # to them changes what the published recipe has to say. That is its
+          # own change, made on purpose, not a side effect of an unpinned tool.
+          cosign-release: v2.6.5
 
       - name: Sign images (keyless)
         env:
@@ -414,6 +430,22 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The action is pinned by digest and the tool it installs was not, so
+          # cosign floated to v3.0.6 and the v1.0.3 release failed on it: cosign
+          # v3 removed --output-certificate and --output-signature, and defaults
+          # --new-bundle-format to true with an empty --bundle, so signing the
+          # checksum file died with "create bundle file: open : no such file or
+          # directory". A version this workflow does not choose is a dependency
+          # nobody reviewed.
+          #
+          # Staying on v2 is deliberate rather than lazy. SECURITY.md tells
+          # consumers to verify with --signature <file>.sig and --certificate
+          # <file>.pem, which is what sign-blob produces here; v3 bundles are a
+          # different artifact and a different verification command, so moving
+          # to them changes what the published recipe has to say. That is its
+          # own change, made on purpose, not a side effect of an unpinned tool.
+          cosign-release: v2.6.5
 
       - name: Install syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -582,6 +614,22 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The action is pinned by digest and the tool it installs was not, so
+          # cosign floated to v3.0.6 and the v1.0.3 release failed on it: cosign
+          # v3 removed --output-certificate and --output-signature, and defaults
+          # --new-bundle-format to true with an empty --bundle, so signing the
+          # checksum file died with "create bundle file: open : no such file or
+          # directory". A version this workflow does not choose is a dependency
+          # nobody reviewed.
+          #
+          # Staying on v2 is deliberate rather than lazy. SECURITY.md tells
+          # consumers to verify with --signature <file>.sig and --certificate
+          # <file>.pem, which is what sign-blob produces here; v3 bundles are a
+          # different artifact and a different verification command, so moving
+          # to them changes what the published recipe has to say. That is its
+          # own change, made on purpose, not a side effect of an unpinned tool.
+          cosign-release: v2.6.5
 
       - name: Sign chart (keyless)
         run: cosign sign --yes "ghcr.io/42-v/charts/vault-auth@${{ steps.push.outputs.digest }}"

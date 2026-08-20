@@ -461,6 +461,28 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
   Found by vue-tsc 3, which reports the unread variable that vue-tsc 2 did not.
 
+### Tooling
+
+* **cosign is pinned; it was not, and that half-published this release.**
+  `sigstore/cosign-installer` was pinned by commit digest with no
+  `cosign-release` input, so the release job installed whatever cosign was
+  current that morning -- v3.0.6. cosign v3 removed `--output-certificate` and
+  `--output-signature` and defaults `--new-bundle-format` to true, so
+  `.goreleaser.yaml`'s signing step died with `create bundle file: open : no
+  such file or directory` **after** the images, the Helm chart and the NuGet
+  packages had gone out. Now pinned to v2.6.5 in all three installer steps.
+
+  Staying on v2 is a decision rather than inertia. `SECURITY.md` tells
+  consumers to verify the checksum file with `--signature ....sig` and
+  `--certificate ....pem`, which is what `sign-blob` produces here; a v3 bundle
+  is a different artifact and a different verification command, so adopting it
+  rewrites the published recipe. That is its own change, made deliberately.
+
+  `TestScorecard_ToolInstallingActionsPinTheirTool` now fails a workflow that
+  runs a tool-installing action without pinning the tool. Pinning the action by
+  SHA and letting it fetch the latest release are two different supply-chain
+  surfaces, and this repository had closed only one of them.
+
 ### Tests
 
 A sweep of all 5,180 Go test functions for tests that cannot fail, pin the
