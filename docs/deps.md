@@ -68,8 +68,8 @@
 | `internal/keystore` | 99.62% |
 | `internal/email` | 99.56% |
 | `cmd/bridge` | 99.55% |
+| `internal/jwt` | 99.30% |
 | `internal/service` | 99.28% |
-| `internal/jwt` | 99.22% |
 | `cmd/vault` | 98.39% |
 | `internal/crypto` | 98.36% |
 | `cmd/recover` | 98.15% |
