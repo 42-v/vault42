@@ -10,15 +10,28 @@ COPY packages/vue/package.json packages/vue/
 COPY web/package.json web/
 # corepack is no longer bundled with the node image; Node stopped shipping it
 # before 26, so `corepack enable` is "not found" rather than a no-op and the
-# whole frontend stage fails at exit 127. Installing it explicitly keeps the
-# property that made corepack worth using here: it reads `packageManager` from
-# package.json, which pins pnpm by version AND by SHA-512, so the package
-# manager that builds a release image is hash-verified rather than whatever
-# `npm i -g pnpm` resolves on the day. The corepack version is pinned for the
-# same reason every other tool in this build is.
-RUN npm install -g corepack@0.35.0 \
-    && corepack enable \
-    && pnpm install --frozen-lockfile
+# whole frontend stage fails at exit 127.
+#
+# It is fetched by digest rather than by name. `npm install -g corepack@0.35.0`
+# names a version and then trusts whatever the registry serves for it, which is
+# the finding Scorecard raised against the first version of this line: a version
+# is not a pin. The tarball is verified against a SHA-256 taken from a download
+# whose SHA-512 matched the integrity npm publishes for 0.35.0, so a substituted
+# artifact fails the check rather than executing in a release build.
+#
+# corepack is worth this because of what it does next: it reads `packageManager`
+# from package.json, which pins pnpm by version AND by SHA-512, so the package
+# manager that builds a release image is itself hash-verified.
+ARG COREPACK_VERSION=0.35.0
+ARG COREPACK_SHA256=f62535fc7be1f77e4b12cd1e420b8542b8e895cbb14178926963a41a9232a4fe
+RUN set -eu; \
+    wget -qO /tmp/corepack.tgz \
+      "https://registry.npmjs.org/corepack/-/corepack-${COREPACK_VERSION}.tgz"; \
+    echo "${COREPACK_SHA256}  /tmp/corepack.tgz" | sha256sum -c -; \
+    npm install -g /tmp/corepack.tgz; \
+    rm /tmp/corepack.tgz; \
+    corepack enable; \
+    pnpm install --frozen-lockfile
 COPY packages/vue/ packages/vue/
 COPY web/ web/
 RUN pnpm --filter @vault42/vue build && pnpm --filter @vault42/web build
