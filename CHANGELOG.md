@@ -1,5 +1,79 @@
 # Changelog
 
+## 1.0.3 (2026-08-20)
+
+Three claims the project was making without having checked them, and a toolchain that
+had drifted far enough that nobody could tell which of six upgrades was the hard one.
+
+### Compliance
+
+* **The OpenSSF Best Practices criteria are answered, so only the signup is left.**
+  CR-35 recorded the absence of a bestpractices.dev badge as an accepted risk and left
+  it there, which quietly treated an unregistered project as an unassessable one. The
+  67 passing-level criteria are now answered in `docs/openssf-best-practices.md`, each
+  with a citation into the tree that a reader can open, so the registration is a form
+  to fill in rather than an assessment to perform. `version_tags` is answered as
+  qualified rather than met, because the tag that would satisfy it does not exist yet.
+
+  Two answers were wrong in the first draft and were caught before the commit, which is
+  the reason the criteria are worth answering rather than asserting: `-race` does not
+  run over the coverage suite (it runs in the unit, attack and end-to-end CI jobs), and
+  forward secrecy comes from requiring TLS 1.3 rather than from a cipher preference
+  list. Both were plausible, and both would have been published as evidence.
+
+* **`Branch-Protection` publishes its score and both reasons for it.** The register said
+  "Met" and stopped. It is met, and it scored 3 of 10, and the gap is not an omission
+  anybody can close: two of the warnings are `does not require approvers` and
+  `codeowners review is not required`, and GitHub does not offer the Approve control on
+  your own pull request. 1.0.1 set the approval requirement, and the next pull request
+  could not be merged except by an admin bypass that skips the thirteen status checks
+  along with the review. Raising the score means turning the CI gate into something
+  waived on every merge. The row now says the score, says why it is capped, and says
+  which single knob (`enforce_admins`) is a live maintainer decision rather than a
+  structural limit.
+
+* **SLSA v1.1 Build Track assessed as the eleventh standard.** The release has done
+  keyless cosign signing, build provenance attestation and syft SBOMs since 1.0.0
+  without ever stating what level that adds up to. Eight rows: Build L2 in full, and
+  the one L3 clause that does not hold is recorded as **CR-38** rather than rounded up.
+  `actions/attest-build-provenance` takes the subject digest as an input from the job,
+  so a compromised build step could request an attestation over a digest it did not
+  produce; the signing key is genuinely out of reach, but "every field generated in a
+  trusted control plane" is not true of the subject.
+
+  `tests/compliance/slsa_build_track_test.go` gates the five clauses that are this
+  project's to keep rather than GitHub's: every published artifact class carries an
+  attestation, the signing is keyless against the workflow identity, all 33 jobs run on
+  GitHub-hosted labels, no `setup-go` step reintroduces a shared module cache, and the
+  release stays tag-driven. It deliberately does not test GitHub's runner isolation,
+  because a test that pretends to check somebody else's guarantee is worse than no test.
+
+  Register totals: 431 requirements across 11 standards, 369 Met, 15 Accepted Risk,
+  47 Not Applicable.
+
+### Changed
+
+* **Frontend toolchain: four of the six pending majors, and a name for the other two.**
+  vite 6 to 8, vue-router 4 to 5, TypeScript 5 to 6.0.3, `@vitejs/plugin-vue` 5 to 6,
+  `vite-plugin-dts` 4 to 5, plus the patch line. Verified per step rather than in one
+  jump: `vue-tsc --noEmit` clean, both builds clean, 507 and 742 tests, statement
+  coverage 100.00% and 99.56%, eslint at zero.
+
+  The root now pins TypeScript explicitly. It did not, so `typescript-eslint` had pulled
+  a `typescript@7` into the lockfile that nothing declared and nothing type-checked
+  against.
+
+  The two that did not land are not drift and are tracked as their own work.
+  `vue-tsc` 2 to 3 needs a template type-checking migration, because composable refs
+  stop auto-unwrapping in templates; it also gates TypeScript 7, which vue-tsc 2 cannot
+  load. Bisection ruled out vite 8, plugin-vue 6 and vue 3.5.41 individually, so it is
+  one migration rather than a general incompatibility. `tailwindcss` 3 to 4 is the only
+  item in the set that changes shipped CSS instead of build tooling, moving
+  configuration into a CSS `@theme` block and dropping postcss and autoprefixer, and it
+  wants somebody looking at the rendered application rather than a green suite.
+
+  `docs/TODO.md` is not tracked, so this entry is where that reasoning lives.
+
 ## 1.0.2 (2026-08-20)
 
 Two things 1.0.1 got wrong, and the badge table it should have shipped with.

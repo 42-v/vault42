@@ -1,6 +1,6 @@
 {
   "name": "@vault42/vue",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Vue 3 composables and i18n plugin for Vault42 authentication service",
   "type": "module",
   "license": "MIT",

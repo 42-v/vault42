@@ -2,8 +2,8 @@ apiVersion: v2
 name: vault-auth
 description: Production-grade JWT authentication microservice
 type: application
-version: 1.0.2
-appVersion: "1.0.2"
+version: 1.0.3
+appVersion: "1.0.3"
 keywords:
   - authentication
   - jwt

@@ -16,9 +16,12 @@
     "coverage/**",
     "web/dist/**",
     "internal/frontend/dist/**",
-    // Kept on disk, never published -- the same set .gitignore lists under
-    // "Internal-only". A CI checkout does not have these; a working tree does,
-    // and without this a local run and a CI run disagree.
+    // Untracked in every case, so a CI checkout does not have these and a
+    // working tree does. Without the entry a local run reports findings CI
+    // cannot see, which is the same as having no local run at all: the output
+    // is noise you learn to scroll past. .claude/ is the agent's own scratch
+    // directory; the rest is what .gitignore lists under "Internal-only".
+    ".claude/**",
     "CLAUDE.md",
     "GROK_OUTPUT.md",
     ".review.md",

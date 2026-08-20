@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "tests": 5049,
   "passed": "5049 passed",
   "coverage": "99.60%",

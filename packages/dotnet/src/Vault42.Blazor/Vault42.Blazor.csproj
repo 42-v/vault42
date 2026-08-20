@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Vault42.Blazor</RootNamespace>
     <PackageId>Vault42.Blazor</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>42-v</Authors>
     <Description>Blazor WASM authentication library for Vault42. Implements OAuth2 Authorization Code + PKCE flow with redirect to Vault42's integrated frontend.</Description>
     <PackageTags>vault42;blazor;authentication;oauth2;pkce;wasm</PackageTags>
