@@ -254,3 +254,80 @@ func readWorkflow(t *testing.T, name string) string {
 	}
 	return string(raw)
 }
+
+// publishedImageDockerfiles are the three Dockerfiles that .github/workflows/
+// release.yml actually builds and pushes. Dockerfile.goreleaser* copy a
+// prebuilt binary and compile nothing, so they are linted and scanned but have
+// no build flags to check.
+var publishedImageDockerfiles = []string{
+	"Dockerfile",
+	"Dockerfile.admin-gateway",
+	"Dockerfile.bridge",
+}
+
+// hardeningBuildFlags are the `go build` flags a released binary is compiled
+// with, and the reason each one is not optional.
+var hardeningBuildFlags = []struct{ flag, why string }{
+	{"-trimpath", "without it Go records every package's absolute build directory in the binary, so the image binary carries /build paths that the archive binary does not"},
+	{"-buildvcs=false", "the default is `auto`, which stamps VCS state including a dirty-tree flag; .dockerignore excludes .git so it currently finds nothing, and saying `false` keeps a change to .dockerignore from quietly starting to stamp one in"},
+	{"CGO_ENABLED=0", "a cgo build links against the builder's libc and stops being a static binary the distroless base can run"},
+}
+
+// TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags covers PW.6.1 and
+// PW.6.2: choose build tool features that improve the security of the
+// executable, and configure them consistently.
+//
+// vault42 ships the same three programs twice, by two different routes.
+// .goreleaser.yaml compiles the release archives; the three Dockerfiles compile
+// the images. They are supposed to be the same binary, and for two releases
+// they were not: the goreleaser builds set -trimpath and -buildvcs=false and the
+// Dockerfiles set neither, so `strings` on the image binary listed build paths
+// that `strings` on the archive binary did not.
+//
+// Nothing caught it because nothing compared them. Both paths were individually
+// correct-looking, both were linted, and the flags live in different files in
+// different syntaxes. This is the comparison.
+func TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags(t *testing.T) {
+	goreleaser := readProductionSource(t, ".goreleaser.yaml")
+
+	for _, want := range hardeningBuildFlags {
+		if !strings.Contains(goreleaser, want.flag) {
+			t.Errorf("SSDF PW.6.2: .goreleaser.yaml no longer sets %s -- %s", want.flag, want.why)
+		}
+	}
+
+	goBuild := regexp.MustCompile(`(?s)go build\s*\\?\s*\n(.*?)-o\s`)
+
+	for _, name := range publishedImageDockerfiles {
+		source := readProductionSource(t, name)
+
+		if !strings.Contains(source, "go build") {
+			t.Errorf("SSDF PW.6.2: %s no longer compiles anything, so either it stopped being a "+
+				"published image or this list is stale", name)
+			continue
+		}
+
+		// Scoped to the build invocation. A flag named only in a comment
+		// explaining why it is set would otherwise satisfy this.
+		invocation := goBuild.FindStringSubmatch(source)
+		if invocation == nil {
+			t.Errorf("SSDF PW.6.2: could not find the `go build` invocation in %s; the scan is "+
+				"broken and every assertion below it would pass vacuously", name)
+			continue
+		}
+
+		for _, want := range hardeningBuildFlags {
+			// CGO_ENABLED is an environment assignment on the line before the
+			// flags, so it is checked against the whole RUN step.
+			haystack := invocation[1]
+			if strings.HasPrefix(want.flag, "CGO_") {
+				haystack = source
+			}
+			if !strings.Contains(haystack, want.flag) {
+				t.Errorf("SSDF PW.6.2: %s builds without %s while .goreleaser.yaml sets it. The "+
+					"image and the archive are supposed to hold the same binary. %s",
+					name, want.flag, want.why)
+			}
+		}
+	}
+}

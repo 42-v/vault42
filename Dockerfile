@@ -60,9 +60,18 @@ RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
 COPY . .
 # Copy built frontend assets into go:embed location
 COPY --from=frontend /build/web/dist internal/frontend/dist/
+# -trimpath and -buildvcs=false, to match .goreleaser.yaml. The published image
+# and the published archive hold the same program, and until now they did not
+# hold the same binary: without -trimpath Go records every package's absolute
+# build directory, so the image binary carried /build paths the archive binary
+# does not. -buildvcs is `auto` by default, which stamps VCS state including a
+# dirty-tree flag; .dockerignore excludes .git so it currently finds nothing,
+# and saying `false` means a change to .dockerignore cannot quietly start
+# stamping one in.
 RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
     --mount=type=cache,id=gobuild-${TARGETARCH},target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -trimpath -buildvcs=false \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /vault ./cmd/vault
 
