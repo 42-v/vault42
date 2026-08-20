@@ -279,7 +279,7 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
     /// granted. The payload keeps the value as a <see cref="JsonElement"/>, so the array is still
     /// an array here and a scalar is still distinguishable from one.
     /// </remarks>
-    private static IReadOnlyList<string> StringArrayClaim(JwtSecurityToken jwt, string name)
+    private static List<string> StringArrayClaim(JwtSecurityToken jwt, string name)
     {
         if (!jwt.Payload.TryGetValue(name, out var raw))
             return [];

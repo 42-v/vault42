@@ -20,7 +20,7 @@ namespace Vault42.AspNetCore.Tests;
 ///
 /// These drive the real handler through AuthenticateAsync and ChallengeAsync.
 /// </summary>
-[Collection(ClaimMapCollection.Name)]
+[Collection(ClaimMapSerializer.Name)]
 public class VaultAuthenticationHandlerTests
 {
     // ---- no token ----
@@ -57,6 +57,7 @@ public class VaultAuthenticationHandlerTests
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         var user = result.Principal;
         Assert.Equal("user-1", user.GetUserId());
         Assert.Equal(new[] { "user", "admin" }, user.GetRoles());
@@ -229,6 +230,7 @@ public class VaultAuthenticationHandlerTests
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         Assert.Empty(result.Principal.GetRoles());
         Assert.Equal(new[] { "read" }, result.Principal.GetScopes());
     }
@@ -252,6 +254,7 @@ public class VaultAuthenticationHandlerTests
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         Assert.Empty(result.Principal.GetScopes());
     }
 
@@ -270,6 +273,7 @@ public class VaultAuthenticationHandlerTests
 
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
+        Assert.NotNull(result.Principal);
         Assert.Equal(new[] { "read" }, result.Principal.GetScopes());
         Assert.True(result.Principal.HasScope("read"));
     }
@@ -287,6 +291,7 @@ public class VaultAuthenticationHandlerTests
 
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
+        Assert.NotNull(result.Principal);
         Assert.Equal(new[] { "read" }, result.Principal.GetScopes());
     }
 
@@ -310,6 +315,7 @@ public class VaultAuthenticationHandlerTests
 
         var (result, _) = await h.AuthenticateAsync($"Bearer {token}");
 
+        Assert.NotNull(result.Principal);
         Assert.Equal(new[] { "admin" }, result.Principal.GetRoles());
     }
 
@@ -321,6 +327,7 @@ public class VaultAuthenticationHandlerTests
         var (result, _) = await h.AuthenticateAsync($"Bearer {h.Signer.Token()}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         Assert.Empty(result.Principal.GetRoles());
     }
 

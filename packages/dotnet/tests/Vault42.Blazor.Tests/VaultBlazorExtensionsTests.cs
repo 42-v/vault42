@@ -1,5 +1,5 @@
-using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
@@ -115,7 +115,7 @@ public class VaultBlazorExtensionsTests
     // rather than at startup. Pinned here so the shape of the contract is stated
     // somewhere rather than discovered.
     [Fact]
-    public void TheContainerMustBeDisposedAsynchronously()
+    public async Task TheContainerMustBeDisposedAsynchronously()
     {
         var provider = Build();
 
@@ -125,7 +125,7 @@ public class VaultBlazorExtensionsTests
 
         Assert.Throws<InvalidOperationException>(provider.Dispose);
 
-        provider.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await provider.DisposeAsync();
     }
 
     private static ServiceProvider Build(Action<VaultBlazorOptions>? extra = null)

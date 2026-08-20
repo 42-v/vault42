@@ -20,7 +20,7 @@ namespace Vault42.AspNetCore.Tests;
 /// The map is process-global, so these tests share a collection with the rest of
 /// the handler suite to keep them off the same thread, and restore it afterwards.
 /// </summary>
-[Collection(ClaimMapCollection.Name)]
+[Collection(ClaimMapSerializer.Name)]
 public sealed class InboundClaimMapClearedTests : IDisposable
 {
     private readonly IDictionary<string, string> _saved;
@@ -53,6 +53,7 @@ public sealed class InboundClaimMapClearedTests : IDisposable
             ctx.Request.Headers.Authorization = $"Bearer {token}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         Assert.Equal(new[] { "user", "admin" }, result.Principal.GetRoles());
         Assert.True(result.Principal.HasVaultRole("admin"));
     }
@@ -73,6 +74,7 @@ public sealed class InboundClaimMapClearedTests : IDisposable
             ctx.Request.Headers.Authorization = $"Bearer {token}");
 
         Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
         Assert.Empty(result.Principal.GetRoles());
     }
 
@@ -98,9 +100,10 @@ public sealed class InboundClaimMapClearedTests : IDisposable
 
 /// <summary>
 /// Serialises every test that reads or writes the static inbound claim map.
+/// Named without a "Collection" suffix because CA1711 reserves it for collection types.
 /// </summary>
 [CollectionDefinition(Name)]
-public static class ClaimMapCollection
+public static class ClaimMapSerializer
 {
     internal const string Name = "inbound-claim-map";
 }

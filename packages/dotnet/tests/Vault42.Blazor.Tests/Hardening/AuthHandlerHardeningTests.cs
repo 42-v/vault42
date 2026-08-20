@@ -27,7 +27,7 @@ public class AuthHandlerHardeningTests
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert.NotNull(helper);
 
-        var actual = (bool)helper!.Invoke(null, new object[] { new HttpMethod(method) })!;
+        var actual = (bool)helper.Invoke(null, new object[] { new HttpMethod(method) })!;
         Assert.Equal(expected, actual);
     }
 }

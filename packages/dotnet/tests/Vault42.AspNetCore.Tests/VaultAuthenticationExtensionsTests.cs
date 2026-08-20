@@ -92,12 +92,12 @@ public class VaultAuthenticationExtensionsTests
     }
 
     [Fact]
-    public void AddVault_RegistersTheDefaultSchemeName()
+    public async Task AddVault_RegistersTheDefaultSchemeName()
     {
         var services = Build(o => o.Authority = "https://vault.example.com");
 
         var schemes = services.GetRequiredService<IAuthenticationSchemeProvider>();
-        var scheme = schemes.GetSchemeAsync(VaultDefaults.AuthenticationScheme).GetAwaiter().GetResult();
+        var scheme = await schemes.GetSchemeAsync(VaultDefaults.AuthenticationScheme);
 
         Assert.NotNull(scheme);
         Assert.Equal(typeof(VaultAuthenticationHandler), scheme.HandlerType);
@@ -105,7 +105,7 @@ public class VaultAuthenticationExtensionsTests
     }
 
     [Fact]
-    public void AddVault_AcceptsACustomSchemeName()
+    public async Task AddVault_AcceptsACustomSchemeName()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -113,8 +113,8 @@ public class VaultAuthenticationExtensionsTests
             .AddVault("SecondVault", o => o.Authority = "https://vault.example.com");
         var provider = services.BuildServiceProvider();
 
-        var scheme = provider.GetRequiredService<IAuthenticationSchemeProvider>()
-            .GetSchemeAsync("SecondVault").GetAwaiter().GetResult();
+        var scheme = await provider.GetRequiredService<IAuthenticationSchemeProvider>()
+            .GetSchemeAsync("SecondVault");
 
         Assert.NotNull(scheme);
     }

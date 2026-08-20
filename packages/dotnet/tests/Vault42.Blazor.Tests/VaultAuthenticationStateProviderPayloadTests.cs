@@ -80,27 +80,18 @@ public class VaultAuthenticationStateProviderPayloadTests
         Assert.Equal("null", state.User.FindFirst("middle_name")?.Value);
     }
 
+    // Three ways a token can be unreadable, and they are one question rather than
+    // three: the segment count is wrong (the first three cases), the payload
+    // segment decodes to something that is not JSON (the fourth), or it does not
+    // decode at all (the fifth). Every one has to end anonymous rather than as an
+    // identity built from whatever survived.
     [Theory]
     [InlineData("not-a-jwt")]
     [InlineData("only.two")]
     [InlineData("a.b.c.d")]
-    public async Task ATokenThatIsNotThreeSegments_IsAnonymous(string token)
-    {
-        var store = new TokenStore(new FakeJsRuntime());
-        store.SetAccessToken(token, 900);
-
-        var state = await new VaultAuthenticationStateProvider(store).GetAuthenticationStateAsync();
-
-        Assert.False(state.User.Identity?.IsAuthenticated);
-    }
-
-    // Base64 that decodes to something other than JSON, and base64 that does not
-    // decode at all, both land in the catch and both must be anonymous rather
-    // than an identity built from whatever survived.
-    [Theory]
     [InlineData("aGVhZGVy.bm90LWpzb24.c2ln")]
     [InlineData("aGVhZGVy.!!!not-base64!!!.c2ln")]
-    public async Task ATokenWhosePayloadWillNotParse_IsAnonymous(string token)
+    public async Task ATokenThatCannotBeRead_IsAnonymous(string token)
     {
         var store = new TokenStore(new FakeJsRuntime());
         store.SetAccessToken(token, 900);
@@ -139,16 +130,22 @@ public class VaultAuthenticationStateProviderPayloadTests
         return new VaultAuthenticationStateProvider(store).GetAuthenticationStateAsync();
     }
 
+    // Null members are serialised rather than skipped, because a null claim is one
+    // of the payload shapes under test.
+    private static readonly JsonSerializerOptions PayloadOptions = new ()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
+    };
+
     private static string Jwt(object payload)
     {
         static string Segment(byte[] bytes) =>
             Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-        var options = new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never };
         return string.Join(
             '.',
             Segment(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", typ = "JWT" })),
-            Segment(JsonSerializer.SerializeToUtf8Bytes(payload, options)),
+            Segment(JsonSerializer.SerializeToUtf8Bytes(payload, PayloadOptions)),
             Segment(new byte[32]));
     }
 }

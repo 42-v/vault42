@@ -24,7 +24,6 @@ public class VaultAuthServiceTests
     private const string RedirectUri = "https://app.example.com/auth/callback";
 
     // ---- login ----
-
     [Fact]
     public async Task LoginAsync_PersistsTheHandshakeAndLeavesTheApp()
     {
@@ -66,7 +65,6 @@ public class VaultAuthServiceTests
     }
 
     // ---- callback ----
-
     [Fact]
     public async Task HandleCallback_ExchangesTheCodeAndEstablishesTheSession()
     {
@@ -120,8 +118,8 @@ public class VaultAuthServiceTests
         Assert.Empty(h.Http.Requests);
     }
 
-    // The nonce mismatch is the injected-callback case. Refusing is half of it;
-    // clearing the stored nonce is the other half, or the attacker simply retries
+    // The nonce mismatch is the injected-callback case. Refusing is half of it.
+    // Clearing the stored nonce is the other half, or the attacker simply retries
     // against the same value until they guess it.
     [Fact]
     public async Task HandleCallback_StateMismatch_IsRefusedAndBurnsTheNonce()
@@ -187,7 +185,6 @@ public class VaultAuthServiceTests
     }
 
     // ---- refresh ----
-
     // The point of the cookie default: the SDK holds no refresh token at all, so
     // it must still issue the request and let the browser attach the cookie. A
     // "no token, no request" shortcut would break the most secure mode and only
@@ -272,7 +269,6 @@ public class VaultAuthServiceTests
     }
 
     // ---- session restore ----
-
     [Fact]
     public async Task TryRestoreSession_UnderCookieMode_AlwaysAsksTheServer()
     {
@@ -306,7 +302,6 @@ public class VaultAuthServiceTests
     }
 
     // ---- logout ----
-
     [Fact]
     public async Task Logout_ClearsLocallyFirstAndTellsTheServerAfterwards()
     {
@@ -368,7 +363,6 @@ public class VaultAuthServiceTests
     }
 
     // ---- disposal ----
-
     // Disposing is not signing out. The refresh timer stops and the handshake
     // slots are dropped, but a session the app can still restore is left alone.
     [Fact]

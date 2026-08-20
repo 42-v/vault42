@@ -8,6 +8,15 @@ using Vault42.Blazor;
 using Vault42.Blazor.Internal;
 using Xunit;
 
+// BL0006 says the RenderTree types are not for use outside the Blazor framework,
+// because their shape can change between releases. That is exactly what this file
+// does, and the warning is accepted rather than worked around: Renderer itself
+// lives in that namespace, Blazor's own test renderer is not published, the
+// alternative is taking on a third-party component-test package as a dependency
+// for one component, and a framework change that breaks this breaks a test rather
+// than anything shipped.
+#pragma warning disable BL0006
+
 namespace Vault42.Blazor.Tests;
 
 /// <summary>
@@ -26,7 +35,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task ASuccessfulCallback_RaisesOnSuccessAndNavigatesToRedirectTo()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: true));
         h.Http.Enqueue(HttpStatusCode.OK, TokenJson);
@@ -45,7 +54,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task AFailedCallback_RaisesOnErrorAndStaysPut()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: false));
         string? reported = null;
@@ -66,7 +75,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task RedirectToDefaultsToTheApplicationRoot()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: true));
         h.Http.Enqueue(HttpStatusCode.OK, TokenJson);
@@ -81,7 +90,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task TheCallbacksAreOptional()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: false));
 
@@ -93,7 +102,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task TheErrorStateCanBeReplacedByTheApplication()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: false));
 
@@ -112,7 +121,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task TheProcessingStateRendersUntilTheExchangeSettles()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: true));
         var gate = new TaskCompletionSource();
@@ -130,7 +139,7 @@ public class VaultAuthCallbackTests
     [Fact]
     public async Task TheProcessingStateCanBeReplacedByTheApplication()
     {
-        var h = new Harness();
+        using var h = new Harness();
         await h.StartLoginAsync();
         h.Navigation.Reset(h.CallbackUri(valid: true));
         var gate = new TaskCompletionSource();
@@ -151,7 +160,7 @@ public class VaultAuthCallbackTests
     private const string TokenJson =
         "{\"access_token\":\"access-1\",\"token_type\":\"Bearer\",\"expires_in\":900}";
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
         private readonly TestRenderer _renderer;
 
@@ -204,16 +213,19 @@ public class VaultAuthCallbackTests
         internal Task RenderAsync(Dictionary<string, object?> parameters) =>
             _renderer.RenderAsync<VaultAuthCallback>(parameters);
 
+        public void Dispose() => _renderer.Dispose();
+
         /// <summary>Polls until the first render has produced the expected text.</summary>
         internal async Task WaitForMarkupAsync(string expected)
         {
             var deadline = DateTime.UtcNow.AddSeconds(10);
-            string markup;
-            while (!(markup = await MarkupAsync()).Contains(expected, StringComparison.Ordinal))
+            var markup = await MarkupAsync();
+            while (!markup.Contains(expected, StringComparison.Ordinal))
             {
                 if (DateTime.UtcNow > deadline)
                     throw new TimeoutException($"markup never contained \"{expected}\"; it was: {markup}");
                 await Task.Delay(20);
+                markup = await MarkupAsync();
             }
         }
     }
@@ -243,9 +255,7 @@ public class VaultAuthCallbackTests
 
     /// <summary>
     /// The smallest Renderer that can host one component and read back what it
-    /// produced. Blazor's own test infrastructure is not published, and a
-    /// third-party component-test package would be a new dependency for one
-    /// component, so the render tree is walked here instead.
+    /// produced.
     /// </summary>
     private sealed class TestRenderer : Renderer
     {
@@ -307,3 +317,4 @@ public class VaultAuthCallbackTests
         }
     }
 }
+#pragma warning restore BL0006

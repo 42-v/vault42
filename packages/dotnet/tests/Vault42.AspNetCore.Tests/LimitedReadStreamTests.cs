@@ -64,7 +64,7 @@ public class LimitedReadStreamTests
         var buffer = new byte[128];
 
         await Assert.ThrowsAsync<InvalidDataException>(
-            async () => await stream.ReadAsync(buffer.AsMemory()));
+            async () => _ = await stream.ReadAsync(buffer.AsMemory()));
     }
 
     // The check is on the running total, not on the size of one read.
@@ -86,9 +86,9 @@ public class LimitedReadStreamTests
         var buffer = new byte[4];
 
         Assert.Equal(0, stream.Position);
-        stream.Read(buffer, 0, 4);
+        Assert.Equal(4, stream.Read(buffer, 0, 4));
         Assert.Equal(4, stream.Position);
-        stream.Read(buffer, 0, 4);
+        Assert.Equal(4, stream.Read(buffer, 0, 4));
         Assert.Equal(8, stream.Position);
     }
 
