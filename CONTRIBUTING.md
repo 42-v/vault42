@@ -76,7 +76,7 @@ a version-prefixed commit subject as a release mechanism.
 
 ## What CI runs on your pull request
 
-`.github/workflows/ci.yml`, which also runs on every push to `main`. All eighteen jobs, named as
+`.github/workflows/ci.yml`, which also runs on every push to `main`. All nineteen jobs, named as
 they appear in the checks list:
 
 | Job | What it does |
@@ -87,6 +87,7 @@ they appear in the checks list:
 | Go coverage gate (required) | watches the job above and fails when it was skipped. **Require this one in branch protection**, not the job it watches: a skipped job reports green |
 | Frontend | builds `packages/vue` and `web`, then `test:coverage` for both, enforcing the thresholds in each `vite.config.ts`, then `eslint .` over the whole repository, `site/` included, at `--max-warnings 0` |
 | golangci-lint | `.golangci.yml` on the diff as a gate, and a whole-tree run held against `.golangci-baseline.json`. Both fail the job; the whole-tree run is a ratchet, not a report |
+| golangci-lint (required) | watches the job above. It is conditional on a Go change, so like the two coverage gates it needs a watcher before it can be required at all |
 | Security | calls `.github/workflows/nightly-security.yml`: govulncheck, gosec, trivy over source, image and frontend base, and the attack suite |
 | Helm chart | `helm lint` plus a render of every values file, and a check that a default install resolves a published image tag |
 | Version consistency | `scripts/version-bump.sh --check`: every manifest must agree, including the two version markers in `site/index.html` |

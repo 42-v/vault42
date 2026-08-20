@@ -687,3 +687,94 @@ func countTestFuncs(t *testing.T, dir string) int {
 	}
 	return count
 }
+
+// requiredWrapperSuffix is the naming convention for the always-run job that
+// stands in front of a conditional gate.
+const requiredWrapperSuffix = "-required"
+
+// TestSSDF_800_218_EveryConditionalGateHasAnAlwaysRunWrapper covers PO.4.1 and
+// PW.7.2: the criteria a change must pass have to be the criteria that actually
+// block a merge.
+//
+// GitHub branch protection counts a skipped job as a passing one. A gate that
+// is conditional -- "only when a Go file changed", "only when packages/dotnet
+// changed" -- therefore cannot be required directly: requiring it would let
+// every pull request that does not trigger it merge on a green tick the job
+// never earned. The pattern is a second job that always runs, looks at both the
+// condition and the gate's result, and fails when the gate was owed and did not
+// pass.
+//
+// The rule was learned twice and applied twice, to the Go coverage gate and
+// then to the .NET one, and missed the third case. golangci-lint is conditional
+// on the same Go-changed flag, had no wrapper, and so was never among the
+// required checks -- while the register's CR-36 listed it as one of them. The
+// claim went unchallenged because nothing compared the register's sentence to
+// the workflow.
+//
+// This test does not know what branch protection requires; that is a repository
+// setting and not in the tree. It asserts the half that is: that a wrapper
+// exists for every conditional gate that has one, that each wrapper always runs,
+// and that each consults the job it fronts.
+func TestSSDF_800_218_EveryConditionalGateHasAnAlwaysRunWrapper(t *testing.T) {
+	ci := readWorkflow(t, "ci.yml")
+
+	loc := ciJobBlock.FindStringIndex(ci)
+	if loc == nil {
+		t.Fatal("SSDF PO.4.1: ci.yml has no `jobs:` block; the scan is broken")
+	}
+	body := ci[loc[1]:]
+
+	starts := ciJobStart.FindAllStringSubmatchIndex(body, -1)
+	blocks := make(map[string]string, len(starts))
+	for i, m := range starts {
+		end := len(body)
+		if i+1 < len(starts) {
+			end = starts[i+1][0]
+		}
+		blocks[body[m[2]:m[3]]] = body[m[1]:end]
+	}
+	if len(blocks) < 10 {
+		t.Fatalf("SSDF PO.4.1: only %d jobs parsed out of ci.yml; the scan is broken", len(blocks))
+	}
+
+	wrappers := 0
+	for id, block := range blocks {
+		if !strings.HasSuffix(id, requiredWrapperSuffix) {
+			continue
+		}
+		wrappers++
+		guarded := strings.TrimSuffix(id, requiredWrapperSuffix)
+
+		if _, ok := blocks[guarded]; !ok {
+			t.Errorf("SSDF PO.4.1: ci.yml has a %q job and no %q job for it to front. A wrapper "+
+				"with nothing behind it is a required check that asserts nothing.", id, guarded)
+			continue
+		}
+
+		if !strings.Contains(block, "if: always()") {
+			t.Errorf("SSDF PO.4.1: the %q job does not declare `if: always()`. A wrapper that can "+
+				"itself be skipped reintroduces the exact problem it exists to solve, because "+
+				"branch protection reads a skipped job as a passing one.", id)
+		}
+
+		if !strings.Contains(block, "needs."+guarded+".result") {
+			t.Errorf("SSDF PO.4.1: the %q job never reads needs.%s.result, so it reports success "+
+				"without looking at the gate it is named after", id, guarded)
+		}
+
+		// The condition, not just the result: a wrapper that fails whenever the
+		// gate was skipped would block every pull request that legitimately does
+		// not trigger it.
+		if !strings.Contains(block, "needs.changes.outputs.") {
+			t.Errorf("SSDF PO.4.1: the %q job does not consult the changes job, so it cannot tell "+
+				"a gate that was skipped for a good reason from one that was owed", id)
+		}
+	}
+
+	if wrappers < 3 {
+		t.Errorf("SSDF PO.4.1: found %d required-wrappers in ci.yml, expected at least 3 (the Go "+
+			"coverage gate, the .NET coverage gate and golangci-lint). A conditional gate that "+
+			"loses its wrapper stops being requirable, and nothing else would say so.", wrappers)
+	}
+	t.Logf("SSDF PO.4.1: %d conditional gates carry an always-run wrapper", wrappers)
+}

@@ -402,6 +402,41 @@ jobs:
           print(f"golangci-lint at or below baseline ({len(issues)} vs {sum(baseline.values())})")
           PY
 
+  # The same conditional-job problem the two coverage gates have, arriving a
+  # third time. golangci-lint is skipped when no Go file changed, and branch
+  # protection counts a skipped job as green, so requiring `golangci-lint`
+  # directly would pass every pull request that touches no Go -- and requiring
+  # it was therefore never done. The register said otherwise: CR-36 listed
+  # golangci-lint among the checks standing in for a human reviewer, and it was
+  # not among the thirteen the branch actually requires.
+  #
+  # This is the wrapper that makes it requirable, written the way
+  # coverage-gate-required and dotnet-required already are. Adding the job does
+  # not require it; that is a branch-protection setting, and the maintainer's.
+  golangci-required:
+    name: golangci-lint (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, golangci]
+    if: always()
+    steps:
+      - name: Assert the linters ran when they had to
+        shell: bash
+        env:
+          NEEDED: ${{ needs.changes.outputs.go_changed }}
+          RESULT: ${{ needs.golangci.result }}
+        run: |
+          set -euo pipefail
+          if [ "$NEEDED" != 'true' ]; then
+            echo "no Go change in this pull request; golangci-lint was not required"
+            exit 0
+          fi
+          if [ "$RESULT" != 'success' ]; then
+            echo "::error::Go files changed and golangci-lint did not pass (result: $RESULT)"
+            exit 1
+          fi
+          echo "golangci-lint ran and passed"
+
   # govulncheck, gosec and Trivy used to run only at 03:00 UTC on main, so a PR
   # could introduce a HIGH CVE and merge green.
   #
