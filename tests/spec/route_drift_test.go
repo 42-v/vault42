@@ -25,6 +25,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -579,4 +580,80 @@ func sorted(set map[route]bool) []route {
 		return out[i].method < out[j].method
 	})
 	return out
+}
+
+// routeCountInProse matches the sentence in docs/COMPLIANCE.md that quotes the
+// size of the documented route surface.
+var routeCountInProse = regexp.MustCompile(`all (\d+) mounted routes must appear`)
+
+// TestRouteInventoryCountInProseIsCurrent keeps the one prose claim about the
+// size of the API surface honest.
+//
+// The route inventories themselves are gated in both directions by the tests
+// above, so they cannot drift. The sentence in docs/COMPLIANCE.md that tells a
+// reader how many routes those gates cover was not gated by anything, and it
+// was wrong: it said 51 from 1.0.0 until 1.0.3, over an inventory that held 105
+// routes on the day the sentence was written. Nobody counted, because the
+// paragraph is next to a description of a mechanism that counts for itself.
+//
+// A number in prose beside a machine-checked artifact is the worst place for a
+// number to be. It reads as the artifact's own output and is maintained by
+// hand.
+func TestRouteInventoryCountInProseIsCurrent(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+
+	inventory, err := os.ReadFile(filepath.Join(root, "docs", "api.md"))
+	if err != nil {
+		t.Fatalf("read docs/api.md: %v", err)
+	}
+	rows := countInventoryRows(t, string(inventory),
+		"<!-- BEGIN ENDPOINT SUMMARY -->", "<!-- END ENDPOINT SUMMARY -->")
+	if rows == 0 {
+		t.Fatal("no endpoint rows found in docs/api.md; the scan is broken and the comparison " +
+			"below would be against zero")
+	}
+
+	doc, err := os.ReadFile(filepath.Join(root, "docs", "COMPLIANCE.md"))
+	if err != nil {
+		t.Fatalf("read docs/COMPLIANCE.md: %v", err)
+	}
+	m := routeCountInProse.FindSubmatch(doc)
+	if m == nil {
+		t.Fatal("docs/COMPLIANCE.md no longer states how many mounted routes the API9 gate " +
+			"covers. Either restore the sentence or delete this test; leaving the sentence out " +
+			"is fine, leaving it in unchecked is what produced the wrong number.")
+	}
+	claimed, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse the route count out of docs/COMPLIANCE.md: %v", err)
+	}
+
+	if claimed != rows {
+		t.Errorf("docs/COMPLIANCE.md says %d mounted routes and docs/api.md lists %d. The "+
+			"inventory is machine-checked in both directions; this sentence is not, which is why "+
+			"it is the half that was wrong.", claimed, rows)
+	}
+}
+
+// countInventoryRows counts the endpoint rows between two sentinels. A row is a
+// table line whose first cell is a code span, which skips the header and the
+// alignment marker without depending on their exact text.
+func countInventoryRows(t *testing.T, doc, begin, end string) int {
+	t.Helper()
+
+	from := strings.Index(doc, begin)
+	to := strings.Index(doc, end)
+	if from < 0 || to < 0 || to < from {
+		t.Fatalf("sentinels %q / %q not found in order", begin, end)
+	}
+
+	count := 0
+	for _, line := range strings.Split(doc[from:to], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "| `") {
+			count++
+		}
+	}
+	return count
 }

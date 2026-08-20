@@ -285,10 +285,14 @@ jobs:
       - name: Audit dependencies
         run: pnpm audit --audit-level high
 
-  # .golangci.yml is 119 lines of tuned configuration that no workflow, script or
-  # hook has ever invoked. `revive: exported` is on now, and it is the check that
-  # catches undocumented exported API, so the tree starts with a backlog. New
-  # findings block; the backlog is reported and burned down.
+  # .golangci.yml was tuned configuration that no workflow, script or hook
+  # invoked; this job is what started invoking it. `revive: exported` is on, and
+  # it is the check that catches undocumented exported API, so the tree started
+  # with a backlog. New findings block; the backlog is reported and burned down.
+  #
+  # The line count that used to open this comment is gone on purpose. It was a
+  # fact about a file that changes whenever the file does, sitting in a comment
+  # nothing reads, and it had already drifted by seven lines.
   golangci:
     name: golangci-lint
     runs-on: ubuntu-latest
