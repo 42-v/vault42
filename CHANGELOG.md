@@ -170,6 +170,21 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   Seven of the twelve already did out of habit; the other five named source positions.
   The tests existed in all five cases, so this was writing down what was already true.
 
+* **Branch protection was tightened rather than described.** `main` now enforces its rules
+  against administrators too, requires a valid signature on every commit, and requires the
+  new `golangci-lint (required)` check, taking the required set from thirteen to fourteen.
+  The linter had never been requirable: the job is conditional on a Go change and branch
+  protection reads a skipped job as green, which is why 1.0.3 adds the always-run wrapper in
+  front of it.
+
+  Signing was already happening on both ends -- the branch verifies commit by commit and
+  every merge to `main` is a GitHub-signed squash -- so requiring it cost nothing and closed
+  one of CR-40's own revisit conditions. It did not close the risk, which is the part worth
+  recording: a signature proves which key authored a commit and proves nothing about the
+  machine that key sat on. Neither setting raises the Scorecard `Branch-Protection` score,
+  whose two remaining warnings are the single-maintainer problem; both were set because they
+  are right, not because they scored.
+
 * **The supported frontend topology is written down.** `docs/deployment-guide.md` gains a
   section on where the single-page app is served from: separate hostnames, which is the
   production shape and needs two settings that are both off by default and both required,
