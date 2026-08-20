@@ -8,7 +8,7 @@
 |---|---|---|---|---|
 | `github.com/go-webauthn/webauthn` | v0.17.4 | WebAuthn/FIDO2 passkey support | ![stars](https://img.shields.io/github/stars/go-webauthn/webauthn?style=flat&label=) | 2026-05-22 |
 | `github.com/jackc/pgx/v5` | v5.10.0 | PostgreSQL driver + connection pool | ![stars](https://img.shields.io/github/stars/jackc/pgx?style=flat&label=) | 2026-06-03 |
-| `golang.org/x/crypto` | v0.53.0 (latest: v0.55.0) | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-08-11 |
+| `golang.org/x/crypto` | v0.55.0 | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-08-11 |
 
 ## Transitive (18 pulled by the above)
 
@@ -29,9 +29,9 @@
 | `github.com/philhofer/fwd` | v1.2.0 |  | ![stars](https://img.shields.io/github/stars/philhofer/fwd?style=flat&label=) | 2024-09-16 |
 | `github.com/tinylib/msgp` | v1.6.4 |  | ![stars](https://img.shields.io/github/stars/tinylib/msgp?style=flat&label=) | 2026-03-16 |
 | `github.com/x448/float16` | v0.8.4 | cbor | ![stars](https://img.shields.io/github/stars/x448/float16?style=flat&label=) | 2020-01-17 |
-| `golang.org/x/sync` | v0.21.0 | pgx | ![stars](https://img.shields.io/github/stars/golang/sync?style=flat&label=) | 2026-07-01 |
-| `golang.org/x/sys` | v0.46.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/sys?style=flat&label=) | 2026-06-30 |
-| `golang.org/x/text` | v0.39.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/text?style=flat&label=) | 2026-08-11 |
+| `golang.org/x/sync` | v0.22.0 | pgx | ![stars](https://img.shields.io/github/stars/golang/sync?style=flat&label=) | 2026-07-01 |
+| `golang.org/x/sys` | v0.47.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/sys?style=flat&label=) | 2026-06-30 |
+| `golang.org/x/text` | v0.41.0 | x/crypto | ![stars](https://img.shields.io/github/stars/golang/text?style=flat&label=) | 2026-08-11 |
 
 ## Coverage by Package
 
