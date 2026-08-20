@@ -133,7 +133,7 @@ async function handleDelete(id: string) {
                     {{ formatDate(new Date(blob.created_at)) }}
                   </p>
                 </div>
-                <div class="flex gap-2 flex-shrink-0">
+                <div class="flex gap-2 shrink-0">
                   <button class="vault42-btn-secondary vault42-btn-sm" @click="handleDownload(blob.id, blob.label)">
                     {{ t('common.download') }}
                   </button>

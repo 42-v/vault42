@@ -114,7 +114,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <input
           v-model="search"
           type="text"
-          class="w-full bg-vault42-bg border border-vault42-control rounded px-2 py-1.5 text-xs text-vault42-text placeholder-vault42-muted outline-none focus:border-vault42-accent transition-colors"
+          class="w-full bg-vault42-bg border border-vault42-control rounded-sm px-2 py-1.5 text-xs text-vault42-text placeholder-vault42-muted outline-hidden focus:border-vault42-accent transition-colors"
           placeholder="Search..."
           autofocus
           @click.stop

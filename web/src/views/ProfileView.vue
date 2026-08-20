@@ -26,7 +26,7 @@ onMounted(() => fetchProfile())
         <div v-else-if="profile" class="space-y-6">
           <!-- Identity card -->
           <div class="vault42-card flex items-start gap-5">
-            <div class="w-14 h-14 rounded-full bg-vault42-primary/20 flex items-center justify-center flex-shrink-0">
+            <div class="w-14 h-14 rounded-full bg-vault42-primary/20 flex items-center justify-center shrink-0">
               <span class="text-xl font-bold text-vault42-accent">
                 {{ (profile.display_name || profile.email)[0].toUpperCase() }}
               </span>

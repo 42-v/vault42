@@ -14,22 +14,23 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path'
  * hover to 2.98:1.
  */
 
-const configPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '../../tailwind.config.js')
+const stylesheetPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '../style.css')
 
 /**
- * Reads the tokens out of `tailwind.config.js` as text.
+ * Reads the tokens out of the `@theme` block in `src/style.css` as text.
  *
- * Importing it would need `allowJs`, which would drag every config file in the
- * package into the typecheck. Parsing the literal also makes this a test of the
- * file Tailwind actually compiles, not of a copy that could drift from it.
+ * They lived in `tailwind.config.js` until Tailwind 4, which takes its theme
+ * from CSS. Reading the stylesheet keeps this a test of the file Tailwind
+ * actually compiles rather than of a copy that could drift from it, which is
+ * the same reason the old version parsed the config instead of importing it.
  */
 function readPalette(): Record<string, string> {
-  const source = readFileSync(configPath, 'utf8')
-  const block = /vault42:\s*\{([^}]*)\}/.exec(source)
-  if (!block) throw new Error(`no vault42 colour block in ${configPath}`)
+  const source = readFileSync(stylesheetPath, 'utf8')
+  const block = /@theme\s*\{([^}]*)\}/.exec(source)
+  if (!block) throw new Error(`no @theme block in ${stylesheetPath}`)
 
   const tokens: Record<string, string> = {}
-  for (const [, name, hex] of block[1].matchAll(/'?([\w-]+)'?:\s*'(#[0-9a-fA-F]{6})'/g)) {
+  for (const [, name, hex] of block[1].matchAll(/--color-vault42-([\w-]+):\s*(#[0-9a-fA-F]{6});/g)) {
     tokens[name] = hex
   }
   return tokens
@@ -70,7 +71,7 @@ const primaryHover = palette['primary-hover']
 const BACKDROPS: Array<[string, string]> = [['bg', bg], ['surface', surface]]
 
 describe('the palette this suite reads', () => {
-  it('parsed every token out of tailwind.config.js', () => {
+  it('parsed every token out of the @theme block', () => {
     // A parse that silently found nothing would make every assertion below pass
     // against `undefined`.
     expect(Object.keys(palette).sort()).toEqual([
