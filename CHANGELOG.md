@@ -7,6 +7,48 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
 ### Security
 
+* **The outbound allowlist checked one host and the connection went to another.**
+  `outbound.hostOf` compared `strings.ToLower(u.Hostname())`. `net/http` opens the connection
+  to what `canonicalAddr` produces, which runs the same string through UTS-46/IDNA. Those are
+  not the same map, and one rune made the difference exploitable against a plain-ASCII issuer:
+  `U+0130`, the Turkish dotted capital İ, lowercases to an ordinary ASCII `i`. A discovery
+  document advertising
+
+  ```text
+  https://login.microsoftonlİne.com/common/discovery/v2.0/keys
+  ```
+
+  read here as `login.microsoftonline.com`, passed the issuer-domain check, and was dialled as
+  `login.xn--microsoftonline-fqi.com` -- a `.com` anybody can register.
+
+  The reachable fields are the whole CR-17 boundary: `jwks_uri` hands an attacker the keys
+  every `id_token` signature is verified against, and `token_endpoint` posts the client secret
+  to a stranger. Any issuer whose registrable domain contains the letter `i` was reachable, and
+  a rune sweep confirms `U+0130` is the only rune landing in the ASCII tail, so that is the
+  exhaustive list rather than one example. Two lesser variants share the cause: `U+1E9E`
+  reaches the wire as `ss`, and `ToLower` collapses every invalid UTF-8 byte to `U+FFFD`, so
+  two different hosts compare equal.
+
+  A non-ASCII host is refused outright. A discovery document is machine-generated and every
+  issuer serving an internationalized name spells it in punycode, so nothing legitimate loses.
+
+* **A not-yet-valid token verified.** `NumericDate.UnmarshalJSON` converted the parsed
+  `float64` straight to `int64`, which is implementation-defined in Go when the value does not
+  fit; on amd64 it yields `MinInt64`, which `time.Unix` wraps to an instant the validator was
+  happy to call past. An `nbf` of `1e99` therefore verified. Reachable without a token this
+  service minted: a DPoP proof is self-signed by a key the sender invents, and it is parsed
+  with claim validation on. The same conversion sat in `claims.go`, which is the hazard
+  `internal/oauth2` had to cap for `auth_time` earlier in this release -- one defect at three
+  call sites, now bounded at all three.
+
+* **A second spelling of a claim overrode the real one.** `encoding/json` matches a struct tag
+  case-insensitively and takes the last match, so `{"exp":0,"eXP":<future>}` unmarshalled with
+  the future expiry and the real `exp` discarded: an expired token verified. The same move
+  shifts `iss` and `aud`, the two claims validated against configured values, so an audience
+  check could pass on a claim the payload never carried under that name -- demonstrated as
+  `aud:["vault42-api"]` read back by the caller as `[""]`. A payload naming one claim twice
+  under names differing only by case is refused.
+
 * **The email template guard accepted three exfiltration beacons and could be made to
   panic.** `CR-30` records that the guard is written for this codebase rather than taken
   from a library, and its residual risk read: *"a gap in it is a gap nobody else is
