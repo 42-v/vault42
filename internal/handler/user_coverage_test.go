@@ -507,138 +507,64 @@ func TestRenameDevice_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestRenameDevice_EmptyName(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		GetByIDFn: func(ctx context.Context, id string) (*model.Device, error) {
-			return &model.Device{ID: id, UserID: "user-123"}, nil
-		},
-	}
+// The friendly name is user-chosen text that later ends up in the device list,
+// so the handler decides per name whether the rename happens at all. Tab is the
+// one control character that survives, and 100 runes is the last accepted
+// length. A rejected name must leave the stored name untouched, which is why
+// each case also counts the writes.
+func TestRenameDevice_NameValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		friendly  string
+		wantCode  int
+		wantError string
+	}{
+		{"empty", "", http.StatusBadRequest, "name_required"},
+		{"whitespace only", "   ", http.StatusBadRequest, "name_required"},
+		{"control characters", "name\x00with\x01control", http.StatusBadRequest, "name_invalid_chars"},
+		{"tabs are allowed", "name\twith\ttabs", http.StatusOK, ""},
+		{"exactly 100 runes", strings.Repeat("A", 100), http.StatusOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var written []string
+			devices := &mocks.MockDeviceRepo{
+				GetByIDFn: func(_ context.Context, id string) (*model.Device, error) {
+					return &model.Device{ID: id, UserID: "user-123"}, nil
+				},
+				UpdateFriendlyNameFn: func(_ context.Context, _ string, name string) error {
+					written = append(written, name)
+					return nil
+				},
+			}
 
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
+			h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
 
-	body := jsonBody(t, map[string]string{"friendly_name": ""})
-	req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
-	req = setAuthContext(req, "user-123")
-	req.SetPathValue("id", "device-1")
-	rec := httptest.NewRecorder()
+			body := jsonBody(t, map[string]string{"friendly_name": tc.friendly})
+			req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
+			req = setAuthContext(req, "user-123")
+			req.SetPathValue("id", "device-1")
+			rec := httptest.NewRecorder()
 
-	h.RenameDevice(rec, req)
+			h.RenameDevice(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "name_required" {
-		t.Fatalf("expected error=name_required, got %q", result["error"])
-	}
-}
-
-func TestRenameDevice_WhitespaceOnlyName(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		GetByIDFn: func(ctx context.Context, id string) (*model.Device, error) {
-			return &model.Device{ID: id, UserID: "user-123"}, nil
-		},
-	}
-
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
-
-	body := jsonBody(t, map[string]string{"friendly_name": "   "})
-	req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
-	req = setAuthContext(req, "user-123")
-	req.SetPathValue("id", "device-1")
-	rec := httptest.NewRecorder()
-
-	h.RenameDevice(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "name_required" {
-		t.Fatalf("expected error=name_required, got %q", result["error"])
-	}
-}
-
-func TestRenameDevice_ControlChars(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		GetByIDFn: func(ctx context.Context, id string) (*model.Device, error) {
-			return &model.Device{ID: id, UserID: "user-123"}, nil
-		},
-	}
-
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
-
-	body := jsonBody(t, map[string]string{"friendly_name": "name\x00with\x01control"})
-	req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
-	req = setAuthContext(req, "user-123")
-	req.SetPathValue("id", "device-1")
-	rec := httptest.NewRecorder()
-
-	h.RenameDevice(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]string
-	decodeResponse(t, rec, &result)
-	if result["error"] != "name_invalid_chars" {
-		t.Fatalf("expected error=name_invalid_chars, got %q", result["error"])
-	}
-}
-
-func TestRenameDevice_TabsAllowed(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		GetByIDFn: func(ctx context.Context, id string) (*model.Device, error) {
-			return &model.Device{ID: id, UserID: "user-123"}, nil
-		},
-		UpdateFriendlyNameFn: func(ctx context.Context, id string, name string) error {
-			return nil
-		},
-	}
-
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
-
-	body := jsonBody(t, map[string]string{"friendly_name": "name\twith\ttabs"})
-	req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
-	req = setAuthContext(req, "user-123")
-	req.SetPathValue("id", "device-1")
-	rec := httptest.NewRecorder()
-
-	h.RenameDevice(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestRenameDevice_Exactly100Chars(t *testing.T) {
-	devices := &mocks.MockDeviceRepo{
-		GetByIDFn: func(ctx context.Context, id string) (*model.Device, error) {
-			return &model.Device{ID: id, UserID: "user-123"}, nil
-		},
-		UpdateFriendlyNameFn: func(ctx context.Context, id string, name string) error {
-			return nil
-		},
-	}
-
-	h := NewUserHandler(&mocks.MockUserRepo{}, devices, &mocks.MockRefreshTokenRepo{}, nil)
-
-	name := strings.Repeat("A", 100)
-	body := jsonBody(t, map[string]string{"friendly_name": name})
-	req := httptest.NewRequest(http.MethodPatch, "/user/devices/device-1", body)
-	req = setAuthContext(req, "user-123")
-	req.SetPathValue("id", "device-1")
-	rec := httptest.NewRecorder()
-
-	h.RenameDevice(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for 100-char name, got %d; body: %s", rec.Code, rec.Body.String())
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.wantCode, rec.Body.String())
+			}
+			if tc.wantError == "" {
+				if len(written) != 1 {
+					t.Fatalf("the device was renamed %d time(s), want 1", len(written))
+				}
+				return
+			}
+			var result map[string]string
+			decodeResponse(t, rec, &result)
+			if result["error"] != tc.wantError {
+				t.Fatalf("error = %q, want %q", result["error"], tc.wantError)
+			}
+			if len(written) != 0 {
+				t.Fatalf("a refused name was still written to the device: %q", written)
+			}
+		})
 	}
 }
 

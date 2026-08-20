@@ -186,26 +186,24 @@ func TestV070_AdminCreateAdmin_Success(t *testing.T) {
 	}
 }
 
-func TestV070_AdminCreateAdmin_MissingFields(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().CreateAdmin, http.MethodPost, "/admin/admins", `{"username":"only-name"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestV070_AdminCreateAdmin_InvalidRole(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().CreateAdmin, http.MethodPost, "/admin/admins",
-		`{"username":"v070-bad","password":"correct-horse-battery-staple","role":"emperor"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestV070_AdminCreateAdmin_ShortPassword(t *testing.T) {
-	rec := runHandler(adminHandlerEnv().CreateAdmin, http.MethodPost, "/admin/admins",
-		`{"username":"v070-short","password":"tooshort","role":"operator"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+// Three ways a CreateAdmin body fails validation. Each row breaks exactly one
+// rule and leaves the others satisfied, so a check that is dropped fails its own
+// row instead of hiding behind another rejection in the same request.
+func TestV070_AdminCreateAdmin_InvalidBodiesAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "no password and no role", body: `{"username":"only-name"}`},
+		{name: "a role outside the vocabulary", body: `{"username":"v070-bad","password":"correct-horse-battery-staple","role":"emperor"}`},
+		{name: "a password under the length floor", body: `{"username":"v070-short","password":"tooshort","role":"operator"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := runHandler(adminHandlerEnv().CreateAdmin, http.MethodPost, "/admin/admins", tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("a body with %s answered %d, want 400: %s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

@@ -44,6 +44,27 @@ overwrite you.
 | `docs/deps.md` | `scripts/readme-gen.sh` |
 | `docs/test-coverage.md` | `scripts/coverage.sh` |
 
+### The compliance register cites code by line, and code moves
+
+`docs/compliance-register.json` carries `path:line` citations in its `evidence`
+lists and inside its prose. Three gates reject a citation that lands somewhere
+dead -- a blank line, a closing brace, an anchor that no longer resolves -- and
+none of them can see the case where it lands on a real line that simply is not
+the one anybody meant. That case has arrived four times.
+
+After a change that moves code, run:
+
+```bash
+scripts/register-reanchor.py --check     # report
+scripts/register-reanchor.py --apply     # rewrite what it can
+```
+
+It reads what each cited line said at `HEAD`, finds where that text went, and
+re-anchors it when the match is unique. It refuses to guess: an ambiguous or
+vanished citation is printed for a person, because guessing is what produced the
+drift. Citations into `.github/workflows` are excluded, being anchors rather than
+line numbers.
+
 ## Commit messages
 
 Commits are linted as [Conventional Commits](https://www.conventionalcommits.org/) on every pull
@@ -76,7 +97,7 @@ a version-prefixed commit subject as a release mechanism.
 
 ## What CI runs on your pull request
 
-`.github/workflows/ci.yml`, which also runs on every push to `main`. All fifteen jobs, named as
+`.github/workflows/ci.yml`, which also runs on every push to `main`. All nineteen jobs, named as
 they appear in the checks list:
 
 | Job | What it does |
@@ -86,7 +107,8 @@ they appear in the checks list:
 | Go coverage gate | a canonical coverage run checked by `scripts/release-check.sh --coverage-only`. Conditional |
 | Go coverage gate (required) | watches the job above and fails when it was skipped. **Require this one in branch protection**, not the job it watches: a skipped job reports green |
 | Frontend | builds `packages/vue` and `web`, then `test:coverage` for both, enforcing the thresholds in each `vite.config.ts`, then `eslint .` over the whole repository, `site/` included, at `--max-warnings 0` |
-| golangci-lint | `.golangci.yml` on the diff as a gate, and a whole-tree run held against `.golangci-baseline.json`. Both fail the job; the whole-tree run is a ratchet, not a report |
+| golangci-lint | `.golangci.yml` on the diff as a gate, and a plain whole-tree `golangci-lint run ./...`. Both fail the job. The whole-tree run was a ratchet against a committed baseline while a 109-finding backlog came down; the backlog reached zero, so the baseline went with it |
+| golangci-lint (required) | watches the job above. It is conditional on a Go change, so like the two coverage gates it needs a watcher before it can be required at all |
 | Security | calls `.github/workflows/nightly-security.yml`: govulncheck, gosec, trivy over source, image and frontend base, and the attack suite |
 | Helm chart | `helm lint` plus a render of every values file, and a check that a default install resolves a published image tag |
 | Version consistency | `scripts/version-bump.sh --check`: every manifest must agree, including the two version markers in `site/index.html` |
@@ -96,19 +118,20 @@ they appear in the checks list:
 | GoReleaser config | validates `.goreleaser.yaml`. Conditional |
 | Suites CI cannot run | compiles `tests/admin`, `tests/honeypot`, `tests/stress` and `tests/browser` under their build tags and collects the Playwright suite, then fails if any of them neither ran nor printed its skip notice |
 | Hadolint | the six root Dockerfiles and `web/Dockerfile` |
+| Lint (non-Go) | shellcheck over every tracked `*.sh`, `ruff check`, markdownlint and `yamllint --strict`. The four configurations these read were tuned to zero by hand and ran in no workflow until 1.0.1; two had already drifted back by then |
+| .NET SDK coverage gate | builds `packages/dotnet` with `-warnaserror` and runs `scripts/dotnet-coverage.sh` at a floor of 100.00 with no exclusions file. Conditional |
+| .NET SDK coverage gate (required) | watches the job above, for the same reason the Go one has a watcher |
 
 `.github/workflows/commitlint.yml` lints the commits and the pull request title.
 
-Four linter configurations in the root are tuned and committed but invoked by nothing:
-`.markdownlint-cli2.jsonc`, `.shellcheckrc`, `.yamllint.yml` and `ruff.toml`. Run them by hand if
-you touch what they cover. Do not assume a green PR means they passed.
-
-The .NET packages under `packages/dotnet` are **not** built on a pull request; they are compiled
-and tested only in the release workflow. Build them locally if you touch them.
+`.markdownlint-cli2.jsonc`, `.shellcheckrc`, `.yamllint.yml` and `ruff.toml` are read by the
+Lint (non-Go) job. Until 1.0.1 they were read by nothing: each had been driven to zero by hand,
+which described a moment rather than a property, and two of the four had drifted back before
+anyone noticed.
 
 Before a release, `scripts/release-check.sh` runs twelve gates, of which the security pass
 (govulncheck, gosec, trivy fs, attack suite, coverage) is the first five. The other seven are
-version consistency, module hygiene, the golangci ratchet, helm lint and template, documented
+version consistency, module hygiene, golangci-lint at zero over the whole tree, helm lint and template, documented
 chart paths, a changelog section for the version being cut, and a clean working tree, so a
 release can go red on a missing changelog entry alone.
 

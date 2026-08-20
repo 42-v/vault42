@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"encoding/json"
@@ -142,6 +143,9 @@ func ParseWithClaims(tokenString string, claims Claims, keyFunc Keyfunc, opts ..
 	if err != nil {
 		return nil, fmt.Errorf("%w: bad claims encoding", ErrTokenMalformed)
 	}
+	if err := refuseAmbiguousClaimNames(claimsBytes); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(claimsBytes, claims); err != nil {
 		return nil, fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
 	}
@@ -229,6 +233,9 @@ func ParseUnverified(tokenString string, claims Claims) (*Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: bad claims encoding", ErrTokenMalformed)
 	}
+	if err := refuseAmbiguousClaimNames(claimsBytes); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(claimsBytes, claims); err != nil {
 		return nil, fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
 	}
@@ -243,4 +250,64 @@ func ParseUnverified(tokenString string, claims Claims) (*Token, error) {
 		Raw:       tokenString,
 		Valid:     false,
 	}, nil
+}
+
+// refuseAmbiguousClaimNames rejects a payload whose top-level object names the
+// same claim twice under names that differ only by case.
+//
+// encoding/json matches a struct tag case-insensitively and takes the LAST
+// match, so {"exp":0,"eXP":<future>} unmarshals into RegisteredClaims with the
+// future expiry and the real "exp" discarded. A token that has expired then
+// verifies. The same trick moves "aud" and "iss", which are the two claims
+// validateClaims compares against configured values, so an audience check can
+// pass on a claim the payload never carried under that name -- and a caller
+// reading claims.Audience back sees a value the signer did not put in "aud".
+//
+// A duplicate is not something a legitimate issuer emits; RFC 8259 leaves
+// duplicate member names undefined and RFC 7519 s4 says a claim name occurs
+// once. Refusing is therefore free, and it is the only reading on which two
+// verifiers cannot disagree about what a token says.
+//
+// Case-folded rather than exact, because the exact-duplicate case is already
+// last-wins in every JSON implementation and agrees with itself; it is the
+// case-insensitive struct match that makes two DIFFERENT names collide into
+// one field.
+func refuseAmbiguousClaimNames(payload []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		// Not an object. The unmarshal below will reject it with the message
+		// that fits, and there are no member names to collide.
+		return nil
+	}
+
+	seen := make(map[string]string)
+	for dec.More() {
+		// The type assertion is folded into the error check rather than
+		// standing alone: encoding/json reports a non-string member name as a
+		// syntax error from Token, so the assertion can never be the thing that
+		// fails, and a branch on it by itself is a statement no input reaches.
+		nameTok, nameErr := dec.Token()
+		name, ok := nameTok.(string)
+		if nameErr != nil || !ok {
+			return fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
+		}
+		folded := strings.ToLower(name)
+		if first, dup := seen[folded]; dup {
+			return fmt.Errorf("%w: claims name %q and %q differ only by case, and a JSON decoder "+
+				"matches them to one field", ErrTokenMalformed, first, name)
+		}
+		seen[folded] = name
+
+		// Skip the value, whatever it is. Decoder.Token walks into composites,
+		// so an explicit skip keeps the walk at the top level.
+		var skip json.RawMessage
+		if decErr := dec.Decode(&skip); decErr != nil {
+			return fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
+		}
+	}
+	return nil
 }

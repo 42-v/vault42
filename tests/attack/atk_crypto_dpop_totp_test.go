@@ -525,6 +525,11 @@ func TestTOTPAttack_MeasureValidationTimingGap(t *testing.T) {
 // burns a comparison against the attacker's own input on a length mismatch,
 // which reveals nothing about the expected value; measured to say so with a
 // number rather than by reading the code.
+//
+// The medians are logged rather than bounded, because a threshold on a
+// nanosecond-scale measurement is a coin flip on a loaded machine. What this
+// test does assert is the verdict, which never gets to be noisy: no candidate
+// here, including the one of exactly the right length, may compare equal.
 func TestTOTPAttack_MeasureLengthMismatchTiming(t *testing.T) {
 	if testing.Short() || atkRaceDetector {
 		t.Skip("timing measurement: meaningless under -race, skipped in -short")
@@ -536,6 +541,9 @@ func TestTOTPAttack_MeasureLengthMismatchTiming(t *testing.T) {
 	report := make([]string, 0, len(lengths))
 	for _, n := range lengths {
 		candidate := strings.Repeat("b", n)
+		if vaultcrypto.SecureCompare(expected, candidate) {
+			t.Fatalf("SecureCompare matched a %d-byte candidate against the %d-byte expected value", n, len(expected))
+		}
 		const runs = 20001
 		samples := make([]time.Duration, 0, runs)
 		for i := 0; i < runs; i++ {

@@ -9,9 +9,9 @@ namespace Vault42.Blazor.Tests;
 /// default for every call. RecordingJsRuntime in the hardening suite answers
 /// every getItem with null, which is the right double for asserting that a call
 /// was not made and the wrong one for anything that has to read back what it
-/// wrote: the PKCE verifier and the OAuth state nonce both round-trip through
-/// sessionStorage across a full page load, and a double that loses them makes
-/// every callback test pass for the wrong reason.
+/// wrote: under <see cref="RefreshTokenStorage.SessionStorage"/> the refresh
+/// token round-trips through it, and a double that loses it makes a restore test
+/// pass for the wrong reason.
 /// </summary>
 internal sealed class FakeJsRuntime : IJSRuntime
 {
@@ -81,9 +81,16 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
     internal List<(HttpMethod Method, Uri? Uri, string Body, string? Authorization)> Requests { get; } = new ();
 
-    internal StubHttpMessageHandler Enqueue(HttpStatusCode status, string body = "")
+    /// <summary>
+    /// Queues one canned response. <paramref name="contentType"/> exists because a Vault serving
+    /// its own SPA answers an unrouted POST from the catch-all, with 200 and an HTML page: the
+    /// media type is part of what the SDK has to survive, and a stub that labels everything
+    /// application/json cannot reproduce it.
+    /// </summary>
+    internal StubHttpMessageHandler Enqueue(
+        HttpStatusCode status, string body = "", string contentType = "application/json")
     {
-        _responses.Enqueue(_ => Task.FromResult(Response(status, body)));
+        _responses.Enqueue(_ => Task.FromResult(Response(status, body, contentType)));
         return this;
     }
 
@@ -100,7 +107,7 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         _responses.Enqueue(async _ =>
         {
             await gate;
-            return Response(status, body);
+            return Response(status, body, "application/json");
         });
         return this;
     }
@@ -111,11 +118,16 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         return this;
     }
 
-    private static HttpResponseMessage Response(HttpStatusCode status, string body) =>
-        new (status)
-        {
-            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
-        };
+    private static HttpResponseMessage Response(HttpStatusCode status, string body, string contentType)
+    {
+        var content = new StringContent(body, System.Text.Encoding.UTF8);
+
+        // Assigned rather than passed to the constructor, whose mediaType overload rejects a
+        // value carrying parameters. A charset is one of the things the SDK has to survive
+        // being handed, so the double has to be able to send one.
+        content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
+        return new HttpResponseMessage(status) { Content = content };
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,

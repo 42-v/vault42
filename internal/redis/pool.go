@@ -187,10 +187,25 @@ func (p *pool) dial(ctx context.Context) (*conn, error) {
 			// Parse hostname from address for certificate verification
 			serverName, _, _ = net.SplitHostPort(p.opts.Addr)
 		}
-		netConn, err = tls.DialWithDialer(&d, "tcp", p.opts.Addr, &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			ServerName: serverName,
-		})
+		// tls.Dialer rather than tls.DialWithDialer, which accepts no context.
+		// The handshake is a second round trip after the TCP connect, and on
+		// that leg a canceled caller was ignored: the plaintext branch below
+		// returns the moment ctx is done, while this one held its pool slot
+		// until DialTimeout expired. A peer that completes the TCP connect and
+		// then stalls the handshake is the ordinary shape of a half-configured
+		// TLS proxy in front of Redis, and every request that reached it during
+		// one cost a connection from a pool of ten.
+		td := &tls.Dialer{
+			NetDialer: &d,
+			Config: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				ServerName: serverName,
+				// Nil means the host trust store; see Options.TLSRootCAs for why
+				// that is not enough on the runtime image.
+				RootCAs: p.opts.TLSRootCAs,
+			},
+		}
+		netConn, err = td.DialContext(ctx, "tcp", p.opts.Addr)
 	} else {
 		netConn, err = d.DialContext(ctx, "tcp", p.opts.Addr)
 	}

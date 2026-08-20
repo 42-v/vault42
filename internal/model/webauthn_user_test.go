@@ -6,11 +6,11 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// TestWebAuthnUserImplementsInterface verifies that *WebAuthnUser satisfies the
-// webauthn.User interface at compile time.
-func TestWebAuthnUserImplementsInterface(t *testing.T) {
-	var _ webauthn.User = (*WebAuthnUser)(nil)
-}
+// *WebAuthnUser satisfies webauthn.User at compile time. This was a test
+// function whose body was this line, so it ran, asserted nothing, and reported
+// the same result whether or not the package still compiled -- the compiler had
+// already decided by then.
+var _ webauthn.User = (*WebAuthnUser)(nil)
 
 func TestWebAuthnID(t *testing.T) {
 	tests := []struct {

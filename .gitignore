@@ -93,6 +93,21 @@ __pycache__/
 .review.md
 .task.md
 
+# Scratch a parallel agent leaves in the tree. Every pattern here is something
+# that actually turned up in `git status` during the 1.0.3 sweep, not a
+# precaution: a coverage-attribution step wrote empty flattened copies
+# (internal_oauth2_github_test.go) into the repository root, and a probe run
+# left zz_tmp_probe*_test.go files that were captured by a commit and had to be
+# amended out.
+#
+# The repository root holds no Go package, so a *_test.go file there is always
+# scratch; the leading slash keeps this from touching the real suites.
+/*_test.go
+zz_tmp_*
+/*.cover.out
+/before.out
+/after.out
+
 # Compiled commands. `go build ./cmd/<name>` without -o drops the binary in the
 # repository root, where a `git add -A` would otherwise commit 13 MB of object
 # code into an unrelated change. tests/spec/tracked_artifacts_test.go enforces

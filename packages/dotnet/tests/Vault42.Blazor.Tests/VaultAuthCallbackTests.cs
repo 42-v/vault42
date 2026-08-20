@@ -36,8 +36,7 @@ public class VaultAuthCallbackTests
     public async Task ASuccessfulCallback_RaisesOnSuccessAndNavigatesToRedirectTo()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: true));
+        h.Navigation.Reset(Harness.CallbackUri(valid: true));
         h.Http.Enqueue(HttpStatusCode.OK, TokenJson);
         var succeeded = false;
 
@@ -55,8 +54,7 @@ public class VaultAuthCallbackTests
     public async Task AFailedCallback_RaisesOnErrorAndStaysPut()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: false));
+        h.Navigation.Reset(Harness.CallbackUri(valid: false));
         string? reported = null;
 
         await h.RenderAsync(new Dictionary<string, object?>
@@ -76,8 +74,7 @@ public class VaultAuthCallbackTests
     public async Task RedirectToDefaultsToTheApplicationRoot()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: true));
+        h.Navigation.Reset(Harness.CallbackUri(valid: true));
         h.Http.Enqueue(HttpStatusCode.OK, TokenJson);
 
         await h.RenderAsync(new Dictionary<string, object?>());
@@ -91,8 +88,7 @@ public class VaultAuthCallbackTests
     public async Task TheCallbacksAreOptional()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: false));
+        h.Navigation.Reset(Harness.CallbackUri(valid: false));
 
         await h.RenderAsync(new Dictionary<string, object?>());
 
@@ -103,8 +99,7 @@ public class VaultAuthCallbackTests
     public async Task TheErrorStateCanBeReplacedByTheApplication()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: false));
+        h.Navigation.Reset(Harness.CallbackUri(valid: false));
 
         await h.RenderAsync(new Dictionary<string, object?>
         {
@@ -122,8 +117,7 @@ public class VaultAuthCallbackTests
     public async Task TheProcessingStateRendersUntilTheExchangeSettles()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: true));
+        h.Navigation.Reset(Harness.CallbackUri(valid: true));
         var gate = new TaskCompletionSource();
         h.Http.EnqueueGated(HttpStatusCode.OK, TokenJson, gate.Task);
 
@@ -140,8 +134,7 @@ public class VaultAuthCallbackTests
     public async Task TheProcessingStateCanBeReplacedByTheApplication()
     {
         using var h = new Harness();
-        await h.StartLoginAsync();
-        h.Navigation.Reset(h.CallbackUri(valid: true));
+        h.Navigation.Reset(Harness.CallbackUri(valid: true));
         var gate = new TaskCompletionSource();
         h.Http.EnqueueGated(HttpStatusCode.OK, TokenJson, gate.Task);
 
@@ -197,18 +190,20 @@ public class VaultAuthCallbackTests
 
         internal Task<string> MarkupAsync() => _renderer.MarkupAsync();
 
-        /// <summary>Runs LoginAsync so the PKCE verifier and state nonce exist.</summary>
-        internal async Task StartLoginAsync()
-        {
-            await Service.LoginAsync();
-            Navigation.Reset("https://app.example.com/");
-        }
-
-        internal string CallbackUri(bool valid)
-        {
-            var state = valid ? Js.Session["vault_state"] : "not-the-stored-nonce";
-            return $"https://app.example.com/auth/callback?code=auth-code&state={state}";
-        }
+        /// <summary>
+        /// The address the Vault's callback redirect actually puts the browser on.
+        /// </summary>
+        /// <remarks>
+        /// The code is in the fragment, because that is where <c>internal/handler/oauth.go</c>
+        /// puts it -- a fragment is never sent to a server, so the one-time code stays out of
+        /// access logs and Referer. The failure case is the error the redirect can genuinely
+        /// carry, a first sign-in from a provider that cannot prove the caller owns the address,
+        /// rather than a mismatched state nonce, which this flow has never carried back.
+        /// </remarks>
+        internal static string CallbackUri(bool valid) =>
+            valid
+                ? "https://app.example.com/oauth/callback#code=one-time-code"
+                : "https://app.example.com/oauth/callback#error=verification_required";
 
         internal Task RenderAsync(Dictionary<string, object?> parameters) =>
             _renderer.RenderAsync<VaultAuthCallback>(parameters);

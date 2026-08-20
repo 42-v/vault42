@@ -1,5 +1,593 @@
 # Changelog
 
+## 1.0.3 (2026-08-20)
+
+Three claims the project was making without having checked them, and a toolchain that
+had drifted far enough that nobody could tell which of six upgrades was the hard one.
+
+### Security
+
+* **The outbound allowlist checked one host and the connection went to another.**
+  `outbound.hostOf` compared `strings.ToLower(u.Hostname())`. `net/http` opens the connection
+  to what `canonicalAddr` produces, which runs the same string through UTS-46/IDNA. Those are
+  not the same map, and one rune made the difference exploitable against a plain-ASCII issuer:
+  `U+0130`, the Turkish dotted capital İ, lowercases to an ordinary ASCII `i`. A discovery
+  document advertising
+
+  ```text
+  https://login.microsoftonlİne.com/common/discovery/v2.0/keys
+  ```
+
+  read here as `login.microsoftonline.com`, passed the issuer-domain check, and was dialled as
+  `login.xn--microsoftonline-fqi.com` -- a `.com` anybody can register.
+
+  The reachable fields are the whole CR-17 boundary: `jwks_uri` hands an attacker the keys
+  every `id_token` signature is verified against, and `token_endpoint` posts the client secret
+  to a stranger. Any issuer whose registrable domain contains the letter `i` was reachable, and
+  a rune sweep confirms `U+0130` is the only rune landing in the ASCII tail, so that is the
+  exhaustive list rather than one example. Two lesser variants share the cause: `U+1E9E`
+  reaches the wire as `ss`, and `ToLower` collapses every invalid UTF-8 byte to `U+FFFD`, so
+  two different hosts compare equal.
+
+  A non-ASCII host is refused outright. A discovery document is machine-generated and every
+  issuer serving an internationalized name spells it in punycode, so nothing legitimate loses.
+
+* **A not-yet-valid token verified.** `NumericDate.UnmarshalJSON` converted the parsed
+  `float64` straight to `int64`, which is implementation-defined in Go when the value does not
+  fit; on amd64 it yields `MinInt64`, which `time.Unix` wraps to an instant the validator was
+  happy to call past. An `nbf` of `1e99` therefore verified. Reachable without a token this
+  service minted: a DPoP proof is self-signed by a key the sender invents, and it is parsed
+  with claim validation on. The same conversion sat in `claims.go`, which is the hazard
+  `internal/oauth2` had to cap for `auth_time` earlier in this release -- one defect at three
+  call sites, now bounded at all three.
+
+* **A second spelling of a claim overrode the real one.** `encoding/json` matches a struct tag
+  case-insensitively and takes the last match, so `{"exp":0,"eXP":<future>}` unmarshalled with
+  the future expiry and the real `exp` discarded: an expired token verified. The same move
+  shifts `iss` and `aud`, the two claims validated against configured values, so an audience
+  check could pass on a claim the payload never carried under that name -- demonstrated as
+  `aud:["vault42-api"]` read back by the caller as `[""]`. A payload naming one claim twice
+  under names differing only by case is refused.
+
+* **The email template guard accepted three exfiltration beacons and could be made to
+  panic.** `CR-30` records that the guard is written for this codebase rather than taken
+  from a library, and its residual risk read: *"a gap in it is a gap nobody else is
+  fuzzing."* 1.0.3 acted on that sentence. The first fuzz target ever pointed at the guard
+  found three accepted beacons and an unrecovered panic, the first of them within a second.
+
+  All four were one mistake, in the step deciding where a link starts. It searched a
+  lowercased copy of the rendered document and then sliced the *original* at the offsets it
+  found, and `strings.ToLower` is neither length-preserving nor class-preserving. Invalid
+  UTF-8 grows by two bytes per byte and some valid runes grow too, so the examined window
+  slid off the run it was meant to read -- and far enough along, off the end of the string:
+  22 leading `U+023A` ahead of a beacon panicked the validator outright, in code that runs
+  on admin write and again on every load of a stored override. Folding also moves bytes
+  between classes: `U+0130` folds to ASCII `i`, so a byte that is not a host byte in the
+  document is one in the copy, and the word-boundary test read the wrong answer.
+
+  Separately, the lookahead after a protocol-relative `//` was taken from the *masked*
+  document, where a secret is a placeholder rather than a host byte. So
+  `//{{.Token}}@evil.test/` was accepted and `//x{{.Token}}@evil.test/` refused: one literal
+  byte was the entire difference. `//{{.Token}}.evil.test/` was accepted too, and that one
+  leaks on DNS resolution alone.
+
+  The search now runs on the document's own bytes, folding one prefix at a time, and a
+  masked secret counts as a host byte. Reaching any of this needs a `super_admin` writing an
+  email template, which is the population that could rewrite the mail wholesale anyway --
+  the point is not an escalation but that the control did not do what the register said it
+  did.
+
+  `FuzzGuardTemplate` stays, asserting an invariant rather than a verdict: if the guard
+  accepts, then in both branding states no value a mail client resolves as a URL and no
+  auto-linkifiable text run carries a live secret to a host the operator did not choose. Its
+  oracle re-renders with its own unmasked secrets and finds URL sites with its own
+  tokeniser, so it inherits no miss from the code it is judging, and it exempts only a URL
+  whose authority is the configured host -- which makes it a lower bound on the guard, and a
+  failure therefore always a leak rather than a policy difference.
+
+  The same mistake was looked for everywhere else it could live. Of the 37 `strings.ToLower`
+  calls in `internal/` and `cmd/`, every other one feeds a containment, prefix or equality
+  test; none takes an index from the folded copy and slices the original. The class is
+  confined to the site fixed here.
+
+* **A federated access token asserted an authentication nobody performed.** The OAuth
+  callback issued its token pair with `NewAuthContext(time.Now(), ...)`, so `auth_time` on
+  a federated token dated the login to the moment the callback ran. An identity provider
+  answering out of an established single-sign-on session returns without prompting anybody,
+  so a relying party enforcing `max_age` was told a fresh authentication had happened when
+  the user had only followed a redirect. `auth_time` appeared nowhere in `internal/oauth2`:
+  the ID token verifier read `iss`, `aud`, `exp`, `nonce`, `sub` and the profile claims.
+
+  The verifier reads the claim now and the callback passes it on, falling back to the
+  callback instant -- the one moment this server can vouch for -- only when the issuer
+  asserted none. Absence is not an error, because OIDC Core makes the claim optional unless
+  the request sent `max_age`. A ceiling rejects an out-of-range value, since converting a
+  `float64` that does not fit an `int64` is implementation-defined in Go and would otherwise
+  let the issuer choose which instant gets recorded.
+
+  This was inconsistent with two decisions the same code already made deliberately:
+  `internal/service/token.go` emits nothing rather than claim the Unix epoch, and this same
+  callback emits no `amr` because RFC 8176 registers none for an assertion from another
+  issuer.
+
+* **The audit retention purge deleted audit rows and recorded it nowhere.** A completed
+  sweep left one process-log line, and a direct call to `audit.cleanup_old_entries()` left
+  nothing at all, so a trail that stops abruptly read the same whether the sweeper ran on
+  the configured horizon, ran on some other horizon, or somebody purged by hand.
+  `docs/security.md` AR-12 accepts that `vault_app` can purge past the retention horizon;
+  the purge being invisible in the log it purges is what made that worse than it needed to
+  be.
+
+  A sweep that deleted anything, or that failed partway, now writes an `admin_action` entry
+  naming the cutoff it actually applied, the row count, the configured horizon and the
+  replica that won the election. The cutoff is computed once for the whole sweep rather than
+  per batch, because a record naming a horizon no `DELETE` ever used is the kind of
+  attestation an auditor is right to reject. Only the elected replica writes, so one purge
+  is not recorded four times. An empty sweep writes nothing, which is also what stops the
+  log converging on records of purging its own records.
+
+  It does not close AR-12: whoever can purge can purge that row a horizon later, and the SQL
+  function still leaves no trace when called directly. AR-12 says both.
+
+### Compliance
+
+* **The OpenSSF Best Practices criteria are answered, so only the signup is left.**
+  CR-35 recorded the absence of a bestpractices.dev badge as an accepted risk and left
+  it there, which quietly treated an unregistered project as an unassessable one. The
+  67 passing-level criteria are now answered in `docs/openssf-best-practices.md`, each
+  with a citation into the tree that a reader can open, so the registration is a form
+  to fill in rather than an assessment to perform. `version_tags` is answered as
+  qualified rather than met, because the tag that would satisfy it does not exist yet.
+
+  Two answers were wrong in the first draft and were caught before the commit, which is
+  the reason the criteria are worth answering rather than asserting: `-race` does not
+  run over the coverage suite (it runs in the unit, attack and end-to-end CI jobs), and
+  forward secrecy comes from requiring TLS 1.3 rather than from a cipher preference
+  list. Both were plausible, and both would have been published as evidence.
+
+* **`Branch-Protection` publishes its score and both reasons for it.** The register said
+  "Met" and stopped. It is met, and it scored 3 of 10, and the gap is not an omission
+  anybody can close: two of the warnings are `does not require approvers` and
+  `codeowners review is not required`, and GitHub does not offer the Approve control on
+  your own pull request. 1.0.1 set the approval requirement, and the next pull request
+  could not be merged except by an admin bypass that skips the thirteen status checks
+  along with the review. Raising the score means turning the CI gate into something
+  waived on every merge. The row now says the score, says why it is capped, and says
+  which single knob (`enforce_admins`) is a live maintainer decision rather than a
+  structural limit.
+
+* **SLSA v1.1 Build Track assessed as the eleventh standard.** The release has done
+  keyless cosign signing, build provenance attestation and syft SBOMs since 1.0.0
+  without ever stating what level that adds up to. Eight rows: Build L2 in full, and
+  the one L3 clause that does not hold is recorded as **CR-38** rather than rounded up.
+  `actions/attest-build-provenance` takes the subject digest as an input from the job,
+  so a compromised build step could request an attestation over a digest it did not
+  produce; the signing key is genuinely out of reach, but "every field generated in a
+  trusted control plane" is not true of the subject.
+
+  `tests/compliance/slsa_build_track_test.go` gates the five clauses that are this
+  project's to keep rather than GitHub's: every published artifact class carries an
+  attestation, the signing is keyless against the workflow identity, all 33 jobs run on
+  GitHub-hosted labels, no `setup-go` step reintroduces a shared module cache, and the
+  release stays tag-driven. It deliberately does not test GitHub's runner isolation,
+  because a test that pretends to check somebody else's guarantee is worse than no test.
+
+  Register totals: 431 requirements across 11 standards, 369 Met, 15 Accepted Risk,
+  47 Not Applicable.
+
+* **SSDF was assessed at 17 of its 42 tasks, and the register did not say so.** NIST
+  SP 800-218 v1.1 defines 42 tasks across 19 practices. Seventeen were classified while
+  `meta.claim` asserted that every requirement in scope carried a status. A denominator
+  nobody states is a denominator nobody checks, which is the failure this register exists
+  to stop making about other people's software.
+
+  All 42 are classified now. The task list was parsed from NIST's own SSDF 1.1 table
+  rather than recalled, which is also how the register learned that `PW.3` and `PW.4.3`
+  are absent because v1.1 removed them. SSDF 1.2 exists as an initial public draft whose
+  comment period closed in January 2026; v1.1 remains the final publication and the
+  standards entry now says which one is being assessed against and why.
+
+  Of the 25 new rows, 20 are Met, 1 Not Applicable, 4 Accepted Risk. Three of the four
+  are one fact stated twice: SSDF's `PO.2` and `PW.2` tasks assume an organization with
+  roles to train, a reviewer to assess proficiency and an authority above the developer
+  to escalate to. Marking them Not Applicable was considered and rejected -- the register's
+  N/A vocabulary covers a role vault42 does not occupy or a capability the code lacks, and
+  neither describes a practice that simply is not performed. **CR-39** records that.
+  **CR-40** records the development endpoint: the build and test environments are hosted
+  and ephemeral and can be asserted here, but the machine the code is written on is
+  personal, outside the repository, and unverifiable by a reader holding a clone of it.
+
+  Register: 456 requirements across 11 standards, 389 Met, 19 Accepted Risk, 48 Not
+  Applicable.
+
+* **A retired risk owed nothing.** An open risk in the register owes a rationale, a
+  compensating control, a residual-risk statement, a revisit condition and a named
+  accepting party, with a test enforcing all five. Once closed it moved to
+  `retired_risks`, where the rule was: write a paragraph. That is backwards. An open risk
+  is watched because it is open; a closed one is the entry nobody re-reads, so a
+  regression in the code that closed it is silent while the register goes on saying
+  "Closed" and citing a line that has since moved.
+
+  Every retired risk now names the test that keeps it closed, checked against the tree.
+  Seven of the twelve already did out of habit; the other five named source positions.
+  The tests existed in all five cases, so this was writing down what was already true.
+
+* **Branch protection was tightened rather than described.** `main` now enforces its rules
+  against administrators too, requires a valid signature on every commit, and requires the
+  new `golangci-lint (required)` check, taking the required set from thirteen to fourteen.
+  The linter had never been requirable: the job is conditional on a Go change and branch
+  protection reads a skipped job as green, which is why 1.0.3 adds the always-run wrapper in
+  front of it.
+
+  Signing was already happening on both ends -- the branch verifies commit by commit and
+  every merge to `main` is a GitHub-signed squash -- so requiring it cost nothing and closed
+  one of CR-40's own revisit conditions. It did not close the risk, which is the part worth
+  recording: a signature proves which key authored a commit and proves nothing about the
+  machine that key sat on. Neither setting raises the Scorecard `Branch-Protection` score,
+  whose two remaining warnings are the single-maintainer problem; both were set because they
+  are right, not because they scored.
+
+* **The supported frontend topology is written down.** `docs/deployment-guide.md` gains a
+  section on where the single-page app is served from: separate hostnames, which is the
+  production shape and needs two settings that are both off by default and both required,
+  versus `VAULT_SERVE_FRONTEND=true`, which puts the app and the API on one origin and
+  leaves the same-origin policy separating nothing. It says what the single-origin shape is
+  relying on when somebody uses it anyway, which is a `script-src 'self'` CSP with no
+  `unsafe-inline`.
+
+  CR-29 stays accepted rather than closing on the strength of that. Its cost line used to
+  read "nothing to build, just document it", and no amount of documentation makes the
+  requirement true: the topology is the operator's to choose, and a register that marked
+  this Met would be describing a default rather than a guarantee.
+
+* **Seven of the fourteen accepted risks carried claims that were false.** Five parallel
+  analyses read each risk against the code it rests on. Every error was in the direction
+  that makes the project look better than it is, which is the direction a self-assessment
+  drifts when nothing checks it.
+
+  CR-28 stated that no `Sec-Fetch-*` header is read anywhere in the tree;
+  `cmd/bridge/proxy.go` reads all three, and `docs/COMPLIANCE.md` had already recorded that
+  correction without it reaching the register. The same entry's residual risk *overstated*
+  the exposure in the other direction: the emailed link is the SPA route, so a plain
+  prefetcher receives `index.html` and changes nothing, and only a scanner that executes
+  JavaScript completes the verification.
+
+  CR-20 claimed backup codes are issued at enrollment. They are not: they come from an
+  explicit request behind a recent-password confirmation, email OTP is deliberately switched
+  off for an account that has a strong factor, and no admin route resets a user's MFA. A
+  user who loses every factor without having generated codes has no recovery path at all,
+  which is a materially different residual from the one recorded.
+
+  CR-24 argued that a keyed hash chain would be theatre because the key shares a process
+  with the adversary. That is false for the topology the chart ships, where Postgres runs as
+  its own pod under a different credential. The conclusion survives for a narrower reason
+  (an *unkeyed* chain is recomputable by the adversary it targets, and ASVS V16.4.3 is a
+  transport requirement no chain touches) and the entry now says that instead.
+
+  CR-30 *prescribed a change that regresses*: replacing the email template guard with
+  bluemonday was measured to re-admit a beacon the guard rejects, break four shipped
+  templates, and reach a called vulnerability in a transitive dependency. CR-34 credited a
+  NetworkPolicy protecting a Redis the chart does not deploy by default. CR-29 cited four
+  line numbers, none current. CR-40 said "eighteen required checks"; there are thirteen.
+
+* **`V7.6.1` named a test that did not test it.** The row cited a gate asserting the OAuth
+  `state` parameter is HMAC-signed and session-bound, which is a cross-site-request-forgery
+  check that would pass whether or not any of the row's argument held. It now names a
+  coupling gate that fails if either half of the requirement moves without the register
+  moving with it.
+
+### Changed
+
+* **BREAKING, `Vault42.Blazor`: the browser client was written against a protocol
+  vault42 does not speak.** `VaultBlazorOptions.AuthorizePath` defaulted to
+  `/auth/authorize` and `TokenPath` to `/auth/token`. Neither route is registered:
+  `internal/server/server.go` mounts `/auth/oauth2/authorize` and
+  `/auth/oauth2/exchange`. Every sign-in through this package answered `404`, and had
+  the paths been right it would still have failed, because the package sent an
+  OAuth2-shaped request to an endpoint that is not an OAuth2 endpoint.
+
+  What changed, and why each is not a rename of the same thing:
+
+  * `TokenPath` is now `ExchangePath` (`/auth/oauth2/exchange`). The body is exactly
+    `{"code":"..."}`. The handler decodes with `DisallowUnknownFields`, so the previous
+    `grant_type`/`client_id`/`code_verifier` body was a `400` at any path. The option was
+    renamed rather than repointed on purpose: a caller who set it explicitly now gets a
+    compile error instead of a silent change of protocol.
+  * `LoginAsync` sends `?provider=`, the only parameter `Authorize` reads, and no longer
+    sends `response_type`, `client_id`, `redirect_uri`, `code_challenge`, `state` or
+    `scope`. A new `Provider` option carries it.
+  * `HandleCallbackAsync` reads the code from the URL **fragment**, where `oauth.go` puts
+    it, not the query string, and handles the `#error=verification_required` the callback
+    can also return.
+  * New `RefreshPath` (`/auth/refresh`). `RefreshAsync` posts no body: the handler reads
+    the `__Host-refresh_token` cookie and nothing else.
+  * Client-side PKCE and the state nonce are gone, along with `Internal/Pkce.cs` and the
+    PKCE slots on `TokenStore`. The server mints its own verifier and its own HMAC-signed
+    state bound to a `__Host-oauth_state` cookie, and the callback carries neither back,
+    so the browser-side copies had no counterparty. They were theatre, and deleting them
+    is the honest form of that. `Pkce.cs` was already unreferenced by any shipping path;
+    its tests were the only thing keeping it at 100%.
+
+  Four option properties cannot be made to work and now say so in their XML docs rather
+  than reading as configuration: `RedirectUri` is never sent (the server redirects to its
+  own origin plus `/oauth/callback`), `ClientId` is unused by the browser flow, `Scopes`
+  is not negotiable, and `InMemoryOnly`/`SessionStorage` can never receive a refresh token
+  from this server.
+
+  `VaultBlazorOptionsTests.EndpointPaths_AreRoutesTheVaultServerRegisters` parses every
+  `mux.Handle`/`HandleFunc` pattern out of `internal/server/server.go` and asserts each SDK
+  default is a registered method and path, refusing to pass on fewer than 20 parsed routes.
+  Nothing checked this before, which is how a package shipped to nuget.org against
+  endpoints that never existed.
+
+* **`Vault42.AspNetCore`: a JWKS fetch failure answered 500 instead of 401, and turned the
+  rate limiter off.** `ResolveKeyAsync` let `HttpRequestException`, `JsonException`,
+  `FormatException` and `TaskCanceledException` escape, so an unreachable or slow JWKS
+  endpoint surfaced as a server error rather than a refusal. `_lastRefresh` was stamped
+  only on success, so every failing request re-fetched: an issuer that was down took the
+  refresh limiter with it and the resource server hammered it. The stamp moved into a
+  `finally`, a refresh yielding zero usable keys now keeps the previous key set instead of
+  evicting the cache, and a genuine caller cancellation still propagates.
+
+* **`Vault42.AspNetCore`: fingerprint validation failed on dual-stack listeners.** A
+  request arriving as `::ffff:203.0.113.7` was fingerprinted from that spelling, while Go's
+  `(*net.TCPAddr).String()` yields `203.0.113.7`, so the two never matched and every
+  fingerprint-bound token was refused on a dual-stack socket. `Validate` now unmaps first.
+
+* **Frontend toolchain: five of the six pending majors.** vite 6 to 8, vue-router 4 to
+  5, TypeScript 5 to 6.0.3, `@vitejs/plugin-vue` 5 to 6, `vite-plugin-dts` 4 to 5,
+  `vue-tsc` 2 to 3, plus the patch line. Verified per step rather than in one jump.
+
+  The root now pins TypeScript explicitly. It did not, so `typescript-eslint` had pulled
+  a `typescript@7` into the lockfile that nothing declared and nothing type-checked
+  against.
+
+  `tailwindcss` 3 to 4 is the one still outstanding, and it is the only item in the set
+  that changes shipped CSS rather than build tooling: it moves configuration into a CSS
+  `@theme` block and drops postcss and autoprefixer. It wants somebody looking at the
+  rendered application, not a green suite.
+
+  `docs/TODO.md` is not tracked, so this entry is where that reasoning lives.
+
+* **TypeScript 7 is not deferred, it is blocked.** 7.0.2 is the native port, and its
+  package exports no longer include the JavaScript compiler API: there is no
+  `typescript/lib/tsc`, and `.` resolves to a file carrying the version string. vue-tsc
+  3 loads that path in order to patch it and exits before checking anything;
+  typescript-eslint 8 reads `ModuleKind` off the main entry and throws `Cannot read
+  properties of undefined (reading 'Cjs')`. Two tools, one cause, neither of them
+  something this repository can configure around. Both have to be rewritten against the
+  new `./unstable/*` API first.
+
+* **Three CI gates had stopped gating anything.** `scripts/release-check.sh` allowed 112
+  golangci-lint findings over a tree that has none: a ratchet set while a 109-finding backlog
+  came down, never lowered when it reached zero. The comment above it still said
+  golangci-lint had never run in CI, three releases after the job that runs it was added. The
+  CI-side baseline it fed had been empty since 1.0.0, and its own file said to delete it once
+  it was -- forty lines of Python comparing a measured zero against a hand-maintained zero.
+  Both are gone; the whole-tree run is now a plain `golangci-lint run ./...` and the release
+  allowance is zero.
+
+  gosec's test-file findings were held by per-rule counts, and for this rule set that is the
+  wrong shape: `G101` is "hardcoded credentials" with an allowance of 76, so swapping one
+  fixture DSN for a real leaked credential leaves the count at 76 and the gate green. That
+  was demonstrated rather than argued -- the old comparison passes such a report and the new
+  one fails it, naming the line. `scripts/gosec-baseline.py` freezes the rule, the file and
+  the text of the flagged line, with a count per line so a second finding on a listed line is
+  still new. Keyed on the source text rather than the line number, the way
+  `.coverage-exclusions.json` already is. Every rule in the set owes a stated reason, checked
+  rather than left in a comment.
+
+* **Scorecard's last unpinned dependency was already pinned.** The corepack install in the
+  frontend stage fetched a tarball by URL and verified it against a committed SHA-256 before
+  anything ran it, and still scored as an unpinned `npmCommand`, because the check reads the
+  command rather than the verification around it. The tarball is unpacked with `tar` now
+  instead of handed to `npm install -g`, which removes the finding and also removes npm's
+  resolution, tree write and lifecycle scripts from a package whose bytes were already
+  verified. Confirmed by building the stage: corepack 0.35.0 and pnpm 10.18.0 both resolve
+  inside the image and the SPA builds.
+
+### Fixed
+
+* **The published image and the published archive did not hold the same binary.**
+  `.goreleaser.yaml` compiles the release archives with `-trimpath` and
+  `-buildvcs=false`. The three Dockerfiles that `release.yml` actually builds and pushes
+  set neither, so the image binary recorded every package's absolute build directory and
+  the archive binary did not, for the same program at the same tag. Confirmed rather than
+  assumed: the same source built both ways puts 8 build-path strings in the untrimmed
+  binary and 0 in the trimmed one.
+
+  Nothing caught it because nothing compared them. Both were individually plausible, both
+  were hadolint-clean, and the flags live in two files in two syntaxes.
+
+* **`CONTRIBUTING.md` described a CI pipeline three jobs behind.** 1.0.1 added the .NET
+  coverage gate, its required watcher and the non-Go linter job, and the document was not
+  touched. So it said "All fifteen jobs" over a workflow with eighteen, told a contributor
+  the .NET packages were "not built on a pull request", and listed four linter
+  configurations as "invoked by nothing" -- on the release where both had just stopped
+  being true. Every one of those errors points the same way: toward a contributor
+  skipping a check that runs.
+
+* **The register claimed a required status check that was never required.** CR-36 listed
+  golangci-lint among the thirteen checks standing in for a human reviewer on a
+  single-maintainer project. The branch requires thirteen and golangci-lint is not among
+  them, because it cannot be as written: the job is conditional on a Go change, and branch
+  protection reads a skipped job as a passing one. The wrapper pattern that solves this
+  was already in the repository twice, for the Go and .NET coverage gates; it was learned
+  twice and missed the third time. The wrapper now exists, and requiring it is left as the
+  branch-protection setting it is, with CR-36 recording the difference rather than the fix
+  pre-empting the decision.
+
+* **Workflow citations stop being line numbers.** Three edits to `ci.yml` in one session
+  shifted every citation below them. One landed on a blank line and the existing gate caught
+  it; the others landed on real lines of YAML belonging to unrelated steps -- a `go mod
+  verify` citation inside a JSON decode handler -- and passed, because a gate that rejects
+  blank lines and closing braces cannot see the shape where the line is fine and simply is
+  not the one anybody meant. All 47 are anchors now (`#job:<id>`, `#^<prefix>`,
+  `#in:<job>:<substring>`, `#<substring>`), an anchor matching more than one line is an
+  error rather than a first match, and adding a job at the top of the file changes nothing.
+
+* **Prose citations were gated in four fields out of a dozen.** The register cites code in a
+  list and also mid-sentence, and only the four accepted-risk bodies were checked. Not
+  checked: `notes` on all 456 rows, `revisit_when`, and the retired-risk paragraphs. 117
+  citations were living there unchecked and four had gone stale, including one claiming the
+  server does its half of ASVS V14.3.1 while pointing at a blank line where the logout cookie
+  clear used to be.
+
+* **`docs/COMPLIANCE.md` still called `PO.3.2` an accepted risk under CR-32**, which was
+  retired when dependabot landed. **The register's own version header read 1.0.0**, three
+  releases on, because nothing propagated it and nothing checked it: the register is full
+  of gates pointed at the rest of the repository and had none pointed at its own header.
+  `scripts/version-bump.sh` owns it now.
+
+* **A dialog's focus trap was joined to its dialog by an unchecked string.** Three views
+  took a `dialogRef` from `useModalFocus`, never mentioned it again, and bound it in the
+  template by writing the variable's name into a `ref="dialogRef"` attribute. Nothing
+  checked that the name matched, in either direction, and nothing tested the binding:
+  the composable's own suite drives a render-function harness that passes the ref object
+  directly, and each view's Escape test passes whether or not the element was ever
+  bound, because closing on Escape does not need the element. A typo would have left
+  every dialog opening with focus still on the button behind the overlay, which is the
+  exact bug the trap was written to fix, and every test would have stayed green.
+
+  The view now owns the element ref and passes it in. `useTemplateRef` resolves the name
+  against the template, so a misspelling is a compile error listing the refs that do
+  exist, and the element type is inferred from the tag; both behaviours switch off if
+  the type argument is supplied, which is why these call sites do not supply it. A new
+  test opens the real dialog in a mounted view and asserts focus landed inside it,
+  confirmed by deleting the binding and watching it fail.
+
+  `:ref="dialogRef"` looks like the obvious fix and is not one: a template unwraps a
+  setup ref on access, so the binding receives the element or `null` and never the ref.
+
+  Found by vue-tsc 3, which reports the unread variable that vue-tsc 2 did not.
+
+### Tests
+
+A sweep of all 5,180 Go test functions for tests that cannot fail, pin the
+opposite of their name, or duplicate each other. 227 functions became tables,
+the tree lost about 400 lines net, and the tests below were each passing against
+an implementation they were written to reject.
+
+* **A compliance test satisfied entirely by one error string.**
+  `TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates` grepped
+  `internal/email/templates.go` for `svg`, `script`, `iframe`, `object`, `embed`,
+  `form`, `base`, `javascript:` and `data:`. Every one of those is present in a
+  single line: the error message that lists them. Replacing the guard's pattern
+  with a regex matching nothing left that sentence intact and the test green. It
+  now submits ten hostile templates and a hostile subject to
+  `email.ValidateTemplateContent`, with a clean template as the positive control.
+
+* **A logout test that hashed a string fifty times.**
+  `TestASVS_V3_3_1_LogoutInvalidatesRefreshToken` asserted that SHA-256 is a
+  function. It now drives the real service: login, refresh as a positive control,
+  `Logout`, and the refresh afterwards must answer `ErrTokenInvalid`.
+
+* **A header test asserting the wrong direction.**
+  `TestASVS_V3_5_3_RejectDangerousHeaders` checked that vault42's own signer does
+  not emit `jku`, `x5u`, `x5c` or `jwk`. No caller can influence that, and it
+  stays true however permissive the verifier becomes. It now forges validly
+  signed inbound tokens carrying each header and requires the verifier to refuse
+  and name it. `tests/compliance/audit_ietf_test.go` had documented this exact
+  defect and the test was never replaced.
+
+* **Refusal-only suites with no accepting case.** `TestNIST_MFA_TOTPRejectionOfInvalidCodes`
+  and the three JWT registered-claim tests asserted only that bad input was
+  refused, so a verifier that refused everything passed all four. Each now
+  carries the accepted case as its first row. The same hole was in
+  `tests/attack/jwt_auth_header_test.go`, whose eight refusals are now one table
+  with a `well formed -> 200` row.
+
+* **A brute-force test sampling hex.** `TestTOTPBruteForce` drew its hundred
+  "random codes" from `SHA256Hex(...)[:6]`, so roughly ninety-four of them
+  contained a letter and could never be a TOTP code under any implementation.
+  It now samples real six-digit codes excluded from the accept window and
+  requires zero acceptances.
+
+* **A skip that fired exactly when the assertion would have failed.**
+  `TestTOTPWrongCode` skipped when a randomly chosen wrong code turned out to be
+  right, and compared only against the current period while the validator accepts
+  a skew of one, so two of every three genuine collisions would have failed
+  spuriously. Candidates are now filtered against all three in-window codes and
+  the skip is gone. `internal/middleware`'s `TestAuth_ClaimsAvailableInContext`
+  had three `t.Skip("claims nil")` guards with the same shape: if the middleware
+  put nothing on the context, one subtest went red and three went green.
+
+* **A CORS test blind to the hole in its own name.**
+  `TestCSRF_CORSRejectsWildcardWithCredentials` only checked that a refused
+  origin was not echoed back, so a middleware answering `*` with
+  `Allow-Credentials: true` passed all seven rows.
+
+* **Two identity tests that stopped at 200.** The name-truncation cases asserted
+  the ciphertext was non-nil. A `truncate()` returning the empty string, or one
+  cutting on bytes rather than runes, passed every one. They now read the profile
+  back through a second service over the same key material and assert the stored
+  rune count; the CJK row is what makes the byte-versus-rune cut observable.
+
+* **A table whose result column was read into the blank identifier.**
+  `TestMigrationNameEdges_Table` compared nothing, so every case passed.
+  `TestAuditFilter_Table` did the same across four cases against a struct with no
+  methods, and is deleted rather than repaired.
+
+Two mechanical scanners are added for the classes above:
+`scripts/test-smells.py` reports tests that may not test what they claim, and
+`scripts/prod-scan.py` reports the production defect classes this tree has
+already shipped, each rule carrying the history that earns it a place. Both
+print candidates rather than findings, and both say so: about a third of what
+they report is a false positive, and the measured precision per category is
+recorded in the script.
+
+## 1.0.2 (2026-08-20)
+
+Two things 1.0.1 got wrong, and the badge table it should have shipped with.
+
+### Security
+
+* **The corepack install was a version, not a pin.** 1.0.1 fixed a broken frontend
+  build stage -- `node:26-alpine` stopped bundling corepack, so `corepack enable` was
+  "not found" and the image never built -- by adding
+  `npm install -g corepack@0.35.0`. Scorecard raised `Pinned-Dependencies` against
+  that line within the hour, correctly: naming a version and then trusting whatever
+  the registry serves for it is the exact thing 1.0.1 had just finished removing from
+  the lint job, reintroduced two commits later in the release path. The tarball is now
+  fetched by URL and verified against a committed SHA-256 before `npm install` sees it,
+  so a substituted artifact fails `sha256sum -c` rather than executing in a release
+  build. The digest was taken from a download whose SHA-512 matched the integrity npm
+  publishes for 0.35.0.
+
+  corepack is still worth installing, and this is why: it reads `packageManager` from
+  package.json, which pins pnpm by version **and** by SHA-512, so the package manager
+  that builds the release image is itself hash-verified.
+
+### Fixed
+
+* **`.dockerignore` sent every developer's `web/.env` into the image.** A pattern with
+  no leading `**` is anchored at the context root, so `.env` and `.env.*` excluded
+  `/.env` and nothing else. What kept a development API origin out of a published
+  bundle was the forbid-dev-origins Rollup plugin failing the build -- a guard doing a
+  job the build context should never have handed it. CI could not have found this: on a
+  fresh checkout the file does not exist, so the release image was correct for the
+  reason that nobody had a working tree.
+
+### Changed
+
+* **The badge table reports each language separately.** It had three columns and one
+  set of aggregate numbers, so "Coverage" meant Go and the C# SDKs appeared nowhere at
+  all. The table is now four columns -- Go, Vue, C#, and the figures that belong to the
+  project rather than to a language -- and each language carries its own test count and
+  its own coverage percentage. Go 5049 tests at 100.00% of reachable, Vue 1249 at
+  99.76%, C# 247 at 100.00%.
+
+  That the C# column exists is the point. Through 1.0.0 those packages had 46 tests, no
+  pull request had ever built them, and nothing in the README would have told you: their
+  tests were not in the total and their coverage was not measured. A number that is not
+  displayed is a number nobody checks.
+
+  `docs/badges.json` gains a `languages` block carrying the same six figures, and
+  `tests/spec` gains a gate requiring the two to agree, so a hand-edit to either is a
+  failing build. The generator refuses to publish a Vue or C# figure it did not measure,
+  the way it already refused for Go -- an absent measurement is reported as absent, never
+  as a zero.
+
 ## 1.0.1 (2026-08-20)
 
 **1.0.1 is the first 1.x release anyone can install.** 1.0.0 was merged and never

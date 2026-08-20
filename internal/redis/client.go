@@ -7,6 +7,7 @@ package redis
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"strconv"
@@ -24,6 +25,18 @@ type Options struct {
 	IdleTimeout   time.Duration // close idle connections after this duration (default 5m)
 	TLS           bool          // enable TLS encryption (default false)
 	TLSServerName string        // TLS ServerName for certificate verification (default: hostname from Addr)
+
+	// TLSRootCAs is the set of roots the server certificate is verified
+	// against. Nil falls back to the host trust store, which is correct for a
+	// managed Redis holding a publicly rooted certificate and useless for an
+	// in-cluster one: the runtime image is distroless-static and carries public
+	// roots only, so a private CA is not in it and every dial fails
+	// verification with nothing an operator can set to fix it. The pool is
+	// supplied by the caller for the same reason cmd/admin-gateway builds its
+	// ClientCAs there -- reading the PEM at startup turns an unreadable or
+	// malformed bundle into a refused boot instead of a cache that quietly
+	// never connects.
+	TLSRootCAs *x509.CertPool
 }
 
 // Client is a Redis client with connection pooling.

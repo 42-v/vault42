@@ -16,10 +16,15 @@ import (
 // CACHE_BACKEND must not be the difference between one lockout threshold and
 // one per replica, and the caller can only report the degradation it is told
 // about.
-func NewCache(backend string, redisAddr, redisPass string, pgPool *pgxpool.Pool) (Cache, error) {
+//
+// tlsOpts is forwarded to the Redis backend and ignored by the other two, which
+// have no network link of their own to protect: the memory cache is in-process,
+// and the Postgres one rides the pool the caller already opened under
+// DB_SSLMODE.
+func NewCache(backend string, redisAddr, redisPass string, pgPool *pgxpool.Pool, tlsOpts ...RedisTLS) (Cache, error) {
 	switch backend {
 	case "redis":
-		return NewRedisCache(redisAddr, redisPass, 0)
+		return NewRedisCache(redisAddr, redisPass, 0, tlsOpts...)
 	case "memory", "":
 		return NewMemoryCache(), nil
 	case "postgres":

@@ -750,55 +750,39 @@ func TestRegisterEmailTrimmedAndLowered(t *testing.T) {
 	}
 }
 
-func TestRegisterLocaleValidCustom(t *testing.T) {
-	var savedUser *model.User
-	svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
-		o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
-			return nil, nil
-		}
-		o.userRepo.CreateFn = func(_ context.Context, u *model.User) error {
-			savedUser = u
-			return nil
-		}
-	})
+// The locale is attacker-supplied and ends up in the row, so a value that is
+// not a locale must never be stored: it is normalised when it is one, and
+// replaced with the default when it is not.
+func TestRegisterLocaleIsNormalisedOrDefaulted(t *testing.T) {
+	for _, tc := range []struct{ name, email, locale, want string }{
+		{"a valid tag is lower-cased", "locale-sk@example.com", "sk-SK", "sk-sk"},
+		{"anything else falls back to en", "locale-bad@example.com", "invalid<script>", "en"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var savedUser *model.User
+			svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
+				o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
+					return nil, nil
+				}
+				o.userRepo.CreateFn = func(_ context.Context, u *model.User) error {
+					savedUser = u
+					return nil
+				}
+			})
 
-	svc.Register(context.Background(), RegisterInput{
-		Email:    "locale-sk@example.com",
-		Password: "correct-horse-battery-staple",
-		Locale:   "sk-SK",
-	}, "1.2.3.4")
+			svc.Register(context.Background(), RegisterInput{
+				Email:    tc.email,
+				Password: "correct-horse-battery-staple",
+				Locale:   tc.locale,
+			}, "1.2.3.4")
 
-	if savedUser == nil {
-		t.Fatal("user should be saved")
-	}
-	if savedUser.Locale != "sk-sk" {
-		t.Errorf("locale should be 'sk-sk', got %q", savedUser.Locale)
-	}
-}
-
-func TestRegisterLocaleInvalidFallsBackToEn(t *testing.T) {
-	var savedUser *model.User
-	svc, _ := newMockAuthService(t, func(o *mockAuthOpts) {
-		o.userRepo.GetByEmailFn = func(_ context.Context, _ string) (*model.User, error) {
-			return nil, nil
-		}
-		o.userRepo.CreateFn = func(_ context.Context, u *model.User) error {
-			savedUser = u
-			return nil
-		}
-	})
-
-	svc.Register(context.Background(), RegisterInput{
-		Email:    "locale-bad@example.com",
-		Password: "correct-horse-battery-staple",
-		Locale:   "invalid<script>",
-	}, "1.2.3.4")
-
-	if savedUser == nil {
-		t.Fatal("user should be saved")
-	}
-	if savedUser.Locale != "en" {
-		t.Errorf("invalid locale should fallback to 'en', got %q", savedUser.Locale)
+			if savedUser == nil {
+				t.Fatal("user should be saved")
+			}
+			if savedUser.Locale != tc.want {
+				t.Errorf("Register with locale %q stored %q, want %q", tc.locale, savedUser.Locale, tc.want)
+			}
+		})
 	}
 }
 

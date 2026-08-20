@@ -198,3 +198,68 @@ func TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride(t *testing.T) {
 		t.Error("V12.2.1: VAULT_ALLOW_PLAINTEXT is no longer checked inside Config.Validate; plaintext would be reachable without an override")
 	}
 }
+
+// TestASVS_V12_3_1_TheCacheLinkCanBeEncrypted covers the requirement that
+// traffic to a backend service is encrypted.
+//
+// The Redis client had a TLS branch from the beginning, and nothing in
+// production ever set the flag that reached it: cache.NewRedisCache built its
+// options from an address, a password and a database number, no environment
+// variable supplied anything else, and the branch was unreachable code that
+// read as a control. That is the shape this file exists to catch, and it stood
+// for four releases because every test asked whether the client constructs
+// rather than what it negotiates.
+//
+// So this asserts the wiring end to end and in the direction that fails when it
+// is undone. The behavior -- a real handshake, a refusal to downgrade against a
+// plaintext server, a refusal without the issuing CA -- is held by the tests in
+// internal/redis and internal/cache, which drive a TLS listener rather than
+// reading source. What is left for a structural gate is the part those cannot
+// see: that the setting still travels from the environment, through the config,
+// into the options the dialer reads, and out to a chart an operator can set.
+func TestASVS_V12_3_1_TheCacheLinkCanBeEncrypted(t *testing.T) {
+	config := readProductionSource(t, "internal/config/config.go")
+	for _, env := range []struct{ name, why string }{
+		{"REDIS_TLS", "the switch itself; without it the dial path is unreachable again"},
+		{"REDIS_TLS_CA_FILE", "an in-cluster issuer is not in the distroless image's trust store, so a private CA has to be supplied or only a publicly trusted Redis can be verified"},
+		{"REDIS_TLS_SERVER_NAME", "the certificate's name and the address do not have to agree, and without an override the only options are to weaken verification or to not connect"},
+	} {
+		if !strings.Contains(config, env.name) {
+			t.Errorf("V12.3.1: internal/config no longer reads %s -- %s", env.name, env.why)
+		}
+	}
+
+	// The options literal is the join. A config field nothing copies into it is
+	// the same unreachable branch in a different place.
+	cache := readProductionSource(t, "internal/cache/redis.go")
+	for _, field := range []string{"TLS:", "TLSServerName:", "TLSRootCAs:"} {
+		if !strings.Contains(cache, field) {
+			t.Errorf("V12.3.1: internal/cache/redis.go no longer sets %s on the client options, "+
+				"so the dialer cannot see the setting however it was configured", field)
+		}
+	}
+
+	// TLS 1.2 is the floor the dial path pins, and a version pinned in a
+	// comment is not pinned.
+	pool := readProductionSource(t, "internal/redis/pool.go")
+	if !strings.Contains(pool, "MinVersion: tls.VersionTLS12") {
+		t.Error("V12.3.1: internal/redis/pool.go no longer pins a minimum TLS version for the " +
+			"cache dial, so the negotiated version is whatever the server will accept")
+	}
+	if !strings.Contains(pool, "RootCAs:") {
+		t.Error("V12.3.1: the cache dial no longer passes a root CA pool, so verification falls " +
+			"back to the host trust store and an in-cluster issuer cannot be used")
+	}
+
+	// And the chart, because a setting an operator cannot reach is a setting
+	// that does not exist for a deployment. tests/spec holds the general rule;
+	// this names the three that carry this requirement.
+	for _, tpl := range []string{"charts/vault/templates/configmap.yaml", "charts/vault/templates/deployment.yaml"} {
+		rendered := readProductionSource(t, tpl)
+		if strings.Contains(rendered, "REDIS_TLS") {
+			return
+		}
+	}
+	t.Error("V12.3.1: neither chart template names REDIS_TLS, so no deployment can turn the " +
+		"encryption on and the row is true about the code and false about anything installed")
+}

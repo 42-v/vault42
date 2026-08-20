@@ -67,6 +67,25 @@ public class VaultAuthenticationHandlerTests
         Assert.True(user.HasVaultRole("admin"));
     }
 
+    // User.Identity.Name was null for every application on the default
+    // configuration. The handler declared "sub" as the identity's name claim
+    // type, but JwtSecurityTokenHandler's default inbound map had already renamed
+    // that claim to ClaimTypes.NameIdentifier, so the identity was looking for a
+    // type nothing carried. Nothing threw and nothing logged: Name was simply
+    // empty, and an app rendering @context.User.Identity?.Name showed nobody.
+    [Fact]
+    public async Task TheAuthenticatedPrincipalHasAName()
+    {
+        var h = await Fixture.CreateAsync();
+
+        var (result, _) = await h.AuthenticateAsync($"Bearer {h.Signer.Token()}");
+
+        Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
+        Assert.Equal("user-1", result.Principal.Identity?.Name);
+        Assert.Equal("user-1", result.Principal.GetUserId());
+    }
+
     // ---- rejection paths ----
     [Fact]
     public async Task ATokenOverTheSizeLimit_IsRefusedBeforeItIsParsed()

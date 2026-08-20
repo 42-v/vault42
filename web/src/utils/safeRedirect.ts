@@ -92,6 +92,17 @@ function isStructurallySafe(value: string): boolean {
  * checked.
  */
 function isDecodedShapeSafe(value: string): boolean {
+  // The first two are unreachable from isProvablySafe and are kept anyway.
+  // Nothing gets here without passing isStructurallySafe, which requires a
+  // literal leading '/', and no percent-decoding can delete a literal character
+  // or empty a non-empty string -- every escape decodes to at least one
+  // character. They are the two statements the frontend coverage report has
+  // never covered, and this comment is the reason rather than an oversight.
+  //
+  // Defence in depth in the strict sense: this function's contract is "these
+  // shapes are unsafe", and it holds whether or not the caller checked first. A
+  // future caller that decodes from somewhere else gets a function that is
+  // correct on its own, not one that assumes it was called in the right order.
   if (value.length === 0) return false
   if (value[0] !== '/') return false
   if (value[1] === '/' || value[1] === '\\') return false
@@ -134,6 +145,11 @@ function isProvablySafe(value: unknown): value is string {
   // above disagree about what this string means, the value is not returned.
   try {
     const url = new URL(value, PROBE_ORIGIN)
+    // Also unreachable, for the same reason: a value that begins with a single
+    // '/' and no backslash resolves against the probe base to the probe origin,
+    // and the parser does not throw on the ASCII, control-free, decodable
+    // strings that reach here. The check that does the work is the next one,
+    // which is where the parser gets to disagree.
     if (url.origin !== PROBE_ORIGIN) return false
     if (url.pathname + url.search + url.hash !== value) return false
   } catch {

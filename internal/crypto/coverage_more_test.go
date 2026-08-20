@@ -115,42 +115,50 @@ func TestEncodeRSAExponentFourBytes(t *testing.T) {
 	}
 }
 
-// parseArgon2Hash (via VerifyPassword) must reject a parallelism value that
-// overflows the uint8 range before reaching the spec maximum check.
-func TestVerifyPasswordParallelismOverflow(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=1,p=256$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	_, err := VerifyPassword("test-user", hash)
-	if err == nil {
-		t.Fatal("expected error for p=256")
+// parseArgon2Hash reaches VerifyPassword's caller only through the error, so
+// each malformed segment has to surface its own message rather than one generic
+// failure -- an operator reading "invalid hash" cannot tell a corrupted column
+// from a wrong algorithm.
+//
+// The parallelism case is separate from the bounds table in
+// argon2_security_test.go because 256 is caught by the uint8 conversion guard,
+// before the spec maximum is ever compared.
+func TestVerifyPasswordRejectsMalformedHashSegments(t *testing.T) {
+	tests := []struct {
+		name    string
+		hash    string
+		wantErr string
+	}{
+		{
+			name:    "parallelism past the uint8 range",
+			hash:    "$argon2id$v=19$m=47104,t=1,p=256$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			wantErr: "uint8 range",
+		},
+		{
+			name:    "a salt segment that is not base64",
+			hash:    "$argon2id$v=19$m=47104,t=1,p=1$****invalid****$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			wantErr: "decode salt",
+		},
+		{
+			name:    "a digest segment that is not base64",
+			hash:    "$argon2id$v=19$m=47104,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$****invalid****",
+			wantErr: "decode hash",
+		},
 	}
-	if !strings.Contains(err.Error(), "uint8 range") {
-		t.Errorf("error = %v, want uint8 range", err)
-	}
-}
 
-// parseArgon2Hash (via VerifyPassword) must surface a decode error when the
-// salt segment is not valid base64.
-func TestVerifyPasswordBadSaltEncoding(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=1,p=1$****invalid****$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	_, err := VerifyPassword("test-user", hash)
-	if err == nil {
-		t.Fatal("expected decode error for invalid salt base64")
-	}
-	if !strings.Contains(err.Error(), "decode salt") {
-		t.Errorf("error = %v, want decode salt", err)
-	}
-}
-
-// parseArgon2Hash (via VerifyPassword) must surface a decode error when the
-// hash segment is not valid base64.
-func TestVerifyPasswordBadHashEncoding(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$****invalid****"
-	_, err := VerifyPassword("test-user", hash)
-	if err == nil {
-		t.Fatal("expected decode error for invalid hash base64")
-	}
-	if !strings.Contains(err.Error(), "decode hash") {
-		t.Errorf("error = %v, want decode hash", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, err := VerifyPassword("test-user", tt.hash)
+			if ok {
+				t.Error("the password verified against a hash that could not be parsed")
+			}
+			if err == nil {
+				t.Fatalf("VerifyPassword returned no error, want one mentioning %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want one mentioning %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

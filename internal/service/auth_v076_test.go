@@ -43,14 +43,21 @@ func TestCompleteMFALoginChallengeConsumed(t *testing.T) {
 }
 
 // SECURITY: a cache failure during the single-use check must fail closed.
+//
+// The refusal has to be the cache one. ErrChallengeConsumed would also be a
+// refusal here, and it is the answer for a challenge that really was replayed --
+// reporting it for a cache that never answered tells the operator a lie about
+// which of the two happened.
 func TestCompleteMFALoginCacheFailsClosed(t *testing.T) {
+	cacheErr := errors.New("redis unavailable")
 	svc, o := newMockAuthService(t)
 	o.cache.SetIfNotExistsFn = func(_ context.Context, _, _ string, _ time.Duration) (bool, error) {
-		return false, errors.New("redis unavailable")
+		return false, cacheErr
 	}
 
-	if _, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP}); err == nil {
-		t.Fatal("expected fail-closed error when cache is unavailable")
+	_, err := svc.CompleteMFALogin(context.Background(), "u", "fp", "ip", "ua", "jti-1", MFACompletion{Method: MethodTOTP})
+	if !errors.Is(err, cacheErr) {
+		t.Fatalf("err = %v, want the cache failure to surface as the reason the login was refused", err)
 	}
 }
 

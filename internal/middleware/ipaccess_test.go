@@ -17,330 +17,191 @@ func resetIPAccess() {
 	SetIPAccessLists(nil, nil, nil, nil, "")
 }
 
-func TestIPAccessNoListsPassthrough(t *testing.T) {
-	resetIPAccess()
-	h := IPAccess()(ok200)
+// TestIPAccess is the whole decision table for the middleware: address lists,
+// country lists, the order the two are consulted in, and the health-probe
+// bypass. Each row is one configuration and one request, because the failure
+// this guards against is a configuration that silently admits somebody rather
+// than a single check misbehaving.
+//
+// Every geo row declares a trusted proxy. The country header is believed only
+// from a hop the operator trusts, so a geo case with an untrusted peer would be
+// testing the trust gate rather than the list logic -- except the two rows that
+// say so in their names.
+func TestIPAccess(t *testing.T) {
+	tests := []struct {
+		name string
+		// Arguments to SetIPAccessLists, in order.
+		allow, block, geoAllow, geoBlock []string
+		geoHeader                        string
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
-	req.RemoteAddr = "1.2.3.4:1234"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("no lists: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessAllowlistMatchAllows(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists([]string{"10.0.0.0/8"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.1.2.3:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("allowlist match: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessAllowlistNonMatchBlocks(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists([]string{"10.0.0.0/8"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "192.168.1.1:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("allowlist non-match: got %d, want 403", rec.Code)
-	}
-	assertAccessDeniedBody(t, rec)
-}
-
-func TestIPAccessBlocklistMatchBlocks(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists(nil, []string{"192.0.2.0/24"}, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "192.0.2.50:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("blocklist match: got %d, want 403", rec.Code)
-	}
-}
-
-func TestIPAccessBlocklistNonMatchAllows(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists(nil, []string{"192.0.2.0/24"}, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.1:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("blocklist non-match: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessAllowlistBeforeBlocklist(t *testing.T) {
-	// IP is in blocklist but NOT in allowlist → 403 (allowlist checked first)
-	resetIPAccess()
-	SetIPAccessLists([]string{"10.0.0.0/8"}, []string{"192.168.1.0/24"}, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "192.168.1.5:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("allowlist+blocklist: got %d, want 403 (not in allowlist)", rec.Code)
-	}
-}
-
-func TestIPAccessGeoAllowlistMatchAllows(t *testing.T) {
-	resetIPAccess()
-	// A trusted peer, because these cases are about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, []string{"SK", "CZ"}, nil, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "SK")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("geo allowlist match: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessGeoAllowlistNonMatchBlocks(t *testing.T) {
-	resetIPAccess()
-	// A trusted peer, because these cases are about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, []string{"SK", "CZ"}, nil, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "US")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("geo allowlist non-match: got %d, want 403", rec.Code)
-	}
-}
-
-func TestIPAccessGeoBlocklistMatchBlocks(t *testing.T) {
-	resetIPAccess()
-	// A trusted peer, because these cases are about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, nil, []string{"CN", "RU"}, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "RU")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("geo blocklist match: got %d, want 403", rec.Code)
-	}
-}
-
-func TestIPAccessGeoBlocklistNonMatchAllows(t *testing.T) {
-	resetIPAccess()
-	// A trusted peer, because these cases are about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, nil, []string{"CN", "RU"}, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "SK")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("geo blocklist non-match: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessGeoNoHeaderIsDeniedUnderAnAllowlist(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists(nil, nil, []string{"SK"}, nil, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	// This test used to assert 200 and was named ...SkipsCheck. It pinned the
-	// defect: an allowlist says only these countries may reach this service, and
-	// omitting the header was a bypass that did not even require knowing which
-	// countries were on the list.
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "1.2.3.4:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("no geo header under an allowlist: got %d, want 403", rec.Code)
-	}
-}
-
-func TestIPAccessGeoNoGeoHeaderConfigSkipsCheck(t *testing.T) {
-	// GeoAllowlist set but GeoIPHeader is empty → geo checks never run
-	resetIPAccess()
-	// A trusted peer, because this case is about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, []string{"SK"}, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "CN") // should be ignored
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("no geo header config: got %d, want 200 (geo disabled)", rec.Code)
-	}
-}
-
-func TestIPAccessHealthzBypass(t *testing.T) {
-	resetIPAccess()
-	// Block everything — health probes should still pass
-	SetIPAccessLists([]string{"255.255.255.255/32"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	for _, path := range []string{"/healthz", "/readyz"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.RemoteAddr = "1.2.3.4:5555"
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Errorf("%s bypass: got %d, want 200", path, rec.Code)
-		}
-	}
-}
-
-func TestIPAccessBareIP(t *testing.T) {
-	resetIPAccess()
-	// Bare IP (no CIDR suffix) should be normalized to /32
-	SetIPAccessLists([]string{"10.0.0.1"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.1:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("bare IP: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessIPv6CIDR(t *testing.T) {
-	resetIPAccess()
-	SetIPAccessLists([]string{"2001:db8::/32"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "[2001:db8::1]:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("IPv6 CIDR match: got %d, want 200", rec.Code)
+		trusted    []string
+		remoteAddr string
+		path       string
+		// header is the country header sent by the client, if any.
+		header [2]string
+		want   int
+	}{
+		{
+			name:       "no lists at all lets everything through",
+			remoteAddr: "1.2.3.4:1234", path: "/auth/login", want: http.StatusOK,
+		},
+		{
+			name:       "an address on the allowlist is admitted",
+			allow:      []string{"10.0.0.0/8"},
+			remoteAddr: "10.1.2.3:5555", want: http.StatusOK,
+		},
+		{
+			name:       "an address off the allowlist is refused",
+			allow:      []string{"10.0.0.0/8"},
+			remoteAddr: "192.168.1.1:5555", want: http.StatusForbidden,
+		},
+		{
+			name:       "an address on the blocklist is refused",
+			block:      []string{"192.0.2.0/24"},
+			remoteAddr: "192.0.2.50:5555", want: http.StatusForbidden,
+		},
+		{
+			name:       "an address off the blocklist is admitted",
+			block:      []string{"192.0.2.0/24"},
+			remoteAddr: "10.0.0.1:5555", want: http.StatusOK,
+		},
+		{
+			// The allowlist is consulted first, so being absent from it refuses the
+			// request whatever the blocklist says.
+			name:  "on the blocklist and off the allowlist is refused by the allowlist",
+			allow: []string{"10.0.0.0/8"}, block: []string{"192.168.1.0/24"},
+			remoteAddr: "192.168.1.5:5555", want: http.StatusForbidden,
+		},
+		{
+			name:       "a bare address in a list is read as a single host",
+			allow:      []string{"10.0.0.1"},
+			remoteAddr: "10.0.0.1:5555", want: http.StatusOK,
+		},
+		{
+			name:       "an IPv6 address inside an allowlisted prefix",
+			allow:      []string{"2001:db8::/32"},
+			remoteAddr: "[2001:db8::1]:5555", want: http.StatusOK,
+		},
+		{
+			name:       "an IPv6 address outside an allowlisted prefix",
+			allow:      []string{"2001:db8::/32"},
+			remoteAddr: "[2001:db9::1]:5555", want: http.StatusForbidden,
+		},
+		{
+			// An unparseable entry must be dropped rather than widened into a match,
+			// so the valid neighbor keeps working ...
+			name:       "an unparseable list entry does not break its valid neighbor",
+			allow:      []string{"not-a-cidr", "10.0.0.0/8"},
+			remoteAddr: "10.1.2.3:5555", want: http.StatusOK,
+		},
+		{
+			// ... and nothing outside that neighbor is admitted by it.
+			name:       "an unparseable list entry does not admit anyone",
+			allow:      []string{"not-a-cidr", "10.0.0.0/8"},
+			remoteAddr: "203.0.113.9:5555", want: http.StatusForbidden,
+		},
+		{
+			name:     "a country on the geo allowlist is admitted",
+			geoAllow: []string{"SK", "CZ"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "SK"}, want: http.StatusOK,
+		},
+		{
+			name:     "a country off the geo allowlist is refused",
+			geoAllow: []string{"SK", "CZ"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "US"}, want: http.StatusForbidden,
+		},
+		{
+			name:     "a country on the geo blocklist is refused",
+			geoBlock: []string{"CN", "RU"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "RU"}, want: http.StatusForbidden,
+		},
+		{
+			name:     "a country off the geo blocklist is admitted",
+			geoBlock: []string{"CN", "RU"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "SK"}, want: http.StatusOK,
+		},
+		{
+			// Cloudflare reports Tor exits as the pseudo-country T1, so the list has
+			// to work on a value that is not an ISO country code.
+			name:     "the Tor pseudo-country blocks like any other",
+			geoBlock: []string{"T1"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "T1"}, want: http.StatusForbidden,
+		},
+		{
+			name:     "the geo header name is configurable",
+			geoBlock: []string{"CN"}, geoHeader: "X-Geo-Country",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"X-Geo-Country", "CN"}, want: http.StatusForbidden,
+		},
+		{
+			name:     "country comparison ignores case",
+			geoAllow: []string{"sk"}, geoHeader: "CF-IPCountry",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "sk"}, want: http.StatusOK,
+		},
+		{
+			// An allowlist says only these countries may reach the service, so
+			// omitting the header must not be a bypass that does not even require
+			// knowing which countries are on the list. This row used to assert 200.
+			name:     "a missing country header under a geo allowlist is refused",
+			geoAllow: []string{"SK"}, geoHeader: "CF-IPCountry",
+			remoteAddr: "1.2.3.4:5555", want: http.StatusForbidden,
+		},
+		{
+			name:     "a geo list with no header name configured is inert",
+			geoAllow: []string{"SK"}, geoHeader: "",
+			trusted: []string{"10.0.0.0/8"}, remoteAddr: "10.0.0.7:5555",
+			header: [2]string{"CF-IPCountry", "CN"}, want: http.StatusOK,
+		},
+		{
+			// Blocking every address must not take the probes down with it, or a
+			// tightened list rolls the pods.
+			name:       "healthz is exempt from an allowlist that blocks everything",
+			allow:      []string{"255.255.255.255/32"},
+			remoteAddr: "1.2.3.4:5555", path: "/healthz", want: http.StatusOK,
+		},
+		{
+			name:       "readyz is exempt from an allowlist that blocks everything",
+			allow:      []string{"255.255.255.255/32"},
+			remoteAddr: "1.2.3.4:5555", path: "/readyz", want: http.StatusOK,
+		},
 	}
 
-	// Non-matching IPv6
-	req2 := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req2.RemoteAddr = "[2001:db9::1]:5555"
-	rec2 := httptest.NewRecorder()
-	h.ServeHTTP(rec2, req2)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetIPAccess()
+			SetIPAccessLists(tt.allow, tt.block, tt.geoAllow, tt.geoBlock, tt.geoHeader)
+			SetTrustedProxies(tt.trusted)
+			t.Cleanup(func() {
+				resetIPAccess()
+				SetTrustedProxies(nil)
+			})
 
-	if rec2.Code != http.StatusForbidden {
-		t.Errorf("IPv6 CIDR non-match: got %d, want 403", rec2.Code)
-	}
-}
+			path := tt.path
+			if path == "" {
+				path = "/api/test"
+			}
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = tt.remoteAddr
+			if tt.header[0] != "" {
+				req.Header.Set(tt.header[0], tt.header[1])
+			}
 
-func TestIPAccessInvalidCIDRSkipped(t *testing.T) {
-	resetIPAccess()
-	// Invalid entry should be skipped, valid entry should work
-	SetIPAccessLists([]string{"not-a-cidr", "10.0.0.0/8"}, nil, nil, nil, "")
-	h := IPAccess()(ok200)
+			rec := httptest.NewRecorder()
+			IPAccess()(ok200).ServeHTTP(rec, req)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.1.2.3:5555"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("invalid CIDR skipped: got %d, want 200", rec.Code)
-	}
-}
-
-func TestIPAccessTorExitNode(t *testing.T) {
-	// Cloudflare uses "T1" for Tor exit nodes
-	resetIPAccess()
-	// A trusted peer, because this case is about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, nil, []string{"T1"}, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "T1")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("Tor exit: got %d, want 403", rec.Code)
-	}
-}
-
-func TestIPAccessGeoCaseInsensitive(t *testing.T) {
-	resetIPAccess()
-	// A trusted peer, because this case is about the list logic and the
-	// country is only believed from a hop the operator trusts.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, []string{"sk"}, nil, "CF-IPCountry")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("CF-IPCountry", "sk")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("geo case insensitive: got %d, want 200", rec.Code)
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.want == http.StatusForbidden {
+				assertAccessDeniedBody(t, rec)
+			}
+		})
 	}
 }
 
@@ -419,27 +280,6 @@ func TestClientIPRealIPHeaderDisabled(t *testing.T) {
 	got := ClientIP(req)
 	if got != "198.51.100.1" {
 		t.Errorf("ClientIP disabled real IP header: got %q, want %q", got, "198.51.100.1")
-	}
-}
-
-func TestIPAccessCustomGeoHeader(t *testing.T) {
-	// Verify that a custom geo header name (e.g. X-Geo-Country) works
-	resetIPAccess()
-	// A trusted peer: the country is only believed from a hop the operator
-	// trusts, so a geo case has to declare one to be testing the list logic.
-	SetTrustedProxies([]string{"10.0.0.0/8"})
-	defer SetTrustedProxies(nil)
-	SetIPAccessLists(nil, nil, nil, []string{"CN"}, "X-Geo-Country")
-	h := IPAccess()(ok200)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.RemoteAddr = "10.0.0.7:5555"
-	req.Header.Set("X-Geo-Country", "CN")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("custom geo header: got %d, want 403", rec.Code)
 	}
 }
 

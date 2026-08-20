@@ -143,17 +143,17 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 310,
+      "line": 326,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to create keystore: %v\", err)",
       "bucket": "B",
       "confirmed": true,
-      "justification": "Bucket B, and the twin of the keystore guard at cmd/admin-gateway/main.go:169. keystore.New has exactly one error return, the len(masterKey) != 32 check at internal/keystore/keystore.go:141, and no other statement in it can fail: the rest is a copy and a struct literal. cmd/vault/main.go:302 is that same length check on that same slice, eight lines above the call, and it ends in log.Fatal, which calls os.Exit; control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between. That is why the error cannot happen. The bucket is B rather than C because even a reachable failure could not be recorded here: log.Fatalf ends the process before the testing package writes the profile, so covering the reaction would need main split into a run() error whose only caller besides main would be the test. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
+      "justification": "Bucket B, and the twin of the keystore guard at cmd/admin-gateway/main.go:169. keystore.New has exactly one error return, the len(masterKey) != 32 check at internal/keystore/keystore.go:141, and no other statement in it can fail: the rest is a copy and a struct literal. cmd/vault/main.go:318 is that same length check on that same slice, eight lines above the call, and it ends in log.Fatal, which calls os.Exit; control therefore reaches keystore.New only with a masterKey proven to be 32 bytes, in straight-line single-goroutine code that cannot change it in between. That is why the error cannot happen. The bucket is B rather than C because even a reachable failure could not be recorded here: log.Fatalf ends the process before the testing package writes the profile, so covering the reaction would need main split into a run() error whose only caller besides main would be the test. The guard itself is covered by TestKeyRotationDBRequiresA32ByteMasterKey (absent, too short, too long)."
     },
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 436,
+      "line": 452,
       "occurrence": 1,
       "source": "\t\tlog.Printf(\"WARNING: ipintel load failed (%v); continuing with an empty table (new-location notice and VPN scrutiny inert)\", err)",
       "bucket": "C",
@@ -163,12 +163,12 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 437,
+      "line": 453,
       "occurrence": 1,
       "source": "\t\tipIntelDB = ipintel.NewEmpty()",
       "bucket": "C",
       "confirmed": true,
-      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:436: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
+      "justification": "Companion statement of the ipintel.Default fail-open branch at cmd/vault/main.go:452: the substitution of an empty table for a load that failed. Reached only when ipintel.Default() returns an error, which needs the embedded blob to fail decoding (a build-time defect), the same unreachable condition justified on the line above."
     },
     {
       "package": "internal/adminapi",
@@ -543,7 +543,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 504,
+      "line": 520,
       "occurrence": 1,
       "source": "\t\t\tlog.Fatalf(\"Failed to generate the honeypot signing key: %v\", err)",
       "bucket": "B",
@@ -553,7 +553,7 @@
     {
       "package": "cmd/vault",
       "file": "cmd/vault/main.go",
-      "line": 513,
+      "line": 529,
       "occurrence": 1,
       "source": "\t\t\tlog.Printf(\"WARNING: honeypot profile with VAULT_KEY_ROTATION_DB=true: the trap signing key (kid=%s) \"+",
       "bucket": "B",

@@ -513,3 +513,69 @@ func devFloorLabel(m []string) string {
 	}
 	return m[1]
 }
+
+// TestASVS_V7_6_1_FederatedSessionLifetimeMatchesWhatTheRegisterClaims is the
+// coupling gate this row did not have.
+//
+// V7.6.1 asks that session lifetime and termination between a relying party and
+// an identity provider behave as documented. CR-22 carries it as an accepted
+// risk on the grounds that vault42 records neither the provider's authentication
+// instant nor its session identifier, and nothing held that argument to the
+// code: the row named TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound,
+// which asserts the OAuth state parameter is HMAC-signed and session-bound. That
+// is a cross-site-request-forgery gate. It would pass unchanged whether or not
+// auth_time were read, so the row could have drifted in either direction without
+// anything failing.
+//
+// The requirement has two halves and they moved apart. The authentication
+// instant is now taken from the provider's auth_time claim, so a federated token
+// no longer dates a login to the moment the callback ran. Termination is still
+// unhandled in both directions: no back-channel logout endpoint exists, and
+// AuthService.Logout revokes only vault42's own tokens. The row stays accepted
+// for the second half, and this gate fails if either half changes without the
+// register changing with it.
+func TestASVS_V7_6_1_FederatedSessionLifetimeMatchesWhatTheRegisterClaims(t *testing.T) {
+	callback := readCodeOnly(t, "internal/handler/oauth.go")
+	verifier := readCodeOnly(t, "internal/oauth2/oidc_idtoken.go")
+
+	// Half one: the instant. Reading the claim and passing it on are separate
+	// steps and a gate that checked only the first would pass over a value that
+	// is parsed and dropped.
+	readsAuthTime := strings.Contains(verifier, `claims["auth_time"]`)
+	usesAuthTime := strings.Contains(callback, "authTime := userInfo.AuthTime") &&
+		strings.Contains(callback, "service.NewAuthContext(authTime,")
+
+	if readsAuthTime != usesAuthTime {
+		t.Errorf("V7.6.1: the ID token verifier %s auth_time and the callback %s it. Reading the "+
+			"claim without passing it on leaves the token dating the login to the callback; "+
+			"passing on a claim nobody reads cannot compile. One of the two moved without the "+
+			"other.",
+			map[bool]string{true: "reads", false: "does not read"}[readsAuthTime],
+			map[bool]string{true: "uses", false: "does not use"}[usesAuthTime])
+	}
+
+	// Half two: termination. A back-channel logout endpoint is what closes it,
+	// and it would be the thing that moves this row to Met.
+	backchannel := strings.Contains(readCodeOnly(t, "internal/server/server.go"), "backchannel-logout") ||
+		strings.Contains(verifier, "logout_token")
+
+	status, ar := registerRowStatus(t, "OWASP ASVS", "V7.6.1")
+
+	switch {
+	case backchannel && status != statusMet:
+		t.Errorf("V7.6.1: a back-channel logout path has landed and the register still carries "+
+			"the row as %q (%s). Upstream termination was the half holding it open.", status, ar)
+	case !backchannel && status == statusMet:
+		t.Error("V7.6.1: the register marks this Met, and termination is still unhandled: no " +
+			"back-channel logout endpoint exists, so an IdP session ending upstream does not end " +
+			"the vault42 session.")
+	case !readsAuthTime && status != statusMet:
+		t.Error("V7.6.1: the register's argument rests on the authentication instant being read " +
+			"from the provider, and internal/oauth2 no longer reads auth_time. Either the claim " +
+			"handling was removed, in which case the row is weaker than it says, or this gate is " +
+			"looking in the wrong place.")
+	default:
+		t.Logf("V7.6.1: carried as %s (%s); auth_time read=%v, back-channel logout=%v",
+			status, ar, readsAuthTime, backchannel)
+	}
+}

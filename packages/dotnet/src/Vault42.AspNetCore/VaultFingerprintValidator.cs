@@ -52,14 +52,24 @@ public static class VaultFingerprintValidator
     /// </param>
     /// <returns><see langword="true"/> when the recomputed fingerprint equals the claim.</returns>
     /// <remarks>
-    /// The comparison is constant-time, so a caller cannot recover the expected value by timing
-    /// repeated attempts. The client IP is read from <see cref="Microsoft.AspNetCore.Http.ConnectionInfo.RemoteIpAddress"/>,
+    /// <para>The comparison is constant-time, so a caller cannot recover the expected value by
+    /// timing repeated attempts. The client IP is read from <see cref="Microsoft.AspNetCore.Http.ConnectionInfo.RemoteIpAddress"/>,
     /// which behind a reverse proxy is the proxy's address unless forwarded-headers processing is
-    /// configured first; without that, every token issued through the proxy fails this check.
+    /// configured first; without that, every token issued through the proxy fails this check.</para>
+    /// <para>An IPv4 client reaching a dual-stack listener is reported by Kestrel in the
+    /// IPv4-mapped form, and it is unmapped here before hashing. Go's <c>net.IP.String</c> prints
+    /// such an address as its dotted quad, so the Vault hashed "203.0.113.7" while
+    /// <see cref="System.Net.IPAddress.ToString"/> produced "::ffff:203.0.113.7" -- two different
+    /// digests for one client, and a 401 for every IPv4 user of every container deployment, which
+    /// binds to <see cref="System.Net.IPAddress.IPv6Any"/> by default.</para>
     /// </remarks>
     public static bool Validate(HttpContext context, string expectedFingerprint, string? tlsFingerprintHeader)
     {
-        var ip = context.Connection.RemoteIpAddress?.ToString() ?? string.Empty;
+        var remote = context.Connection.RemoteIpAddress;
+        if (remote is not null && remote.IsIPv4MappedToIPv6)
+            remote = remote.MapToIPv4();
+
+        var ip = remote?.ToString() ?? string.Empty;
         var ua = context.Request.Headers.UserAgent.ToString();
         var lang = context.Request.Headers.AcceptLanguage.ToString();
         var tls = string.IsNullOrEmpty(tlsFingerprintHeader)

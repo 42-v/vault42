@@ -143,11 +143,42 @@ func TestRetention_SweepErrorSurfaces(t *testing.T) {
 	}
 }
 
-// Disabled retention must be inert, not panic, when Start/Stop are called.
+// cmd/vault calls Start and defers Stop whether or not a horizon is configured,
+// so the disabled path has to survive both. Start spawns no loop when disabled,
+// which leaves doneCh open for good: a Stop that waited on it would hang
+// shutdown for every deployment that never set a horizon. Nothing may be deleted
+// either, which is what the sweep counter is for --
+// TestRetention_DisabledNeverPurges covers Sweep directly, this covers the
+// lifecycle calls around it.
 func TestRetention_DisabledLifecycleIsSafe(t *testing.T) {
-	r := NewRetention(&mocks.MockAuditRepo{}, 0)
+	var sweeps int
+	repo := &mocks.MockAuditRepo{
+		CleanupLockedFn: func(context.Context, time.Time) (int64, bool, error) {
+			sweeps++
+			return 0, true, nil
+		},
+	}
+	r := NewRetention(repo, 0)
+	if r.Enabled() {
+		t.Fatal("a zero period is not a retention horizon")
+	}
+
 	r.Start(context.Background())
-	r.Stop()
+
+	stopped := make(chan struct{})
+	go func() {
+		r.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked on a disabled sweeper: Start never spawned the loop that closes doneCh, so shutdown would hang")
+	}
+
+	if sweeps != 0 {
+		t.Errorf("a disabled sweeper ran %d times; a deployment that set no horizon must not start deleting security logs", sweeps)
+	}
 }
 
 // The cleanup takes an ACCESS EXCLUSIVE lock on the audit table — it disables the

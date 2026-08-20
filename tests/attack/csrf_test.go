@@ -11,26 +11,35 @@ import (
 // TestCSRF_CORSRejectsWildcardWithCredentials verifies that CORS middleware
 // does not allow wildcard origin (*) when credentials are involved, which
 // would be a CSRF vulnerability.
+//
+// The header is pinned exactly rather than compared against the request's own
+// origin. The old form asserted only that a refused origin was not echoed back,
+// so a middleware that answered "*" with Allow-Credentials: true -- the exact
+// vulnerability in the test's name -- passed every case. The no-origin row
+// asserted nothing at all, because its guard excluded the empty string.
 func TestCSRF_CORSRejectsWildcardWithCredentials(t *testing.T) {
+	const configured = "https://app.example.com"
 	// allowAll=false with a specific origin
-	handler := middleware.CORS("https://app.example.com", nil, false)(
+	handler := middleware.CORS(configured, nil, false)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
 	)
 
 	tests := []struct {
-		name          string
-		origin        string
-		expectAllowed bool
+		name     string
+		origin   string
+		wantACAO string // exact Access-Control-Allow-Origin, "" for absent
 	}{
-		{"correct_origin", "https://app.example.com", true},
-		{"wrong_origin", "https://evil.example.com", false},
-		{"no_origin", "", false},
-		{"subdomain_attack", "https://evil.app.example.com", false},
-		{"http_downgrade", "http://app.example.com", false},
-		{"port_variation", "https://app.example.com:8443", false},
-		{"path_suffix", "https://app.example.com.evil.com", false},
+		{"correct_origin", configured, configured},
+		{"wrong_origin", "https://evil.example.com", ""},
+		// No Origin header is not a browser cross-origin request, so answering
+		// with the configured origin grants nothing to a caller.
+		{"no_origin", "", configured},
+		{"subdomain_attack", "https://evil.app.example.com", ""},
+		{"http_downgrade", "http://app.example.com", ""},
+		{"port_variation", "https://app.example.com:8443", ""},
+		{"path_suffix", "https://app.example.com.evil.com", ""},
 	}
 
 	for _, tc := range tests {
@@ -44,11 +53,17 @@ func TestCSRF_CORSRejectsWildcardWithCredentials(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			allowOrigin := rec.Header().Get("Access-Control-Allow-Origin")
-			if tc.expectAllowed && allowOrigin != tc.origin {
-				t.Fatalf("Expected Allow-Origin=%q, got %q", tc.origin, allowOrigin)
+			credentials := rec.Header().Get("Access-Control-Allow-Credentials")
+
+			if allowOrigin == "*" {
+				t.Fatalf("origin %q got Allow-Origin: * with Allow-Credentials: %q; a wildcard here is the CSRF hole", tc.origin, credentials)
 			}
-			if !tc.expectAllowed && allowOrigin == tc.origin && tc.origin != "" {
-				t.Fatalf("Origin %q should NOT be allowed, but got Allow-Origin=%q", tc.origin, allowOrigin)
+			if allowOrigin != tc.wantACAO {
+				t.Fatalf("origin %q: Allow-Origin = %q, want %q", tc.origin, allowOrigin, tc.wantACAO)
+			}
+			if want := tc.wantACAO != ""; (credentials == "true") != want {
+				t.Fatalf("origin %q: Allow-Credentials = %q with Allow-Origin %q; credentials belong to a named origin and nothing else",
+					tc.origin, credentials, allowOrigin)
 			}
 		})
 	}

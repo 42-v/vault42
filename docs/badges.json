@@ -1,16 +1,40 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.1",
-  "tests": 5049,
-  "passed": "5049 passed",
-  "coverage": "99.60%",
-  "coverageNum": 99.60,
+  "version": "1.0.3",
+  "tests": 4898,
+  "passed": "4898 passed",
+  "coverage": "99.61%",
+  "coverageNum": 99.61,
   "reachableCoverage": "100.00%",
   "reachableCoverageNum": 100.00,
   "packages": 44,
   "goFiles": 195,
-  "goLines": 47986,
-  "testFiles": 904,
+  "goLines": 48651,
+  "testFiles": 920,
   "directDeps": 3,
-  "transitiveDeps": 18
+  "transitiveDeps": 18,
+  "totalTests": 6467,
+  "languages": {
+    "go": {
+      "tests": 4898,
+      "coverage": "100.00% of reachable",
+      "coverageNum": 100.00,
+      "lines": 48651,
+      "deps": 3
+    },
+    "vue": {
+      "tests": 1305,
+      "coverage": "99.76%",
+      "coverageNum": 99.76,
+      "lines": 6743,
+      "deps": 3
+    },
+    "csharp": {
+      "tests": 264,
+      "coverage": "100.00%",
+      "coverageNum": 100.00,
+      "lines": 2347,
+      "deps": 6
+    }
+  }
 }

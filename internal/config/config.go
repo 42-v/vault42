@@ -4,6 +4,7 @@
 package config
 
 import (
+	"crypto/x509"
 	"fmt"
 	"log"
 	"net"
@@ -83,6 +84,26 @@ type Config struct {
 	RedisAddr string
 	// RedisPass is the Redis password (REDIS_PASS_FILE).
 	RedisPass string
+	// RedisTLS encrypts the cache connection (REDIS_TLS). Default: false, which
+	// is the posture that was previously the only one available: the dial path
+	// could already negotiate TLS but nothing configured it, so the link
+	// carried the AUTH password above, the lockout and rate-limit keys with
+	// their client addresses and user identifiers, and the jti binding a
+	// password-confirmation window, all in cleartext.
+	RedisTLS bool
+	// RedisTLSCAFile is a PEM bundle of root certificates the Redis server's
+	// certificate is verified against (REDIS_TLS_CA_FILE). Empty uses the host
+	// trust store, which the runtime image populates with public roots only.
+	RedisTLSCAFile string
+	// RedisTLSServerName is the name verified against the Redis server
+	// certificate (REDIS_TLS_SERVER_NAME). Empty verifies against the host part
+	// of REDIS_ADDR.
+	RedisTLSServerName string
+	// RedisTLSRootCAs is RedisTLSCAFile parsed into a pool at startup by
+	// loadRedisTLS. It exists as a field rather than as a read on first dial so
+	// that a CA bundle the process cannot use is a refused boot rather than a
+	// cache that fails its ping and degrades to per-process memory.
+	RedisTLSRootCAs *x509.CertPool
 
 	// AccessTokenTTL is the lifetime of JWT access tokens (VAULT_ACCESS_TOKEN_TTL). Default: 15m.
 	AccessTokenTTL time.Duration
@@ -436,8 +457,11 @@ func Load() (*Config, error) {
 		DBStatementTimeout: envDuration("DB_STATEMENT_TIMEOUT", 10*time.Second),
 		DBLockTimeout:      envDuration("DB_LOCK_TIMEOUT", 3*time.Second),
 
-		CacheBackend: os.Getenv("CACHE_BACKEND"),
-		RedisAddr:    os.Getenv("REDIS_ADDR"),
+		CacheBackend:       os.Getenv("CACHE_BACKEND"),
+		RedisAddr:          os.Getenv("REDIS_ADDR"),
+		RedisTLS:           envBool("REDIS_TLS"),
+		RedisTLSCAFile:     os.Getenv("REDIS_TLS_CA_FILE"),
+		RedisTLSServerName: os.Getenv("REDIS_TLS_SERVER_NAME"),
 
 		EmailProvider: envOr("VAULT_EMAIL_PROVIDER", "smtp"),
 		SMTPHost:      os.Getenv("SMTP_HOST"),
@@ -611,6 +635,10 @@ func Load() (*Config, error) {
 	// they are mailing one-time codes across a network in cleartext.
 	if c.SMTPAllowPlaintext && c.Profile != ProfileDev && !isLoopbackSMTPHost(c.SMTPHost) {
 		return nil, fmt.Errorf("VAULT_SMTP_ALLOW_PLAINTEXT is accepted only for a loopback SMTP_HOST in %s profile (got %q)", c.Profile, c.SMTPHost)
+	}
+
+	if err := c.loadRedisTLS(); err != nil {
+		return nil, err
 	}
 
 	if floor := passwordFloorFor(c.Profile); c.PasswordMinLength < floor {
@@ -801,6 +829,26 @@ func (c *Config) warnOnDegradedControls() {
 	for _, h := range c.OutboundAllowedHosts {
 		log.Printf("SECURITY WARNING: VAULT_OUTBOUND_ALLOWED_HOSTS names %q, so a provider's discovery document may direct vault42 there even though it is outside the issuer's own domain", h)
 	}
+	// The cache link is the last outbound hop vault42 leaves unencrypted by
+	// default, and REDIS_ADDR is what says whether that hop crosses a network:
+	// the chart ships "redis:6379", a service name, which is a routed
+	// connection through the cluster network to another pod. What travels on it
+	// is the Redis AUTH password on every dial, the lockout and rate-limit keys
+	// with the client addresses and user identifiers they are keyed on, and the
+	// jti binding a password-confirmation window.
+	//
+	// This warns where checkDatabaseLink refuses, and the difference is the
+	// upgrade. DB_SSLMode has defaulted to "require" for as long as the setting
+	// has existed, so refusing "disable" only ever caught a deployment that had
+	// opted into it. REDIS_TLS is new and defaults off, so refusing here would
+	// mean every existing install with a non-loopback REDIS_ADDR -- which is the
+	// shipped chart default -- stops booting on upgrade to a release whose only
+	// change was to make the option available. Once the chart defaults it on,
+	// this becomes a refusal with an explicit override, the shape
+	// VAULT_ALLOW_PLAINTEXT_DB already uses.
+	if c.CacheBackend == "redis" && c.RedisAddr != "" && !c.RedisTLS && !isLoopbackRedisAddr(c.RedisAddr) {
+		log.Printf("SECURITY WARNING: REDIS_ADDR=%q is not on this machine and REDIS_TLS is not set, so the cache link carries the Redis AUTH password, the lockout and rate-limit keys with the client addresses they are keyed on, and password-confirmation jtis in cleartext across the cluster network", c.RedisAddr)
+	}
 }
 
 // checkDatabaseLink refuses a non-dev database connection that is not
@@ -857,15 +905,95 @@ func (c *Config) checkGeoFence() error {
 	return nil
 }
 
+// loadRedisTLS resolves the transport settings for the cache link and turns
+// REDIS_TLS_CA_FILE into the pool the dialer verifies against.
+//
+// The bundle is read here, at startup and beside the secret files, for the same
+// reason cmd/admin-gateway reads its client CA before it builds a listener: a
+// path that does not resolve or does not hold a certificate is an operator
+// mistake, and finding it on the first dial instead means a process that came
+// up healthy, logged one warning and fell back to the per-process memory cache
+// (cmd/vault/main.go), where the login limiter, the OAuth state and the TOTP
+// replay guard silently stop being shared across replicas.
+//
+// A CA file or a server name given without REDIS_TLS is refused rather than
+// ignored, which is the rule stated at the top of envcheck.go: a value that is
+// set but cannot be honored must not be indistinguishable, from outside the
+// process, from nothing having been configured. The failure that refusal
+// prevents is the one this whole setting exists to close -- an operator who
+// mounts a CA bundle, reads the manifest back as an encrypted cache link, and
+// is still shipping the Redis AUTH password and every lockout counter in
+// cleartext.
+//
+// Every profile runs this, dev included. A local operator who is wiring TLS up
+// against a container needs the same refusal, and a dev deployment that accepts
+// a broken CA teaches a configuration that gets copied into a manifest.
+func (c *Config) loadRedisTLS() error {
+	if !c.RedisTLS {
+		for _, v := range []struct{ name, value string }{
+			{"REDIS_TLS_CA_FILE", c.RedisTLSCAFile},
+			{"REDIS_TLS_SERVER_NAME", c.RedisTLSServerName},
+		} {
+			if v.value != "" {
+				return fmt.Errorf("%s is set (%q) but REDIS_TLS is not enabled; the cache link would still be cleartext", v.name, v.value)
+			}
+		}
+		return nil
+	}
+
+	// An empty CA file is the managed-Redis case: the server holds a publicly
+	// rooted certificate and the host trust store verifies it. Only a bundle
+	// that was named has to parse.
+	if c.RedisTLSCAFile == "" {
+		return nil
+	}
+
+	pemBytes, err := os.ReadFile(filepath.Clean(c.RedisTLSCAFile)) // #nosec G304 -- path from operator env var (_FILE convention), cleaned with filepath.Clean
+	if err != nil {
+		return fmt.Errorf("REDIS_TLS_CA_FILE %q could not be read: %w", c.RedisTLSCAFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return fmt.Errorf("REDIS_TLS_CA_FILE %q holds no PEM certificate; an empty pool verifies nothing and every cache dial would fail", c.RedisTLSCAFile)
+	}
+	c.RedisTLSRootCAs = pool
+	return nil
+}
+
 // isLoopbackSMTPHost reports whether SMTP_HOST names a relay on this machine.
 // "localhost" is accepted by name because that is how a sidecar relay is
 // usually addressed; everything else has to resolve to a loopback literal.
 func isLoopbackSMTPHost(host string) bool {
+	return isLoopbackHost(host)
+}
+
+// isLoopbackHost is the shared test behind isLoopbackSMTPHost and
+// isLoopbackRedisAddr. Both answer the same question -- is this hop one that
+// never leaves the machine -- and an encrypted-transport exemption that means
+// two different things depending on which service asked is an exemption nobody
+// can review.
+func isLoopbackHost(host string) bool {
 	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// isLoopbackRedisAddr reports whether REDIS_ADDR names a server on this
+// machine.
+//
+// REDIS_ADDR carries host:port where SMTP_HOST carries the host alone, and an
+// address written without a port is judged on what it does carry rather than
+// treated as remote: net.SplitHostPort fails on a bare "localhost", and
+// answering "not loopback" there would warn loudest about the one address that
+// needs no warning.
+func isLoopbackRedisAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return isLoopbackHost(host)
 }
 
 // passwordMinLengthFloor is the shortest VAULT_PASSWORD_MIN_LENGTH accepted

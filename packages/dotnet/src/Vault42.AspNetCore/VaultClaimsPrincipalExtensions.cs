@@ -48,9 +48,23 @@ public static class VaultClaimsPrincipalExtensions
     /// <summary>Get the client ID claim.</summary>
     /// <param name="principal">The authenticated principal.</param>
     /// <returns>
-    /// The OAuth2 client the token was issued to, or <see langword="null"/>. Tokens from the
-    /// first-party password login flow have no client and return null here.
+    /// The value of the token's <c>client_id</c> claim, or <see langword="null"/> when it carries
+    /// none.
     /// </returns>
+    /// <remarks>
+    /// <para><strong>Not an authenticated identity, and must not be used as one.</strong> On the
+    /// password path the value is whatever the caller put in the <c>client_id</c> field of the
+    /// <c>POST /auth/login</c> request body, copied unverified into the claim; the server says so
+    /// itself at <c>internal/service/auth.go:695</c> -- "ClientID above is self-asserted body text
+    /// and proves nothing". Anyone able to log in can present any client id they like, including
+    /// one belonging to a registered confidential client. An authorization rule written against
+    /// this, such as trusting a first-party client id more than a third-party one, is defeated by
+    /// editing a JSON field.</para>
+    /// <para>The value is proven only for a token from <c>POST /client/token</c>, where the client
+    /// authenticated with HTTP Basic against a stored secret before anything was issued. Nothing in
+    /// the claim distinguishes the two cases, so where the distinction matters, gate on a scope
+    /// only the client-credentials path can grant instead.</para>
+    /// </remarks>
     public static string? GetClientId(this ClaimsPrincipal principal) =>
         principal.FindFirst(VaultClaimTypes.ClientId)?.Value;
 

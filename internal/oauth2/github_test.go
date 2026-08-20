@@ -30,9 +30,8 @@ func TestGitHubName(t *testing.T) {
 	}
 }
 
-func TestGitHubImplementsProvider(t *testing.T) {
-	var _ Provider = (*GitHubProvider)(nil)
-}
+// Compile-time conformance; see the note in facebook_test.go.
+var _ Provider = (*GitHubProvider)(nil)
 
 func TestGitHubAuthURL(t *testing.T) {
 	tests := []struct {

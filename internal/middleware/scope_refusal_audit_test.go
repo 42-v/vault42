@@ -137,6 +137,10 @@ func TestRequireScopeRefusalSurvivesRequestCancellation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403: canceling the request must not change the decision", rec.Code)
+	}
+
 	entries, canceled := repo.snapshot()
 	if len(entries) != 1 {
 		t.Fatalf("%d audit entries written, want 1: a prober erased their own record by dropping "+

@@ -186,7 +186,7 @@ func logLevelDocMentions(t *testing.T, root string) []string {
 func TestDocsDoNotPromiseLogLevel(t *testing.T) {
 	root := logLevelRepoRoot(t)
 	if logLevelFieldDeclared() && len(logLevelReaders(t, root)) > 0 {
-		t.Skip("LogLevel is wired into the server, so documenting it is correct")
+		t.Skip("LogLevel has come back and something outside internal/config reads it, so documenting it is correct again")
 	}
 	if mentions := logLevelDocMentions(t, root); len(mentions) > 0 {
 		t.Errorf("docs present LOG_LEVEL as a vault42 setting, but the server has no log-verbosity control:\n  %s",
@@ -197,7 +197,7 @@ func TestDocsDoNotPromiseLogLevel(t *testing.T) {
 func TestSettingLogLevelIsNotSilent(t *testing.T) {
 	root := logLevelRepoRoot(t)
 	if logLevelFieldDeclared() && len(logLevelReaders(t, root)) > 0 {
-		t.Skip("LogLevel is wired into the server, so it is honored rather than announced")
+		t.Skip("LogLevel has come back and something outside internal/config reads it, so it is honored rather than announced")
 	}
 
 	t.Setenv("VAULT_PROFILE", "production")

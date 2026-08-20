@@ -156,50 +156,48 @@ func TestAuth_DPoPSchemeOptionOnAllConstructors(t *testing.T) {
 	}
 }
 
-func TestAuth_WrongIssuer(t *testing.T) {
+// A token that is perfectly signed but was minted for somewhere else must still
+// be refused. Without these two checks any vault42 deployment sharing a signing
+// key would accept the others' tokens.
+func TestAuth_WrongIssuerOrAudience(t *testing.T) {
 	key := newTestKey(t)
 	kid := "aabb0033-5566"
 	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
 
-	handler := Auth(keys, "expected-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	tests := []struct {
+		name                     string
+		wantIssuer, wantAudience string
+		tokenIssuer              string
+		tokenAudience            string
+	}{
+		{
+			name: "wrong issuer", wantIssuer: "expected-issuer", wantAudience: "test-audience",
+			tokenIssuer: "wrong-issuer", tokenAudience: "test-audience",
+		},
+		{
+			name: "wrong audience", wantIssuer: "test-issuer", wantAudience: "expected-audience",
+			tokenIssuer: "test-issuer", tokenAudience: "wrong-audience",
+		},
+	}
 
-	tokenStr := signTestToken(t, key, kid, "wrong-issuer", "test-audience", "user-123", 5*time.Minute)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := Auth(keys, tt.wantIssuer, tt.wantAudience)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("the handler ran on a token minted for somewhere else")
+			}))
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+			tokenStr := signTestToken(t, key, kid, tt.tokenIssuer, tt.tokenAudience, "user-123", 5*time.Minute)
 
-	t.Run("rejects wrong issuer", func(t *testing.T) {
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rec.Code)
-		}
-	})
-}
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
 
-func TestAuth_WrongAudience(t *testing.T) {
-	key := newTestKey(t)
-	kid := "aabb0044-7788"
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
-
-	handler := Auth(keys, "test-issuer", "expected-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	tokenStr := signTestToken(t, key, kid, "test-issuer", "wrong-audience", "user-123", 5*time.Minute)
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	t.Run("rejects wrong audience", func(t *testing.T) {
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rec.Code)
-		}
-	})
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", rec.Code)
+			}
+		})
+	}
 }
 
 func TestAuth_TokenSignedWithDifferentKey(t *testing.T) {
@@ -414,38 +412,21 @@ func TestAuth_ClaimsAvailableInContext(t *testing.T) {
 		t.Fatalf("status = %d, want 200; cannot test claims", rec.Code)
 	}
 
-	t.Run("claims are in context", func(t *testing.T) {
-		if extractedClaims == nil {
-			t.Fatal("claims should be set in context")
-		}
-	})
-
-	t.Run("subject matches", func(t *testing.T) {
-		if extractedClaims == nil {
-			t.Skip("claims nil")
-		}
-		if extractedClaims.Subject != "user-ctx-test" {
-			t.Errorf("subject = %q, want user-ctx-test", extractedClaims.Subject)
-		}
-	})
-
-	t.Run("issuer matches", func(t *testing.T) {
-		if extractedClaims == nil {
-			t.Skip("claims nil")
-		}
-		if extractedClaims.Issuer != "test-issuer" {
-			t.Errorf("issuer = %q, want test-issuer", extractedClaims.Issuer)
-		}
-	})
-
-	t.Run("roles present", func(t *testing.T) {
-		if extractedClaims == nil {
-			t.Skip("claims nil")
-		}
-		if len(extractedClaims.Roles) == 0 {
-			t.Error("roles should be present")
-		}
-	})
+	// One Fatal rather than four subtests each skipping on a nil pointer: those
+	// skips turned "the middleware put nothing on the context" into three green
+	// results and one red one.
+	if extractedClaims == nil {
+		t.Fatal("claims should be set in context")
+	}
+	if extractedClaims.Subject != "user-ctx-test" {
+		t.Errorf("subject = %q, want user-ctx-test", extractedClaims.Subject)
+	}
+	if extractedClaims.Issuer != "test-issuer" {
+		t.Errorf("issuer = %q, want test-issuer", extractedClaims.Issuer)
+	}
+	if len(extractedClaims.Roles) == 0 {
+		t.Error("roles should be present")
+	}
 }
 
 func TestGetClaims_WrongContextValueType(t *testing.T) {

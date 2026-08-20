@@ -39,115 +39,45 @@ func setupAuthMiddleware(t *testing.T) (http.Handler, string) {
 	return handler, tokenStr
 }
 
-// TestJWT_AuthHeader_LowercaseBearer verifies that "bearer" (lowercase) is rejected.
-func TestJWT_AuthHeader_LowercaseBearer(t *testing.T) {
+// TestJWT_AuthHeader covers the Authorization header parse in middleware.Auth:
+// every mangling of the scheme or of the token around one valid credential.
+//
+// The "well formed" row is what makes the rest mean anything. Without it a
+// middleware that refused everything, a broken key map for instance, would
+// satisfy all eight refusals and the table would still be green.
+func TestJWT_AuthHeader(t *testing.T) {
 	handler, token := setupAuthMiddleware(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "bearer "+token)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for lowercase 'bearer', got %d", rec.Code)
+	cases := []struct {
+		name   string
+		header func(token string) string
+		want   int
+	}{
+		{"well formed", func(tok string) string { return "Bearer " + tok }, http.StatusOK},
+		{"lowercase scheme", func(tok string) string { return "bearer " + tok }, http.StatusUnauthorized},
+		{"uppercase scheme", func(tok string) string { return "BEARER " + tok }, http.StatusUnauthorized},
+		{"trailing space after token", func(tok string) string { return "Bearer " + tok + " " }, http.StatusUnauthorized},
+		// SplitN(" Bearer token", " ", 2) yields [" Bearer", "token"], so the
+		// scheme keeps the leading space and stops matching "Bearer".
+		{"leading space before scheme", func(tok string) string { return " Bearer " + tok }, http.StatusUnauthorized},
+		{"scheme with no token", func(string) string { return "Bearer" }, http.StatusUnauthorized},
+		{"token with no scheme", func(tok string) string { return tok }, http.StatusUnauthorized},
+		{"basic auth", func(string) string { return "Basic dXNlcjpwYXNz" }, http.StatusUnauthorized},
+		{"empty header", func(string) string { return "" }, http.StatusUnauthorized},
 	}
-}
 
-// TestJWT_AuthHeader_UppercaseBearer verifies that "BEARER" (all caps) is rejected.
-func TestJWT_AuthHeader_UppercaseBearer(t *testing.T) {
-	handler, token := setupAuthMiddleware(t)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			value := tc.header(token)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "BEARER "+token)
-	rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", value)
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for uppercase 'BEARER', got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_TrailingSpace verifies that trailing space in token is rejected.
-func TestJWT_AuthHeader_TrailingSpace(t *testing.T) {
-	handler, token := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+token+" ")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for trailing space in token, got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_LeadingSpace verifies that leading space in Authorization value is handled.
-func TestJWT_AuthHeader_LeadingSpace(t *testing.T) {
-	handler, token := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", " Bearer "+token)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	// SplitN(" Bearer token", " ", 2) → [" Bearer", "token"] — scheme doesn't match "Bearer"
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for leading space in Authorization, got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_MissingToken verifies that "Bearer" with no token is rejected.
-func TestJWT_AuthHeader_MissingToken(t *testing.T) {
-	handler, _ := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for 'Bearer' without token, got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_NoScheme verifies that a bare token without scheme is rejected.
-func TestJWT_AuthHeader_NoScheme(t *testing.T) {
-	handler, token := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", token)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for bare token without scheme, got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_BasicAuth verifies that Basic auth scheme is rejected.
-func TestJWT_AuthHeader_BasicAuth(t *testing.T) {
-	handler, _ := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for Basic auth, got %d", rec.Code)
-	}
-}
-
-// TestJWT_AuthHeader_EmptyValue verifies that empty Authorization header is rejected.
-func TestJWT_AuthHeader_EmptyValue(t *testing.T) {
-	handler, _ := setupAuthMiddleware(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expected 401 for empty Authorization, got %d", rec.Code)
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("Authorization: %q got %d, want %d", value, rec.Code, tc.want)
+			}
+		})
 	}
 }

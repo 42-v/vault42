@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/42-v/vault42/internal/audit"
+	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/tests/mocks"
 )
 
@@ -16,16 +17,24 @@ func testAuditLog() *audit.Logger {
 	return audit.NewLogger(&mocks.MockAuditRepo{}, 0)
 }
 
-// Alert with an audit logger but no webhook: covers the audit-trigger block
-// and the early return when webhookURL is empty.
+// Alert with an audit logger but no webhook. The audit row is not conditional on
+// a webhook being configured: an operator who never set one still has to be able
+// to find out that the trap fired. Exactly one entry, the trigger, and no
+// dispatch entry, because nothing was dispatched.
 func TestAlert_AuditOnlyNoWebhook(t *testing.T) {
-	a := NewAlerter("", []string{"trap@x.test"}, testAuditLog())
+	var entries []*model.AuditEntry
+	a := NewAlerter("", []string{"trap@x.test"}, apAuditSpy(&entries))
 	a.Alert(context.Background(), Event{
 		EventType: "trap_login",
 		IP:        "10.0.0.9",
 		Email:     "trap@x.test",
 		RiskScore: 100,
 	})
+
+	assertTriggerOnly(t, entries)
+	if entries[0].IP != "10.0.0.9" {
+		t.Errorf("audit entry lost the attacker IP: %q", entries[0].IP)
+	}
 }
 
 // Alert with an audit logger AND a live webhook returning 200: covers the

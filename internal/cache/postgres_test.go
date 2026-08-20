@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 )
@@ -24,9 +23,10 @@ func TestNewPostgresCache_NilPool(t *testing.T) {
 	}
 }
 
-func TestPostgresCache_ImplementsInterface(t *testing.T) {
-	var _ Cache = (*PostgresCache)(nil)
-}
+// Compile-time conformance. This was a test function whose body was this line,
+// so it ran, asserted nothing, and reported the same result whether or not the
+// package still compiled -- the compiler had already decided by then.
+var _ Cache = (*PostgresCache)(nil)
 
 func TestPostgresCache_Close(t *testing.T) {
 	pc, _ := NewPostgresCache(nil)
@@ -53,28 +53,43 @@ func TestPostgresCache_StructFields(t *testing.T) {
 	}
 }
 
-// TestPostgresCache_Methods_NilPool executes the method bodies (they panic on nil pool)
-// to achieve statement coverage for the error-path / wrapper code. Panics are recovered.
+// The factory refuses a nil pool, so this reaches past it to run the method
+// bodies with nothing behind them. What it pins is that they fail loudly rather
+// than answering: a method that swallowed the nil and returned ("", ErrNotFound)
+// or (false, nil) would be indistinguishable from a genuine cache miss, and a
+// miss is what the rate limiter and the lockout counter read as "no attempts
+// recorded yet". Close is excluded because it touches no pool and is documented
+// as safe on a half-built cache; TestPostgresCache_Close covers it.
 func TestPostgresCache_Methods_NilPool(t *testing.T) {
 	pc, err := NewPostgresCache(nil)
 	if err != nil || pc == nil {
 		t.Fatal("constructor")
 	}
 	ctx := context.Background()
-	cases := []func(){
-		func() { _, _ = pc.Get(ctx, "k") },
-		func() { _ = pc.Set(ctx, "k", "v", time.Minute) },
-		func() { _ = pc.Delete(ctx, "k") },
-		func() { _, _ = pc.GetAndDelete(ctx, "k") },
-		func() { _, _ = pc.SetIfNotExists(ctx, "k", "v", time.Minute) },
-		func() { _, _ = pc.Increment(ctx, "k", time.Minute) },
-		func() { _, _ = pc.Exists(ctx, "k") },
-		func() { _ = pc.Close() },
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{"Get", func() { _, _ = pc.Get(ctx, "k") }},
+		{"Set", func() { _ = pc.Set(ctx, "k", "v", time.Minute) }},
+		{"Delete", func() { _ = pc.Delete(ctx, "k") }},
+		{"GetAndDelete", func() { _, _ = pc.GetAndDelete(ctx, "k") }},
+		{"SetIfNotExists", func() { _, _ = pc.SetIfNotExists(ctx, "k", "v", time.Minute) }},
+		{"Increment", func() { _, _ = pc.Increment(ctx, "k", time.Minute) }},
+		{"Exists", func() { _, _ = pc.Exists(ctx, "k") }},
 	}
-	for i, c := range cases {
-		t.Run(fmt.Sprintf("method_%d", i), func(t *testing.T) {
-			defer func() { _ = recover() }()
-			c()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s returned a value with no pool behind it; a caller cannot tell that from a real cache miss", tc.name)
+				}
+			}()
+			tc.call()
 		})
+	}
+
+	if err := pc.Close(); err != nil {
+		t.Errorf("Close on a pool-less cache = %v, want nil", err)
 	}
 }

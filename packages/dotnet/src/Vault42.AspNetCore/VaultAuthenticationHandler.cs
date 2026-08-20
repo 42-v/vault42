@@ -240,10 +240,21 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
         if (!Options.MapRolesToClaims)
             inherited = inherited.Where(c => c.Type != ClaimTypes.Role);
 
+        // The same inbound map rewrites "sub" to ClaimTypes.NameIdentifier before any of this
+        // runs, so an identity that declares "sub" as its name claim type finds no claim of that
+        // type and User.Identity.Name is null -- which is what it was for every application on the
+        // default configuration. An application that clears the map, the usual way to keep the
+        // issuer's claim names, leaves "sub" in place instead. Name the type the validated
+        // principal actually carries rather than the one the token spelled, so Name is the subject
+        // either way.
+        var nameClaimType = validated.FindFirst(ClaimTypes.NameIdentifier) is not null
+            ? ClaimTypes.NameIdentifier
+            : "sub";
+
         var identity = new ClaimsIdentity(
             inherited,
             Scheme.Name,
-            source?.NameClaimType ?? "sub",
+            nameClaimType,
             ClaimTypes.Role);
 
         // Map roles array to individual Role claims

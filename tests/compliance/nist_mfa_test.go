@@ -114,7 +114,18 @@ func TestNIST_MFA_TOTPRejectionOfInvalidCodes(t *testing.T) {
 	}
 
 	// Generate the valid code for comparison
-	validCode, _ := vaultcrypto.GenerateTOTPCode(secret, now)
+	validCode, err := vaultcrypto.GenerateTOTPCode(secret, now)
+	if err != nil {
+		t.Fatalf("NIST MFA: GenerateTOTPCode failed: %v", err)
+	}
+
+	// Positive control. Every assertion below is a refusal, and a verifier that
+	// refuses everything satisfies all of them while locking out every user, so
+	// the acceptance has to be pinned in the same test as the rejections.
+	if step, _ := vaultcrypto.ValidateTOTPCode(secret, validCode, now); step < 0 {
+		t.Fatalf("NIST MFA: the code generated for this instant was itself refused (step=%d); "+
+			"the rejections below would pass against a verifier that accepts nothing", step)
+	}
 
 	for _, tc := range invalidCodes {
 		if tc.code == validCode {

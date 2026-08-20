@@ -5,82 +5,80 @@ import (
 	"testing"
 )
 
-func TestArgon2UpperBoundsIterations(t *testing.T) {
-	// Craft a hash with iterations=99 — should be rejected
-	hash := "$argon2id$v=19$m=47104,t=99,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with excessive iterations should not verify")
-	}
-	if err == nil || !strings.Contains(err.Error(), "iterations exceed maximum") {
-		t.Errorf("expected iterations exceed maximum error, got: %v", err)
-	}
-}
+// The parameters come out of the stored hash string, so a row that lands in the
+// password column decides how much CPU and memory one verification costs. Both
+// ends of every parameter are pinned: too high is a denial of service anybody
+// with write access to a hash can trigger, and too low (or zero, which argon2
+// panics on) is a hash that verifies far too cheaply.
+//
+// Each case asserts the specific message as well as the refusal, because the
+// bounds are checked in sequence and a case that fell through to the wrong
+// branch would still return an error and still look green.
+func TestArgon2RejectsOutOfRangeParameters(t *testing.T) {
+	// A well-formed argon2id hash with the parameter under test substituted in.
+	const (
+		salt   = "AAAAAAAAAAAAAAAAAAAAAA"
+		digest = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	)
 
-func TestArgon2UpperBoundsParallelism(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=1,p=99$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with excessive parallelism should not verify")
+	tests := []struct {
+		name    string
+		hash    string
+		wantErr string
+	}{
+		{
+			name:    "iterations above the ceiling",
+			hash:    "$argon2id$v=19$m=47104,t=99,p=1$" + salt + "$" + digest,
+			wantErr: "iterations exceed maximum",
+		},
+		{
+			name:    "iterations of zero",
+			hash:    "$argon2id$v=19$m=47104,t=0,p=1$" + salt + "$" + digest,
+			wantErr: "iterations must be >= 1",
+		},
+		{
+			name:    "parallelism above the ceiling",
+			hash:    "$argon2id$v=19$m=47104,t=1,p=99$" + salt + "$" + digest,
+			wantErr: "parallelism exceeds maximum",
+		},
+		{
+			name:    "parallelism of zero",
+			hash:    "$argon2id$v=19$m=47104,t=1,p=0$" + salt + "$" + digest,
+			wantErr: "parallelism must be >= 1",
+		},
+		{
+			// 999999 KiB is well past the verification ceiling, so accepting it would
+			// let one stored hash allocate a gigabyte per login attempt.
+			name:    "memory above the ceiling",
+			hash:    "$argon2id$v=19$m=999999,t=1,p=1$" + salt + "$" + digest,
+			wantErr: "memory exceeds maximum",
+		},
+		{
+			// argon2 requires memory >= 8*parallelism.
+			name:    "memory below 8 KiB per lane",
+			hash:    "$argon2id$v=19$m=1,t=1,p=1$" + salt + "$" + digest,
+			wantErr: "memory too small",
+		},
+		{
+			name:    "an empty hash string",
+			hash:    "",
+			wantErr: "invalid hash format",
+		},
 	}
-	if err == nil || !strings.Contains(err.Error(), "parallelism exceeds maximum") {
-		t.Errorf("expected parallelism exceeds maximum error, got: %v", err)
-	}
-}
 
-func TestArgon2UpperBoundsMemory(t *testing.T) {
-	// memory = 999999 KiB > 128 MiB (131072 KiB)
-	hash := "$argon2id$v=19$m=999999,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with excessive memory should not verify")
-	}
-	if err == nil || !strings.Contains(err.Error(), "memory exceeds maximum") {
-		t.Errorf("expected memory exceeds maximum error, got: %v", err)
-	}
-}
-
-func TestArgon2MemoryTooSmall(t *testing.T) {
-	// memory = 1 < 8*p=8
-	hash := "$argon2id$v=19$m=1,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with too-small memory should not verify")
-	}
-	if err == nil || !strings.Contains(err.Error(), "memory too small") {
-		t.Errorf("expected memory too small error, got: %v", err)
-	}
-}
-
-func TestArgon2ZeroIterations(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=0,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with zero iterations should not verify")
-	}
-	if err == nil || !strings.Contains(err.Error(), "iterations must be >= 1") {
-		t.Errorf("expected iterations >= 1 error, got: %v", err)
-	}
-}
-
-func TestArgon2ZeroParallelism(t *testing.T) {
-	hash := "$argon2id$v=19$m=47104,t=1,p=0$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	ok, err := VerifyPassword("password", hash)
-	if ok {
-		t.Error("hash with zero parallelism should not verify")
-	}
-	if err == nil || !strings.Contains(err.Error(), "parallelism must be >= 1") {
-		t.Errorf("expected parallelism >= 1 error, got: %v", err)
-	}
-}
-
-func TestArgon2EmptyHash(t *testing.T) {
-	ok, err := VerifyPassword("password", "")
-	if ok {
-		t.Error("empty hash should not verify")
-	}
-	if err == nil {
-		t.Error("empty hash should return error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok, err := VerifyPassword("password", tt.hash)
+			if ok {
+				t.Error("the password verified against a hash the parameter check should have refused")
+			}
+			if err == nil {
+				t.Fatalf("VerifyPassword returned no error, want one mentioning %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want one mentioning %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -138,19 +139,34 @@ func TestASVS_V3_2_3_FingerprintDeterministic(t *testing.T) {
 
 // --- V3.3: Session Termination ---
 
+// V3.3.1: "Verify that logout invalidates the session token."
+//
+// The old body hashed one string fifty times and asserted SHA256 is a function.
+// It could not fail whatever Logout did, including nothing, which is the single
+// behavior the requirement is about. This drives the shipped path instead:
+// the session rotates cleanly first, so the refusal afterwards can only be the
+// logout, and then Refresh must answer ErrTokenInvalid.
 func TestASVS_V3_3_1_LogoutInvalidatesRefreshToken(t *testing.T) {
-	// V3.3.1: Verify that logout invalidates the session token.
-	// Vault: refresh tokens are stored hashed in DB/cache. Deletion = invalidation.
-	// We test that SHA256 hash lookup is deterministic (for DB deletion).
-	token, _ := vaultcrypto.RandomHex(32)
-	hash := vaultcrypto.SHA256Hex(token)
+	f := newSessionFixture(t, 15*time.Minute, 24*time.Hour, 30*24*time.Hour, 12*time.Hour)
+	res := f.login(t)
 
-	// Same token always produces same hash for deletion
-	for i := 0; i < 50; i++ {
-		h := vaultcrypto.SHA256Hex(token)
-		if h != hash {
-			t.Fatalf("V3.3.1: SHA256 hash not deterministic at iteration %d", i)
-		}
+	rotated, err := f.refresh(res.RefreshToken)
+	if err != nil {
+		t.Fatalf("V3.3.1: the session refused to rotate before logout, so nothing below would "+
+			"distinguish an invalidating logout from a broken fixture: %v", err)
+	}
+
+	row, err := f.tokens.GetByTokenHash(context.Background(), vaultcrypto.SHA256Hex(rotated.RefreshToken))
+	if err != nil || row == nil {
+		t.Fatalf("V3.3.1: the rotated refresh token is not in the store (err=%v)", err)
+	}
+	if err := f.svc.Logout(context.Background(), row.UserID, sessionIP, sessionAgent); err != nil {
+		t.Fatalf("V3.3.1: logout failed: %v", err)
+	}
+
+	if _, err := f.refresh(rotated.RefreshToken); !errors.Is(err, service.ErrTokenInvalid) {
+		t.Fatalf("V3.3.1: the refresh token issued before logout is still usable; Refresh answered "+
+			"%v, wanted %v", err, service.ErrTokenInvalid)
 	}
 }
 

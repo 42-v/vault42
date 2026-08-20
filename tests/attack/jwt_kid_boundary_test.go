@@ -1,6 +1,7 @@
 package attack
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,90 +10,50 @@ import (
 	vjwt "github.com/42-v/vault42/internal/jwt"
 )
 
-// TestJWT_KID_Length63 verifies that a 63-char hex kid passes validation.
-func TestJWT_KID_Length63(t *testing.T) {
+// TestJWT_KID_Length walks the kid length limit. 64 is the last accepted
+// length and 65 the first refused one, so these rows straddle the boundary the
+// parser enforces and a limit that moves by one in either direction turns one
+// of them red.
+func TestJWT_KID_Length(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid := strings.Repeat("a", 63)
 	keyFunc := func(tok *vjwt.Token) (any, error) {
 		return &key.PublicKey, nil
 	}
 
-	tokenStr, err := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "test",
-			Audience:  vjwt.ClaimStrings{"test"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-	if err != nil {
-		t.Fatalf("SignRS256WithHeader failed: %v", err)
+	cases := []struct {
+		length     int
+		wantAccept bool
+	}{
+		{63, true},
+		{64, true},
+		{65, false},
 	}
 
-	_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
-	if err != nil {
-		t.Fatalf("63-char hex kid should be valid: %v", err)
-	}
-}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("length=%d", tc.length), func(t *testing.T) {
+			tokenStr, err := vjwt.SignRS256WithHeader(map[string]any{
+				"alg": "RS256", "typ": "JWT", "kid": strings.Repeat("a", tc.length),
+			}, &vaultcrypto.VaultClaims{
+				RegisteredClaims: vjwt.RegisteredClaims{
+					Subject:   "user-123",
+					Issuer:    "test",
+					Audience:  vjwt.ClaimStrings{"test"},
+					ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
+					IssuedAt:  vjwt.NewNumericDate(time.Now()),
+				},
+			}, key)
+			if err != nil {
+				t.Fatalf("SignRS256WithHeader failed: %v", err)
+			}
 
-// TestJWT_KID_Length64 verifies that a 64-char hex kid passes (at the limit).
-func TestJWT_KID_Length64(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid := strings.Repeat("b", 64)
-	keyFunc := func(tok *vjwt.Token) (any, error) {
-		return &key.PublicKey, nil
-	}
-
-	tokenStr, err := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "test",
-			Audience:  vjwt.ClaimStrings{"test"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-	if err != nil {
-		t.Fatalf("SignRS256WithHeader failed: %v", err)
-	}
-
-	_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
-	if err != nil {
-		t.Fatalf("64-char hex kid should be valid (at limit): %v", err)
-	}
-}
-
-// TestJWT_KID_Length65 verifies that a 65-char kid is rejected (exceeds max 64).
-func TestJWT_KID_Length65(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid := strings.Repeat("c", 65)
-	keyFunc := func(tok *vjwt.Token) (any, error) {
-		return &key.PublicKey, nil
-	}
-
-	tokenStr, err := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "test",
-			Audience:  vjwt.ClaimStrings{"test"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-	if err != nil {
-		t.Fatalf("SignRS256WithHeader failed: %v", err)
-	}
-
-	_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
-	if err == nil {
-		t.Fatal("65-char kid should be rejected (exceeds max 64)")
+			_, err = vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "test", "test")
+			if tc.wantAccept && err != nil {
+				t.Fatalf("a %d-char kid is within the 64-char limit and must be accepted: %v", tc.length, err)
+			}
+			if !tc.wantAccept && err == nil {
+				t.Fatalf("a %d-char kid exceeds the 64-char limit and must be rejected", tc.length)
+			}
+		})
 	}
 }
 

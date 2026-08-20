@@ -5,7 +5,10 @@
 // and [FacebookProvider].
 package oauth2
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // maxProviderResponse caps every response body this package reads.
 //
@@ -74,4 +77,15 @@ type UserInfo struct {
 	AvatarURL string
 	// Provider is the name of the OAuth2 provider (e.g., "google", "github").
 	Provider string
+	// AuthTime is the instant the provider states it authenticated the user,
+	// from the OIDC auth_time claim. It is the zero time whenever the provider
+	// stated none: the claim is OPTIONAL in OIDC Core §2 unless the request sent
+	// max_age or asked for auth_time as an essential claim, and no non-OIDC
+	// provider has an equivalent, so most logins leave it zero.
+	//
+	// A caller must read the zero value as "not stated" and substitute an
+	// instant it can vouch for. Passing it on as a timestamp dates the session
+	// to the Unix epoch, which is the reading internal/service/token.go already
+	// refuses to emit.
+	AuthTime time.Time
 }

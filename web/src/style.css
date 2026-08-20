@@ -1,11 +1,176 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+/**
+ * Vault42 palette.
+ *
+ * Every value here is fixed by a contrast requirement rather than by taste, and
+ * `src/__tests__/palette.test.ts` re-derives the ratios from this file, so a
+ * "just a shade" edit fails the suite instead of quietly failing WCAG.
+ *
+ * The old palette failed AA in three places at once: `muted #64748b` carried
+ * body copy across every screen at 4.15:1, `primary #6366f1` was used as link
+ * and active-nav text at 4.42:1, and `border #1e1e2e` drew form-field
+ * boundaries at 1.20:1 against a 3:1 requirement. A fourth was hiding
+ * underneath: `.vault42-btn` put white on `primary` at 4.47:1 and *lightened*
+ * to `accent` on hover, which is 2.98:1.
+ *
+ * `primary` and `accent` were doing each other's jobs. They are split now:
+ *
+ *   primary        the interactive *surface*. Dark enough that white sits on it
+ *                  at 6.29:1. Never used as text.
+ *   primary-hover  the hover surface. Darker, so white still passes at 5.43:1.
+ *                  Lightening on hover is what broke the base pairing.
+ *   accent         the interactive *ink*: links, active nav, focus borders,
+ *                  progress fill. 6.62:1 on bg, 6.25:1 on surface.
+ *   border         decorative container outlines only: cards, dividers, tinted
+ *                  fills. WCAG 1.4.11 exempts non-interactive containers, so
+ *                  this stays deliberately subtle.
+ *   control        the boundary of an interactive control: inputs, checkboxes,
+ *                  outline buttons. 3.24:1 on bg, 3.05:1 on surface.
+ *
+ * `error` moved from `#ef4444` to red-400 because it is almost always rendered
+ * on its own 10-20% tint, where the old value fell to 4.00-4.53:1.
+ *
+ * These lived in `tailwind.config.js` until Tailwind 4, which reads its theme
+ * from CSS. The file they live in changed; nothing about the values did.
+ */
+@theme {
+  --color-vault42-bg: #0a0a0f;
+  --color-vault42-surface: #12121a;
+  --color-vault42-border: #1e1e2e;
+  --color-vault42-control: #606078;
+  --color-vault42-primary: #4f46e5;
+  --color-vault42-primary-hover: #5b53ea;
+  --color-vault42-accent: #818cf8;
+  --color-vault42-text: #e2e8f0;
+  --color-vault42-muted: #94a3b8;
+  --color-vault42-success: #22c55e;
+  --color-vault42-error: #f87171;
+}
+
+/* The upgrade tool offers a compatibility rule here, restoring Tailwind 3's
+   default border colour of gray-200 for every element. It is not wanted. Every
+   border-width utility in this tree is written alongside an explicit
+   `border-vault42-*`, verified by scanning each class attribute, so v4's
+   `currentcolor` default is never the colour anything actually paints. Keeping
+   the rule would mean carrying a light-grey default into a dark theme against
+   the day somebody writes a bare `border` -- which would then look wrong in a
+   way that reads as intentional. */
+
+@utility vault42-card {
+  /* Shared card style */
+  @apply bg-vault42-surface border border-vault42-border rounded-xl p-6;
+}
+
+@utility vault42-btn {
+  /* Primary button */
+  @apply px-4 py-2.5 bg-vault42-primary text-white font-medium rounded-lg
+           hover:bg-vault42-primary-hover transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-hidden focus:ring-2 focus:ring-vault42-accent;
+}
+
+@utility vault42-btn-outline {
+  @apply px-4 py-2.5 border border-vault42-control text-vault42-text font-medium rounded-lg
+           hover:border-vault42-accent hover:text-vault42-accent transition-all duration-200
+           focus:outline-hidden focus:ring-2 focus:ring-vault42-accent;
+}
+
+@utility vault42-btn-primary {
+  /* Aliases for semantic naming */
+  @apply vault42-btn;
+}
+
+@utility vault42-btn-secondary {
+  @apply vault42-btn-outline;
+}
+
+@utility vault42-btn-danger {
+  @apply px-4 py-2.5 bg-vault42-error/10 text-vault42-error font-medium rounded-lg
+           hover:bg-vault42-error/20 transition-all duration-200
+           focus:outline-hidden focus:ring-2 focus:ring-vault42-error;
+}
+
+@utility vault42-btn-sm {
+  @apply px-3 py-1.5 text-sm;
+}
+
+@utility vault42-input {
+  /* Input */
+  @apply w-full px-3 py-2.5 bg-vault42-bg border border-vault42-control rounded-lg
+           text-vault42-text placeholder-vault42-muted
+           focus:outline-hidden focus:border-vault42-accent focus:ring-1 focus:ring-vault42-accent
+           transition-colors duration-200;
+}
+
+@utility vault42-label {
+  @apply block text-sm font-medium text-vault42-muted mb-1.5;
+}
+
+@utility vault42-alert-success {
+  /* Alert banners */
+  @apply p-4 bg-vault42-success/10 border border-vault42-success/20 rounded-lg text-vault42-success text-sm;
+}
+
+@utility vault42-alert-error {
+  @apply p-4 bg-vault42-error/10 border border-vault42-error/20 rounded-lg text-vault42-error text-sm;
+}
+
+@utility vault42-alert-info {
+  @apply p-4 bg-vault42-primary/10 border border-vault42-primary/20 rounded-lg text-vault42-accent text-sm;
+}
+
+@utility vault42-badge {
+  /* Badge */
+  @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+}
+
+@utility vault42-badge-success {
+  @apply vault42-badge bg-vault42-success/15 text-vault42-success;
+}
+
+@utility vault42-badge-error {
+  @apply vault42-badge bg-vault42-error/15 text-vault42-error;
+}
+
+@utility vault42-badge-muted {
+  @apply vault42-badge bg-vault42-border text-vault42-muted;
+}
+
+@utility vault42-modal-overlay {
+  /* Modal overlay & container */
+  @apply fixed inset-0 z-50 flex items-center justify-center;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+@utility vault42-modal {
+  @apply bg-vault42-surface border border-vault42-border rounded-xl p-6
+           max-w-md w-full mx-4 shadow-lg;
+}
+
+@utility vault42-spinner-sm {
+  /* Small spinner variant */
+  @apply w-4 h-4;
+}
 
 @layer base {
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tailwind 4's preflight stopped giving buttons `cursor: pointer`, on the
+     grounds that native buttons do not have one. Every button in this app is a
+     styled control in a web UI, where the arrow cursor reads as "not
+     clickable", so the v3 behaviour is restored deliberately rather than
+     inherited by accident.
+
+     Scoped to enabled buttons, which v3's blanket rule was not: a disabled
+     button showed a pointer unless something else overrode it. The
+     `vault42-btn*` classes all carry `disabled:cursor-not-allowed` and so were
+     already correct; this makes every other button correct too. */
+  button:not(:disabled) {
+    cursor: pointer;
   }
 
   /* Custom scrollbar */
@@ -27,102 +192,6 @@
   ::selection {
     background: rgba(0, 255, 66, 0.2);
   }
-}
-
-@layer components {
-  /* Shared card style */
-  .vault42-card {
-    @apply bg-vault42-surface border border-vault42-border rounded-xl p-6;
-  }
-
-  /* Primary button */
-  .vault42-btn {
-    @apply px-4 py-2.5 bg-vault42-primary text-white font-medium rounded-lg
-           hover:bg-vault42-primary-hover transition-all duration-200
-           disabled:opacity-50 disabled:cursor-not-allowed
-           focus:outline-none focus:ring-2 focus:ring-vault42-accent;
-  }
-
-  .vault42-btn-outline {
-    @apply px-4 py-2.5 border border-vault42-control text-vault42-text font-medium rounded-lg
-           hover:border-vault42-accent hover:text-vault42-accent transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-vault42-accent;
-  }
-
-  /* Aliases for semantic naming */
-  .vault42-btn-primary {
-    @apply vault42-btn;
-  }
-
-  .vault42-btn-secondary {
-    @apply vault42-btn-outline;
-  }
-
-  .vault42-btn-danger {
-    @apply px-4 py-2.5 bg-vault42-error/10 text-vault42-error font-medium rounded-lg
-           hover:bg-vault42-error/20 transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-vault42-error;
-  }
-
-  .vault42-btn-sm {
-    @apply px-3 py-1.5 text-sm;
-  }
-
-  /* Input */
-  .vault42-input {
-    @apply w-full px-3 py-2.5 bg-vault42-bg border border-vault42-control rounded-lg
-           text-vault42-text placeholder-vault42-muted
-           focus:outline-none focus:border-vault42-accent focus:ring-1 focus:ring-vault42-accent
-           transition-colors duration-200;
-  }
-
-  .vault42-label {
-    @apply block text-sm font-medium text-vault42-muted mb-1.5;
-  }
-
-  /* Alert banners */
-  .vault42-alert-success {
-    @apply p-4 bg-vault42-success/10 border border-vault42-success/20 rounded-lg text-vault42-success text-sm;
-  }
-  .vault42-alert-error {
-    @apply p-4 bg-vault42-error/10 border border-vault42-error/20 rounded-lg text-vault42-error text-sm;
-  }
-  .vault42-alert-info {
-    @apply p-4 bg-vault42-primary/10 border border-vault42-primary/20 rounded-lg text-vault42-accent text-sm;
-  }
-
-  /* Badge */
-  .vault42-badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
-  }
-  .vault42-badge-success {
-    @apply vault42-badge bg-vault42-success/15 text-vault42-success;
-  }
-  .vault42-badge-error {
-    @apply vault42-badge bg-vault42-error/15 text-vault42-error;
-  }
-  .vault42-badge-muted {
-    @apply vault42-badge bg-vault42-border text-vault42-muted;
-  }
-
-  /* Modal overlay & container */
-  .vault42-modal-overlay {
-    @apply fixed inset-0 z-50 flex items-center justify-center;
-    background: rgba(0, 0, 0, 0.7);
-  }
-
-  .vault42-modal {
-    @apply bg-vault42-surface border border-vault42-border rounded-xl p-6
-           max-w-md w-full mx-4 shadow-lg;
-  }
-
-  /* Small spinner variant */
-  .vault42-spinner-sm {
-    @apply w-4 h-4;
-  }
-}
-
-@layer utilities {
 }
 
 /* Vault42 form styling (applies to @vault42/vue unstyled components) */
@@ -163,7 +232,7 @@
   /* accent-color, not text-color: `text-*` on a native checkbox sets `color`,
      which no browser paints the tick with. This is the utility that actually
      colours the control, and white on `primary` is 6.29:1. */
-  @apply w-4 h-4 rounded border-vault42-control bg-vault42-bg accent-vault42-primary
+  @apply w-4 h-4 rounded-sm border-vault42-control bg-vault42-bg accent-vault42-primary
          focus:ring-vault42-accent focus:ring-offset-0;
 }
 

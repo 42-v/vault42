@@ -96,82 +96,48 @@ func TestChallengeToken_ChallengeEndpointAcceptsChallengeType(t *testing.T) {
 	}
 }
 
-// TestChallengeToken_WrongAudience verifies that a challenge token with wrong
-// audience is rejected.
-func TestChallengeToken_WrongAudience(t *testing.T) {
+// TestChallengeToken_InvalidClaimsAreRefused covers the registered claims
+// AuthChallenge validates on a 2fa_challenge token. Each row changes exactly
+// one of them and nothing else, so a row that stops failing names the check
+// that was lost. The accepted shape is
+// TestChallengeToken_ChallengeEndpointAcceptsChallengeType above, which is what
+// keeps a table of refusals from passing on a middleware that refuses
+// everything.
+func TestChallengeToken_InvalidClaimsAreRefused(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
 
 	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
 
-	// Token with wrong audience
-	tokenStr := makeChallengeToken(t, key, kid, "user-123", "vault", "wrong-audience", "2fa_challenge",
-		time.Now().Add(5*time.Minute))
-
-	handler := middleware.AuthChallenge(keys, "vault", "vault")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}))
-
-	req := httptest.NewRequest(http.MethodPost, "/auth/mfa/totp/verify", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Challenge token with wrong audience should be rejected, got %d", rec.Code)
+	cases := []struct {
+		name     string
+		issuer   string
+		audience string
+		expires  time.Time
+	}{
+		{"wrong audience", "vault", "wrong-audience", time.Now().Add(5 * time.Minute)},
+		{"wrong issuer", "wrong-issuer", "vault", time.Now().Add(5 * time.Minute)},
+		{"expired a minute ago", "vault", "vault", time.Now().Add(-1 * time.Minute)},
 	}
-}
 
-// TestChallengeToken_WrongIssuer verifies that a challenge token with wrong
-// issuer is rejected.
-func TestChallengeToken_WrongIssuer(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tokenStr := makeChallengeToken(t, key, kid, "user-123", tc.issuer, tc.audience, "2fa_challenge", tc.expires)
 
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
+			handler := middleware.AuthChallenge(keys, "vault", "vault")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			}))
 
-	tokenStr := makeChallengeToken(t, key, kid, "user-123", "wrong-issuer", "vault", "2fa_challenge",
-		time.Now().Add(5*time.Minute))
+			req := httptest.NewRequest(http.MethodPost, "/auth/mfa/totp/verify", nil)
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+			rec := httptest.NewRecorder()
 
-	handler := middleware.AuthChallenge(keys, "vault", "vault")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}))
+			handler.ServeHTTP(rec, req)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/mfa/totp/verify", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Challenge token with wrong issuer should be rejected, got %d", rec.Code)
-	}
-}
-
-// TestChallengeToken_Expired verifies that an expired challenge token is rejected.
-func TestChallengeToken_Expired(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
-
-	// Token that expired 1 minute ago
-	tokenStr := makeChallengeToken(t, key, kid, "user-123", "vault", "vault", "2fa_challenge",
-		time.Now().Add(-1*time.Minute))
-
-	handler := middleware.AuthChallenge(keys, "vault", "vault")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}))
-
-	req := httptest.NewRequest(http.MethodPost, "/auth/mfa/totp/verify", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("Expired challenge token should be rejected, got %d", rec.Code)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("challenge token with %s got %d, want 401", tc.name, rec.Code)
+			}
+		})
 	}
 }
 

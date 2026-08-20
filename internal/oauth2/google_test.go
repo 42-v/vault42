@@ -30,9 +30,8 @@ func TestGoogleName(t *testing.T) {
 	}
 }
 
-func TestGoogleImplementsProvider(t *testing.T) {
-	var _ Provider = (*GoogleProvider)(nil)
-}
+// Compile-time conformance; see the note in facebook_test.go.
+var _ Provider = (*GoogleProvider)(nil)
 
 func TestGoogleAuthURL(t *testing.T) {
 	tests := []struct {

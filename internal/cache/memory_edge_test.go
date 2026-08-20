@@ -209,6 +209,13 @@ func TestMemory_EmptyStringValue(t *testing.T) {
 // Concurrent stress tests
 // ---------------------------------------------------------------------------
 
+// The race detector is the oracle: nothing here compares a value, because with
+// 100 goroutines writing the same keys there is no deterministic value to
+// compare against. What is deterministic is that no two of them may touch the
+// map unsynchronized, which -race reports, and that all of them return, which a
+// lock-order mistake would prevent.
+// TestMemory_ConcurrentIncrement_Correctness below does check a value, because a
+// counter has one regardless of interleaving.
 func TestMemory_ConcurrentSetGetDelete(t *testing.T) {
 	c := NewMemoryCache()
 	defer c.Close()
@@ -234,7 +241,6 @@ func TestMemory_ConcurrentSetGetDelete(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-	// No panic or data race = success
 }
 
 func TestMemory_ConcurrentIncrement_Correctness(t *testing.T) {

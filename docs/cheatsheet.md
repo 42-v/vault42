@@ -318,7 +318,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Defense:** HMAC-signed state with provider name, nonce, and expiry. Validated on callback: signature checked, provider matched, expiry enforced, nonce atomically consumed (single-use via cache GetAndDelete).
 
-**Tests:** `internal/handler/oauth_test.go` -- TestOAuth_Callback_MissingState, TestOAuth_Callback_InvalidState_BadHMAC, TestOAuth_Callback_InvalidState_WrongProvider, TestOAuth_Callback_ExpiredState, TestOAuth_Callback_InvalidOrReusedState
+**Tests:** `internal/handler/oauth_test.go` -- TestOAuth_Callback_RefusalsBeforeTheExchange (cases `missing state`, `state with a bad HMAC`), TestOAuth_Callback_InvalidState_WrongProvider, TestOAuth_Callback_ExpiredState, TestOAuth_Callback_InvalidOrReusedState
 
 ### 6.3 Open Redirect via redirect_uri
 
@@ -470,7 +470,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Defense:** When `GEO_IP_HEADER` is configured but the header is absent (not behind the proxy), geo checks are skipped -- the request is still subject to IP allowlist/blocklist. For strict enforcement, combine geo-fencing with an IP allowlist restricted to the proxy's CIDR ranges.
 
-**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessGeoNoHeaderIsDeniedUnderAnAllowlist, TestIPAccessGeoNoGeoHeaderConfigSkipsCheck
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccess, cases `a missing country header under a geo allowlist is refused` and `a geo list with no header name configured is inert`
 
 ### 9.7 IP Blocklist Evasion via IPv4/IPv6 Duality
 
@@ -478,7 +478,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Defense:** `net.ParseCIDR` and `net.IP.Contains` in Go's stdlib handle IPv4-mapped IPv6 addresses correctly -- `::ffff:192.0.2.1` is contained in `192.0.2.0/24`.
 
-**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessIPv6CIDR
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccess, cases `an IPv6 address inside an allowlisted prefix` and `an IPv6 address outside an allowlisted prefix`
 
 ### 9.8 Health Endpoint Abuse Past IP Access Control
 
@@ -486,7 +486,7 @@ TestASVS_V6_5_1_ByteComparisonsUseAConstantTimePrimitive
 
 **Defense:** Health endpoints return only a static `{"status":"ok"}` body with no sensitive data. They are intentionally exempt from IP access control so that Kubernetes probes and load balancers work regardless of access restrictions.
 
-**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccessHealthzBypass
+**Test:** `internal/middleware/ipaccess_test.go` -- TestIPAccess, cases `healthz is exempt from an allowlist that blocks everything` and the matching `readyz` row
 
 ---
 

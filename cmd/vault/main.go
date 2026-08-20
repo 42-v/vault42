@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rsa"
 	"errors"
@@ -84,7 +85,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	if err := cfg.Validate(); err != nil {
+	// The outbound widenings are checked here rather than where the policy is
+	// built, because an entry that can never match is a control the operator
+	// believes is in force and is not, and this is the line every other
+	// configuration refusal already comes out of. cmp.Or reports the first
+	// non-nil error; both calls are pure, so evaluating both costs nothing.
+	if err := cmp.Or(cfg.Validate(), outbound.ValidateAllowedHosts(cfg.OutboundAllowedHosts)); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 	log.Printf("Configuration loaded:\n%s", cfg)
@@ -139,7 +145,17 @@ func main() {
 	// as long as it lasts rather than in one line at startup that has scrolled
 	// away by the time anyone looks.
 	cacheDegraded := false
-	appCache, err := cache.NewCache(cfg.CacheBackend, cfg.RedisAddr, cfg.RedisPass, db.Pool)
+	//
+	// The TLS settings travel with the address rather than being read inside
+	// the cache package, because the CA bundle behind them has already been
+	// parsed: config.Load turns REDIS_TLS_CA_FILE into a pool at startup so a
+	// bundle this process cannot use refuses the boot, instead of failing the
+	// ping below and landing in exactly the degraded fallback described above.
+	appCache, err := cache.NewCache(cfg.CacheBackend, cfg.RedisAddr, cfg.RedisPass, db.Pool, cache.RedisTLS{
+		Enabled:    cfg.RedisTLS,
+		RootCAs:    cfg.RedisTLSRootCAs,
+		ServerName: cfg.RedisTLSServerName,
+	})
 	if err != nil {
 		log.Printf("WARNING: cache init failed, falling back to per-process memory: %v. "+
 			"Cross-replica rate limiting, OAuth state and TOTP replay protection are degraded "+

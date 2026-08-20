@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import tailwindcss from '@tailwindcss/vite'
 
 // Origins that only ever mean "somebody's development machine". A production
 // bundle carrying one of these is a mis-built release, not a configuration
@@ -61,7 +62,7 @@ function forbidDevOrigins(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [vue(), forbidDevOrigins()],
+  plugins: [vue(), tailwindcss(), forbidDevOrigins()],
   build: {
     sourcemap: false,
   },

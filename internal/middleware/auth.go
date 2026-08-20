@@ -33,12 +33,16 @@ type authOptions struct {
 // (RFC 9449 §7.1) is accepted on the Authorization header. It is off by
 // default, so only "Bearer" is accepted.
 //
-// RFC 9449 reserves the scheme for sender-constrained tokens. vault42 issues
-// no such token: nothing populates the "cnf.jkt" confirmation claim, so a
-// token presented under the DPoP scheme is bearer-equivalent, which is the
-// confusion the separate scheme exists to prevent. Enable this only when
-// VAULT_DPOP_ENABLED is set, and only while DPoP is understood to be
-// experimental and unsupported.
+// RFC 9449 reserves the scheme for sender-constrained tokens, and vault42 does
+// issue them: internal/service/token.go stamps "cnf.jkt" on an access token and
+// on a 2FA challenge token whenever the request that minted it carried a valid
+// proof. Refresh tokens are not bound, which README.md states as a real limit.
+//
+// What this option controls is narrower than that and is the part worth being
+// careful about: accepting the scheme here says nothing about whether a proof
+// was checked. This middleware validates the JWT alone, so a token presented
+// under the DPoP scheme is bearer-equivalent until DPoP runs after it. Enable it
+// only when VAULT_DPOP_ENABLED is set.
 func WithDPoPScheme(enabled bool) AuthOption {
 	return func(o *authOptions) { o.acceptDPoPScheme = enabled }
 }
@@ -52,9 +56,9 @@ func (o authOptions) schemeAllowed(scheme string) bool {
 // Only the "Bearer" scheme is accepted unless WithDPoPScheme(true) is passed.
 // Even then, this middleware validates the JWT alone and performs no
 // proof-of-possession check, so a DPoP-scheme token is bearer-equivalent here.
-// Sender-constraint enforcement lives in DPoP, which must be chained after
-// this middleware, and which can only bind a token carrying "cnf.jkt", a claim
-// vault42 does not currently issue.
+// Sender-constraint enforcement lives in DPoP, which must be chained after this
+// middleware, and which binds a token carrying "cnf.jkt" -- a claim issuance
+// stamps on the access and 2FA challenge tokens when a proof was presented.
 func Auth(keys map[string]*rsa.PublicKey, issuer, audience string, opts ...AuthOption) func(http.Handler) http.Handler {
 	return authWithTypes(func() map[string]*rsa.PublicKey { return keys }, issuer, audience, opts, "Bearer")
 }

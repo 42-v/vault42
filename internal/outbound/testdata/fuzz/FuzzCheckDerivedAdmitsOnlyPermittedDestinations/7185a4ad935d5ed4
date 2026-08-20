@@ -1,0 +1,4 @@
+go test fuzz v1
+string("0")
+string("http://WWW.GOOGLEAPIS.CO\x88")
+string("www.googleApis.Co\xf4")

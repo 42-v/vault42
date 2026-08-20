@@ -102,20 +102,38 @@ func TestAlerting_ARunBelowTheThresholdRaisesNothingAndOneAboveItRaisesOneAlert(
 
 // An event class with no rule is recorded, scored and filterable, and raises
 // nothing. Alerting on everything is the same as alerting on nothing.
+//
+// The class is chosen at run time rather than named. Naming one turns a later
+// rule addition into a test that skips itself, and a skip here is a green report
+// for an assertion nobody is making any more. Each candidate is ordinary traffic
+// on a working deployment; if the table ever watched all of them, the line this
+// test defends has already been crossed, which is what the failure says.
 func TestAlerting_AnUnwatchedEventClassRaisesNothing(t *testing.T) {
-	if _, watched := AlertRule(LoginSuccess); watched {
-		t.Skip("login_success has gained a rule; pick another unwatched class for this assertion")
+	event := ""
+	for _, candidate := range []string{LoginSuccess, TokenRefresh, Registration, TwoFAVerify, OAuth2Authorize} {
+		if _, watched := AlertRule(candidate); !watched {
+			event = candidate
+			break
+		}
 	}
+	if event == "" {
+		t.Fatal("every ordinary event class has gained a rule; alerting on everything is the same as alerting on nothing")
+	}
+
 	repo := &mockAuditRepo{}
 	l, sink := alertingLogger(t, repo, 0, 0)
 
-	for i := 0; i < 1000; i++ {
-		if err := l.Log(context.Background(), LoginSuccess, "user-1", "", "203.0.113.7", "ua", "", "", nil); err != nil {
+	const attempts = 1000
+	for i := 0; i < attempts; i++ {
+		if err := l.Log(context.Background(), event, "user-1", "", "203.0.113.7", "ua", "", "", nil); err != nil {
 			t.Fatalf("log: %v", err)
 		}
 	}
 	if got := sink.all(); len(got) != 0 {
-		t.Fatalf("1000 successful logins raised %d alerts: %+v", len(got), got)
+		t.Fatalf("%d %s events raised %d alerts, want 0: %+v", attempts, event, len(got), got)
+	}
+	if len(repo.entries) != attempts {
+		t.Errorf("stored %d %s entries, want %d: an unwatched class is still recorded", len(repo.entries), event, attempts)
 	}
 }
 
@@ -152,18 +170,23 @@ func TestAlerting_AStoreThatRefusesTheWriteStillRaisesTheAlert(t *testing.T) {
 // isCriticalEvent already refuses an attacker the trick of flooding the buffer
 // and then acting in the silence. Detection has to refuse it the same way, or
 // the buffer is a switch that turns the alerting off.
+//
+// The class has to be watched and non-critical: a critical event is written
+// synchronously when the buffer is full and so never reaches the dropped path
+// this test needs. It is picked from the rule table at run time for the same
+// reason the unwatched-class test picks its own -- naming one leaves the test
+// skipping itself the day that class becomes critical, and reporting green while
+// it does.
 func TestAlerting_AFullBufferDoesNotSilenceDetection(t *testing.T) {
-	rule, _ := AlertRule(LoginNewCountry)
-	if isCriticalEvent(LoginNewCountry) {
-		t.Skip("login_new_country is now critical, so it never meets the dropped path")
-	}
+	event, rule := lowestThresholdDroppableRule(t)
+
 	repo := &mockAuditRepo{}
 	// A buffer of one, a flush interval that will not elapse during the test:
 	// every event after the first meets a full buffer and is dropped.
 	l, sink := alertingLogger(t, repo, time.Hour, 1)
 
 	for i := 0; i < rule.Threshold+1; i++ {
-		if err := l.Log(context.Background(), LoginNewCountry, "user-1", "", "", "ua", "", "",
+		if err := l.Log(context.Background(), event, "user-1", "", "", "ua", "", "",
 			map[string]interface{}{"country": "SK"}); err != nil {
 			t.Fatalf("log: %v", err)
 		}
@@ -173,9 +196,34 @@ func TestAlerting_AFullBufferDoesNotSilenceDetection(t *testing.T) {
 		t.Fatal("nothing met a full buffer; this test is not exercising the dropped path")
 	}
 	if got := sink.all(); len(got) != 1 {
-		t.Fatalf("a run that filled the buffer raised %d alerts, want 1; buffer pressure is not a "+
-			"way to go silent: %+v", len(got), got)
+		t.Fatalf("a run of %s that filled the buffer raised %d alerts, want 1; buffer pressure is not a "+
+			"way to go silent: %+v", event, len(got), got)
 	}
+}
+
+// lowestThresholdDroppableRule returns a watched, non-critical event class and
+// its rule -- the two properties the buffer-pressure test needs. Lowest
+// threshold wins so the run stays short; ties break on the name so the choice
+// does not move between runs with Go's map ordering.
+func lowestThresholdDroppableRule(t *testing.T) (string, alert.Rule) {
+	t.Helper()
+
+	best := ""
+	var bestRule alert.Rule
+	for _, event := range AlertedEventTypes() {
+		if isCriticalEvent(event) {
+			continue
+		}
+		rule, _ := AlertRule(event)
+		if best == "" || rule.Threshold < bestRule.Threshold ||
+			(rule.Threshold == bestRule.Threshold && event < best) {
+			best, bestRule = event, rule
+		}
+	}
+	if best == "" {
+		t.Fatal("every watched class is critical, so none can meet the dropped path this test needs")
+	}
+	return best, bestRule
 }
 
 // docs/PRIVACY.md inventories the audit store as the place that holds a whole

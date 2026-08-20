@@ -20,9 +20,19 @@ import (
 
 // --- V14.4: Security Headers ---
 
-// TestOWASP_SecurityHeaders_XContentTypeOptions verifies that X-Content-Type-Options
-// is set to "nosniff".
-func TestOWASP_SecurityHeaders_XContentTypeOptions(t *testing.T) {
+// TestOWASP_SecurityHeaders checks every header middleware.SecurityHeaders is
+// responsible for, on one response.
+//
+// One response rather than one per header is deliberate. The previous shape was
+// eight functions that each built the same handler, made the same request and
+// read one header, and the eighth existed only to state that all of them arrive
+// on the same response. Reading them off a single recorder says that by
+// construction.
+//
+// A header with a fixed value is asserted by value. HSTS and CSP carry a
+// directive list whose order and extras are not the requirement, so those rows
+// name the directives that are.
+func TestOWASP_SecurityHeaders(t *testing.T) {
 	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -31,147 +41,39 @@ func TestOWASP_SecurityHeaders_XContentTypeOptions(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	val := rec.Header().Get("X-Content-Type-Options")
-	if val != "nosniff" {
-		t.Fatalf("X-Content-Type-Options should be 'nosniff', got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_XFrameOptions verifies that X-Frame-Options
-// is set to "DENY".
-func TestOWASP_SecurityHeaders_XFrameOptions(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("X-Frame-Options")
-	if val != "DENY" {
-		t.Fatalf("X-Frame-Options should be 'DENY', got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_HSTS verifies that Strict-Transport-Security is set.
-func TestOWASP_SecurityHeaders_HSTS(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("Strict-Transport-Security")
-	if val == "" {
-		t.Fatal("Strict-Transport-Security header must be present")
-	}
-	if !strings.Contains(val, "max-age=") {
-		t.Fatalf("HSTS must contain max-age directive, got %q", val)
-	}
-	if !strings.Contains(val, "includeSubDomains") {
-		t.Fatalf("HSTS should include includeSubDomains, got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_CSP verifies Content-Security-Policy is set.
-func TestOWASP_SecurityHeaders_CSP(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("Content-Security-Policy")
-	if val == "" {
-		t.Fatal("Content-Security-Policy header must be present")
-	}
-	if !strings.Contains(val, "default-src") {
-		t.Fatalf("CSP should contain default-src directive, got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_ReferrerPolicy verifies Referrer-Policy is set.
-func TestOWASP_SecurityHeaders_ReferrerPolicy(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("Referrer-Policy")
-	if val == "" {
-		t.Fatal("Referrer-Policy header must be present")
-	}
-	if val != "no-referrer" {
-		t.Fatalf("Referrer-Policy should be 'no-referrer', got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_CacheControl verifies Cache-Control is set to no-store.
-func TestOWASP_SecurityHeaders_CacheControl(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("Cache-Control")
-	if val != "no-store" {
-		t.Fatalf("Cache-Control should be 'no-store', got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_XSSProtection verifies X-XSS-Protection is "0"
-// (disabled, per modern best practices — CSP is the replacement).
-func TestOWASP_SecurityHeaders_XSSProtection(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	val := rec.Header().Get("X-XSS-Protection")
-	if val != "0" {
-		t.Fatalf("X-XSS-Protection should be '0' (disabled), got %q", val)
-	}
-}
-
-// TestOWASP_SecurityHeaders_AllPresent verifies ALL security headers are set in one request.
-func TestOWASP_SecurityHeaders_AllPresent(t *testing.T) {
-	handler := middleware.SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	required := []string{
-		"Strict-Transport-Security",
-		"Content-Security-Policy",
-		"X-Content-Type-Options",
-		"X-Frame-Options",
-		"X-XSS-Protection",
-		"Referrer-Policy",
-		"Cache-Control",
-		"Pragma",
-	}
-
-	for _, h := range required {
-		if rec.Header().Get(h) == "" {
-			t.Errorf("Missing required security header: %s", h)
-		}
+	for _, tc := range []struct {
+		header string
+		// want is the exact value, for the headers that have one.
+		want string
+		// directives are the substrings a header must carry when its full value
+		// is not itself the requirement.
+		directives []string
+	}{
+		{header: "X-Content-Type-Options", want: "nosniff"},
+		{header: "X-Frame-Options", want: "DENY"},
+		{header: "Referrer-Policy", want: "no-referrer"},
+		{header: "Cache-Control", want: "no-store"},
+		{header: "Pragma", want: "no-cache"},
+		// "0" disables the legacy auditor rather than enabling it: the filter is
+		// itself an XSS vector, and CSP is the replacement.
+		{header: "X-XSS-Protection", want: "0"},
+		{header: "Strict-Transport-Security", directives: []string{"max-age=", "includeSubDomains"}},
+		{header: "Content-Security-Policy", directives: []string{"default-src"}},
+	} {
+		t.Run(tc.header, func(t *testing.T) {
+			val := rec.Header().Get(tc.header)
+			if val == "" {
+				t.Fatalf("%s is missing from the response", tc.header)
+			}
+			if tc.want != "" && val != tc.want {
+				t.Fatalf("%s is %q, want %q", tc.header, val, tc.want)
+			}
+			for _, d := range tc.directives {
+				if !strings.Contains(val, d) {
+					t.Errorf("%s does not carry %q: %q", tc.header, d, val)
+				}
+			}
+		})
 	}
 }
 
@@ -462,71 +364,95 @@ func TestOWASP_RateLimitDisabledPassthrough(t *testing.T) {
 
 // --- V3.5: JWT Token Validation ---
 
-// TestOWASP_JWTExpirationRequired verifies that tokens without expiration are rejected.
-func TestOWASP_JWTExpirationRequired(t *testing.T) {
+// TestOWASP_JWTRegisteredClaimsAreVerified checks the three registered claims
+// ParseAndValidate is given an expectation for: a missing expiry, an issuer the
+// verifier was not told to expect, and an audience the token was not minted for.
+//
+// These were three functions that each signed a token, called ParseAndValidate
+// and asserted err != nil, and none of them ever parsed a token that should
+// succeed. A verifier that refused every token satisfied all three. The
+// accepted case is now the first row, so the refusals below it mean something.
+func TestOWASP_JWTRegisteredClaimsAreVerified(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
 	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
 
-	// Token without exp
-	tokenStr, _ := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:  "user-123",
-			Issuer:   "vault",
-			Audience: vjwt.ClaimStrings{"app"},
-			IssuedAt: vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app")
-	if err == nil {
-		t.Fatal("Token without exp claim should be rejected")
+	// sign builds a token from the claims as given, including omissions:
+	// SignRS256WithHeader is used rather than SignToken because a token with no
+	// exp is one of the cases and SignToken would not produce one.
+	sign := func(t *testing.T, claims vjwt.RegisteredClaims) string {
+		t.Helper()
+		tokenStr, err := vjwt.SignRS256WithHeader(
+			map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid},
+			&vaultcrypto.VaultClaims{RegisteredClaims: claims}, key)
+		if err != nil {
+			t.Fatalf("signing the fixture token failed: %v", err)
+		}
+		return tokenStr
 	}
-}
 
-// TestOWASP_JWTIssuerRequired verifies that tokens with wrong issuer are rejected.
-func TestOWASP_JWTIssuerRequired(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
-
-	tokenStr, _ := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "legit-vault",
-			Audience:  vjwt.ClaimStrings{"app"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key, kid)
-
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "different-vault", "app")
-	if err == nil {
-		t.Fatal("Token with wrong issuer should be rejected")
+	valid := vjwt.RegisteredClaims{
+		Subject:   "user-123",
+		Issuer:    "vault",
+		Audience:  vjwt.ClaimStrings{"app"},
+		ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
+		IssuedAt:  vjwt.NewNumericDate(time.Now()),
 	}
-}
 
-// TestOWASP_JWTAudienceRequired verifies that tokens with wrong audience are rejected.
-func TestOWASP_JWTAudienceRequired(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
-
-	tokenStr, _ := vaultcrypto.SignToken(vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject:   "user-123",
-			Issuer:    "vault",
-			Audience:  vjwt.ClaimStrings{"app-frontend"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
+	for _, tc := range []struct {
+		name string
+		// mutate turns the valid claim set into the one this row presents.
+		mutate func(vjwt.RegisteredClaims) vjwt.RegisteredClaims
+		// wantIssuer and wantAudience are what the verifier is told to expect.
+		wantIssuer, wantAudience string
+		accepted                 bool
+	}{
+		{
+			name:     "a token matching every expectation is accepted",
+			mutate:   func(c vjwt.RegisteredClaims) vjwt.RegisteredClaims { return c },
+			accepted: true,
 		},
-	}, key, kid)
+		{
+			name: "no expiry",
+			mutate: func(c vjwt.RegisteredClaims) vjwt.RegisteredClaims {
+				c.ExpiresAt = nil
+				return c
+			},
+		},
+		{
+			name: "an issuer the verifier does not expect",
+			mutate: func(c vjwt.RegisteredClaims) vjwt.RegisteredClaims {
+				c.Issuer = "legit-vault"
+				return c
+			},
+			wantIssuer: "different-vault",
+		},
+		{
+			name: "an audience the token was not minted for",
+			mutate: func(c vjwt.RegisteredClaims) vjwt.RegisteredClaims {
+				c.Audience = vjwt.ClaimStrings{"app-frontend"}
+				return c
+			},
+			wantAudience: "app-admin",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer, audience := "vault", "app"
+			if tc.wantIssuer != "" {
+				issuer = tc.wantIssuer
+			}
+			if tc.wantAudience != "" {
+				audience = tc.wantAudience
+			}
 
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app-admin")
-	if err == nil {
-		t.Fatal("Token with wrong audience should be rejected")
+			_, err := vaultcrypto.ParseAndValidate(sign(t, tc.mutate(valid)), keyFunc, issuer, audience)
+			if tc.accepted && err != nil {
+				t.Fatalf("a token with %s was rejected: %v", tc.name, err)
+			}
+			if !tc.accepted && err == nil {
+				t.Fatalf("a token with %s was accepted", tc.name)
+			}
+		})
 	}
 }
 

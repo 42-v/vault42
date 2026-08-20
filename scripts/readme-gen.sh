@@ -222,9 +222,6 @@ while IFS= read -r owner; do
   CREATOR_COUNT=$((CREATOR_COUNT + 1))
 done < <(cut -f1 "$CREATOR_TMP" | sort -u)
 
-# ═══════════════════════════════════════════════════════════════
-# 7. Generate docs/badges.json
-# ═══════════════════════════════════════════════════════════════
 COV_NUM=$(echo "$TOTAL_COV" | tr -d '%')
 
 # Reachable coverage comes from the same tool the release gate uses, so the badge
@@ -254,25 +251,6 @@ print("%.2f" % (100.0 * d["covered_statements"] / reach))
 VERSION_STR=$(cat VERSION 2>/dev/null || echo "0.0.0")
 
 mkdir -p docs
-
-cat > docs/badges.json <<EOF
-{
-  "schemaVersion": 1,
-  "version": "${VERSION_STR}",
-  "tests": ${PASSED},
-  "passed": "${PASSED} passed",
-  "coverage": "${TOTAL_COV}",
-  "coverageNum": ${COV_NUM},
-  "reachableCoverage": "${REACHABLE_COV}%",
-  "reachableCoverageNum": ${REACHABLE_COV},
-  "packages": ${PKGS},
-  "goFiles": ${GO_FILES},
-  "goLines": ${GO_LINES},
-  "testFiles": ${TEST_FILES},
-  "directDeps": ${DIRECT_COUNT},
-  "transitiveDeps": ${INDIRECT_COUNT}
-}
-EOF
 
 # ═══════════════════════════════════════════════════════════════
 # 8. Generate docs/deps.md
@@ -375,6 +353,129 @@ deps.discard('@vault42/vue')
 print(len(deps))
 ")
 
+# Frontend coverage, combined across the two packages. vitest already writes a
+# json-summary for each; combining the raw counts rather than averaging the two
+# percentages is the difference between a number and a number-shaped thing,
+# because the packages are not the same size.
+FE_COV="${VUE_COVERAGE:-}"
+if [ -z "$FE_COV" ]; then
+  FE_COV=$(python3 -c "
+import json, sys
+
+covered = total = 0
+found = []
+for path in ('web/coverage/coverage-summary.json', 'packages/vue/coverage/coverage-summary.json'):
+    try:
+        with open(path) as fh:
+            stmts = json.load(fh)['total']['statements']
+    except (OSError, KeyError, ValueError):
+        continue
+    covered += stmts['covered']
+    total += stmts['total']
+    found.append(path)
+
+# Same rule the test count above follows: a measurement that did not happen is
+# reported as absent, never as a number. Publishing a coverage badge derived
+# from one of the two packages would understate or overstate it silently.
+if len(found) != 2 or total == 0:
+    sys.exit('MISSING')
+print(f'{100.0 * covered / total:.2f}')
+" 2>/dev/null) || {
+    echo "ERROR: no combined frontend coverage summary." >&2
+    echo "  web/coverage/coverage-summary.json and packages/vue/coverage/coverage-summary.json are" >&2
+    echo "  what the Vue coverage badge quotes. Run 'pnpm -C web test:coverage' and" >&2
+    echo "  'pnpm -C packages/vue test:coverage', or pass VUE_COVERAGE=<pct> from a run that did" >&2
+    echo "  measure. A badge is a claim; there is nothing here to back one." >&2
+    exit 1
+  }
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# 9b. Collect C# SDK stats
+#
+# The two packages under packages/dotnet are published to nuget.org, and until
+# 1.0.1 nothing on a pull request built them. They are a shipped language
+# surface with their own suite and their own coverage gate, so they get their
+# own badge column rather than being folded into a total that hides them.
+# ═══════════════════════════════════════════════════════════════
+CS_TESTS="${DOTNET_TESTS:-}"
+CS_COV="${DOTNET_COVERAGE:-}"
+
+if [ -z "$CS_COV" ] || [ -z "$CS_TESTS" ]; then
+  CS_JSON=$(mktemp)
+  if scripts/dotnet-coverage.sh --json "$CS_JSON" > "$CS_JSON.log" 2>&1; then
+    [ -z "$CS_COV" ] && CS_COV=$(python3 -c "import json;print(f\"{json.load(open('$CS_JSON'))['percent']:.2f}\")")
+    [ -z "$CS_TESTS" ] && CS_TESTS=$({ grep -oP '(?<=Passed:)\s*\d+' "$CS_JSON.log" || true; } | awk '{s+=$1}END{print s+0}')
+  fi
+  rm -f "$CS_JSON" "$CS_JSON.log"
+fi
+
+if [ -z "$CS_COV" ] || [ -z "${CS_TESTS:-}" ] || [ "${CS_TESTS:-0}" -eq 0 ]; then
+  echo "ERROR: the .NET SDK suites reported no measurement." >&2
+  echo "  scripts/dotnet-coverage.sh produced neither a test count nor a coverage figure, so" >&2
+  echo "  there is nothing to put in the C# badge column. Install the .NET SDK and re-run, or" >&2
+  echo "  pass DOTNET_TESTS=<n> DOTNET_COVERAGE=<pct> from a run that did measure. This refuses" >&2
+  echo "  rather than publishing a zero, for the same reason the Go and Vue halves do." >&2
+  exit 1
+fi
+
+CS_LINES=$(find packages/dotnet/src \( -name '*.cs' -o -name '*.razor' \) \
+  -not -path '*/obj/*' -not -path '*/bin/*' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
+CS_DEPS=$(grep -rhoP '(?<=<PackageReference Include=")[^"]+' \
+  packages/dotnet/src/*/*.csproj 2>/dev/null | sort -u | wc -l | tr -d ' ')
+
+# ═══════════════════════════════════════════════════════════════
+# 9c. Generate docs/badges.json
+#
+# Written here rather than earlier because it now carries all three languages,
+# and two of them are not measured until the sections above have run. The
+# top-level keys are the Go ones and keep their old names and meanings: they
+# were the only language when the file was designed, and a consumer reading
+# `tests` should not silently start getting a different number.
+# ═══════════════════════════════════════════════════════════════
+cat > docs/badges.json <<EOF
+{
+  "schemaVersion": 1,
+  "version": "${VERSION_STR}",
+  "tests": ${PASSED},
+  "passed": "${PASSED} passed",
+  "coverage": "${TOTAL_COV}",
+  "coverageNum": ${COV_NUM},
+  "reachableCoverage": "${REACHABLE_COV}%",
+  "reachableCoverageNum": ${REACHABLE_COV},
+  "packages": ${PKGS},
+  "goFiles": ${GO_FILES},
+  "goLines": ${GO_LINES},
+  "testFiles": ${TEST_FILES},
+  "directDeps": ${DIRECT_COUNT},
+  "transitiveDeps": ${INDIRECT_COUNT},
+  "totalTests": $((PASSED + FE_TESTS + CS_TESTS)),
+  "languages": {
+    "go": {
+      "tests": ${PASSED},
+      "coverage": "${REACHABLE_COV}% of reachable",
+      "coverageNum": ${REACHABLE_COV},
+      "lines": ${GO_LINES},
+      "deps": ${DIRECT_COUNT}
+    },
+    "vue": {
+      "tests": ${FE_TESTS},
+      "coverage": "${FE_COV}%",
+      "coverageNum": ${FE_COV},
+      "lines": ${FE_LINES},
+      "deps": ${FE_DEPS}
+    },
+    "csharp": {
+      "tests": ${CS_TESTS},
+      "coverage": "${CS_COV}%",
+      "coverageNum": ${CS_COV},
+      "lines": ${CS_LINES},
+      "deps": ${CS_DEPS}
+    }
+  }
+}
+EOF
+
 # ═══════════════════════════════════════════════════════════════
 # 10. Update badge table in README.md
 #     Uses sentinel: <!-- badges -->...<!-- /badges -->
@@ -401,7 +502,14 @@ if [ -f README.md ]; then
     GO_VER=$(grep '^go ' go.mod | awk '{print $2}')
   fi
   VUE_VER=$(grep '"vue":' web/package.json | grep -oP '[\d.]+' | head -1)
-  TOTAL_TESTS=$((PASSED + FE_TESTS))
+  CS_VER=$(grep -oP '(?<=<TargetFramework>net)[\d.]+' \
+    packages/dotnet/src/Vault42.AspNetCore/Vault42.AspNetCore.csproj | head -1)
+  TOTAL_TESTS=$((PASSED + FE_TESTS + CS_TESTS))
+
+  # The register is the source for these two, so the badge cannot claim a
+  # standard count the register does not carry.
+  REG_STANDARDS=$(python3 -c "import json;print(len(json.load(open('docs/compliance-register.json'))['standards']))")
+  REG_REQS=$(python3 -c "import json;print(len(json.load(open('docs/compliance-register.json'))['requirements']))")
 
   python3 -c "
 import re
@@ -410,12 +518,29 @@ with open('README.md', 'r') as f:
     text = f.read()
 
 S = 'https://img.shields.io/badge'
-table = f'''| | | |
-|---|---|---|
-| ![Go]({S}/Go-${GO_VER}-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue]({S}/Vue-${VUE_VER}-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License]({S}/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests]({S}/Go_Tests-${PASSED}-155724?style=flat&labelColor=000) | ![Vue Tests]({S}/Vue_Tests-${FE_TESTS}-155724?style=flat&labelColor=000) | ![Total]({S}/Total-${TOTAL_TESTS}_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines]({S}/Go-${GO_LINES}_lines-555?style=flat&labelColor=000) | ![Vue Lines]({S}/Vue-${FE_LINES}_lines-555?style=flat&labelColor=000) | ![Coverage]({S}/Coverage-${COV_ENCODED}-${COV_COLOR}?style=flat&labelColor=000) |
-| ![Go Deps]({S}/Go-${DIRECT_COUNT}_deps-555?style=flat&labelColor=000) | ![Vue Deps]({S}/Vue-${FE_DEPS}_deps-555?style=flat&labelColor=000) | ![Locales]({S}/Locales-${FE_LOCALES}-555?style=flat&labelColor=000) |'''
+
+
+def colour(pct):
+    \"\"\"Same thresholds the Go figure has always used, applied per language.\"\"\"
+    value = float(pct)
+    if value >= 80:
+        return '155724'
+    if value >= 60:
+        return '7d6e00'
+    return 'red'
+
+
+go_colour = '${COV_COLOR}'
+vue_colour = colour('${FE_COV}')
+cs_colour = colour('${CS_COV}')
+
+table = f'''| Go | Vue | C# | |
+|---|---|---|---|
+| ![Go]({S}/Go-${GO_VER}-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue]({S}/Vue-${VUE_VER}-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![.NET]({S}/.NET-${CS_VER}-512BD4?style=flat&logo=dotnet&logoColor=white) | ![License]({S}/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go Tests]({S}/Tests-${PASSED}-155724?style=flat&labelColor=000) | ![Vue Tests]({S}/Tests-${FE_TESTS}-155724?style=flat&labelColor=000) | ![C# Tests]({S}/Tests-${CS_TESTS}-155724?style=flat&labelColor=000) | ![Total]({S}/Total-${TOTAL_TESTS}_tests-155724?style=flat&labelColor=000) |
+| ![Go Coverage]({S}/Coverage-${COV_ENCODED}-{go_colour}?style=flat&labelColor=000) | ![Vue Coverage]({S}/Coverage-${FE_COV}%25-{vue_colour}?style=flat&labelColor=000) | ![C# Coverage]({S}/Coverage-${CS_COV}%25-{cs_colour}?style=flat&labelColor=000) | ![Locales]({S}/Locales-${FE_LOCALES}-555?style=flat&labelColor=000) |
+| ![Go Lines]({S}/Lines-${GO_LINES}-555?style=flat&labelColor=000) | ![Vue Lines]({S}/Lines-${FE_LINES}-555?style=flat&labelColor=000) | ![C# Lines]({S}/Lines-${CS_LINES}-555?style=flat&labelColor=000) | ![Standards]({S}/Standards-${REG_STANDARDS}-555?style=flat&labelColor=000) |
+| ![Go Deps]({S}/Deps-${DIRECT_COUNT}-555?style=flat&labelColor=000) | ![Vue Deps]({S}/Deps-${FE_DEPS}-555?style=flat&labelColor=000) | ![C# Deps]({S}/Deps-${CS_DEPS}-555?style=flat&labelColor=000) | ![Requirements]({S}/Requirements-${REG_REQS}-555?style=flat&labelColor=000) |'''
 
 text = re.sub(
     r'(<!-- badges -->\n).*?(\n<!-- /badges -->)',
@@ -430,4 +555,5 @@ with open('README.md', 'w') as f:
   echo "README.md badges updated"
 fi
 
-echo "docs/badges.json + docs/deps.md updated: ${PASSED} Go + ${FE_TESTS} Vue tests, ${TOTAL_COV} coverage, ${DIRECT_COUNT}+${INDIRECT_COUNT} deps"
+echo "docs/badges.json + docs/deps.md updated: ${PASSED} Go (${REACHABLE_COV}% reachable) + "\
+     "${FE_TESTS} Vue (${FE_COV}%) + ${CS_TESTS} C# (${CS_COV}%) tests, ${DIRECT_COUNT}+${INDIRECT_COUNT} Go deps"

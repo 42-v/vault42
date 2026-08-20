@@ -74,6 +74,10 @@ func TestKMSAttack_CloseRacesUnwrapOnRootSecret(t *testing.T) {
 // The same race reached through the wrap half of the interface. Wrap is not
 // exposed over HTTP today, but it is exported, deploy tooling calls it, and it
 // reads the identical unsynchronized field.
+//
+// Like the test above it asserts nothing about the results, on purpose: the
+// race detector is the assertion, and a clean pass without -race is the honest
+// outcome for a finding that is a data race rather than a wrong answer.
 func TestKMSAttack_CloseRacesWrapOnRootSecret(t *testing.T) {
 	svc := newKMS(t)
 

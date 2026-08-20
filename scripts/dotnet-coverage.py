@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import collections
 import glob
+import json
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -27,7 +28,6 @@ import xml.etree.ElementTree as ET
 # as a missing file instead of a smaller, still-green denominator.
 EXPECTED_FILES = {
     "Internal/LimitedReadStream.cs",
-    "Internal/Pkce.cs",
     "Internal/TokenResponse.cs",
     "Internal/TokenStore.cs",
     "VaultAuthCallback.razor",
@@ -75,6 +75,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("results_dir")
     parser.add_argument("--floor", type=float, default=100.0)
+    parser.add_argument(
+        "--json",
+        metavar="PATH",
+        help="also write {covered, total, percent} here, for the badge generator to read "
+             "rather than re-derive",
+    )
     args = parser.parse_args()
 
     lines = merge(args.results_dir)
@@ -114,6 +120,14 @@ def main() -> int:
 
     percent = 100.0 * covered / total
     print(f"\nTOTAL {covered}/{total} = {percent:.2f}% (floor {args.floor:.2f}%)")
+
+    # Written before the floor is applied on purpose: a run that fails the gate
+    # still measured something, and a caller asking for the number should get the
+    # number rather than an empty file it then reads as zero.
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump({"covered": covered, "total": total, "percent": round(percent, 2)}, fh)
+            fh.write("\n")
 
     if percent + 1e-9 < args.floor:
         uncovered = {

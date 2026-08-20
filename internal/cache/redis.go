@@ -2,7 +2,9 @@ package cache
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -14,12 +16,49 @@ type RedisCache struct {
 	client *vredis.Client
 }
 
-// NewRedisCache creates a Redis-backed cache.
-func NewRedisCache(addr, password string, db int) (*RedisCache, error) {
+// RedisTLS carries the transport settings for the cache link from whoever read
+// them out of the environment down to the dialer.
+//
+// It is one struct rather than three more parameters, and it arrives as a
+// trailing variadic rather than as a required one, because NewRedisCache and
+// NewCache are called from about twenty places under tests/ that have no Redis
+// TLS to configure. A required parameter would be a compile error in every one
+// of them, in files this change does not own, for no behavioral gain; a
+// variadic leaves them building unchanged and still keeps the three settings
+// named at the call site instead of positional.
+type RedisTLS struct {
+	// Enabled turns on TLS for the cache connection (REDIS_TLS).
+	Enabled bool
+	// RootCAs verifies the Redis server certificate. Nil uses the host trust
+	// store, which on the distroless-static runtime image holds public roots
+	// only and therefore cannot verify an in-cluster private CA.
+	RootCAs *x509.CertPool
+	// ServerName is the name checked against the certificate
+	// (REDIS_TLS_SERVER_NAME). Empty uses the host part of the address, which
+	// is what a service DNS name gives; it has to be set when the address is an
+	// IP or a port-forward and the certificate names the service.
+	ServerName string
+}
+
+// NewRedisCache creates a Redis-backed cache. At most one RedisTLS may be
+// given; more than one is a caller bug rather than a merge of the two, because
+// the second would silently decide whether the link is encrypted.
+func NewRedisCache(addr, password string, db int, tlsOpts ...RedisTLS) (*RedisCache, error) {
+	if len(tlsOpts) > 1 {
+		return nil, fmt.Errorf("cache: NewRedisCache accepts at most one RedisTLS (got %d)", len(tlsOpts))
+	}
+	var tlsOpt RedisTLS
+	if len(tlsOpts) == 1 {
+		tlsOpt = tlsOpts[0]
+	}
+
 	client := vredis.NewClient(&vredis.Options{
-		Addr:     addr,
-		Password: password,
-		DB:       db,
+		Addr:          addr,
+		Password:      password,
+		DB:            db,
+		TLS:           tlsOpt.Enabled,
+		TLSServerName: tlsOpt.ServerName,
+		TLSRootCAs:    tlsOpt.RootCAs,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -327,7 +327,15 @@ func TestSendEmailOTPFireAndForget_CachesAndSends(t *testing.T) {
 func TestSendEmailOTPFireAndForget_NotAllowedNoSend(t *testing.T) {
 	// nil MFA service → emailOTPAllowed is false → doSendEmailOTP returns
 	// ErrEmailOTPNotAllowed before any cache/email work. The fire-and-forget
-	// wrapper swallows the error (logs only).
+	// wrapper swallows the error (logs only), so the log line is the only place
+	// the reason survives -- and the reason matters: this service has both a
+	// cache and a sender, so "nothing was sent" must mean the factor was refused
+	// rather than a dependency being missing.
+	var logBuf claimLogBuffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
 	svc, _ := newMockAuthService(t) // no mfaSvc
 
 	var emailed bool
@@ -340,6 +348,9 @@ func TestSendEmailOTPFireAndForget_NotAllowedNoSend(t *testing.T) {
 
 	if emailed {
 		t.Error("email-OTP must not be sent when not an allowed factor")
+	}
+	if got := logBuf.String(); !strings.Contains(got, ErrEmailOTPNotAllowed.Error()) {
+		t.Errorf("log = %q, want the send refused as %v", got, ErrEmailOTPNotAllowed)
 	}
 }
 

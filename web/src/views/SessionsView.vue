@@ -77,7 +77,7 @@ onMounted(() => {
             >
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <div class="w-2 h-2 rounded-full bg-vault42-success vault42-pulse flex-shrink-0"></div>
+                  <div class="w-2 h-2 rounded-full bg-vault42-success vault42-pulse shrink-0"></div>
                   <p class="text-sm font-medium truncate">
                     {{ s.friendly_name || s.user_agent?.slice(0, 60) || t('sessions.unknownSession') }}
                   </p>
@@ -89,7 +89,7 @@ onMounted(() => {
                 </div>
               </div>
               <button
-                class="text-xs text-vault42-error hover:text-red-300 transition-colors flex-shrink-0"
+                class="text-xs text-vault42-error hover:text-red-300 transition-colors shrink-0"
                 @click="revokeSession(s.id)"
               >
                 {{ t('common.revoke') }}
@@ -139,7 +139,7 @@ onMounted(() => {
                       {{ d.friendly_name || d.user_agent?.slice(0, 60) || t('devices.unknownDevice') }}
                     </p>
                     <button
-                      class="text-vault42-muted hover:text-vault42-text transition-colors flex-shrink-0"
+                      class="text-vault42-muted hover:text-vault42-text transition-colors shrink-0"
                       :title="t('devices.renameDevice')"
                       @click="startEdit(d.id, d.friendly_name || '')"
                     >
@@ -147,7 +147,7 @@ onMounted(() => {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                       </svg>
                     </button>
-                    <span v-if="d.trusted" class="vault42-badge-success flex-shrink-0">{{ t('common.trusted') }}</span>
+                    <span v-if="d.trusted" class="vault42-badge-success shrink-0">{{ t('common.trusted') }}</span>
                   </div>
                 </template>
 
@@ -158,7 +158,7 @@ onMounted(() => {
               </div>
 
               <button
-                class="text-xs text-vault42-error hover:text-red-300 transition-colors flex-shrink-0"
+                class="text-xs text-vault42-error hover:text-red-300 transition-colors shrink-0"
                 @click="removeDevice(d.id)"
               >
                 {{ t('common.remove') }}

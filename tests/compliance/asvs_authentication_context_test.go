@@ -86,12 +86,21 @@ func TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength(t *te
 
 	// The callback has to actually apply the fallback. The AuthContext it builds
 	// is the whole control: methods = the provider assertion only, UV clear.
+	//
+	// Matched on the methods and the UV flag rather than on the whole
+	// expression. The first version of this pinned the literal
+	// `NewAuthContext(time.Now(), ...)` and so also pinned the first argument,
+	// which carries a different requirement: the authentication instant belongs
+	// to V7.6.1 and CR-22, and reading it from the provider's auth_time instead
+	// of the local clock failed this assertion while changing nothing about the
+	// strength assumption it exists to hold.
 	callback := readCodeOnly(t, "internal/handler/oauth.go")
-	if !strings.Contains(callback, "service.NewAuthContext(time.Now(), []string{service.MethodFederated}, false)") {
+	if !strings.Contains(callback, "[]string{service.MethodFederated}, false)") {
 		t.Error("V6.8.4: the OAuth callback no longer issues its token pair with an AuthContext of " +
-			"MethodFederated alone. Either it now reads the provider's acr/amr — in which case this " +
-			"row's argument changes from 'assumes the minimum' to 'verifies what the IdP returned' " +
-			"and the register has to say so — or the strength assumption has been dropped.")
+			"MethodFederated alone and user verification clear. Either it now reads the provider's " +
+			"acr/amr, in which case this row's argument changes from 'assumes the minimum' to " +
+			"'verifies what the IdP returned' and the register has to say so, or the strength " +
+			"assumption has been dropped.")
 	}
 	// A provider assertion never satisfies an enrolled second factor: the
 	// callback still routes an MFA-enrolled user through the challenge, carrying

@@ -46,63 +46,69 @@ func signTestToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience, sub
 	return tokenStr
 }
 
-func TestAuthMissingHeader(t *testing.T) {
+// TestAuthRejects covers every way an Authorization header fails to get past the
+// middleware. They share a table because the interesting part is that each one
+// stops at 401 with its own error code: a caller must be able to tell "you sent
+// nothing" from "your token is not valid", and the middleware must never let one
+// of these fall through to the handler.
+func TestAuthRejects(t *testing.T) {
 	key := newTestKey(t)
 	kid := "aabbccdd-1234"
+	wrongKID := "00112233-5678"
 	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
 
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
+	expired := vaultcrypto.VaultClaims{
+		RegisteredClaims: vjwt.RegisteredClaims{
+			Issuer:    "test-issuer",
+			Audience:  vjwt.ClaimStrings{"test-audience"},
+			Subject:   "user-123",
+			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
+			NotBefore: vjwt.NewNumericDate(time.Now().Add(-5 * time.Minute)),
+			IssuedAt:  vjwt.NewNumericDate(time.Now().Add(-5 * time.Minute)),
+			ID:        "expired-jti",
+		},
 	}
-	assertJSONError(t, rec, "missing_authorization")
-}
-
-func TestAuthInvalidScheme(t *testing.T) {
-	key := newTestKey(t)
-	kid := "aabbccdd-1234"
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
-
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
+	expiredToken, err := vaultcrypto.SignToken(expired, key, kid)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
 	}
-	assertJSONError(t, rec, "invalid_authorization")
-}
 
-func TestAuthInvalidToken(t *testing.T) {
-	key := newTestKey(t)
-	kid := "aabbccdd-1234"
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
-
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer garbage-token-value")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
+	tests := []struct {
+		name string
+		// authorization is set verbatim; the empty string means no header at all.
+		authorization string
+		wantError     string
+	}{
+		{name: "no Authorization header", wantError: "missing_authorization"},
+		{name: "a scheme that is not Bearer", authorization: "Basic dXNlcjpwYXNz", wantError: "invalid_authorization"},
+		{name: "a Bearer value that is not a JWT", authorization: "Bearer garbage-token-value", wantError: "invalid_token"},
+		{
+			name:          "a token signed under a kid the server does not hold",
+			authorization: "Bearer " + signTestToken(t, key, wrongKID, "test-issuer", "test-audience", "user-123", 5*time.Minute),
+			wantError:     "invalid_token",
+		},
+		{name: "an expired token", authorization: "Bearer " + expiredToken, wantError: "invalid_token"},
 	}
-	assertJSONError(t, rec, "invalid_token")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("the handler ran on a request that should have been refused")
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", rec.Code)
+			}
+			assertJSONError(t, rec, tt.wantError)
+		})
+	}
 }
 
 func TestAuthValidToken(t *testing.T) {
@@ -135,67 +141,6 @@ func TestAuthValidToken(t *testing.T) {
 	if len(gotClaims.Roles) != 1 || gotClaims.Roles[0] != "user" {
 		t.Errorf("roles = %v, want [user]", gotClaims.Roles)
 	}
-}
-
-func TestAuthWrongKID(t *testing.T) {
-	key := newTestKey(t)
-	kid := "aabbccdd-1234"
-	wrongKID := "00112233-5678"
-	// Key map has wrongKID, but token is signed with kid
-	keys := map[string]*rsa.PublicKey{wrongKID: &key.PublicKey}
-
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	tokenStr := signTestToken(t, key, kid, "test-issuer", "test-audience", "user-123", 5*time.Minute)
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
-	}
-	assertJSONError(t, rec, "invalid_token")
-}
-
-func TestAuthExpiredToken(t *testing.T) {
-	key := newTestKey(t)
-	kid := "aabbccdd-1234"
-	keys := map[string]*rsa.PublicKey{kid: &key.PublicKey}
-
-	handler := Auth(keys, "test-issuer", "test-audience")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// Create a token that expired 1 minute ago
-	claims := vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Issuer:    "test-issuer",
-			Audience:  vjwt.ClaimStrings{"test-audience"},
-			Subject:   "user-123",
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
-			NotBefore: vjwt.NewNumericDate(time.Now().Add(-5 * time.Minute)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now().Add(-5 * time.Minute)),
-			ID:        "expired-jti",
-		},
-	}
-	tokenStr, err := vaultcrypto.SignToken(claims, key, kid)
-	if err != nil {
-		t.Fatalf("failed to sign token: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rec.Code)
-	}
-	assertJSONError(t, rec, "invalid_token")
 }
 
 func TestGetClaimsNil(t *testing.T) {

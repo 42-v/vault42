@@ -35,10 +35,40 @@ func (d *NumericDate) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("could not convert json number to float: %w", err)
 	}
 
+	// Refuse a value that will not survive the conversion below. Converting a
+	// float64 outside int64's range is implementation-defined in Go, and on
+	// amd64 it yields MinInt64, which time.Unix then wraps to an instant tens of
+	// thousands of years away. An "nbf" of 1e99 therefore stopped meaning "not
+	// before the heat death of the universe" and started meaning a moment the
+	// validator was happy to call past, so a token that is not yet valid
+	// verified.
+	//
+	// That is reachable with fully attacker-controlled input rather than only
+	// from a token this service minted: a DPoP proof is self-signed by a key the
+	// sender invents, and crypto.ValidateDPoPProof parses it with claim
+	// validation on. The same conversion in claims.go is what internal/oauth2
+	// had to cap for auth_time, one hazard at three call sites.
+	//
+	// NaN fails the comparison in both directions and is refused with the rest.
+	if !(f >= minNumericDate && f <= maxNumericDate) {
+		return fmt.Errorf("NumericDate %v is outside the range of representable instants", f)
+	}
+
 	whole, frac := math.Modf(f)
 	*d = NumericDate{time.Unix(int64(whole), int64(frac*1e9)).Truncate(time.Second)}
 	return nil
 }
+
+// The range a NumericDate may name, in seconds since the epoch.
+//
+// Bounded well inside int64 rather than at its edge: the conversion is only half
+// the hazard, because time.Unix overflows internally long before int64 does.
+// Year 1 to year 9999 covers every instant a token can sensibly assert and
+// leaves no representation to be clever with.
+const (
+	minNumericDate = -62135596800 // 0001-01-01T00:00:00Z
+	maxNumericDate = 253402300799 // 9999-12-31T23:59:59Z
+)
 
 // ClaimStrings is []string that unmarshals from either "string" or ["array"].
 type ClaimStrings []string

@@ -5,12 +5,13 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It is not an OAuth2 authorization server and not an OIDC provider: there is no authorize endpoint, no consent screen, and no `redirect_uri` a third-party client registers against it.
 
 <!-- badges -->
-| | | |
-|---|---|---|
-| ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-5049-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1302-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6351_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-47986_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6701_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
-| ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
+| Go | Vue | C# | |
+|---|---|---|---|
+| ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.41-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat&logo=dotnet&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Tests-4898-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Tests-1305-155724?style=flat&labelColor=000) | ![C# Tests](https://img.shields.io/badge/Tests-264-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6467_tests-155724?style=flat&labelColor=000) |
+| ![Go Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) | ![Vue Coverage](https://img.shields.io/badge/Coverage-99.76%25-155724?style=flat&labelColor=000) | ![C# Coverage](https://img.shields.io/badge/Coverage-100.00%25-155724?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Lines-48651-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6743-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2347-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-11-555?style=flat&labelColor=000) |
+| ![Go Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![C# Deps](https://img.shields.io/badge/Deps-6-555?style=flat&labelColor=000) | ![Requirements](https://img.shields.io/badge/Requirements-456-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
 ## Highlights
@@ -183,7 +184,7 @@ Coverage tooling lives in `scripts/`:
 | `scripts/coverage.sh` | Regenerate `docs/test-coverage.md` with per-package + per-function coverage |
 | `scripts/dotnet-coverage.sh` | Build, test and coverage-gate the published .NET SDKs (floor 100.00, no exclusions) |
 | `scripts/security-scan.sh` | Standalone Go + frontend security pass (go vet, gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
-| `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, the golangci ratchet, helm, doc chart paths, a changelog section for the version, and a clean tree |
+| `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, golangci-lint at zero, helm, doc chart paths, a changelog section for the version, and a clean tree |
 | `scripts/precommit.sh` | Pre-commit verification: build, vet, gosec, tests, badges, docs |
 
 ## Docs
@@ -229,7 +230,7 @@ the images carry SBOM and SLSA provenance attestations:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/42-v/vault42:1.0.1
+  ghcr.io/42-v/vault42:1.0.3
 ```
 
 Full instructions, covering all four artifact classes, are in

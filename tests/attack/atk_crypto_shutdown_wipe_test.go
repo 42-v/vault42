@@ -282,10 +282,12 @@ func TestKeystoreAttack_StopRacesImportOnMasterKey(t *testing.T) {
 // A control for the test above, and a finding in its own right: the race
 // detector cannot see a wipe racing a key read on the AES path.
 //
-// Two goroutines run the identical unsynchronized pattern over one 32-byte
-// slice. The first reads it the way internal/crypto.Encrypt does, through
-// aes.NewCipher, whose key schedule is assembly and therefore uninstrumented.
-// The second reads the same bytes in plain Go. Only the second is reported.
+// Two goroutines run an unsynchronized read/wipe pattern over one 32-byte
+// slice. The read goes through internal/crypto.Encrypt, so the key reaches
+// aes.NewCipher, whose key schedule is assembly and therefore uninstrumented,
+// and the detector stays quiet. The same pattern read in plain Go is reported
+// every time; that half is not run here because it would fail the suite on
+// purpose, and a green suite is the only way this file can carry the finding.
 //
 // The consequence for vault42 is that `go test -race` in CI is not evidence
 // that the keystore master key is safe from the shutdown wipe. It is evidence

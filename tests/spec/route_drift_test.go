@@ -25,6 +25,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -578,5 +579,183 @@ func sorted(set map[route]bool) []route {
 		}
 		return out[i].method < out[j].method
 	})
+	return out
+}
+
+// routeCountInProse matches the sentence in docs/COMPLIANCE.md that quotes the
+// size of the documented route surface.
+var routeCountInProse = regexp.MustCompile(`all (\d+) mounted routes must appear`)
+
+// TestRouteInventoryCountInProseIsCurrent keeps the one prose claim about the
+// size of the API surface honest.
+//
+// The route inventories themselves are gated in both directions by the tests
+// above, so they cannot drift. The sentence in docs/COMPLIANCE.md that tells a
+// reader how many routes those gates cover was not gated by anything, and it
+// was wrong: it said 51 from 1.0.0 until 1.0.3, over an inventory that held 105
+// routes on the day the sentence was written. Nobody counted, because the
+// paragraph is next to a description of a mechanism that counts for itself.
+//
+// A number in prose beside a machine-checked artifact is the worst place for a
+// number to be. It reads as the artifact's own output and is maintained by
+// hand.
+func TestRouteInventoryCountInProseIsCurrent(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+
+	inventory, err := os.ReadFile(filepath.Join(root, "docs", "api.md"))
+	if err != nil {
+		t.Fatalf("read docs/api.md: %v", err)
+	}
+	rows := countInventoryRows(t, string(inventory),
+		"<!-- BEGIN ENDPOINT SUMMARY -->", "<!-- END ENDPOINT SUMMARY -->")
+	if rows == 0 {
+		t.Fatal("no endpoint rows found in docs/api.md; the scan is broken and the comparison " +
+			"below would be against zero")
+	}
+
+	doc, err := os.ReadFile(filepath.Join(root, "docs", "COMPLIANCE.md"))
+	if err != nil {
+		t.Fatalf("read docs/COMPLIANCE.md: %v", err)
+	}
+	m := routeCountInProse.FindSubmatch(doc)
+	if m == nil {
+		t.Fatal("docs/COMPLIANCE.md no longer states how many mounted routes the API9 gate " +
+			"covers. Either restore the sentence or delete this test; leaving the sentence out " +
+			"is fine, leaving it in unchecked is what produced the wrong number.")
+	}
+	claimed, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse the route count out of docs/COMPLIANCE.md: %v", err)
+	}
+
+	if claimed != rows {
+		t.Errorf("docs/COMPLIANCE.md says %d mounted routes and docs/api.md lists %d. The "+
+			"inventory is machine-checked in both directions; this sentence is not, which is why "+
+			"it is the half that was wrong.", claimed, rows)
+	}
+}
+
+// countInventoryRows counts the endpoint rows between two sentinels. A row is a
+// table line whose first cell is a code span, which skips the header and the
+// alignment marker without depending on their exact text.
+func countInventoryRows(t *testing.T, doc, begin, end string) int {
+	t.Helper()
+
+	from := strings.Index(doc, begin)
+	to := strings.Index(doc, end)
+	if from < 0 || to < 0 || to < from {
+		t.Fatalf("sentinels %q / %q not found in order", begin, end)
+	}
+
+	count := 0
+	for _, line := range strings.Split(doc[from:to], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "| `") {
+			count++
+		}
+	}
+	return count
+}
+
+// inventoryHeadline is the sentence both inventories open with: a total and the
+// split between the two binaries.
+var inventoryHeadline = regexp.MustCompile(
+	`\*\*(\d+) API routes: (\d+) on the main binary, (\d+) on the admin gateway\.\*\*`)
+
+// docsWithRouteInventoryHeadline are the files that publish that sentence.
+var docsWithRouteInventoryHeadline = []string{"docs/api.md", "docs/spec.md"}
+
+// TestRouteInventoryHeadlineMatchesTheTable checks the three numbers in the
+// sentence, which nothing did.
+//
+// TestRouteInventoryCountInProseIsCurrent covers the count in docs/COMPLIANCE.md
+// by comparing it against the number of endpoint rows in docs/api.md. It passed
+// while the sentence directly above that same table read "103 API routes: 62 on
+// the main binary, 41 on the admin gateway" and the table held 105 rows split
+// 62 and 43. Two gates, one table, and the sentence between them belonged to
+// neither.
+//
+// The split is checked and not just the total, because a total alone stays
+// correct when a route moves from one binary to the other, and which binary
+// serves a route is the more consequential half of the claim: the admin gateway
+// is a separate deployment behind mTLS.
+func TestRouteInventoryHeadlineMatchesTheTable(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+	rows := apiDocEndpointRows(t, root)
+	if len(rows) < 50 {
+		t.Fatalf("only %d endpoint row(s) parsed out of docs/api.md; the scan is broken and "+
+			"every comparison below would be against a number nobody computed", len(rows))
+	}
+
+	var admin, main int
+	for _, path := range rows {
+		if strings.HasPrefix(path, "/admin") {
+			admin++
+			continue
+		}
+		main++
+	}
+
+	var checked int
+	for _, rel := range docsWithRouteInventoryHeadline {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		m := inventoryHeadline.FindStringSubmatch(string(body))
+		if m == nil {
+			t.Errorf("%s no longer opens its route inventory with the count sentence. Either the "+
+				"inventory moved or the sentence was reworded; in both cases the numbers it "+
+				"carried are no longer checked by anything.", rel)
+			continue
+		}
+		checked++
+
+		for _, want := range []struct {
+			label  string
+			stated string
+			actual int
+		}{
+			{"total", m[1], len(rows)},
+			{"main binary", m[2], main},
+			{"admin gateway", m[3], admin},
+		} {
+			stated, err := strconv.Atoi(want.stated)
+			if err != nil {
+				t.Errorf("%s: %s count %q is not a number", rel, want.label, want.stated)
+				continue
+			}
+			if stated != want.actual {
+				t.Errorf("%s says %d routes on the %s and docs/api.md lists %d. The table is "+
+					"generated against the router by TestRouteDrift, so the table is right and "+
+					"the sentence is stale.", rel, stated, want.label, want.actual)
+			}
+		}
+	}
+
+	if checked != len(docsWithRouteInventoryHeadline) {
+		t.Errorf("the headline was found in %d of %d inventories", checked,
+			len(docsWithRouteInventoryHeadline))
+	}
+}
+
+// apiDocEndpointRows returns the path from every endpoint row of the docs/api.md
+// route table.
+func apiDocEndpointRows(t *testing.T, root string) []string {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join(root, "docs", "api.md"))
+	if err != nil {
+		t.Fatalf("read docs/api.md: %v", err)
+	}
+	row := regexp.MustCompile("(?m)^\\|\\s*`(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)`\\s*\\|\\s*`([^`]+)`")
+	matches := row.FindAllStringSubmatch(string(body), -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m[1])
+	}
 	return out
 }

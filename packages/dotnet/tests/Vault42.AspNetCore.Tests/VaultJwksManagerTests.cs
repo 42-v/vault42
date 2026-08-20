@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Vault42.AspNetCore;
 using Xunit;
 
@@ -39,11 +41,14 @@ public class VaultJwksManagerTests
         await Assert.ThrowsAsync<HttpRequestException>(() => manager.InitializeAsync());
     }
 
-    // A malformed body is not: the periodic refresh will retry, and taking the
-    // process down for one bad response would turn a transient issuer bug into an
-    // outage.
+    // This was Initialize_SurvivesAMalformedDocumentWithAnEmptyCache, and it fed
+    // {"keys":null}: well-formed JSON that deserialises to a null list and
+    // returns quietly. So it exercised the quiet path while claiming the
+    // malformed one, and the malformed one -- which throws straight out of
+    // InitializeAsync, contradicting the XML doc that said it does not -- was
+    // never executed. Both are asserted now, separately.
     [Fact]
-    public async Task Initialize_SurvivesAMalformedDocumentWithAnEmptyCache()
+    public async Task Initialize_WithAKeysMemberOfNull_CachesNothingAndDoesNotThrow()
     {
         var http = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, "{\"keys\":null}");
         using var manager = Manager(http);
@@ -51,6 +56,18 @@ public class VaultJwksManagerTests
         await manager.InitializeAsync();
 
         Assert.Empty(manager.CachedKeyIds);
+    }
+
+    // An unparseable body is fatal at startup for the same reason a 5xx is: the
+    // process would come up answering 401 to every caller, and an operator finds
+    // that out faster from a failed start than from traffic.
+    [Fact]
+    public async Task Initialize_PropagatesAnUnparseableBody()
+    {
+        var http = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, "{\"keys\": [");
+        using var manager = Manager(http);
+
+        await Assert.ThrowsAsync<JsonException>(() => manager.InitializeAsync());
     }
 
     // CS-5. A key published for encryption is not a key this application will
@@ -260,6 +277,142 @@ public class VaultJwksManagerTests
         Assert.Equal(1, http.Calls);
     }
 
+    // The test above only ever measured the limiter after a refresh that
+    // succeeded, which is the one case where it already worked: the timestamp was
+    // the last statement of the try, so success set it and every early return and
+    // every throw skipped it. While refreshes were failing the window never
+    // opened and each unknown kid bought its own outbound fetch -- the amplifier
+    // the limiter exists to prevent, disarmed exactly when the Vault is already
+    // in trouble.
+    //
+    // One failed fetch, then five misses. The stub was given one response and
+    // throws on any request past it, so before the fix this fails on the second
+    // request rather than on the count.
+    [Fact]
+    public async Task ResolveKey_AfterAFailedRefresh_IsStillRateLimited()
+    {
+        var http = new StubHttpMessageHandler().Enqueue(HttpStatusCode.InternalServerError);
+        using var manager = Manager(http, o => o.MinimumJwksRefreshInterval = TimeSpan.FromMinutes(30));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => manager.InitializeAsync());
+
+        for (var i = 0; i < 5; i++)
+            Assert.Null(await manager.ResolveKeyAsync("kid-unknown"));
+
+        Assert.Equal(1, http.Calls);
+    }
+
+    // Every way the fetch can fail has to come back as "no key", because the
+    // caller is the authentication handler and it turns null into a 401. Letting
+    // any of these out made a token naming an unknown kid a 500 whenever the
+    // Vault was unreachable, so an unauthenticated caller could drive this
+    // application's error rate by sending garbage kids.
+    [Theory]
+    [InlineData("status")]
+    [InlineData("unparseable")]
+    [InlineData("bad-base64")]
+    [InlineData("timeout")]
+    public async Task ResolveKey_WhenTheForcedRefreshFails_AnswersNoKeyRatherThanThrowing(string failure)
+    {
+        using var signer = new TestSigner();
+        var http = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, signer.JwksJson());
+        switch (failure)
+        {
+            case "status":
+                http.Enqueue(HttpStatusCode.BadGateway);
+                break;
+            case "unparseable":
+                http.Enqueue(HttpStatusCode.OK, "{\"keys\": [");
+                break;
+            case "bad-base64":
+                // A JWK whose modulus is not base64url. Convert.FromBase64String
+                // throws FormatException from inside the parse loop.
+                http.Enqueue(HttpStatusCode.OK, "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"kid-2\",\"use\":\"sig\",\"n\":\"!!!!\",\"e\":\"AQAB\"}]}");
+                break;
+            default:
+                // What HttpClient.Timeout raises: a cancellation nobody asked for.
+                http.EnqueueThrow(new TaskCanceledException("timeout", new TimeoutException()));
+                break;
+        }
+
+        using var manager = Manager(http, o => o.MinimumJwksRefreshInterval = TimeSpan.Zero);
+        await manager.InitializeAsync();
+
+        Assert.Null(await manager.ResolveKeyAsync("kid-unknown"));
+
+        // The already-cached key is still there: a failed refresh is not a reason
+        // to stop verifying tokens that were verifying a moment ago.
+        Assert.NotNull(await manager.ResolveKeyAsync("kid-1"));
+    }
+
+    // A failure that leaves the key set stale is invisible from the outside --
+    // every request just starts answering 401 -- so it has to be findable in the
+    // log.
+    [Fact]
+    public async Task ResolveKey_LogsAFailedForcedRefresh()
+    {
+        using var signer = new TestSigner();
+        var http = new StubHttpMessageHandler()
+            .Enqueue(HttpStatusCode.OK, signer.JwksJson())
+            .Enqueue(HttpStatusCode.BadGateway);
+        var logger = new RecordingLogger<VaultJwksManager>();
+        using var manager = Manager(http, o => o.MinimumJwksRefreshInterval = TimeSpan.Zero, logger);
+        await manager.InitializeAsync();
+
+        Assert.Null(await manager.ResolveKeyAsync("kid-unknown"));
+
+        var record = Assert.Single(logger.Records);
+        Assert.Equal(LogLevel.Warning, record.Level);
+        Assert.Contains("JWKS refresh", record.Message, StringComparison.Ordinal);
+    }
+
+    // A caller that really did cancel -- an aborted request -- is not a JWKS
+    // problem, and swallowing it would report "unknown signing key" for a
+    // response nobody is waiting for any more. The exception filter that lets a
+    // timeout through has to keep this one out.
+    [Fact]
+    public async Task ResolveKey_WithACancelledToken_DoesNotSwallowTheCancellation()
+    {
+        using var signer = new TestSigner();
+        var http = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, signer.JwksJson());
+        using var manager = Manager(http, o => o.MinimumJwksRefreshInterval = TimeSpan.Zero);
+        await manager.InitializeAsync();
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => manager.ResolveKeyAsync("kid-unknown", cts.Token));
+    }
+
+    // A JWKS that parses but publishes nothing usable -- an empty array, or a set
+    // whose every member the use/alg/modulus rules refuse -- used to fall through
+    // to the eviction loop and empty the cache, so one bad publish rejected every
+    // token in flight and stayed broken until the issuer published again. Keep
+    // what is cached and say so loudly instead.
+    [Theory]
+    [InlineData("{\"keys\":[]}")]
+    [InlineData("{\"keys\":[{\"kty\":\"EC\",\"kid\":\"ec-1\",\"use\":\"sig\",\"crv\":\"P-256\"}]}")]
+    public async Task ARefreshPublishingNoUsableKey_KeepsThePreviousSetAndLogs(string emptyDocument)
+    {
+        using var signer = new TestSigner();
+        var http = new StubHttpMessageHandler()
+            .Enqueue(HttpStatusCode.OK, signer.JwksJson())
+            .Enqueue(HttpStatusCode.OK, emptyDocument);
+        var logger = new RecordingLogger<VaultJwksManager>();
+        using var manager = Manager(http, o => o.MinimumJwksRefreshInterval = TimeSpan.Zero, logger);
+        await manager.InitializeAsync();
+
+        Assert.Null(await manager.ResolveKeyAsync("kid-unknown"));
+
+        Assert.Equal(new[] { "kid-1" }, manager.CachedKeyIds);
+        Assert.NotNull(await manager.ResolveKeyAsync("kid-1"));
+
+        var record = Assert.Single(logger.Records);
+        Assert.Equal(LogLevel.Error, record.Level);
+        Assert.Contains("no usable signing key", record.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Dispose_IsIdempotent()
     {
@@ -274,10 +427,11 @@ public class VaultJwksManagerTests
 
     private static VaultJwksManager Manager(
         StubHttpMessageHandler http,
-        Action<VaultAuthenticationOptions>? configure = null)
+        Action<VaultAuthenticationOptions>? configure = null,
+        ILogger<VaultJwksManager>? logger = null)
     {
         var options = new VaultAuthenticationOptions { Authority = TestSigner.Issuer };
         configure?.Invoke(options);
-        return new VaultJwksManager(new HttpClient(http), options);
+        return new VaultJwksManager(new HttpClient(http), options, logger);
     }
 }

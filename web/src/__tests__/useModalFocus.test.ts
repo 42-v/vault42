@@ -4,9 +4,13 @@ import { defineComponent, h, ref } from 'vue'
 import { useModalFocus } from '../composables/useModalFocus'
 
 /**
- * A minimal dialog wired the way the three real ones are: `v-if` on a flag, the
- * dialog element carrying `ref="dialogRef"`, and Escape routed back through the
- * component's own close handler.
+ * A minimal dialog wired the way the three real ones are: `v-if` on a flag, an
+ * element ref the component owns and passes in, and Escape routed back through
+ * the component's own close handler.
+ *
+ * The harness binds with a render function rather than a template, so it hands
+ * the ref object straight to `ref:` where the real views use `useTemplateRef`
+ * and a name. Both end at the same place: a ref whose value is the element.
  */
 const Harness = defineComponent({
   props: {
@@ -16,7 +20,8 @@ const Harness = defineComponent({
   },
   setup(props, { expose }) {
     const open = ref(false)
-    const { dialogRef } = useModalFocus(open, () => { open.value = false })
+    const dialogRef = ref<HTMLElement | null>(null)
+    useModalFocus(open, () => { open.value = false }, dialogRef)
     expose({ closeNow: () => { open.value = false } })
 
     return () => [

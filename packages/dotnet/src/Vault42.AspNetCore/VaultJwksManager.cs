@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Vault42.AspNetCore.Internal;
 
@@ -17,6 +18,7 @@ public sealed class VaultJwksManager : IDisposable
     private const int MinModulusBytes = 256;
 
     private readonly HttpClient _httpClient;
+    private readonly ILogger<VaultJwksManager>? _logger;
     private readonly string _jwksUri;
     private readonly TimeSpan _refreshInterval;
     private readonly TimeSpan _minRefreshInterval;
@@ -48,14 +50,24 @@ public sealed class VaultJwksManager : IDisposable
     /// <c>/.well-known/jwks.json</c>) and of the refresh and size limits. The values are copied
     /// here, so later mutation of <paramref name="options"/> has no effect.
     /// </param>
+    /// <param name="logger">
+    /// Receives the two conditions that leave the cache serving stale or no keys while every
+    /// request still looks ordinary: a forced refresh that failed, and a refresh that parsed but
+    /// yielded no usable key. Optional, but without it both are silent and the only symptom is
+    /// "Unknown signing key" on tokens that should validate.
+    /// </param>
     /// <remarks>
     /// The constructor performs no I/O and leaves the key cache empty; the background refresh
     /// timer stays disarmed until <see cref="InitializeAsync"/> runs. Resolving a kid before then
     /// fails.
     /// </remarks>
-    public VaultJwksManager(HttpClient httpClient, VaultAuthenticationOptions options)
+    public VaultJwksManager(
+        HttpClient httpClient,
+        VaultAuthenticationOptions options,
+        ILogger<VaultJwksManager>? logger = null)
     {
         _httpClient = httpClient;
+        _logger = logger;
         _jwksUri = options.Authority.TrimEnd('/') + "/.well-known/jwks.json";
         _refreshInterval = options.JwksRefreshInterval;
         _minRefreshInterval = options.MinimumJwksRefreshInterval;
@@ -76,10 +88,19 @@ public sealed class VaultJwksManager : IDisposable
     /// Startup should treat this as fatal: with no keys cached, every token is rejected as
     /// "Unknown signing key".
     /// </exception>
+    /// <exception cref="JsonException">
+    /// The body was not parseable JSON. Fatal for the same reason as a non-success status, and
+    /// stated here because it was previously documented as not throwing: the one test covering it
+    /// fed <c>{"keys":null}</c>, which is well-formed and returns quietly, so the throw was never
+    /// exercised.
+    /// </exception>
     /// <remarks>
-    /// A malformed or oversized JWKS body is not an exception. The fetch returns having cached
-    /// nothing, and the periodic refresh retries on the next tick, so this method can complete
-    /// successfully with an empty key set.
+    /// An oversized body is not an exception, and neither is a well-formed document with no usable
+    /// key. Both return having changed nothing, and the periodic refresh retries on the next tick,
+    /// so this method can complete successfully with an empty key set. Unlike a forced refresh from
+    /// <see cref="ResolveKeyAsync"/>, failures here are not caught: an application that starts with
+    /// no keys serves 401s to every caller, and finding that out at startup beats finding it out in
+    /// production traffic.
     /// </remarks>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -99,13 +120,18 @@ public sealed class VaultJwksManager : IDisposable
     /// any other key.
     /// </returns>
     /// <remarks>
-    /// A cache miss triggers one immediate refetch only when
+    /// <para>A cache miss triggers one immediate refetch only when
     /// <see cref="VaultAuthenticationOptions.RefreshOnUnknownKid"/> is enabled and at least
     /// <see cref="VaultAuthenticationOptions.MinimumJwksRefreshInterval"/> has passed since the
-    /// last successful refresh. That rate limit makes an unknown kid a bounded cost, so a flood of
+    /// last refresh attempt. That rate limit makes an unknown kid a bounded cost, so a flood of
     /// forged kids cannot turn token validation into a request amplifier against the Vault server.
     /// Within the window the miss returns null without any network call, which means a genuinely
-    /// new signing key can be rejected for up to that interval after rotation.
+    /// new signing key can be rejected for up to that interval after rotation.</para>
+    /// <para>A forced refresh that fails is answered null, not rethrown. The caller is the
+    /// authentication handler, which turns null into a 401; letting the fetch failure out instead
+    /// made an unknown kid arriving while the Vault was down a 500, so a caller could take the
+    /// resource server's error rate up by presenting garbage kids. The failure is logged rather
+    /// than swallowed silently.</para>
     /// </remarks>
     public async Task<SecurityKey?> ResolveKeyAsync(string kid, CancellationToken ct = default)
     {
@@ -119,7 +145,36 @@ public sealed class VaultJwksManager : IDisposable
         if (DateTimeOffset.UtcNow - _lastRefresh < _minRefreshInterval)
             return null;
 
-        await RefreshInternalAsync(ct);
+        try
+        {
+            await RefreshInternalAsync(ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger?.LogWarning(ex, "Vault42: forced JWKS refresh for an unknown kid failed; the key set is unchanged");
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogWarning(ex, "Vault42: forced JWKS refresh returned a body that is not a JWKS document; the key set is unchanged");
+            return null;
+        }
+        catch (FormatException ex)
+        {
+            // Base64UrlDecode of a JWK's n or e. A JWKS with one malformed member is not a
+            // reason to fail the request with a 500.
+            _logger?.LogWarning(ex, "Vault42: forced JWKS refresh returned a key whose base64url did not decode; the key set is unchanged");
+            return null;
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // HttpClient.Timeout. The filter keeps a genuine caller cancellation -- an aborted
+            // request -- propagating, because that is not a JWKS problem and the response is
+            // already gone.
+            _logger?.LogWarning(ex, "Vault42: forced JWKS refresh timed out; the key set is unchanged");
+            return null;
+        }
+
         _keys.TryGetValue(kid, out key);
         return key;
     }
@@ -192,17 +247,37 @@ public sealed class VaultJwksManager : IDisposable
                 newKeys.Add(jwk.Kid);
             }
 
+            // A document that parsed but yielded nothing usable -- {"keys":[]}, or a set whose
+            // every member was filtered out by the use/alg/modulus rules -- is treated as a
+            // fetch that told us nothing, not as "the issuer has retired every key". Falling
+            // through to the eviction loop emptied the cache and rejected every token in flight
+            // with "Unknown signing key", turning one bad publish into a total outage that
+            // recovers only when the issuer publishes again.
+            if (newKeys.Count == 0)
+            {
+                _logger?.LogError(
+                    "Vault42: JWKS at {JwksUri} published no usable signing key; keeping the {CachedCount} already cached",
+                    _jwksUri,
+                    _keys.Count);
+                return;
+            }
+
             // Remove stale keys no longer in JWKS
             foreach (var oldKid in _keys.Keys)
             {
                 if (!newKeys.Contains(oldKid))
                     _keys.TryRemove(oldKid, out _);
             }
-
-            _lastRefresh = DateTimeOffset.UtcNow;
         }
         finally
         {
+            // Stamped on every terminating path, not only the successful one. As the last
+            // statement of the try it was skipped by every early return and every throw, which
+            // left _lastRefresh at its initial value and made the MinimumJwksRefreshInterval
+            // check in ResolveKeyAsync unreachable: while the Vault was unreachable, each
+            // unknown-kid request produced its own outbound fetch. The limiter has to hold
+            // precisely when refreshes are failing, because that is when the retries pile up.
+            _lastRefresh = DateTimeOffset.UtcNow;
             _refreshLock.Release();
         }
     }

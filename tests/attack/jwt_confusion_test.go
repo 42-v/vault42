@@ -172,75 +172,45 @@ func TestJWTConfusion_EmbeddedJWK(t *testing.T) {
 	}
 }
 
-// TestJWTConfusion_JKUHeader verifies that tokens with jku (JWK Set URL)
-// header are rejected, preventing key injection via URL.
-func TestJWTConfusion_JKUHeader(t *testing.T) {
+// TestJWTConfusion_KeySourceHeaders covers the three headers that name a key
+// somewhere other than the local JWKS. Each one is a way to ask the parser to
+// fetch or trust attacker-chosen key material, and the token is otherwise valid
+// and signed by the key the verifier already holds, so the only thing that can
+// refuse it is the header itself.
+func TestJWTConfusion_KeySourceHeaders(t *testing.T) {
 	key, _ := vaultcrypto.GenerateRSAKeyPair()
 	kid, _ := vaultcrypto.RandomUUID()
 	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
 
-	tokenStr, _ := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-		"jku": "https://evil.example.com/.well-known/jwks.json",
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject: "user", Issuer: "vault", Audience: vjwt.ClaimStrings{"app"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app")
-	if err == nil {
-		t.Fatal("Token with jku header should be rejected")
+	cases := []struct {
+		header string
+		value  any
+	}{
+		{"jku", "https://evil.example.com/.well-known/jwks.json"},
+		{"x5u", "https://evil.example.com/cert.pem"},
+		{"x5c", []string{"MIIC...(fake cert)..."}},
 	}
-}
 
-// TestJWTConfusion_X5UHeader verifies that tokens with x5u (X.509 URL)
-// header are rejected.
-func TestJWTConfusion_X5UHeader(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
+	for _, tc := range cases {
+		t.Run(tc.header, func(t *testing.T) {
+			tokenStr, err := vjwt.SignRS256WithHeader(map[string]any{
+				"alg": "RS256", "typ": "JWT", "kid": kid,
+				tc.header: tc.value,
+			}, &vaultcrypto.VaultClaims{
+				RegisteredClaims: vjwt.RegisteredClaims{
+					Subject: "user", Issuer: "vault", Audience: vjwt.ClaimStrings{"app"},
+					ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
+					IssuedAt:  vjwt.NewNumericDate(time.Now()),
+				},
+			}, key)
+			if err != nil {
+				t.Fatalf("SignRS256WithHeader failed: %v", err)
+			}
 
-	tokenStr, _ := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-		"x5u": "https://evil.example.com/cert.pem",
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject: "user", Issuer: "vault", Audience: vjwt.ClaimStrings{"app"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app")
-	if err == nil {
-		t.Fatal("Token with x5u header should be rejected")
-	}
-}
-
-// TestJWTConfusion_X5CHeader verifies that tokens with x5c (X.509 Certificate
-// Chain) header are rejected.
-func TestJWTConfusion_X5CHeader(t *testing.T) {
-	key, _ := vaultcrypto.GenerateRSAKeyPair()
-	kid, _ := vaultcrypto.RandomUUID()
-	keyFunc := func(t *vjwt.Token) (any, error) { return &key.PublicKey, nil }
-
-	tokenStr, _ := vjwt.SignRS256WithHeader(map[string]any{
-		"alg": "RS256", "typ": "JWT", "kid": kid,
-		"x5c": []string{"MIIC...(fake cert)..."},
-	}, &vaultcrypto.VaultClaims{
-		RegisteredClaims: vjwt.RegisteredClaims{
-			Subject: "user", Issuer: "vault", Audience: vjwt.ClaimStrings{"app"},
-			ExpiresAt: vjwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  vjwt.NewNumericDate(time.Now()),
-		},
-	}, key)
-
-	_, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app")
-	if err == nil {
-		t.Fatal("Token with x5c header should be rejected")
+			if _, err := vaultcrypto.ParseAndValidate(tokenStr, keyFunc, "vault", "app"); err == nil {
+				t.Fatalf("token carrying a %q header was accepted", tc.header)
+			}
+		})
 	}
 }
 

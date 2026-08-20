@@ -178,7 +178,7 @@ jobs:
       # fall and may not rise, so a new InsecureSkipVerify or a new hardcoded
       # credential in a test still turns this red, while the fixture noise that
       # predates the gate does not block 1.0.0.
-      - name: Test-file findings may not increase
+      - name: Test-file findings must match the frozen set
         shell: bash
         run: |
           set -euo pipefail
@@ -187,51 +187,7 @@ jobs:
                  "scan, not a clean one." >&2
             exit 1
           fi
-          python3 - gosec-tests.json .gosec-tests-baseline.json <<'PY'
-          import collections, json, sys
-
-          try:
-              with open(sys.argv[1]) as fh:
-                  data = json.load(fh)
-          except json.JSONDecodeError as exc:
-              sys.exit(f"gosec test report is not valid JSON, so the scan did not complete: {exc}")
-
-          issues = data.get('Issues')
-          if issues is None:
-              sys.exit("gosec test report has no Issues key; the format changed or the scan aborted")
-
-          baseline = json.load(open(sys.argv[2]))['high_and_critical_by_rule']
-          high = [i for i in issues if i.get('severity') in ('HIGH', 'CRITICAL')]
-          counts = collections.Counter(i['rule_id'] for i in high)
-
-          # Production is gated at zero by the step above; anything HIGH outside a
-          # test file here means that gate was bypassed, so it is never tolerated.
-          leaked = [i for i in high if not i['file'].endswith('_test.go')]
-          for i in leaked:
-              print(f"::error file={i['file']},line={i['line']}::{i['rule_id']} "
-                    f"{i['details']} in non-test code")
-
-          worse = {r: (n, baseline.get(r, 0)) for r, n in counts.items()
-                   if n > baseline.get(r, 0)}
-          for rule, (now, was) in sorted(worse.items()):
-              print(f"::error::gosec {rule} rose from {was} to {now} in test files")
-              for i in high:
-                  if i['rule_id'] == rule:
-                      print(f"    {i['file']}:{i['line']} {i['details']}")
-
-          better = {r: (counts.get(r, 0), n) for r, n in baseline.items()
-                    if counts.get(r, 0) < n}
-          if better:
-              for rule, (now, was) in sorted(better.items()):
-                  print(f"gosec {rule} fell from {was} to {now}; lower the baseline")
-              print("replacement for high_and_critical_by_rule:")
-              print(json.dumps(dict(sorted(counts.items())), indent=2))
-
-          if worse or leaked:
-              sys.exit(f"{len(worse)} rule(s) regressed, {len(leaked)} finding(s) in non-test code")
-          print(f"test-file HIGH/CRITICAL at or below baseline ({sum(counts.values())} vs "
-                f"{sum(baseline.values())})")
-          PY
+          python3 scripts/gosec-baseline.py --check gosec-tests.json
 
   trivy-source:
     name: Trivy Source Scan

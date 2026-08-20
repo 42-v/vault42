@@ -243,12 +243,15 @@ func TestMultiReplica(t *testing.T) {
 				st, _ := jsonPost(t, httpClient, replA.URL+"/auth/register", map[string]string{
 					"email": email, "password": testPassword, "display_name": "O",
 				})
-				if st == 429 {
-					t.Skip("rate on reg")
-					t.SkipNow()
-				}
+				// cleanupState above clears the limiter, and this subtest sends
+				// one registration, so a 429 is the limiter holding state it was
+				// told to drop rather than this test being noisy. Skipping on it
+				// reported green for the whole cross-replica one-time-token
+				// contract, which is what this subtest exists to check.
+				// The unreachable t.SkipNow() that followed the skip is gone with
+				// it: t.Skip already calls it.
 				if st != 201 && st != 200 {
-					t.Fatalf("reg: %d", st)
+					t.Fatalf("register on replica A = %d, want 201 or 200 (429 means the shared limiter kept state cleanupState cleared)", st)
 				}
 				// allow time for email capture
 				time.Sleep(50 * time.Millisecond)
