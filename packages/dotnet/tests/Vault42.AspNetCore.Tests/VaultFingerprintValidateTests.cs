@@ -73,6 +73,47 @@ public class VaultFingerprintValidateTests
         Assert.True(VaultFingerprintValidator.Validate(context, expected, "X-JA4"));
     }
 
+    // Kestrel on IPv6Any -- the default for any container image, and what
+    // ASPNETCORE_URLS=http://+:8080 produces -- reports an IPv4 client as
+    // ::ffff:203.0.113.7, and IPAddress.ToString keeps it in that form. Go prints
+    // the same address as its dotted quad, so the Vault hashed "203.0.113.7"
+    // while this hashed "::ffff:203.0.113.7": two digests for one client, and a
+    // 401 on every request from every IPv4 user of every container deployment.
+    [Fact]
+    public void AnIPv4ClientOnADualStackListener_HashesAsItsDottedQuad()
+    {
+        var context = Request("::ffff:203.0.113.7", "probe-agent", "en-GB");
+        var asTheVaultHashedIt = VaultFingerprintValidator.ComputeFingerprint(
+            "203.0.113.7", "probe-agent", "en-GB", string.Empty);
+
+        Assert.True(VaultFingerprintValidator.Validate(context, asTheVaultHashedIt, null));
+    }
+
+    // The digest the unfixed validator produced. It has to be refused, because no
+    // Vault has ever issued a token carrying it.
+    [Fact]
+    public void TheMappedSpellingIsNotAcceptedAsAFingerprint()
+    {
+        var context = Request("::ffff:203.0.113.7", "probe-agent", "en-GB");
+        var mappedSpelling = VaultFingerprintValidator.ComputeFingerprint(
+            "::ffff:203.0.113.7", "probe-agent", "en-GB", string.Empty);
+
+        Assert.False(VaultFingerprintValidator.Validate(context, mappedSpelling, null));
+    }
+
+    // Unmapping must not touch a native IPv6 client. Go and .NET already agree on
+    // the compressed lowercase form there, and rewriting it would break the case
+    // the fix was not about.
+    [Fact]
+    public void ANativeIPv6Client_IsHashedUnchanged()
+    {
+        var context = Request("2001:db8::1", "probe-agent", "en-GB");
+        var expected = VaultFingerprintValidator.ComputeFingerprint(
+            "2001:db8::1", "probe-agent", "en-GB", string.Empty);
+
+        Assert.True(VaultFingerprintValidator.Validate(context, expected, null));
+    }
+
     // Kestrel leaves RemoteIpAddress null for a Unix-socket connection, and the
     // in-process test host leaves it null too. Empty rather than an exception.
     [Fact]

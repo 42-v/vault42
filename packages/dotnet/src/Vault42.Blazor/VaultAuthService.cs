@@ -1,5 +1,4 @@
 using System.Net.Http.Json;
-using System.Security.Cryptography;
 using Microsoft.AspNetCore.Components;
 using Vault42.Blazor.Internal;
 
@@ -7,8 +6,17 @@ namespace Vault42.Blazor;
 
 /// <summary>
 /// Core authentication service for Vault Blazor apps.
-/// Handles OAuth2 Authorization Code + PKCE flow with redirect to Vault's integrated frontend.
+/// Drives the Vault server's social-login flow: redirect to the server's authorize route, then
+/// exchange the one-time code it hands back for an access token.
 /// </summary>
+/// <remarks>
+/// The Vault server runs the OAuth2 authorization-code + PKCE dance with the upstream identity
+/// provider itself, under its own registration. The browser side of it has no client, no scope
+/// negotiation and no code challenge: the app sends the user to
+/// <see cref="VaultBlazorOptions.AuthorizePath"/> with a provider name, the server bounces through
+/// the IdP, and the callback lands back on the app with a one-time code in the URI fragment. That
+/// code is exchanged for an access token at <see cref="VaultBlazorOptions.ExchangePath"/>.
+/// </remarks>
 public sealed class VaultAuthService : IAsyncDisposable
 {
     private readonly VaultBlazorOptions _options;
@@ -43,108 +51,69 @@ public sealed class VaultAuthService : IAsyncDisposable
     public bool IsAuthenticated => _store.IsAccessTokenValid;
 
     /// <summary>
-    /// Initiate login by redirecting to the Vault authorization endpoint.
-    /// Generates PKCE challenge and state, stores them in sessionStorage,
-    /// then navigates the browser to Vault's login page.
+    /// Initiate login by redirecting to the Vault authorization endpoint for
+    /// <see cref="VaultBlazorOptions.Provider"/>.
     /// </summary>
     /// <returns>
-    /// A task that completes once the PKCE verifier and state have been persisted and navigation
-    /// has been requested. It does not represent a completed login: the browser leaves the app, and
+    /// A completed task. It does not represent a completed login: the browser leaves the app, and
     /// the flow resumes in <see cref="HandleCallbackAsync"/> on the redirect back.
     /// </returns>
     /// <remarks>
-    /// The verifier and the state nonce are written to sessionStorage before navigating, because
-    /// the full page load that follows discards everything held in memory. Both are required on
-    /// return: without them the callback cannot complete and fails closed.
+    /// <para>Nothing is persisted before navigating, because there is nothing on this side of the
+    /// flow to carry across the page load. The CSRF binding is the server's: it mints an
+    /// HMAC-signed state carrying the hash of a <c>__Host-oauth_state</c> cookie it sets on this
+    /// redirect, and the callback refuses a state whose hash does not match the cookie the browser
+    /// presents. A nonce minted here could not participate -- the callback redirect carries no
+    /// state back to the app -- so generating one would be theatre.</para>
+    /// <para>The same goes for PKCE. The server generates the verifier it sends to the IdP and
+    /// keeps it server-side; a challenge computed in the browser has no counterparty.</para>
     /// </remarks>
-    public async Task LoginAsync()
+    public Task LoginAsync()
     {
-        var verifier = Pkce.GenerateVerifier();
-        var challenge = Pkce.ComputeChallenge(verifier);
-        var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-
-        await _store.SetPkceVerifierAsync(verifier);
-        await _store.SetStateAsync(state);
-
-        var scope = string.Join(" ", _options.Scopes);
         var authorizeUrl = $"{_options.EffectiveAuthority}{_options.AuthorizePath}" +
-            $"?response_type=code" +
-            $"&client_id={Uri.EscapeDataString(_options.ClientId)}" +
-            $"&redirect_uri={Uri.EscapeDataString(_options.RedirectUri)}" +
-            $"&code_challenge={Uri.EscapeDataString(challenge)}" +
-            $"&code_challenge_method=S256" +
-            $"&state={Uri.EscapeDataString(state)}" +
-            $"&scope={Uri.EscapeDataString(scope)}";
+            $"?provider={Uri.EscapeDataString(_options.Provider)}";
 
         _navigation.NavigateTo(authorizeUrl, forceLoad: true);
+        return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Handle the callback after Vault redirects back with an authorization code.
-    /// Validates state, exchanges code for tokens via PKCE, and establishes the session.
+    /// Handle the callback after Vault redirects back with a one-time exchange code.
     /// </summary>
     /// <param name="callbackUri">
-    /// The full redirect URI the browser landed on, including its query string. Pass
+    /// The full redirect URI the browser landed on, including its fragment. Pass
     /// <c>NavigationManager.Uri</c> unmodified.
     /// </param>
     /// <returns>True if authentication succeeded, false on error.</returns>
     /// <remarks>
-    /// Every failure path returns false rather than throwing, including a provider-reported error,
-    /// a missing code, and a <c>state</c> that does not match the stored nonce. The state
-    /// comparison is constant-time and its mismatch clears the stored state, so a replayed or
-    /// injected callback cannot be retried against the same nonce. Callers must treat false as
-    /// "not signed in" and must not infer a reason from it.
+    /// <para>The code arrives in the URI <em>fragment</em>, not the query string, because a
+    /// fragment is never sent to a server: it stays out of access logs, out of the Referer header
+    /// and out of any proxy in between. Reading the query instead would find nothing.</para>
+    /// <para>Every failure path returns false rather than throwing, including a provider-reported
+    /// error and a missing code. Callers must treat false as "not signed in" and must not infer a
+    /// reason from it. A false here does not always mean the callback was hostile: the exchange
+    /// code is stored under a key that includes the request fingerprint, so a client whose address,
+    /// User-Agent or Accept-Language changed between the callback and the exchange is refused
+    /// exactly like a forged code.</para>
     /// </remarks>
     public async Task<bool> HandleCallbackAsync(string callbackUri)
     {
         var uri = new Uri(callbackUri);
-        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var fragment = System.Web.HttpUtility.ParseQueryString(uri.Fragment.TrimStart('#'));
 
-        var code = query["code"];
-        var returnedState = query["state"];
-        var error = query["error"];
-
-        if (!string.IsNullOrEmpty(error))
+        if (!string.IsNullOrEmpty(fragment["error"]))
             return false;
 
-        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(returnedState))
+        var code = fragment["code"];
+        if (string.IsNullOrEmpty(code))
             return false;
 
-        // Validate state matches what we stored
-        var savedState = await _store.GetStateAsync();
-        if (savedState is null || !CryptographicOperations.FixedTimeEquals(
-            System.Text.Encoding.UTF8.GetBytes(savedState),
-            System.Text.Encoding.UTF8.GetBytes(returnedState)))
-        {
-            await _store.ClearStateAsync();
-            return false;
-        }
-
-        // Retrieve PKCE verifier
-        var verifier = await _store.GetPkceVerifierAsync();
-        if (string.IsNullOrEmpty(verifier))
-            return false;
-
-        // Clean up PKCE + state (one-time use)
-        await _store.ClearPkceVerifierAsync();
-        await _store.ClearStateAsync();
-
-        // Exchange code for tokens
-        var tokenRequest = new TokenRequest
-        {
-            GrantType = "authorization_code",
-            Code = code,
-            RedirectUri = _options.RedirectUri,
-            ClientId = _options.ClientId,
-            CodeVerifier = verifier,
-        };
-
-        var tokenUrl = $"{_options.EffectiveAuthority}{_options.TokenPath}";
-        var response = await _httpClient.PostAsJsonAsync(tokenUrl, tokenRequest);
+        var exchangeUrl = $"{_options.EffectiveAuthority}{_options.ExchangePath}";
+        var response = await _httpClient.PostAsJsonAsync(exchangeUrl, new ExchangeRequest { Code = code });
         if (!response.IsSuccessStatusCode)
             return false;
 
-        var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
+        var tokenResponse = await ReadTokenResponseAsync(response);
         if (tokenResponse is null || string.IsNullOrEmpty(tokenResponse.AccessToken))
             return false;
 
@@ -153,21 +122,23 @@ public sealed class VaultAuthService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Refresh the access token. Source of the refresh token depends on
-    /// <see cref="VaultBlazorOptions.RefreshStorage"/>:
-    /// <list type="bullet">
-    /// <item>HttpOnlyCookieOnly: server-issued <c>HttpOnly + Secure + SameSite=Strict</c>
-    /// cookie travels with the request automatically; no body field.</item>
-    /// <item>InMemoryOnly / SessionStorage: refresh token attached to the request body.</item>
-    /// </list>
+    /// Refresh the access token.
     /// </summary>
     /// <returns>True if refresh succeeded.</returns>
+    /// <remarks>
+    /// The request carries no body. <c>POST /auth/refresh</c> reads the refresh token only from the
+    /// <c>__Host-refresh_token</c> cookie the browser attaches, so under
+    /// <see cref="RefreshTokenStorage.HttpOnlyCookieOnly"/> the SDK holds nothing and must still
+    /// issue the request. Under the other two modes it can see it holds nothing and skips the round
+    /// trip -- but note that against a Vault server those modes are never given a token to hold,
+    /// because the refresh token is only ever a cookie.
+    /// </remarks>
     public async Task<bool> RefreshAsync()
     {
         var refreshToken = await _store.GetRefreshTokenAsync();
 
         // CS-10/CS-11: under HttpOnlyCookieOnly, the SDK has no in-memory refresh
-        // token (the server holds it in the cookie). Still issue the request — the
+        // token (the server holds it in the cookie). Still issue the request -- the
         // browser will attach the cookie. For other modes, missing refresh = no-op.
         if (string.IsNullOrEmpty(refreshToken)
             && _store.RefreshMode != RefreshTokenStorage.HttpOnlyCookieOnly)
@@ -175,19 +146,10 @@ public sealed class VaultAuthService : IAsyncDisposable
             return false;
         }
 
-        var tokenRequest = new TokenRequest
-        {
-            GrantType = "refresh_token",
-            RefreshToken = _store.RefreshMode == RefreshTokenStorage.HttpOnlyCookieOnly
-                ? null
-                : refreshToken,
-            ClientId = _options.ClientId,
-        };
-
-        var tokenUrl = $"{_options.EffectiveAuthority}{_options.TokenPath}";
+        var refreshUrl = $"{_options.EffectiveAuthority}{_options.RefreshPath}";
         try
         {
-            var response = await _httpClient.PostAsJsonAsync(tokenUrl, tokenRequest);
+            var response = await _httpClient.PostAsync(refreshUrl, content: null);
             if (!response.IsSuccessStatusCode)
             {
                 await _store.ClearAllAsync();
@@ -195,7 +157,7 @@ public sealed class VaultAuthService : IAsyncDisposable
                 return false;
             }
 
-            var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
+            var tokenResponse = await ReadTokenResponseAsync(response);
             if (tokenResponse is null || string.IsNullOrEmpty(tokenResponse.AccessToken))
             {
                 await _store.ClearAllAsync();
@@ -215,7 +177,7 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// <summary>
     /// Try to restore a session from a stored refresh token (call on app startup).
     /// Under <see cref="RefreshTokenStorage.HttpOnlyCookieOnly"/>, this always
-    /// attempts a refresh — the SDK can't introspect the cookie, so we ask the
+    /// attempts a refresh -- the SDK can't introspect the cookie, so we ask the
     /// server. Under other modes, we skip the round-trip when no token is held.
     /// </summary>
     /// <returns>True if a session was restored.</returns>
@@ -232,7 +194,7 @@ public sealed class VaultAuthService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Log out — clears all tokens and optionally calls the Vault logout endpoint.
+    /// Log out -- clears all tokens and optionally calls the Vault logout endpoint.
     /// </summary>
     /// <returns>A task that completes once local state is cleared and navigation away has been requested.</returns>
     /// <remarks>
@@ -266,6 +228,38 @@ public sealed class VaultAuthService : IAsyncDisposable
         _navigation.NavigateTo(_options.PostLogoutRedirectUri, forceLoad: true);
     }
 
+    /// <summary>
+    /// Reads the token payload, treating a body that is not the JSON object this SDK expects as a
+    /// failed call rather than an exception.
+    /// </summary>
+    /// <remarks>
+    /// A Vault server started with <c>VAULT_SERVE_FRONTEND</c> serves the SPA from a catch-all, so
+    /// a POST to a path it does not route is answered 200 with <c>index.html</c>. The status check
+    /// passes and the JSON reader throws, which is how the 1.0.2 endpoint defaults produced a login
+    /// that failed with no diagnostic at all: the exception escaped the callback uncaught and was
+    /// swallowed whole by the refresh path's catch. Returning null keeps a misrouted response on
+    /// the same footing as a refusal.
+    /// </remarks>
+    private static async Task<TokenResponse?> ReadTokenResponseAsync(HttpResponseMessage response)
+    {
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<TokenResponse>();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            // What ReadFromJsonAsync raises, ahead of the parser and so not as a JsonException,
+            // when Content-Type names a charset no encoding is registered for. Without this arm a
+            // single mislabelled response is an exception thrown past the callback component
+            // rather than a refused login.
+            return null;
+        }
+    }
+
     private async Task ApplyTokenResponseAsync(TokenResponse response)
     {
         _store.SetAccessToken(response.AccessToken, response.ExpiresIn);
@@ -297,18 +291,18 @@ public sealed class VaultAuthService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stops the background refresh timer and disposes the token store.
+    /// Stops the background refresh timer.
     /// </summary>
-    /// <returns>A task that completes once the timer is stopped and the store has released its resources.</returns>
+    /// <returns>A completed task once the timer is stopped.</returns>
     /// <remarks>
     /// This does not sign the user out. Tokens persisted in browser storage survive disposal, so a
     /// later <see cref="TryRestoreSessionAsync"/> can pick the session back up. Call
     /// <see cref="LogoutAsync"/> when the intent is to end the session. The service is registered
     /// as a singleton by <c>AddVaultAuth</c>, so in a normal app the container owns this call.
     /// </remarks>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         StopRefreshTimer();
-        await _store.DisposeAsync();
+        return ValueTask.CompletedTask;
     }
 }

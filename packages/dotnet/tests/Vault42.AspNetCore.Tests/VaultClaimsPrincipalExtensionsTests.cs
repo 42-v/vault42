@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Xml.Linq;
 using Vault42.AspNetCore;
 using Xunit;
 
@@ -102,6 +103,46 @@ public class VaultClaimsPrincipalExtensionsTests
         Assert.Equal("blazor-app", principal.GetClientId());
         Assert.Equal(new string('a', 64), principal.GetFingerprint());
         Assert.Equal("0e2c8a1a-0000-4000-8000-000000000001", principal.GetTokenId());
+    }
+
+    /// <summary>
+    /// GetClientId returns a value the caller chose for itself, and the only thing between that
+    /// and an application writing an authorization rule against it is the documentation.
+    /// </summary>
+    /// <remarks>
+    /// It used to read "the OAuth2 client the token was issued to", which describes the
+    /// client-credentials case and is wrong for the password one: POST /auth/login copies the
+    /// request body's client_id straight into the claim, and internal/service/auth.go:695 says as
+    /// much -- "ClientID above is self-asserted body text and proves nothing". No behaviour
+    /// changed, so no behaviour can be asserted; what shipped is the warning, and the XML file is
+    /// how it reaches an IntelliSense tooltip, so that is what is checked.
+    /// </remarks>
+    [Fact]
+    public void GetClientId_IsDocumentedAsSelfAssertedRatherThanAsAnIdentity()
+    {
+        var remarks = MemberDocs(
+            "M:Vault42.AspNetCore.VaultClaimsPrincipalExtensions.GetClientId(System.Security.Claims.ClaimsPrincipal)");
+
+        Assert.Contains("Not an authenticated identity", remarks, StringComparison.Ordinal);
+        Assert.Contains("self-asserted body text", remarks, StringComparison.Ordinal);
+        Assert.Contains("authenticated with HTTP Basic", remarks, StringComparison.Ordinal);
+    }
+
+    /// <summary>Reads one member's documentation out of the XML file the package ships.</summary>
+    private static string MemberDocs(string memberName)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Vault42.AspNetCore.xml");
+        Assert.True(
+            File.Exists(path),
+            $"{path} is missing; GenerateDocumentationFile is off and the shipped package no longer carries its documentation");
+
+        var member = XDocument
+            .Load(path)
+            .Descendants("member")
+            .SingleOrDefault(m => (string?)m.Attribute("name") == memberName);
+
+        Assert.NotNull(member);
+        return member.Value;
     }
 
     // The scope claims the helpers read are the mapped ones. A token carrying a

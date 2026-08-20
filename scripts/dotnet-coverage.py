@@ -28,7 +28,6 @@ import xml.etree.ElementTree as ET
 # as a missing file instead of a smaller, still-green denominator.
 EXPECTED_FILES = {
     "Internal/LimitedReadStream.cs",
-    "Internal/Pkce.cs",
     "Internal/TokenResponse.cs",
     "Internal/TokenStore.cs",
     "VaultAuthCallback.razor",

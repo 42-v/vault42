@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -169,6 +170,19 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         return this;
     }
 
+    /// <summary>Queues a transport-level failure instead of a response.</summary>
+    /// <remarks>
+    /// A JWKS fetch can fail before any status exists: DNS, a refused connection, or
+    /// HttpClient.Timeout, which surfaces as a TaskCanceledException with no cancellation from
+    /// the caller. Each has its own arm in ResolveKeyAsync, and an arm no test can reach is an
+    /// arm nobody knows works.
+    /// </remarks>
+    internal StubHttpMessageHandler EnqueueThrow(Exception ex)
+    {
+        _responses.Enqueue(() => throw ex);
+        return this;
+    }
+
     /// <summary>Queues a body whose read blocks until <paramref name="gate"/> completes.</summary>
     internal StubHttpMessageHandler EnqueueGated(string body, Task gate)
     {
@@ -217,6 +231,36 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
             return await base.ReadAsync(buffer, cancellationToken);
         }
+    }
+}
+
+/// <summary>
+/// Keeps every log record the JWKS manager writes, so a test can assert that a
+/// condition which is otherwise invisible was actually reported.
+/// </summary>
+/// <remarks>
+/// Both conditions this captures leave the application answering 401 to tokens that should
+/// validate, with nothing else to go on: a forced refresh that failed, and a JWKS that parsed
+/// but published no usable key. Asserting the log is asserting that an operator has something
+/// to find.
+/// </remarks>
+internal sealed class RecordingLogger<T> : ILogger<T>
+{
+    internal List<(LogLevel Level, string Message)> Records { get; } = new ();
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        Records.Add((logLevel, formatter(state, exception)));
     }
 }
 

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Vault42.AspNetCore;
 
@@ -92,7 +93,10 @@ public static class VaultAuthenticationExtensions
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             var httpClient = factory.CreateClient(VaultDefaults.HttpClientName);
-            return new VaultJwksManager(httpClient, options);
+            return new VaultJwksManager(
+                httpClient,
+                options,
+                sp.GetService<ILogger<VaultJwksManager>>());
         });
 
         builder.AddScheme<VaultAuthenticationOptions, VaultAuthenticationHandler>(

@@ -58,6 +58,33 @@ public sealed class InboundClaimMapClearedTests : IDisposable
         Assert.True(result.Principal.HasVaultRole("admin"));
     }
 
+    // The other half of the Identity.Name fix. With the map in place the subject
+    // reaches the handler as ClaimTypes.NameIdentifier; with it cleared the
+    // token's own "sub" survives. The handler names whichever the validated
+    // principal actually carries, because hard-coding either one leaves Name null
+    // for half the applications using this package -- and it was hard-coded to
+    // "sub", so it was null for the half that changes nothing.
+    [Fact]
+    public async Task TheNameIsTheSubjectWithTheInboundMapCleared()
+    {
+        using var signer = new TestSigner();
+        var options = Options();
+        using var jwks = await JwksAsync(signer, options);
+
+        var (result, _) = await HandlerHarness.AuthenticateAsync(options, jwks, ctx =>
+            ctx.Request.Headers.Authorization = $"Bearer {signer.Token()}");
+
+        Assert.True(result.Succeeded, result.Failure?.Message);
+        Assert.NotNull(result.Principal);
+
+        var identity = Assert.IsType<ClaimsIdentity>(result.Principal.Identity);
+        Assert.Equal("user-1", identity.Name);
+
+        // And the claim really is under the unmapped name here, so this exercises
+        // a different arm from the one the handler suite covers.
+        Assert.Equal("sub", identity.NameClaimType);
+    }
+
     // And with mapping turned off, nothing puts them back.
     [Fact]
     public async Task WithRoleMappingOffNoRolesReachThePrincipal()
