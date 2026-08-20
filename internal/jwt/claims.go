@@ -145,8 +145,19 @@ func mapNumericDate(m MapClaims, key string) *NumericDate {
 	}
 	switch v := raw.(type) {
 	case float64:
+		// Same range refusal as NumericDate.UnmarshalJSON, and for the same
+		// reason: an out-of-range float64 converts to MinInt64 on amd64 and
+		// time.Unix wraps it to an instant a validator will happily call past.
+		// Returning nil here reads as "the claim is absent", which is the
+		// direction that fails closed for exp and is checked for nbf.
+		if !(v >= minNumericDate && v <= maxNumericDate) {
+			return nil
+		}
 		return NewNumericDate(time.Unix(int64(v), 0))
 	case int64:
+		if v < minNumericDate || v > maxNumericDate {
+			return nil
+		}
 		return NewNumericDate(time.Unix(v, 0))
 	case *NumericDate:
 		return v

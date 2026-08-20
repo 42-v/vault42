@@ -258,17 +258,74 @@ func (p *Policy) refuseAddress(ip net.IP) error {
 	return nil
 }
 
-// hostOf extracts the lowercased host of a URL.
+// hostOf extracts the host this allowlist will judge, and refuses any host that
+// would not reach the wire unchanged.
+//
+// The refusal is the security control, not tidiness. This function used to
+// return strings.ToLower(u.Hostname()), and every caller then compared that
+// against the issuer or the operator's list -- while the connection is opened to
+// the host net/http produces, which runs the same string through UTS-46/IDNA in
+// canonicalAddr. strings.ToLower and IDNA are not the same map, so the check and
+// the dial could disagree about which host a URL names.
+//
+// One rune made that exploitable against a plain ASCII issuer. U+0130, the Turkish
+// dotted capital I, lowercases to an ordinary ASCII "i", so a discovery document
+// advertising
+//
+//	https://login.microsoftonlİne.com/common/discovery/v2.0/keys
+//
+// read as login.microsoftonline.com here, passed underDomain against an issuer of
+// https://login.microsoftonline.com, and was dialled as
+// login.xn--microsoftonline-fqi.com -- a .com anybody can register. Any issuer
+// whose registrable domain contains the letter "i" was reachable that way, and
+// the reachable fields are the whole CR-17 boundary: jwks_uri hands an attacker
+// the keys every id_token signature is verified against, and token_endpoint posts
+// the client secret to a stranger. A rune sweep confirms U+0130 is the only rune
+// that lands in the ASCII tail, so that was the exhaustive list rather than one
+// example of many.
+//
+// Two lesser variants of the same gap: U+1E9E lowercases to U+00DF and reaches the
+// wire as "ss", and strings.ToLower collapses every byte of invalid UTF-8 to
+// U+FFFD, so two different hosts compare equal.
+//
+// Refusing a non-ASCII host closes all three without a new dependency and costs a
+// caller nothing that is legitimate: a discovery document is machine-generated,
+// and an internationalized domain name is spelled in punycode by every issuer
+// that serves one. Comparing idna.Lookup.ToASCII forms would be the thorough
+// alternative and would add golang.org/x/net as a direct dependency, which the
+// dependency policy treats as a security decision rather than a convenience.
 func hostOf(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("is not a URL: %w", err)
 	}
-	host := strings.ToLower(u.Hostname())
+	host := u.Hostname()
 	if host == "" {
 		return "", fmt.Errorf("names no host")
 	}
-	return host, nil
+	if !isASCIIHost(host) {
+		return "", fmt.Errorf("names a host with non-ASCII bytes (%q); an internationalized "+
+			"domain must be given in punycode, because the name this check reads and the name "+
+			"the connection is opened to would otherwise be normalized differently", host)
+	}
+	// Safe now that every byte is ASCII: on ASCII, ToLower is exactly the
+	// case-folding IDNA applies, and it cannot change the length or the rune
+	// count.
+	return strings.ToLower(host), nil
+}
+
+// isASCIIHost reports whether every byte of host is printable ASCII.
+//
+// Byte-wise on purpose. A rune-wise check would decode invalid UTF-8 to U+FFFD
+// and report the replacement character as the offending rune, which is the same
+// lossy step that made two different hosts compare equal in the first place.
+func isASCIIHost(host string) bool {
+	for i := 0; i < len(host); i++ {
+		if host[i] < 0x21 || host[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // isLoopbackHost reports whether a host is the loopback interface by name, not
