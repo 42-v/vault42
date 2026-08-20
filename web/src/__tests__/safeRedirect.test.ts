@@ -244,3 +244,138 @@ describe('safeRedirect', () => {
     })
   })
 })
+
+/**
+ * Everything above is a table: a vector somebody thought of, and the outcome it
+ * must have. A table is only as good as the imagination behind it, and this
+ * validator's whole job is to survive inputs nobody imagined.
+ *
+ * So this last block stops asserting outcomes for named inputs and starts
+ * asserting a property over generated ones: whatever `safeRedirect` returns is
+ * re-derived as safe from the returned string alone, without consulting the
+ * implementation. The checks below are written from the threat -- can this
+ * string leave the origin -- rather than from the code, so an input that talks
+ * the validator around fails here even though the validator thought it was fine.
+ *
+ * The generator is deterministic. A fuzz test that finds a failure once a month
+ * and cannot reproduce it is worse than no fuzz test: it teaches the reader to
+ * re-run CI.
+ */
+
+/** Fragments chosen because each one has, somewhere, been an open redirect. */
+const FRAGMENTS = [
+  '/', '//', '\\', '/\\', '.', '..', '/..', '/.', 'evil.com', 'profile', '2fa',
+  '?', '#', '&', '=', ':', '@', '%2f', '%2F', '%5c', '%252f', '%00', '%09', '%0a',
+  '%25', '%', 'http:', 'https:', '://', 'javascript:', 'data:', ' ', TAB, LF, CR,
+  NUL, DEL, NEL, LINE_SEP, 'a', '1', '-', '_', '~', ';', ',', '+', '!', '$', "'",
+  '(', ')', '*', '[', ']', 'localhost', '127.0.0.1', 'İ', '／',
+]
+
+/** xorshift32. Constant seed, so a failure reported here reproduces exactly. */
+function makeRandom(seed: number): () => number {
+  let state = seed
+  return () => {
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    return (state >>> 0) / 0x100000000
+  }
+}
+
+const PROBE = 'http://safe-redirect.invalid'
+
+/**
+ * Re-derives safety from a returned value. Deliberately not a copy of the
+ * validator: it asks the questions an attacker asks, and a validator that
+ * satisfies its own rules while failing these has a bug the rules did not cover.
+ */
+function escapesTheOrigin(value: string): string | null {
+  if (!value.startsWith('/')) return 'does not start with a slash'
+  if (value.startsWith('//') || value.startsWith('/\\')) return 'starts an authority'
+  if (value.includes('\\')) return 'contains a backslash'
+  if (value.includes('://')) return 'contains a scheme separator'
+
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029) {
+      return `contains control character 0x${code.toString(16)}`
+    }
+  }
+
+  // A consumer that decodes before navigating must not be handed something that
+  // becomes an authority on the way.
+  let decoded = value
+  for (let round = 0; round < 4; round++) {
+    let next: string
+    try {
+      next = decodeURIComponent(decoded)
+    } catch {
+      break
+    }
+    if (next === decoded) break
+    if (next.startsWith('//') || next.startsWith('/\\') || next.includes('://')) {
+      return `decodes in ${round + 1} round(s) to something that leaves the origin: ${next}`
+    }
+    decoded = next
+  }
+
+  try {
+    const url = new URL(value, PROBE)
+    if (url.origin !== PROBE) return `resolves to ${url.origin}`
+  } catch {
+    return 'is not a URL the parser accepts'
+  }
+
+  return null
+}
+
+describe('generated inputs', () => {
+  it('never returns a value that can leave the origin', () => {
+    const random = makeRandom(0x5afe_9ed1)
+    const failures: string[] = []
+    let accepted = 0
+
+    for (let i = 0; i < 20_000; i++) {
+      const parts = 1 + Math.floor(random() * 6)
+      let candidate = ''
+      for (let p = 0; p < parts; p++) {
+        candidate += FRAGMENTS[Math.floor(random() * FRAGMENTS.length)]
+      }
+
+      const result = safeRedirect(candidate)
+      if (result === candidate) accepted++
+
+      const why = escapesTheOrigin(result)
+      if (why !== null) {
+        failures.push(`safeRedirect(${JSON.stringify(candidate)}) = ${JSON.stringify(result)} ${why}`)
+      }
+      if (failures.length >= 5) break
+    }
+
+    expect(failures).toEqual([])
+
+    // A corpus that is rejected in full passes this test without exercising the
+    // accepting path at all, and would go on passing if the validator were
+    // replaced by `() => '/'`. The generator currently accepts 261 of the 20000,
+    // things like `/.;` and `/..*`, whose first segment only looks like a dot
+    // segment. The floor is well under that: it is here to catch a generator
+    // that stops producing valid paths, not to pin the exact figure.
+    expect(accepted).toBeGreaterThan(50)
+  })
+
+  it('returns either the input unchanged or the fallback, never a repaired value', () => {
+    // A validator that normalises is a validator whose output the caller has to
+    // re-check. This one is allowlist-shaped: a value is accepted as it stands
+    // or replaced wholesale.
+    const random = makeRandom(0x0bad_f00d)
+    for (let i = 0; i < 5_000; i++) {
+      const parts = 1 + Math.floor(random() * 4)
+      let candidate = ''
+      for (let p = 0; p < parts; p++) {
+        candidate += FRAGMENTS[Math.floor(random() * FRAGMENTS.length)]
+      }
+      const result = safeRedirect(candidate, '/home')
+      expect(result === candidate || result === '/home').toBe(true)
+    }
+  })
+})
