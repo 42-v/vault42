@@ -143,19 +143,14 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"GDPR|Art. 15|internal/handler/data_export.go":                                     {},
 	"GDPR|Art. 20|internal/handler/data_export.go":                                     {},
 	"GDPR|Art. 32|internal/crypto/aes.go":                                              {},
-	"GDPR|Art. 5(1)(c)|internal/audit/audit.go":                                        {},
-	"GDPR|Art. 5(1)(c)|internal/httputil/safelog.go":                                   {},
 	"IETF RFC / OpenID Connect|OIDC Core 1.0 s3.1.3.7|internal/oauth2/oidc_idtoken.go": {},
-	"IETF RFC / OpenID Connect|RFC 7636|internal/handler/oauth.go":                     {},
 	"IETF RFC / OpenID Connect|RFC 8725 s3.1|internal/crypto/jwt.go":                   {},
 	"IETF RFC / OpenID Connect|RFC 8725 s3.8|internal/crypto/jwt.go":                   {},
 	"IETF RFC / OpenID Connect|RFC 8725 s3.9|internal/jwt/validate.go":                 {},
-	"IETF RFC / OpenID Connect|RFC 9700 s2.1.1|internal/handler/oauth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.1.1|internal/handler/oauth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.14.2|internal/service/auth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.3.2|internal/handler/oauth.go":              {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.5.3|internal/oauth2/oidc_idtoken.go":        {},
-	"NIST SP 800-53|AC-2|internal/adminapi/handler.go":                                 {},
 	"NIST SP 800-53|AC-3|internal/rbac/rbac.go":                                        {},
 	"NIST SP 800-53|AC-6|internal/rbac/rbac.go":                                        {},
 	"NIST SP 800-53|AC-7|internal/service/auth.go":                                     {},
@@ -196,14 +191,11 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP ASVS|V1.2.9|internal/sanitize/sanitize.go":                                  {},
 	"OWASP ASVS|V13.4.2|internal/config/profiles.go":                                   {},
 	"OWASP ASVS|V14.1.1|internal/audit/audit.go":                                       {},
-	"OWASP ASVS|V14.2.3|internal/httputil/safelog.go":                                  {},
-	"OWASP ASVS|V15.3.4|internal/middleware/ratelimit.go":                              {},
 	"OWASP ASVS|V15.3.5|internal/crypto/hmac.go":                                       {},
 	"OWASP ASVS|V16.2.5|internal/audit/audit.go":                                       {},
 	"OWASP ASVS|V16.3.1|internal/service/auth.go":                                      {},
 	"OWASP ASVS|V2.2.1|internal/sanitize/sanitize.go":                                  {},
 	"OWASP ASVS|V2.3.2|internal/handler/data_export.go":                                {},
-	"OWASP ASVS|V4.1.3|internal/middleware/ratelimit.go":                               {},
 	"OWASP ASVS|V6.2.11|internal/service/hibp.go":                                      {},
 	"OWASP ASVS|V6.3.6|internal/service/mfa.go":                                        {},
 	"OWASP ASVS|V6.8.1|internal/seed/seed.go":                                          {},
@@ -218,6 +210,19 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP Top 10|A05:2025|internal/repository/postgres/refresh_token.go":              {},
 	"OWASP Top 10|A06:2025|internal/middleware/ratelimit.go":                           {},
 	"OWASP Top 10|A07:2025|internal/service/auth.go":                                   {},
+}
+
+// citationDeadEnds are the lines a drifted citation lands on that resolve, are
+// not blank, and still say nothing: the punctuation that closes a declaration,
+// a composite literal or a call. The blank-line check below caught the case
+// where a citation had drifted past the end of its declaration entirely; a
+// citation that stops one line short of that is no better off. Twenty-eight
+// evidence references were sitting on one of these when the check was written,
+// including three rows whose notes described a mechanism in a different
+// function of a different file.
+var citationDeadEnds = map[string]struct{}{
+	"}": {}, "{": {}, ")": {}, "(": {}, "]": {}, "[": {},
+	"})": {}, "},": {}, "};": {}, ");": {}, "),": {}, "],": {},
 }
 
 var evidenceIdentifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
@@ -268,10 +273,21 @@ func TestComplianceRegister_EvidenceIsRelevantAndNotJustResolvable(t *testing.T)
 					r.Standard, r.RequirementID, ev, len(lines))
 				continue
 			}
-			if strings.TrimSpace(lines[line-1]) == "" {
+			cited := strings.TrimSpace(lines[line-1])
+			if cited == "" {
 				t.Errorf("%s %s cites %s, which is a blank line. A blank line is not evidence of "+
 					"anything; it is a citation that used to point at something.",
 					r.Standard, r.RequirementID, ev)
+				continue
+			}
+			if _, brace := citationDeadEnds[cited]; brace {
+				t.Errorf("%s %s cites %s, which is %q -- a line that closes a block rather than "+
+					"doing anything. It carries no identifier and no behaviour, so a reader "+
+					"following the citation learns nothing from it. This is the same failure as a "+
+					"blank line, arriving a few lines earlier: a citation drifts off the statement "+
+					"it was written for and lands on the end of its declaration. Cite the "+
+					"statement.",
+					r.Standard, r.RequirementID, ev, cited)
 				continue
 			}
 			if !strings.HasSuffix(relPath, ".go") {
@@ -683,18 +699,14 @@ func sortedKeys(m map[string]string) []string {
 // is a ratchet: a new row must carry a reason, and an entry that gains one must
 // be deleted from this list.
 var thinNotesBaseline = map[string]struct{}{
-	"GDPR|Art. 30":      {},
-	"GDPR|Art. 32":      {},
-	"GDPR|Art. 5(1)(c)": {},
-	"GDPR|Art. 7":       {},
+	"GDPR|Art. 30": {},
+	"GDPR|Art. 32": {},
+	"GDPR|Art. 7":  {},
 	"IETF RFC / OpenID Connect|OIDC Core 1.0 s3.1.3.7": {},
-	"IETF RFC / OpenID Connect|RFC 7636":               {},
 	"IETF RFC / OpenID Connect|RFC 8725 s3.1":          {},
-	"IETF RFC / OpenID Connect|RFC 9700 s2.1.1":        {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.14.2":       {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.3.2":        {},
 	"IETF RFC / OpenID Connect|RFC 9700 s4.5.3":        {},
-	"NIST SP 800-53|AC-2":                              {},
 	"NIST SP 800-53|AC-3":                              {},
 	"NIST SP 800-53|AC-6":                              {},
 	"NIST SP 800-53|AC-7":                              {},
@@ -715,7 +727,6 @@ var thinNotesBaseline = map[string]struct{}{
 	"NIST SP 800-53|SR-4":                              {},
 	"NIST SP 800-63B-4|2.4.3":                          {},
 	"NIST SP 800-63B-4|7":                              {},
-	"OWASP ASVS|V10.4.6":                               {},
 	"OWASP ASVS|V11.3.2":                               {},
 	"OWASP ASVS|V11.4.3":                               {},
 	"OWASP Top 10|A01:2025":                            {},
