@@ -337,74 +337,22 @@ jobs:
 
       # This used to be `continue-on-error: true` with a summary table, which is
       # how the tree reached 109 findings: a step that cannot fail records a
-      # backlog, it does not hold one. It is a ratchet now. Each linter's count
-      # may fall and may not rise, so the backlog can only shrink while it is
-      # being burned down, and the step still prints the same table.
+      # backlog, it does not hold one. It became a ratchet against
+      # .golangci-baseline.json, the backlog came down, and the baseline reached
+      # zero -- at which point the ratchet was 40 lines of Python comparing a
+      # measured zero against a hand-maintained zero.
+      #
+      # The baseline file said to do this: "can be deleted once the CI step it
+      # feeds is rewritten as a plain `golangci-lint run ./...`; while it exists
+      # it must stay empty." It is deleted, and this is that plain run. Any
+      # finding anywhere in the tree fails the job, which is what the ratchet
+      # had been converging on.
       #
       # This does not replace --new-from-merge-base above, it covers the other
       # half: that gate requires the diff to be clean, this one requires the
-      # rest of the tree not to get worse behind it.
-      #
-      # When .golangci-baseline.json reaches zero everywhere, delete it and make
-      # this a plain `golangci-lint run ./...`.
+      # rest of the tree to stay clean behind it.
       - name: Full run
-        shell: bash
-        run: |
-          set -uo pipefail
-          golangci-lint run --timeout 15m --output.json.path=golangci.json ./... || true
-          if [ ! -s golangci.json ]; then
-            echo "::error::golangci-lint produced no report. That is a failed run," \
-                 "not a clean one."
-            exit 1
-          fi
-          python3 - golangci.json .golangci-baseline.json <<'PY'
-          import collections, json, os, sys
-
-          try:
-              with open(sys.argv[1]) as fh:
-                  report = json.load(fh)
-          except json.JSONDecodeError as exc:
-              sys.exit(f"golangci report is not valid JSON, so the run did not complete: {exc}")
-
-          issues = report.get("Issues")
-          if issues is None:
-              sys.exit("golangci report has no Issues key; the format changed or the run aborted")
-
-          baseline = json.load(open(sys.argv[2]))["findings_by_linter"]
-          counts = collections.Counter(i["FromLinter"] for i in issues)
-          by_pkg = collections.Counter(os.path.dirname(i["Pos"]["Filename"]) for i in issues)
-
-          summary = open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a")
-          print(f"### golangci-lint: {len(issues)} findings "
-                f"(baseline {sum(baseline.values())})\n", file=summary)
-          print("| linter | count | baseline |\n|---|---|---|", file=summary)
-          for k in sorted(set(counts) | set(baseline)):
-              print(f"| `{k}` | {counts.get(k, 0)} | {baseline.get(k, 0)} |", file=summary)
-          print("\n| package | count |\n|---|---|", file=summary)
-          for k, n in by_pkg.most_common(25):
-              print(f"| `{k}` | {n} |", file=summary)
-
-          worse = {k: (n, baseline.get(k, 0)) for k, n in counts.items()
-                   if n > baseline.get(k, 0)}
-          for linter, (now, was) in sorted(worse.items()):
-              print(f"::error::golangci-lint {linter} rose from {was} to {now}")
-              for i in issues:
-                  if i["FromLinter"] == linter:
-                      pos = i["Pos"]
-                      print(f"    {pos['Filename']}:{pos['Line']} {i['Text']}")
-
-          better = {k: (counts.get(k, 0), n) for k, n in baseline.items()
-                    if counts.get(k, 0) < n}
-          if better:
-              for linter, (now, was) in sorted(better.items()):
-                  print(f"golangci-lint {linter} fell from {was} to {now}; lower the baseline")
-              print("replacement for findings_by_linter:")
-              print(json.dumps(dict(sorted(counts.items())), indent=2))
-
-          if worse:
-              sys.exit(f"{len(worse)} linter(s) regressed against .golangci-baseline.json")
-          print(f"golangci-lint at or below baseline ({len(issues)} vs {sum(baseline.values())})")
-          PY
+        run: golangci-lint run --timeout 15m ./...
 
   # The same conditional-job problem the two coverage gates have, arriving a
   # third time. golangci-lint is skipped when no Go file changed, and branch

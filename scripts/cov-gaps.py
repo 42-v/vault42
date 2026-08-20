@@ -41,7 +41,7 @@ import os
 import re
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_EXCLUSIONS = os.path.join(REPO_ROOT, ".coverage-exclusions.json")
@@ -455,6 +455,16 @@ def check_profile_is_current(blocks, module, profile_path=None):
     sys.exit(1)
 
 
+def local_stamp(mtime):
+    """A wall-clock timestamp in the reader's own zone.
+
+    Built from an aware UTC datetime rather than datetime.fromtimestamp(mtime),
+    which returns a naive one whose meaning depends on where it is later
+    interpreted -- and which ruff's DTZ rules reject for that reason.
+    """
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def age_hint(profile_path):
     """Describe how old the profile is next to the newest Go source it claims to measure.
 
@@ -483,11 +493,11 @@ def age_hint(profile_path):
             if mtime > newest:
                 newest, newest_path = mtime, path
 
-    stamp = datetime.fromtimestamp(profile_mtime).strftime("%Y-%m-%d %H:%M")
+    stamp = local_stamp(profile_mtime)
     if newest_path is None:
         return f"The profile was written {stamp}."
     rel = os.path.relpath(newest_path, REPO_ROOT)
-    newest_stamp = datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
+    newest_stamp = local_stamp(newest)
     if profile_mtime < newest:
         hours = (newest - profile_mtime) / 3600
         return (f"The profile was written {stamp} and {rel} changed {newest_stamp}, "

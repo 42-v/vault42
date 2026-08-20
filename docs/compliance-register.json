@@ -248,10 +248,10 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-20",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
-      "rationale": "GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained, unsafe by design and carrying known issues, with no patched version and none coming. The advisory is against the module, and golang.org/x/crypto is a direct dependency of vault42 for argon2id and HKDF. Removing the finding would mean removing the module, which means hand-rolling argon2id -- a worse trade by a wide margin than carrying an advisory for a package nothing imports.",
+      "rationale": "GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained and unsafe by design. It has no patched version and the advisory is against every version of the golang.org/x/crypto module, because the finding is a deprecation of a subpackage rather than a flaw with a fix. Nothing in this tree imports openpgp, and govulncheck confirms that at symbol level on both modules, but OSV reports per module and Scorecard reads OSV, so the finding stands for as long as the dependency does.\n\nThe dependency is one import in one file: internal/crypto/argon2.go, for argon2id password hashing. HKDF used to be the other reason and no longer is -- it moved to the standard library in crypto/hkdf. So the whole of x/crypto is retained for Argon2id, and there is no maintained pure-Go Argon2 outside it worth swapping a password hash onto.",
       "compensating_control": "No file in either Go module imports golang.org/x/crypto/openpgp, and govulncheck confirms it at symbol level on both: zero vulnerabilities in code reached from any entry point. The nightly scan would report the day that stopped being true.",
       "residual_risk": "OSV and therefore Scorecard report per-module, so the count stays at one and the check cannot reach 10 while x/crypto is a dependency. The residual security risk is nil; the residual reporting risk is a permanent point on a public scorecard.",
-      "revisit_when": "x/crypto drops the openpgp package, or the advisory is scoped to the package rather than the module."
+      "revisit_when": "Any of: the Go standard library gains Argon2id; a maintained pure-Go Argon2id implementation outside golang.org/x/crypto appears and is worth trusting a password hash to; or upstream splits openpgp out of the module so the advisory stops covering it. Checked at each release by the nightly govulncheck and Trivy runs, which is how the other three advisories in this set closed."
     },
     "CR-38": {
       "title": "Attestation subjects are supplied by the build job, not by a trusted control plane",
@@ -7654,8 +7654,8 @@
       "requirement": "Acquire and maintain well-secured software components from commercial, open-source and other third-party developers",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:654",
-        ".github/workflows/ci.yml:657"
+        ".github/workflows/ci.yml:602",
+        ".github/workflows/ci.yml:605"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7689,7 +7689,7 @@
       "requirement": "Verify that acquired third-party software components comply with the requirements",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:654",
+        ".github/workflows/ci.yml:602",
         ".github/workflows/nightly-security.yml:57",
         "docs/deps.md"
       ],
@@ -7823,7 +7823,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:697",
-        ".github/workflows/ci.yml:474"
+        ".github/workflows/ci.yml:422"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7989,7 +7989,7 @@
       "evidence": [
         "tests/compliance/register_gates_test.go",
         "tests/compliance/nist_ssdf_800_218_test.go",
-        ".github/workflows/ci.yml:886"
+        ".github/workflows/ci.yml:834"
       ],
       "tests": [
         "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed",
@@ -8367,13 +8367,13 @@
       "status": "Met",
       "evidence": [
         ".github/requirements-lint.txt:1",
-        ".github/workflows/ci.yml:929"
+        ".github/workflows/ci.yml:877"
       ],
       "tests": [
         "TestScorecard_EveryActionIsPinnedByCommit",
         "TestScorecard_BuildToolsResolveThroughAHash"
       ],
-      "notes": "Met as of 1.0.1; scored 9 on the 2026-08-20 run with two findings, both in the non-Go lint job. Every action reference across the five workflows is pinned to a 40-character commit SHA and always was. The two findings were a pip and an npm install that named exact versions and then trusted whatever bytes the registry returned for them, which is a version pin and not a supply-chain pin: a republished artifact under the same version, or an account takeover on ruff, yamllint or markdownlint-cli2, executed in CI on every pull request. pip now installs under --require-hashes from a pip-compile-generated file carrying a digest for every resolved artifact including the transitive ones, and markdownlint-cli2 is a root devDependency that pnpm-lock.yaml pins by integrity, the treatment commitlint already had."
+      "notes": "Met; scored 9 on the 2026-08-20 run against main, with one finding left. Every action reference across the five workflows is pinned to a 40-character commit SHA and always was: 69 of 69 GitHub-owned actions, 32 of 32 third-party actions, 11 of 11 container images, 2 of 2 go commands, 1 of 1 pip command.\n\nThe findings were installs that named an exact version and then trusted whatever bytes the registry returned, which is a version pin and not a supply-chain pin: a republished artifact under the same version, or an account takeover on ruff, yamllint or markdownlint-cli2, executed in CI on every pull request. pip installs under --require-hashes from a pip-compile-generated file carrying a digest for every resolved artifact including the transitive ones, and markdownlint-cli2 is a root devDependency that pnpm-lock.yaml pins by integrity.\n\nThe last one was the corepack install in the frontend build stage, which was already fetched by URL and verified against a committed SHA-256 before anything ran it -- so it was pinned harder than most of what the check was passing, and still scored as an unpinned npmCommand, because the check reads the command and not the verification around it. The tarball is now unpacked with tar instead of handed to `npm install -g`, which removes the finding and also removes npm's resolution, tree write and lifecycle scripts from a package whose bytes were already verified. Verified by building the stage: corepack 0.35.0 and pnpm 10.18.0 both resolve inside the image."
     },
     {
       "standard": "OpenSSF Scorecard",
@@ -8444,7 +8444,7 @@
       "tests": [
         "TestScorecard_ReleasesAreSigned"
       ],
-      "notes": "Met by the workflow; scored -1 on the 2026-08-20 run, which reports \"no releases found\" because the check reads the artifacts of published releases and 1.0.0 was merged without ever being tagged. Every image and the Helm chart are signed keylessly by digest with cosign, each carries a build-provenance attestation, and the release archives are covered by a detached signature over their SHA256SUMS file. The score moves when 1.0.1 is the first tagged release to publish those artifacts."
+      "notes": "Met by the workflow; scored -1 on the 2026-08-20 run, which reports \"no releases found\" because the check reads the artifacts of published releases and there were none: 1.0.0 was merged without ever being tagged, and 1.0.1 was merged and not tagged after it. Every image and the Helm chart are signed keylessly by digest with cosign, each carries a build-provenance attestation, and the release archives are covered by a detached signature over their SHA256SUMS file. None of that has been exercised on a published release, which is exactly what a -1 means and why the row does not claim the score. It moves when the first tag is pushed."
     },
     {
       "standard": "OpenSSF Scorecard",

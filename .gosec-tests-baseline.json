@@ -1,20 +1,706 @@
 {
   "_comment": [
-    "HIGH and CRITICAL gosec findings in _test.go files, per rule, as of the",
-    "1.0.0 hardening pass. CI fails if any rule exceeds its number here, so this",
-    "can only be lowered. It is not a suppression list: a new InsecureSkipVerify",
-    "or a new hardcoded credential in a test still turns CI red.",
-    "Production code is scanned separately and must stay at zero; it is at zero.",
-    "Lower a number whenever you remove a finding. The CI step prints the exact",
-    "replacement block when a count drops."
+    "HIGH and CRITICAL gosec findings in _test.go files, frozen by rule, file",
+    "and the text of the flagged line. Production code is scanned separately",
+    "and must stay at zero; it is at zero.",
+    "",
+    "This is not a suppression list. A finding that is not here fails CI, and",
+    "that includes a finding of an already-listed rule in an already-listed",
+    "file: the previous version of this file held per-rule counts, so a real",
+    "credential replacing a fixture one kept the G101 total at 76 and passed.",
+    "",
+    "Keyed on the source line rather than the line number, so the entry",
+    "survives the file growing above it. Regenerate with",
+    "scripts/gosec-baseline.py --generate <report.json>."
   ],
-  "high_and_critical_by_rule": {
-    "G101": 76,
-    "G115": 38,
-    "G122": 4,
-    "G402": 2,
-    "G702": 2,
-    "G703": 2
+  "rules": {
+    "G101": "Hardcoded credentials. Every one is a fixture: a fake DSN, a literal test password, or a constant that exists so a redaction path has something to redact. None is a credential for anything that exists.",
+    "G115": "Integer overflow on conversion. All in table-driven tests and encoding helpers where the input is a literal the test wrote itself, so the range is known at the call site and there is nothing to validate.",
+    "G122": "Filesystem operation inside a filepath.WalkDir callback. The trees walked are the repository's own source and testdata directories, read by tests that scan the tree; there is no attacker between the walk and the read.",
+    "G402": "InsecureSkipVerify. Two end-to-end tests, each talking to a container the same test just started, over a certificate that container generated. Verifying it would test the fixture, not the product.",
+    "G702": "Command injection via taint analysis. Test harnesses building an argv from constants and t.TempDir(); nothing on the path comes from outside the test binary.",
+    "G703": "Path traversal via taint analysis. Migration tests reading the repository's own migrations directory and writing under t.TempDir()."
   },
+  "entries": [
+    {
+      "rule": "G101",
+      "file": "cmd/admin-gateway/main_test.go",
+      "line_text": "1166: }, 1167: { 1168: name: \"the postgresql scheme is matched too\", 1169: in: \"cannot parse `postgresql://vault_admin:hunter2@db:5432/vault`: bad port\", 1170: secret: \"hunter2\", 1171: }, 1172: }",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "cmd/recover/opsec_test.go",
+      "line_text": "prodDSN = \"postgres://vault_app:Tr0ub4dor-prod@db.internal:5432/vault?sslmode=require\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "cmd/recover/opsec_test.go",
+      "line_text": "prodPassword = \"Tr0ub4dor-prod\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "cmd/vault/startup_test.go",
+      "line_text": "apiKey := \"SG.test-key-not-a-real-credential\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "cmd/vault/startup_test.go",
+      "line_text": "secret := \"oauth-client-secret-fixture\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "cmd/vault/startup_test.go",
+      "line_text": "secret := \"oidc-client-secret-fixture\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/adminapi_v076_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
+      "count": 2
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/adminapi_v076b_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
+      "count": 3
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/auth_test.go",
+      "line_text": "const secret = \"JBSWY3DPEHPK3PXP\"",
+      "count": 2
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/auth_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
+      "count": 2
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/config_redaction_test.go",
+      "line_text": "23: ListFn: func(context.Context) (map[string]string, error) { 24: return map[string]string{ 25: \"admin_token_hash\": \"$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHQ$aGFzaGhhc2g\", 26: \"login_banner\": \"Authorized use only\", 27: }, nil 28: },",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/views_test.go",
+      "line_text": "const pwHash = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/views_test.go",
+      "line_text": "const secretHash = \"$argon2id$v=19$m=47104,t=1,p=1$c2FsdHNhbHRzYWx0c2FsdA$BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/adminapi/views_test.go",
+      "line_text": "const tokenHash = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/audit/audit_test.go",
+      "line_text": "116: logger.Log(ctx, LoginSuccess, \"u1\", \"\", \"1.1.1.1\", \"\", \"\", \"\", 117: map[string]interface{}{ 118: \"password\": \"super-secret\", 119: \"token\": \"jwt-token-here\", 120: \"access_token\": \"at-value\", 121: \"action\": \"login\", // this should survive 122: \"email\": \"user@example.com\", // this should survive 123: }) 124:",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/cli/admin_token_file_test.go",
+      "line_text": "const token = \"3c9909afec25354d551dae21590bb26e38d53f2173b8d3dc3eee4c047e7ab1c1\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/cli/admin_token_file_test.go",
+      "line_text": "const token = \"b1946ac92492d2347c6235b4d2611184c0d1f3a9e8b7c6d5a4f3e2d1c0b9a8f7\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/crypto/totp_edge_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
+      "count": 3
+    },
+    {
+      "rule": "G101",
+      "file": "internal/crypto/totp_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\" // standard test secret",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/argon2_backpressure_test.go",
+      "line_text": "268: call: func(rec *httptest.ResponseRecorder) { 269: req := httptest.NewRequest(http.MethodPost, \"/auth/password/reset/confirm\", jsonBody(t, map[string]string{ 270: \"token\": \"a-live-reset-token\", \"password\": \"a brand new passphrase\", 271: })) 272: resetHandler.ResetConfirm(rec, req)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/auth_coverage_test.go",
+      "line_text": "token := \"verify-repo-error-token\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/client_test.go",
+      "line_text": "clientSecret := \"default-scope-secret\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/client_test.go",
+      "line_text": "clientSecret := \"scope-invalid-secret\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/client_test.go",
+      "line_text": "clientSecret := \"scope-test-secret-1\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/coverage_v089_test.go",
+      "line_text": "token := \"reset-token-hibp-guard\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/coverage_v096_test.go",
+      "line_text": "172: mux.HandleFunc(\"/token\", func(w http.ResponseWriter, _ *http.Request) { 173: _ = json.NewEncoder(w).Encode(map[string]any{ 174: \"access_token\": \"oidc-access-token\", 175: \"id_token\": *idToken, 176: \"token_type\": \"Bearer\", 177: \"expires_in\": 3600, 178: }) 179: })",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/oauth_test.go",
+      "line_text": "const testOAuthCSRFToken = \"test-csrf-token-fixed\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/password_breach_test.go",
+      "line_text": "126: 127: req := httptest.NewRequest(http.MethodPost, \"/auth/password/reset/confirm\", jsonBody(t, map[string]string{ 128: \"token\": \"a-live-reset-token\", \"password\": breached, 129: })) 130: rec := httptest.NewRecorder()",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/password_breach_test.go",
+      "line_text": "203: 204: req := httptest.NewRequest(http.MethodPost, \"/auth/password/reset/confirm\", jsonBody(t, map[string]string{ 205: \"token\": \"a-live-reset-token\", \"password\": \"a perfectly fine new passphrase\", 206: })) 207: rec := httptest.NewRecorder()",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/handler/password_claim_test.go",
+      "line_text": "const token = \"reset-token-value\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/metrics/metrics_test.go",
+      "line_text": "46: // Verify all metrics are present with correct values 47: checks := map[string]string{ 48: \"vault_argon2_active\": \"vault_argon2_active 2\", 49: \"vault_argon2_max\": \"vault_argon2_max 4\", 50: \"vault_argon2_rejected_total\": \"vault_argon2_rejected_total 5\", 51: \"vault_login_attempts_total\": \"vault_login_attempts_total 3\", 52: \"vault_login_success_total\": \"vault_login_success_total 1\", 53: \"vault_login_failed_total\": \"vault_login_failed_total 2\", 54: \"vault_tokens_issued_total\": \"vault_tokens_issued_total 1\", 55: \"vault_tokens_refreshed_total\": \"vault_tokens_refreshed_total 1\", 56: } 57:",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/migrate/migrate_test.go",
+      "line_text": "275: 276: sqls := map[string]string{ 277: \"001_create_schema.sql\": \"CREATE SCHEMA IF NOT EXISTS auth;\", 278: \"002_create_users.sql\": \"CREATE TABLE auth.users (id UUID PRIMARY KEY, email TEXT NOT NULL);\", 279: \"003_create_tokens.sql\": \"CREATE TABLE auth.refresh_tokens (id UUID PRIMARY KEY, user_id UUID NOT NULL);\", 280: } 281:",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/oauth2/facebook_test.go",
+      "line_text": "281: func TestFacebookExchange_ConnectionRefused(t *testing.T) { 282: p := &FacebookProvider{ 283: clientID: \"cid\", 284: clientSecret: \"csec\", 285: redirectURI: \"https://example.com/cb\", 286: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 287: } 288: _, err := p.Exchange(context.Background(), \"code\", \"\")",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/oauth2/github_test.go",
+      "line_text": "275: func TestGitHubExchange_ConnectionRefused(t *testing.T) { 276: p := &GitHubProvider{ 277: clientID: \"cid\", 278: clientSecret: \"csec\", 279: redirectURI: \"https://example.com/cb\", 280: tokenURL: \"http://127.0.0.1:1\", // nothing listens here 281: } 282: _, err := p.Exchange(context.Background(), \"code\", \"\")",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/oauth2/google_test.go",
+      "line_text": "140: }{ 141: { 142: name: \"success with all fields\", 143: statusCode: http.StatusOK, 144: body: `{\"access_token\":\"ya29.abc\",\"refresh_token\":\"1//refresh\",\"id_token\":\"eyJ.header.sig\",\"token_type\":\"Bearer\",\"expires_in\":3600}`, 145: wantToken: \"ya29.abc\", 146: wantRefresh: \"1//refresh\", 147: wantIDToken: \"eyJ.header.sig\", 148: wantType: \"Bearer\", 149: wantExpires: 3600, 150: }, 151: {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/oauth2/google_test.go",
+      "line_text": "279: func TestGoogleExchange_ConnectionRefused(t *testing.T) { 280: p := &GoogleProvider{ 281: clientID: \"gcid\", 282: clientSecret: \"gsec\", 283: redirectURI: \"https://example.com/cb\", 284: tokenURL: \"http://127.0.0.1:1\", 285: } 286: _, err := p.Exchange(context.Background(), \"code\", \"verifier\")",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/oauth2/oidc_unbuildable_request_test.go",
+      "line_text": "118: p := NewOIDCProvider(\"okta\", \"https://issuer.test\", \"cid\", \"sec\", \"https://vault.test/cb\", \"\") 119: p.discovered = &oidcDiscovery{ 120: Issuer: \"https://issuer.test\", 121: AuthEndpoint: oauthgrpCtlURL, 122: TokenEndpoint: \"https://issuer.test/token\", 123: } 124:",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/repository/postgres/email_repos_errors_test.go",
+      "line_text": "admin := &model.AdminUser{ID: \"a-1\", Username: \"root\", PasswordHash: \"$argon2id$h\"}",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/repository/postgres/repos_errors_test.go",
+      "line_text": "if err := repo.Create(ctx, &model.PasswordHistory{ID: \"ph-1\", UserID: \"u-1\", PasswordHash: \"$argon2id$h\"}); err == nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "internal/repository/postgres/user_blob_errors_test.go",
+      "line_text": "user := &model.User{ID: \"u-1\", Email: \"u@example.com\", PasswordHash: \"$argon2id$h\"}",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/attack/atk_db_erasure_svcdoc_residue_test.go",
+      "line_text": "154: now := time.Now().UTC() 155: u := &model.User{ 156: ID: atkDBRandomID(t), 157: Email: email, 158: EmailVerified: true, 159: PasswordHash: \"$argon2id$placeholder\", 160: Locale: \"en\", 161: CreatedAt: now, 162: UpdatedAt: now, 163: } 164: if err := postgres.NewUserRepo(&postgres.DB{Pool: owner}).Create(context.Background(), u); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/gdpr_erasure_test.go",
+      "line_text": "187: now := time.Now().UTC().Truncate(time.Microsecond) 188: user := &model.User{ 189: ID: userID, 190: Email: email, 191: EmailVerified: true, 192: PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dGVzdHNhbHQ$testhash\", 193: DisplayName: displayName, 194: Locale: \"en\", 195: Roles: []string{\"user\"}, 196: CreatedAt: now, 197: UpdatedAt: now, 198: } 199: if err := users.Create(ctx, user); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/gdpr_erasure_test.go",
+      "line_text": "243: id, _ := vaultcrypto.RandomUUID() 244: if err := pwHistory.Create(ctx, &model.PasswordHistory{ 245: ID: id, UserID: userID, PasswordHash: \"$argon2id$old-hash\", CreatedAt: now, 246: }); err != nil { 247: t.Fatalf(\"seed password history %d: %v\", i, err)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/gdpr_erasure_test.go",
+      "line_text": "250: totpID, _ := vaultcrypto.RandomUUID() 251: if err := totp.Create(ctx, &model.TOTPSecret{ 252: ID: totpID, UserID: userID, SecretEnc: \"enc:totp-secret\", CreatedAt: now, 253: }); err != nil { 254: t.Fatalf(\"seed totp secret: %v\", err)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/gdpr_retention_test.go",
+      "line_text": "121: 122: err := logger.Log(context.Background(), audit.LoginFailure, \"user-1\", \"\", \"203.0.113.7\", \"ua\", \"\", \"\", map[string]interface{}{ 123: \"password\": \"hunter2-hunter2\", 124: \"Token\": \"eyJhbGciOiJSUzI1NiJ9\", 125: \"purpose\": \"marketing_email\", 126: \"oauth\": map[string]interface{}{ 127: \"secret\": \"client-secret-value\", 128: \"provider\": \"github\", 129: }, 130: }) 131: if err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/nist_800_53_test.go",
+      "line_text": "196: src := readProductionSource(t, \"internal/audit/audit.go\") 197: categories := map[string]string{ 198: \"LoginSuccess\": \"successful logon\", 199: \"LoginFailure\": \"unsuccessful logon\", 200: \"PasswordChange\": \"credential change\", 201: \"PasswordReset\": \"credential reset\", 202: \"TokenRevoke\": \"credential revocation\", 203: \"AdminAction\": \"privileged function execution\", 204: \"AccountErased\": \"account lifecycle\", 205: \"DataExport\": \"information export\", 206: \"KMSUnwrap\": \"key release\", 207: } 208: for constant, category := range categories {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/nist_coverage_test.go",
+      "line_text": "pw14 := \"aB3dE5gH7jK9mN\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/nist_coverage_test.go",
+      "line_text": "pw15 := \"aB3dE5gH7jK9mN1\" // exactly 15 chars",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/compliance/nist_mfa_test.go",
+      "line_text": "secret := \"JBSWY3DPEHPK3PXP\"",
+      "count": 2
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_admin_role_privileges_test.go",
+      "line_text": "144: } 145: if err := postgres.NewPasswordHistoryRepo(seed).Create(ctx, &model.PasswordHistory{ 146: ID: randomID(), UserID: user.ID, PasswordHash: \"$argon2id$h\", CreatedAt: now, 147: }); err != nil { 148: t.Fatalf(\"seed password history: %v\", err)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_admin_session_retention_test.go",
+      "line_text": "33: // Expired two hours ago, never revoked: the natural end-of-life of a session. 34: expired := &model.AdminSession{ 35: ID: randomID(), AdminID: admin.ID, TokenHash: \"hash-expired-unrevoked\", 36: IP: \"203.0.113.9\", UserAgent: \"reaper-test\", Revoked: false, 37: ExpiresAt: time.Now().Add(-2 * time.Hour), 38: } 39: if err := repo.Create(ctx, expired); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_admin_test.go",
+      "line_text": "24: func makeAdmin(username, role string) *model.AdminUser { 25: return &model.AdminUser{ 26: ID: randomID(), 27: Username: username, 28: PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dGVzdHNhbHQ$testhash\", 29: Role: role, 30: } 31: }",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_client_capability_scope_test.go",
+      "line_text": "42: now := time.Now().UTC().Truncate(time.Microsecond) 43: return &model.Client{ 44: ID: randomID(), 45: Name: name, 46: SecretHash: \"$argon2id$v=19$m=47104,t=1,p=1$c2VjcmV0$attackerchosen\", 47: Role: \"service\", 48: Scopes: scopes, 49: RedirectURIs: []string{}, 50: Active: true, 51: CreatedAt: now, 52: UpdatedAt: now, 53: } 54: }",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_client_test.go",
+      "line_text": "189: t.Run(\"Create with empty scopes and redirect URIs\", func(t *testing.T) { 190: c := &model.Client{ 191: ID: randomID(), 192: Name: \"test-client-empty-arrays\", 193: SecretHash: \"$argon2id$v=19$m=47104,t=1,p=1$c2VjcmV0$hash\", 194: Role: \"service\", 195: Scopes: []string{}, 196: RedirectURIs: []string{}, 197: Active: true, 198: CreatedAt: time.Now().UTC().Truncate(time.Microsecond), 199: UpdatedAt: time.Now().UTC().Truncate(time.Microsecond), 200: } 201: if err := repo.Create(ctx, c); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_client_test.go",
+      "line_text": "21: now := time.Now().UTC().Truncate(time.Microsecond) 22: return &model.Client{ 23: ID: randomID(), 24: Name: name, 25: SecretHash: \"$argon2id$v=19$m=47104,t=1,p=1$c2VjcmV0$clienthash\", 26: Role: \"frontend\", 27: Scopes: []string{\"user:read\", \"user:write\"}, 28: RedirectURIs: []string{\"https://example.com/callback\"}, 29: Active: true, 30: CreatedAt: now, 31: UpdatedAt: now, 32: } 33: }",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_erasure_ops_test.go",
+      "line_text": "e := &model.PasswordHistory{ID: randomID(), UserID: user.ID, PasswordHash: \"$argon2id$hash\", CreatedAt: time.Now().UTC()}",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_misc_test.go",
+      "line_text": "277: t.Run(\"Create and GetByProviderAndID\", func(t *testing.T) { 278: a := &model.SocialAccount{ 279: ID: randomID(), 280: UserID: user.ID, 281: Provider: \"google\", 282: ProviderUserID: \"google-user-123\", 283: AccessTokenEnc: \"enc-access-token\", 284: RefreshTokenEnc: \"enc-refresh-token\", 285: CreatedAt: time.Now().UTC().Truncate(time.Microsecond), 286: } 287: if err := repo.Create(ctx, a); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_misc_test.go",
+      "line_text": "319: // Add a second social account 320: a2 := &model.SocialAccount{ 321: ID: randomID(), 322: UserID: user.ID, 323: Provider: \"github\", 324: ProviderUserID: \"github-user-456\", 325: AccessTokenEnc: \"enc-access-2\", 326: RefreshTokenEnc: \"enc-refresh-2\", 327: CreatedAt: time.Now().UTC().Truncate(time.Microsecond), 328: } 329: if err := repo.Create(ctx, a2); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_misc_test.go",
+      "line_text": "379: t.Run(\"Delete\", func(t *testing.T) { 380: a := &model.SocialAccount{ 381: ID: randomID(), 382: UserID: user.ID, 383: Provider: \"facebook\", 384: ProviderUserID: \"fb-user-789\", 385: AccessTokenEnc: \"enc-access-3\", 386: RefreshTokenEnc: \"enc-refresh-3\", 387: CreatedAt: time.Now().UTC().Truncate(time.Microsecond), 388: } 389: if err := repo.Create(ctx, a); err != nil {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_refresh_token_test.go",
+      "line_text": "181: } 182: tok2 := &model.RefreshToken{ 183: ID: randomID(), UserID: user2.ID, TokenHash: \"hash-revokeall-2\", 184: FamilyID: randomID(), ExpiresAt: now.Add(time.Hour), CreatedAt: now, 185: } 186: for _, tok := range []*model.RefreshToken{tok1, tok2} {",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_refresh_token_test.go",
+      "line_text": "213: // Expired + revoked (should be deleted) 214: tok2 := &model.RefreshToken{ 215: ID: randomID(), UserID: user.ID, TokenHash: \"hash-expired-revoked\", 216: FamilyID: randomID(), ExpiresAt: now.Add(-1 * time.Hour), CreatedAt: now.Add(-2 * time.Hour), 217: } 218: // Expired but not used/revoked (should NOT be deleted)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_refresh_token_test.go",
+      "line_text": "218: // Expired but not used/revoked (should NOT be deleted) 219: tok3 := &model.RefreshToken{ 220: ID: randomID(), UserID: user.ID, TokenHash: \"hash-expired-fresh\", 221: FamilyID: randomID(), ExpiresAt: now.Add(-1 * time.Hour), CreatedAt: now.Add(-2 * time.Hour), 222: } 223: // Not expired (should NOT be deleted)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_role_privileges_test.go",
+      "line_text": "279: } 280: if err := pwHistory.Create(ctx, &model.PasswordHistory{ 281: ID: randomID(), UserID: user.ID, PasswordHash: \"$argon2id$h\", CreatedAt: now, 282: }); err != nil { 283: t.Fatalf(\"create password history: %v\", err)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/integration/postgres_user_test.go",
+      "line_text": "28: now := time.Now().UTC().Truncate(time.Microsecond) 29: return &model.User{ 30: ID: randomID(), 31: Email: email, 32: PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dGVzdHNhbHQ$testhash\", 33: Locale: \"en\", 34: CreatedAt: now, 35: UpdatedAt: now, 36: } 37: }",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/unit/handler_password_test.go",
+      "line_text": "327: 328: body := jsonBody(t, map[string]string{ 329: \"current_password\": currentPassword, 330: \"new_password\": \"a-brand-new-secure-password\", 331: }) 332: req := httptest.NewRequest(http.MethodPost, \"/user/password\", body)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/unit/handler_password_test.go",
+      "line_text": "370: 371: body := jsonBody(t, map[string]string{ 372: \"current_password\": \"wrong-password-not-correct\", 373: \"new_password\": \"a-brand-new-secure-password\", 374: }) 375: req := httptest.NewRequest(http.MethodPost, \"/user/password\", body)",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/unit/handler_password_test.go",
+      "line_text": "pwTestOrigin = \"https://vault.test\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
+      "file": "tests/unit/handler_password_test.go",
+      "line_text": "return &model.User{ID: \"user-abc\", Email: email, PasswordHash: \"$argon2id$v=19$m=47104,t=1,p=1$dummy$dummy\"}, nil",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/recover/main_test.go",
+      "line_text": "binary.BigEndian.PutUint32(out[:4], uint32(len(wrapped)))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/recover/postgres_test.go",
+      "line_text": "formats[i] = int16(r.u16())",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/recover/postgres_test.go",
+      "line_text": "paramFormats[i] = int16(r.u16())",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "binary.BigEndian.PutUint16(b, uint16(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "binary.BigEndian.PutUint32(b, uint32(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "binary.BigEndian.PutUint64(b, uint64(micros))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "out = append(out, pgInt32(int32(len(payload)+4))...)",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "parts := [][]byte{pgInt16(int16(len(rule.cols)))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "parts := [][]byte{pgInt16(int16(len(vals)))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "parts := [][]byte{pgInt16(int16(n))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "parts = append(parts, pgInt32(int32(len(v))), v)",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "cmd/vault/pgstub_test.go",
+      "line_text": "pgInt32(int32(col.oid)), // type OID",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/adminapi/argon2_overload_test.go",
+      "line_text": "for holder.parked.Load() < int32(slots) || vaultcrypto.Argon2ActiveCount() < int64(slots) {",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/adminapi/argon2_overload_test.go",
+      "line_text": "holder := &adminapiArgon2Holder{release: make(chan struct{}), limit: int32(slots)}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/handler/webauthn_ceremony_test.go",
+      "line_text": "binary.BigEndian.PutUint16(l[:], uint16(len(a.credID)))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/handler/webauthn_ceremony_test.go",
+      "line_text": "return []byte{mt | 25, byte(n >> 8), byte(n)}",
+      "count": 2
+    },
+    {
+      "rule": "G115",
+      "file": "internal/ipintel/ipintel_coverage_test.go",
+      "line_text": "binary.LittleEndian.PutUint32(out[12:16], uint32(len(v6)))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/ipintel/ipintel_coverage_test.go",
+      "line_text": "binary.LittleEndian.PutUint32(out[8:12], uint32(len(v4)))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/keystore/keystore_truncated_refresh_test.go",
+      "line_text": "binary.BigEndian.PutUint64(b, uint64((ts.Unix()-keystorePostgresEpochOff)*1_000_000))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/migrate/begin_failure_test.go",
+      "line_text": "binary.BigEndian.PutUint32(out[1:], uint32(len(payload)+4))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/repos_row_contract_test.go",
+      "line_text": "binary.BigEndian.PutUint32(b, uint32(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/repos_row_contract_test.go",
+      "line_text": "binary.BigEndian.PutUint64(b, uint64((ts.Unix()-blobClientPostgresEpochOff)*1_000_000))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/repos_row_contract_test.go",
+      "line_text": "out = binary.BigEndian.AppendUint32(out, uint32(len(v)))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/repos_row_contract_test.go",
+      "line_text": "out = binary.BigEndian.AppendUint32(out, uint32(len(values))) // dimension length",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/servicedoc_test.go",
+      "line_text": "binary.BigEndian.PutUint16(b, uint16(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "binary.BigEndian.PutUint16(b, uint16(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "binary.BigEndian.PutUint32(b, uint32(v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "out = append(out, apInt32(int32(len(payload)+4))...)",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "parts := [][]byte{apInt16(int16(len(cols)))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "parts := [][]byte{apInt16(int16(len(vals)))}",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "internal/repository/postgres/wire_stub_test.go",
+      "line_text": "parts = append(parts, apInt32(int32(len(*v))), []byte(*v))",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/admin/helpers_test.go",
+      "line_text": "counter := uint64(t.Unix()) / 30",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/attack/atk_crypto_argon2_pressure_test.go",
+      "line_text": "peakMiB := uint64(vaultcrypto.Argon2MaxConcurrent()) * worstAlloc / (1024 * 1024)",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/attack/atk_crypto_argon2_pressure_test.go",
+      "line_text": "uint64(vaultcrypto.Argon2MaxConcurrent())*worstAlloc/(1024*1024),",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/attack/atk_crypto_recovery_escrow_test.go",
+      "line_text": "uint32(len(blob)) - 3, // one past",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/attack/atk_crypto_recovery_escrow_test.go",
+      "line_text": "uint32(len(blob)) - 4, // exactly the remainder: leaves an empty AES blob",
+      "count": 1
+    },
+    {
+      "rule": "G115",
+      "file": "tests/attack/atk_crypto_recovery_escrow_test.go",
+      "line_text": "uint32(len(blob)),",
+      "count": 1
+    },
+    {
+      "rule": "G122",
+      "file": "internal/config/loglevel_gate_test.go",
+      "line_text": "body, readErr := os.ReadFile(path) // #nosec G304 -- path comes from walking docs/, not from input",
+      "count": 1
+    },
+    {
+      "rule": "G122",
+      "file": "internal/config/loglevel_gate_test.go",
+      "line_text": "body, readErr := os.ReadFile(path) // #nosec G304 -- path comes from walking this repo, not from input",
+      "count": 1
+    },
+    {
+      "rule": "G122",
+      "file": "tests/compliance/audit_asvsauth_test.go",
+      "line_text": "b, err := os.ReadFile(path) // #nosec G304 -- walking the repo's own migrations",
+      "count": 1
+    },
+    {
+      "rule": "G122",
+      "file": "tests/compliance/audit_asvsauth_test.go",
+      "line_text": "b, err := os.ReadFile(path) // #nosec G304 -- walking the repo's own source tree",
+      "count": 1
+    },
+    {
+      "rule": "G402",
+      "file": "tests/e2e/e2e_test.go",
+      "line_text": "TLSClientConfig: &tls.Config{InsecureSkipVerify: true},",
+      "count": 2
+    },
+    {
+      "rule": "G702",
+      "file": "cmd/recover/main_test.go",
+      "line_text": "cmd := exec.Command(os.Args[0])",
+      "count": 1
+    },
+    {
+      "rule": "G702",
+      "file": "cmd/vault/harness_test.go",
+      "line_text": "cmd := exec.Command(os.Args[0]) // #nosec G204 -- re-executes this test binary",
+      "count": 1
+    },
+    {
+      "rule": "G703",
+      "file": "tests/integration/migrate_test.go",
+      "line_text": "if err := os.WriteFile(filepath.Join(tmpDir, \"001_initial_schema.sql\"), []byte(cleanedSQL), 0o644); err != nil {",
+      "count": 2
+    }
+  ],
+  "lines": 113,
   "total": 124
 }

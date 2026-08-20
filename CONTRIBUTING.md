@@ -86,7 +86,7 @@ they appear in the checks list:
 | Go coverage gate | a canonical coverage run checked by `scripts/release-check.sh --coverage-only`. Conditional |
 | Go coverage gate (required) | watches the job above and fails when it was skipped. **Require this one in branch protection**, not the job it watches: a skipped job reports green |
 | Frontend | builds `packages/vue` and `web`, then `test:coverage` for both, enforcing the thresholds in each `vite.config.ts`, then `eslint .` over the whole repository, `site/` included, at `--max-warnings 0` |
-| golangci-lint | `.golangci.yml` on the diff as a gate, and a whole-tree run held against `.golangci-baseline.json`. Both fail the job; the whole-tree run is a ratchet, not a report |
+| golangci-lint | `.golangci.yml` on the diff as a gate, and a plain whole-tree `golangci-lint run ./...`. Both fail the job. The whole-tree run was a ratchet against a committed baseline while a 109-finding backlog came down; the backlog reached zero, so the baseline went with it |
 | golangci-lint (required) | watches the job above. It is conditional on a Go change, so like the two coverage gates it needs a watcher before it can be required at all |
 | Security | calls `.github/workflows/nightly-security.yml`: govulncheck, gosec, trivy over source, image and frontend base, and the attack suite |
 | Helm chart | `helm lint` plus a render of every values file, and a check that a default install resolves a published image tag |
@@ -110,7 +110,7 @@ anyone noticed.
 
 Before a release, `scripts/release-check.sh` runs twelve gates, of which the security pass
 (govulncheck, gosec, trivy fs, attack suite, coverage) is the first five. The other seven are
-version consistency, module hygiene, the golangci ratchet, helm lint and template, documented
+version consistency, module hygiene, golangci-lint at zero over the whole tree, helm lint and template, documented
 chart paths, a changelog section for the version being cut, and a clean working tree, so a
 release can go red on a missing changelog entry alone.
 

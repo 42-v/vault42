@@ -19,7 +19,7 @@
 #   5  coverage                verified exclusions, full statement accounting
 #   6  version consistency     VERSION == tag == every manifest
 #   7  module hygiene          go mod verify, go mod tidy -diff
-#   8  golangci-lint           issue count against the ratchet below
+#   8  golangci-lint           zero findings over the whole tree
 #   9  helm                    lint + template of every values file
 #   10 docs                    no chart path that does not exist
 #   11 changelog               a section for the version being cut
@@ -38,13 +38,18 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 GOVULNCHECK_VERSION=v1.1.4
 GOSEC_VERSION=v2.28.0
 
-# Ratchet, not a target. golangci-lint has never run in CI, so the tree starts
-# with a backlog; this locks in "no worse than today" and comes down as packages
-# are cleaned. The gate below prints the new figure whenever a run comes in under
-# the ratchet, so lowering it is a one-line edit against a measured number.
-# CI blocks on new findings only (--new-from-merge-base), so this ratchet gates
-# the release, not the pull request.
-GOLANGCI_MAX_ISSUES=${GOLANGCI_MAX_ISSUES:-112}
+# Zero, and it stays zero. This was a ratchet set to 112 while the tree was being
+# cleaned, and the tree reached zero without anyone lowering it -- so a release
+# would have passed this gate carrying up to 112 findings, which is not a gate.
+# The comment above it still said golangci-lint had never run in CI, three
+# releases after the job that runs it was added.
+#
+# A ratchet is the right shape while a backlog is coming down and the wrong shape
+# afterwards: it keeps a number that has to be maintained by hand in step with
+# one that is measured, and the failure is silent in the permissive direction.
+# The variable stays overridable for someone bisecting a linter upgrade, and says
+# what it is when it is not zero.
+GOLANGCI_MAX_ISSUES=${GOLANGCI_MAX_ISSUES:-0}
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -325,7 +330,10 @@ print(len(d.get('Issues') or []))
   rm -f "$LINT_JSON"
   if [ "$LINT_COUNT" -gt "$GOLANGCI_MAX_ISSUES" ]; then
     golangci-lint run --timeout 15m ./... || true
-    fail "golangci-lint: $LINT_COUNT issues, ratchet is $GOLANGCI_MAX_ISSUES"
+    if [ "$GOLANGCI_MAX_ISSUES" -eq 0 ]; then
+      fail "golangci-lint: $LINT_COUNT issues over the whole tree, and the tree is held at zero"
+    fi
+    fail "golangci-lint: $LINT_COUNT issues, allowance is $GOLANGCI_MAX_ISSUES"
   elif [ "$LINT_COUNT" -lt "$GOLANGCI_MAX_ISSUES" ]; then
     pass "golangci-lint: $LINT_COUNT issues; lower GOLANGCI_MAX_ISSUES to $LINT_COUNT"
   else

@@ -19,6 +19,16 @@ COPY web/package.json web/
 # whose SHA-512 matched the integrity npm publishes for 0.35.0, so a substituted
 # artifact fails the check rather than executing in a release build.
 #
+# The tarball is then unpacked directly instead of being handed to `npm install
+# -g`. Two reasons, and the second is the one that made the change worth making.
+# npm resolves, writes a tree and runs lifecycle scripts for a package whose
+# bytes have already been verified, which is work with a wider blast radius than
+# `tar -xzf`. And Scorecard's Pinned-Dependencies check reads the command, not
+# the verification around it: any `npm install` counts as an unpinned npmCommand
+# regardless of what the argument is, so the previous line scored the repository
+# 9/10 for a dependency that was in fact pinned harder than most. The check was
+# right that the shape was wrong even though its reason did not apply.
+#
 # corepack is worth this because of what it does next: it reads `packageManager`
 # from package.json, which pins pnpm by version AND by SHA-512, so the package
 # manager that builds a release image is itself hash-verified.
@@ -35,8 +45,11 @@ RUN set -eu; \
       "https://registry.npmjs.org/corepack/-/corepack-${COREPACK_VERSION}.tgz"; \
     printf '%s  /tmp/corepack.tgz\n' "${COREPACK_SHA256}" > /tmp/corepack.sha256; \
     sha256sum -c /tmp/corepack.sha256; \
-    npm install -g /tmp/corepack.tgz; \
+    mkdir -p /opt/corepack; \
+    tar -xzf /tmp/corepack.tgz -C /opt/corepack --strip-components=1; \
+    ln -s /opt/corepack/dist/corepack.js /usr/local/bin/corepack; \
     rm /tmp/corepack.tgz /tmp/corepack.sha256; \
+    corepack --version; \
     corepack enable; \
     pnpm install --frozen-lockfile
 COPY packages/vue/ packages/vue/

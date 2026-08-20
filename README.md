@@ -184,7 +184,7 @@ Coverage tooling lives in `scripts/`:
 | `scripts/coverage.sh` | Regenerate `docs/test-coverage.md` with per-package + per-function coverage |
 | `scripts/dotnet-coverage.sh` | Build, test and coverage-gate the published .NET SDKs (floor 100.00, no exclusions) |
 | `scripts/security-scan.sh` | Standalone Go + frontend security pass (go vet, gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
-| `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, the golangci ratchet, helm, doc chart paths, a changelog section for the version, and a clean tree |
+| `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, golangci-lint at zero, helm, doc chart paths, a changelog section for the version, and a clean tree |
 | `scripts/precommit.sh` | Pre-commit verification: build, vet, gosec, tests, badges, docs |
 
 ## Docs

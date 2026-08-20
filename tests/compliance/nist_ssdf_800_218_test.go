@@ -598,10 +598,12 @@ func TestSSDF_800_218_SecureCodingStandardIsEnforcedByTools(t *testing.T) {
 		t.Error("SSDF PW.5.1: ci.yml no longer runs golangci-lint, so .golangci.yml describes a " +
 			"standard nothing holds anyone to")
 	}
-	if !strings.Contains(ci, ".golangci-baseline.json") {
-		t.Error("SSDF PW.5.1: the whole-tree golangci run no longer checks against a baseline. " +
-			"Without it the diff gate is the only check, and a finding in code nobody touched " +
-			"stays findable but never fails anything.")
+	if !strings.Contains(ci, "golangci-lint run --timeout 15m ./...") {
+		t.Error("SSDF PW.5.1: ci.yml no longer runs golangci-lint over the whole tree. The diff " +
+			"gate (--new-from-merge-base) would be the only check left, and a finding in code " +
+			"nobody touched stays findable but never fails anything. This ran against a " +
+			"hand-maintained baseline until the backlog reached zero; the plain run is what " +
+			"replaced it, and it is stricter, not looser.")
 	}
 }
 
