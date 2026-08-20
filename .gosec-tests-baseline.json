@@ -180,6 +180,12 @@
     },
     {
       "rule": "G101",
+      "file": "internal/handler/oauth_authtime_test.go",
+      "line_text": "oidcCallbackTokenIssuer = \"https://vault.test\"",
+      "count": 1
+    },
+    {
+      "rule": "G101",
       "file": "internal/handler/oauth_test.go",
       "line_text": "const testOAuthCSRFToken = \"test-csrf-token-fixed\"",
       "count": 1
@@ -701,6 +707,6 @@
       "count": 2
     }
   ],
-  "lines": 113,
-  "total": 124
+  "lines": 114,
+  "total": 125
 }
