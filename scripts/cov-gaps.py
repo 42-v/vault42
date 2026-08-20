@@ -41,6 +41,7 @@ import os
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_EXCLUSIONS = os.path.join(REPO_ROOT, ".coverage-exclusions.json")
@@ -389,7 +390,7 @@ def module_path():
     return ""
 
 
-def check_profile_is_current(blocks, module):
+def check_profile_is_current(blocks, module, profile_path=None):
     """Abort when the profile describes a file longer than the one on disk.
 
     A block whose start line is past its file's end cannot have come from the
@@ -440,11 +441,58 @@ def check_profile_is_current(blocks, module):
     if len(stale) > 5:
         print(f"        ... and {len(stale) - 5} more", file=sys.stderr)
     print("      Those counters were compiled from a different version of the file, so every "
-          "number below is measured against a tree that is not this one.\n"
-          "      Run `go clean -cache` and measure again. To confirm without clearing a shared "
-          "cache, re-run one package under GOCACHE=$(mktemp -d) and compare the block count.",
-          file=sys.stderr)
+          "number below is measured against a tree that is not this one.", file=sys.stderr)
+    print(f"      {age_hint(profile_path)}", file=sys.stderr)
+    print("      Regenerate first: `scripts/coverage.sh` writes coverage/coverage.out. Most of "
+          "the time the profile is simply older than the tree, and the previous version of this "
+          "message did not say so -- it named a poisoned build cache as the cause, which sent a "
+          "reader to `go clean -cache` and a full re-measure for a file they only had to "
+          "replace.\n"
+          "      If a freshly generated profile still lands here, the build cache is holding "
+          "counters from an older compile: run `go clean -cache` and measure again, or confirm "
+          "without clearing a shared cache by re-running one package under "
+          "GOCACHE=$(mktemp -d) and comparing the block count.", file=sys.stderr)
     sys.exit(1)
+
+
+def age_hint(profile_path):
+    """Describe how old the profile is next to the newest Go source it claims to measure.
+
+    A profile older than the code is not a subtle failure and does not need the
+    block arithmetic to diagnose, but the block arithmetic is what reports it,
+    so the two facts are printed together.
+    """
+    if profile_path is None:
+        return "The profile's age could not be determined."
+    try:
+        profile_mtime = os.path.getmtime(profile_path)
+    except OSError:
+        return "The profile's age could not be determined."
+
+    newest, newest_path = 0.0, None
+    for root, dirs, names in os.walk(REPO_ROOT):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "coverage", "dist", "tmp"}]
+        for name in names:
+            if not name.endswith(".go"):
+                continue
+            path = os.path.join(root, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if mtime > newest:
+                newest, newest_path = mtime, path
+
+    stamp = datetime.fromtimestamp(profile_mtime).strftime("%Y-%m-%d %H:%M")
+    if newest_path is None:
+        return f"The profile was written {stamp}."
+    rel = os.path.relpath(newest_path, REPO_ROOT)
+    newest_stamp = datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
+    if profile_mtime < newest:
+        hours = (newest - profile_mtime) / 3600
+        return (f"The profile was written {stamp} and {rel} changed {newest_stamp}, "
+                f"{hours:.1f} hours later. A profile older than the code cannot be measuring it.")
+    return f"The profile was written {stamp}; the newest Go file, {rel}, is older than that."
 
 
 def totals(blocks):
@@ -951,7 +999,7 @@ def verify_exclusions(args):
                         "scripts/coverage.sh writes.")
     else:
         blocks = load(args.profile)
-        check_profile_is_current(blocks, doc.get("module", ""))
+        check_profile_is_current(blocks, doc.get("module", ""), args.profile)
         total, covered = totals(blocks)
         canon_problems, canon_notes = check_canonical(blocks, total, doc.get("module", ""))
         problems += canon_problems
@@ -1114,7 +1162,7 @@ def main():
         sys.exit("a coverage profile is required (scripts/coverage.sh writes one)")
 
     blocks = load(args.profile)
-    check_profile_is_current(blocks, module_path())
+    check_profile_is_current(blocks, module_path(), args.profile)
     if args.diff:
         diff(blocks, load(args.diff))
         return

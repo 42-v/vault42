@@ -9,6 +9,7 @@
 #   scripts/release-check.sh                     every gate
 #   scripts/release-check.sh --version-only VER  version consistency only
 #   scripts/release-check.sh --coverage-only P   coverage gate over profile P
+#                                                (default: coverage/coverage.out)
 #
 # Gates:
 #   1  govulncheck             Go stdlib + transitive CVEs
@@ -142,7 +143,13 @@ case "${1-}" in
     exit 0
     ;;
   --coverage-only)
-    coverage_gate "${2:-coverage.out}"
+    # Defaults to what scripts/coverage.sh writes when nothing overrides it.
+    # It used to default to ./coverage.out, which is where the *full* release
+    # run puts its profile via COVERAGE_FILE -- so a bare --coverage-only read
+    # whatever profile the last full run had left at the root, and on a
+    # developer's machine that was a week-old file. The staleness check caught
+    # it, which is the only reason this is a papercut rather than a false green.
+    coverage_gate "${2:-coverage/coverage.out}"
     echo -e "\n${GREEN}release-check: coverage gate green${NC}"
     exit 0
     ;;

@@ -7403,7 +7403,7 @@
       "requirement": "Specify which tools are to be included in each toolchain",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:1",
+        ".github/workflows/ci.yml:33",
         ".github/workflows/nightly-security.yml:42"
       ],
       "tests": [
@@ -7537,8 +7537,9 @@
       "requirement": "Make software integrity verification information available to software acquirers",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:39",
-        ".github/workflows/release.yml:292"
+        ".github/workflows/release.yml:222",
+        ".github/workflows/release.yml:348",
+        ".goreleaser.yaml"
       ],
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
@@ -7653,8 +7654,8 @@
       "requirement": "Acquire and maintain well-secured software components from commercial, open-source and other third-party developers",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:366",
-        ".github/workflows/ci.yml:369"
+        ".github/workflows/ci.yml:654",
+        ".github/workflows/ci.yml:657"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7688,7 +7689,7 @@
       "requirement": "Verify that acquired third-party software components comply with the requirements",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:366",
+        ".github/workflows/ci.yml:654",
         ".github/workflows/nightly-security.yml:57",
         "docs/deps.md"
       ],
@@ -7707,7 +7708,7 @@
       "status": "Met",
       "evidence": [
         ".golangci.yml:10",
-        ".github/workflows/ci.yml:292",
+        ".github/workflows/ci.yml:326",
         "CONTRIBUTING.md"
       ],
       "tests": [
@@ -7756,7 +7757,7 @@
       "status": "Met",
       "evidence": [
         ".github/CODEOWNERS:1",
-        ".github/workflows/ci.yml:226"
+        ".github/workflows/ci.yml:326"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist",
@@ -7822,7 +7823,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:697",
-        ".github/workflows/ci.yml:427"
+        ".github/workflows/ci.yml:474"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7988,7 +7989,7 @@
       "evidence": [
         "tests/compliance/register_gates_test.go",
         "tests/compliance/nist_ssdf_800_218_test.go",
-        ".github/workflows/ci.yml:847"
+        ".github/workflows/ci.yml:886"
       ],
       "tests": [
         "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed",
@@ -8181,7 +8182,7 @@
       "requirement": "This check determines whether a project's default and release branches are protected with GitHub's branch protection or repository rules settings.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:207"
+        ".github/workflows/ci.yml:204"
       ],
       "tests": [
         "TestScorecard_TheAssessmentItselfRuns"
@@ -8366,7 +8367,7 @@
       "status": "Met",
       "evidence": [
         ".github/requirements-lint.txt:1",
-        ".github/workflows/ci.yml:810"
+        ".github/workflows/ci.yml:929"
       ],
       "tests": [
         "TestScorecard_EveryActionIsPinnedByCommit",
@@ -8385,7 +8386,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/nightly-security.yml:97",
-        ".github/workflows/ci.yml:292"
+        ".github/workflows/ci.yml:326"
       ],
       "tests": [
         "TestScorecard_StaticAnalysisAndFuzzingRun"
