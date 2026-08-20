@@ -51,6 +51,43 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   Register totals: 431 requirements across 11 standards, 369 Met, 15 Accepted Risk,
   47 Not Applicable.
 
+* **SSDF was assessed at 17 of its 42 tasks, and the register did not say so.** NIST
+  SP 800-218 v1.1 defines 42 tasks across 19 practices. Seventeen were classified while
+  `meta.claim` asserted that every requirement in scope carried a status. A denominator
+  nobody states is a denominator nobody checks, which is the failure this register exists
+  to stop making about other people's software.
+
+  All 42 are classified now. The task list was parsed from NIST's own SSDF 1.1 table
+  rather than recalled, which is also how the register learned that `PW.3` and `PW.4.3`
+  are absent because v1.1 removed them. SSDF 1.2 exists as an initial public draft whose
+  comment period closed in January 2026; v1.1 remains the final publication and the
+  standards entry now says which one is being assessed against and why.
+
+  Of the 25 new rows, 20 are Met, 1 Not Applicable, 4 Accepted Risk. Three of the four
+  are one fact stated twice: SSDF's `PO.2` and `PW.2` tasks assume an organization with
+  roles to train, a reviewer to assess proficiency and an authority above the developer
+  to escalate to. Marking them Not Applicable was considered and rejected -- the register's
+  N/A vocabulary covers a role vault42 does not occupy or a capability the code lacks, and
+  neither describes a practice that simply is not performed. **CR-39** records that.
+  **CR-40** records the development endpoint: the build and test environments are hosted
+  and ephemeral and can be asserted here, but the machine the code is written on is
+  personal, outside the repository, and unverifiable by a reader holding a clone of it.
+
+  Register: 456 requirements across 11 standards, 389 Met, 19 Accepted Risk, 48 Not
+  Applicable.
+
+* **A retired risk owed nothing.** An open risk in the register owes a rationale, a
+  compensating control, a residual-risk statement, a revisit condition and a named
+  accepting party, with a test enforcing all five. Once closed it moved to
+  `retired_risks`, where the rule was: write a paragraph. That is backwards. An open risk
+  is watched because it is open; a closed one is the entry nobody re-reads, so a
+  regression in the code that closed it is silent while the register goes on saying
+  "Closed" and citing a line that has since moved.
+
+  Every retired risk now names the test that keeps it closed, checked against the tree.
+  Seven of the twelve already did out of habit; the other five named source positions.
+  The tests existed in all five cases, so this was writing down what was already true.
+
 ### Changed
 
 * **Frontend toolchain: five of the six pending majors.** vite 6 to 8, vue-router 4 to
@@ -78,6 +115,41 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   new `./unstable/*` API first.
 
 ### Fixed
+
+* **The published image and the published archive did not hold the same binary.**
+  `.goreleaser.yaml` compiles the release archives with `-trimpath` and
+  `-buildvcs=false`. The three Dockerfiles that `release.yml` actually builds and pushes
+  set neither, so the image binary recorded every package's absolute build directory and
+  the archive binary did not, for the same program at the same tag. Confirmed rather than
+  assumed: the same source built both ways puts 8 build-path strings in the untrimmed
+  binary and 0 in the trimmed one.
+
+  Nothing caught it because nothing compared them. Both were individually plausible, both
+  were hadolint-clean, and the flags live in two files in two syntaxes.
+
+* **`CONTRIBUTING.md` described a CI pipeline three jobs behind.** 1.0.1 added the .NET
+  coverage gate, its required watcher and the non-Go linter job, and the document was not
+  touched. So it said "All fifteen jobs" over a workflow with eighteen, told a contributor
+  the .NET packages were "not built on a pull request", and listed four linter
+  configurations as "invoked by nothing" -- on the release where both had just stopped
+  being true. Every one of those errors points the same way: toward a contributor
+  skipping a check that runs.
+
+* **The register claimed a required status check that was never required.** CR-36 listed
+  golangci-lint among the thirteen checks standing in for a human reviewer on a
+  single-maintainer project. The branch requires thirteen and golangci-lint is not among
+  them, because it cannot be as written: the job is conditional on a Go change, and branch
+  protection reads a skipped job as a passing one. The wrapper pattern that solves this
+  was already in the repository twice, for the Go and .NET coverage gates; it was learned
+  twice and missed the third time. The wrapper now exists, and requiring it is left as the
+  branch-protection setting it is, with CR-36 recording the difference rather than the fix
+  pre-empting the decision.
+
+* **`docs/COMPLIANCE.md` still called `PO.3.2` an accepted risk under CR-32**, which was
+  retired when dependabot landed. **The register's own version header read 1.0.0**, three
+  releases on, because nothing propagated it and nothing checked it: the register is full
+  of gates pointed at the rest of the repository and had none pointed at its own header.
+  `scripts/version-bump.sh` owns it now.
 
 * **A dialog's focus trap was joined to its dialog by an unchecked string.** Three views
   took a `dialogRef` from `useModalFocus`, never mentioned it again, and bound it in the
