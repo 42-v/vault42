@@ -15,19 +15,29 @@
 # a genuinely unreachable line ever does appear, lowering DOTNET_COVERAGE_FLOOR
 # is a one-line diff that a reviewer sees, which is the point.
 #
-# Usage: scripts/dotnet-coverage.sh [--floor N]
+# Usage: scripts/dotnet-coverage.sh [--floor N] [--json PATH]
+#
+# --json writes {covered, total, percent} for scripts/readme-gen.sh, so the C#
+# badge quotes the number this gate measured rather than re-deriving one that
+# could disagree with it.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 solution="$root/packages/dotnet/Vault42.sln"
 results="${DOTNET_COVERAGE_RESULTS:-$root/tmp/dotnet-coverage}"
 floor="${DOTNET_COVERAGE_FLOOR:-100.00}"
+json_out=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --floor)
       [ $# -ge 2 ] || { echo "--floor needs a value" >&2; exit 2; }
       floor="$2"
+      shift 2
+      ;;
+    --json)
+      [ $# -ge 2 ] || { echo "--json needs a path" >&2; exit 2; }
+      json_out="$2"
       shift 2
       ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -46,8 +56,14 @@ esac
 rm -rf "${results:?}"
 mkdir -p "$results"
 
+# The test count goes to the badge generator too, and it comes from the same run
+# that produced the profile so the two can never describe different suites.
 dotnet test "$solution" -c Release --nologo \
   --collect:"XPlat Code Coverage" \
-  --results-directory "$results"
+  --results-directory "$results" | tee "$results/test-output.txt"
 
-python3 "$root/scripts/dotnet-coverage.py" "$results" --floor "$floor"
+if [ -n "$json_out" ]; then
+  python3 "$root/scripts/dotnet-coverage.py" "$results" --floor "$floor" --json "$json_out"
+else
+  python3 "$root/scripts/dotnet-coverage.py" "$results" --floor "$floor"
+fi

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "tests": 5049,
   "passed": "5049 passed",
   "coverage": "99.60%",
@@ -10,7 +10,31 @@
   "packages": 44,
   "goFiles": 195,
   "goLines": 47986,
-  "testFiles": 904,
+  "testFiles": 905,
   "directDeps": 3,
-  "transitiveDeps": 18
+  "transitiveDeps": 18,
+  "totalTests": 6545,
+  "languages": {
+    "go": {
+      "tests": 5049,
+      "coverage": "100.00% of reachable",
+      "coverageNum": 100.00,
+      "lines": 47986,
+      "deps": 3
+    },
+    "vue": {
+      "tests": 1249,
+      "coverage": "99.76%",
+      "coverageNum": 99.76,
+      "lines": 6701,
+      "deps": 3
+    },
+    "csharp": {
+      "tests": 247,
+      "coverage": "100.00%",
+      "coverageNum": 100.00,
+      "lines": 2238,
+      "deps": 6
+    }
+  }
 }

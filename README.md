@@ -5,12 +5,13 @@ Production-grade JWT authentication server written in Go, with an integrated Vue
 Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It is not an OAuth2 authorization server and not an OIDC provider: there is no authorize endpoint, no consent screen, and no `redirect_uri` a third-party client registers against it.
 
 <!-- badges -->
-| | | |
-|---|---|---|
-| ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-5049-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1302-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6351_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-47986_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6701_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
-| ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
+| Go | Vue | C# | |
+|---|---|---|---|
+| ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat&logo=dotnet&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Tests-5049-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Tests-1249-155724?style=flat&labelColor=000) | ![C# Tests](https://img.shields.io/badge/Tests-247-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6545_tests-155724?style=flat&labelColor=000) |
+| ![Go Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) | ![Vue Coverage](https://img.shields.io/badge/Coverage-99.76%25-155724?style=flat&labelColor=000) | ![C# Coverage](https://img.shields.io/badge/Coverage-100.00%25-155724?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Lines-47986-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6701-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2238-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-10-555?style=flat&labelColor=000) |
+| ![Go Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![C# Deps](https://img.shields.io/badge/Deps-6-555?style=flat&labelColor=000) | ![Requirements](https://img.shields.io/badge/Requirements-424-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
 ## Highlights
@@ -229,7 +230,7 @@ the images carry SBOM and SLSA provenance attestations:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/42-v/vault42:1.0.1
+  ghcr.io/42-v/vault42:1.0.2
 ```
 
 Full instructions, covering all four artifact classes, are in
