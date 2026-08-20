@@ -1,6 +1,8 @@
 package compliance
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +22,7 @@ import (
 //
 // Which is why the register carries the checks rather than a score. A score is
 // one number over twenty weighted checks; the two this project cannot move
-// (Contributors wants more than one organisation, CII-Best-Practices wants a
+// (Contributors wants more than one organization, CII-Best-Practices wants a
 // badge nobody has applied for) drag it down regardless of the eighteen it can,
 // and quoting the number alone would either flatter or understate depending on
 // which way the weighting fell that week.
@@ -312,10 +314,9 @@ func TestScorecard_TheReleaseHistoryIsRecorded(t *testing.T) {
 // direct dependency for argon2id and HKDF, and nothing in either module imports
 // openpgp. The first two make the finding unavoidable; the third is what makes
 // it harmless, and it is the one a future import could quietly undo.
-// openpgpImportPrefix is assembled rather than written out, because the scan
-// below walks every Go file in the tree including this one, and a literal here
-// would make this test the import it exists to forbid.
-var openpgpImportPrefix = `"golang.org/x/crypto/` + "openpgp"
+// openpgpImportPath is the quoted import path the scan below compares against,
+// in the form an *ast.ImportSpec carries it.
+const openpgpImportPath = `"golang.org/x/crypto/openpgp"`
 
 func TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames(t *testing.T) {
 	root := repoRoot(t)
@@ -326,6 +327,11 @@ func TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames(t *testing.T) {
 			"means CR-37 has closed and the accepted risk should be retired rather than carried")
 	}
 
+	// The import graph is read from the AST rather than from the file bytes.
+	// Reading the bytes inside a WalkDir callback is the symlink-TOCTOU shape
+	// gosec's G122 reports, and the parser gives a more precise answer anyway:
+	// a package named in a comment or in this test's own error message is not
+	// an import.
 	scannedCount := 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -333,7 +339,7 @@ func TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "tmp", "dist", "coverage", "bin", "obj":
+			case ".git", "node_modules", "tmp", "dist", "coverage", "bin", "obj", "testdata":
 				return filepath.SkipDir
 			}
 			return nil
@@ -341,16 +347,22 @@ func TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
+		parsed, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return parseErr
 		}
 		scannedCount++
-		if strings.Contains(string(raw), openpgpImportPrefix) {
-			rel, _ := filepath.Rel(root, path)
-			t.Errorf("Scorecard Vulnerabilities: %s imports golang.org/x/crypto/openpgp. "+
-				"GO-2026-5932 marks that package unmaintained and unsafe by design with no "+
-				"patched version; CR-37 accepts the advisory only because no code reaches it.", rel)
+		for _, imp := range parsed.Imports {
+			if imp.Path == nil || imp.Path.Value != openpgpImportPath {
+				continue
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				rel = path
+			}
+			t.Errorf("Scorecard Vulnerabilities: %s imports %s. GO-2026-5932 marks that package "+
+				"unmaintained and unsafe by design with no patched version; CR-37 accepts the "+
+				"advisory only because no code reaches it.", rel, openpgpImportPath)
 		}
 		return nil
 	})
@@ -358,10 +370,10 @@ func TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames(t *testing.T) {
 		t.Fatalf("Scorecard Vulnerabilities: walking the tree failed: %v", err)
 	}
 	if scannedCount < 100 {
-		t.Fatalf("Scorecard Vulnerabilities: only %d Go files scanned; the walk is broken and the "+
+		t.Fatalf("Scorecard Vulnerabilities: only %d Go files parsed; the walk is broken and the "+
 			"assertion above would pass vacuously", scannedCount)
 	}
-	t.Logf("Scorecard Vulnerabilities: %d Go files scanned, no openpgp import", scannedCount)
+	t.Logf("Scorecard Vulnerabilities: %d Go files parsed, no openpgp import", scannedCount)
 }
 
 // TestScorecard_RegisterMatchesTheCheckSet is the drift gate. Scorecard's check

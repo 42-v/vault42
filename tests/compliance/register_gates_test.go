@@ -282,7 +282,7 @@ func TestComplianceRegister_EvidenceIsRelevantAndNotJustResolvable(t *testing.T)
 			}
 			if _, brace := citationDeadEnds[cited]; brace {
 				t.Errorf("%s %s cites %s, which is %q -- a line that closes a block rather than "+
-					"doing anything. It carries no identifier and no behaviour, so a reader "+
+					"doing anything. It carries no identifier and no behavior, so a reader "+
 					"following the citation learns nothing from it. This is the same failure as a "+
 					"blank line, arriving a few lines earlier: a citation drifts off the statement "+
 					"it was written for and lands on the end of its declaration. Cite the "+
