@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Vault42.AspNetCore</RootNamespace>
     <PackageId>Vault42.AspNetCore</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>42-v</Authors>
     <Description>ASP.NET Core authentication middleware for Vault42 — a production-grade Go JWT auth service. Validates RS256 JWTs via JWKS with auto-refresh, claim mapping, fingerprint validation, and authorization policies.</Description>
     <PackageTags>vault42;jwt;authentication;authorization;aspnetcore;jwks</PackageTags>
@@ -26,11 +26,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Vault42.AspNetCore.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.203" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.400" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,8 +42,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.17.0" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.17.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.22.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
   </ItemGroup>
 
 </Project>

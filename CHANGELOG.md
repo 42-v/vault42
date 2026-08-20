@@ -1,6 +1,120 @@
 # Changelog
 
-## 1.0.0 (2026-08-18)
+## 1.0.1 (2026-08-20)
+
+**1.0.1 is the first 1.x release anyone can install.** 1.0.0 was merged and never
+tagged, and the release workflow is tag-driven, so no image, chart, archive or NuGet
+package was ever published under that number. The section below it records what landed
+in that merge; this section records what happened next.
+
+What happened next was eighteen dependabot pull requests, one Dependabot advisory and
+six OpenSSF Scorecard findings arriving against a tree nobody could install.
+
+### Security
+
+* **`HasScope` returned false for every scope the Vault has ever issued.** The .NET
+  authentication handler read the `roles` and `scopes` arrays out of
+  `JwtSecurityToken.Claims`, and that collection flattens a JSON array into one claim
+  per element: a token carrying `"scopes":["read","write"]` yields two claims valued
+  `read` and `write`, never the array text. Deserialising the first of them as
+  `string[]` throws on every real token, and the throw was swallowed by a `catch`
+  commented "non-array scopes claim, skip". So `ClaimsPrincipal.GetScopes()` returned
+  empty and `HasScope(...)` returned false for every application that has ever used
+  `Vault42.AspNetCore` for scope-based authorization. It failed closed, which is the
+  only reason this is a defect and not an incident. Roles appeared to work, and that is
+  why it survived: they arrive mapped to `ClaimTypes.Role` by
+  `JwtSecurityTokenHandler`'s default inbound claim map rather than by any code in this
+  package -- so `MapRolesToClaims = false` was also a no-op, and an application that
+  clears that map, which is the usual way to stop the library renaming claims, lost
+  roles entirely. Both arrays are now read from the payload, where an array is still an
+  array.
+* **`GHSA-hfg8-hc9c-6c3h`** in `github.com/moby/go-archive` is closed by 0.3.3. The
+  package is reached only through testcontainers from `_test.go` files, so no shipped
+  artifact ever contained it. `govulncheck` is clean at symbol level on both modules;
+  the one module-level finding that remains, `GO-2026-5932`, marks
+  `golang.org/x/crypto/openpgp` unmaintained with no patched version and is accepted as
+  CR-37, with a test asserting nothing in either module imports it.
+* **`main` is protected.** It was not, through 1.0.0. Merging now requires a pull request,
+  thirteen passing status checks including the Go and .NET coverage gates, branches up to
+  date before merge, linear history and resolved conversations, with force-push and deletion
+  blocked. No approving review is required, and that is deliberate: GitHub does not let you
+  approve your own pull request, so on a single-maintainer project a required approval is one
+  nobody can give. It was set that way first, and the very next pull request could only be
+  merged by an admin bypass -- which skips the thirteen status checks as well as the review.
+  A rule meant to add a reviewer was in practice removing the CI gate. The checks are the part
+  that works, so the checks are what is required; the missing reviewer is recorded as CR-36
+  instead of being papered over. `enforce_admins` stays off so a hotfix remains possible.
+* **The lint job's dependencies resolve through a hash.** `pip install 'ruff==0.16.3'`
+  and `npm install markdownlint-cli2@0.23.2` both named an exact version and then trusted
+  whatever bytes the registry served for it, which is a version pin and not a
+  supply-chain pin: a republished artifact under the same version, or an account takeover
+  on any of ruff, yamllint or markdownlint-cli2, executed on every pull request. pip now
+  installs under `--require-hashes` from a `pip-compile`-generated file carrying a digest
+  for every resolved artifact including the transitive ones, and markdownlint-cli2 is a
+  root devDependency that `pnpm-lock.yaml` pins by integrity. These were Scorecard's only
+  two Pinned-Dependencies findings.
+
+### Tests
+
+* **The published .NET SDKs are tested on pull requests, and covered.** Until now they
+  were built by exactly one thing: the release workflow, after the tag had been pushed.
+  No pull request ever compiled them, which is how two dependabot bumps to the test SDK
+  and the xunit runner merged green in this release without either project being touched.
+  Coverage of the shipped source was **53.08%**; `VaultAuthService`, the entire OAuth2
+  client, was at **0%**, with none of its four fail-closed branches -- provider error,
+  missing code, state mismatch, missing verifier -- asserted by anything.
+  **46 tests to 247, and 53.08% to 100.00% of shipped lines**, gated by
+  `scripts/dotnet-coverage.sh` with a floor of 100.00 and no exclusions file: when a line
+  cannot be reached, delete it, which is where `VaultErrorResponse` and an unreachable arm
+  of the array-claim reader went. Writing those tests is what found the scopes defect
+  above.
+
+### Compliance
+
+* **OpenSSF Scorecard joins the register**, and it is the one standard here vault42 does
+  not grade itself against: the checks are scored from outside by a weekly run and
+  published where a reader can contradict a row by opening a URL. Twenty checks, fifteen
+  Met, four Accepted Risk, one Not Applicable. The composite score is deliberately not
+  quoted -- two of the twenty measure a project's contributor base rather than its
+  software, and a single-maintainer project scores zero on both whatever the code looks
+  like. They are recorded as accepted risks under CR-36 rather than argued away.
+* **Twenty-eight evidence citations pointed at a closing brace.** The register's gate
+  rejected a citation that had drifted onto a blank line; twenty-eight had drifted one
+  line less far and sat on the punctuation that ends a declaration, which resolves, is
+  not blank, and tells a reader nothing. Several had drifted far enough to be wrong: ASVS
+  V1.3.11 described `sanitize.Email` and cited the URL-path sanitiser, V2.3.4 described
+  the concurrent-session lock and cited an email-OTP cache write, and the two NIST
+  password rows named constants 97 lines from the lines they pointed at. All twenty-eight
+  are re-anchored, the gate now rejects the brace case too, and thirteen rows that now say
+  what they cite leave the two frozen exemption lists.
+
+### Tooling
+
+* **`scripts/version-bump.sh` propagates two locations it did not know about.** It calls
+  itself the only thing that knows where every copy of `VERSION` lives, and two published
+  image tags in prose -- the cosign verification example in `README.md` and the Helm
+  command in `docs/deployment-guide.md` -- were not in its table. `tests/spec` caught them
+  still reading 1.0.0 after this release's bump, which is one release later than a
+  propagation script should ever find out. Both are rules now, and
+  `scripts/dotnet-coverage.sh` joins the script table in the README.
+
+### Dependencies
+
+Every open dependabot pull request, applied as one change so `go mod tidy` settles the
+graph once rather than eighteen times. testcontainers-go 0.42.0 to 0.44.0, `x/crypto`
+0.53.0 to 0.55.0, moby/go-archive 0.2.0 to 0.3.3, chromedp 0.14.2 to 0.16.0 in
+`tests/browser`; the action set including checkout, upload-artifact, setup-dotnet,
+setup-helm, login-action, cosign-installer, goreleaser-action, action-gh-release,
+pnpm/action-setup, hadolint and sbom-action, all still pinned by commit SHA; the golang
+and distroless base digests, node 22-alpine to 26-alpine; and the .NET analyzer set,
+the IdentityModel packages, Test.Sdk and xunit.runner.visualstudio.
+
+## 1.0.0 -- merged 2026-08-18, never released
+
+The tag was never pushed, so nothing was published under this version. Its contents ship
+as part of 1.0.1 and the notes are kept intact below, because the work is what 1.0.1 is
+built on and rewriting it as though it had always been 1.0.1 would lose the reason the
+exclusion set exists.
 
 The version number is the coverage figure, so 1.0.0 could only ever mean a fully covered
 tree. It turned out not to be honestly reachable, and saying why is most of what this

@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -40,7 +40,7 @@ jobs:
       # a silent skip is the same defect wearing a different hat.
       #
       # The version matches the chart jobs so CI renders with one helm, not two.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
@@ -116,13 +116,13 @@ jobs:
             2>&1 | tee -a test-output.txt
 
       - name: Upload unit coverage
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-unit
           path: coverage-unit.out
 
       - name: Upload test output
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: test-output
@@ -138,7 +138,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -153,7 +153,7 @@ jobs:
       # a silent skip is the same defect wearing a different hat.
       #
       # The version matches the chart jobs so CI renders with one helm, not two.
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
@@ -186,7 +186,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
           path: |
@@ -233,10 +233,10 @@ jobs:
       # fetch-depth: 0 was here for the `git diff` in the changed-files lint.
       # That step is gone and nothing else in this job reads history, so the
       # checkout is shallow again.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -304,7 +304,7 @@ jobs:
     env:
       BASE_REF: ${{ github.base_ref || 'main' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -423,11 +423,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
 
-      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.3
 
@@ -462,7 +462,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - name: Every manifest agrees with VERSION
@@ -476,8 +476,9 @@ jobs:
       go_changed: ${{ steps.filter.outputs.go }}
       goreleaser_changed: ${{ steps.filter.outputs.goreleaser }}
       image_inputs_changed: ${{ steps.filter.outputs.image_inputs }}
+      dotnet_changed: ${{ steps.filter.outputs.dotnet }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -504,6 +505,14 @@ jobs:
             goreleaser:
               - '.goreleaser.yaml'
               - '.goreleaser.yml'
+            # The .NET SDKs are published to nuget.org and, until 1.0.1, were
+            # built by nothing except the release workflow -- after the tag had
+            # already been pushed. Two dependabot bumps to the test SDK merged
+            # green without either project ever being compiled.
+            dotnet:
+              - 'packages/dotnet/**'
+              - 'scripts/dotnet-coverage.sh'
+              - 'scripts/dotnet-coverage.py'
             # What can change the vulnerability surface of a built image: the
             # base image pin, the dependency manifests the image installs from,
             # and the script that builds it. Deliberately NOT '**/*.go': editing
@@ -519,6 +528,74 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'scripts/ci-build-image.sh'
 
+  dotnet:
+    name: .NET SDK coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes]
+    if: needs.changes.outputs.dotnet_changed == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: preview
+
+      # -warnaserror here rather than TreatWarningsAsErrors in the csproj: the
+      # projects are consumed as source by nobody, so the strictness belongs to
+      # the gate rather than to anyone who opens the solution locally.
+      #
+      # SourceLink is off for this build only. It emits a warning, not an error,
+      # when it cannot resolve the repository URL, and under -warnaserror that
+      # turns an environment detail into a failed quality gate. The release
+      # workflow packs with SourceLink on, which is where the symbols it
+      # produces are actually consumed.
+      - name: Build
+        run: >-
+          dotnet build packages/dotnet/Vault42.sln -c Release --nologo
+          -warnaserror -p:EnableSourceLink=false
+
+      - name: Coverage gate
+        run: scripts/dotnet-coverage.sh
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dotnet-coverage
+          path: tmp/dotnet-coverage/**/coverage.cobertura.xml
+
+  # Same reasoning as coverage-gate-required: a conditional job reports skipped,
+  # branch protection counts skipped as green, so the required check has to be a
+  # job that always runs and inspects the result of the one that does not.
+  dotnet-required:
+    name: .NET SDK coverage gate (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, dotnet]
+    if: always()
+    steps:
+      - name: Assert the gate ran when it had to
+        shell: bash
+        env:
+          NEEDED: ${{ needs.changes.outputs.dotnet_changed }}
+          RESULT: ${{ needs.dotnet.result }}
+        run: |
+          set -euo pipefail
+          if [ "$NEEDED" = "true" ]; then
+            if [ "$RESULT" != "success" ]; then
+              echo "::error::packages/dotnet changed and the .NET coverage gate did not pass (result: $RESULT)"
+              exit 1
+            fi
+            echo ".NET coverage gate ran and passed"
+          else
+            echo "no .NET changes; gate correctly skipped (result: $RESULT)"
+          fi
+
   modules:
     name: Go module hygiene
     runs-on: ubuntu-latest
@@ -526,7 +603,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -547,7 +624,7 @@ jobs:
     needs: [test, changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -577,7 +654,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -608,7 +685,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_changed == 'true' || needs.changes.outputs.goreleaser_changed == 'true'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -617,7 +694,7 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: '~> v2'
@@ -650,14 +727,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -760,10 +837,10 @@ jobs:
           - Dockerfile.goreleaser.admin-gateway
           - web/Dockerfile
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-      - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+      - uses: hadolint/hadolint-action@2a66e89f53d0771bb131a7fa31f3136336094aa6 # v3.4.0
         with:
           dockerfile: ${{ matrix.dockerfile }}
 
@@ -780,26 +857,41 @@ jobs:
     # Versions are pinned for the same reason the actions are: a linter that
     # picks up a new rule on its own turns an unrelated pull request red, which
     # is how a gate stops being trusted.
+    #
+    # A version pin is not a supply-chain pin. `pip install 'ruff==0.16.3'` and
+    # `npm install markdownlint-cli2@0.23.2` both name a version and then trust
+    # whatever bytes the registry serves for it, which is what Scorecard's
+    # Pinned-Dependencies check was reporting against these two lines. Both now
+    # resolve through a committed hash: pip via --require-hashes against
+    # .github/requirements-lint.txt, markdownlint-cli2 as a root devDependency
+    # that pnpm-lock.yaml pins by integrity, the same treatment commitlint got.
     name: Lint (non-Go)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
         with:
           python-version: '3.12'
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: pnpm
 
-      - name: Install linters
+      # --require-hashes makes pip refuse the whole install if any resolved
+      # artifact -- direct or transitive -- is absent from the file or does not
+      # match, so a hijacked release cannot substitute itself for a pinned one.
+      - name: Install Python linters
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check \
-            'ruff==0.16.3' 'yamllint==1.38.0'
-          npm install --no-save --no-audit --no-fund 'markdownlint-cli2@0.23.2'
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r .github/requirements-lint.txt
+
+      - name: Install Node linters
+        run: pnpm install --frozen-lockfile
 
       # shellcheck ships on the GitHub-hosted Ubuntu image, so it needs no
       # install step. The file list comes from git rather than from find, so a
@@ -823,7 +915,7 @@ jobs:
         run: ruff check --no-cache .
 
       - name: markdownlint
-        run: npx --no-install markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
+        run: pnpm exec markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
 
       - name: yamllint
         run: yamllint --strict .

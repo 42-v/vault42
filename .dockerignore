@@ -31,8 +31,16 @@ ROADMAP.md
 secrets/
 *.pem
 *.key
+# A .dockerignore pattern without a leading ** is anchored at the context root,
+# so `.env` excluded /.env and nothing else: web/.env, which every developer who
+# has run the dev stack has, was being copied into the release image. What kept a
+# dev API origin out of a published bundle was the forbid-dev-origins Rollup
+# plugin failing the build, which is a guard doing a job the context should never
+# have handed it.
 .env
 .env.*
+**/.env
+**/.env.*
 
 # Scripts
 scripts/

@@ -5,7 +5,7 @@
 # (not under QEMU, which crashes 5.x and earlier on the alpine
 # musl/Go networking path); cross-compile to $TARGETARCH instead.
 
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -28,7 +28,7 @@ RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
         -o /vault-admin-gateway ./cmd/admin-gateway
 
 # Runtime image — minimal, distroless
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:5074667eecabac8ac5c5d395100a153a7b4e8426181cca36181cd019530f00c8
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
 
 WORKDIR /app
 COPY --from=builder /vault-admin-gateway /app/vault-admin-gateway

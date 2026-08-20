@@ -77,7 +77,7 @@ public class AuthenticationHardeningTests
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(helper);
 
-        var actual = (bool)helper!.Invoke(null, new object[] { path, prefix })!;
+        var actual = (bool)helper.Invoke(null, new object[] { path, prefix })!;
         Assert.Equal(expected, actual);
     }
 

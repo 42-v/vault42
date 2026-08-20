@@ -3,19 +3,29 @@
 # Frontend build stage: compile Vue SPA on the native build host. Output is static
 # JS/HTML so target arch is irrelevant — pinning $BUILDPLATFORM avoids running Node
 # under QEMU, which segfaults corepack/pnpm on arm64.
-FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd AS frontend
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019 AS frontend
 WORKDIR /build
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/vue/package.json packages/vue/
 COPY web/package.json web/
-RUN corepack enable && pnpm install --frozen-lockfile
+# corepack is no longer bundled with the node image; Node stopped shipping it
+# before 26, so `corepack enable` is "not found" rather than a no-op and the
+# whole frontend stage fails at exit 127. Installing it explicitly keeps the
+# property that made corepack worth using here: it reads `packageManager` from
+# package.json, which pins pnpm by version AND by SHA-512, so the package
+# manager that builds a release image is hash-verified rather than whatever
+# `npm i -g pnpm` resolves on the day. The corepack version is pinned for the
+# same reason every other tool in this build is.
+RUN npm install -g corepack@0.35.0 \
+    && corepack enable \
+    && pnpm install --frozen-lockfile
 COPY packages/vue/ packages/vue/
 COPY web/ web/
 RUN pnpm --filter @vault42/vue build && pnpm --filter @vault42/web build
 
 # Go build stage: runs on native (amd64) host, cross-compiles for target arch.
 # Go cross-compiles natively — no QEMU emulation needed, ~10x faster for ARM64.
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -36,7 +46,7 @@ RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /vault ./cmd/vault
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:5074667eecabac8ac5c5d395100a153a7b4e8426181cca36181cd019530f00c8
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
 WORKDIR /app
 COPY --from=builder /vault /app/vault
 COPY migrations /app/migrations

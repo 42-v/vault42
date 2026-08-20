@@ -44,9 +44,3 @@ internal sealed class TokenRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RefreshToken { get; set; }
 }
-
-internal sealed class VaultErrorResponse
-{
-    [JsonPropertyName("error")]
-    public string Error { get; set; } = string.Empty;
-}

@@ -1,0 +1,14 @@
+# Source pins for the non-Go lint job in .github/workflows/ci.yml.
+#
+# Regenerate .github/requirements-lint.txt after changing anything here:
+#
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras \
+#     --output-file=.github/requirements-lint.txt .github/requirements-lint.in
+#
+# The generated file carries a --hash for every artifact of every resolved
+# package, including the transitive ones, because pip refuses to install any
+# unhashed requirement once --require-hashes is in force. That refusal is the
+# point: a compromised release of ruff, yamllint or one of their dependencies
+# cannot enter this job without also matching a hash committed here.
+ruff==0.16.3
+yamllint==1.38.0

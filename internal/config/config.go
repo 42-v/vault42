@@ -937,6 +937,9 @@ func (c *Config) checkAdminTokenFile() error {
 		// rather than skipped silently, because an absent mount and a consumed
 		// one look identical from here and only one of them is fine.
 		if os.IsNotExist(err) && SecretFilesAreConsumed() {
+			// #nosec G706 -- %q renders through strconv.Quote, which escapes CR, LF
+			// and every other non-printable, so an operator-supplied path cannot forge
+			// a log record. gosec's taint analysis does not model verb-level escaping.
 			log.Printf("ADMIN_TOKEN_FILE %q is absent and VAULT_SECRET_FILE_CONSUME is set: "+
 				"treating it as consumed by an earlier boot. The admin token in force is the "+
 				"hash already recorded in auth.admin_config; this mount is not read again.", path)

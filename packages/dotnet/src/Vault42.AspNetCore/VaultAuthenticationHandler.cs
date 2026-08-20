@@ -231,8 +231,17 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
     private ClaimsIdentity MapClaims(ClaimsPrincipal validated, JwtSecurityToken jwt)
     {
         var source = validated.Identity as ClaimsIdentity;
+        IEnumerable<Claim> inherited = source?.Claims ?? [];
+
+        // JwtSecurityTokenHandler's default inbound map already rewrites a
+        // "roles" claim to ClaimTypes.Role, so turning MapRolesToClaims off has
+        // to remove what the map added. Without this the option reads as
+        // "roles are not mapped" and maps them anyway.
+        if (!Options.MapRolesToClaims)
+            inherited = inherited.Where(c => c.Type != ClaimTypes.Role);
+
         var identity = new ClaimsIdentity(
-            source?.Claims ?? [],
+            inherited,
             Scheme.Name,
             source?.NameClaimType ?? "sub",
             ClaimTypes.Role);
@@ -240,45 +249,55 @@ public class VaultAuthenticationHandler : AuthenticationHandler<VaultAuthenticat
         // Map roles array to individual Role claims
         if (Options.MapRolesToClaims)
         {
-            var rolesClaim = jwt.Claims.FirstOrDefault(c => c.Type == VaultClaimTypes.Roles);
-            if (rolesClaim is not null)
+            foreach (var role in StringArrayClaim(jwt, VaultClaimTypes.Roles))
             {
-                try
-                {
-                    var roles = JsonSerializer.Deserialize<string[]>(rolesClaim.Value);
-                    if (roles is not null)
-                    {
-                        foreach (var role in roles)
-                            identity.AddClaim(new Claim(ClaimTypes.Role, role));
-                    }
-                }
-                catch
-                { /* non-array roles claim, skip */
-                }
+                if (!identity.HasClaim(ClaimTypes.Role, role))
+                    identity.AddClaim(new Claim(ClaimTypes.Role, role));
             }
         }
 
         // Map scopes array to individual scope claims
         if (Options.MapScopesToClaims)
         {
-            var scopesClaim = jwt.Claims.FirstOrDefault(c => c.Type == VaultClaimTypes.Scopes);
-            if (scopesClaim is not null)
-            {
-                try
-                {
-                    var scopes = JsonSerializer.Deserialize<string[]>(scopesClaim.Value);
-                    if (scopes is not null)
-                    {
-                        foreach (var scope in scopes)
-                            identity.AddClaim(new Claim("scope", scope));
-                    }
-                }
-                catch
-                { /* non-array scopes claim, skip */
-                }
-            }
+            foreach (var scope in StringArrayClaim(jwt, VaultClaimTypes.Scopes))
+                identity.AddClaim(new Claim("scope", scope));
         }
 
         return identity;
+    }
+
+    /// <summary>
+    /// Reads a JSON array-of-strings claim from the payload.
+    /// </summary>
+    /// <remarks>
+    /// The payload rather than <see cref="JwtSecurityToken.Claims"/>, because that collection
+    /// flattens a JSON array into one <see cref="Claim"/> per element: a token carrying
+    /// <c>"scopes":["read","write"]</c> yields two claims valued "read" and "write", never the
+    /// array text. Deserialising the first of those as <c>string[]</c> throws on every real token,
+    /// which is how scope mapping came to be silently inert -- the exception was swallowed as
+    /// "non-array claim, skip" and <c>HasScope</c> answered false for every scope the Vault had
+    /// granted. The payload keeps the value as a <see cref="JsonElement"/>, so the array is still
+    /// an array here and a scalar is still distinguishable from one.
+    /// </remarks>
+    private static List<string> StringArrayClaim(JwtSecurityToken jwt, string name)
+    {
+        if (!jwt.Payload.TryGetValue(name, out var raw))
+            return [];
+
+        // ReadJwtToken deserialises the payload with System.Text.Json, so an
+        // array arrives as a JsonElement and a scalar as a string. Anything that
+        // is not an array of strings is skipped rather than coerced: a token
+        // saying scopes is the number 3 grants nothing.
+        if (raw is not JsonElement element || element.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var values = new List<string>(element.GetArrayLength());
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { } value)
+                values.Add(value);
+        }
+
+        return values;
     }
 }

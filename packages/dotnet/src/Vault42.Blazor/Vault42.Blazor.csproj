@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Vault42.Blazor</RootNamespace>
     <PackageId>Vault42.Blazor</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>42-v</Authors>
     <Description>Blazor WASM authentication library for Vault42. Implements OAuth2 Authorization Code + PKCE flow with redirect to Vault42's integrated frontend.</Description>
     <PackageTags>vault42;blazor;authentication;oauth2;pkce;wasm</PackageTags>
@@ -35,13 +35,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.203" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.400" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.7" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.7" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.7" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
   </ItemGroup>
 
 </Project>

@@ -8,8 +8,8 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 | | | |
 |---|---|---|
 | ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.38-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Go_Tests-5037-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1249-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6286_tests-155724?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Go-47657_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6701_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Go_Tests-5049-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Vue_Tests-1302-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6351_tests-155724?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Go-47986_lines-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Vue-6701_lines-555?style=flat&labelColor=000) | ![Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Go-3_deps-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Vue-3_deps-555?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
@@ -172,7 +172,7 @@ Everything else (JWT, Redis, TOTP, CORS, JWKS, config, migrations, password hash
 
 ## Testing
 
-Twelve Go suites under `tests/`: unit, attack simulation (93 vector files), NIST/OWASP compliance, spec (chart and workflow assertions), integration (testcontainers), end-to-end including a multi-replica keystore, fuzz (18 targets), browser (chromedp), Playwright, admin-gateway E2E over real mTLS, honeypot E2E (bridge + trap flows), and stress. The frontend adds its own vitest runs in `web/` and `packages/vue/`. Several suites need a container runtime, a build tag or a browser and are skipped without one; the `Suites CI cannot run` job fails the build if a suite neither ran nor said why.
+Twelve Go suites under `tests/`: unit, attack simulation (93 vector files), NIST/OWASP/OpenSSF-Scorecard compliance, spec (chart and workflow assertions), integration (testcontainers), end-to-end including a multi-replica keystore, fuzz (18 targets), browser (chromedp), Playwright, admin-gateway E2E over real mTLS, honeypot E2E (bridge + trap flows), and stress. The frontend adds its own vitest runs in `web/` and `packages/vue/`, and the published .NET SDKs carry an xunit suite gated at 100.00% line coverage by `scripts/dotnet-coverage.sh`. Several suites need a container runtime, a build tag or a browser and are skipped without one; the `Suites CI cannot run` job fails the build if a suite neither ran nor said why.
 
 Coverage tooling lives in `scripts/`:
 
@@ -181,6 +181,7 @@ Coverage tooling lives in `scripts/`:
 | `scripts/t.sh [path]` | Run Go tests (default: all packages, single path supported) |
 | `scripts/tcount.sh` | Test-count summary. It runs the suite; what it saves you is reading the output, not the wait |
 | `scripts/coverage.sh` | Regenerate `docs/test-coverage.md` with per-package + per-function coverage |
+| `scripts/dotnet-coverage.sh` | Build, test and coverage-gate the published .NET SDKs (floor 100.00, no exclusions) |
 | `scripts/security-scan.sh` | Standalone Go + frontend security pass (go vet, gosec, govulncheck, staticcheck, pnpm audit, hadolint) |
 | `scripts/release-check.sh` | Full pre-release gate, twelve of them: the security pass (govulncheck, gosec, trivy fs, attack suite, coverage) plus version consistency, module hygiene, the golangci ratchet, helm, doc chart paths, a changelog section for the version, and a clean tree |
 | `scripts/precommit.sh` | Pre-commit verification: build, vet, gosec, tests, badges, docs |
@@ -228,7 +229,7 @@ the images carry SBOM and SLSA provenance attestations:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/42-v/vault42:1.0.0
+  ghcr.io/42-v/vault42:1.0.1
 ```
 
 Full instructions, covering all four artifact classes, are in

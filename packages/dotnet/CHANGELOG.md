@@ -1,5 +1,50 @@
 # Vault42 .NET SDK — Changelog
 
+## 1.0.1 — 2026-08-20
+
+The first release of these packages that a pull request has ever built. Until now the
+solution was compiled by exactly one thing, the release workflow, after the tag had
+already been pushed; CI now builds and tests it on every change and gates it on coverage.
+
+### Fixed
+
+- **`ClaimsPrincipal.HasScope(...)` and `GetScopes()` returned false and empty for every
+  token the Vault issues.** `VaultAuthenticationHandler` read the `roles` and `scopes`
+  arrays out of `JwtSecurityToken.Claims`, which flattens a JSON array into one claim per
+  element, so deserialising the first as `string[]` threw on every real token and the
+  throw was swallowed as "non-array claim, skip". Scope-based authorization with this
+  package denied everything. Both arrays are now read from the payload, where an array is
+  still an array.
+- **`MapRolesToClaims = false` was a no-op.** Roles reached the principal through
+  `JwtSecurityTokenHandler.DefaultInboundClaimTypeMap` rather than through this package,
+  so turning the option off changed nothing -- and an application that clears that map,
+  the usual way to stop the library renaming claims, lost roles entirely. The option now
+  removes what the inbound map added, and the handler's own mapping works with the map
+  cleared.
+
+### Removed
+
+- `VaultErrorResponse`, which was declared, never referenced and never deserialised into.
+
+### Tests
+
+- 46 to 247 tests; 53.08% to 100.00% line coverage of the shipped source. The additions
+  are behavioural: the authentication handler is driven through `AuthenticateAsync` and
+  `ChallengeAsync` with real RS256 tokens against a real `VaultJwksManager`, the CS-13
+  retry rules through `SendAsync` rather than through the private predicate, and
+  `VaultAuthCallback` through a `Renderer`. Tokens carrying a `jku`, `x5u`, `x5c` or `jwk`
+  header are assembled and signed by hand, because `SecurityTokenDescriptor.
+  AdditionalHeaderClaims` is ignored by `JwtSecurityTokenHandler` and a test built that
+  way would have passed whether or not the handler rejected the header.
+
+### Dependencies
+
+- Microsoft.CodeAnalysis.NetAnalyzers 10.0.203 to 10.0.400, Roslynator.Analyzers 4.15.0 to
+  4.16.1, SonarAnalyzer.CSharp 10.24.0 to 10.32.0, Microsoft.SourceLink.GitHub 10.0.203 to
+  10.0.400, Microsoft.IdentityModel.Tokens and System.IdentityModel.Tokens.Jwt 8.17.0 to
+  8.22.0, the ASP.NET Core Components packages 10.0.7 to 10.0.11, Microsoft.NET.Test.Sdk
+  18.5.0 to 18.9.0 and xunit.runner.visualstudio 3.1.5 to 4.0.0.
+
 ## 1.0.0 — 2026-08-14
 
 Version lockstep with the vault42 server, and the first release whose published packages carry

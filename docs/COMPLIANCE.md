@@ -1,15 +1,15 @@
 # vault42 -- Standards Compliance Report
 
-vault42 1.0.0 · assessed 2026-08-10 · self-assessment
+vault42 1.0.1 · assessed 2026-08-20 · self-assessment
 
-vault42 has been assessed against nine security and privacy standards at the
+vault42 has been assessed against ten security and privacy standards at the
 revisions listed below, each cited with its publication date and the source the
 revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **404 requirements in scope across 9 standards: 348 Met, 10 Accepted Risk,
-> 46 Not Applicable. 0 unclassified.**
+> **424 requirements in scope across 10 standards: 363 Met, 14 Accepted Risk,
+> 47 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
 runs on every CI build. Every **Accepted Risk** carries a rationale, a
@@ -79,6 +79,7 @@ memory and not from a previous version of this document.
 | OWASP API Security Top 10 | **2023** | 2023 | Category identifiers and titles from [owasp.org/API-Security/editions/2023](https://owasp.org/API-Security/editions/2023/en/0x00-header/). A separate list from the OWASP Top 10:2025 above, not another edition of it |
 | NIST SP 800-218 -- *Secure Software Development Framework (SSDF)* | **1.1** | 2022-02 | Practice and task identifiers from the SP 800-218 v1.1 table on [csrc.nist.gov](https://csrc.nist.gov/pubs/sp/800/218/final) |
 | Kubernetes Pod Security Standards | **restricted profile** | living | Control names from [kubernetes.io](https://kubernetes.io/docs/concepts/security/pod-security-standards/) |
+| OpenSSF Scorecard | **v5.5.0** | observed 2026-08-20 | Check names, risk levels and descriptions verbatim from [`docs/checks.md`](https://github.com/ossf/scorecard/blob/main/docs/checks.md) in `ossf/scorecard`; the revision is the tool version [api.securityscorecards.dev](https://api.securityscorecards.dev/projects/github.com/42-v/vault42) reported for this repository on that date |
 
 > **Needs verification:** OWASP publishes no release date for the Top 10:2025
 > edition on the project page, on the 2025 pages, or through the repository's
@@ -204,13 +205,38 @@ than being retired on a technicality.
 | OWASP API Security Top 10:2023 | 10 | 0 | 0 | 10 |
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
-| **Total** | **348** | **10** | **46** | **404** |
+| OpenSSF Scorecard v5.5.0 | 15 | 4 | 1 | 20 |
+| **Total** | **363** | **14** | **47** | **424** |
 
-The 10 Accepted Risk rows collapse to **8 distinct accepted risks**: several
+The 14 Accepted Risk rows collapse to **11 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
 previously.
+
+### OpenSSF Scorecard is the one standard vault42 does not grade itself against
+
+Every other standard in this register is a self-assessment: the maintainer reads
+the requirement, decides whether the code meets it, and writes down why. Scorecard
+is scored from outside by a weekly run of `ossf/scorecard-action` against the same
+twenty checks it applies to every project, and the result is published at
+[api.securityscorecards.dev](https://api.securityscorecards.dev/projects/github.com/42-v/vault42),
+where a reader can contradict any row here by opening a URL.
+
+The register carries the twenty checks rather than the composite score. The score
+is one weighted number, and two of the checks cannot move: `Contributors` wants
+commits from more than one organisation, and `Code-Review` counts changesets
+approved by someone other than their author. A single-maintainer project scores
+zero on both no matter what its code looks like, so quoting the number alone would
+understate the eighteen checks that are actually about the software. Both are
+recorded as accepted risks under CR-36 rather than being explained away.
+
+1.0.1 moves three checks. `Pinned-Dependencies` goes from 9 to 10: the lint job's
+`pip install` and `npm install` named exact versions and then trusted whatever the
+registry returned for them, and both now resolve through a committed hash.
+`Branch-Protection` goes from unreadable to enforced. `Vulnerabilities` goes from
+four open advisories to one, and the one that remains is CR-37, which cannot be
+closed while `golang.org/x/crypto` is a dependency.
 
 ### What moved, and why the N/A bucket shrank by seventeen
 

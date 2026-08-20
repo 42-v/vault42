@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
-  "tests": 5037,
-  "passed": "5037 passed",
+  "version": "1.0.1",
+  "tests": 5049,
+  "passed": "5049 passed",
   "coverage": "99.60%",
   "coverageNum": 99.60,
   "reachableCoverage": "100.00%",
   "reachableCoverageNum": 100.00,
   "packages": 44,
-  "goFiles": 193,
-  "goLines": 47657,
-  "testFiles": 903,
+  "goFiles": 195,
+  "goLines": 47986,
+  "testFiles": 904,
   "directDeps": 3,
   "transitiveDeps": 18
 }

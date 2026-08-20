@@ -41,6 +41,15 @@ RULES=(
   "Blazor csproj::packages/dotnet/src/Vault42.Blazor/Vault42.Blazor.csproj::<Version>::</Version>"
   "site helm command::site/index.html::--set image\.tag=::"
   "site footer::site/index.html::vault42 v::"
+  # Two published image tags in prose. They are as much a copy of VERSION as any
+  # manifest field, and they were not in this list: tests/spec's
+  # TestPublishedImageTagsExist caught them holding 1.0.0 after the 1.0.1 bump,
+  # which is one release later than a propagation script should ever find out.
+  # The character class is not decoration: a rule is split on "::", so a prefix
+  # whose last character is a colon would take the delimiter's first colon with
+  # it and match nothing.
+  "readme cosign image::README.md::ghcr\.io/42-v/vault42[:]::"
+  "deployment guide helm command::docs/deployment-guide.md::--set image\.tag=::"
 )
 
 # The root package.json is `private: true` and carries no version field. Every

@@ -104,6 +104,14 @@
       "revision": "restricted",
       "source": "https://kubernetes.io/docs/concepts/security/pod-security-standards/",
       "verified": "Control names taken from the Pod Security Standards page on kubernetes.io on 2026-08-18. Deliberately NOT the CIS Kubernetes Benchmark: that benchmark is overwhelmingly control-plane, etcd, kubelet and node configuration, none of which a Helm chart owns."
+    },
+    {
+      "name": "OpenSSF Scorecard",
+      "short_name": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "released": "2026-08-20",
+      "source": "https://github.com/ossf/scorecard/blob/main/docs/checks.md",
+      "verified": "Check names, risk levels and descriptions taken verbatim from docs/checks.md in ossf/scorecard on 2026-08-20. The revision is the scorecard version reported by api.securityscorecards.dev for this repository on the same day; the released date is when that version was observed rather than a publication date, because Scorecard versions its tool rather than its specification. Unlike every other standard here the assessor is external: the checks are scored by a weekly run of ossf/scorecard-action and published at https://api.securityscorecards.dev/projects/github.com/42-v/vault42."
     }
   ],
   "accepted_risks": {
@@ -202,6 +210,39 @@
       "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
       "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
       "cost_of_closing": "A REDIS_TLS boolean and an optional server-name override on Config, threaded through cache.NewCache into the Options literal at internal/cache/redis.go:19. The dial path already exists at internal/redis/pool.go:184 and already pins tls.VersionTLS12, so internal/redis does not change. The chart then needs a Redis that terminates TLS, which is the part that is not a code change and is why this is scheduled rather than done."
+    },
+    "CR-35": {
+      "title": "No OpenSSF Best Practices badge",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "The OpenSSF Best Practices badge is earned by registering a project at bestpractices.dev and self-certifying against roughly seventy criteria. It is an account action against an external service, not a change to the repository, so no commit can close it and no test can assert it. Scorecard weights it low for the same reason: the badge evidences a process rather than a property of the code.",
+      "compensating_control": "Most of what the badge asks for is separately evidenced here and enforced by tests: a published security policy and reporting route, a license, a documented change history, static analysis and fuzzing in CI, signed releases with provenance and SBOMs, and a dependency update tool whose output is actually merged. The register is a stricter artifact than the badge questionnaire, because every claim in it names a test that runs.",
+      "residual_risk": "A reader who looks for the badge and does not find it has less signal about the project than one who reads this register. The score loses the check's weight.",
+      "revisit_when": "The maintainer registers the project at bestpractices.dev, or a downstream consumer asks for the badge specifically."
+    },
+    "CR-36": {
+      "title": "Code review cannot be independent in a single-maintainer project",
+      "severity": "Medium",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "Scorecard scores the fraction of merged changesets that carried an approving review from someone other than the author. vault42 has one maintainer, so that fraction is structurally zero: a self-approval is not review, and GitHub does not offer one anyway -- the Approve control is unavailable on your own pull request. 1.0.1 briefly required an approving review on main and the first pull request under it could not be merged at all except by an admin bypass, which skips the required status checks too. Requiring a review nobody can give does not add a reviewer; it converts every merge into an override of the checks that do work. The requirement is therefore not set, and the gap is recorded here.",
+      "compensating_control": "Thirteen required status checks stand in for the reviewer on everything a reviewer would be checking mechanically: the full Go test suite, the Go and .NET coverage gates, golangci-lint, the non-Go linters, govulncheck, gosec, Trivy, the version-consistency check and conventional-commit validation, with branches required to be up to date before merge. Direct pushes to main are refused, so every change still arrives as a pull request with all of that attached. The compliance register itself is a second mechanism: a change that alters behaviour a row claims fails the row's test, which is a form of review that does not need a second person.",
+      "residual_risk": "Nothing catches a design mistake that the tests do not encode. A second pair of eyes would; the automation cannot.",
+      "revisit_when": "A second maintainer joins, or an external contributor's pull request is merged."
+    },
+    "CR-37": {
+      "title": "golang.org/x/crypto/openpgp is unmaintained and cannot be removed",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained, unsafe by design and carrying known issues, with no patched version and none coming. The advisory is against the module, and golang.org/x/crypto is a direct dependency of vault42 for argon2id and HKDF. Removing the finding would mean removing the module, which means hand-rolling argon2id -- a worse trade by a wide margin than carrying an advisory for a package nothing imports.",
+      "compensating_control": "No file in either Go module imports golang.org/x/crypto/openpgp, and govulncheck confirms it at symbol level on both: zero vulnerabilities in code reached from any entry point. The nightly scan would report the day that stopped being true.",
+      "residual_risk": "OSV and therefore Scorecard report per-module, so the count stays at one and the check cannot reach 10 while x/crypto is a dependency. The residual security risk is nil; the residual reporting risk is a permanent point on a public scorecard.",
+      "revisit_when": "x/crypto drops the openpgp package, or the advisory is scoped to the package rather than the module."
     }
   },
   "requirements": [
@@ -536,13 +577,13 @@
       "evidence": [
         "internal/outbound/outbound.go:94",
         "internal/outbound/outbound.go:147",
-        "internal/oauth2/oidc.go:184",
+        "internal/oauth2/oidc.go:188",
         "cmd/vault/main.go:623"
       ],
       "tests": [
         "TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist"
       ],
-      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:85). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:184): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:623 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
+      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:85). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:188): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:623 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
     },
     {
       "standard": "OWASP ASVS",
@@ -631,12 +672,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:76"
+        "internal/sanitize/sanitize.go:152"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "sanitize.Email requires net/mail.ParseAddress to accept the address before it reaches the mail path, which rejects the embedded control characters SMTP injection needs."
+      "notes": "sanitize.Email requires net/mail.ParseAddress to accept the address (internal/sanitize/sanitize.go:152) before it reaches the mail path, which rejects the embedded control characters SMTP injection needs."
     },
     {
       "standard": "OWASP ASVS",
@@ -932,7 +973,7 @@
       "status": "Met",
       "evidence": [
         "internal/repository/postgres/refresh_token.go:142",
-        "internal/service/auth.go:1803",
+        "internal/service/auth.go:2498",
         "internal/handler/oauth.go:657"
       ],
       "tests": [
@@ -1320,7 +1361,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "web/package.json:1"
+        "web/package.json"
       ],
       "tests": [
         "TestASVS_V3_7_1_NoObsoletePluginTechnologyIsShipped"
@@ -1396,12 +1437,12 @@
       "requirement": "Verify that any HTTP header field used by the application and set by an intermediary layer, such as a load balancer, a web proxy, or a backend-for-frontend service, cannot be overridden by the end-user. Example headers might include X-Real-IP, X-Forwarded-*, or X-User-ID.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:290"
+        "internal/middleware/ratelimit.go:451"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "X-Forwarded-For is honoured only when a trusted-proxy list is configured, and the walk takes the rightmost untrusted hop."
+      "notes": "X-Forwarded-For is honoured only when a trusted-proxy list is configured. middleware.ClientIP returns the connection address outright when loadTrustedProxyCIDRs is empty (internal/middleware/ratelimit.go:451) and again when isTrustedProxy rejects the peer, so an end user talking to the listener directly cannot set the header the application reads. Behind a configured proxy the chain is walked from the right to the first untrusted hop, and every candidate is validated with net.ParseIP before it is used."
     },
     {
       "standard": "OWASP ASVS",
@@ -1413,12 +1454,12 @@
       "requirement": "Verify that all application components (including load balancers, firewalls, and application servers) determine boundaries of incoming HTTP messages using the appropriate mechanism for the HTTP version to prevent HTTP request smuggling. In HTTP/1.x, if a Transfer-Encoding header field is present, the Content-Length header must be ignored per RFC 2616. When using HTTP/2 or HTTP/3, if a Content-Length header field is present, the receiver must ensure that it is consistent with the length of the DATA frames.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:159"
+        "internal/server/server.go:227"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "net/http rejects conflicting Content-Length and Transfer-Encoding framing; MaxHeaderBytes bounds the header block."
+      "notes": "net/http rejects conflicting Content-Length and Transfer-Encoding framing, so request smuggling is resolved by the standard library's parser rather than by application code. MaxHeaderBytes bounds the header block on every listener (internal/server/server.go:227 for the API, :337 for the metrics collector)."
     },
     {
       "standard": "OWASP ASVS",
@@ -1787,13 +1828,13 @@
       "evidence": [
         "internal/config/config.go:439",
         "internal/config/config.go:744",
-        "internal/config/config.go:975"
+        "internal/config/config.go:878"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestASVS_V2_1_1_PasswordMinLengthConfigured"
       ],
-      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:975) is 15 and a non-dev profile refuses to start below it (:622); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:432, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
+      "notes": "Met. This requirement asks for 8 and strongly recommends 15; vault42 enforces 15. passwordMinLengthFloor (internal/config/config.go:878) is 15 and a non-dev profile refuses to start below it (:616); the dev profile carries a lower floor of 8, which is still this requirement's own minimum. The evidence previously cited internal/config/config.go:432, a doc comment on the RecoveryRetentionPeriod field, which has nothing to do with password length."
     },
     {
       "standard": "OWASP ASVS",
@@ -2635,7 +2676,7 @@
       "evidence": [
         "docs/config.md",
         "internal/config/config.go:574",
-        "internal/service/auth.go:2498"
+        "internal/service/auth.go:2407"
       ],
       "tests": [
         "TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes"
@@ -2771,13 +2812,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:2498",
-        "internal/service/auth.go:1380"
+        "internal/service/auth.go:2407",
+        "internal/service/auth.go:1378"
       ],
       "tests": [
         "TestASVS_V7_3_1_AnIdleSessionCannotRotateAndAnActiveOneCan"
       ],
-      "notes": "Met. An inactivity timeout exists, is enforced, and re-authentication is what it requires: a family idle past VAULT_INACTIVITY_TIMEOUT is revoked and refused with ErrSessionIdle, so the way back is a full login rather than another rotation. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2498), called from the refresh path at internal/service/auth.go:1380 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip. The documented security decision the requirement asks for is the default of 1 hour and the reasoning in docs/config.md. The check fails closed on an unreadable issuance instant, the same way the absolute bound fails closed on an unknown family origin."
+      "notes": "Met. An inactivity timeout exists, is enforced, and re-authentication is what it requires: a family idle past VAULT_INACTIVITY_TIMEOUT is revoked and refused with ErrSessionIdle, so the way back is a full login rather than another rotation. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2407), called from the refresh path at internal/service/auth.go:1378 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip. The documented security decision the requirement asks for is the default of 1 hour and the reasoning in docs/config.md. The check fails closed on an unreadable issuance instant, the same way the absolute bound fails closed on an unknown family origin."
     },
     {
       "standard": "OWASP ASVS",
@@ -2794,7 +2835,7 @@
       "evidence": [
         "internal/service/token.go:290",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:355"
+        "cmd/vault/main.go:414"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -3111,12 +3152,12 @@
       "status": "Met",
       "evidence": [
         "internal/service/identity.go:178",
-        "internal/repository/postgres/servicedoc.go:151"
+        "internal/repository/postgres/servicedoc.go:142"
       ],
       "tests": [
         "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest"
       ],
-      "notes": "Tenancy is the client_id axis on service documents and the per-subject pseudonym on identity and blobs; both are applied in the query, not after it."
+      "notes": "Tenancy is the client_id axis on service documents and the per-subject pseudonym on identity and blobs; both are applied in the query, not after it. Every ServiceDocumentRepo read carries client_id in its WHERE clause (internal/repository/postgres/servicedoc.go:142), so a document belonging to another client is not fetched and then filtered, it is never selected."
     },
     {
       "standard": "OWASP ASVS",
@@ -3490,14 +3531,14 @@
       "requirement": "Verify that, if the code grant is used, the authorization server mitigates authorization code interception attacks by requiring proof key for code exchange (PKCE). For authorization requests, the authorization server must require a valid 'code_challenge' value and must not accept a 'code_challenge_method' value of 'plain'. For a token request, it must require validation of the 'code_verifier' parameter.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:82",
+        "internal/handler/oauth.go:83",
         "internal/oauth2/oidc.go:180"
       ],
       "tests": [
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge",
         "TestRFC9700_2_1_1_PKCEOnAllAuthorizeURLs"
       ],
-      "notes": "S256 on every provider."
+      "notes": "S256 on every provider: the challenge is SHA256Base64URL over a 32-byte verifier (internal/handler/oauth.go:83), and plain is never offered."
     },
     {
       "standard": "OWASP ASVS",
@@ -3527,13 +3568,13 @@
       "evidence": [
         "internal/service/token.go:290",
         "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:355"
+        "cmd/vault/main.go:414"
       ],
       "tests": [
         "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented"
       ],
-      "notes": "Met: sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin (family_created_at, NOT NULL with a default) so the deadline cannot be reset by rotation or by pruning a spent row; TokenService clamps a rotated pair to origin plus the configured maximum and AuthService.enforceSessionLifetime refuses a family past it; cmd/vault/main.go:355 configures the bound. The test that used to back this row could never fail: it searched migrations/001_initial_schema.sql for a column that landed in 013_session_lifetime.sql. Its replacement reads every migration."
+      "notes": "Met: sliding refresh expiration is bounded by an absolute family deadline, which is exactly the case this requirement calls out. Migration 013 stores the family origin (family_created_at, NOT NULL with a default) so the deadline cannot be reset by rotation or by pruning a spent row; TokenService clamps a rotated pair to origin plus the configured maximum and AuthService.enforceSessionLifetime refuses a family past it; cmd/vault/main.go:414 configures the bound. The test that used to back this row could never fail: it searched migrations/001_initial_schema.sql for a column that landed in 013_session_lifetime.sql. Its replacement reads every migration."
     },
     {
       "standard": "OWASP ASVS",
@@ -4311,12 +4352,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:639"
+        "internal/config/secrets.go:18"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
       ],
-      "notes": "Every secret is loaded from a file path; no credential has a default value."
+      "notes": "Every secret is loaded from a file path through config.LoadSecret (internal/config/secrets.go:18), which reads the path named by a _FILE variable and has no default to fall back to: an unset variable is an error at startup, not a built-in credential."
     },
     {
       "standard": "OWASP ASVS",
@@ -4477,12 +4518,12 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:323"
+        "internal/server/server.go:373"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Go's ServeMux routes by method pattern; TRACE matches no route and returns 405."
+      "notes": "Go's ServeMux routes by method pattern: every route this server registers names its method (http.NewServeMux at internal/server/server.go:373, routes from :515), so TRACE matches no pattern and the mux answers 405 without any application code having to enumerate the methods it refuses."
     },
     {
       "standard": "OWASP ASVS",
@@ -4497,13 +4538,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:308",
-        "internal/server/server.go:309"
+        "internal/server/server.go:306",
+        "internal/server/server.go:327"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:308-280), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
+      "notes": "The metrics collector is mounted only when explicitly enabled, and no longer on the public listener at all: it has its own http.Server on its own port with its own mux and timeouts (internal/server/server.go:306 and :327), so a scrape target is not reachable through the API surface and cannot inherit its middleware or its exposure. The admin plane remains a separate binary on loopback behind mutual TLS."
     },
     {
       "standard": "OWASP ASVS",
@@ -4566,14 +4607,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:323"
+        "internal/handler/oauth.go:735"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
         "TestNIST_TokenNotInURL",
         "TestASVS_V3_1_1_RefreshTokenNotInURL"
       ],
-      "notes": "No credential appears in any route pattern or query string; the OAuth result is delivered in a URL fragment, which is not sent to the server or logged."
+      "notes": "No credential appears in any route pattern or query string. The OAuth callback carries a single-use exchange code in the URL fragment (internal/handler/oauth.go:735), which browsers do not send to the server and no proxy or access log records; the access token itself is never in the redirect at all, it is held in the cache under the hash of that code and collected by POST /auth/oauth2/exchange."
     },
     {
       "standard": "OWASP ASVS",
@@ -4607,13 +4648,13 @@
       "requirement": "Verify that defined sensitive data is not sent to untrusted parties (e.g., user trackers) to prevent unwanted collection of data outside of the application's control.",
       "status": "Met",
       "evidence": [
-        "internal/httputil/safelog.go:26",
+        "internal/httputil/safelog.go:44",
         "docs/PRIVACY.md"
       ],
       "tests": [
         "TestASVS_V16_4_1_LoggedAddressesArePseudonymised"
       ],
-      "notes": "No analytics, tracker or third-party beacon exists. Addresses are pseudonymised before logging."
+      "notes": "No analytics, tracker or third-party beacon exists. Addresses are pseudonymised before logging by httputil.ObfuscatedIP (internal/httputil/safelog.go:44), which zeroes the last octet of an IPv4 address and the lower 64 bits of an IPv6 one."
     },
     {
       "standard": "OWASP ASVS",
@@ -4888,12 +4929,12 @@
       "requirement": "Verify that all proxying and middleware components transfer the user's original IP address correctly using trusted data fields that cannot be manipulated by the end user, and the application and web server use this correct value for logging and security decisions such as rate limiting, taking into account that even the original IP address may not be reliable due to dynamic IPs, VPNs, or corporate firewalls.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:290"
+        "internal/middleware/ratelimit.go:451"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "The client address is taken from the connection unless a trusted-proxy list is configured, and the forwarded chain is walked from the right to the first untrusted hop."
+      "notes": "The client address is taken from the connection unless a trusted-proxy list is configured: middleware.ClientIP returns RemoteAddr when loadTrustedProxyCIDRs is empty (internal/middleware/ratelimit.go:451). Where a proxy is configured and trusted, the forwarded chain is walked from the right to the first untrusted hop by lastRealIP, which is what keeps a client-supplied prefix out of the rate-limit bucket key."
     },
     {
       "standard": "OWASP ASVS",
@@ -5250,13 +5291,13 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/ratelimit.go:285",
-        "internal/service/auth.go:1102"
+        "internal/service/auth.go:872"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Cache loss degrades to a database-backed lockout rather than removing the control, and the credential limiters fail closed: RateLimit rejects with 503 when FailClosed is set and the distributed cache is unavailable (internal/middleware/ratelimit.go:285)."
+      "notes": "Cache loss degrades to a database-backed lockout rather than removing the control, and the credential limiters fail closed: RateLimit rejects with 503 when FailClosed is set and the distributed cache is unavailable (internal/middleware/ratelimit.go:285). The lockout itself is a persisted users.locked_until deadline that AuthService.Login re-reads on every attempt (internal/service/auth.go:872), so it is the database and not the cache that holds a locked account locked."
     },
     {
       "standard": "OWASP ASVS",
@@ -5434,7 +5475,7 @@
       "evidence": [
         "internal/config/config.go:574",
         "internal/config/config.go:573",
-        "internal/service/auth.go:2498",
+        "internal/service/auth.go:2407",
         "migrations/013_session_lifetime.sql"
       ],
       "tests": [
@@ -5483,14 +5524,14 @@
       "evidence": [
         "internal/config/config.go:439",
         "internal/config/config.go:744",
-        "internal/config/config.go:983"
+        "internal/config/config.go:886"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
         "TestNIST_NoCompositionRules",
         "TestNIST_NoForcedPasswordExpiration"
       ],
-      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:983), and every other profile enforces 15. The evidence previously cited internal/config/config.go:432, a doc comment on an unrelated field."
+      "notes": "Subscriber-chosen passwords, no composition rules, no periodic rotation. Section 3.1.1.1 requires a verifier to accept memorized secrets of at least 8 characters; the lowest floor any profile carries is devPasswordMinLengthFloor = 8 (internal/config/config.go:886), and every other profile enforces 15. The evidence previously cited internal/config/config.go:432, a doc comment on an unrelated field."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5502,8 +5543,8 @@
       "evidence": [
         "internal/config/config.go:439",
         "internal/config/config.go:744",
-        "internal/config/config.go:975",
-        "internal/config/config.go:983"
+        "internal/config/config.go:878",
+        "internal/config/config.go:886"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5512,7 +5553,7 @@
         "TestNIST_PasswordNoTruncation",
         "TestNIST_SaltLength"
       ],
-      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:975) equals the default (:412), and a deployment configuring less is refused at startup (:622). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:983), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
+      "notes": "Met. Rev 4 raises the single-factor password floor to 15 characters, and 15 is now the enforced floor and not merely the shipped default: passwordMinLengthFloor (internal/config/config.go:878) equals the default (:453), and a deployment configuring less is refused at startup (:616). The dev profile is no longer exempt from having a floor at all -- it has a lower one, devPasswordMinLengthFloor = 8 (internal/config/config.go:886), which is itself the figure section 3.1.1.1 requires a verifier to accept, so no profile now accepts a four-character password. Salting, hashing with Argon2id, no truncation, Unicode acceptance and breach-corpus blocking are separately tested. This row was an accepted risk (CR-31) for exactly as long as the floor was 8: TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay reads both numbers out of config.go and fired on the merge that raised it."
     },
     {
       "standard": "NIST SP 800-63B-4",
@@ -5901,12 +5942,12 @@
       "requirement": "Account Management",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:191"
+        "internal/adminapi/handler.go:216"
       ],
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer"
       ],
-      "notes": ""
+      "notes": "Account Management. The admin gateway is the only surface that manages accounts and it is a separate binary behind mutual TLS: Handler.ListUsers (internal/adminapi/handler.go:216), GetUser, LockUser, UnlockUser and DeleteUser cover enumeration, inspection, disabling and removal, each one gated by an RBAC permission and each one writing an audit entry naming the acting admin."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6616,13 +6657,13 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:295",
-        "internal/httputil/safelog.go:26"
+        "internal/httputil/safelog.go:44"
       ],
       "tests": [
         "TestGDPR_Art5_1_c_AuditMetadataScrubbed",
         "TestASVS_V16_4_1_LoggedAddressesArePseudonymised"
       ],
-      "notes": ""
+      "notes": "Data minimisation. Audit entries carry the identifiers an investigation needs and no payloads, and the client address is pseudonymised before it is written or logged: httputil.ObfuscatedIP (internal/httputil/safelog.go:44) reduces an IPv4 address to its /24 and an IPv6 address to its /64, which preserves abuse correlation without retaining the address itself."
     },
     {
       "standard": "GDPR",
@@ -6853,13 +6894,13 @@
       "requirement": "OAuth 2.0 Security BCP: PKCE on the authorization code flow",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:82"
+        "internal/handler/oauth.go:83"
       ],
       "tests": [
         "TestRFC9700_2_1_1_PKCEOnAllAuthorizeURLs",
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge"
       ],
-      "notes": "Also ASVS 5.0.0 V10.4.6."
+      "notes": "PKCE is applied to every authorization-code flow, with S256 as the only challenge method (internal/handler/oauth.go:83). Also ASVS 5.0.0 V10.4.6."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -6995,13 +7036,13 @@
       "requirement": "Proof Key for Code Exchange: S256 challenge method",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:82"
+        "internal/handler/oauth.go:83"
       ],
       "tests": [
         "TestNIST_OAuth2_PKCE_S256",
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge"
       ],
-      "notes": ""
+      "notes": "PKCE with S256. The authorize handler derives the challenge from a 32-byte random verifier through SHA256Base64URL (internal/handler/oauth.go:83); plain is not implemented, so there is no downgrade to refuse."
     },
     {
       "standard": "IETF RFC / OpenID Connect",
@@ -7165,12 +7206,12 @@
       "evidence": [
         "internal/outbound/outbound.go:208",
         "internal/outbound/outbound.go:147",
-        "internal/oauth2/oidc.go:184"
+        "internal/oauth2/oidc.go:188"
       ],
       "tests": [
         "TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment"
       ],
-      "notes": "The inventory divides three ways. Four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. Only the last four come from data, and they are what this control covers: internal/oauth2/oidc.go:184 holds them to the issuer's domain or the operator's list, and Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses they resolve to. Policy.refuseAddress (internal/outbound/outbound.go:208) refuses link-local unconditionally -- 169.254.0.0/16 and fe80::/10, where cloud instance metadata answers -- and refuses loopback, RFC 1918, IPv6 unique-local and RFC 6598 unless VAULT_OUTBOUND_ALLOW_PRIVATE is set, which defaults on only in the dev profile. Because the check is at dial time, a redirect is judged on the same terms as the endpoint it came from. The chart's NetworkPolicy is the network-layer half and it is no longer the stricter one: charts/vault/templates/networkpolicy.yaml admits egress on 443 to any destination by default (networkPolicy.httpsEgress.enabled: true, cidrs: []), because the shipped policy previously left the HIBP breach check enabled in configuration and unreachable in fact. Narrowing it with httpsEgress.cidrs is available and is a defence in depth, not this row's control. Previously accepted risk CR-17, now retired."
+      "notes": "The inventory divides three ways. Four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. Only the last four come from data, and they are what this control covers: internal/oauth2/oidc.go:188 holds them to the issuer's domain or the operator's list, and Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses they resolve to. Policy.refuseAddress (internal/outbound/outbound.go:208) refuses link-local unconditionally -- 169.254.0.0/16 and fe80::/10, where cloud instance metadata answers -- and refuses loopback, RFC 1918, IPv6 unique-local and RFC 6598 unless VAULT_OUTBOUND_ALLOW_PRIVATE is set, which defaults on only in the dev profile. Because the check is at dial time, a redirect is judged on the same terms as the endpoint it came from. The chart's NetworkPolicy is the network-layer half and it is no longer the stricter one: charts/vault/templates/networkpolicy.yaml admits egress on 443 to any destination by default (networkPolicy.httpsEgress.enabled: true, cidrs: []), because the shipped policy previously left the HIBP breach check enabled in configuration and unreachable in fact. Narrowing it with httpsEgress.cidrs is available and is a defence in depth, not this row's control. Previously accepted risk CR-17, now retired."
     },
     {
       "standard": "OWASP API Top 10",
@@ -7231,8 +7272,8 @@
       "requirement": "Define security requirements for software development",
       "status": "Met",
       "evidence": [
-        "docs/compliance-register.json:1",
-        "docs/security.md:1"
+        "docs/compliance-register.json",
+        "docs/security.md"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist"
@@ -7656,6 +7697,346 @@
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
       ],
       "notes": "Met: the templates use secret, configMap, emptyDir and persistentVolumeClaim, every one of which the restricted profile lists. No csi, nfs or cloud-provider volume appears. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Binary-Artifacts",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether the project has generated executable (binary) artifacts in the source repository.",
+      "status": "Met",
+      "evidence": [
+        ".gitignore:1"
+      ],
+      "tests": [
+        "TestScorecard_GovernanceFilesExist"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: no binaries found in the repo. Nothing under version control is an executable artifact; the binaries are produced by goreleaser at release time and never committed. This is the state a Go project is in by default and it is recorded because the check scores it, not because effort went into it."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Branch-Protection",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether a project's default and release branches are protected with GitHub's branch protection or repository rules settings.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:207"
+      ],
+      "tests": [
+        "TestScorecard_TheAssessmentItselfRuns"
+      ],
+      "notes": "Met as of 1.0.1. main was unprotected through 1.0.0 and the check scored -1 (Scorecard's unauthenticated run cannot read the setting, so it reported an internal error rather than a zero). Protection now requires a pull request, thirteen status checks including the Go and .NET coverage gates, branches up to date before merge, linear history and resolved conversations, and blocks force pushes and deletion. It requires no approving review, and that is deliberate rather than an omission: GitHub does not permit approving one's own pull request, so on a single-maintainer project a required approval is one nobody can give. It made every merge an admin bypass, and a bypass skips the thirteen status checks as well as the review -- so the rule that was meant to add a reviewer was in practice removing the CI gate. Requiring the checks and not the approval is the stronger setting here, and the missing reviewer is recorded as CR-36 rather than papered over. enforce_admins stays off so a hotfix remains possible; the required checks are the always-run wrapper jobs, not the conditional gates they watch, because branch protection counts a skipped job as green."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "CI-Tests",
+      "chapter": "Low risk",
+      "level": "Low",
+      "requirement": "This check tries to determine if the project runs tests before pull requests are merged.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/ci.yml:23"
+      ],
+      "tests": [
+        "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: 13 of 13 merged pull requests were checked by a CI test. The suite that runs on a pull request is the unit, attack, compliance, spec and fuzz set plus the coverage gate; 1.0.1 adds the .NET SDK build and coverage gate, which until then ran only in the release workflow after the tag had been pushed."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "CII-Best-Practices",
+      "chapter": "Low risk",
+      "level": "Low",
+      "requirement": "This check determines whether the project has earned an OpenSSF (formerly CII) Best Practices Badge at the passing, silver, or gold level.",
+      "status": "Accepted Risk",
+      "evidence": [
+        "docs/COMPLIANCE.md:1"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-35. Scored 0: no effort to earn a badge detected. The badge requires registering the project at bestpractices.dev and self-certifying against roughly seventy criteria, which is an account action outside the repository and cannot be performed by a commit. Most of what it asks for is already true and already evidenced here, so the gap is the registration rather than the practice.",
+      "accepted_risk": "CR-35"
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Code-Review",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether the project requires human code review before pull requests are merged.",
+      "status": "Accepted Risk",
+      "evidence": [
+        ".github/CODEOWNERS:1"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-36. Scored 0: 0 of 14 approved changesets. Every change reaches main through a pull request with CI attached, and 1.0.1 adds a branch-protection rule requiring one approving review -- but the project has one maintainer, so the approval it requires is the author's own or none. The rule still earns its place, because it makes an unreviewed merge a deliberate admin bypass rather than the default path, and the score will move as soon as there is a second reviewer. Claiming Met on a rule nobody else can satisfy would be the overclaim this register exists to avoid.",
+      "accepted_risk": "CR-36"
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Contributors",
+      "chapter": "Low risk",
+      "level": "Low",
+      "requirement": "This check tries to determine if the project has recent contributors from multiple organizations.",
+      "status": "Accepted Risk",
+      "evidence": [
+        ".github/CODEOWNERS:1"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-36, the same single-maintainer fact that holds Code-Review at zero. Scored 0: zero contributing organisations. The check measures how many organisations have committed recently, which one maintainer cannot move by writing better code. It was first classified Not Applicable here and that was wrong: the register's vocabulary for inapplicable requirements covers absent capabilities, roles vault42 does not occupy, and components declared out of scope, and this is none of those. It is a real property of the project, measured correctly, that the project has decided to live with.",
+      "accepted_risk": "CR-36"
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Dangerous-Workflow",
+      "chapter": "Critical risk",
+      "level": "Critical",
+      "requirement": "This check determines whether the project's GitHub Action workflows has dangerous code patterns.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/commitlint.yml:44"
+      ],
+      "tests": [
+        "TestScorecard_TokenPermissionsAreLeastPrivilege"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: no dangerous workflow patterns detected. No workflow checks out untrusted code on a privileged trigger, and the two places a pull request's own values reach a script -- the base and head SHAs the commit linter uses -- are bound through the env block rather than interpolated into the run body."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Dependency-Update-Tool",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check tries to determine if the project uses a dependency update tool, specifically Dependabot or Renovate bot.",
+      "status": "Met",
+      "evidence": [
+        ".github/dependabot.yml:1"
+      ],
+      "tests": [
+        "TestScorecard_DependencyUpdateToolIsConfigured"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run. Dependabot watches five ecosystems: Go modules, GitHub Actions, Docker base images, npm and NuGet. The check scores the configuration, which is the weaker half of the claim; the stronger half is that the updates get taken, and 1.0.1 is the release that cleared the eighteen open pull requests which had accumulated behind 1.0.0."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Fuzzing",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project uses fuzzing.",
+      "status": "Met",
+      "evidence": [
+        "tests/fuzz"
+      ],
+      "tests": [
+        "TestScorecard_StaticAnalysisAndFuzzingRun"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: project is fuzzed. Seventeen Go fuzz targets under tests/fuzz cover the parsers that see attacker-controlled bytes -- JWT parsing, the Redis wire protocol, URL and email sanitisation, the JWKS reader. They run in CI as a bounded seed pass rather than continuously; the project is not in OSS-Fuzz."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "License",
+      "chapter": "Low risk",
+      "level": "Low",
+      "requirement": "This check tries to determine if the project has published a license.",
+      "status": "Met",
+      "evidence": [
+        "LICENSE"
+      ],
+      "tests": [
+        "TestScorecard_GovernanceFilesExist"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: license file detected. MIT, at the repository root, in the location the check looks for it."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Maintained",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether the project is actively maintained.",
+      "status": "Met",
+      "evidence": [
+        "CHANGELOG.md"
+      ],
+      "tests": [
+        "TestScorecard_TheReleaseHistoryIsRecorded"
+      ],
+      "notes": "Met, scored 8 on the 2026-08-20 run: 10 commits and no issue activity in the previous 90 days. The check pays partial credit for issue activity from collaborators, which a project with one maintainer and no external issues does not generate, so 8 rather than 10 reflects the absence of a conversation rather than the absence of maintenance. No test asserts this: it measures the commit history, and a test reading the commit history would be asserting that the repository has recently been committed to, which is circular."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Packaging",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project is published as a package.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:596"
+      ],
+      "tests": [
+        "TestScorecard_ReleasesAreSigned"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: packaging workflow detected. The release publishes three container images and a Helm chart to GHCR and two NuGet packages to nuget.org, so a consumer takes a published artifact rather than building from source."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Pinned-Dependencies",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project pins dependencies used during its build and release process. A \"pinned dependency\" is a dependency that is explicitly set to a specific hash instead of allowing a mutable version or range of versions.",
+      "status": "Met",
+      "evidence": [
+        ".github/requirements-lint.txt:1",
+        ".github/workflows/ci.yml:810"
+      ],
+      "tests": [
+        "TestScorecard_EveryActionIsPinnedByCommit",
+        "TestScorecard_BuildToolsResolveThroughAHash"
+      ],
+      "notes": "Met as of 1.0.1; scored 9 on the 2026-08-20 run with two findings, both in the non-Go lint job. Every action reference across the five workflows is pinned to a 40-character commit SHA and always was. The two findings were a pip and an npm install that named exact versions and then trusted whatever bytes the registry returned for them, which is a version pin and not a supply-chain pin: a republished artifact under the same version, or an account takeover on ruff, yamllint or markdownlint-cli2, executed in CI on every pull request. pip now installs under --require-hashes from a pip-compile-generated file carrying a digest for every resolved artifact including the transitive ones, and markdownlint-cli2 is a root devDependency that pnpm-lock.yaml pins by integrity, the treatment commitlint already had."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "SAST",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project uses Static Application Security Testing.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/nightly-security.yml:97",
+        ".github/workflows/ci.yml:292"
+      ],
+      "tests": [
+        "TestScorecard_StaticAnalysisAndFuzzingRun"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: SAST tool detected. gosec, staticcheck through golangci-lint, CodeQL and Trivy over the source and the images. gosec runs twice, once over production code and once with -tests, against separately frozen baselines."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "SBOM",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project maintains a Software Bill of Materials (SBOM) either as a file in the source or a release artifact.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:419",
+        ".goreleaser.yaml:1"
+      ],
+      "tests": [
+        "TestScorecard_SbomIsProduced"
+      ],
+      "notes": "Met. Every release carries SBOMs in two places: BuildKit attaches one to each image, and syft produces one per release archive through goreleaser. The check did not score this repository on the 2026-08-20 run because it reads published release artifacts and the run predates any 1.x release."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Security-Policy",
+      "chapter": "Medium risk",
+      "level": "Medium",
+      "requirement": "This check tries to determine if the project has published a security policy.",
+      "status": "Met",
+      "evidence": [
+        "SECURITY.md"
+      ],
+      "tests": [
+        "TestScorecard_GovernanceFilesExist"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: security policy file detected. SECURITY.md states the supported versions, the reporting route and the response timeline."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Signed-Releases",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check tries to determine if the project cryptographically signs release artifacts.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:348",
+        ".goreleaser.yaml:1"
+      ],
+      "tests": [
+        "TestScorecard_ReleasesAreSigned"
+      ],
+      "notes": "Met by the workflow; scored -1 on the 2026-08-20 run, which reports \"no releases found\" because the check reads the artifacts of published releases and 1.0.0 was merged without ever being tagged. Every image and the Helm chart are signed keylessly by digest with cosign, each carries a build-provenance attestation, and the release archives are covered by a detached signature over their SHA256SUMS file. The score moves when 1.0.1 is the first tagged release to publish those artifacts."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Token-Permissions",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether the project's automated workflows tokens follow the principle of least privilege.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:43"
+      ],
+      "tests": [
+        "TestScorecard_TokenPermissionsAreLeastPrivilege"
+      ],
+      "notes": "Met, scored 10 on the 2026-08-20 run: workflow tokens follow the principle of least privilege. Every workflow declares a read-only top-level permissions block and each job requests exactly what its own steps use. The release workflow is where this matters most: eight of its jobs used to inherit contents: write and packages: write from the workflow, including the ones that run the full test and attack suites, which meant arbitrary repository code executing while holding a token that could push to GHCR."
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Vulnerabilities",
+      "chapter": "High risk",
+      "level": "High",
+      "requirement": "This check determines whether the project has open, unfixed vulnerabilities in its own codebase or its dependencies using the OSV service.",
+      "status": "Accepted Risk",
+      "evidence": [
+        "go.mod:1"
+      ],
+      "tests": [
+        "TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames"
+      ],
+      "notes": "Accepted as CR-37, reduced not closed. Scored 6 on the 2026-08-20 run with four open advisories; 1.0.1 clears three of them. GHSA-hfg8-hc9c-6c3h in moby/go-archive is fixed by 0.3.3, and two more resolve with the testcontainers and x/crypto upgrades. The fourth cannot be fixed: GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained and unsafe by design with no patched version, and x/crypto is a direct dependency for argon2 and hkdf. Nothing in this tree imports openpgp, and govulncheck confirms it at symbol level on both modules, but OSV reports per-module rather than per-symbol so the finding stands as long as the dependency does.",
+      "accepted_risk": "CR-37"
+    },
+    {
+      "standard": "OpenSSF Scorecard",
+      "revision": "v5.5.0",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Webhooks",
+      "chapter": "Critical risk",
+      "level": "Critical",
+      "requirement": "This check determines whether the webhook defined in the repository has a token configured to authenticate the origins of requests.",
+      "status": "Not Applicable",
+      "evidence": [],
+      "tests": [],
+      "notes": "Not applicable by scope. The component the check reads is the GitHub repository's webhook configuration, which is account state rather than anything in the tree this register assesses: the scope section names cmd/, internal/, migrations/ and charts/vault. Branch protection is also account state and is nevertheless classified Met, because a branch rule governs what enters the tree; a webhook delivers events outward and governs nothing here. The check is experimental, requires a maintainer token to run at all, and does not appear in the published result for this repository.",
+      "na_basis": "scope-exclusion"
     }
   ],
   "retired_risks": {
