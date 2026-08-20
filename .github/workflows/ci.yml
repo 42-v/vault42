@@ -780,6 +780,14 @@ jobs:
     # Versions are pinned for the same reason the actions are: a linter that
     # picks up a new rule on its own turns an unrelated pull request red, which
     # is how a gate stops being trusted.
+    #
+    # A version pin is not a supply-chain pin. `pip install 'ruff==0.16.3'` and
+    # `npm install markdownlint-cli2@0.23.2` both name a version and then trust
+    # whatever bytes the registry serves for it, which is what Scorecard's
+    # Pinned-Dependencies check was reporting against these two lines. Both now
+    # resolve through a committed hash: pip via --require-hashes against
+    # .github/requirements-lint.txt, markdownlint-cli2 as a root devDependency
+    # that pnpm-lock.yaml pins by integrity, the same treatment commitlint got.
     name: Lint (non-Go)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -790,16 +798,23 @@ jobs:
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
         with:
           python-version: '3.12'
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: pnpm
 
-      - name: Install linters
+      # --require-hashes makes pip refuse the whole install if any resolved
+      # artifact -- direct or transitive -- is absent from the file or does not
+      # match, so a hijacked release cannot substitute itself for a pinned one.
+      - name: Install Python linters
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check \
-            'ruff==0.16.3' 'yamllint==1.38.0'
-          npm install --no-save --no-audit --no-fund 'markdownlint-cli2@0.23.2'
+          python -m pip install --disable-pip-version-check --require-hashes \
+            -r .github/requirements-lint.txt
+
+      - name: Install Node linters
+        run: pnpm install --frozen-lockfile
 
       # shellcheck ships on the GitHub-hosted Ubuntu image, so it needs no
       # install step. The file list comes from git rather than from find, so a
@@ -823,7 +838,7 @@ jobs:
         run: ruff check --no-cache .
 
       - name: markdownlint
-        run: npx --no-install markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
+        run: pnpm exec markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
 
       - name: yamllint
         run: yamllint --strict .
