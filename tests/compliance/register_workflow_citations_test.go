@@ -1,90 +1,158 @@
 package compliance
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
 
 // =============================================================================
-// A citation into a workflow has to land on something with a name.
+// Workflow citations are anchors, not line numbers.
 //
-// The register's evidence is `path:line`, and the relevance gate next door
-// checks two failure modes for it: a line that has gone blank, and a line that
-// only closes a block. Both are the shape a citation takes after the file above
-// it grew and the number stayed still.
+// Evidence in the register is `path:line`, and for source files that is fine:
+// a Go function moves rarely and the relevance gate next door checks that the
+// cited line still mentions what the row says.
 //
-// Neither catches the third shape, which is the common one. A citation that
-// drifts a few lines lands on a real line of YAML -- `timeout-minutes: 5`,
-// `failed=0`, a bare `#` -- and passes, because those lines are neither blank
-// nor a closing brace. They are also not evidence of anything. Adding one job
-// to ci.yml moved eight citations onto lines like that, and the register went
-// on presenting them as the proof of eight requirements.
+// For .github/workflows it was not fine. Adding one job to ci.yml shifts every
+// citation below it, and three separate edits in one working session did
+// exactly that. The existing gates catch the two shapes where a drifted
+// citation lands somewhere obviously dead -- a blank line, a closing brace --
+// and cannot catch the third and most common one, where it lands on a real line
+// of YAML belonging to an unrelated step. Two rounds of that were found by
+// reading all sixteen citations by hand, which is not a gate.
 //
-// The rule here is narrow on purpose, because the obvious wider rule is wrong.
-// "Cite a job key, a step name or a `uses:`" rejects `cache: false`,
-// `contents: read` and `go-version-file: go.mod`, which are three of the best
-// citations in the register: each is the substance of the requirement it is
-// filed under. Frequency is no better -- `contents: read` appears eleven times
-// and is still exactly what Token-Permissions is about.
+// So workflow evidence stops carrying a number. An anchor names what it points
+// at, and the only way to break it is to delete the thing it names, which is
+// the failure anybody would want reported.
 //
-// What actually distinguishes a drifted citation is that it points at a
-// container rather than at content. `with:` is not evidence of anything; it
-// appears 93 times across these workflows and introduces the block that holds
-// the evidence. Neither is `timeout-minutes: 5`, or the `set -euo pipefail`
-// that opens most run steps. Those are the lines a number lands on when the
-// lines above it moved.
+//	path#job:<id>              the job key line
+//	path#^<prefix>             the unique line starting with <prefix>
+//	path#in:<job>:<substring>  the unique line containing <substring>, inside <job>
+//	path#<substring>           the unique line containing <substring>
 //
-// So: reject bare mapping keys and a short list of named boilerplate, and let
-// everything with content through. This does not prove a citation is right -- a
-// drift from one `run:` to another still passes -- it removes the class where
-// the cited line could not have been the intended one under any reading.
+// Ambiguity is an error rather than a first-match: an anchor matching four
+// lines is not identifying any of them, and the fix is to write a longer one.
+//
+// The scoping form is a prefix rather than a `<substring>@<job>` suffix,
+// because @ is not a rare character in a workflow: every pinned action carries
+// one, and so does every image digest and every `image@sha256:` reference. The
+// first draft of this used the suffix form and misread three citations, one of
+// them looking for a job named "${VAULT_DIGEST}".
 // =============================================================================
 
-// workflowCitation matches an evidence entry pointing into .github/workflows.
-var workflowCitation = regexp.MustCompile(`^(\.github/workflows/[^:]+\.yml):(\d+)$`)
+// workflowEvidence matches an evidence entry pointing into .github/workflows.
+var workflowEvidence = regexp.MustCompile(`^(\.github/workflows/[^:#]+\.yml)([:#])(.*)$`)
 
-// containerKey matches a mapping key with nothing after it: the line that opens
-// a block rather than the line that says something. A job key like
-// `lint-non-go:` is deliberately allowed, because naming a job is naming a
-// location; the set below is the keys whose only job is to introduce children.
-var containerKeys = map[string]bool{
-	"with": true, "env": true, "steps": true, "permissions": true,
-	"strategy": true, "matrix": true, "jobs": true, "on": true,
-	"outputs": true, "defaults": true, "concurrency": true, "secrets": true,
+// jobKey builds the pattern for a job declaration: two spaces, the id, a colon,
+// nothing else. Steps are indented further and never match.
+func jobKey(id string) *regexp.Regexp {
+	return regexp.MustCompile(`^  ` + regexp.QuoteMeta(id) + `:\s*$`)
 }
 
-// structuralOnly are lines that parse, carry no identity, and are where a
-// drifted citation comes to rest. Listed explicitly so the failure message can
-// say which one was hit rather than "did not match a regex".
-var structuralOnly = map[string]string{
-	"timeout-minutes":   "a timeout is on almost every job; landing on one says nothing about which",
-	"runs-on":           "every job has one, and they are all the same value here",
-	"shell":             "boilerplate on a run step",
-	"set -euo pipefail": "the first line of most scripts in this repository",
-	"set -eo pipefail":  "the first line of most scripts in this repository",
-	"|":                 "a YAML block scalar introducer",
+// jobBounds returns the half-open line range of a job's block, or ok=false.
+func jobBounds(lines []string, id string) (start, end int, ok bool) {
+	key := jobKey(id)
+	anyJob := regexp.MustCompile(`^  [a-z0-9][a-z0-9-]*:\s*$`)
+	start = -1
+	for i, line := range lines {
+		if key.MatchString(line) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return 0, 0, false
+	}
+	for i := start + 1; i < len(lines); i++ {
+		if anyJob.MatchString(lines[i]) {
+			return start, i, true
+		}
+	}
+	return start, len(lines), true
 }
 
-// TestComplianceRegister_WorkflowCitationsLandOnSomethingNamed is the third
-// citation gate, after the blank line and the closing brace.
-func TestComplianceRegister_WorkflowCitationsLandOnSomethingNamed(t *testing.T) {
+// resolveAnchor returns the 1-based line numbers an anchor matches.
+func resolveAnchor(lines []string, anchor string) (hits []int, err error) {
+	switch {
+	case strings.HasPrefix(anchor, "job:"):
+		id := strings.TrimPrefix(anchor, "job:")
+		if id == "" {
+			return nil, fmt.Errorf("empty job id")
+		}
+		key := jobKey(id)
+		for i, line := range lines {
+			if key.MatchString(line) {
+				hits = append(hits, i+1)
+			}
+		}
+
+	case strings.HasPrefix(anchor, "^"):
+		prefix := strings.TrimPrefix(anchor, "^")
+		for i, line := range lines {
+			if strings.HasPrefix(line, prefix) {
+				hits = append(hits, i+1)
+			}
+		}
+
+	case strings.HasPrefix(anchor, "in:"):
+		rest := strings.TrimPrefix(anchor, "in:")
+		colon := strings.Index(rest, ":")
+		if colon < 1 || colon == len(rest)-1 {
+			return nil, fmt.Errorf("in: anchors are in:<job-id>:<substring>")
+		}
+		job, sub := rest[:colon], rest[colon+1:]
+		start, end, ok := jobBounds(lines, job)
+		if !ok {
+			return nil, fmt.Errorf("no job %q in this workflow", job)
+		}
+		for i := start; i < end; i++ {
+			if strings.Contains(lines[i], sub) {
+				hits = append(hits, i+1)
+			}
+		}
+
+	default:
+		for i, line := range lines {
+			if strings.Contains(line, anchor) {
+				hits = append(hits, i+1)
+			}
+		}
+	}
+	return hits, nil
+}
+
+// TestComplianceRegister_WorkflowCitationsResolveToExactlyOneLine is the gate.
+func TestComplianceRegister_WorkflowCitationsResolveToExactlyOneLine(t *testing.T) {
 	reg := loadRegister(t)
 	root := repoRoot(t)
 
 	cache := map[string][]string{}
-	checked := 0
+	resolved := 0
 
 	for _, r := range reg.Requirements {
 		for _, ev := range r.Evidence {
-			m := workflowCitation.FindStringSubmatch(ev)
+			m := workflowEvidence.FindStringSubmatch(ev)
 			if m == nil {
 				continue
 			}
-			relPath, lineText := m[1], m[2]
+			relPath, sep, anchor := m[1], m[2], m[3]
+
+			if sep == ":" {
+				t.Errorf("%s %s cites %s by line number. Workflow evidence uses an anchor, "+
+					"because a line number in a workflow is invalidated by any job added above "+
+					"it -- which happened three times in one working session, twice landing on a "+
+					"real line belonging to an unrelated step, where nothing could report it. "+
+					"Write %s#<something on the line> instead.",
+					r.Standard, r.RequirementID, ev, relPath)
+				continue
+			}
+			if strings.TrimSpace(anchor) == "" {
+				t.Errorf("%s %s cites %s with an empty anchor", r.Standard, r.RequirementID, ev)
+				continue
+			}
 
 			lines, ok := cache[relPath]
 			if !ok {
@@ -97,55 +165,32 @@ func TestComplianceRegister_WorkflowCitationsLandOnSomethingNamed(t *testing.T) 
 				cache[relPath] = lines
 			}
 
-			line, err := strconv.Atoi(lineText)
-			if err != nil || line < 1 || line > len(lines) {
-				t.Errorf("%s %s cites %s, which is outside the file", r.Standard, r.RequirementID, ev)
+			hits, err := resolveAnchor(lines, anchor)
+			if err != nil {
+				t.Errorf("%s %s cites %s: %v", r.Standard, r.RequirementID, ev, err)
 				continue
 			}
-			checked++
 
-			cited := strings.TrimSpace(lines[line-1])
-
-			// A comment can be evidence -- several rows cite the paragraph that
-			// explains why a step exists -- but only if it says something. A
-			// bare marker is the same dead end as a closing brace.
-			if cited == "#" || cited == "" {
-				t.Errorf("%s %s cites %s, which is an empty comment marker. It carries no text "+
-					"and no identifier, so a reader following the citation learns nothing.",
+			switch len(hits) {
+			case 1:
+				resolved++
+			case 0:
+				t.Errorf("%s %s cites %s and nothing in the file matches the anchor. Either the "+
+					"step it named is gone -- in which case the row's evidence is gone with it "+
+					"and the row needs re-examining, which is the whole point of failing here -- "+
+					"or the line was reworded and the anchor needs the same edit.",
 					r.Standard, r.RequirementID, ev)
-				continue
-			}
-			if strings.HasPrefix(cited, "#") {
-				continue
-			}
-
-			key := cited
-			if idx := strings.Index(cited, ":"); idx > 0 {
-				key = strings.TrimPrefix(cited[:idx], "- ")
-			}
-			if why, bad := structuralOnly[key]; bad {
-				t.Errorf("%s %s cites %s, which is %q -- %s. This is what a citation looks like "+
-					"after the lines above it moved: syntactically fine, and not the line anybody "+
-					"wrote the citation for.", r.Standard, r.RequirementID, ev, cited, why)
-				continue
-			}
-			if why, bad := structuralOnly[cited]; bad {
-				t.Errorf("%s %s cites %s, which is %q -- %s", r.Standard, r.RequirementID, ev, cited, why)
-				continue
-			}
-
-			if strings.HasSuffix(cited, ":") && containerKeys[strings.TrimSuffix(strings.TrimPrefix(cited, "- "), ":")] {
-				t.Errorf("%s %s cites %s, which is %q -- a line that opens a block rather than "+
-					"one that says anything. The evidence is inside it, and a citation to the lid "+
-					"survives any change to the contents. Cite the line that carries the claim.",
-					r.Standard, r.RequirementID, ev, cited)
+			default:
+				t.Errorf("%s %s cites %s, which matches %d lines (%v). An anchor that matches "+
+					"more than one line identifies none of them; lengthen it, or scope it to a "+
+					"job with @<job-id>.", r.Standard, r.RequirementID, ev, len(hits), hits)
 			}
 		}
 	}
 
-	if checked < 10 {
-		t.Fatalf("only %d workflow citations found; the scan is broken and this gate would pass "+
-			"over a register that had none left", checked)
+	if resolved < 20 {
+		t.Fatalf("only %d workflow anchors resolved; the scan is broken and this gate would "+
+			"pass over a register whose workflow evidence had all gone stale", resolved)
 	}
-	t.Logf("%d workflow citations resolved to a named line", checked)
+	t.Logf("%d workflow anchors resolved to exactly one line each", resolved)
 }

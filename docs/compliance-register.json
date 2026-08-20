@@ -4738,7 +4738,7 @@
       "tests": [
         "TestASVS_V3_3_1_LogoutInvalidatesRefreshToken"
       ],
-      "notes": "Clearing authenticated data from client storage is a property of the browser application, which the declared scope assesses separately. The half the server owns is done: the session cookie is expired with MaxAge -1 on logout (internal/handler/auth.go:307) and the refresh family is revoked server-side, so a client that fails to clear its own storage still holds nothing that authenticates.",
+      "notes": "Clearing authenticated data from client storage is a property of the browser application, which the declared scope assesses separately. The half the server owns is done: the session cookie is expired with MaxAge -1 on logout (clearRefreshCookie, internal/handler/auth.go:434) and the refresh family is revoked server-side, so a client that fails to clear its own storage still holds nothing that authenticates.",
       "na_basis": "scope-exclusion"
     },
     {
@@ -4798,7 +4798,7 @@
       "status": "Met",
       "evidence": [
         "SECURITY.md",
-        ".github/workflows/nightly-security.yml:5"
+        ".github/workflows/nightly-security.yml## introduce a HIGH CVE that only surfaces on main at 03:00 the next day."
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -4820,7 +4820,7 @@
       ],
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:83"
+        ".github/workflows/release.yml## reading is done. Jobs that have to treat a candidate differently,"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -5515,8 +5515,8 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/config/config.go:574",
-        "internal/config/config.go:573",
+        "internal/config/config.go:495",
+        "internal/config/config.go:496",
         "internal/service/auth.go:2407",
         "migrations/013_session_lifetime.sql"
       ],
@@ -6066,7 +6066,7 @@
         "TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily",
         "TestNIST80053_AC_12_InactivityTerminatesTheWholeFamily"
       ],
-      "notes": "Met, both halves. Explicit termination is complete: RevokeAllForUser and RevokeFamily reach every generation of every family, and each state change that invalidates the credential a session rests on calls one of them. The trigger conditions the control asks for are now two, and both terminate rather than merely refuse -- the absolute age bound and the inactivity bound, each revoking the whole family and recording an audit event naming the trigger (session_lifetime_exceeded, session_inactivity_exceeded). Termination is also visible in the concurrent-session cap: issuance clamps a refresh token's stored expires_at to the inactivity window, so a timed-out family stops being counted by CountActiveFamilies instead of holding a slot for the rest of VAULT_REFRESH_TOKEN_TTL. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2498), called from the refresh path at internal/service/auth.go:1380 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip."
+      "notes": "Met, both halves. Explicit termination is complete: RevokeAllForUser and RevokeFamily reach every generation of every family, and each state change that invalidates the credential a session rests on calls one of them. The trigger conditions the control asks for are now two, and both terminate rather than merely refuse -- the absolute age bound and the inactivity bound, each revoking the whole family and recording an audit event naming the trigger (session_lifetime_exceeded, session_inactivity_exceeded). Termination is also visible in the concurrent-session cap: issuance clamps a refresh token's stored expires_at to the inactivity window, so a timed-out family stops being counted by CountActiveFamilies instead of holding a slot for the rest of VAULT_REFRESH_TOKEN_TTL. The mechanism is AuthService.enforceSessionInactivity (internal/service/auth.go:2498), called from the refresh path at internal/service/auth.go:1378 before the presented token is spent. It measures idleness from the presented refresh token's own created_at, which is the instant its family last rotated: a family only advances by rotating, the predecessor row is marked used before the successor is inserted, so the row a client presents is always its family's newest generation. No last_activity_at column was added, because that would be a second copy of a fact the row already carries -- repository.ActiveFamily.LastUsedAt already publishes the same value to the user -- and because stamping activity per request would turn the hottest read path in the service into a write. GetByTokenHash already selects created_at, so the check adds no query and no round trip."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6299,7 +6299,7 @@
       "requirement": "Vulnerability Monitoring and Scanning",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml:24"
+        ".github/workflows/nightly-security.yml#schedule:"
       ],
       "tests": [
         "TestNIST_RA_5_NightlySecurityScannersEnforceHighCriticalGate"
@@ -6471,7 +6471,7 @@
       "requirement": "Supply Chain Controls and Processes",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:107"
+        ".github/workflows/release.yml#- name: Release ref is the tag being published"
       ],
       "tests": [
         "TestOWASP_A03_2025_WorkflowActionsArePinnedToCommitSHAs"
@@ -6486,7 +6486,7 @@
       "requirement": "Provenance",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:84"
+        ".github/workflows/release.yml## starting with the floating image tags, take the answer from here"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -6549,7 +6549,7 @@
       "requirement": "Software Supply Chain Failures",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:84"
+        ".github/workflows/release.yml## starting with the floating image tags, take the answer from here"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance",
@@ -7403,8 +7403,8 @@
       "requirement": "Specify which tools are to be included in each toolchain",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:33",
-        ".github/workflows/nightly-security.yml:42"
+        ".github/workflows/ci.yml#in:test:go-version-file: go.mod",
+        ".github/workflows/nightly-security.yml## `github.ref` and `github.event_name` all resolve to the CALLER's. A group"
       ],
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent",
@@ -7421,7 +7421,7 @@
       "status": "Met",
       "evidence": [
         ".github/dependabot.yml:1",
-        ".github/workflows/nightly-security.yml:30"
+        ".github/workflows/nightly-security.yml## false on workflow_call, so no pull request ever scanned an image: a"
       ],
       "tests": [
         "TestSSDF_800_218_DependencyUpdateAutomationIsAutomated",
@@ -7437,7 +7437,7 @@
       "requirement": "Configure tools to generate artifacts of their support of secure software development practices",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:119",
+        ".github/workflows/ci.yml#- name: Upload unit coverage",
         ".github/workflows/release.yml",
         "docs/test-coverage.md"
       ],
@@ -7537,8 +7537,8 @@
       "requirement": "Make software integrity verification information available to software acquirers",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:222",
-        ".github/workflows/release.yml:348",
+        ".github/workflows/release.yml#- name: Upload coverage",
+        ".github/workflows/release.yml#cosign sign --yes \"ghcr.io/42-v/vault42@${VAULT_DIGEST}\"",
         ".goreleaser.yaml"
       ],
       "tests": [
@@ -7555,7 +7555,7 @@
       "status": "Met",
       "evidence": [
         "CHANGELOG.md:1",
-        ".github/workflows/release.yml:299"
+        ".github/workflows/release.yml#- name: Build and push vault42"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist",
@@ -7571,7 +7571,7 @@
       "requirement": "Collect, safeguard, maintain and share provenance data for all components",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:241",
+        ".github/workflows/release.yml#images:",
         ".goreleaser.yaml:109"
       ],
       "tests": [
@@ -7654,8 +7654,8 @@
       "requirement": "Acquire and maintain well-secured software components from commercial, open-source and other third-party developers",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:602",
-        ".github/workflows/ci.yml:605"
+        ".github/workflows/ci.yml#run: go mod verify",
+        ".github/workflows/ci.yml#run: go mod tidy -diff"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7689,8 +7689,8 @@
       "requirement": "Verify that acquired third-party software components comply with the requirements",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:602",
-        ".github/workflows/nightly-security.yml:57",
+        ".github/workflows/ci.yml#run: go mod verify",
+        ".github/workflows/nightly-security.yml#govulncheck:",
         "docs/deps.md"
       ],
       "tests": [
@@ -7708,7 +7708,7 @@
       "status": "Met",
       "evidence": [
         ".golangci.yml:10",
-        ".github/workflows/ci.yml:326",
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
         "CONTRIBUTING.md"
       ],
       "tests": [
@@ -7757,7 +7757,7 @@
       "status": "Met",
       "evidence": [
         ".github/CODEOWNERS:1",
-        ".github/workflows/ci.yml:326"
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist",
@@ -7773,7 +7773,7 @@
       "requirement": "Perform the code review and/or code analysis based on the organization's secure coding standards",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml:47"
+        ".github/workflows/nightly-security.yml## Cancellation is on for the nightly, which should never queue behind its own"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7790,7 +7790,7 @@
       "status": "Met",
       "evidence": [
         "CONTRIBUTING.md",
-        ".github/workflows/ci.yml:23"
+        ".github/workflows/ci.yml#job:test"
       ],
       "tests": [
         "TestSSDF_800_218_TheDocumentedCIGatesAreTheOnesThatRun",
@@ -7806,8 +7806,8 @@
       "requirement": "Design the software to meet security requirements and mitigate security risks",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:23",
-        ".github/workflows/ci.yml:104"
+        ".github/workflows/ci.yml#job:test",
+        ".github/workflows/ci.yml#go test ./tests/integration/... ./tests/compliance/... \\"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -7823,7 +7823,7 @@
       "status": "Met",
       "evidence": [
         "internal/config/config.go:697",
-        ".github/workflows/ci.yml:422"
+        ".github/workflows/ci.yml#run: helm lint charts/vault"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7857,8 +7857,8 @@
       "requirement": "Gather information from software acquirers, users and public sources on potential vulnerabilities",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml:30",
-        ".github/workflows/nightly-security.yml:114"
+        ".github/workflows/nightly-security.yml## false on workflow_call, so no pull request ever scanned an image: a",
+        ".github/workflows/nightly-security.yml#run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -7873,8 +7873,8 @@
       "requirement": "Review, analyze and/or test the software's code to identify or confirm the presence of previously undetected vulnerabilities",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml:47",
-        ".github/workflows/nightly-security.yml:142"
+        ".github/workflows/nightly-security.yml## Cancellation is on for the nightly, which should never queue behind its own",
+        ".github/workflows/nightly-security.yml#- name: Run gosec (production code)"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -7989,7 +7989,7 @@
       "evidence": [
         "tests/compliance/register_gates_test.go",
         "tests/compliance/nist_ssdf_800_218_test.go",
-        ".github/workflows/ci.yml:834"
+        ".github/workflows/ci.yml#lint-non-go:"
       ],
       "tests": [
         "TestComplianceRegister_EveryRetiredRiskNamesTheTestThatKeepsItClosed",
@@ -8182,7 +8182,7 @@
       "requirement": "This check determines whether a project's default and release branches are protected with GitHub's branch protection or repository rules settings.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:204"
+        ".github/workflows/ci.yml#job:coverage-gate-required"
       ],
       "tests": [
         "TestScorecard_TheAssessmentItselfRuns"
@@ -8199,7 +8199,7 @@
       "requirement": "This check tries to determine if the project runs tests before pull requests are merged.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/ci.yml:23"
+        ".github/workflows/ci.yml#job:test"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -8264,7 +8264,7 @@
       "requirement": "This check determines whether the project's GitHub Action workflows has dangerous code patterns.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/commitlint.yml:44"
+        ".github/workflows/commitlint.yml## The two SHAs were interpolated straight into the run body. They are"
       ],
       "tests": [
         "TestScorecard_TokenPermissionsAreLeastPrivilege"
@@ -8349,7 +8349,7 @@
       "requirement": "This check tries to determine if the project is published as a package.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:596"
+        ".github/workflows/release.yml#nuget:"
       ],
       "tests": [
         "TestScorecard_ReleasesAreSigned"
@@ -8367,7 +8367,7 @@
       "status": "Met",
       "evidence": [
         ".github/requirements-lint.txt:1",
-        ".github/workflows/ci.yml:877"
+        ".github/workflows/ci.yml#python -m pip install --disable-pip-version-check --require-hashes \\"
       ],
       "tests": [
         "TestScorecard_EveryActionIsPinnedByCommit",
@@ -8385,8 +8385,8 @@
       "requirement": "This check tries to determine if the project uses Static Application Security Testing.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml:97",
-        ".github/workflows/ci.yml:326"
+        ".github/workflows/nightly-security.yml#gosec:",
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8"
       ],
       "tests": [
         "TestScorecard_StaticAnalysisAndFuzzingRun"
@@ -8403,7 +8403,7 @@
       "requirement": "This check tries to determine if the project maintains a Software Bill of Materials (SBOM) either as a file in the source or a release artifact.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:419",
+        ".github/workflows/release.yml#uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0",
         ".goreleaser.yaml:1"
       ],
       "tests": [
@@ -8438,7 +8438,7 @@
       "requirement": "This check tries to determine if the project cryptographically signs release artifacts.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:348",
+        ".github/workflows/release.yml#cosign sign --yes \"ghcr.io/42-v/vault42@${VAULT_DIGEST}\"",
         ".goreleaser.yaml:1"
       ],
       "tests": [
@@ -8456,7 +8456,7 @@
       "requirement": "This check determines whether the project's automated workflows tokens follow the principle of least privilege.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:43"
+        ".github/workflows/release.yml#^permissions:"
       ],
       "tests": [
         "TestScorecard_TokenPermissionsAreLeastPrivilege"
@@ -8505,7 +8505,7 @@
       "requirement": "The producer MUST select a build platform that is capable of reaching their desired SLSA Build Level.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:1"
+        ".github/workflows/release.yml#job:images"
       ],
       "tests": [
         "TestSLSA_BuildsRunOnTheHostedPlatform"
@@ -8522,7 +8522,7 @@
       "requirement": "The producer MUST build their artifact in a consistent manner such that verifiers can form expectations about the build process.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:19"
+        ".github/workflows/release.yml#- 'v[0-9]+.[0-9]+.[0-9]+'"
       ],
       "tests": [
         "TestSLSA_TheBuildProcessIsConsistent"
@@ -8539,7 +8539,7 @@
       "requirement": "The producer MUST distribute provenance to artifact consumers.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:363"
+        ".github/workflows/release.yml#- name: Attest build provenance (vault42)"
       ],
       "tests": [
         "TestSLSA_ProvenanceExistsForEveryPublishedArtifact"
@@ -8556,7 +8556,7 @@
       "requirement": "The build process MUST generate provenance that unambiguously identifies the output package by cryptographic digest and describes how that package was produced.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:363",
+        ".github/workflows/release.yml#- name: Attest build provenance (vault42)",
         ".goreleaser.yaml:1"
       ],
       "tests": [
@@ -8574,7 +8574,7 @@
       "requirement": "Consumers MUST be able to validate the authenticity of the provenance attestation. This SHOULD be through a digital signature from a private key accessible only to the build platform component that generated the provenance attestation.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:348"
+        ".github/workflows/release.yml#cosign sign --yes \"ghcr.io/42-v/vault42@${VAULT_DIGEST}\""
       ],
       "tests": [
         "TestSLSA_ProvenanceIsAuthentic"
@@ -8591,7 +8591,7 @@
       "requirement": "The build platform ensured that the build steps ran in an isolated environment, free of unintended external influence. This MUST hold true even between builds within the same tenant project.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml:167"
+        ".github/workflows/release.yml#- name: Version consistency"
       ],
       "tests": [
         "TestSLSA_NoSharedBuildCacheBetweenRuns"
@@ -8608,7 +8608,7 @@
       "requirement": "Provenance MUST be strongly resistant to forgery by tenants. Every field in the provenance MUST be generated or verified by the build platform in a trusted control plane. The user-controlled build steps MUST NOT be able to inject or alter the contents.",
       "status": "Accepted Risk",
       "evidence": [
-        ".github/workflows/release.yml:363"
+        ".github/workflows/release.yml#- name: Attest build provenance (vault42)"
       ],
       "tests": [],
       "notes": "Accepted as CR-38, and it is the single requirement between this project and a clean Build L3. The secret-material half is satisfied outright: no signing key is ever on the runner, because Sigstore issues a short-lived certificate against the workflow identity, so there is nothing for a build step to read. The failing half is the subject. actions/attest-build-provenance takes subject-digest and subject-path as inputs supplied by the job, so a compromised build step could request an attestation over a digest it did not produce -- that field is not generated in a trusted control plane, it is asserted by the tenant. Claiming L3 on the strength of the key half alone would be exactly the rounding-up this register exists to prevent.",
@@ -8619,13 +8619,13 @@
     "CR-16": "Closed. A failed authorization decision now reaches the audit log: adminapi.RBACCheck writes an admin_authz_denied record on a permission denial. Asserted by TestASVS_V16_3_2_RBACDenialsAreAudited. Not to be confused with docs/security.md AR-16, which is a different and open risk.",
     "CR-19": "Closed. The login-outcome enumeration oracle: account_locked, the import-claim path, banned and disabled now all answer 401 invalid_credentials without a valid password. Asserted by TestASVS_V3_7_1_AccountLockoutPreventsEnumeration.",
     "CR-27": "Closed. Both Content-Security-Policy strings now declare object-src 'none' and base-uri 'none' (internal/middleware/security_headers.go:18 and :19), which is the minimum ASVS V3.4.3 names. Asserted by TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims, which was written to fail on closure and did.",
-    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:975) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
+    "CR-31": "Closed. The 15-character password minimum is now the enforced floor and not only the shipped default: passwordMinLengthFloor (internal/config/config.go:878) is 15 and a non-dev profile refuses to start below it (:622). The dev profile is no longer exempt from having a floor -- it carries a lower one, devPasswordMinLengthFloor = 8 (:812), which is itself the figure SP 800-63B-4 section 3.1.1.1 requires a verifier to accept. While this risk was open the register, docs/COMPLIANCE.md and README.md all said 15 was 'the minimum vault42 has enforced since 0.4'; it was the default and the floor was 8, and the row was downgraded to an accepted risk rather than the claim being softened. Asserted by TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay, which reads both numbers out of config.go and fired on the merge that raised the floor.",
     "CR-32": "Closed. .github/dependabot.yml configures automated dependency updates. While this risk was open the reasoning was that a scheduled scanner reports a vulnerable dependency and does not raise the pull request that fixes it, so nightly govulncheck and Trivy could not stand in for an update tool. Asserted by TestSSDF_800_218_DependencyUpdateAutomationIsAutomated.",
     "CR-25": "Closed, both halves. DPoP: cnf.jkt is set at issuance on the access, rotated and challenge paths (internal/service/token.go:276, :278) and enforced by a constant-time thumbprint comparison (internal/middleware/dpop.go:110); the attack suite's tripwire was inverted so it now fails if the binding is dropped. Memory zeroing: the decrypted blob plaintext and label are wiped (internal/service/blob.go:372, :399, :441), which was the remaining residual after the keystore PEM was found already wiped. Refresh tokens are still not bound and there is no DPoP-Nonce; both are recorded in the requirement row rather than carried as a risk, because neither is a gap against the claim now made. What keeps it closed: TestRFC9700_4_10_1_SenderConstrainedDPoP holds the binding, and TestBlobServiceZeroesEveryDecryptedBuffer holds the wipe.",
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice. What keeps it closed: TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege fails on a default render that takes a host namespace, and TestK8sPSS_Restricted_ThereAreNoDeviationsLeft fails if an exemption is reintroduced.",
     "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:686). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34. What keeps it closed: TestSendRefusesAServerThatDoesNotOfferSTARTTLS and TestSendUpgradesWheneverSTARTTLSIsAdvertised drive a fake relay through both branches, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride holds the config-side refusal.",
     "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
-    "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:184 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
+    "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:185 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
     "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:221 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee. What keeps it closed: TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType, TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer and TestASVS_V5_1_1_TheDocumentationSaysHowStoredObjectsAreMadeSafeToDownload, one per row rather than one cited three times, for the reason above.",
     "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk. What keeps it closed: TestNIST80053_AU_6_ACorrelatedRunRaisesOneAlertAndAQuietOneRaisesNone for the windowing and the cooldown, TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile for the install, and TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten for the score being a filter rather than a field."
   }
