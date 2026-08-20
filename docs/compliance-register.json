@@ -112,6 +112,14 @@
       "released": "2026-08-20",
       "source": "https://github.com/ossf/scorecard/blob/main/docs/checks.md",
       "verified": "Check names, risk levels and descriptions taken verbatim from docs/checks.md in ossf/scorecard on 2026-08-20. The revision is the scorecard version reported by api.securityscorecards.dev for this repository on the same day; the released date is when that version was observed rather than a publication date, because Scorecard versions its tool rather than its specification. Unlike every other standard here the assessor is external: the checks are scored by a weekly run of ossf/scorecard-action and published at https://api.securityscorecards.dev/projects/github.com/42-v/vault42."
+    },
+    {
+      "name": "SLSA \u2014 Supply-chain Levels for Software Artifacts, Build Track",
+      "short_name": "SLSA",
+      "revision": "1.1",
+      "released": "2025-06-11",
+      "source": "https://slsa.dev/spec/v1.1/requirements",
+      "verified": "Requirement names and text taken verbatim from docs/spec/v1.1/requirements.md at tag v1.1 in slsa-framework/slsa, read on 2026-08-20. v1.1 rather than v1.0 because v1.0 is superseded: the repository tags v1.1 as the current release and carries a v1.2 draft. The Build Track splits its eight requirements between the producer, which is this project, and the build platform, which is GitHub Actions -- a producer satisfies a platform requirement by choosing a platform that makes the guarantee, not by writing code, and the rows say which side each one falls on."
     }
   ],
   "accepted_risks": {
@@ -243,6 +251,17 @@
       "compensating_control": "No file in either Go module imports golang.org/x/crypto/openpgp, and govulncheck confirms it at symbol level on both: zero vulnerabilities in code reached from any entry point. The nightly scan would report the day that stopped being true.",
       "residual_risk": "OSV and therefore Scorecard report per-module, so the count stays at one and the check cannot reach 10 while x/crypto is a dependency. The residual security risk is nil; the residual reporting risk is a permanent point on a public scorecard.",
       "revisit_when": "x/crypto drops the openpgp package, or the advisory is scoped to the package rather than the module."
+    },
+    "CR-38": {
+      "title": "Attestation subjects are supplied by the build job, not by a trusted control plane",
+      "severity": "Low",
+      "accepted_by": "Project maintainer (vault42)",
+      "accepted_on": "2026-08-20",
+      "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
+      "rationale": "SLSA Build L3 requires that every field of the provenance be generated or verified by the build platform in a trusted control plane, and that user-controlled build steps cannot inject or alter it. actions/attest-build-provenance accepts subject-digest and subject-path as job inputs, so the artifact an attestation names is asserted by the tenant rather than observed by the platform. A build step compromised badly enough to substitute an artifact could also ask for an attestation over it. Closing this needs a build platform whose control plane observes the outputs itself; it is not something a workflow change can fix, and switching platforms to gain one level is not a trade this project is making.",
+      "compensating_control": "The half of the requirement about secret material is fully met: signing is keyless, no long-lived key is ever present on a runner, and the certificate is bound to the workflow's OIDC identity and logged in Rekor, so a forged attestation would have to be produced by a run of this workflow and would be publicly visible in the transparency log. The digest an attestation names is the one docker/build-push-action reported for the image it just pushed, taken from that step's output rather than recomputed. Release runs are reachable only through an annotated tag, tag creation is restricted to the repository admin by ruleset, and the tagged commit must already be an ancestor of main -- so reaching the build step at all means passing branch protection and thirteen required checks first.",
+      "residual_risk": "An attacker who could already execute arbitrary steps inside the release job could obtain an attestation naming an artifact of their choosing. That attacker has already won -- they are inside the job that builds and pushes the real artifacts -- so the attestation is not the weakest link; it is one that would fail to catch them.",
+      "revisit_when": "GitHub's attestation service derives subjects in its own control plane rather than taking them as inputs, or the release moves to a build platform that does."
     }
   },
   "requirements": [
@@ -8037,6 +8056,125 @@
       "tests": [],
       "notes": "Not applicable by scope. The component the check reads is the GitHub repository's webhook configuration, which is account state rather than anything in the tree this register assesses: the scope section names cmd/, internal/, migrations/ and charts/vault. Branch protection is also account state and is nevertheless classified Met, because a branch rule governs what enters the tree; a webhook delivers events outward and governs nothing here. The check is experimental, requires a maintainer token to run at all, and does not appear in the published result for this repository.",
       "na_basis": "scope-exclusion"
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Choose an appropriate build platform",
+      "chapter": "Producer",
+      "level": "L1",
+      "requirement": "The producer MUST select a build platform that is capable of reaching their desired SLSA Build Level.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:1"
+      ],
+      "tests": [
+        "TestSLSA_BuildsRunOnTheHostedPlatform"
+      ],
+      "notes": "Met. Every job in every workflow runs on a GitHub-hosted runner label; the repository has no self-hosted runners registered, which is the way a release quietly comes to be built on somebody's workstation. GitHub Actions provides ephemeral per-job VMs and keyless attestation through Sigstore, which is what Build L2 needs and most of what L3 needs."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Follow a consistent build process",
+      "chapter": "Producer",
+      "level": "L1",
+      "requirement": "The producer MUST build their artifact in a consistent manner such that verifiers can form expectations about the build process.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:19"
+      ],
+      "tests": [
+        "TestSLSA_TheBuildProcessIsConsistent"
+      ],
+      "notes": "Met. The release is driven by an annotated vX.Y.Z tag, not by whatever is on main and not by the subject line of a squash commit -- the subject-driven trigger it replaced is what lost 0.8.6 and then 1.0.0, because a release depending on someone editing a merge message is a release skipped the first time they forget. Three guards keep the run and the tag the same thing: the run's ref must be the tag being published, the tagged commit must be an ancestor of main, and VERSION must agree with the tag. A verifier can therefore expect that a given tag names a reviewed commit and the artifacts built from it."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Distribute provenance",
+      "chapter": "Producer",
+      "level": "L1",
+      "requirement": "The producer MUST distribute provenance to artifact consumers.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:363"
+      ],
+      "tests": [
+        "TestSLSA_ProvenanceExistsForEveryPublishedArtifact"
+      ],
+      "notes": "Met, through the package ecosystem as the requirement permits. Image attestations are stored by GitHub against the repository and resolved by digest with `gh attestation verify`; BuildKit provenance and an SBOM travel inside each image, so a consumer who only pulls still gets them; and the release archives carry syft SBOMs alongside a signed SHA256SUMS."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Provenance exists",
+      "chapter": "Build platform",
+      "level": "L1",
+      "requirement": "The build process MUST generate provenance that unambiguously identifies the output package by cryptographic digest and describes how that package was produced.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:363",
+        ".goreleaser.yaml:1"
+      ],
+      "tests": [
+        "TestSLSA_ProvenanceExistsForEveryPublishedArtifact"
+      ],
+      "notes": "Met for every artifact class a release publishes, which is the part worth checking: the three images by digest, the Helm chart by digest, and the release archives by path. Provenance covering three of four would be provenance a consumer cannot rely on without first working out which one is missing. The format is in-toto SLSA Provenance, which the spec recommends."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Provenance is authentic",
+      "chapter": "Build platform",
+      "level": "L2",
+      "requirement": "Consumers MUST be able to validate the authenticity of the provenance attestation. This SHOULD be through a digital signature from a private key accessible only to the build platform component that generated the provenance attestation.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:348"
+      ],
+      "tests": [
+        "TestSLSA_ProvenanceIsAuthentic"
+      ],
+      "notes": "Met, and keyless, which is stronger here than a key would be: Sigstore issues a short-lived certificate against the workflow's OIDC identity and the signature is logged in Rekor, so what a verifier trusts is the workflow that ran rather than a key somebody has to keep and could lose. No long-lived signing key exists to be stolen from a runner. cosign signs the images and the chart by digest, so a signature cannot be moved to a different artifact, and one signature over SHA256SUMS covers every release archive."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Isolated",
+      "chapter": "Build platform",
+      "level": "L3",
+      "requirement": "The build platform ensured that the build steps ran in an isolated environment, free of unintended external influence. This MUST hold true even between builds within the same tenant project.",
+      "status": "Met",
+      "evidence": [
+        ".github/workflows/release.yml:167"
+      ],
+      "tests": [
+        "TestSLSA_NoSharedBuildCacheBetweenRuns"
+      ],
+      "notes": "Met by the platform, with the one clause a workflow can break on its own asserted here. GitHub provisions a fresh VM per job and destroys it afterwards, which covers ephemerality and cross-build memory influence; those are GitHub's guarantees and this register does not pretend to test them. The clause a workflow controls is cache poisoning -- the spec asks that a build produce identical output whether or not a cache was used -- and every setup-go step in the release path sets cache: false, so no module cache is carried between runs. No workflow opens a debug or remote-shell service."
+    },
+    {
+      "standard": "SLSA",
+      "revision": "1.1",
+      "revision_date": "2026-08-20",
+      "requirement_id": "Provenance is unforgeable",
+      "chapter": "Build platform",
+      "level": "L3",
+      "requirement": "Provenance MUST be strongly resistant to forgery by tenants. Every field in the provenance MUST be generated or verified by the build platform in a trusted control plane. The user-controlled build steps MUST NOT be able to inject or alter the contents.",
+      "status": "Accepted Risk",
+      "evidence": [
+        ".github/workflows/release.yml:363"
+      ],
+      "tests": [],
+      "notes": "Accepted as CR-38, and it is the single requirement between this project and a clean Build L3. The secret-material half is satisfied outright: no signing key is ever on the runner, because Sigstore issues a short-lived certificate against the workflow identity, so there is nothing for a build step to read. The failing half is the subject. actions/attest-build-provenance takes subject-digest and subject-path as inputs supplied by the job, so a compromised build step could request an attestation over a digest it did not produce -- that field is not generated in a trusted control plane, it is asserted by the tenant. Claiming L3 on the strength of the key half alone would be exactly the rounding-up this register exists to prevent.",
+      "accepted_risk": "CR-38"
     }
   ],
   "retired_risks": {

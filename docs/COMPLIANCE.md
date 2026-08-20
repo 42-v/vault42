@@ -1,14 +1,14 @@
 # vault42 -- Standards Compliance Report
 
-vault42 1.0.1 · assessed 2026-08-20 · self-assessment
+vault42 1.0.3 · assessed 2026-08-20 · self-assessment
 
-vault42 has been assessed against ten security and privacy standards at the
+vault42 has been assessed against eleven security and privacy standards at the
 revisions listed below, each cited with its publication date and the source the
 revision was verified against. Every requirement in scope is classified **Met**,
 **Accepted Risk**, or **Not Applicable**. There are no unclassified requirements
 and no open Gap findings.
 
-> **424 requirements in scope across 10 standards: 363 Met, 14 Accepted Risk,
+> **431 requirements in scope across 11 standards: 369 Met, 15 Accepted Risk,
 > 47 Not Applicable. 0 unclassified.**
 
 Every **Met** requirement names at least one test in `tests/compliance/` that
@@ -80,6 +80,7 @@ memory and not from a previous version of this document.
 | NIST SP 800-218 -- *Secure Software Development Framework (SSDF)* | **1.1** | 2022-02 | Practice and task identifiers from the SP 800-218 v1.1 table on [csrc.nist.gov](https://csrc.nist.gov/pubs/sp/800/218/final) |
 | Kubernetes Pod Security Standards | **restricted profile** | living | Control names from [kubernetes.io](https://kubernetes.io/docs/concepts/security/pod-security-standards/) |
 | OpenSSF Scorecard | **v5.5.0** | observed 2026-08-20 | Check names, risk levels and descriptions verbatim from [`docs/checks.md`](https://github.com/ossf/scorecard/blob/main/docs/checks.md) in `ossf/scorecard`; the revision is the tool version [api.securityscorecards.dev](https://api.securityscorecards.dev/projects/github.com/42-v/vault42) reported for this repository on that date |
+| SLSA — Build Track | **1.1** | 2025-06-11 | Requirement text verbatim from [`docs/spec/v1.1/requirements.md`](https://github.com/slsa-framework/slsa/blob/v1.1/docs/spec/v1.1/requirements.md) at tag `v1.1`. v1.1 rather than v1.0: v1.0 is superseded, and the upstream repository tags v1.1 as current |
 
 > **Needs verification:** OWASP publishes no release date for the Top 10:2025
 > edition on the project page, on the 2025 pages, or through the repository's
@@ -206,9 +207,10 @@ than being retired on a technicality.
 | NIST SP 800-218 (SSDF v1.1) | 17 | 0 | 0 | 17 |
 | Kubernetes Pod Security Standards, restricted | 10 | 0 | 0 | 10 |
 | OpenSSF Scorecard v5.5.0 | 15 | 4 | 1 | 20 |
-| **Total** | **363** | **14** | **47** | **424** |
+| SLSA 1.1 Build Track | 6 | 1 | 0 | 7 |
+| **Total** | **369** | **15** | **47** | **431** |
 
-The 14 Accepted Risk rows collapse to **11 distinct accepted risks**: several
+The 15 Accepted Risk rows collapse to **12 distinct accepted risks**: several
 requirements across different standards describe the same underlying gap, and
 each references one shared entry rather than being counted as an independent
 finding. That is the double-counting the AU-9 and GDPR-14 duplication caused
