@@ -198,12 +198,32 @@ func renderSelectorLabels(t *testing.T, helm, root string) map[string]string {
 // operator is upgrading from.
 func lastReleaseTag(t *testing.T, root string) string {
 	t.Helper()
-	cmd := exec.Command("git", "-C", root, "describe", "--tags", "--abbrev=0", "HEAD")
+
+	// The tag being released is excluded, because every caller wants the release
+	// this one upgrades FROM. Without the exclusion the answer is the current
+	// version whenever HEAD is the release commit, which is exactly the state
+	// the release workflow checks out: it builds the tag, so `git describe`
+	// returns that tag and every comparison against the previous release is made
+	// against itself.
+	//
+	// That is not hypothetical. This helper was written after v0.9.9 was tagged,
+	// and 1.0.0, 1.0.1 and 1.0.2 were all merged without tags, so no release
+	// workflow ran between then and v1.0.3. The first tag that reached it failed
+	// the build: docs/UPGRADING.md described the hop from v0.9.9 and this
+	// function answered v1.0.3.
+	version, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		t.Fatalf("read VERSION: %v", err)
+	}
+	self := "v" + strings.TrimSpace(string(version))
+
+	cmd := exec.Command("git", "-C", root, "describe", "--tags", "--abbrev=0",
+		"--exclude", self, "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
-		t.Skip("no release tag is reachable from HEAD, so the previously released chart " +
-			"cannot be rendered. A shallow clone does this; fetch tags (actions/checkout " +
-			"with fetch-depth: 0) to run this gate.")
+		t.Skip("no release tag other than " + self + " is reachable from HEAD, so the " +
+			"previously released chart cannot be rendered. A shallow clone does this; " +
+			"fetch tags (actions/checkout with fetch-depth: 0) to run this gate.")
 	}
 	return strings.TrimSpace(string(out))
 }
