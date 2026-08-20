@@ -622,6 +622,24 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// auth_time is when the end user authenticated, and on a federated login that
+	// is when the identity provider authenticated them, not when this callback
+	// ran. A provider answering out of an established SSO session returns without
+	// prompting anyone, so dating the event to time.Now() tells every relying
+	// party enforcing max_age that a fresh authentication happened while the user
+	// only followed a redirect. userInfo.AuthTime carries the instant the provider
+	// asserted, and is zero when it asserted none.
+	//
+	// The callback instant is the fallback rather than the zero value, because it
+	// is the one moment this server can vouch for: it saw the provider's
+	// assertion arrive. Emitting zero instead would drop auth_time from the token
+	// entirely (internal/service/token.go omits the claim for a zero instant),
+	// and emitting the epoch would date every federated session to 1970.
+	authTime := userInfo.AuthTime
+	if authTime.IsZero() {
+		authTime = time.Now()
+	}
+
 	// Issue tokens. The only factor vault42 observed is the provider assertion,
 	// so this is AAL1 and carries no amr value: RFC 8176 registers none for "an
 	// assertion from another issuer", and inventing one would name a check this
@@ -629,7 +647,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	pair, err := h.tokenSvc.IssueTokenPairWithAuth(
 		r.Context(), userID, []string{"user"}, []string{"read", "write"},
 		"", fp, "", false,
-		service.NewAuthContext(time.Now(), []string{service.MethodFederated}, false),
+		service.NewAuthContext(authTime, []string{service.MethodFederated}, false),
 	)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "internal_error")

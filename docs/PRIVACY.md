@@ -132,7 +132,11 @@ The process log is not one of these stores. What it may carry is described in §
   device fingerprints, and admin/admin-session tokens are stored as hashes only.
 - **Append-only:** the audit log and the recovery escrow are enforced append-only at the
   database layer (UPDATE and DELETE are blocked by triggers); bulk removal is possible only
-  through the dedicated retention-cleanup routine for each.
+  through the dedicated retention-cleanup routine for each. A retention sweep that removes
+  audit entries records itself in the audit log, naming the cutoff it applied and how many
+  entries went, so a shortened trail is distinguishable from a sweep that ran as configured.
+  That record carries no subject data: a cutoff, a count, the configured horizon and the
+  replica that ran it.
 - **Recovery escrow (`auth.account_recovery`):** written on account erasure **only when the
   Operator has configured `VAULT_RECOVERY_PUBLIC_KEY_FILE`**. Each record holds the erased
   user's email, account creation date, roles and display name in a single payload encrypted

@@ -44,7 +44,8 @@ type proseField struct {
 func registerProseFields(t *testing.T, reg registerFile) []proseField {
 	t.Helper()
 
-	var fields []proseField
+	fields := make([]proseField, 0,
+		len(reg.Requirements)+2*len(reg.AcceptedRisks)+len(reg.RetiredRisks))
 	for _, r := range reg.Requirements {
 		fields = append(fields, proseField{
 			where: r.Standard + " " + r.RequirementID + " notes",
