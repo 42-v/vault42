@@ -53,26 +53,53 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
 ### Changed
 
-* **Frontend toolchain: four of the six pending majors, and a name for the other two.**
-  vite 6 to 8, vue-router 4 to 5, TypeScript 5 to 6.0.3, `@vitejs/plugin-vue` 5 to 6,
-  `vite-plugin-dts` 4 to 5, plus the patch line. Verified per step rather than in one
-  jump: `vue-tsc --noEmit` clean, both builds clean, 507 and 742 tests, statement
-  coverage 100.00% and 99.56%, eslint at zero.
+* **Frontend toolchain: five of the six pending majors.** vite 6 to 8, vue-router 4 to
+  5, TypeScript 5 to 6.0.3, `@vitejs/plugin-vue` 5 to 6, `vite-plugin-dts` 4 to 5,
+  `vue-tsc` 2 to 3, plus the patch line. Verified per step rather than in one jump.
 
   The root now pins TypeScript explicitly. It did not, so `typescript-eslint` had pulled
   a `typescript@7` into the lockfile that nothing declared and nothing type-checked
   against.
 
-  The two that did not land are not drift and are tracked as their own work.
-  `vue-tsc` 2 to 3 needs a template type-checking migration, because composable refs
-  stop auto-unwrapping in templates; it also gates TypeScript 7, which vue-tsc 2 cannot
-  load. Bisection ruled out vite 8, plugin-vue 6 and vue 3.5.41 individually, so it is
-  one migration rather than a general incompatibility. `tailwindcss` 3 to 4 is the only
-  item in the set that changes shipped CSS instead of build tooling, moving
-  configuration into a CSS `@theme` block and dropping postcss and autoprefixer, and it
-  wants somebody looking at the rendered application rather than a green suite.
+  `tailwindcss` 3 to 4 is the one still outstanding, and it is the only item in the set
+  that changes shipped CSS rather than build tooling: it moves configuration into a CSS
+  `@theme` block and drops postcss and autoprefixer. It wants somebody looking at the
+  rendered application, not a green suite.
 
   `docs/TODO.md` is not tracked, so this entry is where that reasoning lives.
+
+* **TypeScript 7 is not deferred, it is blocked.** 7.0.2 is the native port, and its
+  package exports no longer include the JavaScript compiler API: there is no
+  `typescript/lib/tsc`, and `.` resolves to a file carrying the version string. vue-tsc
+  3 loads that path in order to patch it and exits before checking anything;
+  typescript-eslint 8 reads `ModuleKind` off the main entry and throws `Cannot read
+  properties of undefined (reading 'Cjs')`. Two tools, one cause, neither of them
+  something this repository can configure around. Both have to be rewritten against the
+  new `./unstable/*` API first.
+
+### Fixed
+
+* **A dialog's focus trap was joined to its dialog by an unchecked string.** Three views
+  took a `dialogRef` from `useModalFocus`, never mentioned it again, and bound it in the
+  template by writing the variable's name into a `ref="dialogRef"` attribute. Nothing
+  checked that the name matched, in either direction, and nothing tested the binding:
+  the composable's own suite drives a render-function harness that passes the ref object
+  directly, and each view's Escape test passes whether or not the element was ever
+  bound, because closing on Escape does not need the element. A typo would have left
+  every dialog opening with focus still on the button behind the overlay, which is the
+  exact bug the trap was written to fix, and every test would have stayed green.
+
+  The view now owns the element ref and passes it in. `useTemplateRef` resolves the name
+  against the template, so a misspelling is a compile error listing the refs that do
+  exist, and the element type is inferred from the tag; both behaviours switch off if
+  the type argument is supplied, which is why these call sites do not supply it. A new
+  test opens the real dialog in a mounted view and asserts focus landed inside it,
+  confirmed by deleting the binding and watching it fail.
+
+  `:ref="dialogRef"` looks like the obvious fix and is not one: a template unwraps a
+  setup ref on access, so the binding receives the element or `null` and never the ref.
+
+  Found by vue-tsc 3, which reports the unread variable that vue-tsc 2 did not.
 
 ## 1.0.2 (2026-08-20)
 
