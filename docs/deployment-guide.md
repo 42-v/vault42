@@ -135,7 +135,7 @@ the chart.
 microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
   -f charts/vault/values-embedded.yaml \
-  --set image.tag=1.0.1 \
+  --set image.tag=1.0.2 \
   --set secrets.existingSecret=vault42-secrets \
   --set origin=https://vault42.local
 ```

@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.0.2 (2026-08-20)
+
+Two things 1.0.1 got wrong, and the badge table it should have shipped with.
+
+### Security
+
+* **The corepack install was a version, not a pin.** 1.0.1 fixed a broken frontend
+  build stage -- `node:26-alpine` stopped bundling corepack, so `corepack enable` was
+  "not found" and the image never built -- by adding
+  `npm install -g corepack@0.35.0`. Scorecard raised `Pinned-Dependencies` against
+  that line within the hour, correctly: naming a version and then trusting whatever
+  the registry serves for it is the exact thing 1.0.1 had just finished removing from
+  the lint job, reintroduced two commits later in the release path. The tarball is now
+  fetched by URL and verified against a committed SHA-256 before `npm install` sees it,
+  so a substituted artifact fails `sha256sum -c` rather than executing in a release
+  build. The digest was taken from a download whose SHA-512 matched the integrity npm
+  publishes for 0.35.0.
+
+  corepack is still worth installing, and this is why: it reads `packageManager` from
+  package.json, which pins pnpm by version **and** by SHA-512, so the package manager
+  that builds the release image is itself hash-verified.
+
+### Fixed
+
+* **`.dockerignore` sent every developer's `web/.env` into the image.** A pattern with
+  no leading `**` is anchored at the context root, so `.env` and `.env.*` excluded
+  `/.env` and nothing else. What kept a development API origin out of a published
+  bundle was the forbid-dev-origins Rollup plugin failing the build -- a guard doing a
+  job the build context should never have handed it. CI could not have found this: on a
+  fresh checkout the file does not exist, so the release image was correct for the
+  reason that nobody had a working tree.
+
+### Changed
+
+* **The badge table reports each language separately.** It had three columns and one
+  set of aggregate numbers, so "Coverage" meant Go and the C# SDKs appeared nowhere at
+  all. The table is now four columns -- Go, Vue, C#, and the figures that belong to the
+  project rather than to a language -- and each language carries its own test count and
+  its own coverage percentage. Go 5049 tests at 100.00% of reachable, Vue 1249 at
+  99.76%, C# 247 at 100.00%.
+
+  That the C# column exists is the point. Through 1.0.0 those packages had 46 tests, no
+  pull request had ever built them, and nothing in the README would have told you: their
+  tests were not in the total and their coverage was not measured. A number that is not
+  displayed is a number nobody checks.
+
+  `docs/badges.json` gains a `languages` block carrying the same six figures, and
+  `tests/spec` gains a gate requiring the two to agree, so a hand-edit to either is a
+  failing build. The generator refuses to publish a Vue or C# figure it did not measure,
+  the way it already refused for Go -- an absent measurement is reported as absent, never
+  as a zero.
+
 ## 1.0.1 (2026-08-20)
 
 **1.0.1 is the first 1.x release anyone can install.** 1.0.0 was merged and never
