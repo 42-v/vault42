@@ -170,6 +170,19 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   Seven of the twelve already did out of habit; the other five named source positions.
   The tests existed in all five cases, so this was writing down what was already true.
 
+* **The supported frontend topology is written down.** `docs/deployment-guide.md` gains a
+  section on where the single-page app is served from: separate hostnames, which is the
+  production shape and needs two settings that are both off by default and both required,
+  versus `VAULT_SERVE_FRONTEND=true`, which puts the app and the API on one origin and
+  leaves the same-origin policy separating nothing. It says what the single-origin shape is
+  relying on when somebody uses it anyway, which is a `script-src 'self'` CSP with no
+  `unsafe-inline`.
+
+  CR-29 stays accepted rather than closing on the strength of that. Its cost line used to
+  read "nothing to build, just document it", and no amount of documentation makes the
+  requirement true: the topology is the operator's to choose, and a register that marked
+  this Met would be describing a default rather than a guarantee.
+
 * **Seven of the fourteen accepted risks carried claims that were false.** Five parallel
   analyses read each risk against the code it rests on. Every error was in the direction
   that makes the project look better than it is, which is the direction a self-assessment

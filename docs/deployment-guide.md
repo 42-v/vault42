@@ -219,6 +219,41 @@ The embedded profile uses:
 - **Frontend**: Embedded in Go binary (when `VAULT_SERVE_FRONTEND=true`)
 - **TLS**: Disabled (handle at ingress level)
 
+### Where the single-page app is served from
+
+Two topologies, and the difference is a security boundary rather than a preference.
+
+**Separate hostnames, which is the supported production shape.** The chart deploys the
+SPA as its own nginx workload and the API as another, and an ingress puts them on
+different hostnames. The browser's same-origin policy then separates them: a flaw in
+the frontend cannot read from the API's origin, and a script running on the API's origin
+is not the frontend's script. This is what ASVS V3.5.4 asks for.
+
+It is offered rather than shipped. Both of these are off by default and both are needed:
+
+```yaml
+frontend:
+  enabled: true          # deploy the SPA workload; default false
+ingress:
+  hosts:                 # you supply the hostnames; the chart has no default
+    - host: vault.example.com        # the API
+      paths: [{ path: /, pathType: Prefix }]
+    - host: account.example.com      # the SPA
+      paths: [{ path: /, pathType: Prefix }]
+```
+
+**One origin, which is `VAULT_SERVE_FRONTEND=true`.** The Go binary serves the SPA from
+its own catch-all route, so the API and the app answer on one hostname and the
+same-origin policy separates nothing. It is off by default (`serveFrontend: false`) and
+exists for development, for the embedded profile on a single small machine, and for the
+honeypot profile, which forces it on.
+
+If you run it this way in production, know what you are relying on: the
+Content-Security-Policy applied when the frontend is served names `script-src 'self'`
+with no `unsafe-inline`, so a script the SPA did not author does not execute. That is a
+real control and it is a second line, not the first one. The register records this as an
+accepted risk (CR-29) rather than as a supported production topology.
+
 ### IP Access Control (Cloudflare / Proxy)
 
 When deployed behind a reverse proxy, configure IP-based access control and geo-fencing. **Only `TRUSTED_PROXIES` has a chart value today**; the rest are read by the server but are not templated by `charts/vault`, so setting them takes a second step.
