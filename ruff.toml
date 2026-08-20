@@ -1,14 +1,22 @@
 # ruff configuration for the Python utilities under scripts/.
 #
-# The repository has two Python files, both developer tools: scripts/cov-gaps.py
-# (coverage-gap reporter used by the coverage gate) and scripts/gen-ipintel.py
-# (regenerates internal/ipintel/data/ipintel.bin). Nothing here ships in a
-# release artifact, but both are load-bearing for CI, so they are linted.
+# Every Python file in this repository is a developer tool under scripts/, and
+# each is linted because several are load-bearing for CI:
+#
+#   cov-gaps.py           coverage-gap reporter behind the coverage gate
+#   dotnet-coverage.py    the C# SDK coverage floor
+#   gen-ipintel.py        regenerates internal/ipintel/data/ipintel.bin
+#   gosec-baseline.py     freezes the gosec findings in test code
+#   prod-scan.py          reports the defect classes this tree has shipped
+#   register-reanchor.py  repairs compliance-register citations after code moves
+#   test-smells.py        reports tests that may not test what they claim
+#
+# None of them ships in a release artifact.
 #
 # The rule set below is deliberately much wider than ruff's default (F + a
-# subset of E). It is held at zero. `--select ALL` is not the target: it reports
-# 296 findings on these two files, dominated by families that would require
-# rewriting the scripts rather than fixing a defect (see the tail of this file).
+# subset of E) and is held at zero. `--select ALL` is not the target: it reports
+# hundreds of findings dominated by families that would require rewriting the
+# scripts rather than fixing a defect (see the tail of this file).
 
 line-length = 100
 

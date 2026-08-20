@@ -55,6 +55,14 @@ RULES=(
   # it and match nothing.
   "readme cosign image::README.md::ghcr\.io/42-v/vault42[:]::"
   "deployment guide helm command::docs/deployment-guide.md::--set image\.tag=::"
+  # The shell variable the two verification recipes set and then
+  # interpolate into every cosign and gh command below it. The image-tag
+  # gate reads those commands as placeholders, correctly, so the claim
+  # lives entirely in the assignment and nothing propagated it: both sat at
+  # 1.0.0 through three releases, telling a security researcher to verify
+  # artifacts from a tag that was never pushed.
+  "security verification recipe::SECURITY.md::VERSION=::"
+  "deployment guide verification recipe::docs/deployment-guide.md::VERSION=::"
 )
 
 # The root package.json is `private: true` and carries no version field. Every

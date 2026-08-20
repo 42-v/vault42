@@ -155,3 +155,62 @@ func TestVersionBumpRuleDoesNotBakeInAPrefix(t *testing.T) {
 		}
 	}
 }
+
+// shellVersionAssignment matches the variable a published verification recipe
+// sets before interpolating it into every command below.
+var shellVersionAssignment = regexp.MustCompile(`(?m)^\s*VERSION=["']?([0-9][A-Za-z0-9._-]*)["']?\s*$`)
+
+// TestPublishedVersionAssignmentsAreCurrent closes the hole the tag gate leaves
+// open by design.
+//
+// TestPublishedImageTagsExist treats `$VERSION` as a placeholder, which is
+// correct: the reference is a shape, not a claim about the registry. But a
+// recipe that sets `VERSION=` at the top and interpolates it into every command
+// below has made the claim in the assignment instead, and nothing read it.
+// SECURITY.md sat at `VERSION=1.0.0` through 1.0.1, 1.0.2 and 1.0.3, so every
+// cosign and gh command a security researcher copied out of it verified
+// artifacts from a release three versions old, or from a tag that was never
+// pushed at all.
+//
+// A pinned older version would be a legitimate thing to write, which is why the
+// failure message says to interpolate rather than to bump: a recipe that has to
+// name one release is a recipe that goes stale the day after it is written.
+func TestPublishedVersionAssignmentsAreCurrent(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		t.Fatalf("read VERSION: %v", err)
+	}
+	want := strings.TrimSpace(string(raw))
+
+	var checked int
+	for _, rel := range docsWithInstallCommands {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		for _, m := range shellVersionAssignment.FindAllStringSubmatch(string(body), -1) {
+			checked++
+			if m[1] == want {
+				continue
+			}
+			t.Errorf("%s sets VERSION=%s and the tree is at %s. Every command below that "+
+				"assignment then verifies the wrong release, and the reader has no way to "+
+				"tell: the commands themselves interpolate and look right. Either track the "+
+				"VERSION file here or take the literal out and have the reader export it.",
+				rel, m[1], want)
+		}
+	}
+
+	// The whole gate is one regex against a shell idiom, and a recipe that
+	// switches to `readonly VERSION=` or splits the assignment across a
+	// continuation takes its claim out of reach while this still reports ok.
+	if checked == 0 {
+		t.Fatalf("no VERSION= assignment found in any of %v. Either the verification recipes "+
+			"were removed, or they changed shape and this gate is now checking nothing.",
+			docsWithInstallCommands)
+	}
+}
