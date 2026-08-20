@@ -86,7 +86,9 @@ Alternatively, `client_id` and `client_secret` can be sent as form values in the
 
 ### Password Confirmation (Elevated Access)
 
-Sensitive operations (TOTP setup/disable, WebAuthn register/delete, backup code generation) require a recent password confirmation via `POST /auth/confirm`. This grants a 5-minute elevated access window. Endpoints requiring confirmation return `403 requires_confirmation` if the window has expired.
+Sensitive operations require a recent password confirmation via `POST /auth/confirm`, which opens a 5-minute elevated window. The full set is TOTP setup and disable, WebAuthn registration and deletion, backup code generation, identity erasure (`DELETE /user/identity`), and both blob deletions (`DELETE /user/blobs/{id}` and `DELETE /user/blobs/named/{name}`) -- the last three are destructive and were missing from this list. Endpoints requiring confirmation return `403 requires_confirmation`.
+
+The window is bound to the access token that opened it, not just to the user: the server records the confirming token's `jti` and refuses a request presenting any other token. Refreshing therefore closes the window, and a client that refreshes between the confirm and the delete has to confirm again.
 
 ---
 
@@ -136,7 +138,8 @@ Success responses have an appropriate HTTP status code (200, 201) and a JSON bod
 - **Field names are `snake_case`.** No response carries a Go field name or a camelCase key.
 - **Timestamps are RFC 3339 in UTC.** Fractional seconds may be present, so parse RFC 3339 generally rather than matching a fixed layout.
 - **A list field is always an array.** An empty collection is `[]`, never `null`. Changing that in either direction is a breaking change.
-- **List responses carry `{<collection>, total, limit, offset}`** where the endpoint is paged. `total` is present even on an empty result. On the admin gateway `limit` defaults to 50 and is clamped to 100; an out-of-range value falls back to the default rather than erroring. Unpaged collections return the collection key alone.
+- **List responses carry `{<collection>, total, limit, offset}`** where the endpoint is paged. `total` is present even on an empty result. On the admin gateway `limit` defaults to 50 and is clamped to 100; an out-of-range value falls back to the default rather than erroring.
+- **`total` does not imply pagination.** `GET /user/sessions` and `GET /user/devices` are unpaged and still return `total` alongside the collection, because the count is useful and costs nothing when the whole set is already in the response. `GET /user/backup-codes` and the WebAuthn credential list return the collection key alone. So read `limit` and `offset` to decide whether an endpoint pages, never `total` -- an earlier version of this page said unpaged collections return the collection key alone, which was never true of the two largest ones.
 
 ### Error responses
 
@@ -257,7 +260,22 @@ curl https://vault42.example.com/readyz
 
 #### GET /metrics
 
-Prometheus metrics endpoint. Returns metrics in Prometheus text exposition format. Only available when `VAULT_METRICS_ENABLED=true`. In production, protect this endpoint with a Kubernetes NetworkPolicy to restrict access to the monitoring namespace.
+Prometheus metrics in the text exposition format, when `VAULT_METRICS_ENABLED=true`.
+
+**This endpoint is not on the API listener.** It has its own, bound to
+`127.0.0.1:9090` by default and set by `VAULT_METRICS_ADDR`; the server refuses to
+start if that address resolves to the same port the API is on. Requesting
+`/metrics` from the API port is a 404 no matter how the feature toggle is set.
+
+The separate listener is the access control, and it replaced advice that could not
+work. This page used to tell operators to restrict `/metrics` with a Kubernetes
+NetworkPolicy. A NetworkPolicy selects on namespace, pod and port and knows nothing
+about paths, so on a shared listener it cannot admit `POST /auth/login` and refuse
+`GET /metrics` through the same port -- it either allows both or blocks both. The
+counters are process-global document read and write rates, which is a coarse
+cross-client volume oracle to anything that can reach them, so the port had to be
+the boundary. Bind `VAULT_METRICS_ADDR` where only your monitoring can reach it,
+and put the NetworkPolicy on that port.
 
 **Authentication:** None
 
@@ -403,10 +421,18 @@ Create a new user account. Sends a verification email with a 24-hour token. The 
 
 ```json
 {
-  "user_id": "550e8400-e29b-41d4-a716-446655440000",
-  "email": "user@example.com"
+  "status": "verification_email_sent",
+  "message": "If this email is not already registered, a verification email has been sent."
 }
 ```
+
+This is the **only** body this endpoint returns on success, and it is byte-identical
+whether the address was free or already registered -- that identity is the
+anti-enumeration property, and it is why no identifier appears here. An earlier
+version of this page showed a `{user_id, email}` body, which the handler has never
+emitted: it discards the created user and writes the message above on both paths.
+A client cannot learn the new user's id from registration, and must not be written
+as though it can.
 
 Note: When the email is already registered, the server returns the same `201` status with an anti-enumeration message:
 
@@ -506,7 +532,9 @@ Authenticate a user with email and password. If the user has MFA enabled, return
 }
 ```
 
-The response also sets an `HttpOnly` cookie named `refresh_token` on the `/auth` path with `Secure`, `SameSite=Strict` attributes.
+The response also sets the refresh cookie: `__Host-refresh_token`, `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`.
+
+The `__Host-` prefix is not decoration and the name is not shortenable. A browser only accepts a cookie under that prefix if it is `Secure`, has `Path=/`, and carries no `Domain`, and it refuses the `Set-Cookie` outright otherwise -- which is what makes the cookie unsettable by a subdomain. This page previously called the cookie `refresh_token` and placed it on the `/auth` path; both were wrong, and the second is not a thing a `__Host-` cookie can be. Read it by its full name.
 
 **Success response -- MFA required (200 OK):**
 
@@ -555,15 +583,15 @@ curl -X POST https://vault42.example.com/auth/login \
 
 #### POST /auth/refresh
 
-Exchange a refresh token (from the `refresh_token` cookie) for a new access token and a new refresh token. Implements single-use rotation with family-based replay detection.
+Exchange a refresh token (from the `__Host-refresh_token` cookie) for a new access token and a new refresh token. Implements single-use rotation with family-based replay detection.
 
 **Authentication:** None (uses cookie)
 **Rate limit:** 30 requests per minute (per IP)
-**Cookie required:** `refresh_token` (set by login/previous refresh)
+**Cookie required:** `__Host-refresh_token` (set by login/previous refresh)
 
 **Request body:** None
 
-The refresh token is read from the `refresh_token` HttpOnly cookie, not from the request body.
+The refresh token is read from the `__Host-refresh_token` HttpOnly cookie, not from the request body.
 
 **Success response (200 OK):**
 
@@ -575,19 +603,19 @@ The refresh token is read from the `refresh_token` HttpOnly cookie, not from the
 }
 ```
 
-Sets a new `refresh_token` cookie (the old refresh token is invalidated).
+Sets a new `__Host-refresh_token` cookie (the old refresh token is invalidated).
 
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
-| 401 | `missing_refresh_token` | No `refresh_token` cookie present |
+| 401 | `missing_refresh_token` | No `__Host-refresh_token` cookie present |
 | 401 | `replay_detected` | Refresh token reuse detected; entire token family revoked |
 | 401 | `token_expired` | Refresh token has expired |
 | 401 | `invalid_token` | Token not found, revoked, or fingerprint mismatch |
 | 500 | `internal_error` | Server error |
 
-On any error, the `refresh_token` cookie is cleared.
+On any error, the `__Host-refresh_token` cookie is cleared.
 
 **curl example:**
 
@@ -615,7 +643,7 @@ Revoke all refresh tokens for the authenticated user and clear the refresh token
 {"status": "logged_out"}
 ```
 
-Clears the `refresh_token` cookie.
+Clears the `__Host-refresh_token` cookie.
 
 **Error responses:**
 
@@ -641,7 +669,18 @@ curl -X POST https://vault42.example.com/auth/logout \
 Verify the user's password to grant a 5-minute elevated access window for sensitive operations (TOTP setup, WebAuthn management, backup codes).
 
 **Authentication:** Bearer token
-**Rate limit:** 5 requests per 15 minutes (per IP)
+**Rate limit:** 5 requests per 15 minutes, keyed on the **authenticated user**, not the
+IP. This route sits behind the auth middleware, so a token is always present and the
+bucket is `user:<subject>`; the per-IP fallback in the key function is unreachable here.
+
+**The bucket is shared with five other routes.** `POST /auth/confirm`,
+`POST /user/password`, `DELETE /user/identity`, `DELETE /user/blobs/{id}`,
+`DELETE /user/blobs/named/{name}` and `DELETE /user/social/{id}` all draw on the same
+five-per-fifteen-minutes allowance. That is deliberate -- they are the operations a
+password confirmation gates, and one budget across them is what stops the confirmation
+window being spent elsewhere -- but it means a client that burns the budget changing a
+password cannot then delete a blob, and the 429 it gets back will name the blob route.
+Budget across the group rather than per endpoint.
 
 **Request body:**
 
@@ -924,7 +963,9 @@ curl -X PUT https://vault42.example.com/user/profile \
 
 #### GET /user/sessions
 
-List all active sessions (devices) for the authenticated user.
+List the authenticated user's active sessions. A session is a refresh-token
+family, which is not the same thing as a device: a device can carry several
+families, and a family whose device resolution failed at login carries none.
 
 **Authentication:** Bearer token
 
@@ -934,17 +975,36 @@ List all active sessions (devices) for the authenticated user.
 {
   "sessions": [
     {
-      "id": "device-uuid-1",
+      "id": "0f6c2a1e-9b3d-4c77-8a10-2b5e6d4f9c31",
+      "device_id": "3d9a7b52-0c14-4e88-9f6a-71c2e5804db3",
       "friendly_name": "Chrome on Windows",
       "ip": "203.0.113.42",
       "user_agent": "Mozilla/5.0...",
       "trusted": false,
       "last_seen_at": "2025-06-15T14:30:00Z",
-      "first_seen_at": "2025-06-01T08:00:00Z"
+      "first_seen_at": "2025-06-01T08:00:00Z",
+      "created_at": "2025-06-01T08:00:00Z",
+      "expires_at": "2025-06-29T08:00:00Z"
     }
-  ]
+  ],
+  "total": 1
 }
 ```
+
+`id` is the **refresh-token family** UUID and is what `DELETE
+/user/sessions/{id}` addresses. It is not the device id, and this document
+previously showed it as one. The distinction is the whole point of the field:
+when `id` was the device UUID, a family carrying no device was invisible in this
+list and could not be revoked at all, and two families sharing one fingerprint
+collapsed into a single row that revoked only one of them.
+
+`device_id` is the device the session is bound to, or `""` when device
+resolution failed at login. Empty means a session with no device metadata, never
+a session that does not exist -- so do not treat it as a key.
+
+`trusted` is the remembered-device flag. Current issuance never sets it, so
+`false` is the only value observed today. `last_seen_at` is null on a session
+that has never been refreshed.
 
 **Error responses:**
 
@@ -1048,18 +1108,25 @@ List all registered devices for the authenticated user.
   "devices": [
     {
       "id": "device-uuid-1",
-      "fingerprint_hash": "a1b2c3d4...",
       "friendly_name": "Chrome on Windows",
       "trusted": false,
       "ip": "203.0.113.42",
       "user_agent": "Mozilla/5.0...",
       "last_seen_at": "2025-06-15T14:30:00Z"
     }
-  ]
+  ],
+  "total": 1
 }
 ```
 
-The `fingerprint_hash` field is truncated to the first 8 characters for display purposes.
+The device fingerprint hash is not returned. It is what the server matches a
+device on, and handing it to a client would let one device present another
+device's identity. `id` is the identifier every endpoint here addresses, and
+the only one a client needs.
+
+`trusted` is the remembered-device flag. Current issuance never sets it, so it
+is `false` on every device today. `last_seen_at` is null only on a row that has
+never been refreshed.
 
 **Error responses:**
 
@@ -1281,6 +1348,12 @@ The endpoint aggregates the live repositories and stores nothing of its own, so 
     {"timestamp": "2026-08-10T08:03:00Z", "event_type": "login_success",
      "ip": "203.0.113.10", "user_agent": "Mozilla/5.0 ..."}
   ],
+  "service_documents": [
+    {"key": "prefs.editor", "owner_id": "550e8400-e29b-41d4-a716-446655440000",
+     "visibility": "private", "size_bytes": 84,
+     "document": {"theme": "dark", "tab_width": 4},
+     "created_at": "2026-02-11T10:20:00Z", "updated_at": "2026-07-19T13:05:00Z"}
+  ],
   "audit_events_total": 4210,
   "audit_events_limit": 1000,
   "audit_events_truncated": true
@@ -1292,6 +1365,8 @@ The endpoint aggregates the live repositories and stores nothing of its own, so 
 **Audit events are capped at 1000, most recent first.** Because a silently truncated export is indistinguishable from a complete one, the response always states the shape of the truncation: `audit_events_total` is how many exist, `audit_events_limit` is the cap, and `audit_events_truncated` says whether it was reached. A subject who sees `true` can ask the Operator for the remainder rather than assuming this is everything.
 
 `identity` is `null` when the identity store is disabled or the user has set no profile. `blobs` is `[]` when blob storage is disabled.
+
+**`service_documents` carries the document bodies in full**, unlike `blobs`, which carries metadata only. A service document is arbitrary caller-supplied JSON stored against the user, so it is personal data the subject is entitled to receive and there is no metadata-only form of it that would satisfy the request. This category was missing from this page entirely until 1.0.3, which understated what an export contains -- the wrong direction for a document a data-subject or a DPO reads to decide whether the export is complete. `owner` appears only when the document is owned by someone other than the exporting user.
 
 **Error responses:**
 
@@ -1378,7 +1453,11 @@ Create or replace the authenticated user's identity profile. All fields are opti
 | `family_name` | string | 100 runes | Truncated if longer |
 | `country` | string | 2 chars | ISO 3166-1 alpha-2 (`^[A-Z]{2}$`) |
 | `date_of_birth` | string | -- | ISO 8601 date (`YYYY-MM-DD`), must not be in the future |
-| `sex` | string | 50 runes | Truncated if longer |
+| `username` | string | 3--32 runes | Outside that range is `400 invalid_profile`, not a truncation |
+| `state` | string | 3 runes | Subdivision code. Longer is `400 invalid_profile`, not a truncation |
+| `sex` | string | -- | Closed vocabulary: `male`, `female`, or empty. Anything else is `400 invalid_profile` |
+| `marketing_emails` | bool | -- | See Marketing Consent below. Omitting the key leaves the stored consent untouched; sending `false` withdraws it |
+| `dynamic` | object | 64 KiB encoded | Namespaced opaque JSON, see below |
 | `billing` | object | -- | Optional billing address |
 | `billing.address_line_1` | string | 200 runes | Truncated if longer |
 | `billing.address_line_2` | string | 200 runes | Truncated if longer |
@@ -1386,6 +1465,23 @@ Create or replace the authenticated user's identity profile. All fields are opti
 | `billing.postal_code` | string | 20 runes | Truncated if longer |
 | `billing.country` | string | 2 chars | ISO 3166-1 alpha-2 (`^[A-Z]{2}$`) |
 | `billing.vat_id` | string | 50 runes | Truncated if longer |
+
+**`dynamic` is a per-user JSON store and its contents are never interpreted.** Keys must
+match `^[a-z0-9]+(\.[a-z0-9]+)*$` and be at most 64 bytes; each value must be syntactically
+valid JSON; the whole map must encode to 64 KiB or less. A violation of any of those is
+`400 invalid_profile`. Sending `dynamic` replaces the stored object wholesale, and omitting
+it or sending an empty object clears it, because `PUT` is a replace rather than a merge.
+
+Two consequences worth stating, because this field was undocumented until 1.0.3 and its
+shape invites the wrong assumption. It is caller-controlled storage that counts against
+nothing else, so treat 64 KiB per user as the budget it is. And its contents go out in
+full through `GET /user/data-export`, so anything written here is personal data the
+subject receives verbatim -- do not put anything in it you would not hand back.
+
+Note which limits truncate and which refuse. `given_name`, `family_name` and the `billing`
+strings are cut to length silently. `username`, `state`, `sex`, `country` and
+`date_of_birth` are validated, and a value outside their range is refused with
+`400 invalid_profile` rather than trimmed.
 
 **Success response (200 OK):**
 
@@ -1419,7 +1515,9 @@ curl -X PUT https://vault42.example.com/user/identity \
 
 Permanently delete the authenticated user's identity profile.
 
-**Authentication:** Bearer token
+**Authentication:** Bearer token, plus a password confirmation window. Call
+`POST /auth/confirm` first; the window lasts 5 minutes and is bound to the access
+token that opened it, so a refresh closes it.
 
 **Success response (200 OK):**
 
@@ -1432,6 +1530,7 @@ Permanently delete the authenticated user's identity profile.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
+| 403 | `requires_confirmation` | No open confirmation window, or it was opened by a different access token |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1741,7 +1840,9 @@ curl https://vault42.example.com/user/blobs/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 Permanently delete an encrypted blob.
 
-**Authentication:** Bearer token
+**Authentication:** Bearer token, plus a password confirmation window. Call
+`POST /auth/confirm` first; the window lasts 5 minutes and is bound to the access
+token that opened it, so a refresh closes it.
 
 **Path parameters:**
 
@@ -1761,6 +1862,7 @@ Permanently delete an encrypted blob.
 |--------|-------|-------------|
 | 400 | `missing_id` | No blob ID in path |
 | 401 | `unauthorized` | Not authenticated |
+| 403 | `requires_confirmation` | No open confirmation window, or it was opened by a different access token |
 | 404 | `blob_not_found` | Blob not found or belongs to another user |
 | 500 | `internal_error` | Server error |
 
@@ -1871,7 +1973,9 @@ curl https://vault42.example.com/user/blobs/named/session-data \
 
 Delete a named blob by its reference name.
 
-**Authentication:** Bearer token
+**Authentication:** Bearer token, plus a password confirmation window. Call
+`POST /auth/confirm` first; the window lasts 5 minutes and is bound to the access
+token that opened it, so a refresh closes it.
 
 **Path parameters:**
 
@@ -1891,6 +1995,7 @@ Delete a named blob by its reference name.
 |--------|-------|-------------|
 | 400 | `missing_name` | No name in path |
 | 401 | `unauthorized` | Not authenticated |
+| 403 | `requires_confirmation` | No open confirmation window, or it was opened by a different access token |
 | 404 | `blob_not_found` | Named blob not found |
 | 500 | `internal_error` | Server error |
 
@@ -1904,6 +2009,31 @@ curl -X DELETE https://vault42.example.com/user/blobs/named/session-data \
 ---
 
 ### Two-Factor Authentication
+
+**Changing a second factor signs the user out everywhere, including the session
+that made the change.** Five operations revoke every refresh-token family on the
+account:
+
+| Operation | Endpoint |
+|---|---|
+| TOTP enrolled | `POST /auth/2fa/totp/verify` |
+| TOTP removed | `DELETE /auth/2fa/totp` |
+| WebAuthn credential enrolled | `POST /auth/2fa/webauthn/register/finish` |
+| WebAuthn credential removed | `DELETE /auth/2fa/webauthn/credentials/{id}` |
+| Backup codes regenerated | `POST /auth/2fa/backup-codes` |
+
+The reason is containment: if a factor is being changed by somebody who should
+not be, the sessions they hold have to go with it, and a revocation that spared
+the caller would spare the attacker in exactly the case that matters. Password
+changes make the same trade.
+
+The consequence for a client is that a `200` from any of these is immediately
+followed by a dead refresh token. The access token keeps working until it
+expires, so the failure surfaces later, at the next refresh, as a `401` that
+looks unrelated to the enrolment that caused it. Treat these responses as a
+sign-out: re-authenticate straight away rather than waiting to discover it.
+Backup-code regeneration is the one people miss, because it reads like a
+read-only operation and is not.
 
 ---
 
@@ -2023,7 +2153,7 @@ Verify a TOTP code. Has two modes of operation:
 }
 ```
 
-Also sets the `refresh_token` HttpOnly cookie.
+Also sets the `__Host-refresh_token` HttpOnly cookie.
 
 **Error responses:**
 
@@ -2034,6 +2164,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 401 | `invalid_code` | TOTP code is incorrect |
 | 401 | `invalid_token` | Device fingerprint mismatch |
 | 404 | `totp_not_setup` | TOTP has not been configured |
+| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 429 | `totp_code_already_used` | Same code used within the same 30-second time step (replay prevention) |
 | 500 | `internal_error` | Server error |
@@ -2142,7 +2273,9 @@ curl -X POST https://vault42.example.com/auth/2fa/webauthn/register/begin \
 
 Complete WebAuthn credential registration. Send the `AuthenticatorAttestationResponse` from the browser's `navigator.credentials.create()` call.
 
-**Authentication:** Bearer token
+**Authentication:** Bearer token, plus a password confirmation window. Call
+`POST /auth/confirm` first; the window lasts 5 minutes and is bound to the access
+token that opened it, so a refresh closes it.
 
 **Request body:** The `AuthenticatorAttestationResponse` JSON object from the browser WebAuthn API (passed through directly as the raw HTTP request body).
 
@@ -2159,6 +2292,7 @@ Complete WebAuthn credential registration. Send the `AuthenticatorAttestationRes
 | 400 | `no_pending_registration` | No registration session found (expired or not started) |
 | 400 | `webauthn_verification_failed` | Credential verification failed |
 | 401 | `unauthorized` | Not authenticated |
+| 403 | `requires_confirmation` | No open confirmation window, or it was opened by a different access token |
 | 401 | `invalid_token` | Device fingerprint mismatch |
 | 401 | `unauthorized` | User not found |
 | 409 | `credential_already_registered` | The credential ID is already enrolled on this or another account |
@@ -2253,7 +2387,7 @@ Complete WebAuthn authentication. Send the `AuthenticatorAssertionResponse` from
 }
 ```
 
-Also sets the `refresh_token` HttpOnly cookie.
+Also sets the `__Host-refresh_token` HttpOnly cookie.
 
 **Error responses:**
 
@@ -2365,7 +2499,7 @@ curl -X DELETE https://vault42.example.com/auth/2fa/webauthn/credentials/cred-uu
 
 #### POST /auth/2fa/backup-codes
 
-Generate a new set of 10 backup codes. Any existing backup codes are replaced. Requires recent password confirmation. Each code is 12 hex characters (48-bit entropy), stored as Argon2id hashes.
+Generate a new set of 10 backup codes. Any existing backup codes are replaced. Requires recent password confirmation. Each code is 16 hex characters (64-bit entropy), stored as HMAC-SHA256 hashes.
 
 **Authentication:** Bearer token + password confirmation
 
@@ -2376,16 +2510,16 @@ Generate a new set of 10 backup codes. Any existing backup codes are replaced. R
 ```json
 {
   "codes": [
-    "a1b2c3d4e5f6",
-    "7890abcdef12",
-    "3456789abcde",
-    "f0123456789a",
-    "bcdef0123456",
-    "789abcdef012",
-    "3456789abcde",
-    "f0123456789a",
-    "bcdef0123456",
-    "789abcdef012"
+    "a1b2c3d4e5f60718",
+    "7890abcdef123456",
+    "3456789abcdef012",
+    "f0123456789abcde",
+    "bcdef0123456789a",
+    "789abcdef0123456",
+    "0f1e2d3c4b5a6978",
+    "13579bdf02468ace",
+    "fedcba9876543210",
+    "0123456789abcdef"
   ],
   "warning": "Save these codes. They will not be shown again."
 }
@@ -2447,19 +2581,26 @@ Codes are stored as HMAC-SHA256 hashes and compared in constant time. Consumptio
 }
 ```
 
-Sets the `refresh_token` cookie.
+Sets the `__Host-refresh_token` cookie.
 
 **Error responses:**
 
 | Status | Error | Description |
 |--------|-------|-------------|
-| 400 | `invalid_request` | Malformed JSON or missing code |
+| 400 | `code_required` | Malformed JSON, or `code` absent or empty |
 | 401 | `unauthorized` | Not authenticated |
-| 401 | `invalid_code` | Code is wrong or already used |
+| 401 | `invalid_backup_code` | Code is wrong or already used; records an MFA failure |
 | 401 | `invalid_token` | Device fingerprint mismatch |
+| 429 | `account_locked` | Too many MFA failures on this account; shared with the TOTP and password counters |
 | 429 | `rate_limit_exceeded` | Verify rate limit exceeded |
 | 500 | `internal_error` | Server error |
 | 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+The two 429s mean different things and clear differently. `rate_limit_exceeded`
+is per caller and expires on its own window. `account_locked` is the per-account
+MFA lockout that backup codes share with TOTP and password verification, so
+failures against any of the three count toward the same lock, and retrying a
+different factor does not escape it.
 
 **curl example:**
 
@@ -2510,7 +2651,7 @@ An email OTP is automatically sent during login when the user's only available 2
 }
 ```
 
-Also sets the `refresh_token` HttpOnly cookie.
+Also sets the `__Host-refresh_token` HttpOnly cookie.
 
 **Error responses:**
 
@@ -2520,6 +2661,7 @@ Also sets the `refresh_token` HttpOnly cookie.
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | Email OTP code is incorrect or expired |
 | 401 | `invalid_token` | Device fingerprint mismatch |
+| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
 
@@ -2638,7 +2780,7 @@ If the user has MFA enabled, redirects to `{origin}/oauth/callback#requires_2fa=
 
 **Success response:** `302 Found` redirect to `{origin}/oauth/callback#code=...`
 
-Also sets the `refresh_token` HttpOnly cookie. The `code` is a one-time exchange code (60-second TTL) -- call `POST /auth/oauth2/exchange` to retrieve the access token.
+Also sets the `__Host-refresh_token` HttpOnly cookie. The `code` is a one-time exchange code (60-second TTL) -- call `POST /auth/oauth2/exchange` to retrieve the access token.
 
 **Error responses:**
 
@@ -2745,10 +2887,17 @@ Requested scopes are intersected with the client's allowed scopes. If no scopes 
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `invalid_scope` | Requested scopes have no overlap with allowed scopes |
-| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials. RFC 6749 calls this `invalid_client`; see above |
-| 401 | `client_revoked` | Client has been deactivated |
+| 401 | `invalid_client_credentials` | Missing, malformed, or wrong client credentials, and also a client that has been deactivated. RFC 6749 calls this `invalid_client`; see above |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 503 | `server_busy` | Password hashing is saturated; retry |
 | 500 | `internal_error` | Server error |
+
+A deactivated client is answered with `invalid_client_credentials` and nothing
+else, and the endpoint spends the same Argon2 verification on it that a live
+client costs. That is deliberate: a distinct code, or a faster refusal, would
+tell an attacker which client IDs exist and which of those have been revoked.
+Do not write a client that branches on telling those cases apart, because the
+server does not tell them apart.
 
 **curl examples:**
 
@@ -3717,14 +3866,14 @@ curl https://vault42.example.com/.well-known/openid-configuration
 
 ## Endpoint Summary
 
-**103 API routes: 62 on the main binary, 41 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
+**105 API routes: 62 on the main binary, 43 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
 
 The **Mounted when** column is the answer to "why does this endpoint 404 in production". A route in a group that is not mounted does not exist, and `net/http.ServeMux` answers `404` in `text/plain` -- not the JSON error envelope.
 
 **Auth column key:**
 
 - **None** -- public endpoint, no authentication required
-- **Cookie** -- requires the `refresh_token` HttpOnly cookie
+- **Cookie** -- requires the `__Host-refresh_token` HttpOnly cookie
 - **Basic** -- HTTP Basic authentication with client credentials
 - **Bearer** -- requires `Authorization: Bearer <token>` with fingerprint verification
 - **Bearer + Confirm** -- Bearer token plus a recent password confirmation via `POST /auth/confirm`
@@ -3826,7 +3975,7 @@ Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md`
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
-| `GET` | `/admin/sessions` | Session | `sessions:list` | Always | List active refresh families |
+| `GET` | `/admin/sessions` | Session | `admins:manage` | Always | List active **admin** sessions |
 | `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
 | `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log |
 | `GET` | `/admin/clients` | Session | `clients:list` | Always | List service clients |
@@ -3866,6 +4015,6 @@ Thirteen further registrations exist and are outside this table and outside the 
 
 | Cookie | Path | Attributes | Set By | Cleared By |
 |--------|------|------------|--------|------------|
-| `refresh_token` | `/auth` | `HttpOnly`, `Secure` (when TLS), `SameSite=Strict` | Login, Refresh, TOTP Verify (MFA), WebAuthn Verify Finish (MFA), Email OTP Verify (MFA), OAuth2 Callback | Logout, Refresh (on error) |
+| `__Host-refresh_token` | `/` | `HttpOnly`, `Secure` (when TLS), `SameSite=Strict` | Login, Refresh, TOTP Verify (MFA), WebAuthn Verify Finish (MFA), Email OTP Verify (MFA), OAuth2 Callback | Logout, Refresh (on error) |
 
 The `Secure` flag is derived from the server's TLS configuration, not the profile name. In development with TLS enabled, cookies are still marked `Secure`.

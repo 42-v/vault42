@@ -605,15 +605,15 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/outbound/outbound.go:94",
-        "internal/outbound/outbound.go:147",
+        "internal/outbound/outbound.go:122",
+        "internal/outbound/outbound.go:175",
         "internal/oauth2/oidc.go:188",
-        "cmd/vault/main.go:623"
+        "cmd/vault/main.go:630"
       ],
       "tests": [
         "TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist"
       ],
-      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:85). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:94), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:188): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:147) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:623 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
+      "notes": "The untrusted data this requirement names is the issuer's discovery document, and the four endpoints it supplies -- authorization_endpoint, token_endpoint, userinfo_endpoint and jwks_uri -- are the only outbound destinations vault42 takes from data rather than from configuration or a compiled-in literal. Protocol was already allowlisted by fetchableEndpoint (internal/oauth2/oidc.go:85). The domain, path and port half is now Policy.CheckDerived (internal/outbound/outbound.go:122), applied to all four before any of them is cached or used (internal/oauth2/oidc.go:188): an endpoint must name the issuer's own host, a subdomain of it on a label boundary, a loopback destination, or a host the operator listed in VAULT_OUTBOUND_ALLOWED_HOSTS. underDomain tests the suffix on a label boundary, so notokta.test is not admitted under okta.test. The rule needs no configuration and has no off switch: the nil Policy is the strict case. Policy.DialContext (internal/outbound/outbound.go:175) judges every address the destination resolved to and connects to the address it judged rather than re-resolving the name, which is what covers a name that resolves inward and a redirect that never passed through the endpoint check. cmd/vault/main.go:630 builds the deployment's Policy and installs it on every generic OIDC provider, asserted by TestVaultGuardsEveryOIDCProviderItBuilds. The refusal names the host and VAULT_OUTBOUND_ALLOWED_HOSTS, because the legitimate cross-domain provider is real. Previously accepted risk CR-17, now retired. No allowlist is applied to the six destinations that are compiled-in literals or operator-set URLs, deliberately: neither can be pointed anywhere by a request."
     },
     {
       "standard": "OWASP ASVS",
@@ -1600,8 +1600,8 @@
       "requirement": "Verify that the documentation defines the permitted file types, expected file extensions, and maximum size (including unpacked size) for each upload feature. Additionally, ensure that the documentation specifies how files are made safe for end-users to download and process, such as how the application behaves when a malicious file is detected.",
       "status": "Met",
       "evidence": [
-        "docs/api.md:1550",
-        "docs/api.md:1660",
+        "docs/api.md:1577",
+        "docs/api.md:1691",
         "internal/handler/blob.go:434"
       ],
       "tests": [
@@ -2759,7 +2759,7 @@
       "requirement": "Verify that the application performs all session token verification using a trusted, backend service.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:109"
+        "internal/middleware/auth.go:113"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3222,13 +3222,13 @@
       "status": "Met",
       "evidence": [
         "internal/crypto/jwt.go:25",
-        "internal/jwt/parse.go:194"
+        "internal/jwt/parse.go:199"
       ],
       "tests": [
         "TestASVS_V9_1_2_TokenAlgorithmAllowlistExcludesNoneAndHMAC",
         "TestNIST_AlgorithmWhitelistRS256Only"
       ],
-      "notes": "RS256 only. The verifier has no symmetric or none branch at all, so key confusion is structurally impossible."
+      "notes": "The algorithm switch has exactly two branches, RS256 and ES256, and a default that refuses anything else by name. Both are asymmetric: there is no symmetric branch and no none branch, so key confusion is structurally impossible rather than filtered. The cited line is the refusal, because that is what makes the absence of the other branches enforced instead of incidental."
     },
     {
       "standard": "OWASP ASVS",
@@ -3452,14 +3452,14 @@
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:253",
+        "internal/middleware/auth.go:257",
         "internal/server/server.go:686",
         "internal/crypto/jwt.go:47"
       ],
       "tests": [
         "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
       ],
-      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:267 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
+      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:271 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
     },
     {
       "standard": "OWASP ASVS",
@@ -7147,7 +7147,7 @@
       "requirement": "Broken Authentication",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:57",
+        "internal/middleware/auth.go:66",
         "internal/crypto/jwt.go:25"
       ],
       "tests": [
@@ -7236,14 +7236,14 @@
       "requirement": "Server Side Request Forgery",
       "status": "Met",
       "evidence": [
-        "internal/outbound/outbound.go:208",
-        "internal/outbound/outbound.go:147",
+        "internal/outbound/outbound.go:236",
+        "internal/outbound/outbound.go:175",
         "internal/oauth2/oidc.go:188"
       ],
       "tests": [
         "TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment"
       ],
-      "notes": "The inventory divides three ways. Four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. Only the last four come from data, and they are what this control covers: internal/oauth2/oidc.go:188 holds them to the issuer's domain or the operator's list, and Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses they resolve to. Policy.refuseAddress (internal/outbound/outbound.go:208) refuses link-local unconditionally -- 169.254.0.0/16 and fe80::/10, where cloud instance metadata answers -- and refuses loopback, RFC 1918, IPv6 unique-local and RFC 6598 unless VAULT_OUTBOUND_ALLOW_PRIVATE is set, which defaults on only in the dev profile. Because the check is at dial time, a redirect is judged on the same terms as the endpoint it came from. The chart's NetworkPolicy is the network-layer half and it is no longer the stricter one: charts/vault/templates/networkpolicy.yaml admits egress on 443 to any destination by default (networkPolicy.httpsEgress.enabled: true, cidrs: []), because the shipped policy previously left the HIBP breach check enabled in configuration and unreachable in fact. Narrowing it with httpsEgress.cidrs is available and is a defence in depth, not this row's control. Previously accepted risk CR-17, now retired."
+      "notes": "The inventory divides three ways. Four destinations are compiled-in https literals (SendGrid, the HIBP range API, and the Google, GitHub and Facebook endpoints), two are operator-configured (the SMTP relay and the OIDC issuer), and four are named by the issuer's own discovery document. Only the last four come from data, and they are what this control covers: internal/oauth2/oidc.go:188 holds them to the issuer's domain or the operator's list, and Policy.DialContext (internal/outbound/outbound.go:175) judges the addresses they resolve to. Policy.refuseAddress (internal/outbound/outbound.go:236) refuses link-local unconditionally -- 169.254.0.0/16 and fe80::/10, where cloud instance metadata answers -- and refuses loopback, RFC 1918, IPv6 unique-local and RFC 6598 unless VAULT_OUTBOUND_ALLOW_PRIVATE is set, which defaults on only in the dev profile. Because the check is at dial time, a redirect is judged on the same terms as the endpoint it came from. The chart's NetworkPolicy is the network-layer half and it is no longer the stricter one: charts/vault/templates/networkpolicy.yaml admits egress on 443 to any destination by default (networkPolicy.httpsEgress.enabled: true, cidrs: []), because the shipped policy previously left the HIBP breach check enabled in configuration and unreachable in fact. Narrowing it with httpsEgress.cidrs is available and is a defence in depth, not this row's control. Previously accepted risk CR-17, now retired."
     },
     {
       "standard": "OWASP API Top 10",
@@ -7447,7 +7447,7 @@
       "evidence": [
         ".coverage-exclusions.json",
         "CONTRIBUTING.md",
-        "scripts/dotnet-coverage.py:78"
+        "scripts/dotnet-coverage.py:77"
       ],
       "tests": [
         "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked",
@@ -8615,7 +8615,7 @@
     "CR-33": "Closed. adminGateway.hostNetwork now defaults to false, so a default render takes no host namespace and the chart meets the restricted profile without an exemption. While the risk was open the argument was that hostNetwork was load-bearing for LocalOnly, which requires the node's loopback; an operator who still wants that posture opts in, on a namespace whose policy permits it, and the chart says so at the point of choice. What keeps it closed: TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege fails on a default render that takes a host namespace, and TestK8sPSS_Restricted_ThereAreNoDeviationsLeft fails if an exemption is reintroduced.",
     "CR-23": "Closed. internal/email/smtp.go:111 replaced net/smtp.SendMail with an explicit conversation: STARTTLS when the server advertises it, ErrSMTPNoSTARTTLS when it does not, and tls.VersionTLS12 rather than the Go default. The opt-out, VAULT_SMTP_ALLOW_PLAINTEXT, is refused outside the dev profile unless the SMTP host is loopback (internal/config/config.go:714). ASVS V12.3.1 did not become Met, because the SMTP relay was never the only unencrypted outbound link: the Redis cache connection has no TLS option at all, which the row had not recorded. That is now CR-34. What keeps it closed: TestSendRefusesAServerThatDoesNotOfferSTARTTLS and TestSendUpgradesWheneverSTARTTLSIsAdvertised drive a fake relay through both branches, and TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride holds the config-side refusal.",
     "CR-21": "Closed, both rows. VaultClaims carries acr, amr and auth_time, and AALForMethods has non-test callers on every user-authenticating issuance path: the password login and the MFA completion through internal/service/auth.go, and the OAuth callback through internal/handler/oauth.go. ASVS V6.8.4 is Met on the requirement's fallback clause -- a provider assertion is assumed to be the minimum strength mechanism and never counts as a second factor -- and V10.3.4 is Met on middleware.Confirmed, which checks authentication recentness against the jti of the presented access token. Asserted by TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength and TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken. The trap this risk recorded was avoided rather than hit: MFAStatus.Methods is not what reaches AALForMethods, because MFACompletion carries the first factor across on the challenge token and its methods() concatenates that with the second.",
-    "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:94) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:185 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:147) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
+    "CR-17": "Closed, both rows. The four endpoints an OIDC discovery document supplies were the whole of vault42's server-side request forgery surface and had only a protocol check. Policy.CheckDerived (internal/outbound/outbound.go:122) now holds them to the issuer's own domain, a loopback destination, or a host the operator named in VAULT_OUTBOUND_ALLOWED_HOSTS, applied at internal/oauth2/oidc.go:185 before the document is cached; Policy.DialContext (internal/outbound/outbound.go:175) judges the addresses those hosts resolve to and connects to the address it judged, which is what covers DNS rebinding and a redirect that never passed through the endpoint check. ASVS V1.3.6 is Met on the destination allowlist and OWASP API7:2023 on what it protects, asserted by TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist and TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment. Two things this risk recorded did not survive the closure. Its compensating control claimed the chart admitted no egress to 443 at all; d124a06 opened 443 to any destination by default so the HIBP breach check would stop failing open silently, so the network-layer half is now the weaker one and the application-layer check is what carries these rows. And its cost-of-closing named a registrable-domain constraint; the shipped rule is the stricter same-or-subdomain test, which needs no public suffix list and no new dependency, at the price of an operator list entry for a provider whose endpoints legitimately span domains -- accounts.google.com serving its keys from www.googleapis.com is the case that costs one.",
     "CR-26": "Closed, all three rows. attachmentDisposition (internal/handler/blob.go:434) sets Content-Disposition: attachment with a server-chosen filename on both download paths (internal/handler/blob.go:221 and :315), and docs/api.md gained the 'How stored objects are made safe to download' section V5.1.1's second clause asks for. ASVS V3.2.1 is Met on the disposition type, V5.4.1 on the filename parameter and V5.1.1 on the documentation, each with its own test rather than one cited three times, because the three requirements turn on three different halves of the same change. The filename is contentDispositionFilename's reduction of the blob's own reference rather than the reference itself: the estimate in this risk's cost-of-closing was 'one header on each of the two download paths', and it was one line short, because DownloadNamed reads its name straight out of the route and never runs validRefName, so the header could not borrow the upload path's charset guarantee. What keeps it closed: TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType, TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer and TestASVS_V5_1_1_TheDocumentationSaysHowStoredObjectsAreMadeSafeToDownload, one per row rather than one cited three times, for the reason above.",
     "CR-15": "Closed by the detection and alerting work. internal/alert keeps windowed counts per subject and per masked source network and raises one alert per rule crossing, with a cooldown, a bounded key space and a saturation report; cmd/vault/main.go installs it on every profile with alert.LogSink, and tests/spec fails the build if that install moves inside a branch. risk_score stopped being a per-call-site literal: audit.Severity keys one scale by event class, Logger.Log no longer takes a score, and repository.AuditFilter.MinRiskScore emits a risk_score >= predicate reachable as min_risk_score on GET /admin/audit. AU-6, A09:2025 and GDPR Arts. 33/34 are Met with tests naming what each requires. CR-24, which shares a prerequisite -- a destination outside the application's own database -- did NOT close: nothing here ships audit records off-box or makes tampering detectable at read time, and V16.4.3, AU-9 and Art. 5(2) stay Accepted Risk. What keeps it closed: TestNIST80053_AU_6_ACorrelatedRunRaisesOneAlertAndAQuietOneRaisesNone for the windowing and the cooldown, TestOWASP_A09_2025_TheAlertSinkIsInstalledOutsideTheHoneypotProfile for the install, and TestOWASP_A09_2025_RiskScoreIsReadAndNotMerelyWritten for the score being a filter rather than a field.",
     "CR-34": "Closed. The cache link can be encrypted: REDIS_TLS, REDIS_TLS_CA_FILE and REDIS_TLS_SERVER_NAME reach internal/cache/redis.go:55 and the dial path at internal/redis/pool.go, and all three are settable from the chart. The risk was accurate about the defect -- a TLS branch nothing could reach -- and wrong in both directions about the cost of closing it. It said internal/redis would not change, and it had to, because the dial passed no RootCAs and the distroless runtime carries public roots only, so no in-cluster issuer would have verified. It said the obstacle was a Redis that could terminate TLS, and redis:7-alpine already can; the obstacle was certificate issuance and the probe arguments, which is why the bundled development Redis is deliberately left plaintext rather than half-converted. Its compensating control also credited a NetworkPolicy protecting a workload the chart does not deploy by default. What keeps it closed: TestASVS_V12_3_1_TheCacheLinkCanBeEncrypted for the wiring, and TestPool_TLSDialCompletesAVerifiedHandshakeAndHidesTheAUTHPassword, TestPool_TLSAgainstAPlaintextServerFailsRatherThanDowngrading, TestPool_TLSWithoutTheIssuingCAIsRefused and TestPool_TLSDialHonorsContextCancellation for the behaviour."

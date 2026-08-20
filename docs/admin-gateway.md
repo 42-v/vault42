@@ -127,7 +127,7 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/admin/sessions` | Session + RBAC | `sessions:list` | List active sessions |
+| `GET` | `/admin/sessions` | Session + RBAC | `admins:manage` | List active **admin** sessions, not user ones |
 | `POST` | `/admin/sessions/revoke-all` | Session + RBAC | `sessions:revoke` | Revoke all sessions |
 
 ### Audit Log

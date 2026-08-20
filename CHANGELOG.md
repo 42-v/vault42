@@ -278,6 +278,62 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
 ### Changed
 
+* **BREAKING, `Vault42.Blazor`: the browser client was written against a protocol
+  vault42 does not speak.** `VaultBlazorOptions.AuthorizePath` defaulted to
+  `/auth/authorize` and `TokenPath` to `/auth/token`. Neither route is registered:
+  `internal/server/server.go` mounts `/auth/oauth2/authorize` and
+  `/auth/oauth2/exchange`. Every sign-in through this package answered `404`, and had
+  the paths been right it would still have failed, because the package sent an
+  OAuth2-shaped request to an endpoint that is not an OAuth2 endpoint.
+
+  What changed, and why each is not a rename of the same thing:
+
+  * `TokenPath` is now `ExchangePath` (`/auth/oauth2/exchange`). The body is exactly
+    `{"code":"..."}`. The handler decodes with `DisallowUnknownFields`, so the previous
+    `grant_type`/`client_id`/`code_verifier` body was a `400` at any path. The option was
+    renamed rather than repointed on purpose: a caller who set it explicitly now gets a
+    compile error instead of a silent change of protocol.
+  * `LoginAsync` sends `?provider=`, the only parameter `Authorize` reads, and no longer
+    sends `response_type`, `client_id`, `redirect_uri`, `code_challenge`, `state` or
+    `scope`. A new `Provider` option carries it.
+  * `HandleCallbackAsync` reads the code from the URL **fragment**, where `oauth.go` puts
+    it, not the query string, and handles the `#error=verification_required` the callback
+    can also return.
+  * New `RefreshPath` (`/auth/refresh`). `RefreshAsync` posts no body: the handler reads
+    the `__Host-refresh_token` cookie and nothing else.
+  * Client-side PKCE and the state nonce are gone, along with `Internal/Pkce.cs` and the
+    PKCE slots on `TokenStore`. The server mints its own verifier and its own HMAC-signed
+    state bound to a `__Host-oauth_state` cookie, and the callback carries neither back,
+    so the browser-side copies had no counterparty. They were theatre, and deleting them
+    is the honest form of that. `Pkce.cs` was already unreferenced by any shipping path;
+    its tests were the only thing keeping it at 100%.
+
+  Four option properties cannot be made to work and now say so in their XML docs rather
+  than reading as configuration: `RedirectUri` is never sent (the server redirects to its
+  own origin plus `/oauth/callback`), `ClientId` is unused by the browser flow, `Scopes`
+  is not negotiable, and `InMemoryOnly`/`SessionStorage` can never receive a refresh token
+  from this server.
+
+  `VaultBlazorOptionsTests.EndpointPaths_AreRoutesTheVaultServerRegisters` parses every
+  `mux.Handle`/`HandleFunc` pattern out of `internal/server/server.go` and asserts each SDK
+  default is a registered method and path, refusing to pass on fewer than 20 parsed routes.
+  Nothing checked this before, which is how a package shipped to nuget.org against
+  endpoints that never existed.
+
+* **`Vault42.AspNetCore`: a JWKS fetch failure answered 500 instead of 401, and turned the
+  rate limiter off.** `ResolveKeyAsync` let `HttpRequestException`, `JsonException`,
+  `FormatException` and `TaskCanceledException` escape, so an unreachable or slow JWKS
+  endpoint surfaced as a server error rather than a refusal. `_lastRefresh` was stamped
+  only on success, so every failing request re-fetched: an issuer that was down took the
+  refresh limiter with it and the resource server hammered it. The stamp moved into a
+  `finally`, a refresh yielding zero usable keys now keeps the previous key set instead of
+  evicting the cache, and a genuine caller cancellation still propagates.
+
+* **`Vault42.AspNetCore`: fingerprint validation failed on dual-stack listeners.** A
+  request arriving as `::ffff:203.0.113.7` was fingerprinted from that spelling, while Go's
+  `(*net.TCPAddr).String()` yields `203.0.113.7`, so the two never matched and every
+  fingerprint-bound token was refused on a dual-stack socket. `Validate` now unmaps first.
+
 * **Frontend toolchain: five of the six pending majors.** vite 6 to 8, vue-router 4 to
   5, TypeScript 5 to 6.0.3, `@vitejs/plugin-vue` 5 to 6, `vite-plugin-dts` 4 to 5,
   `vue-tsc` 2 to 3, plus the patch line. Verified per step rather than in one jump.
@@ -404,6 +460,81 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   setup ref on access, so the binding receives the element or `null` and never the ref.
 
   Found by vue-tsc 3, which reports the unread variable that vue-tsc 2 did not.
+
+### Tests
+
+A sweep of all 5,180 Go test functions for tests that cannot fail, pin the
+opposite of their name, or duplicate each other. 227 functions became tables,
+the tree lost about 400 lines net, and the tests below were each passing against
+an implementation they were written to reject.
+
+* **A compliance test satisfied entirely by one error string.**
+  `TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates` grepped
+  `internal/email/templates.go` for `svg`, `script`, `iframe`, `object`, `embed`,
+  `form`, `base`, `javascript:` and `data:`. Every one of those is present in a
+  single line: the error message that lists them. Replacing the guard's pattern
+  with a regex matching nothing left that sentence intact and the test green. It
+  now submits ten hostile templates and a hostile subject to
+  `email.ValidateTemplateContent`, with a clean template as the positive control.
+
+* **A logout test that hashed a string fifty times.**
+  `TestASVS_V3_3_1_LogoutInvalidatesRefreshToken` asserted that SHA-256 is a
+  function. It now drives the real service: login, refresh as a positive control,
+  `Logout`, and the refresh afterwards must answer `ErrTokenInvalid`.
+
+* **A header test asserting the wrong direction.**
+  `TestASVS_V3_5_3_RejectDangerousHeaders` checked that vault42's own signer does
+  not emit `jku`, `x5u`, `x5c` or `jwk`. No caller can influence that, and it
+  stays true however permissive the verifier becomes. It now forges validly
+  signed inbound tokens carrying each header and requires the verifier to refuse
+  and name it. `tests/compliance/audit_ietf_test.go` had documented this exact
+  defect and the test was never replaced.
+
+* **Refusal-only suites with no accepting case.** `TestNIST_MFA_TOTPRejectionOfInvalidCodes`
+  and the three JWT registered-claim tests asserted only that bad input was
+  refused, so a verifier that refused everything passed all four. Each now
+  carries the accepted case as its first row. The same hole was in
+  `tests/attack/jwt_auth_header_test.go`, whose eight refusals are now one table
+  with a `well formed -> 200` row.
+
+* **A brute-force test sampling hex.** `TestTOTPBruteForce` drew its hundred
+  "random codes" from `SHA256Hex(...)[:6]`, so roughly ninety-four of them
+  contained a letter and could never be a TOTP code under any implementation.
+  It now samples real six-digit codes excluded from the accept window and
+  requires zero acceptances.
+
+* **A skip that fired exactly when the assertion would have failed.**
+  `TestTOTPWrongCode` skipped when a randomly chosen wrong code turned out to be
+  right, and compared only against the current period while the validator accepts
+  a skew of one, so two of every three genuine collisions would have failed
+  spuriously. Candidates are now filtered against all three in-window codes and
+  the skip is gone. `internal/middleware`'s `TestAuth_ClaimsAvailableInContext`
+  had three `t.Skip("claims nil")` guards with the same shape: if the middleware
+  put nothing on the context, one subtest went red and three went green.
+
+* **A CORS test blind to the hole in its own name.**
+  `TestCSRF_CORSRejectsWildcardWithCredentials` only checked that a refused
+  origin was not echoed back, so a middleware answering `*` with
+  `Allow-Credentials: true` passed all seven rows.
+
+* **Two identity tests that stopped at 200.** The name-truncation cases asserted
+  the ciphertext was non-nil. A `truncate()` returning the empty string, or one
+  cutting on bytes rather than runes, passed every one. They now read the profile
+  back through a second service over the same key material and assert the stored
+  rune count; the CJK row is what makes the byte-versus-rune cut observable.
+
+* **A table whose result column was read into the blank identifier.**
+  `TestMigrationNameEdges_Table` compared nothing, so every case passed.
+  `TestAuditFilter_Table` did the same across four cases against a struct with no
+  methods, and is deleted rather than repaired.
+
+Two mechanical scanners are added for the classes above:
+`scripts/test-smells.py` reports tests that may not test what they claim, and
+`scripts/prod-scan.py` reports the production defect classes this tree has
+already shipped, each rule carrying the history that earns it a place. Both
+print candidates rather than findings, and both say so: about a third of what
+they report is a false positive, and the measured precision per category is
+recorded in the script.
 
 ## 1.0.2 (2026-08-20)
 

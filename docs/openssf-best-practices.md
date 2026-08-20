@@ -51,7 +51,7 @@ read on 2026-08-20.
 | `repo_distributed` (SUGGESTED) | Met | git is distributed. |
 | `version_unique` (MUST) | Met | One `VERSION` file is the source of truth, and `scripts/version-bump.sh` propagates it to every manifest that carries a copy. `scripts/release-check.sh --version-only` fails the build when any of them disagree. |
 | `version_semver` (SUGGESTED) | Met | Semantic versioning; the release workflow refuses a tag that is not `vX.Y.Z[-suffix]`. |
-| `version_tags` (SUGGESTED) | **Partially met — see note** | Releases through 0.9.9 are tagged `vX.Y.Z`. 1.0.0 and 1.0.1 were merged without their tags being pushed, so no artifact was published under either. The release workflow is tag-driven precisely so this is recoverable, and the gap is recorded in the changelog rather than hidden. Answer honestly as "unmet" until the tags exist. |
+| `version_tags` (SUGGESTED) | **Partially met -- see note** | Releases through 0.9.9 are tagged `vX.Y.Z`, and `v0.9.9` is still the newest tag in the repository. 1.0.0, 1.0.1 and 1.0.2 were each merged without their tag being pushed, so no artifact was ever published under any of the three: the release workflow fires on the tag, so a merge alone publishes nothing. The three are recorded in the changelog as merged rather than released, which is the honest form of the gap. `v1.0.3` is the tag that closes it, and it supersedes the three: retagging releases whose artifacts were never built would publish today's tree under three historical version numbers. Answer this criterion as "unmet" until `v1.0.3` exists. |
 | `release_notes` (MUST) | Met | [`CHANGELOG.md`](../CHANGELOG.md), one section per version, and `scripts/release-check.sh` refuses a release whose version has no section. |
 | `release_notes_vulns` (MUST) | Met | The changelog names the advisories a release closes by identifier (for example `GHSA-hfg8-hc9c-6c3h` in 1.0.1). |
 
@@ -129,9 +129,12 @@ read on 2026-08-20.
 | Met | 43 | 10 | 14 | 67 |
 | Unmet | 0 | 0 | 0 | 0 |
 
-with **one qualification**: `version_tags` is answered "met" only once `v1.0.1`
-and `v1.0.2` exist. Push the tags before submitting, or answer that one
-criterion honestly as unmet and revisit it.
+with **one qualification**: `version_tags` is answered "met" only once `v1.0.3`
+exists, and nothing in the repository is tagged above `v0.9.9` today. Push
+that tag before submitting, or answer that one criterion honestly as unmet
+and revisit it. Do not answer it "met" on the strength of the 0.9.x tags:
+the criterion asks whether the releases people are being offered are
+tagged, and the ones being offered are 1.x.
 
 ## What to do
 

@@ -392,7 +392,7 @@ The product is two binaries. `cmd/vault` serves the 62-route public API. `cmd/ad
 
 **Endpoint:** `POST /auth/refresh`
 
-1. Refresh token read from `refresh_token` cookie
+1. Refresh token read from the `__Host-refresh_token` cookie
 2. Token hash looked up in database
 3. Replay detection: if token already `used = true`, entire family is revoked (all tokens in the rotation chain) and `replay_detected` error returned
 4. Expiry check
@@ -2073,7 +2073,7 @@ Threat observation deployment. Extends production with auto-migration, embedded 
 
 ## 16. Endpoint Inventory
 
-**103 API routes: 62 on the main binary, 41 on the admin gateway.** This inventory is the complete
+**105 API routes: 62 on the main binary, 43 on the admin gateway.** This inventory is the complete
 set. `tests/spec/route_drift_test.go` parses `internal/server/server.go` and
 `internal/adminapi/router.go` with `go/ast` and fails the build if a route here does not exist, or
 if a route exists that is not here. Adding an endpoint without a row is not possible.
@@ -2212,7 +2212,7 @@ role must hold. Section 21 describes the behaviour.
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
-| `GET` | `/admin/sessions` | Session | `sessions:list` | Always | Active refresh families |
+| `GET` | `/admin/sessions` | Session | `admins:manage` | Always | Active **admin** sessions |
 | `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
 | `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log (21.4) |
 | `GET` | `/admin/clients` | Session | `clients:list` | Always | List service clients |
