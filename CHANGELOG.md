@@ -5,6 +5,47 @@
 Three claims the project was making without having checked them, and a toolchain that
 had drifted far enough that nobody could tell which of six upgrades was the hard one.
 
+### Security
+
+* **A federated access token asserted an authentication nobody performed.** The OAuth
+  callback issued its token pair with `NewAuthContext(time.Now(), ...)`, so `auth_time` on
+  a federated token dated the login to the moment the callback ran. An identity provider
+  answering out of an established single-sign-on session returns without prompting anybody,
+  so a relying party enforcing `max_age` was told a fresh authentication had happened when
+  the user had only followed a redirect. `auth_time` appeared nowhere in `internal/oauth2`:
+  the ID token verifier read `iss`, `aud`, `exp`, `nonce`, `sub` and the profile claims.
+
+  The verifier reads the claim now and the callback passes it on, falling back to the
+  callback instant -- the one moment this server can vouch for -- only when the issuer
+  asserted none. Absence is not an error, because OIDC Core makes the claim optional unless
+  the request sent `max_age`. A ceiling rejects an out-of-range value, since converting a
+  `float64` that does not fit an `int64` is implementation-defined in Go and would otherwise
+  let the issuer choose which instant gets recorded.
+
+  This was inconsistent with two decisions the same code already made deliberately:
+  `internal/service/token.go` emits nothing rather than claim the Unix epoch, and this same
+  callback emits no `amr` because RFC 8176 registers none for an assertion from another
+  issuer.
+
+* **The audit retention purge deleted audit rows and recorded it nowhere.** A completed
+  sweep left one process-log line, and a direct call to `audit.cleanup_old_entries()` left
+  nothing at all, so a trail that stops abruptly read the same whether the sweeper ran on
+  the configured horizon, ran on some other horizon, or somebody purged by hand.
+  `docs/security.md` AR-12 accepts that `vault_app` can purge past the retention horizon;
+  the purge being invisible in the log it purges is what made that worse than it needed to
+  be.
+
+  A sweep that deleted anything, or that failed partway, now writes an `admin_action` entry
+  naming the cutoff it actually applied, the row count, the configured horizon and the
+  replica that won the election. The cutoff is computed once for the whole sweep rather than
+  per batch, because a record naming a horizon no `DELETE` ever used is the kind of
+  attestation an auditor is right to reject. Only the elected replica writes, so one purge
+  is not recorded four times. An empty sweep writes nothing, which is also what stops the
+  log converging on records of purging its own records.
+
+  It does not close AR-12: whoever can purge can purge that row a horizon later, and the SQL
+  function still leaves no trace when called directly. AR-12 says both.
+
 ### Compliance
 
 * **The OpenSSF Best Practices criteria are answered, so only the signup is left.**
@@ -88,6 +129,42 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   Seven of the twelve already did out of habit; the other five named source positions.
   The tests existed in all five cases, so this was writing down what was already true.
 
+* **Seven of the fourteen accepted risks carried claims that were false.** Five parallel
+  analyses read each risk against the code it rests on. Every error was in the direction
+  that makes the project look better than it is, which is the direction a self-assessment
+  drifts when nothing checks it.
+
+  CR-28 stated that no `Sec-Fetch-*` header is read anywhere in the tree;
+  `cmd/bridge/proxy.go` reads all three, and `docs/COMPLIANCE.md` had already recorded that
+  correction without it reaching the register. The same entry's residual risk *overstated*
+  the exposure in the other direction: the emailed link is the SPA route, so a plain
+  prefetcher receives `index.html` and changes nothing, and only a scanner that executes
+  JavaScript completes the verification.
+
+  CR-20 claimed backup codes are issued at enrollment. They are not: they come from an
+  explicit request behind a recent-password confirmation, email OTP is deliberately switched
+  off for an account that has a strong factor, and no admin route resets a user's MFA. A
+  user who loses every factor without having generated codes has no recovery path at all,
+  which is a materially different residual from the one recorded.
+
+  CR-24 argued that a keyed hash chain would be theatre because the key shares a process
+  with the adversary. That is false for the topology the chart ships, where Postgres runs as
+  its own pod under a different credential. The conclusion survives for a narrower reason
+  (an *unkeyed* chain is recomputable by the adversary it targets, and ASVS V16.4.3 is a
+  transport requirement no chain touches) and the entry now says that instead.
+
+  CR-30 *prescribed a change that regresses*: replacing the email template guard with
+  bluemonday was measured to re-admit a beacon the guard rejects, break four shipped
+  templates, and reach a called vulnerability in a transitive dependency. CR-34 credited a
+  NetworkPolicy protecting a Redis the chart does not deploy by default. CR-29 cited four
+  line numbers, none current. CR-40 said "eighteen required checks"; there are thirteen.
+
+* **`V7.6.1` named a test that did not test it.** The row cited a gate asserting the OAuth
+  `state` parameter is HMAC-signed and session-bound, which is a cross-site-request-forgery
+  check that would pass whether or not any of the row's argument held. It now names a
+  coupling gate that fails if either half of the requirement moves without the register
+  moving with it.
+
 ### Changed
 
 * **Frontend toolchain: five of the six pending majors.** vite 6 to 8, vue-router 4 to
@@ -113,6 +190,34 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   properties of undefined (reading 'Cjs')`. Two tools, one cause, neither of them
   something this repository can configure around. Both have to be rewritten against the
   new `./unstable/*` API first.
+
+* **Three CI gates had stopped gating anything.** `scripts/release-check.sh` allowed 112
+  golangci-lint findings over a tree that has none: a ratchet set while a 109-finding backlog
+  came down, never lowered when it reached zero. The comment above it still said
+  golangci-lint had never run in CI, three releases after the job that runs it was added. The
+  CI-side baseline it fed had been empty since 1.0.0, and its own file said to delete it once
+  it was -- forty lines of Python comparing a measured zero against a hand-maintained zero.
+  Both are gone; the whole-tree run is now a plain `golangci-lint run ./...` and the release
+  allowance is zero.
+
+  gosec's test-file findings were held by per-rule counts, and for this rule set that is the
+  wrong shape: `G101` is "hardcoded credentials" with an allowance of 76, so swapping one
+  fixture DSN for a real leaked credential leaves the count at 76 and the gate green. That
+  was demonstrated rather than argued -- the old comparison passes such a report and the new
+  one fails it, naming the line. `scripts/gosec-baseline.py` freezes the rule, the file and
+  the text of the flagged line, with a count per line so a second finding on a listed line is
+  still new. Keyed on the source text rather than the line number, the way
+  `.coverage-exclusions.json` already is. Every rule in the set owes a stated reason, checked
+  rather than left in a comment.
+
+* **Scorecard's last unpinned dependency was already pinned.** The corepack install in the
+  frontend stage fetched a tarball by URL and verified it against a committed SHA-256 before
+  anything ran it, and still scored as an unpinned `npmCommand`, because the check reads the
+  command rather than the verification around it. The tarball is unpacked with `tar` now
+  instead of handed to `npm install -g`, which removes the finding and also removes npm's
+  resolution, tree write and lifecycle scripts from a package whose bytes were already
+  verified. Confirmed by building the stage: corepack 0.35.0 and pnpm 10.18.0 both resolve
+  inside the image and the SPA builds.
 
 ### Fixed
 
@@ -144,6 +249,22 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
   twice and missed the third time. The wrapper now exists, and requiring it is left as the
   branch-protection setting it is, with CR-36 recording the difference rather than the fix
   pre-empting the decision.
+
+* **Workflow citations stop being line numbers.** Three edits to `ci.yml` in one session
+  shifted every citation below them. One landed on a blank line and the existing gate caught
+  it; the others landed on real lines of YAML belonging to unrelated steps -- a `go mod
+  verify` citation inside a JSON decode handler -- and passed, because a gate that rejects
+  blank lines and closing braces cannot see the shape where the line is fine and simply is
+  not the one anybody meant. All 47 are anchors now (`#job:<id>`, `#^<prefix>`,
+  `#in:<job>:<substring>`, `#<substring>`), an anchor matching more than one line is an
+  error rather than a first match, and adding a job at the top of the file changes nothing.
+
+* **Prose citations were gated in four fields out of a dozen.** The register cites code in a
+  list and also mid-sentence, and only the four accepted-risk bodies were checked. Not
+  checked: `notes` on all 456 rows, `revisit_when`, and the retired-risk paragraphs. 117
+  citations were living there unchecked and four had gone stale, including one claiming the
+  server does its half of ASVS V14.3.1 while pointing at a blank line where the logout cookie
+  clear used to be.
 
 * **`docs/COMPLIANCE.md` still called `PO.3.2` an accepted risk under CR-32**, which was
   retired when dependabot landed. **The register's own version header read 1.0.0**, three
