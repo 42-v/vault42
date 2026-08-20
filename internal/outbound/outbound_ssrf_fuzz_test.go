@@ -37,7 +37,7 @@ import (
 //	the issuer's own host or a subdomain of it on a label boundary.
 //
 // Two things keep the check an independent opinion rather than a second run of
-// the code under test. The dialled host is read out of net/http itself instead
+// the code under test. The dialed host is read out of net/http itself instead
 // of being recomputed here, so a disagreement between the name CheckDerived
 // judged and the name that reaches the dialer is visible rather than
 // reproduced: net/http feeds url.Hostname() through IDNA on its way to
@@ -71,11 +71,11 @@ var errOracleRecorded = errors.New("outbound fuzz oracle: destination recorded, 
 // rule here would only reproduce whichever reading the author of hostOf held,
 // which is no second opinion at all.
 //
-// A URL net/http declines before dialling -- an unsupported scheme, an empty
+// A URL net/http declines before dialing -- an unsupported scheme, an empty
 // host -- returns false. That is not a gap in the invariant. internal/oauth2's
 // fetchableEndpoint admits only https and plaintext loopback, so a URL no
 // dialer is reached for is a URL no packet is sent for, and a property about
-// the host that gets dialled has nothing to say about it.
+// the host that gets dialed has nothing to say about it.
 func dialTarget(u *url.URL) (string, bool) {
 	var (
 		addr   string
@@ -108,8 +108,8 @@ func dialTarget(u *url.URL) (string, bool) {
 		Host:       u.Host,
 	}
 	// The request is built around the parsed URL rather than around a string,
-	// so the redirect phase below can hand CheckDerived a re-serialised spelling
-	// while this side still dials the object the transport would have dialled.
+	// so the redirect phase below can hand CheckDerived a re-serialized spelling
+	// while this side still dials the object the transport would have dialed.
 	resp, err := tr.RoundTrip(req.WithContext(context.Background()))
 	if err == nil {
 		resp.Body.Close() //nolint:errcheck,gosec // unreachable: the recorder never returns a connection
@@ -124,7 +124,7 @@ func dialTarget(u *url.URL) (string, bool) {
 	return strings.ToLower(host), true
 }
 
-// oracleIsLoopback reports whether a dialled host is the loopback interface.
+// oracleIsLoopback reports whether a dialed host is the loopback interface.
 //
 // It is the loopback exception restated, not isLoopbackHost called: a name that
 // merely resolves to 127.0.0.1 does not qualify, because that resolution
@@ -186,7 +186,7 @@ func oracleAllowedHosts(entries []string) []string {
 // oracleIssuerBases is the set of domains the operator vouched for by
 // configuring an issuer, in the same two spellings and for the same reason.
 //
-// The dialled spelling is the one that matters and is listed first. The raw
+// The dialed spelling is the one that matters and is listed first. The raw
 // hostname is kept as well because net/http falls back to it when IDNA cannot
 // convert a name: in that case the endpoint reaches the dialer under the same
 // unconverted spelling that CheckDerived judged, which is a name no resolver
@@ -309,7 +309,7 @@ var oracleSeeds = []struct {
 	// while net/http connects to the host UTS-46 produced, and those two
 	// normalisations are not the same map. U+1E9E lowercases to U+00DF but
 	// reaches the wire as "ss", so an endpoint spelled with it is admitted as
-	// the issuer's own host and dialled at another domain. U+0130 lowercases to
+	// the issuer's own host and dialed at another domain. U+0130 lowercases to
 	// a plain ASCII "i", which makes an ASCII issuer enough: a document naming
 	// login.microsoftonl<U+0130>ne.com reads as exactly login.microsoftonline.com
 	// to the domain rule and to the operator list, and net/http opens the
@@ -362,7 +362,7 @@ var oracleSeeds = []struct {
 
 // FuzzCheckDerivedAdmitsOnlyPermittedDestinations drives the whole destination
 // rule: the parse, the loopback exception, the operator list, the issuer domain
-// test, and the re-serialisation ClientForIssuer performs before it re-applies
+// test, and the re-serialization ClientForIssuer performs before it re-applies
 // the rule to a redirect hop.
 func FuzzCheckDerivedAdmitsOnlyPermittedDestinations(f *testing.F) {
 	for _, seed := range oracleSeeds {
@@ -405,9 +405,9 @@ func FuzzCheckDerivedAdmitsOnlyPermittedDestinations(f *testing.F) {
 		// different code paths. A URL whose host does not survive that round
 		// trip is checked as one destination and connected to as another, which
 		// is how a 302 carrying a client_secret leaves the issuer's domain.
-		if reserialised := u.String(); reserialised != endpoint {
-			if p.CheckDerived(issuer, "redirect", reserialised) == nil {
-				assertDialedHostIsPermitted(t, "the redirect path", issuer, endpoint, reserialised, allowed, p, u)
+		if reserialized := u.String(); reserialized != endpoint {
+			if p.CheckDerived(issuer, "redirect", reserialized) == nil {
+				assertDialedHostIsPermitted(t, "the redirect path", issuer, endpoint, reserialized, allowed, p, u)
 			}
 		}
 	})

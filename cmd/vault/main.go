@@ -605,6 +605,13 @@ func main() {
 	// with no configuration at all; what the deployment supplies here is the
 	// operator's widenings of it, and the dial-time address check that a
 	// transport is the only place to put.
+	//
+	// The widenings are checked before the policy is built, because an entry
+	// that can never match is a control the operator believes is in force and
+	// is not. Startup is the only place that fact is cheap to learn.
+	if err := outbound.ValidateAllowedHosts(cfg.OutboundAllowedHosts); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	outboundPolicy := outbound.New(cfg.OutboundAllowedHosts, cfg.OutboundAllowPrivate)
 	for _, op := range cfg.OIDCProviders {
 		provider := oauth2.NewOIDCProvider(

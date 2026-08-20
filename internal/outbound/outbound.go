@@ -85,6 +85,34 @@ func New(allowedHosts []string, allowPrivate bool) *Policy {
 	return &Policy{allowedHosts: allowed, allowPrivate: allowPrivate}
 }
 
+// ValidateAllowedHosts reports an operator entry that no destination can match.
+//
+// hostOf refuses a URL whose host carries non-ASCII bytes, because the name
+// this package reads and the name net/http dials are normalized differently.
+// An allowlist entry written in that same non-ASCII form is therefore dead: a
+// discovery document names the punycode, the entry names the Unicode, and the
+// two never compare equal. What the operator is left with is their host sitting
+// in the configuration and a refusal naming it at request time, which is the
+// most confusing pair of facts this package could hand them.
+//
+// So the entry is refused where it is written rather than where it fails, and
+// the message says which spelling to write instead.
+func ValidateAllowedHosts(hosts []string) error {
+	for _, h := range hosts {
+		trimmed := strings.TrimSpace(h)
+		if trimmed == "" {
+			continue
+		}
+		if !isASCIIHost(trimmed) {
+			return fmt.Errorf("VAULT_OUTBOUND_ALLOWED_HOSTS names %q, which carries bytes "+
+				"outside the printable ASCII range; a discovery document reaches this check "+
+				"in punycode, so the entry as written can never match and the destination "+
+				"stays refused; write the punycode form of the name instead", trimmed)
+		}
+	}
+	return nil
+}
+
 // CheckDerived reports whether vault42 may fetch endpoint, a URL that a
 // provider's own document named rather than one an operator configured. field
 // is the document key it arrived under, so a refusal says which one.
@@ -275,7 +303,7 @@ func (p *Policy) refuseAddress(ip net.IP) error {
 //	https://login.microsoftonlİne.com/common/discovery/v2.0/keys
 //
 // read as login.microsoftonline.com here, passed underDomain against an issuer of
-// https://login.microsoftonline.com, and was dialled as
+// https://login.microsoftonline.com, and was dialed as
 // login.xn--microsoftonline-fqi.com -- a .com anybody can register. Any issuer
 // whose registrable domain contains the letter "i" was reachable that way, and
 // the reachable fields are the whole CR-17 boundary: jwks_uri hands an attacker

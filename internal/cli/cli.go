@@ -558,7 +558,12 @@ func (c *CLI) InitAdminToken(ctx context.Context) error {
 // about whether their mount is in force.
 func (c *CLI) provisionedTokenMatches(storedHash string) bool {
 	if strings.HasPrefix(c.provisionedAdminToken, argon2idPrefix) {
-		return c.provisionedAdminToken == storedHash
+		// Both sides are already Argon2id output, so there is nothing here an
+		// attacker guesses a byte at a time, and this runs once at boot with no
+		// response to time it against. Constant time anyway: the alternative is a
+		// scan hit on every run that a reader has to re-derive as benign, and a
+		// known-benign hit is what trains people to skip the real one.
+		return vaultcrypto.SecureCompare(c.provisionedAdminToken, storedHash)
 	}
 	ok, _ := vaultcrypto.VerifyPassword(c.provisionedAdminToken, storedHash)
 	return ok
