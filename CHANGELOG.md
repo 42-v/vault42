@@ -34,12 +34,16 @@ six OpenSSF Scorecard findings arriving against a tree nobody could install.
   the one module-level finding that remains, `GO-2026-5932`, marks
   `golang.org/x/crypto/openpgp` unmaintained with no patched version and is accepted as
   CR-37, with a test asserting nothing in either module imports it.
-* **`main` is protected.** It was not, through 1.0.0. Merging now requires a pull
-  request with an approving review, thirteen passing status checks including the Go and .NET
-  coverage gates, linear history and resolved conversations, and force-push and deletion are
-  blocked. `enforce_admins` is deliberately off: with one maintainer, enforcing it makes
-  every merge require a second person who does not exist, and a rule like that gets
-  disabled the first time it matters rather than the first time it is safe.
+* **`main` is protected.** It was not, through 1.0.0. Merging now requires a pull request,
+  thirteen passing status checks including the Go and .NET coverage gates, branches up to
+  date before merge, linear history and resolved conversations, with force-push and deletion
+  blocked. No approving review is required, and that is deliberate: GitHub does not let you
+  approve your own pull request, so on a single-maintainer project a required approval is one
+  nobody can give. It was set that way first, and the very next pull request could only be
+  merged by an admin bypass -- which skips the thirteen status checks as well as the review.
+  A rule meant to add a reviewer was in practice removing the CI gate. The checks are the part
+  that works, so the checks are what is required; the missing reviewer is recorded as CR-36
+  instead of being papered over. `enforce_admins` stays off so a hotfix remains possible.
 * **The lint job's dependencies resolve through a hash.** `pip install 'ruff==0.16.3'`
   and `npm install markdownlint-cli2@0.23.2` both named an exact version and then trusted
   whatever bytes the registry served for it, which is a version pin and not a
