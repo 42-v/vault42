@@ -44,6 +44,27 @@ overwrite you.
 | `docs/deps.md` | `scripts/readme-gen.sh` |
 | `docs/test-coverage.md` | `scripts/coverage.sh` |
 
+### The compliance register cites code by line, and code moves
+
+`docs/compliance-register.json` carries `path:line` citations in its `evidence`
+lists and inside its prose. Three gates reject a citation that lands somewhere
+dead -- a blank line, a closing brace, an anchor that no longer resolves -- and
+none of them can see the case where it lands on a real line that simply is not
+the one anybody meant. That case has arrived four times.
+
+After a change that moves code, run:
+
+```bash
+scripts/register-reanchor.py --check     # report
+scripts/register-reanchor.py --apply     # rewrite what it can
+```
+
+It reads what each cited line said at `HEAD`, finds where that text went, and
+re-anchors it when the match is unique. It refuses to guess: an ambiguous or
+vanished citation is printed for a person, because guessing is what produced the
+drift. Citations into `.github/workflows` are excluded, being anchors rather than
+line numbers.
+
 ## Commit messages
 
 Commits are linted as [Conventional Commits](https://www.conventionalcommits.org/) on every pull
