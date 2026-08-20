@@ -286,12 +286,13 @@ func refuseAmbiguousClaimNames(payload []byte) error {
 
 	seen := make(map[string]string)
 	for dec.More() {
+		// The type assertion is folded into the error check rather than
+		// standing alone: encoding/json reports a non-string member name as a
+		// syntax error from Token, so the assertion can never be the thing that
+		// fails, and a branch on it by itself is a statement no input reaches.
 		nameTok, nameErr := dec.Token()
-		if nameErr != nil {
-			return fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
-		}
 		name, ok := nameTok.(string)
-		if !ok {
+		if nameErr != nil || !ok {
 			return fmt.Errorf("%w: bad claims JSON", ErrTokenMalformed)
 		}
 		folded := strings.ToLower(name)

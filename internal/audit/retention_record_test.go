@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -278,5 +279,47 @@ func TestReplicaLabelNamesTheHostAndTheProcess(t *testing.T) {
 	}
 	if replicaID == "" {
 		t.Error("replicaID is empty, so no purge record can say which replica ran it")
+	}
+}
+
+// TestRetention_AnUnrecordablePurgeIsStillReportedSomewhere covers the one
+// branch the record path has and the suite above did not reach.
+//
+// The rows are already gone by the time the record is attempted, so failing the
+// sweep would not bring them back and would make a caller retry a purge that
+// already happened. The write is therefore best-effort. That leaves exactly one
+// obligation: say so out loud. A purge that deleted rows, could not record
+// itself, and said nothing is indistinguishable from a purge that never ran --
+// which is the state this record exists to make impossible.
+func TestRetention_AnUnrecordablePurgeIsStillReportedSomewhere(t *testing.T) {
+	var logBuf strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	recordErr := errors.New("audit store unreachable")
+	repo := &mocks.MockAuditRepo{
+		CleanupLockedFn: func(context.Context, time.Time) (int64, bool, error) {
+			return 12, true, nil
+		},
+		InsertFn: func(context.Context, *model.AuditEntry) error { return recordErr },
+	}
+
+	deleted, err := NewRetention(repo, 90*24*time.Hour).Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep returned %v; a record that cannot be written must not fail the sweep, "+
+			"because the rows are already deleted and a retry would purge again", err)
+	}
+	if deleted != 12 {
+		t.Errorf("deleted = %d, want 12: the count is what the sweep actually removed and is "+
+			"unaffected by the record failing", deleted)
+	}
+
+	got := logBuf.String()
+	for _, want := range []string{"12", recordErr.Error()} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log = %q, want it to name %q. An operator reading this line is the only "+
+				"remaining evidence that the purge happened at all.", got, want)
+		}
 	}
 }

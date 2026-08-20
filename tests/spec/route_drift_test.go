@@ -752,8 +752,9 @@ func apiDocEndpointRows(t *testing.T, root string) []string {
 		t.Fatalf("read docs/api.md: %v", err)
 	}
 	row := regexp.MustCompile("(?m)^\\|\\s*`(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)`\\s*\\|\\s*`([^`]+)`")
-	var out []string
-	for _, m := range row.FindAllStringSubmatch(string(body), -1) {
+	matches := row.FindAllStringSubmatch(string(body), -1)
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
 		out = append(out, m[1])
 	}
 	return out

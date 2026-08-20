@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rsa"
 	"errors"
@@ -84,7 +85,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	if err := cfg.Validate(); err != nil {
+	// The outbound widenings are checked here rather than where the policy is
+	// built, because an entry that can never match is a control the operator
+	// believes is in force and is not, and this is the line every other
+	// configuration refusal already comes out of. cmp.Or reports the first
+	// non-nil error; both calls are pure, so evaluating both costs nothing.
+	if err := cmp.Or(cfg.Validate(), outbound.ValidateAllowedHosts(cfg.OutboundAllowedHosts)); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 	log.Printf("Configuration loaded:\n%s", cfg)
@@ -605,13 +611,6 @@ func main() {
 	// with no configuration at all; what the deployment supplies here is the
 	// operator's widenings of it, and the dial-time address check that a
 	// transport is the only place to put.
-	//
-	// The widenings are checked before the policy is built, because an entry
-	// that can never match is a control the operator believes is in force and
-	// is not. Startup is the only place that fact is cheap to learn.
-	if err := outbound.ValidateAllowedHosts(cfg.OutboundAllowedHosts); err != nil {
-		log.Fatalf("config: %v", err)
-	}
 	outboundPolicy := outbound.New(cfg.OutboundAllowedHosts, cfg.OutboundAllowPrivate)
 	for _, op := range cfg.OIDCProviders {
 		provider := oauth2.NewOIDCProvider(
