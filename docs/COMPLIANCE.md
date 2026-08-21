@@ -19,7 +19,7 @@ not apply.
 
 The requirement register is [`docs/compliance-register.json`](compliance-register.json):
 one row per requirement, carrying the verbatim requirement text, its status, the
-`file:line` implementing it and the name of the test that proves it. **CI fails
+an anchor naming the line that implements it and the name of the test that proves it. **CI fails
 if any requirement marked Met names a test that does not exist**, so the register
 cannot drift from the suite.
 
@@ -422,7 +422,7 @@ Full text for each, including what was accepted while it was open, is in
 table above.
 
 **How each row was reached.** Every requirement was read in its published text,
-not in a paraphrase, and classified against source at a cited `file:line`. Where
+not in a paraphrase, and classified against source at a cited anchor. Where
 a previous version of this document and the code disagreed, the code won and the
 disagreement was recorded as a correction above.
 

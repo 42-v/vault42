@@ -93,6 +93,19 @@
   `cov_run` reproduces. The figure was right and the sentence introducing it was not.
   Corrected, and now unrepeatable.
 
+* **`scripts/register-reanchor.py` converts a line number into an anchor, and stopped
+  reporting nonsense on its second run.** Write `path:line` if that is what you have and
+  `--apply` turns it into an anchor for the statement that was on it.
+
+  Its prose half -- the sentences in `notes` and in the risk bodies, which still carry
+  `path:line` because an anchor mid-sentence reads as a quotation of the code -- compared
+  the ref's text at the number *currently* in the register. Once a citation had been
+  re-anchored, that number addressed a different line at the ref, and the tool proposed
+  moving a correct citation onto whatever text used to live there. A prose field is now
+  remapped only when it is byte-identical to the same field at the ref: an edited field may
+  already carry the author's own fix, and guessing on top of that is what produced the drift
+  in the first place.
+
 ### Documentation
 
 * **The API reference understated the failure surface of 17 endpoints, and now a gate
@@ -194,21 +207,6 @@
 
   Three entries left `evidenceRelevanceExemptions` as a result and were deleted, which is
   the only direction that list moves.
-
-### Tooling
-
-* **`scripts/register-reanchor.py` converts a line number into an anchor, and stopped
-  reporting nonsense on its second run.** Write `path:line` if that is what you have and
-  `--apply` turns it into an anchor for the statement that was on it.
-
-  Its prose half -- the sentences in `notes` and in the risk bodies, which still carry
-  `path:line` because an anchor mid-sentence reads as a quotation of the code -- compared
-  the ref's text at the number *currently* in the register. Once a citation had been
-  re-anchored, that number addressed a different line at the ref, and the tool proposed
-  moving a correct citation onto whatever text used to live there. A prose field is now
-  remapped only when it is byte-identical to the same field at the ref: an edited field may
-  already carry the author's own fix, and guessing on top of that is what produced the drift
-  in the first place.
 
 ## 1.0.3 (2026-08-20)
 
