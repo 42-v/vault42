@@ -13,7 +13,8 @@ source "$(dirname "$0")/lib/coverage-env.sh"
 COVER_FILE=$(mktemp)
 TEST_OUT=$(mktemp)
 CREATOR_TMP=$(mktemp)
-trap 'rm -f "$COVER_FILE" "$TEST_OUT" "$CREATOR_TMP"' EXIT
+CS_PKG_TMP=$(mktemp)
+trap 'rm -f "$COVER_FILE" "$TEST_OUT" "$CREATOR_TMP" "$CS_PKG_TMP"' EXIT
 
 # ═══════════════════════════════════════════════════════════════
 # 1. Run tests ONCE — get verbose output + coverage profile
@@ -98,7 +99,35 @@ dep_note() {
 
 # ═══════════════════════════════════════════════════════════════
 # 4. Parse go.mod for dependencies
+#
+# Which requires get counted is decided by the build, not by the file.
+# `go list -deps` walks the import graph of every package that ships and names
+# the modules it links, so GO_CLOSURE is the dependency surface of the binaries,
+# which is what a reader of the badge is asking about. go.mod declares more: it
+# requires testcontainers and yaml.v3, which only the test suites import, and its
+# indirect block carries their fan-out (the docker, otel and gopsutil trees, plus
+# xxhash, logr and stdr) as though a release shipped it.
+#
+# This replaced a hand-written list of module prefixes to skip. That list had to
+# be edited by hand whenever a test dependency moved and nothing failed when it
+# was not: an unlisted test-only module just appeared in the published table as
+# something the release carries. Three of them did, and docs/deps.md called them
+# "pulled by" the three direct dependencies, which no build agreed with.
+#
+# `./...` is package-scoped, so test-only imports are excluded by construction:
+# a package's Deps are its non-test imports.
 # ═══════════════════════════════════════════════════════════════
+GO_MAIN_MOD=$(go list -m)
+GO_CLOSURE=$(go list -deps -f '{{if and (not .Standard) .Module}}{{.Module.Path}}{{end}}' ./... \
+  | grep -vxF "$GO_MAIN_MOD" | sort -u)
+GO_CLOSURE_COUNT=$(printf '%s\n' "$GO_CLOSURE" | grep -c . || true)
+if [ "$GO_CLOSURE_COUNT" -eq 0 ]; then
+  echo "ERROR: 'go list -deps ./...' named no third-party modules." >&2
+  echo "  That is the set every dependency figure below is derived from, so there is nothing to" >&2
+  echo "  publish. Check the module cache is populated (go mod download) and re-run." >&2
+  exit 1
+fi
+
 DIRECT_ROWS=""
 INDIRECT_ROWS=""
 DIRECT_COUNT=0
@@ -118,26 +147,13 @@ while IFS= read -r line; do
   VER=$(echo "$line" | awk '{print $2}')
   [ -z "$MOD" ] && continue
 
-  # Skip test-only dependencies
-  case "$MOD" in
-    github.com/testcontainers/*|github.com/chromedp/*) continue ;;
-    github.com/docker/*|github.com/containerd/*|github.com/moby/*) continue ;;
-    github.com/opencontainers/*|github.com/distribution/*) continue ;;
-    github.com/cpuguy83/dockercfg*|github.com/mdelapenya/tlscert*) continue ;;
-    github.com/cenkalti/backoff*|github.com/magiconair/properties*) continue ;;
-    github.com/Azure/go-ansiterm*|github.com/Microsoft/go-winio*) continue ;;
-    github.com/klauspost/compress*|github.com/morikuni/aec*) continue ;;
-    github.com/shirou/gopsutil*|github.com/lufia/plan9stats*) continue ;;
-    github.com/power-devops/perfstat*|github.com/tklauser/*) continue ;;
-    github.com/yusufpapurcu/wmi*|github.com/go-ole/go-ole*) continue ;;
-    github.com/ebitengine/purego*) continue ;;
-    github.com/sirupsen/logrus*|github.com/stretchr/testify*) continue ;;
-    github.com/davecgh/go-spew*|github.com/pmezard/go-difflib*) continue ;;
-    github.com/gobwas/*|github.com/go-json-experiment/*) continue ;;
-    go.opentelemetry.io/*|github.com/grpc-ecosystem/*) continue ;;
-    google.golang.org/grpc*|google.golang.org/protobuf*) continue ;;
-    github.com/felixge/httpsnoop*) continue ;;
-    dario.cat/mergo*|gopkg.in/yaml.v3*) continue ;;
+  # A require no shipped package imports is a test-only dependency. The closure
+  # decides, so there is no list to keep in sync. Matched in-shell rather than
+  # through `printf | grep -q`, because grep -q closes the pipe on the first hit
+  # and under `set -o pipefail` the writer's SIGPIPE would fail the match.
+  case $'\n'"${GO_CLOSURE}"$'\n' in
+    *$'\n'"${MOD}"$'\n'*) ;;
+    *) continue ;;
   esac
 
   # Shorten a Go pseudo-version by dropping its timestamp segment:
@@ -180,6 +196,21 @@ while IFS= read -r line; do
     DIRECT_COUNT=$((DIRECT_COUNT + 1))
   fi
 done < go.mod
+
+# Every module the build links has to be a require in go.mod -- that is what the
+# module graph guarantees -- so the two row sets and the closure are the same
+# set counted twice. If they disagree, a linked module got no row and the
+# published table understates what ships; publishing it anyway would put the
+# flattering half of a known discrepancy in the README.
+if [ "$((DIRECT_COUNT + INDIRECT_COUNT))" -ne "$GO_CLOSURE_COUNT" ]; then
+  echo "ERROR: the build links ${GO_CLOSURE_COUNT} modules, go.mod yielded" \
+       "$((DIRECT_COUNT + INDIRECT_COUNT)) rows ($DIRECT_COUNT direct + $INDIRECT_COUNT transitive)." >&2
+  echo "  Modules linked but not listed in go.mod's require blocks:" >&2
+  comm -23 <(printf '%s\n' "$GO_CLOSURE" | sort -u) \
+           <(grep -oP '^\s+\K[^\s]+(?=\s+v)' go.mod | sort -u) >&2
+  echo "  Run 'go mod tidy' and re-run; a table missing a linked module understates the release." >&2
+  exit 1
+fi
 
 # ═══════════════════════════════════════════════════════════════
 # 5. Per-package coverage summary (derived from the profile, not from the
@@ -297,7 +328,9 @@ fi
 cat > docs/deps.md <<EOF
 # Dependencies
 
-${DIRECT_COUNT} direct dependencies. Everything else — TOTP, CORS, JWKS, config, migrations, password hashing — is stdlib or hand-written.
+${DIRECT_COUNT} direct dependencies, and ${INDIRECT_COUNT} more reached through them: ${GO_CLOSURE_COUNT} third-party modules linked into the binaries. Everything else -- TOTP, CORS, JWKS, config, migrations, password hashing -- is stdlib or hand-written.
+
+Both figures come from \`go list -deps ./...\`, which is what the build links, rather than from go.mod's require blocks, which also carry the test-only tree.
 
 ## Direct
 
@@ -344,14 +377,79 @@ fi
 
 FE_LINES="${VUE_LINES:-$(find web/src packages/vue/src \( -name '*.vue' -o -name '*.ts' \) -not -path '*__tests__*' -not -name '*.test.*' -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')}"
 FE_LOCALES="${VUE_LOCALES:-$(find web/src/locales -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')}"
-FE_DEPS=$(python3 -c "
+# Direct and transitive frontend dependencies, from one root set so the two
+# figures describe the same tree. The roots are unchanged: web's `dependencies`
+# plus the peers packages/vue asks a consumer for, minus @vault42/vue, which is
+# the workspace package itself rather than something it depends on.
+#
+# The closure is walked over pnpm-lock.yaml instead of shelling out to
+# `pnpm list --depth Infinity --prod`. pnpm list reads node_modules, so it would
+# make the dependency figures need an install -- and this script already has a
+# path that skips the frontend entirely (VUE_TESTS), which would then publish a
+# count with nothing installed to count. The lockfile is what pnpm resolves an
+# install from, so it describes the same tree without needing one.
+#
+# optionalDependencies are left out. They are the per-platform binaries (rollup,
+# esbuild), so including them would publish a different number depending on which
+# machine regenerated the badge.
+FE_DEP_COUNTS=$(python3 - <<'PY'
 import json
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.exit("PyYAML is missing; it is pinned in .github/requirements-lint.txt "
+             "(pip install pyyaml). The frontend dependency figures are read from "
+             "pnpm-lock.yaml and there is nothing to guess from.")
+
+lock = yaml.safe_load(open('pnpm-lock.yaml'))
 web = json.load(open('web/package.json'))
 vue = json.load(open('packages/vue/package.json'))
-deps = set(list(web.get('dependencies',{}).keys()) + list(vue.get('peerDependencies',{}).keys()))
-deps.discard('@vault42/vue')
-print(len(deps))
-")
+
+roots = set(web.get('dependencies', {})) | set(vue.get('peerDependencies', {}))
+roots.discard('@vault42/vue')
+
+importers = lock.get('importers', {})
+snapshots = lock.get('snapshots', {})
+
+# A root resolves to the lockfile id pnpm recorded for it, peer suffix included,
+# because that suffix is part of the snapshot key.
+root_ids = {}
+for importer in ('web', 'packages/vue'):
+    for section in ('dependencies', 'peerDependencies'):
+        for name, meta in (importers.get(importer, {}).get(section) or {}).items():
+            if name in roots:
+                root_ids[name] = '%s@%s' % (name, meta['version'])
+
+missing = sorted(roots - set(root_ids))
+if missing:
+    sys.exit('pnpm-lock.yaml resolves no version for %s; the lockfile is out of date '
+             'with the manifests (pnpm install --lockfile-only)' % ', '.join(missing))
+
+seen = set()
+stack = list(root_ids.values())
+while stack:
+    pkg_id = stack.pop()
+    if pkg_id in seen:
+        continue
+    seen.add(pkg_id)
+    for name, version in (snapshots.get(pkg_id, {}).get('dependencies') or {}).items():
+        stack.append('%s@%s' % (name, version))
+
+
+def installed(pkg_id):
+    """Drop the peer suffix: one package on disk, however many peer sets reach it."""
+    cut = pkg_id.find('(')
+    return pkg_id if cut < 0 else pkg_id[:cut]
+
+
+packages = {installed(pkg_id) for pkg_id in seen}
+print(len(root_ids), len(packages) - len(root_ids))
+PY
+)
+FE_DEPS=${FE_DEP_COUNTS%% *}
+FE_TRANSITIVE_DEPS=${FE_DEP_COUNTS##* }
 
 # Frontend coverage, combined across the two packages. vitest already writes a
 # json-summary for each; combining the raw counts rather than averaging the two
@@ -424,15 +522,83 @@ CS_LINES=$(find packages/dotnet/src \( -name '*.cs' -o -name '*.razor' \) \
 CS_DEPS=$(grep -rhoP '(?<=<PackageReference Include=")[^"]+' \
   packages/dotnet/src/*/*.csproj 2>/dev/null | sort -u | wc -l | tr -d ' ')
 
+# The transitive closure of the two published projects, from the restore graph
+# rather than the project files: NuGet is the only thing that knows what
+# Microsoft.AspNetCore.Components.Web drags in.
+#
+# CS_DEPS above stays the csproj count on purpose. `dotnet list package` also
+# reports the analyzers Directory.Build.props injects (StyleCop, Roslynator,
+# SonarAnalyzer, NetAnalyzers) as top-level, and those are build-time tools the
+# consumer never resolves; counting them would inflate the number the maintainer
+# is answerable for. They contribute nothing to the transitive set, so the two
+# figures do not overlap.
+CS_TRANSITIVE_DEPS="${DOTNET_TRANSITIVE_DEPS:-}"
+if [ -z "$CS_TRANSITIVE_DEPS" ]; then
+  for proj in packages/dotnet/src/*/*.csproj; do
+    dotnet list "$proj" package --include-transitive --format json >> "$CS_PKG_TMP" 2>/dev/null || true
+  done
+  CS_TRANSITIVE_DEPS=$(python3 - "$CS_PKG_TMP" <<'PY' || true
+import glob
+import json
+import re
+import sys
+
+raw = open(sys.argv[1]).read()
+decoder = json.JSONDecoder()
+reports = []
+at = 0
+while at < len(raw):
+    while at < len(raw) and raw[at].isspace():
+        at += 1
+    if at >= len(raw):
+        break
+    report, at = decoder.raw_decode(raw, at)
+    reports.append(report)
+
+if not reports:
+    sys.exit(1)
+
+direct = set()
+for path in glob.glob('packages/dotnet/src/*/*.csproj'):
+    direct.update(re.findall(r'<PackageReference Include="([^"]+)"', open(path).read()))
+
+transitive = set()
+for report in reports:
+    for project in report.get('projects') or []:
+        for framework in project.get('frameworks') or []:
+            for package in framework.get('transitivePackages') or []:
+                transitive.add(package['id'])
+
+print(len(transitive - direct))
+PY
+  )
+fi
+
+if [ -z "$CS_TRANSITIVE_DEPS" ]; then
+  echo "ERROR: 'dotnet list package --include-transitive' produced no restore graph." >&2
+  echo "  packages/dotnet/src/*/*.csproj have to restore before NuGet can say what they pull in," >&2
+  echo "  and a transitive count is not something to guess at. Run 'dotnet restore" >&2
+  echo "  packages/dotnet/Vault42.sln' and re-run, or pass DOTNET_TRANSITIVE_DEPS=<n> from a run" >&2
+  echo "  that did resolve." >&2
+  exit 1
+fi
+
 # ═══════════════════════════════════════════════════════════════
 # 9c. Generate docs/badges.json
 #
 # Written here rather than earlier because it now carries all three languages,
 # and two of them are not measured until the sections above have run. The
-# top-level keys are the Go ones and keep their old names and meanings: they
-# were the only language when the file was designed, and a consumer reading
-# `tests` should not silently start getting a different number.
+# top-level keys are the Go ones and keep their old names: they were the only
+# language when the file was designed, and a consumer reading `tests` should not
+# silently start getting a different number.
+#
+# `transitiveDeps` is the one that changed meaning, in 1.0.4. It used to be the
+# size of go.mod's indirect block after a hand-written skip list; it is now the
+# part of the linked module set that is not a direct require, which is what
+# docs/deps.md's transitive table has always claimed to list.
 # ═══════════════════════════════════════════════════════════════
+TOTAL_DEPS=$((DIRECT_COUNT + INDIRECT_COUNT + FE_DEPS + FE_TRANSITIVE_DEPS + CS_DEPS + CS_TRANSITIVE_DEPS))
+
 cat > docs/badges.json <<EOF
 {
   "schemaVersion": 1,
@@ -450,27 +616,31 @@ cat > docs/badges.json <<EOF
   "directDeps": ${DIRECT_COUNT},
   "transitiveDeps": ${INDIRECT_COUNT},
   "totalTests": $((PASSED + FE_TESTS + CS_TESTS)),
+  "totalDeps": ${TOTAL_DEPS},
   "languages": {
     "go": {
       "tests": ${PASSED},
       "coverage": "${REACHABLE_COV}% of reachable",
       "coverageNum": ${REACHABLE_COV},
       "lines": ${GO_LINES},
-      "deps": ${DIRECT_COUNT}
+      "deps": ${DIRECT_COUNT},
+      "transitiveDeps": ${INDIRECT_COUNT}
     },
     "vue": {
       "tests": ${FE_TESTS},
       "coverage": "${FE_COV}%",
       "coverageNum": ${FE_COV},
       "lines": ${FE_LINES},
-      "deps": ${FE_DEPS}
+      "deps": ${FE_DEPS},
+      "transitiveDeps": ${FE_TRANSITIVE_DEPS}
     },
     "csharp": {
       "tests": ${CS_TESTS},
       "coverage": "${CS_COV}%",
       "coverageNum": ${CS_COV},
       "lines": ${CS_LINES},
-      "deps": ${CS_DEPS}
+      "deps": ${CS_DEPS},
+      "transitiveDeps": ${CS_TRANSITIVE_DEPS}
     }
   }
 }
@@ -511,6 +681,12 @@ if [ -f README.md ]; then
   REG_STANDARDS=$(python3 -c "import json;print(len(json.load(open('docs/compliance-register.json'))['standards']))")
   REG_REQS=$(python3 -c "import json;print(len(json.load(open('docs/compliance-register.json'))['requirements']))")
 
+  # Two dependency rows, not one number. Deps is what go.mod, package.json and
+  # the csproj files declare -- the set the maintainer chose and can drop -- and
+  # Transitive is what those drag in, which is the set that has to be audited,
+  # patched and trusted. Publishing only the first understated the frontend by
+  # more than an order of magnitude, and that is the row a supply-chain question
+  # is really about.
   python3 -c "
 import re
 
@@ -540,7 +716,8 @@ table = f'''| Go | Vue | C# | |
 | ![Go Tests]({S}/Tests-${PASSED}-155724?style=flat&labelColor=000) | ![Vue Tests]({S}/Tests-${FE_TESTS}-155724?style=flat&labelColor=000) | ![C# Tests]({S}/Tests-${CS_TESTS}-155724?style=flat&labelColor=000) | ![Total]({S}/Total-${TOTAL_TESTS}_tests-155724?style=flat&labelColor=000) |
 | ![Go Coverage]({S}/Coverage-${COV_ENCODED}-{go_colour}?style=flat&labelColor=000) | ![Vue Coverage]({S}/Coverage-${FE_COV}%25-{vue_colour}?style=flat&labelColor=000) | ![C# Coverage]({S}/Coverage-${CS_COV}%25-{cs_colour}?style=flat&labelColor=000) | ![Locales]({S}/Locales-${FE_LOCALES}-555?style=flat&labelColor=000) |
 | ![Go Lines]({S}/Lines-${GO_LINES}-555?style=flat&labelColor=000) | ![Vue Lines]({S}/Lines-${FE_LINES}-555?style=flat&labelColor=000) | ![C# Lines]({S}/Lines-${CS_LINES}-555?style=flat&labelColor=000) | ![Standards]({S}/Standards-${REG_STANDARDS}-555?style=flat&labelColor=000) |
-| ![Go Deps]({S}/Deps-${DIRECT_COUNT}-555?style=flat&labelColor=000) | ![Vue Deps]({S}/Deps-${FE_DEPS}-555?style=flat&labelColor=000) | ![C# Deps]({S}/Deps-${CS_DEPS}-555?style=flat&labelColor=000) | ![Requirements]({S}/Requirements-${REG_REQS}-555?style=flat&labelColor=000) |'''
+| ![Go Deps]({S}/Deps-${DIRECT_COUNT}-555?style=flat&labelColor=000) | ![Vue Deps]({S}/Deps-${FE_DEPS}-555?style=flat&labelColor=000) | ![C# Deps]({S}/Deps-${CS_DEPS}-555?style=flat&labelColor=000) | ![Requirements]({S}/Requirements-${REG_REQS}-555?style=flat&labelColor=000) |
+| ![Go Transitive Deps]({S}/Transitive-${INDIRECT_COUNT}-555?style=flat&labelColor=000) | ![Vue Transitive Deps]({S}/Transitive-${FE_TRANSITIVE_DEPS}-555?style=flat&labelColor=000) | ![C# Transitive Deps]({S}/Transitive-${CS_TRANSITIVE_DEPS}-555?style=flat&labelColor=000) | ![Total Deps]({S}/Deps-${TOTAL_DEPS}_total-555?style=flat&labelColor=000) |'''
 
 text = re.sub(
     r'(<!-- badges -->\n).*?(\n<!-- /badges -->)',
@@ -556,4 +733,6 @@ with open('README.md', 'w') as f:
 fi
 
 echo "docs/badges.json + docs/deps.md updated: ${PASSED} Go (${REACHABLE_COV}% reachable) + "\
-     "${FE_TESTS} Vue (${FE_COV}%) + ${CS_TESTS} C# (${CS_COV}%) tests, ${DIRECT_COUNT}+${INDIRECT_COUNT} Go deps"
+     "${FE_TESTS} Vue (${FE_COV}%) + ${CS_TESTS} C# (${CS_COV}%) tests; deps "\
+     "${DIRECT_COUNT}+${INDIRECT_COUNT} Go, ${FE_DEPS}+${FE_TRANSITIVE_DEPS} Vue, "\
+     "${CS_DEPS}+${CS_TRANSITIVE_DEPS} C# (${TOTAL_DEPS} total)"

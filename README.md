@@ -1,6 +1,6 @@
 # Vault42
 
-Production-grade JWT authentication server written in Go, with an integrated Vue frontend, honeypot mode for threat observation, and only 3 direct production dependencies. JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
+Production-grade JWT authentication server written in Go, with an integrated Vue frontend, honeypot mode for threat observation, and 3 direct production dependencies -- 18 Go modules once everything those three pull in is counted. JWT, Redis, TOTP, CORS, JWKS, and migrations are all hand-rolled.
 
 Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It is not an OAuth2 authorization server and not an OIDC provider: there is no authorize endpoint, no consent screen, and no `redirect_uri` a third-party client registers against it.
 
@@ -10,8 +10,9 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 | ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.41-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat&logo=dotnet&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
 | ![Go Tests](https://img.shields.io/badge/Tests-4898-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Tests-1305-155724?style=flat&labelColor=000) | ![C# Tests](https://img.shields.io/badge/Tests-264-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6467_tests-155724?style=flat&labelColor=000) |
 | ![Go Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) | ![Vue Coverage](https://img.shields.io/badge/Coverage-99.76%25-155724?style=flat&labelColor=000) | ![C# Coverage](https://img.shields.io/badge/Coverage-100.00%25-155724?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Lines-48651-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6743-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2347-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-11-555?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Lines-48062-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6743-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2347-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-11-555?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![C# Deps](https://img.shields.io/badge/Deps-6-555?style=flat&labelColor=000) | ![Requirements](https://img.shields.io/badge/Requirements-456-555?style=flat&labelColor=000) |
+| ![Go Transitive Deps](https://img.shields.io/badge/Transitive-15-555?style=flat&labelColor=000) | ![Vue Transitive Deps](https://img.shields.io/badge/Transitive-95-555?style=flat&labelColor=000) | ![C# Transitive Deps](https://img.shields.io/badge/Transitive-26-555?style=flat&labelColor=000) | ![Total Deps](https://img.shields.io/badge/Deps-148_total-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
 ## Highlights
@@ -161,7 +162,7 @@ scripts/release-check.sh
 
 ## Dependencies
 
-3 direct production dependencies ([full table](docs/deps.md)):
+3 direct production dependencies, and 15 more the build links through them ([full table](docs/deps.md)):
 
 | Dependency | Purpose |
 |---|---|
@@ -170,6 +171,8 @@ scripts/release-check.sh
 | `x/crypto` | Argon2id hashing |
 
 Everything else (JWT, Redis, TOTP, CORS, JWKS, config, migrations, password hashing) is stdlib or hand-written.
+
+The badge table splits the same way for the frontend and the .NET SDKs. The Deps row is what each of them declares and can drop; the Transitive row is what those declarations resolve to, and it is the one a supply-chain question is really about. The transitive figures come from what each toolchain resolves rather than from a manifest: `go list -deps ./...`, the pnpm lockfile, and the NuGet restore graph. Go's direct count is filtered through the same build closure, so requires only the test suites import are not credited to the release.
 
 ## Testing
 
