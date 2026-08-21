@@ -25,6 +25,25 @@ executed, it says so.
 
 ---
 
+## 1.0.3 to 1.0.4
+
+**Chart.** Nothing to do. `spec.selector` is unchanged, as it has been in every released
+chart.
+
+**Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
+
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
+There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
+of step 1 is that you have one when something else goes wrong.
+
+**Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
+them; no request path, token, database or configuration behaviour differs from 1.0.3. The
+one thing an operator may notice is that `docs/deps.md` and the README badge figures now
+report numbers that differ slightly from 1.0.3's, because those were being counted wrongly --
+see the 1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).
+
+---
+
 ## 0.9.x to 1.0.0
 
 **Chart.** Nothing to do. The Deployment's `spec.selector` is unchanged from every released
@@ -36,9 +55,12 @@ if a future release ever does change it.
 was actually running needs no new key. An installation built from 0.9.9's `NOTES.txt`, which
 listed five of them, was already broken before the upgrade.
 
-**Schema.** v0.9.9 shipped 12 migrations; this release ships 39, so an upgrade applies 27 in
-one go (033 is deliberately absent — the runner sorts filenames and skips what is applied, so gaps
-are harmless). Take the backup first.
+**Schema.** v0.9.9 shipped 12 migrations and 1.0.0 shipped 39, so this upgrade applies 27 in
+one go (033 is deliberately absent -- the runner sorts filenames and skips what is applied, so
+gaps are harmless). Take the backup first.
+
+Still current if you are coming from 0.9.x: 1.0.1 through 1.0.4 added no migrations, so the
+count is the same 39 whichever of them you land on.
 
 **Every idle session is logged out once.** This release adds an inactivity timeout,
 `VAULT_INACTIVITY_TIMEOUT`, defaulting to `1h` — the figure NIST SP 800-63B-4 §2.2.3 gives

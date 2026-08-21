@@ -130,8 +130,9 @@ func prTitleActionTypes(t *testing.T, root string) []string {
 		t.Fatalf("%s: no `types: |` block in the pr-title job", commitlintWorkflow)
 	}
 
-	var out []string
-	for _, line := range strings.Split(after, "\n") {
+	lines := strings.Split(after, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
 		word := strings.TrimSpace(line)
 		// The block ends at the first line that is not an indented bare word.
 		if word == "" || !strings.HasPrefix(line, " ") || strings.ContainsAny(word, ":#-") {

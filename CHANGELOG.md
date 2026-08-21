@@ -171,6 +171,16 @@
 
 ### Documentation
 
+* **`docs/UPGRADING.md` still described the hop from v0.9.9.** It was written for 1.0.0 and
+  never touched again, so an operator on 1.0.3 opened it and read that their upgrade applies 27
+  migrations. It applies none. The gate that checks it -- `TestUpgradingDocMigrationCountsMatchTheTree` --
+  did not catch that for three releases because it compares against the most recent release tag
+  reachable from HEAD, and 1.0.0, 1.0.1 and 1.0.2 were all merged without one: v0.9.9 was
+  genuinely the last tag until v1.0.3 existed. The document now leads with the 1.0.3 to 1.0.4
+  hop, which changes no schema, no secret keys and no behaviour, and keeps the 0.9.x section
+  below it for anyone still making that jump, reworded so it describes 1.0.0 in the past tense
+  rather than claiming to be the current release.
+
 * **The README told you how to build Vault42 and never how to install it.** Three releases
   have published signed images, a signed Helm chart on `oci://ghcr.io/42-v/charts` and two SDKs
   on nuget.org, and the front page's first runnable command was `git clone` followed by
