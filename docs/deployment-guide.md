@@ -18,7 +18,7 @@ This guide covers deploying Vault42 on a Raspberry Pi 5 or similar ARM64 device 
 The automated setup script handles everything:
 
 ```bash
-VERSION=1.0.3
+VERSION=1.0.4
 
 # Download the release tarball and verify it before unpacking. See
 # ../SECURITY.md for the full signature-verification procedure.
@@ -135,7 +135,7 @@ the chart.
 microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
   -f charts/vault/values-embedded.yaml \
-  --set image.tag=1.0.3 \
+  --set image.tag=1.0.4 \
   --set secrets.existingSecret=vault42-secrets \
   --set origin=https://vault42.local
 ```

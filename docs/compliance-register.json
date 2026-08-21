@@ -2,7 +2,7 @@
   "$schema_version": "1",
   "meta": {
     "product": "vault42",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "assessment_date": "2026-08-20",
     "assessment_type": "self-assessment",
     "assessor": "vault42 maintainers",

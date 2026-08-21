@@ -233,7 +233,7 @@ the images carry SBOM and SLSA provenance attestations:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/42-v/vault42:1.0.3
+  ghcr.io/42-v/vault42:1.0.4
 ```
 
 Full instructions, covering all four artifact classes, are in
