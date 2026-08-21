@@ -286,7 +286,7 @@
       "requirement": "Verify that input is decoded or unescaped into a canonical form only once, it is only decoded when encoded data in that form is expected, and that this is done before processing the input further, for example it is not performed after input validation or sanitization.",
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:14"
+        "internal/sanitize/sanitize.go#func String(s string, maxLen int) string {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -306,7 +306,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:10"
+        "internal/sanitize/sanitize.go#var htmlReplacer = strings.NewReplacer(\"<\", \"&lt;\", \">\", \"&gt;\", \"\\\"\", \"&quot;\", \"'\", \"&#39;\")"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -326,8 +326,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/httputil/response.go:20",
-        "internal/middleware/security_headers.go:18"
+        "internal/httputil/response.go#// WriteError writes a JSON error response with the given status code and message.",
+        "internal/middleware/security_headers.go#apiCSP := \"default-src 'none'; frame-ancestors"
       ],
       "tests": [
         "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
@@ -347,8 +347,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:47",
-        "internal/sanitize/sanitize.go:61"
+        "internal/sanitize/sanitize.go#// path, and \"\" otherwise.",
+        "internal/sanitize/sanitize.go#if strings.Contains(path, \"\\\\\") || strings.Contains(path, \"://\") {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -369,7 +369,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/httputil/response.go:12"
+        "internal/httputil/response.go#func WriteJSON(w http.ResponseWriter, status int, data any) {"
       ],
       "tests": [
         "TestASVS_V16_5_1_ServerErrorsCarryNoInternalDetail"
@@ -390,7 +390,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:34"
+        "internal/repository/postgres/refresh_token.go#const insertRefreshRowSQL = `"
       ],
       "tests": [
         "TestOWASP_A05_2025_NoRequestDataIsConcatenatedIntoSQL",
@@ -483,7 +483,7 @@
       "requirement": "Verify that the application escapes special characters in regular expressions (typically using a backslash) to prevent them from being misinterpreted as metacharacters.",
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:30"
+        "internal/sanitize/sanitize.go#func Locale(locale string) string {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -503,9 +503,9 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/email/templates.go:249",
-        "internal/email/template_guard.go:182",
-        "internal/adminapi/email.go:277"
+        "internal/email/templates.go#func validateTemplate(data []byte) error {",
+        "internal/email/template_guard.go#// guardTemplate holds the no-exfiltration property over an operator-authored",
+        "internal/adminapi/email.go#if err := email.ValidateTemplateContent(req.Subject, req.HTMLContent); err != nil {"
       ],
       "tests": [],
       "notes": "Accepted risk CR-30. There is no WYSIWYG editor, but there is untrusted-shaped HTML input: an admin email template body arrives in an HTTP request and is stored. It is validated before storage (internal/adminapi/email.go:277) by internal/email/templates.go:249, which runs a source-text denylist as a first gate and then internal/email/template_guard.go:176, a two-canary differential render followed by an element and attribute allowlist over the rendered body. The allowlist is written for this codebase rather than taken from a well-known sanitisation library, which is the gap this row records: the requirement names the library, not the property. Before 2026-08-18 the denylist was the only stage and it did not hold the property its own comment claimed -- see CR-30.",
@@ -543,7 +543,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:14"
+        "internal/sanitize/sanitize.go#func String(s string, maxLen int) string {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -563,8 +563,8 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/email/templates.go:92",
-        "internal/email/template_guard.go:116"
+        "internal/email/templates.go#var unsafePattern = regexp.MustCompile(",
+        "internal/email/template_guard.go#const guardRootName = \"vault42-template-under-validation\""
       ],
       "tests": [
         "TestASVS_V1_3_4_SVGAndActiveContentAreRejectedInEmailTemplates"
@@ -585,7 +585,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:631"
+        "internal/config/config.go#// login is not a deployment, but a build that accepts a four-character"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -605,10 +605,10 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/outbound/outbound.go:122",
-        "internal/outbound/outbound.go:175",
-        "internal/oauth2/oidc.go:188",
-        "cmd/vault/main.go:630"
+        "internal/outbound/outbound.go#func (p *Policy) CheckDerived(issuer, field, endpoint string) error {",
+        "internal/outbound/outbound.go#func (p *Policy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {",
+        "internal/oauth2/oidc.go#if err := p.guard.CheckDerived(p.issuer, field, endpoint); err != nil {",
+        "cmd/vault/main.go#tokenSvc.UpdateSigningKey(activeKey, newKID)"
       ],
       "tests": [
         "TestASVS_V1_3_6_DiscoverySuppliedDestinationsAreCheckedAgainstAnAllowlist"
@@ -628,11 +628,11 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/email/branding.go:63",
-        "internal/email/branding.go:70",
-        "internal/email/branding.go:80",
-        "internal/service/email_overrides.go:70",
-        "internal/adminapi/email.go:277"
+        "internal/email/branding.go#func CompileOverride(ov TemplateOverride) (*CompiledOverride, error) {",
+        "internal/email/branding.go#if err := validateTemplate([]byte(ov.HTMLContent)); err != nil {",
+        "internal/email/branding.go#ht, err := template.New(\"html\").Funcs(safeFuncMap()).Parse(ov.HTMLContent)",
+        "internal/service/email_overrides.go#compiled, err := vaultemail.CompileOverride(vaultemail.TemplateOverride{",
+        "internal/adminapi/email.go#if err := email.ValidateTemplateContent(req.Subject, req.HTMLContent); err != nil {"
       ],
       "tests": [
         "TestASVS_V1_3_7_AdminTemplateOverridesAreValidatedBeforeCompilation"
@@ -702,7 +702,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:152"
+        "internal/sanitize/sanitize.go#addr, err := mail.ParseAddress(email)"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -722,7 +722,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "go.mod:3"
+        "go.mod#go 1.26.0"
       ],
       "tests": [
         "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned"
@@ -742,7 +742,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:420"
+        "internal/adminapi/handler.go#^\t\t\thttputil.WriteError(w, http.StatusNotFound, \"user_not_found\")"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -797,7 +797,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/response.go:24"
+        "internal/handler/response.go#dec.DisallowUnknownFields()"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -838,7 +838,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:105"
+        "internal/service/identity.go#func (d *IdentityData) Validate() error {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -880,8 +880,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:105",
-        "internal/sanitize/sanitize.go:30"
+        "internal/service/identity.go#func (d *IdentityData) Validate() error {",
+        "internal/sanitize/sanitize.go#func Locale(locale string) string {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -901,7 +901,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:143"
+        "internal/server/server.go#// Read from the environment here rather than from config.Config because the"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -921,7 +921,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:105"
+        "internal/service/identity.go#func (d *IdentityData) Validate() error {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -941,8 +941,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:820",
-        "internal/handler/oauth.go:253"
+        "internal/service/auth.go#set, err := s.cache.SetIfNotExists(ctx, \"challenge_used:\"+jti, \"1\", 5*time.Minute)",
+        "internal/handler/oauth.go#// Validate state parameter"
       ],
       "tests": [
         "TestASVS_V10_4_2_AuthorizationArtifactsAreSingleUse",
@@ -963,8 +963,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:1781",
-        "internal/handler/data_export.go:18"
+        "internal/service/auth.go#func (s *AuthService) doSendEmailOTP(ctx context.Context, userID, emailAddr, app string) error {",
+        "internal/handler/data_export.go#const maxExportAuditEvents = 1000"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -981,7 +981,7 @@
       "requirement": "Verify that transactions are being used at the business logic level such that either a business logic operation succeeds in its entirety or it is rolled back to the previous correct state.",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/audit.go:50",
+        "internal/repository/postgres/audit.go#^\t\t\tINSERT INTO audit.audit_log (id, timestamp,",
         "internal/service/erasure.go"
       ],
       "tests": [
@@ -1002,9 +1002,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:142",
-        "internal/service/auth.go:2498",
-        "internal/handler/oauth.go:675"
+        "internal/repository/postgres/refresh_token.go#// unit of work only because this transaction and this advisory lock make it one.",
+        "internal/service/auth.go#err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{",
+        "internal/handler/oauth.go#deviceID = h.authSvc.FindOrCreateDevice(r.Context(),"
       ],
       "tests": [
         "TestASVS_V2_3_4_ConcurrentSessionCapIsLocked",
@@ -1025,14 +1025,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:424",
-        "internal/middleware/ratelimit.go:266"
+        "internal/server/server.go#loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{",
+        "internal/middleware/ratelimit.go#local := &localRateLimiter{entries: make(map[string]*localRLEntry)}"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:424); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
+      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:479); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
     },
     {
       "standard": "OWASP ASVS",
@@ -1049,9 +1049,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:434",
-        "internal/handler/blob.go:221",
-        "internal/handler/blob.go:319"
+        "internal/handler/blob.go#func attachmentDisposition(w http.ResponseWriter, ref string) {",
+        "internal/handler/blob.go#in:(BlobHandler).DownloadNamed:w.Header().Set(\"X-Blob-Label\", sanitizeLabelForHeader(label))",
+        "internal/handler/blob.go#in:(BlobHandler).Download:w.WriteHeader(http.StatusOK)"
       ],
       "tests": [
         "TestASVS_V3_2_1_ABlobDownloadCarriesTheAttachmentDispositionType"
@@ -1188,9 +1188,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/cors.go:27",
-        "internal/middleware/cors.go:51",
-        "internal/middleware/cors.go:64"
+        "internal/middleware/cors.go#origins := make(map[string]bool)",
+        "internal/middleware/cors.go#} else if reqOrigin != \"\" && origins[reqOrigin] {",
+        "internal/middleware/cors.go#w.Header().Set(\"Access-Control-Allow-Credentials\", \"true\")"
       ],
       "tests": [
         "TestASVS_V3_4_2_CORSReflectsOnlyAllowlistedOrigins"
@@ -1210,14 +1210,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/security_headers.go:18",
-        "internal/middleware/security_headers.go:19"
+        "internal/middleware/security_headers.go#apiCSP := \"default-src 'none'; frame-ancestors",
+        "internal/middleware/security_headers.go#frontendCSP := \"default-src 'self'; frame-ancestors"
       ],
       "tests": [
         "TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims",
         "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
       ],
-      "notes": "Met: both Content-Security-Policy strings now declare the two directives this requirement names as the minimum. apiCSP is default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none' (internal/middleware/security_headers.go:18) and frontendCSP adds them to its allowlisted default-src 'self' policy (:19). Both matter because the two are chosen per request path, so a directive on one is a directive on some of the responses. base-uri has no fallback at all -- it is not a fetch directive -- so an injected <base> would re-point every relative URL while default-src 'self' reported itself satisfied. Carried as accepted risk CR-27 until the directives landed; TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims fired on the merge and required this row to move."
+      "notes": "Met: both Content-Security-Policy strings now declare the two directives this requirement names as the minimum. apiCSP is default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none' (internal/middleware/security_headers.go:30) and frontendCSP adds them to its allowlisted default-src 'self' policy (:31). Both matter because the two are chosen per request path, so a directive on one is a directive on some of the responses. base-uri has no fallback at all -- it is not a fetch directive -- so an injected <base> would re-point every relative URL while default-src 'self' reported itself satisfied. Carried as accepted risk CR-27 until the directives landed; TestASVS_V3_4_3_TheCSPMatchesWhatTheRegisterClaims fired on the merge and required this row to move."
     },
     {
       "standard": "OWASP ASVS",
@@ -1293,8 +1293,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/auth.go:121",
-        "internal/handler/auth.go:316"
+        "internal/handler/auth.go#// visible in the response, which is identical to the public one.",
+        "internal/handler/auth.go#in:(AuthHandler).VerifyEmail:WriteError(w, http.StatusInternalServerError, \"internal_error\")"
       ],
       "tests": [
         "TestASVS_V3_5_1_TheCookieAuthenticatedRouteIsProtectedBySameSiteStrict"
@@ -1316,8 +1316,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/cors.go:62",
-        "internal/middleware/cors.go:68"
+        "internal/middleware/cors.go#w.Header().Set(\"Access-Control-Allow-Headers\", \"Content-Type, Authorization, DPoP\")",
+        "internal/middleware/cors.go#if r.Method == http.MethodOptions {"
       ],
       "tests": [
         "TestASVS_V3_5_2_SensitiveFunctionalityAlwaysTriggersPreflight"
@@ -1337,8 +1337,8 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:504",
-        "internal/handler/auth.go:298"
+        "internal/server/server.go#// the pods stay in rotation, since a degraded cache still reports ready.",
+        "internal/handler/auth.go#func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {"
       ],
       "tests": [],
       "notes": "Accepted risk CR-28. GET /auth/verify-email mutates state: it marks an address verified. The requirement offers two ways out, a non-safe method or strict Sec-Fetch-* validation, and vault42 has neither. What bounds it is a single-use token consumed atomically, and the emailed-link pattern is the one docs/security.md AR-1 already covers. TestASVS_V3_5_3_StateChangingGETMatchesWhatTheRegisterClaims fails when either remedy lands. Previously Not Applicable, which is how this stayed invisible.",
@@ -1357,8 +1357,8 @@
       ],
       "status": "Accepted Risk",
       "evidence": [
-        "internal/server/server.go:889",
-        "charts/vault/templates/frontend.yaml:1"
+        "internal/server/server.go#// parseCORSOrigins splits a comma-separated CORS_ORIGINS string into a slice.",
+        "charts/vault/templates/frontend.yaml"
       ],
       "tests": [],
       "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:667 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
@@ -1411,8 +1411,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:126",
-        "internal/handler/oauth.go:172"
+        "internal/handler/oauth.go#authURL := provider.AuthURL(state, nonce, challenge)",
+        "internal/handler/oauth.go#// flowing into http.Redirect, closing the open-redirect taint path (gosec G710)."
       ],
       "tests": [
         "TestASVS_V3_7_2_EveryRedirectTargetIsServerControlled"
@@ -1433,7 +1433,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/httputil/response.go:12"
+        "internal/httputil/response.go#func WriteJSON(w http.ResponseWriter, status int, data any) {"
       ],
       "tests": [
         "TestASVS_V14_3_2_ResponsesCarryNoStore"
@@ -1450,7 +1450,7 @@
       "requirement": "Verify that only user-facing endpoints (intended for manual web-browser access) automatically redirect from HTTP to HTTPS, while other services or endpoints do not implement transparent redirects. This is to avoid a situation where a client is erroneously sending unencrypted HTTP requests, but since the requests are being automatically redirected to HTTPS, the leakage of sensitive data goes undiscovered.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/security_headers.go:17"
+        "internal/middleware/security_headers.go#// reports itself satisfied. object-src falls back to default-src only on CSP"
       ],
       "tests": [
         "TestOWASP_A02_2025_SecurityHeadersAreSetOnEveryResponse"
@@ -1467,7 +1467,7 @@
       "requirement": "Verify that any HTTP header field used by the application and set by an intermediary layer, such as a load balancer, a web proxy, or a backend-for-frontend service, cannot be overridden by the end-user. Example headers might include X-Real-IP, X-Forwarded-*, or X-User-ID.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:451"
+        "internal/middleware/ratelimit.go#if len(loadTrustedProxyCIDRs()) == 0 {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -1484,7 +1484,7 @@
       "requirement": "Verify that all application components (including load balancers, firewalls, and application servers) determine boundaries of incoming HTTP messages using the appropriate mechanism for the HTTP version to prevent HTTP request smuggling. In HTTP/1.x, if a Transfer-Encoding header field is present, the Content-Length header must be ignored per RFC 2616. When using HTTP/2 or HTTP/3, if a Content-Length header field is present, the receiver must ensure that it is consistent with the length of the DATA frames.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:227"
+        "internal/server/server.go#MaxHeaderBytes: 1 << 20, // 1 MB — prevents large-header DoS"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -1600,9 +1600,9 @@
       "requirement": "Verify that the documentation defines the permitted file types, expected file extensions, and maximum size (including unpacked size) for each upload feature. Additionally, ensure that the documentation specifies how files are made safe for end-users to download and process, such as how the application behaves when a malicious file is detected.",
       "status": "Met",
       "evidence": [
-        "docs/api.md:1577",
-        "docs/api.md:1691",
-        "internal/handler/blob.go:434"
+        "docs/api.md##### How stored objects are made safe to download",
+        "docs/api.md#| 400 | `blob_too_small` | Below minimum size (`VAULT_BLOB_MIN_SIZE`, disabled by default) |",
+        "internal/handler/blob.go#func attachmentDisposition(w http.ResponseWriter, ref string) {"
       ],
       "tests": [
         "TestASVS_V5_1_1_TheDocumentationSaysHowStoredObjectsAreMadeSafeToDownload"
@@ -1622,9 +1622,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:38",
-        "internal/handler/blob.go:143",
-        "internal/handler/servicedoc.go:142"
+        "internal/handler/blob.go#in:(BlobHandler).Upload:r.Body = http.MaxBytesReader(w, r.Body, int64(h.maxBlobSize)+1024)",
+        "internal/handler/blob.go#in:(BlobHandler).UploadNamed:r.Body = http.MaxBytesReader(w, r.Body, int64(h.maxBlobSize)+1024)",
+        "internal/handler/servicedoc.go#r.Body = http.MaxBytesReader(w, r.Body, int64(h.svc.MaxDocumentBytes())+1024)"
       ],
       "tests": [
         "TestASVS_V5_2_1_OversizedUploadsAreRefusedAtTheReader"
@@ -1644,7 +1644,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:376"
+        "internal/handler/blob.go#^\t\tdefault:"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
@@ -1665,9 +1665,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/blob.go:255",
-        "internal/service/blob.go:257",
-        "internal/service/blob.go:260"
+        "internal/service/blob.go#// The row a named upload would replace is LOADED, not deleted.",
+        "internal/service/blob.go#// It used to be deleted before the quota was read, so that a replacement",
+        "internal/service/blob.go#// oversized backup came back as \"409 quota_exceeded\" and the previous"
       ],
       "tests": [
         "TestASVS_V5_2_3_DecompressionIsBoundedAndFailsClosed"
@@ -1687,7 +1687,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/service/blob.go:111"
+        "internal/service/blob.go#func (s *BlobService) uploadInternal(ctx"
       ],
       "tests": [
         "TestASVS_V5_3_1_And_V5_4_3_StoredBytesTouchNoFilesystemAndReachNoOtherUser"
@@ -1711,9 +1711,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:134",
-        "internal/handler/blob.go:138",
-        "internal/handler/blob.go:376"
+        "internal/handler/blob.go#if utf8.RuneCountInString(name) > 255 {",
+        "internal/handler/blob.go#if !validRefName(name) {",
+        "internal/handler/blob.go#^\t\tdefault:"
       ],
       "tests": [
         "TestASVS_V5_3_2_CallerSuppliedBlobNamesAreStrictlyValidated"
@@ -1733,9 +1733,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:376",
-        "internal/handler/blob.go:409",
-        "internal/handler/blob.go:434"
+        "internal/handler/blob.go#^\t\tdefault:",
+        "internal/handler/blob.go#func contentDispositionFilename(ref string) string {",
+        "internal/handler/blob.go#func attachmentDisposition(w http.ResponseWriter, ref string) {"
       ],
       "tests": [
         "TestASVS_V5_4_1_ABlobDownloadSpecifiesAFilenameChosenByTheServer"
@@ -1752,9 +1752,9 @@
       "requirement": "Verify that file names served (e.g., in HTTP response header fields or email attachments) are encoded or sanitized (e.g., following RFC 6266) to preserve document structure and prevent injection attacks.",
       "status": "Met",
       "evidence": [
-        "internal/handler/blob.go:85",
-        "internal/handler/blob.go:223",
-        "internal/handler/blob.go:441"
+        "internal/handler/blob.go#label = strings.TrimSpace(label)",
+        "internal/handler/blob.go#in:(BlobHandler).DownloadNamed:w.WriteHeader(http.StatusOK)",
+        "internal/handler/blob.go#func sanitizeLabelForHeader(label string) string {"
       ],
       "tests": [
         "TestASVS_V5_4_2_ServedLabelsCannotForgeResponseHeaders"
@@ -1774,8 +1774,8 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/blob.go:297",
-        "internal/service/blob.go:142"
+        "internal/handler/blob.go#in:(BlobHandler).Download:WriteError(w, http.StatusInternalServerError, \"internal_error\")",
+        "internal/service/blob.go#// Pseudonym derives the key a user's blobs are stored under. It is the only"
       ],
       "tests": [
         "TestASVS_V5_3_1_And_V5_4_3_StoredBytesTouchNoFilesystemAndReachNoOtherUser"
@@ -1797,12 +1797,12 @@
       "status": "Met",
       "evidence": [
         "docs/spec.md",
-        "internal/server/server.go:424"
+        "internal/server/server.go#loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:424)."
+      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:479)."
     },
     {
       "standard": "OWASP ASVS",
@@ -1814,7 +1814,7 @@
       "requirement": "Verify that a list of context-specific words is documented in order to prevent their use in passwords. The list could include permutations of organization names, product names, system identifiers, project codenames, department or role names, and similar.",
       "status": "Met",
       "evidence": [
-        "internal/service/hibp.go:15"
+        "internal/service/hibp.go#// hibpMaxConcurrent caps in-flight calls to the HIBP API."
       ],
       "tests": [
         "TestNIST_HIBPBreachCheck"
@@ -1856,9 +1856,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:477",
-        "internal/config/config.go:772",
-        "internal/config/config.go:1006"
+        "internal/config/config.go#PasswordMinLength:   envInt(\"VAULT_PASSWORD_MIN_LENGTH\", 15),",
+        "internal/config/config.go#return fmt.Errorf(\"VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set\")",
+        "internal/config/config.go#const passwordMinLengthFloor = 15"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -1919,7 +1919,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/hibp.go:33"
+        "internal/service/hibp.go#type HIBPClient struct {"
       ],
       "tests": [
         "TestNIST_HIBPBreachCheck"
@@ -2057,7 +2057,7 @@
       "requirement": "Verify that the documented list of context specific words is used to prevent easy to guess passwords being created.",
       "status": "Met",
       "evidence": [
-        "internal/service/hibp.go:33"
+        "internal/service/hibp.go#type HIBPClient struct {"
       ],
       "tests": [
         "TestNIST_HIBPBreachCheck"
@@ -2077,7 +2077,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/hibp.go:33"
+        "internal/service/hibp.go#type HIBPClient struct {"
       ],
       "tests": [
         "TestNIST_HIBPBreachCheck"
@@ -2097,14 +2097,14 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:154",
-        "internal/server/server.go:424"
+        "internal/service/auth.go#// of the window, behind the same masked error a wrong password gets. A completed",
+        "internal/server/server.go#loginRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling"
       ],
-      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:424 constructs loginRL at Limit 5 over a 15-minute window)."
+      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:479 constructs loginRL at Limit 5 over a 15-minute window)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2119,9 +2119,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/auth.go:412",
-        "internal/adminapi/auth.go:452",
-        "seed.dev.json:17"
+        "internal/adminapi/auth.go#func EnsureFirstAdmin(",
+        "internal/adminapi/auth.go#passwordBytes, err := vaultcrypto.RandomBytes(32)",
+        "seed.dev.json#\"password\": \"DevPassword12345678!\","
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -2143,7 +2143,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:43"
+        "internal/service/mfa.go#// the canonical strings used to describe a completed factor."
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -2164,7 +2164,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:504",
+        "internal/server/server.go#// the pods stay in rotation, since a degraded cache still reports ready.",
         "docs/api.md"
       ],
       "tests": [
@@ -2206,7 +2206,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:43"
+        "internal/service/mfa.go#// the canonical strings used to describe a completed factor."
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy"
@@ -2245,8 +2245,8 @@
       "requirement": "Verify that valid users cannot be deduced from failed authentication challenges, such as by basing on error messages, HTTP response codes, or different response times. Registration and forgot password functionality must also have this protection.",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:676",
-        "internal/handler/auth.go:91"
+        "internal/service/auth.go#log.Printf(\"auth: failed to send %s email to %s: %v\", kind.label, maskEmail(emailAddr), err)",
+        "internal/handler/auth.go#if _, dummyErr := vaultcrypto.VerifyPassword(\"dummy\","
       ],
       "tests": [
         "TestNIST_DummyHashTimingProtection",
@@ -2267,7 +2267,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/auth.go:452",
+        "internal/adminapi/auth.go#passwordBytes, err := vaultcrypto.RandomBytes(32)",
         "internal/service/auth.go"
       ],
       "tests": [
@@ -2309,7 +2309,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:377"
+        "internal/handler/password.go#if match, _ := vaultcrypto.VerifyPassword(newPassword, entry.PasswordHash, h.pepper); match {"
       ],
       "tests": [
         "TestNIST_PasswordResetSingleUse",
@@ -2443,7 +2443,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/totp.go:77"
+        "internal/crypto/totp.go#q.Set(\"algorithm\", \"SHA1\")"
       ],
       "tests": [
         "TestNIST_MFA_TOTPValidPeriod",
@@ -2501,7 +2501,7 @@
       "requirement": "Verify that time-based one-time passwords (TOTPs) are checked based on a time source from a trusted service and not from an untrusted or client provided time.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/totp.go:89"
+        "internal/crypto/totp.go#mac := hmac.New(sha1.New, key)"
       ],
       "tests": [
         "TestNIST_MFA_TOTPDeterministicGeneration"
@@ -2540,7 +2540,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:820"
+        "internal/service/auth.go#set, err := s.cache.SetIfNotExists(ctx, \"challenge_used:\"+jti, \"1\", 5*time.Minute)"
       ],
       "tests": [
         "TestASVSAuth_V6_6_2_EmailOTPBoundToOriginalRequest"
@@ -2557,8 +2557,8 @@
       "requirement": "Verify that a code based out-of-band authentication mechanism is protected against brute force attacks by using rate limiting. Consider also using a code with at least 64 bits of entropy.",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:436",
-        "internal/server/server.go:573"
+        "internal/server/server.go#// DPoP middleware (RFC 9449) — only active when configured",
+        "internal/server/server.go#// rate-limit it like its siblings to avoid cache-fill eviction pressure"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2594,8 +2594,8 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "cmd/admin-gateway/main.go:251",
-        "cmd/admin-gateway/main.go:263"
+        "cmd/admin-gateway/main.go#erasureSvc.SetServiceDocs(postgres.NewServiceDocumentRepo(db))",
+        "cmd/admin-gateway/main.go#^\t} else {"
       ],
       "tests": [
         "TestASVS_V12_1_3_AdminGatewayRequiresAndVerifiesClientCerts"
@@ -2633,8 +2633,8 @@
       "requirement": "Verify that, if the application supports multiple identity providers (IdPs), the user's identity cannot be spoofed via another supported identity provider (eg. by using the same user identifier). The standard mitigation would be for the application to register and identify the user using a combination of the IdP ID (serving as a namespace) and the user's ID in the IdP.",
       "status": "Met",
       "evidence": [
-        "internal/seed/seed.go:75",
-        "internal/handler/oauth.go:288"
+        "migrations/001_initial_schema.sql#UNIQUE(provider, provider_user_id)",
+        "internal/handler/oauth.go#csrfCookie, cookieErr := r.Cookie(oauthStateCookie)"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -2651,7 +2651,7 @@
       "requirement": "Verify that the presence and integrity of digital signatures on authentication assertions (for example on JWTs or SAML assertions) are always validated, rejecting any assertions that are unsigned or have invalid signatures.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:69"
+        "internal/oauth2/oidc_idtoken.go#// Every failure path returns a nil profile: there is no partial result a"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID",
@@ -2685,9 +2685,9 @@
       "requirement": "Verify that, if an application uses a separate Identity Provider (IdP) and expects specific authentication strength, methods, or recentness for specific functions, the application verifies this using the information returned by the IdP. For example, if OIDC is used, this might be achieved by validating ID Token claims such as 'acr', 'amr', and 'auth_time' (if present). If the IdP does not provide this information, the application must have a documented fallback approach that assumes that the minimum strength authentication mechanism was used (for example, single-factor authentication using username and password).",
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:104",
-        "internal/handler/oauth.go:601",
-        "internal/handler/oauth.go:649"
+        "internal/service/mfa.go#// It used to return AAL3 for user-verified WebAuthn, and that level was rendered",
+        "internal/handler/oauth.go#// does not claim a memorized secret vault42 never verified.",
+        "internal/handler/oauth.go#\"\", fp, \"\", false,"
       ],
       "tests": [
         "TestASVS_V6_8_4_FederatedLoginAssumesTheMinimumAuthenticationStrength"
@@ -2705,8 +2705,8 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:598",
-        "internal/service/auth.go:2407"
+        "internal/config/config.go#return nil, fmt.Errorf(\"VAULT_EMBEDDED_TRUSTED_UPSTREAM",
+        "internal/service/auth.go#func (s *AuthService) enforceSessionInactivity(ctx"
       ],
       "tests": [
         "TestASVS_V7_1_1_TheDocumentedTimeoutsAreTheEnforcedOnes"
@@ -2724,7 +2724,7 @@
       "status": "Met",
       "evidence": [
         "docs/config.md",
-        "internal/config/config.go:109"
+        "internal/config/config.go#AccessTokenTTL time.Duration"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -2759,7 +2759,7 @@
       "requirement": "Verify that the application performs all session token verification using a trusted, backend service.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:113"
+        "internal/middleware/auth.go#httputil.WriteBearerError(w, http.StatusUnauthorized, \"invalid_authorization\","
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -2779,7 +2779,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:78"
+        "internal/service/token.go#// NewTokenService creates a new token service."
       ],
       "tests": [
         "TestASVS_V3_2_1_NewTokenPerAuthentication"
@@ -2821,7 +2821,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:757"
+        "internal/service/auth.go#// the refresh credential travels in a Set-Cookie header, and a wire type that"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated",
@@ -2842,8 +2842,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:2407",
-        "internal/service/auth.go:1378"
+        "internal/service/auth.go#func (s *AuthService) enforceSessionInactivity(ctx",
+        "internal/service/auth.go#if err := s.enforceSessionInactivity(ctx, stored, ip, ua); err != nil {"
       ],
       "tests": [
         "TestASVS_V7_3_1_AnIdleSessionCannotRotateAndAnActiveOneCan"
@@ -2863,9 +2863,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:290",
-        "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:430"
+        "internal/service/token.go#pair, err := s.IssueTokenPairWithAuth(ctx,",
+        "migrations/013_session_lifetime.sql#ALTER TABLE auth.refresh_tokens ADD COLUMN family_created_at TIMESTAMPTZ;",
+        "cmd/vault/main.go#tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)"
       ],
       "tests": [
         "TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented",
@@ -2886,7 +2886,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:91"
+        "internal/repository/postgres/refresh_token.go#func (r *RefreshTokenRepo) RevokeFamily(ctx context.Context, familyID string) error {"
       ],
       "tests": [
         "TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily",
@@ -2905,7 +2905,7 @@
       "status": "Met",
       "evidence": [
         "internal/service/erasure.go",
-        "internal/service/auth.go:854"
+        "internal/service/auth.go#// unauthenticated caller the address is registered. Rotating the probe IP"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure"
@@ -2925,8 +2925,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:377",
-        "internal/handler/webauthn.go:265"
+        "internal/handler/password.go#if match, _ := vaultcrypto.VerifyPassword(newPassword, entry.PasswordHash, h.pepper); match {",
+        "internal/handler/webauthn.go#WriteJSON(w, http.StatusOK, StatusResponse{Status: \"webauthn_registered\"})"
       ],
       "tests": [
         "TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily"
@@ -2943,7 +2943,7 @@
       "requirement": "Verify that all pages that require authentication have easy and visible access to logout functionality.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/server/server.go:598"
+        "internal/server/server.go#mux.Handle(\"POST /auth/logout\", authed(authHandler.Logout))"
       ],
       "tests": [],
       "notes": "Logout is an API endpoint, POST /auth/logout. Whether a page offers easy and visible access to it is decided by the client that renders the page, which is web/src and is assessed separately under the declared scope.",
@@ -2959,7 +2959,7 @@
       "requirement": "Verify that application administrators are able to terminate active sessions for an individual user or for all users.",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:554",
+        "internal/adminapi/handler.go#func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {",
         "internal/adminapi/router.go"
       ],
       "tests": [
@@ -2980,7 +2980,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:387"
+        "internal/server/server.go#in:(Server).setupRoutes:if err != nil {"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -3000,8 +3000,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/user.go:125",
-        "internal/handler/user.go:238"
+        "internal/handler/user.go#in:(UserHandler).UpdateProfile:if err := decodeJSON(r, &req); err != nil {",
+        "internal/handler/user.go#in:(UserHandler).RevokeSession:if claims == nil {"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3023,7 +3023,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-22",
       "evidence": [
-        "internal/handler/oauth.go:650",
+        "internal/handler/oauth.go#service.NewAuthContext(authTime, []string{service.MethodFederated}, false),",
         "internal/oauth2/oidc_idtoken.go"
       ],
       "tests": [
@@ -3041,7 +3041,7 @@
       "requirement": "Verify that creation of a session requires either the user's consent or an explicit action, preventing the creation of new application sessions without user interaction.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:105"
+        "internal/handler/oauth.go#statePayload := fmt.Sprintf(\"%s.%s.%s.%s\", providerName, nonce, expiry, csrfHash)"
       ],
       "tests": [
         "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
@@ -3058,7 +3058,7 @@
       "requirement": "Verify that authorization documentation defines rules for restricting function-level and data-specific access based on consumer permissions and resource attributes.",
       "status": "Met",
       "evidence": [
-        "internal/rbac/rbac.go:9",
+        "internal/rbac/rbac.go#// everything irreversible or privilege-granting. Each [Permission] constant",
         "docs/admin-gateway.md"
       ],
       "tests": [
@@ -3076,8 +3076,8 @@
       "requirement": "Verify that authorization documentation defines rules for field-level access restrictions (both read and write) based on consumer permissions and resource attributes. Note that these rules might depend on other attribute values of the relevant data object, such as state or status.",
       "status": "Met",
       "evidence": [
-        "internal/model/model.go:186",
-        "internal/adminapi/handler.go:534"
+        "internal/model/model.go#// Payload is the hybrid-asymmetric ciphertext of the recoverable profile.",
+        "internal/adminapi/handler.go#// RevokeAllSessions handles POST /admin/sessions/revoke-all."
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
@@ -3098,8 +3098,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/router.go:149",
-        "internal/adminapi/middleware.go:189"
+        "internal/adminapi/router.go#mux.Handle(\"GET /admin/static/\", http.HandlerFunc(frontend.ServeStatic))",
+        "internal/adminapi/middleware.go#if err != nil || admin == nil {"
       ],
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer",
@@ -3122,8 +3122,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:178",
-        "internal/service/blob.go:67"
+        "internal/service/identity.go#return vaultcrypto.HMACSign([]byte(userID+\":identity\"), s.hmacSecret)",
+        "internal/service/blob.go#_, _ = h.Write([]byte(pseudonym))"
       ],
       "tests": [
         "TestASVSAuth_V8_2_2_BlobAccessDeniedWithoutPermission"
@@ -3141,7 +3141,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/response_types.go",
-        "internal/adminapi/handler.go:193"
+        "internal/adminapi/handler.go#type userSummary struct {"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
@@ -3164,7 +3164,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/auth.go",
-        "internal/adminapi/middleware.go:189"
+        "internal/adminapi/middleware.go#if err != nil || admin == nil {"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated",
@@ -3182,8 +3182,8 @@
       "requirement": "Verify that multi-tenant applications use cross-tenant controls to ensure consumer operations will never affect tenants with which they do not have permissions to interact.",
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:178",
-        "internal/repository/postgres/servicedoc.go:142"
+        "internal/service/identity.go#return vaultcrypto.HMACSign([]byte(userID+\":identity\"), s.hmacSecret)",
+        "internal/repository/postgres/servicedoc.go#in:(ServiceDocumentRepo).Get:WHERE client_id = $1 AND subject_hash = $2 AND doc_key = $3`,"
       ],
       "tests": [
         "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest"
@@ -3203,7 +3203,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/jwt/parse.go:183"
+        "internal/jwt/parse.go#pubKey, ok := key.(*rsa.PublicKey)"
       ],
       "tests": [
         "TestASVS_V9_1_1_TokenSizeIsBoundedBeforeParsing",
@@ -3221,8 +3221,8 @@
       "requirement": "Verify that only algorithms on an allowlist can be used to create and verify self-contained tokens, for a given context. The allowlist must include the permitted algorithms, ideally only either symmetric or asymmetric algorithms, and must not include the 'None' algorithm. If both symmetric and asymmetric must be supported, additional controls will be needed to prevent key confusion.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:25",
-        "internal/jwt/parse.go:199"
+        "internal/crypto/jwt.go#const AllowedAlgorithm = \"RS256\"",
+        "internal/jwt/parse.go#return token, fmt.Errorf(\"%w: unsupported algorithm %q\", ErrTokenUnverifiable, alg)"
       ],
       "tests": [
         "TestASVS_V9_1_2_TokenAlgorithmAllowlistExcludesNoneAndHMAC",
@@ -3240,8 +3240,8 @@
       "requirement": "Verify that key material that is used to validate self-contained tokens is from trusted pre-configured sources for the token issuer, preventing attackers from specifying untrusted sources and keys. For JWTs and other JWS structures, headers such as 'jku', 'x5u', and 'jwk' must be validated against an allowlist of trusted sources.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:111",
-        "internal/crypto/jwt.go:124"
+        "internal/crypto/jwt.go#// Format: first 16 hex chars of SHA-256 over the PKIX DER encoding, split as",
+        "internal/crypto/jwt.go#// keystore keep the id they were filed under and the JWKS keeps publishing it."
       ],
       "tests": [
         "TestASVS_V9_1_3_KeySourceHeadersAreRejected",
@@ -3259,7 +3259,7 @@
       "requirement": "Verify that, if a validity time span is present in the token data, the token and its content are accepted only if the verification time is within this validity time span. For example, for JWTs, the claims 'nbf' and 'exp' must be verified.",
       "status": "Met",
       "evidence": [
-        "internal/jwt/validate.go:31"
+        "internal/jwt/validate.go#var errs []error"
       ],
       "tests": [
         "TestASVS_V9_2_1_ValidityWindowClaimsAreVerified",
@@ -3277,8 +3277,8 @@
       "requirement": "Verify that the service receiving a token validates the token to be the correct type and is meant for the intended purpose before accepting the token's contents. For example, only access tokens can be accepted for authorization decisions and only ID Tokens can be used for proving user authentication.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:28",
-        "internal/oauth2/oidc_idtoken.go:69"
+        "internal/crypto/jwt.go#type VaultClaims struct {",
+        "internal/oauth2/oidc_idtoken.go#// Every failure path returns a nil profile: there is no partial result a"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3295,7 +3295,7 @@
       "requirement": "Verify that the service only accepts tokens which are intended for use with that service (audience). For JWTs, this can be achieved by validating the 'aud' claim against an allowlist defined in the service.",
       "status": "Met",
       "evidence": [
-        "internal/jwt/validate.go:57"
+        "internal/jwt/validate.go#// Check iss"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound",
@@ -3313,7 +3313,7 @@
       "requirement": "Verify that, if a token issuer uses the same private key for issuing tokens to different audiences, the issued tokens contain an audience restriction that uniquely identifies the intended audiences. This will prevent a token from being reused with an unintended audience. If the audience identifier is dynamically provisioned, the token issuer must validate these audiences in order to make sure that they do not result in audience impersonation.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:78"
+        "internal/service/token.go#// NewTokenService creates a new token service."
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3330,8 +3330,8 @@
       "requirement": "Verify that tokens are only sent to components that strictly need them. For example, when using a backend-for-frontend pattern for browser-based JavaScript applications, access and refresh tokens shall only be accessible for the backend.",
       "status": "Met",
       "evidence": [
-        "internal/handler/auth.go:294",
-        "internal/handler/oauth.go:516"
+        "internal/handler/auth.go#WriteJSON(w, http.StatusOK, StatusResponse{Status: \"logged_out\"})",
+        "internal/handler/oauth.go#WriteError(w, http.StatusForbidden, \"account_unavailable\")"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath"
@@ -3348,7 +3348,7 @@
       "requirement": "Verify that the client only accepts values from the authorization server (such as the authorization code or ID Token) if these values result from an authorization flow that was initiated by the same user agent session and transaction. This requires that client-generated secrets, such as the proof key for code exchange (PKCE) 'code_verifier', 'state' or OIDC 'nonce', are not guessable, are specific to the transaction, and are securely bound to both the client and the user agent session in which the transaction was started.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:240"
+        "internal/handler/oauth.go#_, ok := h.providers[providerName]"
       ],
       "tests": [
         "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
@@ -3365,8 +3365,8 @@
       "requirement": "Verify that, if the code flow is used, the OAuth client has protection against browser-based request forgery attacks, commonly known as cross-site request forgery (CSRF), which trigger token requests, either by using proof key for code exchange (PKCE) functionality or checking the 'state' parameter that was sent in the authorization request.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:105",
-        "internal/handler/oauth.go:219"
+        "internal/handler/oauth.go#statePayload := fmt.Sprintf(\"%s.%s.%s.%s\", providerName, nonce, expiry, csrfHash)",
+        "internal/handler/oauth.go#return \"\""
       ],
       "tests": [
         "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
@@ -3383,7 +3383,7 @@
       "requirement": "Verify that, if the OAuth client can interact with more than one authorization server, it has a defense against mix-up attacks. For example, it could require that the authorization server return the 'iss' parameter value and validate it in the authorization response and the token response.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:226"
+        "internal/handler/oauth.go#func logRefusedLink(providerName string, userInfo *oauth2.UserInfo, existing *model.User) {"
       ],
       "tests": [
         "TestASVS_V10_2_1_StateIsIntegrityProtectedAndSessionBound"
@@ -3400,7 +3400,7 @@
       "requirement": "Verify that the resource server only accepts access tokens that are intended for use with that service (audience). The audience may be included in a structured access token (such as the 'aud' claim in JWT), or it can be checked using the token introspection endpoint.",
       "status": "Met",
       "evidence": [
-        "internal/jwt/validate.go:57"
+        "internal/jwt/validate.go#// Check iss"
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3418,7 +3418,7 @@
       "status": "Met",
       "evidence": [
         "internal/middleware/auth.go",
-        "internal/crypto/jwt.go:28"
+        "internal/crypto/jwt.go#type VaultClaims struct {"
       ],
       "tests": [
         "TestASVS_V4_1_1_RequireScopeEnforcesExactScope"
@@ -3435,7 +3435,7 @@
       "requirement": "Verify that if an access control decision requires identifying a unique user from an access token (JWT or related token introspection response), the resource server identifies the user from claims that cannot be reassigned to other users. Typically, it means using a combination of 'iss' and 'sub' claims.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:78"
+        "internal/service/token.go#// NewTokenService creates a new token service."
       ],
       "tests": [
         "TestASVS_V9_2_3_IssuerAndAudienceAreBound"
@@ -3452,9 +3452,9 @@
       "requirement": "Verify that, if the resource server requires specific authentication strength, methods, or recentness, it verifies that the presented access token satisfies these constraints. For example, if present, using the OIDC 'acr', 'amr' and 'auth_time' claims respectively.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:257",
-        "internal/server/server.go:686",
-        "internal/crypto/jwt.go:47"
+        "internal/middleware/auth.go#func Confirmed(c cache.Cache) func(http.Handler) http.Handler {",
+        "internal/server/server.go#mux.Handle(\"GET /user/identity\", identityReadRL(authed(identityHandler.Get)))",
+        "internal/crypto/jwt.go#ACR string `json:\"acr,omitempty\"`"
       ],
       "tests": [
         "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
@@ -3471,8 +3471,8 @@
       "requirement": "Verify that the authorization server validates redirect URIs based on a client-specific allowlist of pre-registered URIs using exact string comparison.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/oauth.go:68",
-        "internal/handler/oauth.go:126"
+        "internal/handler/oauth.go#// Authorize handles GET /auth/oauth2/authorize.",
+        "internal/handler/oauth.go#authURL := provider.AuthURL(state, nonce, challenge)"
       ],
       "tests": [
         "TestASVS_V3_7_2_EveryRedirectTargetIsServerControlled"
@@ -3490,7 +3490,7 @@
       "requirement": "Verify that, if the authorization server returns the authorization code in the authorization response, it can be used only once for a token request. For the second valid request with an authorization code that has already been used to issue an access token, the authorization server must reject a token request and revoke any issued tokens related to the authorization code.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:538"
+        "internal/handler/oauth.go#data, err := h.cache.GetAndDelete(r.Context(), \"oauth_code:\"+codeHash+\":\"+fp)"
       ],
       "tests": [
         "TestASVS_V10_4_2_AuthorizationArtifactsAreSingleUse"
@@ -3507,7 +3507,7 @@
       "requirement": "Verify that the authorization code is short-lived. The maximum lifetime can be up to 10 minutes for L1 and L2 applications and up to 1 minute for L3 applications.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:496"
+        "internal/handler/oauth.go#// is true here) and needs no verification mail."
       ],
       "tests": [
         "TestASVS_V10_4_2_AuthorizationArtifactsAreSingleUse"
@@ -3524,8 +3524,8 @@
       "requirement": "Verify that for a given client, the authorization server only allows the usage of grants that this client needs to use. Note that the grants 'token' (Implicit flow) and 'password' (Resource Owner Password Credentials flow) must no longer be used.",
       "status": "Met",
       "evidence": [
-        "internal/handler/client.go:29",
-        "internal/handler/wellknown.go:73"
+        "internal/handler/client.go#// record. The id is attacker-controlled on the unknown-client path, and an",
+        "internal/handler/wellknown.go#// grant_types_supported and token_endpoint_auth_methods_supported can be added"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3542,8 +3542,8 @@
       "requirement": "Verify that the authorization server mitigates refresh token replay attacks for public clients, preferably using sender-constrained refresh tokens, i.e., Demonstrating Proof of Possession (DPoP) or Certificate-Bound Access Tokens using mutual TLS (mTLS). For L1 and L2 applications, refresh token rotation may be used. If refresh token rotation is used, the authorization server must invalidate the refresh token after usage, and revoke all refresh tokens for that authorization if an already used and invalidated refresh token is provided.",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:64",
-        "internal/service/auth.go:757"
+        "internal/repository/postgres/refresh_token.go#// column is therefore not taken from the caller — it is read back from the family",
+        "internal/service/auth.go#// the refresh credential travels in a Set-Cookie header, and a wire type that"
       ],
       "tests": [
         "TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet",
@@ -3562,8 +3562,8 @@
       "requirement": "Verify that, if the code grant is used, the authorization server mitigates authorization code interception attacks by requiring proof key for code exchange (PKCE). For authorization requests, the authorization server must require a valid 'code_challenge' value and must not accept a 'code_challenge_method' value of 'plain'. For a token request, it must require validation of the 'code_verifier' parameter.",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:83",
-        "internal/oauth2/oidc.go:180"
+        "internal/handler/oauth.go#challenge := vaultcrypto.SHA256Base64URL(verifier)",
+        "internal/oauth2/oidc.go#\"jwks_uri\":               doc.JWKSURI,"
       ],
       "tests": [
         "TestASVS_V10_4_6_EveryProviderSendsAnS256Challenge",
@@ -3597,9 +3597,9 @@
       "requirement": "Verify that refresh tokens have an absolute expiration, including if sliding refresh token expiration is applied.",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:290",
-        "migrations/013_session_lifetime.sql:35",
-        "cmd/vault/main.go:430"
+        "internal/service/token.go#pair, err := s.IssueTokenPairWithAuth(ctx,",
+        "migrations/013_session_lifetime.sql#ALTER TABLE auth.refresh_tokens ADD COLUMN family_created_at TIMESTAMPTZ;",
+        "cmd/vault/main.go#tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)"
       ],
       "tests": [
         "TestASVS_V10_4_8_TheAbsoluteFamilyDeadlineIsSchemaBackedAndClamped",
@@ -3620,7 +3620,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/user.go:238"
+        "internal/handler/user.go#in:(UserHandler).RevokeSession:if claims == nil {"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3637,8 +3637,8 @@
       "requirement": "Verify that confidential client is authenticated for client-to-authorized server backchannel requests such as token requests, pushed authorization requests (PAR), and token revocation requests.",
       "status": "Met",
       "evidence": [
-        "internal/handler/client.go:60",
-        "internal/handler/client.go:112"
+        "internal/handler/client.go#clientID = clientID[:clientAuthFailureIDLimit]",
+        "internal/handler/client.go#func parseClientCredentials(r *http.Request) (clientID, clientSecret string, ok bool) {"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3655,7 +3655,7 @@
       "requirement": "Verify that the authorization server configuration only assigns the required scopes to the OAuth client.",
       "status": "Met",
       "evidence": [
-        "internal/handler/client.go:77"
+        "internal/handler/client.go#grantedScopes := intersectScopes(requestedScopes, client.Scopes)"
       ],
       "tests": [
         "TestASVS_V4_1_1_RequireScopeEnforcesExactScope"
@@ -3672,7 +3672,7 @@
       "requirement": "Verify that the client (as the relying party) mitigates ID Token replay attacks. For example, by ensuring that the 'nonce' claim in the ID Token matches the 'nonce' value sent in the authentication request to the OpenID Provider (in OAuth2 refereed to as the authorization request sent to the authorization server).",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:95"
+        "internal/oauth2/oidc_idtoken.go#if _, ok := t.Header[\"crit\"]; ok {"
       ],
       "tests": [
         "TestASVS_V10_5_1_EmptyExpectedNonceFailsClosed"
@@ -3689,7 +3689,7 @@
       "requirement": "Verify that the client uniquely identifies the user from ID Token claims, usually the 'sub' claim, which cannot be reassigned to other users (for the scope of an identity provider).",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:288"
+        "internal/handler/oauth.go#csrfCookie, cookieErr := r.Cookie(oauthStateCookie)"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -3706,7 +3706,7 @@
       "requirement": "Verify that the client rejects attempts by a malicious authorization server to impersonate another authorization server through authorization server metadata. The client must reject authorization server metadata if the issuer URL in the authorization server metadata does not exactly match the pre-configured issuer URL expected by the client.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:156"
+        "internal/oauth2/oidc.go#if strings.TrimRight(doc.Issuer, \"/\") != p.issuer {"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -3723,7 +3723,7 @@
       "requirement": "Verify that the client validates that the ID Token is intended to be used for that client (audience) by checking that the 'aud' claim from the token is equal to the 'client_id' value for the client.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:85"
+        "internal/oauth2/oidc_idtoken.go#if _, ok := t.Header[h]; ok {"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID"
@@ -3756,8 +3756,8 @@
       "requirement": "Verify that the OpenID Provider only allows values 'code', 'ciba', 'id_token', or 'id_token code' for response mode. Note that 'code' is preferred over 'id_token code' (the OIDC Hybrid flow), and 'token' (any Implicit flow) must not be used.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/wellknown.go:55",
-        "internal/handler/wellknown.go:78"
+        "internal/handler/wellknown.go#// OpenIDConfig handles GET /.well-known/openid-configuration.",
+        "internal/handler/wellknown.go#discovery := map[string]interface{}{"
       ],
       "tests": [
         "TestASVS_AbsentEndpointsAreActuallyAbsent"
@@ -3791,7 +3791,7 @@
       "requirement": "Verify that the authorization server ensures that the user consents to each authorization request. If the identity of the client cannot be assured, the authorization server must always explicitly prompt the user for consent.",
       "status": "Not Applicable",
       "evidence": [
-        "internal/adminapi/router.go:1"
+        "internal/adminapi/router.go"
       ],
       "tests": [],
       "notes": "This requirement addresses an authorization server mediating delegation to a third party. vault42's clients are first-party and operator-provisioned through the admin plane, so the end user is never asked to delegate access to a party the operator did not install. Consent for data processing, which is a different question, is covered by the GDPR Art. 6 and Art. 7 rows.",
@@ -3823,7 +3823,7 @@
       "requirement": "Verify that the user can review, modify, and revoke consents which the user has granted through the authorization server.",
       "status": "Met",
       "evidence": [
-        "internal/handler/user.go:238"
+        "internal/handler/user.go#in:(UserHandler).RevokeSession:if claims == nil {"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -3844,7 +3844,7 @@
       "status": "Met",
       "evidence": [
         "docs/security.md",
-        "internal/keystore/keystore.go:47"
+        "internal/keystore/keystore.go#in:KeyRecord:Algorithm string"
       ],
       "tests": [
         "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest"
@@ -3865,7 +3865,7 @@
       "status": "Met",
       "evidence": [
         "docs/security.md",
-        "internal/crypto/aes.go:1"
+        "internal/crypto/aes.go"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured"
@@ -3885,7 +3885,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:20"
+        "internal/crypto/aes.go#func Encrypt(plaintext, key []byte, aad ...[]byte) ([]byte, error) {"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured"
@@ -3906,8 +3906,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/keystore/keystore.go:204",
-        "internal/crypto/jwt.go:25"
+        "internal/keystore/keystore.go#// encrypted under all zeros and lost for good.",
+        "internal/crypto/jwt.go#const AllowedAlgorithm = \"RS256\""
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured"
@@ -3924,8 +3924,8 @@
       "requirement": "Verify that all cryptographic primitives utilize a minimum of 128-bits of security based on the algorithm, key size, and configuration. For example, a 256-bit ECC key provides roughly 128 bits of security where RSA requires a 3072-bit key to achieve 128 bits of security.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:44",
-        "internal/crypto/aes.go:21"
+        "internal/crypto/jwt.go#// assurance level this session reached, as \"urn:vault42:aal:N\". OIDC leaves",
+        "internal/crypto/aes.go#in:Encrypt:if len(key) != 32 {"
       ],
       "tests": [
         "TestASVS_V14_4_RSAKeySize",
@@ -3949,7 +3949,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:45"
+        "internal/crypto/aes.go#return gcm.Seal(nonce, nonce, plaintext, ad), nil"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured",
@@ -3972,7 +3972,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:45"
+        "internal/crypto/aes.go#return gcm.Seal(nonce, nonce, plaintext, ad), nil"
       ],
       "tests": [
         "TestASVS_V6_2_5_AESGCMAuthenticatedEncryption",
@@ -3993,7 +3993,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:77"
+        "internal/crypto/aes.go#plaintext, err := gcm.Open(nil, nonce, ct, ad)"
       ],
       "tests": [
         "TestASVS_V6_2_5_GCMTamperDetection",
@@ -4015,8 +4015,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/hmac.go:10",
-        "internal/crypto/totp.go:5"
+        "internal/crypto/hmac.go#func HMACSign(message, key []byte) string {",
+        "internal/crypto/totp.go#\"crypto/sha1\" // #nosec G505 -- RFC 6238"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured",
@@ -4040,7 +4040,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/argon2.go:157"
+        "internal/crypto/argon2.go#n, argon2MaxConcurrent, argon2Waiting.Load())"
       ],
       "tests": [
         "TestNIST_Argon2idParameters",
@@ -4059,7 +4059,7 @@
       "requirement": "Verify that hash functions used in digital signatures, as part of data authentication or data integrity are collision resistant and have appropriate bit-lengths. If collision resistance is required, the output length must be at least 256 bits. If only resistance to second pre-image attacks is required, the output length must be at least 128 bits.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/hmac.go:10"
+        "internal/crypto/hmac.go#func HMACSign(message, key []byte) string {"
       ],
       "tests": [
         "TestASVS_V6_2_3_HMACSHA256Output"
@@ -4076,7 +4076,7 @@
       "requirement": "Verify that the application uses approved key derivation functions with key stretching parameters when deriving secret keys from passwords. The parameters in use must balance security and performance to prevent brute-force attacks from compromising the resulting cryptographic key.",
       "status": "Met",
       "evidence": [
-        "internal/kms/kms.go:72"
+        "internal/kms/kms.go#// derives from, so \"immutable after construction\" was true only until the"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured"
@@ -4119,7 +4119,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:44"
+        "internal/crypto/jwt.go#// assurance level this session reached, as \"urn:vault42:aal:N\". OIDC leaves"
       ],
       "tests": [
         "TestNIST_RSAKeyPairSize",
@@ -4140,9 +4140,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:224",
-        "cmd/admin-gateway/main.go:230",
-        "internal/redis/pool.go:191"
+        "internal/server/server.go#// allowed to do turns queueing into 502s.",
+        "cmd/admin-gateway/main.go#if len(cfg.RecoveryPublicKeyPEM) > 0 {",
+        "internal/redis/pool.go#// The handshake is a second round trip after the TCP connect, and on"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion",
@@ -4163,7 +4163,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:162"
+        "internal/server/server.go#func New(deps *Deps) *Server {"
       ],
       "tests": [
         "TestASVS_V12_1_1_InboundListenersRequireTLS13"
@@ -4180,7 +4180,7 @@
       "requirement": "Verify that the application validates that mTLS client certificates are trusted before using the certificate identity for authentication or authorization.",
       "status": "Met",
       "evidence": [
-        "cmd/admin-gateway/main.go:231"
+        "cmd/admin-gateway/main.go#recoveryPub, err = vaultcrypto.LoadRSAPublicKeyPEM(cfg.RecoveryPublicKeyPEM)"
       ],
       "tests": [
         "TestASVS_V12_1_3_AdminGatewayRequiresAndVerifiesClientCerts"
@@ -4201,7 +4201,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:681"
+        "internal/config/config.go#if err := c.checkMintAudience(); err != nil {"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -4239,8 +4239,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:462",
-        "internal/cache/redis.go:55",
+        "internal/config/config.go#RedisTLS:           envBool(\"REDIS_TLS\"),",
+        "internal/cache/redis.go#client := vredis.NewClient(&vredis.Options{",
         "internal/redis/pool.go",
         "charts/vault/templates/configmap.yaml"
       ],
@@ -4278,8 +4278,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/redis/pool.go:190",
-        "internal/config/config.go:522"
+        "internal/redis/pool.go#// tls.Dialer rather than tls.DialWithDialer, which accepts no context.",
+        "internal/config/config.go#MintEnabled:  envBool(\"VAULT_MINT_ENABLED\"),"
       ],
       "tests": [
         "TestASVS_V12_1_1_EveryTLSConfigDeclaresAMinimumVersion"
@@ -4300,7 +4300,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/redis/pool.go:190"
+        "internal/redis/pool.go#// tls.Dialer rather than tls.DialWithDialer, which accepts no context."
       ],
       "tests": [
         "TestASVS_V12_3_2_NoInsecureSkipVerifyInProductionCode"
@@ -4342,8 +4342,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:700",
-        "migrations/001_initial_schema.sql:354"
+        "internal/config/config.go#// HMAC and pepper already refuse to start without theirs; the master key",
+        "migrations/001_initial_schema.sql#GRANT SELECT, INSERT, UPDATE ON auth.signing_keys TO vault_app;"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4363,7 +4363,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "migrations/001_initial_schema.sql:357",
+        "migrations/001_initial_schema.sql#GRANT SELECT, INSERT ON audit.audit_log TO vault_app;",
         "migrations/002_revoke_vault_app_admin_select.sql"
       ],
       "tests": [
@@ -4384,7 +4384,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/secrets.go:18"
+        "internal/config/secrets.go#func LoadSecret(envKey string) (string, error) {"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4404,13 +4404,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/networkpolicy.yaml:7",
-        "charts/vault/values.yaml:380"
+        "charts/vault/templates/networkpolicy.yaml## Vault: allow ingress on 8080, egress to postgres + redis + DNS only.",
+        "charts/vault/values.yaml#^networkPolicy:"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
       ],
-      "notes": "The chart ships a 259-line NetworkPolicy, enabled by default (charts/vault/values.yaml:380, networkPolicy.enabled), restricting egress to Postgres, Redis, DNS and SMTP."
+      "notes": "The chart ships a 259-line NetworkPolicy, enabled by default (charts/vault/values.yaml:724, networkPolicy.enabled), restricting egress to Postgres, Redis, DNS and SMTP."
     },
     {
       "standard": "OWASP ASVS",
@@ -4425,8 +4425,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/oauth2/oidc.go:156"
+        "charts/vault/templates/networkpolicy.yaml## Vault: allow ingress on 8080, egress to postgres + redis + DNS only.",
+        "internal/oauth2/oidc.go#if strings.TrimRight(doc.Issuer, \"/\") != p.issuer {"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4451,8 +4451,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/secrets.go:18",
-        "cmd/vault/main.go:339"
+        "internal/config/secrets.go#func LoadSecret(envKey string) (string, error) {",
+        "cmd/vault/main.go#log.Fatalf(\"Failed to initialize keystore: %v\", err)"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4469,7 +4469,7 @@
       "requirement": "Verify that access to secret assets adheres to the principle of least privilege.",
       "status": "Met",
       "evidence": [
-        "internal/config/secrets.go:19"
+        "internal/config/secrets.go#in:LoadSecret:path := os.Getenv(envKey + \"_FILE\")"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4509,8 +4509,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/config/profiles.go:31",
-        "internal/config/profiles.go:95"
+        "internal/config/profiles.go#func applyProfileDefaults(c *Config) {",
+        "internal/config/profiles.go#^\tsetDefaultBool(&c.RateLimitEnabled, true, \"VAULT_RATE_LIMIT_ENABLED\")"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -4530,7 +4530,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:536"
+        "internal/server/server.go#mux.Handle(\"POST /auth/register\", registerRL(http.HandlerFunc(authHandler.Register)))"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4550,7 +4550,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:373"
+        "internal/server/server.go#in:(Server).setupRoutes:mux := http.NewServeMux()"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4570,8 +4570,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:306",
-        "internal/server/server.go:327"
+        "internal/server/server.go#if s.deps.Metrics == nil {",
+        "internal/server/server.go#s.metricsSrv = &http.Server{"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4596,7 +4596,7 @@
       "status": "Met",
       "evidence": [
         "docs/PRIVACY.md",
-        "internal/audit/audit.go:117"
+        "internal/audit/audit.go#// HoneypotAlert records a webhook dispatch in honeypot mode."
       ],
       "tests": [
         "TestASVS_V14_1_1_TheDataInventoryExistsAndIsEnforced"
@@ -4639,7 +4639,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:753"
+        "internal/handler/oauth.go#^\tredirectURL := h.origin + \"/oauth/callback#\" + fragment.Encode()"
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath",
@@ -4663,7 +4663,7 @@
       "status": "Met",
       "evidence": [
         "internal/cache/cache.go",
-        "internal/handler/oauth.go:253"
+        "internal/handler/oauth.go#// Validate state parameter"
       ],
       "tests": [
         "TestASVS_V14_2_2_SingleUseArtifactsArePurgedOnRead"
@@ -4680,7 +4680,7 @@
       "requirement": "Verify that defined sensitive data is not sent to untrusted parties (e.g., user trackers) to prevent unwanted collection of data outside of the application's control.",
       "status": "Met",
       "evidence": [
-        "internal/httputil/safelog.go:44",
+        "internal/httputil/safelog.go#func ObfuscatedIP(s string) string {",
         "docs/PRIVACY.md"
       ],
       "tests": [
@@ -4701,8 +4701,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:295",
-        "internal/audit/retention.go:141"
+        "internal/audit/audit.go#var sensitiveKeys = map[string]bool{",
+        "internal/audit/retention.go#func (r *Retention) Sweep(ctx context.Context) (int64, error) {"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -4723,7 +4723,7 @@
       ],
       "status": "Not Applicable",
       "evidence": [
-        "internal/handler/auth.go:308"
+        "internal/handler/auth.go#// Atomic get-and-delete to prevent TOCTOU race on token reuse"
       ],
       "tests": [
         "TestASVS_V3_3_1_LogoutInvalidatesRefreshToken"
@@ -4744,7 +4744,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/security_headers.go:22"
+        "internal/middleware/security_headers.go#// data: URL. A wildcard image source is a working exfiltration channel for"
       ],
       "tests": [
         "TestASVS_V14_3_2_ResponsesCarryNoStore",
@@ -4766,7 +4766,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/auth.go:20"
+        "internal/handler/auth.go#const refreshTokenCookie = \"__Host-refresh_token\""
       ],
       "tests": [
         "TestASVS_V14_2_1_NoRouteCarriesACredentialInItsPath"
@@ -4827,7 +4827,7 @@
       "requirement": "Verify that the application documentation identifies functionality which is time-consuming or resource-demanding. This must include how to prevent a loss of availability due to overusing this functionality and how to avoid a situation where building a response takes longer than the consumer's timeout. Potential defenses may include asynchronous processing, using queues, and limiting parallel processes per user and per application.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/argon2.go:157",
+        "internal/crypto/argon2.go#n, argon2MaxConcurrent, argon2Waiting.Load())",
         "docs/config.md"
       ],
       "tests": [
@@ -4849,8 +4849,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "package.json:10",
-        "go.mod:3"
+        "package.json#\"pnpm\": {",
+        "go.mod#go 1.26.0"
       ],
       "tests": [
         "TestASVS_V14_2_1_PnpmOverrideFloors",
@@ -4868,8 +4868,8 @@
       "requirement": "Verify that the application has implemented defenses against loss of availability due to functionality which is time-consuming or resource-demanding, based on the documented security decisions and strategies for this.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/argon2.go:297",
-        "internal/server/server.go:143"
+        "internal/crypto/argon2.go#in:HashPassword:defer releaseArgon2()",
+        "internal/server/server.go#// Read from the environment here rather than from config.Config because the"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -4889,7 +4889,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:889"
+        "internal/server/server.go#// parseCORSOrigins splits a comma-separated CORS_ORIGINS string into a slice."
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
@@ -4907,7 +4907,7 @@
       "status": "Met",
       "evidence": [
         "internal/handler/response_types.go",
-        "internal/adminapi/handler.go:554"
+        "internal/adminapi/handler.go#func (h *Handler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) {"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys"
@@ -4924,7 +4924,7 @@
       "requirement": "Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality.",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:156"
+        "internal/oauth2/oidc.go#if strings.TrimRight(doc.Issuer, \"/\") != p.issuer {"
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned"
@@ -4944,7 +4944,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/response.go:24"
+        "internal/handler/response.go#dec.DisallowUnknownFields()"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -4961,7 +4961,7 @@
       "requirement": "Verify that all proxying and middleware components transfer the user's original IP address correctly using trusted data fields that cannot be manipulated by the end user, and the application and web server use this correct value for logging and security decisions such as rate limiting, taking into account that even the original IP address may not be reliable due to dynamic IPs, VPNs, or corporate firewalls.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:451"
+        "internal/middleware/ratelimit.go#if len(loadTrustedProxyCIDRs()) == 0 {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -4978,7 +4978,7 @@
       "requirement": "Verify that the application explicitly ensures that variables are of the correct type and performs strict equality and comparator operations. This is to avoid type juggling or type confusion vulnerabilities caused by the application code making an assumption about a variable type.",
       "status": "Met",
       "evidence": [
-        "internal/crypto/hmac.go:20"
+        "internal/crypto/hmac.go#return SecureCompare(expected, signature)"
       ],
       "tests": [
         "TestASVS_V6_5_1_ConstantTimeStringComparison",
@@ -5013,7 +5013,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/handler/response.go:22"
+        "internal/handler/response.go#func decodeJSON(r *http.Request, dst any) error {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
@@ -5031,7 +5031,7 @@
       "status": "Met",
       "evidence": [
         "docs/PRIVACY.md",
-        "internal/audit/audit.go:24"
+        "internal/audit/audit.go#// Event type constants for audit logging. Each constant represents a"
       ],
       "tests": [
         "TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories"
@@ -5051,7 +5051,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:229"
+        "internal/audit/audit.go#type Logger struct {"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5071,8 +5071,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "migrations/001_initial_schema.sql:154",
-        "internal/model/model.go:450"
+        "migrations/001_initial_schema.sql#timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),",
+        "internal/model/model.go#Timestamp time.Time `json:\"timestamp\"`"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -5089,7 +5089,7 @@
       "requirement": "Verify that the application only stores or broadcasts logs to the files and services that are documented in the log inventory.",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/audit.go:26"
+        "internal/repository/postgres/audit.go#^\t\tINSERT INTO audit.audit_log (id, timestamp,"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore"
@@ -5109,7 +5109,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/model/model.go:189"
+        "internal/model/model.go#// open it."
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -5130,8 +5130,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:117",
-        "internal/audit/audit.go:295"
+        "internal/audit/audit.go#// HoneypotAlert records a webhook dispatch in honeypot mode.",
+        "internal/audit/audit.go#var sensitiveKeys = map[string]bool{"
       ],
       "tests": [
         "TestASVS_V16_2_5_AuditMetadataScrubsCredentialKeys",
@@ -5153,7 +5153,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:531"
+        "internal/service/auth.go#// address is taken a later login through a provider that does verify it is"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -5174,9 +5174,9 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/adminapi/middleware.go:144",
-        "internal/adminapi/middleware.go:241",
-        "internal/adminapi/auth.go:109"
+        "internal/adminapi/middleware.go#_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminSessionRejected,",
+        "internal/adminapi/middleware.go#_ = auditLog.Log(context.WithoutCancel(r.Context()), audit.AdminAuthzDenied,",
+        "internal/adminapi/auth.go#_ = h.auditLog.Log(ctx, audit.AdminLoginFailure, \"\","
       ],
       "tests": [
         "TestASVS_V16_3_2_AdminAuthenticationFailuresAreLogged",
@@ -5197,8 +5197,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:24",
-        "internal/honeypot/honeypot.go:75"
+        "internal/audit/audit.go#// Event type constants for audit logging. Each constant represents a",
+        "internal/honeypot/honeypot.go#type Event struct {"
       ],
       "tests": [
         "TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories"
@@ -5218,8 +5218,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/recovery.go:14",
-        "internal/audit/audit.go:241"
+        "internal/middleware/recovery.go#log.Printf(\"PANIC: %v\\n%s\", err, debug.Stack())",
+        "internal/audit/audit.go#// synchronous path because the buffer they would otherwise join is dead."
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse"
@@ -5239,7 +5239,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/httputil/safelog.go:11"
+        "internal/httputil/safelog.go#// logged that could theoretically contain attacker-influenced data."
       ],
       "tests": [
         "TestASVS_V16_4_1_LogValuesCannotForgeNewRecords",
@@ -5260,8 +5260,8 @@
       ],
       "status": "Met",
       "evidence": [
-        "migrations/001_initial_schema.sql:167",
-        "migrations/012_audit_function_hardening.sql:47"
+        "migrations/001_initial_schema.sql#CREATE OR REPLACE FUNCTION audit.deny_modify() RETURNS TRIGGER AS $$",
+        "migrations/012_audit_function_hardening.sql#CREATE OR REPLACE FUNCTION audit.cleanup_old_entries(retention_interval INTERVAL)"
       ],
       "tests": [
         "TestASVS_V16_4_2_AuditLogIsAppendOnlyInTheSchema",
@@ -5284,7 +5284,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-24",
       "evidence": [
-        "internal/repository/postgres/audit.go:26"
+        "internal/repository/postgres/audit.go#^\t\tINSERT INTO audit.audit_log (id, timestamp,"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore"
@@ -5304,7 +5304,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/httputil/response.go:20"
+        "internal/httputil/response.go#// WriteError writes a JSON error response with the given status code and message."
       ],
       "tests": [
         "TestASVS_V16_5_1_ServerErrorsCarryNoInternalDetail",
@@ -5322,8 +5322,8 @@
       "requirement": "Verify that the application continues to operate securely when external resource access fails, for example, by using patterns such as circuit breakers or graceful degradation.",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:285",
-        "internal/service/auth.go:872"
+        "internal/middleware/ratelimit.go#// Security-sensitive limiter: the per-pod in-memory fallback would",
+        "internal/service/auth.go#if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
@@ -5344,7 +5344,7 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/recovery.go:10"
+        "internal/middleware/recovery.go#func Recovery(next http.Handler) http.Handler {"
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse",
@@ -5472,7 +5472,7 @@
       "requirement": "AAL2: Permitted Authenticator Types",
       "status": "Met",
       "evidence": [
-        "internal/service/mfa.go:43"
+        "internal/service/mfa.go#// the canonical strings used to describe a completed factor."
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -5488,7 +5488,7 @@
       "requirement": "AAL2: Authenticator and Verifier Requirements",
       "status": "Met",
       "evidence": [
-        "internal/crypto/argon2.go:157"
+        "internal/crypto/argon2.go#n, argon2MaxConcurrent, argon2Waiting.Load())"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_PasswordsAreSaltedAndHashed",
@@ -5505,9 +5505,9 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-14",
       "evidence": [
-        "internal/config/config.go:519",
-        "internal/config/config.go:520",
-        "internal/service/auth.go:2407",
+        "internal/config/config.go#MaxSessionLifetime: envDuration(\"VAULT_MAX_SESSION_LIFETIME\", 720*time.Hour),",
+        "internal/config/config.go#InactivityTimeout:  envDuration(\"VAULT_INACTIVITY_TIMEOUT\", 1*time.Hour),",
+        "internal/service/auth.go#func (s *AuthService) enforceSessionInactivity(ctx",
         "migrations/013_session_lifetime.sql"
       ],
       "tests": [
@@ -5554,9 +5554,9 @@
       "requirement": "Password Authenticators",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:477",
-        "internal/config/config.go:772",
-        "internal/config/config.go:1014"
+        "internal/config/config.go#PasswordMinLength:   envInt(\"VAULT_PASSWORD_MIN_LENGTH\", 15),",
+        "internal/config/config.go#return fmt.Errorf(\"VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set\")",
+        "internal/config/config.go#const devPasswordMinLengthFloor = 8"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5573,10 +5573,10 @@
       "requirement": "Password Verifiers",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:477",
-        "internal/config/config.go:772",
-        "internal/config/config.go:1006",
-        "internal/config/config.go:1014"
+        "internal/config/config.go#PasswordMinLength:   envInt(\"VAULT_PASSWORD_MIN_LENGTH\", 15),",
+        "internal/config/config.go#return fmt.Errorf(\"VAULT_MINT_AUDIENCE required when VAULT_MINT_ENABLED is set\")",
+        "internal/config/config.go#const passwordMinLengthFloor = 15",
+        "internal/config/config.go#const devPasswordMinLengthFloor = 8"
       ],
       "tests": [
         "TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay",
@@ -5643,7 +5643,7 @@
       "requirement": "Single-Factor OTP Authenticators",
       "status": "Met",
       "evidence": [
-        "internal/crypto/totp.go:89"
+        "internal/crypto/totp.go#mac := hmac.New(sha1.New, key)"
       ],
       "tests": [
         "TestNIST_MFA_TOTPSecretMinEntropy",
@@ -5659,7 +5659,7 @@
       "requirement": "Single-Factor OTP Verifiers",
       "status": "Met",
       "evidence": [
-        "internal/crypto/totp.go:77"
+        "internal/crypto/totp.go#q.Set(\"algorithm\", \"SHA1\")"
       ],
       "tests": [
         "TestNIST_MFA_TOTPValidPeriod",
@@ -5691,7 +5691,7 @@
       "requirement": "Rate Limiting (Throttling)",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:154"
+        "internal/service/auth.go#// of the window, behind the same masked error a wrong password gets. A completed"
       ],
       "tests": [
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling",
@@ -5748,8 +5748,8 @@
       "requirement": "Verifier-CSP or IdP Communications",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:156",
-        "internal/server/server.go:224"
+        "internal/oauth2/oidc.go#if strings.TrimRight(doc.Issuer, \"/\") != p.issuer {",
+        "internal/server/server.go#// allowed to do turns queueing into 502s."
       ],
       "tests": [
         "TestASVS_V10_5_3_ProviderMetadataIssuerIsPinned",
@@ -5765,8 +5765,8 @@
       "requirement": "Replay Resistance",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:64",
-        "internal/handler/oauth.go:538"
+        "internal/repository/postgres/refresh_token.go#// column is therefore not taken from the caller — it is read back from the family",
+        "internal/handler/oauth.go#data, err := h.cache.GetAndDelete(r.Context(), \"oauth_code:\"+codeHash+\":\"+fp)"
       ],
       "tests": [
         "TestASVS_V10_4_5_RefreshRotationIsSingleUseByCompareAndSet",
@@ -5830,7 +5830,7 @@
       "requirement": "Account Recovery",
       "status": "Met",
       "evidence": [
-        "internal/handler/password.go:377",
+        "internal/handler/password.go#if match, _ := vaultcrypto.VerifyPassword(newPassword, entry.PasswordHash, h.pepper); match {",
         "internal/service/recovery_retention.go"
       ],
       "tests": [
@@ -5847,7 +5847,7 @@
       "requirement": "Expiration",
       "status": "Met",
       "evidence": [
-        "internal/keystore/keystore.go:473"
+        "internal/keystore/keystore.go#log.Printf(\"%v: previous kid=%s was revoked"
       ],
       "tests": [
         "TestNIST63B4_4_4_EphemeralAuthenticatorsExpire",
@@ -5878,7 +5878,7 @@
       "requirement": "Account Notifications",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:758"
+        "internal/service/auth.go#// simply has no field for it cannot leak it into a response body."
       ],
       "tests": [
         "TestNIST63B4_4_6_SubscribersAreNotifiedOfLockout"
@@ -5893,7 +5893,7 @@
       "requirement": "Session Bindings: Browser Cookies",
       "status": "Met",
       "evidence": [
-        "internal/handler/auth.go:294"
+        "internal/handler/auth.go#WriteJSON(w, http.StatusOK, StatusResponse{Status: \"logged_out\"})"
       ],
       "tests": [
         "TestASVS_V3_3_1_LiveRefreshCookieIsSecure",
@@ -5911,7 +5911,7 @@
       "requirement": "Session Bindings: Access Tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:78"
+        "internal/service/token.go#// NewTokenService creates a new token service."
       ],
       "tests": [
         "TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent",
@@ -5927,8 +5927,8 @@
       "requirement": "Reauthentication",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:2498",
-        "internal/service/auth.go:2447"
+        "internal/service/auth.go#err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{",
+        "internal/service/auth.go#// logins by the SAME user can each pass this check and then insert, briefly"
       ],
       "tests": [
         "TestNIST63B4_5_2_ReauthenticationMeansANewLoginNotAnotherRotation"
@@ -5943,8 +5943,8 @@
       "requirement": "Session Monitoring",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:805",
-        "internal/handler/user.go:125"
+        "internal/service/auth.go#// answered 200 from a locked-out IP, which an attacker reaches by burning the",
+        "internal/handler/user.go#in:(UserHandler).UpdateProfile:if err := decodeJSON(r, &req); err != nil {"
       ],
       "tests": [
         "TestNIST63B4_5_1_SessionSecretsAreBoundToTheAuthenticationEvent"
@@ -5974,7 +5974,7 @@
       "requirement": "Account Management",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/handler.go:216"
+        "internal/adminapi/handler.go#func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {"
       ],
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer"
@@ -5989,7 +5989,7 @@
       "requirement": "Access Enforcement",
       "status": "Met",
       "evidence": [
-        "internal/rbac/rbac.go:45"
+        "internal/rbac/rbac.go#// KeysRotate grants generating a new signing key and retiring the current"
       ],
       "tests": [
         "TestNIST80053_AC_3_AccessEnforcementDeniesUnknownPrincipals",
@@ -6005,7 +6005,7 @@
       "requirement": "Least Privilege",
       "status": "Met",
       "evidence": [
-        "internal/rbac/rbac.go:9"
+        "internal/rbac/rbac.go#// everything irreversible or privilege-granting. Each [Permission] constant"
       ],
       "tests": [
         "TestNIST80053_AC_6_LeastPrivilegeHoldsAcrossTheRoleLattice",
@@ -6021,7 +6021,7 @@
       "requirement": "Unsuccessful Logon Attempts",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:154"
+        "internal/service/auth.go#// of the window, behind the same masked error a wrong password gets. A completed"
       ],
       "tests": [
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
@@ -6048,9 +6048,9 @@
       "requirement": "Session Termination",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:363",
-        "internal/repository/postgres/refresh_token.go:350",
-        "internal/service/auth.go:2498"
+        "internal/repository/postgres/refresh_token.go#func (r *RefreshTokenRepo) RevokeAllForUser(ctx context.Context, userID string) error {",
+        "internal/repository/postgres/refresh_token.go#func (r *RefreshTokenRepo) RevokeFamily(ctx context.Context, familyID string) error {",
+        "internal/service/auth.go#err = s.tokens.CreateWithinCap(ctx, &model.RefreshToken{"
       ],
       "tests": [
         "TestNIST80053_AC_12_ExplicitTerminationRevokesEveryFamily",
@@ -6066,7 +6066,7 @@
       "requirement": "Event Logging",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:24"
+        "internal/audit/audit.go#// Event type constants for audit logging. Each constant represents a"
       ],
       "tests": [
         "TestNIST80053_AU_2_TheEventCatalogueCoversTheSelectedCategories"
@@ -6081,8 +6081,8 @@
       "requirement": "Content of Audit Records",
       "status": "Met",
       "evidence": [
-        "internal/model/model.go:446",
-        "internal/audit/audit.go:373"
+        "internal/model/model.go#type AuditEntry struct {",
+        "internal/audit/audit.go#func (l *Logger) Log(ctx context.Context,"
       ],
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
@@ -6097,7 +6097,7 @@
       "requirement": "Audit Log Storage Capacity",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:141"
+        "internal/audit/retention.go#func (r *Retention) Sweep(ctx context.Context) (int64, error) {"
       ],
       "tests": [
         "TestASVS_V16_5_3_CriticalAuditEventsAreExemptFromBufferDrop",
@@ -6113,11 +6113,11 @@
       "requirement": "Audit Record Review, Analysis, and Reporting",
       "status": "Met",
       "evidence": [
-        "internal/repository/repository.go:370",
-        "internal/repository/postgres/audit.go:100",
-        "internal/adminapi/handler.go:652",
-        "internal/audit/alerting.go:49",
-        "internal/alert/detector.go:121"
+        "internal/repository/repository.go#MinRiskScore int",
+        "internal/repository/postgres/audit.go#conditions = append(conditions, fmt.Sprintf(\"risk_score >= $%d\", argIdx))",
+        "internal/adminapi/handler.go#views = append(views, auditEntryView{",
+        "internal/audit/alerting.go#var alertRules = map[string]alert.Rule{",
+        "internal/alert/detector.go#func (d *Detector) count(now time.Time, r Rule, eventType, scope, key string) (Alert, bool) {"
       ],
       "tests": [
         "TestNIST80053_AU_6_TheSeveritySignalIsSelectable",
@@ -6133,7 +6133,7 @@
       "requirement": "Time Stamps",
       "status": "Met",
       "evidence": [
-        "migrations/001_initial_schema.sql:154"
+        "migrations/001_initial_schema.sql#timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
       ],
       "tests": [
         "TestASVS_V16_2_2_AuditTimestampCarriesAnOffset"
@@ -6149,7 +6149,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-24",
       "evidence": [
-        "migrations/001_initial_schema.sql:167"
+        "migrations/001_initial_schema.sql#CREATE OR REPLACE FUNCTION audit.deny_modify() RETURNS TRIGGER AS $$"
       ],
       "tests": [
         "TestNIST80053_AU_9_ModificationIsRevokedAtTheDatabase",
@@ -6166,7 +6166,7 @@
       "requirement": "Audit Record Retention",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:141"
+        "internal/audit/retention.go#func (r *Retention) Sweep(ctx context.Context) (int64, error) {"
       ],
       "tests": [
         "TestNIST80053_AU_11_RetentionIsMechanisedAndOffByDefault",
@@ -6182,7 +6182,7 @@
       "requirement": "Audit Record Generation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:219"
+        "internal/audit/audit.go#\"doc\": true, \"data\": true, \"plaintext\": true, \"payload\": true,"
       ],
       "tests": [
         "TestASVS_V16_3_1_AuthenticationOutcomesHaveDistinctEventTypes"
@@ -6197,7 +6197,7 @@
       "requirement": "Configuration Settings",
       "status": "Met",
       "evidence": [
-        "internal/config/profiles.go:31"
+        "internal/config/profiles.go#func applyProfileDefaults(c *Config) {"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
@@ -6227,7 +6227,7 @@
       "requirement": "Authenticator Management",
       "status": "Met",
       "evidence": [
-        "internal/crypto/argon2.go:157"
+        "internal/crypto/argon2.go#n, argon2MaxConcurrent, argon2Waiting.Load())"
       ],
       "tests": [
         "TestNIST80053_IA_5_StoredAuthenticatorsAreNeverPlaintext"
@@ -6242,7 +6242,7 @@
       "requirement": "Authentication Feedback",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:506"
+        "internal/service/auth.go#log.Printf(\"auth: failed to generate password history ID: %v\", err)"
       ],
       "tests": [
         "TestNIST80053_IA_6_AuthenticationFailureFeedbackIsGeneric",
@@ -6274,7 +6274,7 @@
       "requirement": "Re-authentication",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:387"
+        "internal/server/server.go#in:(Server).setupRoutes:if err != nil {"
       ],
       "tests": [
         "TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation"
@@ -6319,8 +6319,8 @@
       "requirement": "Denial-of-service Protection",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:143",
-        "internal/crypto/argon2.go:297"
+        "internal/server/server.go#// Read from the environment here rather than from config.Config because the",
+        "internal/crypto/argon2.go#in:HashPassword:defer releaseArgon2()"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
@@ -6335,8 +6335,8 @@
       "requirement": "Boundary Protection",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/networkpolicy.yaml:7",
-        "internal/middleware/ipaccess.go:220"
+        "charts/vault/templates/networkpolicy.yaml## Vault: allow ingress on 8080, egress to postgres + redis + DNS only.",
+        "internal/middleware/ipaccess.go#func denyByCIDR(w http.ResponseWriter, reqID,"
       ],
       "tests": [
         "TestASVS_V12_2_1_PlaintextRequiresAnExplicitOverride"
@@ -6351,7 +6351,7 @@
       "requirement": "Transmission Confidentiality and Integrity",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:163"
+        "internal/server/server.go#return &Server{deps: deps}"
       ],
       "tests": [
         "TestNIST80053_SC_8_TransmissionProtectionCoversEveryConfiguredEndpoint",
@@ -6367,8 +6367,8 @@
       "requirement": "Cryptographic Key Establishment and Management",
       "status": "Met",
       "evidence": [
-        "internal/keystore/keystore.go:204",
-        "internal/kms/kms.go:72"
+        "internal/keystore/keystore.go#// encrypted under all zeros and lost for good.",
+        "internal/kms/kms.go#// derives from, so \"immutable after construction\" was true only until the"
       ],
       "tests": [
         "TestASVS_V6_4_2_KeyRotation"
@@ -6383,7 +6383,7 @@
       "requirement": "Cryptographic Protection",
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:20"
+        "internal/crypto/aes.go#func Encrypt(plaintext, key []byte, aad ...[]byte) ([]byte, error) {"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured"
@@ -6398,7 +6398,7 @@
       "requirement": "Session Authenticity",
       "status": "Met",
       "evidence": [
-        "internal/jwt/parse.go:183"
+        "internal/jwt/parse.go#pubKey, ok := key.(*rsa.PublicKey)"
       ],
       "tests": [
         "TestASVS_V9_1_1_TokenSizeIsBoundedBeforeParsing",
@@ -6414,7 +6414,7 @@
       "requirement": "Protection of Information at Rest",
       "status": "Met",
       "evidence": [
-        "internal/service/identity.go:309"
+        "internal/service/identity.go#in:(IdentityService).upsertCAS:enc, err := vaultcrypto.Encrypt(plaintext, s.masterKey, []byte(pseudo))"
       ],
       "tests": [
         "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest"
@@ -6429,7 +6429,7 @@
       "requirement": "Information Input Validation",
       "status": "Met",
       "evidence": [
-        "internal/sanitize/sanitize.go:14"
+        "internal/sanitize/sanitize.go#func String(s string, maxLen int) string {"
       ],
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse",
@@ -6445,7 +6445,7 @@
       "requirement": "Error Handling",
       "status": "Met",
       "evidence": [
-        "internal/httputil/response.go:20"
+        "internal/httputil/response.go#// WriteError writes a JSON error response with the given status code and message."
       ],
       "tests": [
         "TestNIST80053_SI_11_ErrorsRevealNoInternalState",
@@ -6491,7 +6491,7 @@
       "requirement": "Component Authenticity",
       "status": "Met",
       "evidence": [
-        "package.json:3"
+        "package.json#\"packageManager\": \"pnpm"
       ],
       "tests": [
         "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned"
@@ -6506,7 +6506,7 @@
       "requirement": "Broken Access Control",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/router.go:149"
+        "internal/adminapi/router.go#mux.Handle(\"GET /admin/static/\", http.HandlerFunc(frontend.ServeStatic))"
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated",
@@ -6523,7 +6523,7 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/profiles.go:31"
+        "internal/config/profiles.go#func applyProfileDefaults(c *Config) {"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults",
@@ -6556,7 +6556,7 @@
       "requirement": "Cryptographic Failures",
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:20"
+        "internal/crypto/aes.go#func Encrypt(plaintext, key []byte, aad ...[]byte) ([]byte, error) {"
       ],
       "tests": [
         "TestNIST80053_SC_13_OnlyApprovedPrimitivesAreConfigured",
@@ -6573,7 +6573,7 @@
       "requirement": "Injection",
       "status": "Met",
       "evidence": [
-        "internal/repository/postgres/refresh_token.go:34"
+        "internal/repository/postgres/refresh_token.go#const insertRefreshRowSQL = `"
       ],
       "tests": [
         "TestOWASP_A05_2025_NoRequestDataIsConcatenatedIntoSQL",
@@ -6590,7 +6590,7 @@
       "requirement": "Insecure Design",
       "status": "Met",
       "evidence": [
-        "internal/middleware/ratelimit.go:189"
+        "internal/middleware/ratelimit.go#count     int64"
       ],
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
@@ -6606,7 +6606,7 @@
       "requirement": "Authentication Failures",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:154"
+        "internal/service/auth.go#// of the window, behind the same masked error a wrong password gets. A completed"
       ],
       "tests": [
         "TestOWASP_A07_2025_ShippedHIBPClientDetectsBreachViaKAnonymity"
@@ -6621,7 +6621,7 @@
       "requirement": "Software or Data Integrity Failures",
       "status": "Met",
       "evidence": [
-        "package.json:3"
+        "package.json#\"packageManager\": \"pnpm"
       ],
       "tests": [
         "TestOWASP_A08_2025_DependencyResolutionIsIntegrityPinned",
@@ -6637,9 +6637,9 @@
       "requirement": "Security Logging and Alerting Failures",
       "status": "Met",
       "evidence": [
-        "cmd/vault/main.go:200",
-        "internal/alert/alert.go:160",
-        "internal/audit/audit.go:397"
+        "cmd/vault/main.go#// operator would reach for -- \"quieter\" -- is the setting that reopens the",
+        "internal/alert/alert.go#func (LogSink) Deliver(_ context.Context, a Alert) {",
+        "internal/audit/audit.go#defer l.observe(ctx, entry)"
       ],
       "tests": [
         "TestOWASP_A09_2025_SecurityEventsReachAnAppendOnlyStore",
@@ -6656,7 +6656,7 @@
       "requirement": "Mishandling of Exceptional Conditions",
       "status": "Met",
       "evidence": [
-        "internal/middleware/recovery.go:10"
+        "internal/middleware/recovery.go#func Recovery(next http.Handler) http.Handler {"
       ],
       "tests": [
         "TestASVS_V16_5_3_PanicRecoveryReturnsAGenericResponse",
@@ -6688,8 +6688,8 @@
       "requirement": "Data minimisation",
       "status": "Met",
       "evidence": [
-        "internal/audit/audit.go:295",
-        "internal/httputil/safelog.go:44"
+        "internal/audit/audit.go#var sensitiveKeys = map[string]bool{",
+        "internal/httputil/safelog.go#func ObfuscatedIP(s string) string {"
       ],
       "tests": [
         "TestGDPR_Art5_1_c_AuditMetadataScrubbed",
@@ -6705,7 +6705,7 @@
       "requirement": "Storage limitation",
       "status": "Met",
       "evidence": [
-        "internal/audit/retention.go:141"
+        "internal/audit/retention.go#func (r *Retention) Sweep(ctx context.Context) (int64, error) {"
       ],
       "tests": [
         "TestGDPR_Art5_1_e_RetentionDisabledByDefault",
@@ -6723,7 +6723,7 @@
       "status": "Accepted Risk",
       "accepted_risk": "CR-24",
       "evidence": [
-        "migrations/001_initial_schema.sql:167"
+        "migrations/001_initial_schema.sql#CREATE OR REPLACE FUNCTION audit.deny_modify() RETURNS TRIGGER AS $$"
       ],
       "tests": [
         "TestNIST80053_AU_9_ModificationIsRevokedAtTheDatabase"
@@ -6771,7 +6771,7 @@
       "requirement": "Right of access",
       "status": "Met",
       "evidence": [
-        "internal/handler/data_export.go:63"
+        "internal/handler/data_export.go#// profile, devices, blob metadata (names and sizes, never contents), linked"
       ],
       "tests": [
         "TestGDPR_Art15_RightOfAccessCategoriesAndTruncation"
@@ -6786,9 +6786,9 @@
       "requirement": "Right to erasure",
       "status": "Met",
       "evidence": [
-        "internal/service/erasure.go:1",
-        "migrations/031_tombstone_scrubs_late_columns.sql:76",
-        "migrations/030_erase_login_countries.sql:1"
+        "internal/service/erasure.go",
+        "migrations/031_tombstone_scrubs_late_columns.sql#^           password_hash = NULL,",
+        "migrations/030_erase_login_countries.sql#CREATE OR REPLACE FUNCTION auth.erase_login_countries(p_user_id UUID)"
       ],
       "tests": [
         "TestGDPR_Art17_AccountErasure",
@@ -6820,7 +6820,7 @@
       "requirement": "Right to data portability",
       "status": "Met",
       "evidence": [
-        "internal/handler/data_export.go:63"
+        "internal/handler/data_export.go#// profile, devices, blob metadata (names and sizes, never contents), linked"
       ],
       "tests": [
         "TestGDPR_Art20_ExportShapeIsPortableJSON"
@@ -6865,7 +6865,7 @@
       "requirement": "Security of processing",
       "status": "Met",
       "evidence": [
-        "internal/crypto/aes.go:20"
+        "internal/crypto/aes.go#func Encrypt(plaintext, key []byte, aad ...[]byte) ([]byte, error) {"
       ],
       "tests": [
         "TestNIST80053_SC_28_IdentityDataIsEncryptedAtRest",
@@ -6881,8 +6881,8 @@
       "requirement": "Notification of a personal data breach",
       "status": "Met",
       "evidence": [
-        "internal/audit/alerting.go:49",
-        "internal/audit/alerting.go:200",
+        "internal/audit/alerting.go#var alertRules = map[string]alert.Rule{",
+        "internal/audit/alerting.go#func (l *Logger) observe(ctx context.Context, entry *model.AuditEntry) {",
         "docs/PRIVACY.md"
       ],
       "tests": [
@@ -6926,7 +6926,7 @@
       "requirement": "OAuth 2.0 Security BCP: PKCE on the authorization code flow",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:83"
+        "internal/handler/oauth.go#challenge := vaultcrypto.SHA256Base64URL(verifier)"
       ],
       "tests": [
         "TestRFC9700_2_1_1_PKCEOnAllAuthorizeURLs",
@@ -6942,7 +6942,7 @@
       "requirement": "OAuth 2.0 Security BCP: CSRF protection on the redirect endpoint",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:105"
+        "internal/handler/oauth.go#statePayload := fmt.Sprintf(\"%s.%s.%s.%s\", providerName, nonce, expiry, csrfHash)"
       ],
       "tests": [
         "TestIETF_RFC9700_s411_StateIntegrityAndSessionBinding"
@@ -6957,7 +6957,7 @@
       "requirement": "OAuth 2.0 Security BCP: credentials are kept out of URLs",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:516"
+        "internal/handler/oauth.go#WriteError(w, http.StatusForbidden, \"account_unavailable\")"
       ],
       "tests": [
         "TestRFC9700_4_3_2_TokensOutOfURLs",
@@ -6973,7 +6973,7 @@
       "requirement": "OAuth 2.0 Security BCP: OIDC nonce binding",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:95"
+        "internal/oauth2/oidc_idtoken.go#if _, ok := t.Header[\"crit\"]; ok {"
       ],
       "tests": [
         "TestRFC9700_4_5_3_OIDCNonceBinding",
@@ -6989,7 +6989,7 @@
       "requirement": "OAuth 2.0 Security BCP: refresh token replay detection",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:757"
+        "internal/service/auth.go#// the refresh credential travels in a Set-Cookie header, and a wire type that"
       ],
       "tests": [
         "TestRFC9700_4_14_2_RefreshRotationReplay",
@@ -7005,9 +7005,9 @@
       "requirement": "DPoP: sender-constrained access tokens",
       "status": "Met",
       "evidence": [
-        "internal/service/token.go:276",
-        "internal/service/token.go:394",
-        "internal/middleware/dpop.go:110"
+        "internal/service/token.go#// familyOrigin+maxSessionLifetime. The caller also rejects an already-expired",
+        "internal/service/token.go#// outside the standard library.",
+        "internal/middleware/dpop.go#httputil.WriteError(w, http.StatusUnauthorized, \"dpop_proof_reused\")"
       ],
       "tests": [
         "TestRFC9700_4_10_1_SenderConstrainedDPoP"
@@ -7022,7 +7022,7 @@
       "requirement": "JWT BCP: perform algorithm verification against an allowlist",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:25"
+        "internal/crypto/jwt.go#const AllowedAlgorithm = \"RS256\""
       ],
       "tests": [
         "TestASVS_V9_1_2_TokenAlgorithmAllowlistExcludesNoneAndHMAC",
@@ -7038,7 +7038,7 @@
       "requirement": "JWT BCP: do not trust received public keys",
       "status": "Met",
       "evidence": [
-        "internal/crypto/jwt.go:111"
+        "internal/crypto/jwt.go#// Format: first 16 hex chars of SHA-256 over the PKIX DER encoding, split as"
       ],
       "tests": [
         "TestIETF_RFC8725_s38_VerifierRejectsInboundKeySourceHeaders"
@@ -7053,7 +7053,7 @@
       "requirement": "JWT BCP: use UTF-8 and validate all claims",
       "status": "Met",
       "evidence": [
-        "internal/jwt/validate.go:31"
+        "internal/jwt/validate.go#var errs []error"
       ],
       "tests": [
         "TestIETF_RFC8725_s39_ValidityWindowAndBindingFailClosed"
@@ -7068,7 +7068,7 @@
       "requirement": "Proof Key for Code Exchange: S256 challenge method",
       "status": "Met",
       "evidence": [
-        "internal/handler/oauth.go:83"
+        "internal/handler/oauth.go#challenge := vaultcrypto.SHA256Base64URL(verifier)"
       ],
       "tests": [
         "TestNIST_OAuth2_PKCE_S256",
@@ -7084,7 +7084,7 @@
       "requirement": "OAuth 2.0: refreshing an access token",
       "status": "Met",
       "evidence": [
-        "internal/service/auth.go:757"
+        "internal/service/auth.go#// the refresh credential travels in a Set-Cookie header, and a wire type that"
       ],
       "tests": [
         "TestASVS_V10_4_5_OldTokenIsInvalidatedBeforeTheNewOneIsCreated"
@@ -7099,7 +7099,7 @@
       "requirement": "TOTP: time-based one-time password algorithm",
       "status": "Met",
       "evidence": [
-        "internal/crypto/totp.go:89"
+        "internal/crypto/totp.go#mac := hmac.New(sha1.New, key)"
       ],
       "tests": [
         "TestIETF_RFC6238_TOTPAppendixBKnownAnswerVectors"
@@ -7114,7 +7114,7 @@
       "requirement": "OpenID Connect: ID token validation",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc_idtoken.go:69"
+        "internal/oauth2/oidc_idtoken.go#// Every failure path returns a nil profile: there is no partial result a"
       ],
       "tests": [
         "TestASVS_V10_5_4_IDTokenAudienceIsCheckedAgainstTheClientID",
@@ -7130,9 +7130,9 @@
       "requirement": "Broken Object Level Authorization",
       "status": "Met",
       "evidence": [
-        "internal/service/blob.go:142",
-        "internal/handler/servicedoc.go:105",
-        "internal/handler/blob.go:297"
+        "internal/service/blob.go#// Pseudonym derives the key a user's blobs are stored under. It is the only",
+        "internal/handler/servicedoc.go#func requireClient(w http.ResponseWriter, r *http.Request) (clientID string, ok bool) {",
+        "internal/handler/blob.go#in:(BlobHandler).Download:WriteError(w, http.StatusInternalServerError, \"internal_error\")"
       ],
       "tests": [
         "TestAPITop10_API1_2023_ObjectReadsAreScopedToTheCallerNotJustFiltered"
@@ -7147,8 +7147,8 @@
       "requirement": "Broken Authentication",
       "status": "Met",
       "evidence": [
-        "internal/middleware/auth.go:66",
-        "internal/crypto/jwt.go:25"
+        "internal/middleware/auth.go#// AuthChallenge validates JWT tokens allowing both Bearer and 2fa_challenge types.",
+        "internal/crypto/jwt.go#const AllowedAlgorithm = \"RS256\""
       ],
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated",
@@ -7165,7 +7165,7 @@
       "requirement": "Broken Object Property Level Authorization",
       "status": "Met",
       "evidence": [
-        "internal/handler/response.go:24"
+        "internal/handler/response.go#dec.DisallowUnknownFields()"
       ],
       "tests": [
         "TestAPITop10_API3_2023_UnknownRequestPropertiesAreRejectedNotIgnored",
@@ -7181,9 +7181,9 @@
       "requirement": "Unrestricted Resource Consumption",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:188",
-        "internal/service/blob.go:280",
-        "internal/service/blob.go:283"
+        "internal/server/server.go#h = middleware.Logger(h)",
+        "internal/service/blob.go#// what the pre-emptive delete was buying, without the data loss.",
+        "internal/service/blob.go#usedCount--"
       ],
       "tests": [
         "TestAPITop10_API4_2023_EveryConsumableResourceHasACeiling",
@@ -7200,8 +7200,8 @@
       "requirement": "Broken Function Level Authorization",
       "status": "Met",
       "evidence": [
-        "internal/adminapi/router.go:37",
-        "internal/rbac/rbac.go:357"
+        "internal/adminapi/router.go#return sessionAuth(RBACCheck(perm, api.auditLog)(h))",
+        "internal/rbac/rbac.go#EmailWrite:    true,"
       ],
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer",
@@ -7218,9 +7218,9 @@
       "requirement": "Unrestricted Access to Sensitive Business Flows",
       "status": "Met",
       "evidence": [
-        "internal/server/server.go:332",
-        "internal/server/server.go:335",
-        "internal/server/server.go:341"
+        "internal/server/server.go#// four that has no authentication in front of it.",
+        "internal/server/server.go#WriteTimeout:      10 * time.Second,",
+        "internal/server/server.go#// otherwise: the listener is already bound, so the remaining failures are"
       ],
       "tests": [
         "TestAPITop10_API6_2023_BulkAbusableFlowsAreThrottledAndSwitchable",
@@ -7236,9 +7236,9 @@
       "requirement": "Server Side Request Forgery",
       "status": "Met",
       "evidence": [
-        "internal/outbound/outbound.go:236",
-        "internal/outbound/outbound.go:175",
-        "internal/oauth2/oidc.go:188"
+        "internal/outbound/outbound.go#// cannot see: dial-time only judges address class, not whose host it is.",
+        "internal/outbound/outbound.go#func (p *Policy) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {",
+        "internal/oauth2/oidc.go#if err := p.guard.CheckDerived(p.issuer, field, endpoint); err != nil {"
       ],
       "tests": [
         "TestOWASP_API7_2023_AnOutboundCallCannotReachInsideTheDeployment"
@@ -7253,8 +7253,8 @@
       "requirement": "Security Misconfiguration",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:697",
-        "internal/middleware/security_headers.go:17"
+        "internal/config/config.go#return fmt.Errorf(\"VAULT_PEPPER_FILE required",
+        "internal/middleware/security_headers.go#// reports itself satisfied. object-src falls back to default-src only on CSP"
       ],
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults",
@@ -7270,7 +7270,7 @@
       "requirement": "Improper Inventory Management",
       "status": "Met",
       "evidence": [
-        "docs/api.md:1"
+        "docs/api.md"
       ],
       "tests": [
         "TestAPITop10_API9_2023_EveryMountedRouteAppearsInThePublishedReference"
@@ -7285,9 +7285,9 @@
       "requirement": "Unsafe Consumption of APIs",
       "status": "Met",
       "evidence": [
-        "internal/oauth2/oidc.go:1",
-        "internal/handler/oauth.go:417",
-        "internal/service/hibp.go:33"
+        "internal/oauth2/oidc.go",
+        "internal/handler/oauth.go#// sign-in from an unverified provider is simply not auto-provisioned.",
+        "internal/service/hibp.go#type HIBPClient struct {"
       ],
       "tests": [
         "TestAPITop10_API10_2023_ThirdPartyResponsesAreValidatedBeforeUse",
@@ -7350,7 +7350,7 @@
       "requirement": "Create new roles and alter responsibilities to encompass the SDLC",
       "status": "Met",
       "evidence": [
-        ".github/CODEOWNERS:1"
+        ".github/CODEOWNERS"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist"
@@ -7410,7 +7410,7 @@
       "requirement": "Follow recommended security practices to deploy and maintain tools and toolchains",
       "status": "Met",
       "evidence": [
-        ".github/dependabot.yml:1",
+        ".github/dependabot.yml",
         ".github/workflows/nightly-security.yml#false on workflow_call, so no pull request ever scanned an image: a"
       ],
       "tests": [
@@ -7447,7 +7447,7 @@
       "evidence": [
         ".coverage-exclusions.json",
         "CONTRIBUTING.md",
-        "scripts/dotnet-coverage.py:77"
+        "scripts/dotnet-coverage.py#parser.add_argument(\"--floor\", type=float, default=100.0)"
       ],
       "tests": [
         "TestSSDF_800_218_SecurityCheckCriteriaAreDefinedAndTracked",
@@ -7511,8 +7511,8 @@
       "requirement": "Store all forms of code based on the principle of least privilege",
       "status": "Met",
       "evidence": [
-        ".goreleaser.yaml:105",
-        ".goreleaser.yaml:117"
+        ".goreleaser.yaml#name_template: \"{{ .ProjectName }}_{{ .Version }}_SHA256SUMS\"",
+        ".goreleaser.yaml#- id: cosign-checksum"
       ],
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
@@ -7544,7 +7544,7 @@
       "requirement": "Securely archive the necessary files and supporting data to be retained for each release",
       "status": "Met",
       "evidence": [
-        "CHANGELOG.md:1",
+        "CHANGELOG.md",
         ".github/workflows/release.yml#- name: Build and push vault42"
       ],
       "tests": [
@@ -7562,7 +7562,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/release.yml#images:",
-        ".goreleaser.yaml:109"
+        ".goreleaser.yaml#ids: [vault, bridge, admin-gateway]"
       ],
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
@@ -7697,7 +7697,7 @@
       "requirement": "Follow all secure coding practices that are appropriate to the development languages and environment",
       "status": "Met",
       "evidence": [
-        ".golangci.yml:10",
+        ".golangci.yml#^linters:",
         ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
         "CONTRIBUTING.md"
       ],
@@ -7714,8 +7714,8 @@
       "requirement": "Use compiler, interpreter, and build tools that offer features to improve executable security",
       "status": "Met",
       "evidence": [
-        ".goreleaser.yaml:51",
-        "Dockerfile:74"
+        ".goreleaser.yaml## CGO_ENABLED=0, -trimpath, -s -w and mod_timestamp were already set on all",
+        "Dockerfile#FROM gcr.io/distroless/static-debian12:nonroot"
       ],
       "tests": [
         "TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags"
@@ -7730,8 +7730,8 @@
       "requirement": "Determine which compiler, interpreter, and build tool features should be used and how each should be configured, then implement and use the approved configurations",
       "status": "Met",
       "evidence": [
-        ".goreleaser.yaml:31",
-        "Dockerfile:63"
+        ".goreleaser.yaml## CGO_ENABLED=0, -trimpath, -s -w and mod_timestamp were already set on all",
+        "Dockerfile#ARG TARGETOS=linux"
       ],
       "tests": [
         "TestSSDF_800_218_ImageAndArchiveBuildsUseTheSameFlags"
@@ -7746,7 +7746,7 @@
       "requirement": "Determine whether code review or automated analysis should be used",
       "status": "Met",
       "evidence": [
-        ".github/CODEOWNERS:1",
+        ".github/CODEOWNERS",
         ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8"
       ],
       "tests": [
@@ -7812,7 +7812,7 @@
       "requirement": "Configure software to have secure settings by default",
       "status": "Met",
       "evidence": [
-        "internal/config/config.go:697",
+        "internal/config/config.go#return fmt.Errorf(\"VAULT_PEPPER_FILE required",
         ".github/workflows/ci.yml#run: helm lint charts/vault"
       ],
       "tests": [
@@ -7829,8 +7829,8 @@
       "requirement": "Implement the default settings, and document each setting for software administrators",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:36",
-        "charts/vault/values.yaml:51",
+        "charts/vault/values.yaml#runAsUser: 65532",
+        "charts/vault/values.yaml#readOnlyRootFilesystem: true",
         "docs/config.md"
       ],
       "tests": [
@@ -7879,7 +7879,7 @@
       "requirement": "Have a policy that addresses vulnerability disclosure and remediation",
       "status": "Met",
       "evidence": [
-        "SECURITY.md:1"
+        "SECURITY.md"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist"
@@ -7894,8 +7894,8 @@
       "requirement": "Analyze each vulnerability to gather sufficient information to plan its remediation",
       "status": "Met",
       "evidence": [
-        "SECURITY.md:1",
-        "docs/security.md:1"
+        "SECURITY.md",
+        "docs/security.md"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist"
@@ -7910,7 +7910,7 @@
       "requirement": "Plan and implement risk responses for vulnerabilities",
       "status": "Met",
       "evidence": [
-        "SECURITY.md:40",
+        "SECURITY.md### How a security fix ships",
         "CHANGELOG.md"
       ],
       "tests": [
@@ -7995,7 +7995,7 @@
       "requirement": "Privileged Containers: privileged pods disable most security mechanisms and must be disallowed",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:41"
+        "charts/vault/values.yaml#privileged: false"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
@@ -8010,14 +8010,14 @@
       "requirement": "Host Namespaces: sharing the host namespaces must be disallowed",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:591",
-        "charts/vault/templates/admin-gateway.yaml:22"
+        "charts/vault/values.yaml#hostNetwork: false",
+        "charts/vault/templates/admin-gateway.yaml#{{- if .Values.adminGateway.hostNetwork }}"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
       ],
-      "notes": "Met: no workload takes a host namespace in a default render. hostPID and hostIPC are set nowhere, and adminGateway.hostNetwork now defaults to false (charts/vault/values.yaml:591); the admin-gateway template only emits hostNetwork when an operator opts in (charts/vault/templates/admin-gateway.yaml:22), and the chart makes that choice explicit rather than silent. This was accepted risk CR-33 while the default was true. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
+      "notes": "Met: no workload takes a host namespace in a default render. hostPID and hostIPC are set nowhere, and adminGateway.hostNetwork now defaults to false (charts/vault/values.yaml:952); the admin-gateway template only emits hostNetwork when an operator opts in (charts/vault/templates/admin-gateway.yaml:52), and the chart makes that choice explicit rather than silent. This was accepted risk CR-33 while the default was true. Scope: every workload the chart deploys, with no exclusions. The bundled PostgreSQL, the honeypot PostgreSQL and Mailpit were excluded by name while they did not meet the profile; all three have since been hardened and the exclusion is gone, which is what TestK8sPSS_Restricted_ThereAreNoDeviationsLeft now asserts, having replaced the exclusion tripwire that fired on the day the last of them was hardened."
     },
     {
       "standard": "Kubernetes PSS",
@@ -8027,7 +8027,7 @@
       "requirement": "HostPath Volumes: hostPath volumes must be forbidden",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/deployment.yaml:117"
+        "charts/vault/templates/deployment.yaml#{{- if .Values.secrets.keys.pepper }}"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
@@ -8042,7 +8042,7 @@
       "requirement": "Host Ports: host ports should be disallowed entirely (or restricted to a known allowlist)",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/service.yaml:1"
+        "charts/vault/templates/service.yaml"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
@@ -8057,7 +8057,7 @@
       "requirement": "Capabilities: adding capabilities beyond the default set must be disallowed",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:45"
+        "charts/vault/values.yaml## infrastructure workloads; they live in values because these are the product's"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege",
@@ -8073,8 +8073,8 @@
       "requirement": "Privilege Escalation: privilege escalation to root must be disallowed",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:43",
-        "charts/vault/templates/frontend.yaml:36"
+        "charts/vault/values.yaml## -- Container security context. The values here are the same restricted profile",
+        "charts/vault/templates/frontend.yaml#{{- include \"vault.containerSecurityContext\""
       ],
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
@@ -8089,8 +8089,8 @@
       "requirement": "Running as Non-root: containers must be required to run as non-root users",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:34",
-        "charts/vault/templates/frontend.yaml:32"
+        "charts/vault/values.yaml## -- Pod security context",
+        "charts/vault/templates/frontend.yaml#- name: frontend"
       ],
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
@@ -8105,7 +8105,7 @@
       "requirement": "Seccomp: the RuntimeDefault or a Localhost seccomp profile must be set",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:38"
+        "charts/vault/values.yaml#runAsGroup: 65532"
       ],
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile"
@@ -8120,8 +8120,8 @@
       "requirement": "Capabilities (v1.22+): containers must drop ALL capabilities and may add back only NET_BIND_SERVICE",
       "status": "Met",
       "evidence": [
-        "charts/vault/values.yaml:45",
-        "charts/vault/templates/redis.yaml:93"
+        "charts/vault/values.yaml#- ALL",
+        "charts/vault/templates/redis.yaml#{{- include \"vault.containerSecurityContext\""
       ],
       "tests": [
         "TestK8sPSS_Restricted_VaultPlaneWorkloadsMeetTheProfile",
@@ -8137,8 +8137,8 @@
       "requirement": "Volume Types: only the listed volume types may be used",
       "status": "Met",
       "evidence": [
-        "charts/vault/templates/deployment.yaml:117",
-        "charts/vault/templates/postgres.yaml:9"
+        "charts/vault/templates/deployment.yaml#{{- if .Values.secrets.keys.pepper }}",
+        "charts/vault/templates/postgres.yaml#volumes:"
       ],
       "tests": [
         "TestK8sPSS_Restricted_NoWorkloadTakesAHostNamespaceOrPrivilege"
@@ -8155,7 +8155,7 @@
       "requirement": "This check determines whether the project has generated executable (binary) artifacts in the source repository.",
       "status": "Met",
       "evidence": [
-        ".gitignore:1"
+        ".gitignore"
       ],
       "tests": [
         "TestScorecard_GovernanceFilesExist"
@@ -8222,7 +8222,7 @@
       "requirement": "This check determines whether the project requires human code review before pull requests are merged.",
       "status": "Accepted Risk",
       "evidence": [
-        ".github/CODEOWNERS:1"
+        ".github/CODEOWNERS"
       ],
       "tests": [],
       "notes": "Accepted as CR-36. Scored 0: 0 of 14 approved changesets. Every change reaches main through a pull request with CI attached, and 1.0.1 adds a branch-protection rule requiring one approving review -- but the project has one maintainer, so the approval it requires is the author's own or none. The rule still earns its place, because it makes an unreviewed merge a deliberate admin bypass rather than the default path, and the score will move as soon as there is a second reviewer. Claiming Met on a rule nobody else can satisfy would be the overclaim this register exists to avoid.",
@@ -8238,7 +8238,7 @@
       "requirement": "This check tries to determine if the project has recent contributors from multiple organizations.",
       "status": "Accepted Risk",
       "evidence": [
-        ".github/CODEOWNERS:1"
+        ".github/CODEOWNERS"
       ],
       "tests": [],
       "notes": "Accepted as CR-36, the same single-maintainer fact that holds Code-Review at zero. Scored 0: zero contributing organisations. The check measures how many organisations have committed recently, which one maintainer cannot move by writing better code. It was first classified Not Applicable here and that was wrong: the register's vocabulary for inapplicable requirements covers absent capabilities, roles vault42 does not occupy, and components declared out of scope, and this is none of those. It is a real property of the project, measured correctly, that the project has decided to live with.",
@@ -8271,7 +8271,7 @@
       "requirement": "This check tries to determine if the project uses a dependency update tool, specifically Dependabot or Renovate bot.",
       "status": "Met",
       "evidence": [
-        ".github/dependabot.yml:1"
+        ".github/dependabot.yml"
       ],
       "tests": [
         "TestScorecard_DependencyUpdateToolIsConfigured"
@@ -8356,7 +8356,7 @@
       "requirement": "This check tries to determine if the project pins dependencies used during its build and release process. A \"pinned dependency\" is a dependency that is explicitly set to a specific hash instead of allowing a mutable version or range of versions.",
       "status": "Met",
       "evidence": [
-        ".github/requirements-lint.txt:1",
+        ".github/requirements-lint.txt",
         ".github/workflows/ci.yml#python -m pip install --disable-pip-version-check --require-hashes \\"
       ],
       "tests": [
@@ -8394,7 +8394,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/release.yml#uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0",
-        ".goreleaser.yaml:1"
+        ".goreleaser.yaml"
       ],
       "tests": [
         "TestScorecard_SbomIsProduced"
@@ -8429,7 +8429,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/release.yml#cosign sign --yes \"ghcr.io/42-v/vault42@${VAULT_DIGEST}\"",
-        ".goreleaser.yaml:1"
+        ".goreleaser.yaml"
       ],
       "tests": [
         "TestScorecard_ReleasesAreSigned"
@@ -8463,7 +8463,7 @@
       "requirement": "This check determines whether the project has open, unfixed vulnerabilities in its own codebase or its dependencies using the OSV service.",
       "status": "Accepted Risk",
       "evidence": [
-        "go.mod:1"
+        "go.mod"
       ],
       "tests": [
         "TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames"
@@ -8547,7 +8547,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/release.yml#- name: Attest build provenance (vault42)",
-        ".goreleaser.yaml:1"
+        ".goreleaser.yaml"
       ],
       "tests": [
         "TestSLSA_ProvenanceExistsForEveryPublishedArtifact"
