@@ -120,7 +120,7 @@ func TestEveryEmittedErrorCodeIsDocumented(t *testing.T) {
 	handlers, helpers := parseHandlers(t, root)
 	tables := errorTables(t, filepath.Join(root, apiReference))
 
-	// Floors first. A parser that recognises nothing reports no violations,
+	// Floors first. A parser that recognizes nothing reports no violations,
 	// which is indistinguishable from a document that is correct.
 	routed := 0
 	for _, h := range handlers {
@@ -281,7 +281,7 @@ func collect(t *testing.T, body *ast.BlockStmt, h *handlerFunc, file string, fse
 }
 
 // writeErrorArgs pulls the literal status and code out of a WriteError call.
-// A call whose status is not a recognised http.Status constant is a hard
+// A call whose status is not a recognized http.Status constant is a hard
 // failure: silently skipping it is how a gate stops covering new code.
 func writeErrorArgs(t *testing.T, call *ast.CallExpr, file string, fset *token.FileSet) (errCode, bool) {
 	t.Helper()
