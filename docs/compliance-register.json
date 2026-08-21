@@ -7534,7 +7534,7 @@
       "tests": [
         "TestSSDF_800_218_ReleaseIntegrityMechanismsArePresent"
       ],
-      "notes": "Met: images are signed keylessly with cosign over their digests, the checksum file carries a detached signature, and the workflow requests the OIDC token those signatures need. A signing step without id-token: write is inert, so the permission is asserted alongside the step."
+      "notes": "Met: images are signed keylessly with cosign over their digests, the checksum file carries a Sigstore bundle holding its signature, certificate chain and Rekor inclusion proof, and the workflow requests the OIDC token those signatures need. A signing step without id-token: write is inert, so the permission is asserted alongside the step."
     },
     {
       "standard": "NIST SP 800-218",
