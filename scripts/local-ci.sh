@@ -181,8 +181,17 @@ if [ "$ATTAG" -eq 1 ]; then
   cd "$WORK/repo" || exit 1
   gate "spec suite at ${TAG}"       go go test ./tests/spec/
   gate "compliance suite at ${TAG}" go go test ./tests/compliance/
+  # gate() queues; collect() waits and scores. Without this line the summary
+  # below printed "passed 0, failed 0" and exited 0 -- a mode whose whole purpose
+  # is catching a gate that never ran in the situation it guards, itself
+  # reporting success for gates that had not run.
+  collect
 
   echo
+  if [ $((PASSED + ${#FAILED[@]})) -eq 0 ]; then
+    echo "${RED}FAIL${OFF}  no gates ran at ${TAG}; this mode cannot pass vacuously"
+    exit 1
+  fi
   echo "passed $PASSED, failed ${#FAILED[@]}"
   for f in "${FAILED[@]:-}"; do [ -n "$f" ] && echo "  ${RED}failed${OFF}  $f"; done
   echo

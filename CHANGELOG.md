@@ -47,6 +47,16 @@
 
 ### Tooling
 
+* **`--at-tag` reported "passed 0, failed 0" and exited 0.** The mode was added earlier in this
+  release to run the history-reading gates the way a release sees them, and the concurrency
+  change landed after it: `gate()` queues now and `collect()` waits and scores, and the
+  `--at-tag` block called the first without the second. So the mode whose entire purpose is
+  catching a gate that has never run in the situation it guards spent its first release
+  reporting success for two suites that had not run. `collect` is called, and a run that scores
+  zero gates now fails rather than passing vacuously. Verified by removing `collect` again and
+  watching it refuse, and by reinstating the `UPGRADING.md` defect and watching the spec suite
+  fail at the tag.
+
 * **The two lists of allowed commit types had drifted apart again, in the place a comment
   warned they would.** `commitlint.config.js` checks every commit on a branch;
   `.github/workflows/commitlint.yml` hands its own copy of the same list to the PR-title
