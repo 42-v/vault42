@@ -154,16 +154,24 @@ sboms:
 # Keyless blob signing over the checksum file. One signature covers every
 # artifact, because every artifact's digest is in the file being signed.
 signs:
+  # cosign v3 signs a blob into one Sigstore bundle. The v2 pair of a detached
+  # signature and a separate Fulcio certificate is gone: --output-signature and
+  # --output-certificate were removed outright, and --new-bundle-format defaults
+  # to true. The bundle carries the signature, the certificate chain and the
+  # Rekor inclusion proof together, so a verifier needs one file rather than
+  # three and cannot be handed a signature whose certificate went missing.
+  #
+  # `signature:` names the file goreleaser expects to appear and uploads with
+  # the release, which is what ${signature} expands to below.
   - id: cosign-checksum
     cmd: cosign
     artifacts: checksum
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     output: true
     args:
       - sign-blob
       - --yes
-      - --output-certificate=${certificate}
-      - --output-signature=${signature}
+      - --bundle=${signature}
       - ${artifact}
 
 snapshot:

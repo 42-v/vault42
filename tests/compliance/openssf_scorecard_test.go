@@ -460,8 +460,19 @@ func workflowFiles(t *testing.T) []string {
 // Pinning the action by SHA does not pin what the action fetches. These two are
 // separate supply-chain surfaces and this repository had only closed one.
 var toolInstallingActions = map[string]string{
-	"sigstore/cosign-installer": "cosign-release",
+	"sigstore/cosign-installer":         "cosign-release",
+	"goreleaser/goreleaser-action":      "version",
+	"anchore/sbom-action/download-syft": "syft-version",
 }
+
+// floatingVersion matches a version value that is resolved when the job runs
+// rather than written down: a range, a caret, a bare major, or "latest".
+//
+// Naming the input is not the same as pinning it. goreleaser-action carried
+// `version: '~> v2'`, which satisfies "the input is present" and still installs
+// whichever v2.x shipped most recently, which is the defect this file exists to
+// catch one layer down.
+var floatingVersion = regexp.MustCompile(`^\s*['"]?(latest|[~^><*]|v?\d+(\.x)?['"]?\s*$)`)
 
 // TestScorecard_ToolInstallingActionsPinTheirTool is the third part of
 // Pinned-Dependencies, and the one that broke a release rather than costing a
@@ -505,12 +516,27 @@ func TestScorecard_ToolInstallingActionsPinTheirTool(t *testing.T) {
 			if i+1 < len(locs) {
 				end = locs[i+1][0]
 			}
-			if !strings.Contains(body[loc[0]:end], input+":") {
+			block := body[loc[0]:end]
+			idx := strings.Index(block, input+":")
+			if idx < 0 {
 				t.Errorf("Scorecard Pinned-Dependencies: .github/workflows/%s runs %q without a "+
 					"%s: input, so it installs whatever that project released most recently. "+
 					"The action is pinned and the tool it fetches is not, which is how the "+
 					"v1.0.3 release published its images and then failed to sign its archives.",
 					wf, ref, input)
+				continue
+			}
+
+			// Naming the input is not the same as pinning it.
+			value := block[idx+len(input)+1:]
+			if nl := strings.IndexByte(value, '\n'); nl >= 0 {
+				value = value[:nl]
+			}
+			if floatingVersion.MatchString(value) {
+				t.Errorf("Scorecard Pinned-Dependencies: .github/workflows/%s runs %q with "+
+					"%s:%s, which is resolved when the job starts rather than written down. "+
+					"A range installs whatever matched it this morning; write the exact "+
+					"version the change was tested against.", wf, ref, input, value)
 			}
 		}
 	}

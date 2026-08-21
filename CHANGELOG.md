@@ -463,25 +463,55 @@ had drifted far enough that nobody could tell which of six upgrades was the hard
 
 ### Tooling
 
-* **cosign is pinned; it was not, and that half-published this release.**
-  `sigstore/cosign-installer` was pinned by commit digest with no
-  `cosign-release` input, so the release job installed whatever cosign was
-  current that morning -- v3.0.6. cosign v3 removed `--output-certificate` and
-  `--output-signature` and defaults `--new-bundle-format` to true, so
-  `.goreleaser.yaml`'s signing step died with `create bundle file: open : no
-  such file or directory` **after** the images, the Helm chart and the NuGet
-  packages had gone out. Now pinned to v2.6.5 in all three installer steps.
+* **cosign is pinned, and the signing chain moved to v3.** `sigstore/cosign-installer`
+  was pinned by commit digest with no `cosign-release` input, so the release job
+  installed whatever cosign was current that morning -- v3.0.6. cosign v3 removed
+  `--output-certificate` and `--output-signature` and defaults
+  `--new-bundle-format` to true, so `.goreleaser.yaml`'s signing step died with
+  `create bundle file: open : no such file or directory` **after** the images,
+  the Helm chart and the NuGet packages had gone out.
 
-  Staying on v2 is a decision rather than inertia. `SECURITY.md` tells
-  consumers to verify the checksum file with `--signature ....sig` and
-  `--certificate ....pem`, which is what `sign-blob` produces here; a v3 bundle
-  is a different artifact and a different verification command, so adopting it
-  rewrites the published recipe. That is its own change, made deliberately.
+  The fix is to pin, not to retreat to the previous major. All three installer
+  steps now pin v3.1.3, `.goreleaser.yaml` signs the checksum file into a
+  Sigstore bundle, and `SECURITY.md` tells consumers to verify one:
+
+  ```bash
+  cosign verify-blob "vault42_${VERSION}_SHA256SUMS" \
+    --bundle "vault42_${VERSION}_SHA256SUMS.bundle" \
+    --certificate-identity-regexp "$IDENTITY" \
+    --certificate-oidc-issuer "$ISSUER"
+  ```
+
+  **This changes the published artifacts.** Releases through 0.9.9 shipped a
+  detached `.sig` and a separate `.pem`; 1.0.3 ships one `.bundle` carrying the
+  signature, the certificate chain and the Rekor inclusion proof together. A
+  verifier now needs one file instead of two and cannot be handed a signature
+  whose certificate went missing. The verification snippet in the release notes
+  moved with it.
 
   `TestScorecard_ToolInstallingActionsPinTheirTool` now fails a workflow that
   runs a tool-installing action without pinning the tool. Pinning the action by
   SHA and letting it fetch the latest release are two different supply-chain
   surfaces, and this repository had closed only one of them.
+
+* **Three more build tools were floating, and are now pinned.** The gate above
+  was widened from "the version input is present" to "the version input is a
+  version", and it found them immediately: `goreleaser-action` carried
+  `version: '~> v2'` in both workflows, and `sbom-action/download-syft` named no
+  version at all. A range satisfies the first rule and still installs whatever
+  matched it that morning. goreleaser is pinned to v2.17.1 -- the version the
+  signing change was validated against locally, with a stub signer that recorded
+  its arguments -- and syft to v1.51.0. An SBOM is a claim about what is in an
+  artifact, and the tool making that claim belongs in the file like any other
+  build input.
+
+* **The lint job no longer depends on a schema fetch.** The golangci-lint action
+  validates `.golangci.yml` against a JSONSchema it downloads from
+  `golangci-lint.run` at job start. That host was unreachable from the runners
+  twice in a row, and each time the job failed without analysing a line of Go.
+  `verify: false` turns it off; `golangci-lint run` rejects an unknown key on its
+  own, so a malformed config still fails, from the linter rather than from a
+  schema nobody vendored.
 
 ### Tests
 
