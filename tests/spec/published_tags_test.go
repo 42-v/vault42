@@ -42,11 +42,27 @@ var docsWithInstallCommands = []string{
 	"SECURITY.md",
 }
 
-// imageRefs matches both shapes a published pull can take: the fully qualified
-// image reference and the Helm value that becomes one.
+// imageRefs matches every shape a published pull can take: the fully qualified
+// reference to any of the three images, and the Helm value that becomes one.
+//
+// The optional suffix is not decoration. README.md's install block names
+// vault42-admin-gateway and vault42-bridge alongside vault42, and a pattern
+// anchored on the bare name would have walked past both -- publishing two tags
+// this gate exists to check while reporting that it had checked them.
 var imageRefs = []*regexp.Regexp{
-	regexp.MustCompile(`ghcr\.io/42-v/vault42:([A-Za-z0-9._-]+)`),
+	regexp.MustCompile(`ghcr\.io/42-v/vault42(?:-[a-z-]+)?:([A-Za-z0-9._-]+)`),
 	regexp.MustCompile(`--set\s+image\.tag=([A-Za-z0-9._-]+)`),
+}
+
+// otherArtifactRefs matches the published artifacts that are not images: the
+// Helm chart on the OCI registry and the two NuGet packages. Both are versioned
+// by the same VERSION file and both are copy-paste commands, so both can go
+// stale the same way an image tag can. Unlike a tag there is no "latest" to fall
+// back on -- a wrong --version is a hard 404 -- so the only accepted value is
+// the version this tree is at.
+var otherArtifactRefs = []*regexp.Regexp{
+	regexp.MustCompile(`oci://ghcr\.io/42-v/charts/vault-auth\s+--version\s+([A-Za-z0-9._-]+)`),
+	regexp.MustCompile(`dotnet add package\s+Vault42\.[A-Za-z]+\s+--version\s+([A-Za-z0-9._-]+)`),
 }
 
 // publishedTags reports the tag values release.yml actually pushes for the
@@ -77,7 +93,12 @@ func publishedTags(t *testing.T, root string) map[string]bool {
 // nothing reports the same "ok" as a scan that matched everything and found no
 // bad tag. The number may go up. It may not go down without saying which
 // published surface stopped publishing.
-const publishedImageRefFloor = 3
+const publishedImageRefFloor = 6
+
+// publishedArtifactRefFloor is the chart pull plus the two dotnet add package
+// lines in README.md's install block. Same argument as the image floor: a scan
+// that stops matching reports the same ok as a scan that found nothing wrong.
+const publishedArtifactRefFloor = 3
 
 // TestPublishedImageTagsExist fails when a document tells a reader to pull a tag
 // the release never publishes.
@@ -212,5 +233,59 @@ func TestPublishedVersionAssignmentsAreCurrent(t *testing.T) {
 		t.Fatalf("no VERSION= assignment found in any of %v. Either the verification recipes "+
 			"were removed, or they changed shape and this gate is now checking nothing.",
 			docsWithInstallCommands)
+	}
+}
+
+// TestPublishedNonImageArtifactsNameThisVersion holds the chart pull and the two
+// SDK install lines to the VERSION file.
+//
+// These arrived with README.md's install block in 1.0.4, which is the first
+// time the project told a reader how to consume a release without cloning it.
+// An image tag that goes stale still resolves, because :latest exists and the
+// previous version is still in the registry; `--version 1.0.3` against a 1.0.4
+// tree is simply the wrong software, silently, and `helm pull --version` on a
+// version that was never pushed is a 404 with nothing to suggest the document
+// is what is wrong.
+func TestPublishedNonImageArtifactsNameThisVersion(t *testing.T) {
+	root := repoRoot(t)
+
+	raw, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		t.Fatalf("read VERSION: %v", err)
+	}
+	version := strings.TrimSpace(string(raw))
+
+	var checked int
+	for _, rel := range docsWithInstallCommands {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			for _, re := range otherArtifactRefs {
+				for _, m := range re.FindAllStringSubmatch(line, -1) {
+					checked++
+					if m[1] == version {
+						continue
+					}
+					if strings.Contains(m[1], "VERSION") || strings.Contains(m[1], "X") {
+						continue // a placeholder, not a claim
+					}
+					t.Errorf("%s:%d asks for version %q; this tree is %s. Unlike an image tag "+
+						"there is no latest to fall through to, so the command either fetches "+
+						"the wrong release or 404s.", rel, i+1, m[1], version)
+				}
+			}
+		}
+	}
+
+	if checked < publishedArtifactRefFloor {
+		t.Fatalf("only %d non-image artifact reference(s) found across %v, expected at least %d. "+
+			"A published surface stopped publishing, or reformatted its command out of reach of "+
+			"the patterns -- either way this gate is now guarding nothing.",
+			checked, docsWithInstallCommands, publishedArtifactRefFloor)
 	}
 }

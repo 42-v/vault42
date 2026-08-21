@@ -53,7 +53,13 @@ RULES=(
   # The character class is not decoration: a rule is split on "::", so a prefix
   # whose last character is a colon would take the delimiter's first colon with
   # it and match nothing.
-  "readme cosign image::README.md::ghcr\.io/42-v/vault42[:]::"
+  "readme cosign image::README.md::ghcr\.io/42-v/vault42[a-z-]*[:]::"
+  # README.md's install block, added in 1.0.4. The chart and the two SDKs are
+  # versioned by this file like everything else, and unlike an image tag they
+  # have no "latest" to fall through to: a stale --version is either the wrong
+  # release or a 404. tests/spec/published_tags_test.go holds both to VERSION.
+  "readme chart pull::README.md::--version ::$"
+  "readme sdk packages::README.md::dotnet add package Vault42\.[A-Za-z]+ --version ::$"
   "deployment guide helm command::docs/deployment-guide.md::--set image\.tag=::"
   # The shell variable the two verification recipes set and then
   # interpolate into every cosign and gh command below it. The image-tag

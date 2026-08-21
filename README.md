@@ -15,6 +15,34 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 | ![Go Transitive Deps](https://img.shields.io/badge/Transitive-15-555?style=flat&labelColor=000) | ![Vue Transitive Deps](https://img.shields.io/badge/Transitive-95-555?style=flat&labelColor=000) | ![C# Transitive Deps](https://img.shields.io/badge/Transitive-26-555?style=flat&labelColor=000) | ![Total Deps](https://img.shields.io/badge/Deps-148_total-555?style=flat&labelColor=000) |
 <!-- /badges -->
 
+## Install
+
+Every release publishes signed container images, a signed Helm chart and the two .NET SDKs.
+The commands below need no clone.
+
+```bash
+# Helm chart, from the OCI registry the release pushes it to
+helm pull oci://ghcr.io/42-v/charts/vault-auth --version 1.0.4
+
+# Images: the server, the mTLS admin gateway, the honeypot bridge
+docker pull ghcr.io/42-v/vault42:1.0.4
+docker pull ghcr.io/42-v/vault42-admin-gateway:1.0.4
+docker pull ghcr.io/42-v/vault42-bridge:1.0.4
+
+# Client SDKs
+dotnet add package Vault42.AspNetCore --version 1.0.4
+dotnet add package Vault42.Blazor --version 1.0.4
+```
+
+A default `helm install` renders, but it will not come up on its own: the Deployment mounts
+eight keys out of a Secret you supply and expects a PostgreSQL you already run, because the
+chart's bundled one is a development convenience and is off by default.
+[docs/deployment-guide.md](docs/deployment-guide.md) is the path from here to a running
+install; `scripts/deploy-dev.sh` stands the whole thing up locally against a self-signed CA if
+you only want to look at it.
+
+Every artifact above is keyless-signed -- see [Verifying a release](#verifying-a-release).
+
 ## Highlights
 
 - **RS256 JWT**: algorithm whitelist (rejects `none`, `HS256`, all others), fingerprint-bound, 8KB size limit

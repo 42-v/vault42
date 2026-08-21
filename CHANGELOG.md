@@ -155,6 +155,25 @@
 
 ### Documentation
 
+* **The README told you how to build Vault42 and never how to install it.** Three releases
+  have published signed images, a signed Helm chart on `oci://ghcr.io/42-v/charts` and two SDKs
+  on nuget.org, and the front page's first runnable command was `git clone` followed by
+  `go build`. A reader who wanted to try the thing had to read `release.yml` to find out that
+  the artifacts existed. There is now an `Install` section above the feature list with the four
+  ways to consume a release -- chart, three images, two SDKs -- and one paragraph saying plainly
+  that a default `helm install` renders but does not come up, because the Deployment mounts
+  eight keys out of a Secret the operator supplies and expects a PostgreSQL they already run.
+
+  Both new claim shapes are gated. `imageRefs` in `tests/spec/published_tags_test.go` only
+  matched `ghcr.io/42-v/vault42:`, so the admin-gateway and bridge tags in the new block would
+  have been published unchecked; it matches all three images now and the reference floor goes
+  from 3 to 6. `TestPublishedNonImageArtifactsNameThisVersion` is new and holds the chart pull
+  and the two `dotnet add package` lines to the VERSION file, which matters more than it does
+  for an image: a stale tag still resolves because `:latest` exists, while
+  `helm pull --version 1.0.3` against a 1.0.4 tree is either the wrong software or a 404.
+  `scripts/version-bump.sh` gains rules for all three so they propagate rather than needing a
+  gate to catch them.
+
 * **README.md claimed 80 endpoints for a document that lists 105.** Eight gates read the
   README -- badges, published version strings, script invocations, cited test names -- and none
   of them read the documentation table, so the one-line summary of `docs/api.md` kept the split
