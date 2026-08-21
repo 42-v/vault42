@@ -175,7 +175,6 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP ASVS|V10.4.4|internal/handler/wellknown.go":                                 {},
 	"OWASP ASVS|V10.4.6|internal/oauth2/oidc.go":                                       {},
 	"OWASP ASVS|V10.5.4|internal/oauth2/oidc_idtoken.go":                               {},
-	"OWASP ASVS|V10.7.1|internal/adminapi/router.go":                                   {},
 	"OWASP ASVS|V11.1.1|internal/keystore/keystore.go":                                 {},
 	"OWASP ASVS|V11.2.3|internal/crypto/aes.go":                                        {},
 	"OWASP ASVS|V11.2.3|internal/crypto/jwt.go":                                        {},
@@ -198,9 +197,7 @@ var evidenceRelevanceExemptions = map[string]struct{}{
 	"OWASP ASVS|V2.3.2|internal/handler/data_export.go":                                {},
 	"OWASP ASVS|V6.2.11|internal/service/hibp.go":                                      {},
 	"OWASP ASVS|V6.3.6|internal/service/mfa.go":                                        {},
-	"OWASP ASVS|V6.8.1|internal/seed/seed.go":                                          {},
 	"OWASP ASVS|V6.8.2|internal/oauth2/oidc_idtoken.go":                                {},
-	"OWASP ASVS|V7.4.1|internal/repository/postgres/refresh_token.go":                  {},
 	"OWASP ASVS|V9.1.3|internal/crypto/jwt.go":                                         {},
 	"OWASP ASVS|V9.2.1|internal/jwt/validate.go":                                       {},
 	"OWASP ASVS|V9.2.2|internal/crypto/jwt.go":                                         {},
@@ -244,6 +241,7 @@ var evidenceIdentifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 func TestComplianceRegister_EvidenceIsRelevantAndNotJustResolvable(t *testing.T) {
 	reg := loadRegister(t)
 	root := repoRoot(t)
+	ix := newAnchorIndex(root)
 
 	checked, exempted := 0, 0
 	stillFailing := map[string]struct{}{}
@@ -251,13 +249,12 @@ func TestComplianceRegister_EvidenceIsRelevantAndNotJustResolvable(t *testing.T)
 
 	for _, r := range reg.Requirements {
 		for _, ev := range r.Evidence {
-			idx := strings.LastIndex(ev, ":")
-			if idx < 0 {
-				continue
-			}
-			relPath, lineText := ev[:idx], ev[idx+1:]
-			line, err := strconv.Atoi(lineText)
-			if err != nil {
+			// Evidence names a line through an anchor rather than a number; see
+			// register_anchors_test.go. What that line has to BE is unchanged,
+			// and is the rest of this function: an anchor onto a closing brace
+			// is as empty as a line number that drifted onto one.
+			relPath, line, ok := evidenceTarget(ix, ev)
+			if !ok {
 				continue
 			}
 

@@ -12,11 +12,15 @@ import (
 // =============================================================================
 // Workflow citations are anchors, not line numbers.
 //
-// Evidence in the register is `path:line`, and for source files that is fine:
-// a Go function moves rarely and the relevance gate next door checks that the
-// cited line still mentions what the row says.
+// This is where the anchor grammar started. Evidence in the register was
+// `path:line` everywhere, and for source files that looked fine: a Go function
+// moves rarely and the relevance gate next door checks that the cited line
+// still mentions what the row says. It was not fine there either, and
+// register_anchors_test.go now applies this file's grammar to the other 98
+// cited paths. What stays here is the part that only means something in a
+// workflow: `job:`, and the `in:` scope that a job's block defines.
 //
-// For .github/workflows it was not fine. Adding one job to ci.yml shifts every
+// For .github/workflows it was never fine. Adding one job to ci.yml shifts every
 // citation below it, and three separate edits in one working session did
 // exactly that. The existing gates catch the two shapes where a drifted
 // citation lands somewhere obviously dead -- a blank line, a closing brace --

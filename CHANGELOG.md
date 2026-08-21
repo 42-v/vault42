@@ -150,6 +150,66 @@
   `IPIntelWeight` had all drifted by between 28 and 175 lines as code was inserted
   above them. Each was re-anchored to the line that carries the behaviour.
 
+### Compliance
+
+* **The register's code evidence is an anchor, not a line number.** All 460 `path:line`
+  citations in `docs/compliance-register.json` now name what they point at --
+  `internal/handler/oauth.go#data, err := h.cache.GetAndDelete(...)` -- in the grammar
+  `.github/workflows` evidence has used since 1.0.3, extended to the other 98 cited paths
+  and to an `in:<declaration>:<substring>` form that scopes a repeated statement to the Go
+  declaration holding it.
+
+  A line number is invalidated by any edit above it. Three citations broke that way in one
+  working session: V9.1.2 drifted onto a bare `}`, V10.3.4 and API1:2023 onto a `)` and a
+  comment, V5.1.1 onto a blank line after `docs/api.md` was edited. Each was re-derived by
+  hand, and the shape no gate could catch is the one that lands on a real line belonging to
+  something else -- which is what the same code movement does to the old citations for
+  V10.4.10: it repoints them at a struct field and an unrelated function, resolvable and
+  wrong.
+
+  Two rules make it a control rather than a convention, both copied from the workflow gate.
+  An anchor matching more than one line is an error, because an anchor that identifies four
+  lines identifies none of them. An anchor matching nothing names the requirement, the file
+  and the anchor, because the statement it named is gone and a person has to decide what
+  that means for the row. `path:line` is rejected outright: a gate that tolerates the old
+  form for a while is a migration that never finishes.
+
+  What the cited line must *be* is unchanged. The relevance gate resolves the anchor and
+  then applies the same checks it always did, so an anchor onto a closing brace fails
+  exactly as a drifted number did.
+
+* **Twenty-two citations that could not be anchored were re-derived.** An anchor needs the
+  cited line to identify itself, and twenty-two did not: five were a bare `//`, two a lone
+  `return`, and the rest a `{{- end }}`, a `spec:`, a `-- ====` divider and a curl example
+  repeated 35 times in `docs/api.md`. Each is the same defect as a blank line arriving a
+  few lines earlier, and none of the existing gates could see it. Each was replaced with
+  the line the row's own notes name as the mechanism: V2.4.1 now cites the `loginRL`
+  construction rather than a `KeyStore` branch 55 lines above it, V6.8.1 cites
+  `UNIQUE(provider, provider_user_id)` in migration 001 rather than a role-vocabulary
+  comment in a package that has no provider concept, and PSS-host-namespaces cites
+  `hostNetwork: false` rather than a CPU request.
+
+  A citation to line 1 of a file is now the bare path. Line 1 is `package x`, an H1 or an
+  `apiVersion`, and the register already has a form for "this whole file".
+
+  Three entries left `evidenceRelevanceExemptions` as a result and were deleted, which is
+  the only direction that list moves.
+
+### Tooling
+
+* **`scripts/register-reanchor.py` converts a line number into an anchor, and stopped
+  reporting nonsense on its second run.** Write `path:line` if that is what you have and
+  `--apply` turns it into an anchor for the statement that was on it.
+
+  Its prose half -- the sentences in `notes` and in the risk bodies, which still carry
+  `path:line` because an anchor mid-sentence reads as a quotation of the code -- compared
+  the ref's text at the number *currently* in the register. Once a citation had been
+  re-anchored, that number addressed a different line at the ref, and the tool proposed
+  moving a correct citation onto whatever text used to live there. A prose field is now
+  remapped only when it is byte-identical to the same field at the ref: an edited field may
+  already carry the author's own fix, and guessing on top of that is what produced the drift
+  in the first place.
+
 ## 1.0.3 (2026-08-20)
 
 Three claims the project was making without having checked them, and a toolchain that
