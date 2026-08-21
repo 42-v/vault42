@@ -125,6 +125,17 @@ MSG
 # -timeout 30m: the integration suite spins a fresh container per test function,
 # so its wall-clock grows with the suite; the default 10m/package timeout is not
 # enough once integration + compliance are included.
+# cov_container_pkgs lists the packages whose tests start a container, derived
+# from what they import rather than from a hand-kept list. Five of the 44 do:
+# internal/cache, internal/repository/postgres, and the attack, integration and
+# compliance suites. The other 39 were serialized because -p 1 was applied to the
+# whole run to protect those five.
+cov_container_pkgs() {
+  go list -f '{{.ImportPath}} {{join .TestImports " "}} {{join .XTestImports " "}}' \
+      "${COV_PKGS[@]}" 2>/dev/null |
+    grep testcontainers | awk '{print $1}'
+}
+
 cov_run() {
   local profile="$1" out="$2"
   # Swallow the exit code so the report is always produced (cov_check_failures
@@ -132,9 +143,54 @@ cov_run() {
   # build error, and >128 when killed by a signal. A killed run writes a partial
   # profile with no FAIL line, so the raw code is the only signal that the number
   # is incomplete rather than a real regression.
-  local rc=0
-  go test -count=1 -p 1 -timeout 40m -v -coverprofile="$profile" -coverpkg=./internal/...,./cmd/... \
-      "${COV_PKGS[@]}" > "$out" 2>&1 || rc=$?
+  local rc=0 tmp
+  tmp=$(mktemp -d)
+
+  # Split the run. The container-bound packages keep -p 1, because each spins up
+  # its own Postgres and they contend for ports; everything else has no such
+  # constraint and was only ever serialized by association. -coverpkg is
+  # identical across both halves so attribution cannot differ between them.
+  local serial=() parallel=() pkg
+  mapfile -t serial < <(cov_container_pkgs)
+  mapfile -t parallel < <(go list "${COV_PKGS[@]}" 2>/dev/null |
+    grep -vxF -f <(printf '%s\n' "${serial[@]:-__none__}"))
+
+  local lanes; lanes=$(nproc 2>/dev/null || echo 4)
+
+  if [ "${#parallel[@]}" -gt 0 ]; then
+    go test -count=1 -p "$lanes" -timeout 40m -v \
+        -coverprofile="$tmp/par.out" -coverpkg=./internal/...,./cmd/... \
+        "${parallel[@]}" > "$tmp/par.txt" 2>&1 || rc=$?
+  fi
+  if [ "${#serial[@]}" -gt 0 ]; then
+    local rc2=0
+    go test -count=1 -p 1 -timeout 40m -v \
+        -coverprofile="$tmp/ser.out" -coverpkg=./internal/...,./cmd/... \
+        "${serial[@]}" > "$tmp/ser.txt" 2>&1 || rc2=$?
+    [ "$rc" -eq 0 ] && rc=$rc2
+  fi
+
+  # One mode header, then every block from both halves. go tool cover and
+  # cov-gaps.py both accept repeated blocks for the same statement. The header is
+  # copied from the half that produced one rather than hardcoded, so a later
+  # -covermode=atomic cannot leave the merged profile claiming "set".
+  local mode
+  mode=$(head -1 "$tmp/par.out" 2>/dev/null || true)
+  case "$mode" in mode:*) ;; *) mode=$(head -1 "$tmp/ser.out" 2>/dev/null || true) ;; esac
+  case "$mode" in
+    mode:*) ;;
+    *) echo "cov_run: neither half produced a coverage profile" >&2
+       echo "1" > "${out}.rc"
+       cat "$tmp/par.txt" "$tmp/ser.txt" > "$out" 2>/dev/null
+       rm -rf "$tmp"
+       return 0 ;;
+  esac
+  {
+    echo "$mode"
+    cat "$tmp/par.out" "$tmp/ser.out" 2>/dev/null | grep -v '^mode:'
+  } > "$profile"
+  cat "$tmp/par.txt" "$tmp/ser.txt" > "$out" 2>/dev/null
+  rm -rf "$tmp"
   echo "$rc" > "${out}.rc"
 }
 

@@ -47,6 +47,25 @@
 
 ### Tooling
 
+* **`scripts/local-ci.sh` ran nineteen independent tools one after another.** Every gate is a
+  separate binary reading the same read-only tree; none of them writes anything the next one
+  reads. They now run concurrently, `nproc - 2` at a time, with each gate's output buffered and
+  replayed in declaration order so a parallel run reads exactly like a serial one. The `--fast`
+  batch is 21 seconds of wall clock against 113 seconds of gate time. Each gate reports its own
+  duration and the summary prints both figures, so the claim is checkable rather than asserted,
+  and `LOCAL_CI_LANES=1` restores the serial behaviour for when a gate is suspected of being
+  order-dependent.
+
+* **The coverage run applied `-p 1` to all 44 packages to protect five of them.** Five packages
+  start a container per test -- `internal/cache`, `internal/repository/postgres`, and the attack,
+  integration and compliance suites -- and they contend for ports if run together. The other 39
+  were serialized by association, for years. `cov_run` now splits the run by what each package
+  imports rather than by a hand-kept list: the container-bound five keep `-p 1`, the rest get
+  `-p $(nproc)`, and the two profiles are merged under a single mode header copied from whichever
+  half produced one rather than hardcoded, so a later `-covermode=atomic` cannot leave the merged
+  profile claiming `set`. `-coverpkg` is identical across both halves, so attribution cannot
+  differ between them.
+
 * **The badge generator counted files that are not this module's, and the gate that
   checks it agreed.** `scripts/readme-gen.sh` pruned `vendor/` and nothing else, so
   `find . -name '*.go'` walked `tmp/` -- two scratch `main.go` files left by a 1.0.0 audit and

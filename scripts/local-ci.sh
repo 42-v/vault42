@@ -46,27 +46,67 @@ NPX="npx --yes"
 FAILED=()
 PASSED=0
 SKIPPED=()
+GATE_SECONDS=0   # summed gate time, which is what a serial run would have cost
+WALL_START=$SECONDS
+
+# Gates run concurrently. They share no state -- each is a separate tool reading
+# the same read-only tree -- and running 19 of them one after another on a
+# 24-core machine spends most of the wall clock idle. Output is buffered per
+# gate and printed in declaration order when the batch is collected, so a
+# parallel run reads exactly like a serial one.
+JOBS=()          # name<TAB>tool<TAB>outfile<TAB>pid, in declaration order
+RUNDIR=$(mktemp -d)
+# shellcheck disable=SC2064 # expand RUNDIR now, not at trap time
+trap "rm -rf '$RUNDIR'" EXIT
+
+# Leave a couple of cores for the collector and for whatever else is running.
+# LOCAL_CI_LANES=1 restores the old serial behaviour, which is how the speedup
+# in the 1.0.4 notes was measured and how to check a gate is not order-dependent.
+LANES=${LOCAL_CI_LANES:-$(( $(nproc 2>/dev/null || echo 4) - 2 ))}
+[ "$LANES" -lt 1 ] && LANES=1
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# gate <name> <tool-that-must-exist> <command...>
+# gate <name> <tool-that-must-exist> <command...> -- queues, does not block.
 gate() {
   local name=$1 tool=$2; shift 2
   if [ -n "$tool" ] && ! have "$tool"; then
-    SKIPPED+=("$name (missing: $tool)")
-    printf '%sSKIP%s  %-34s %s\n' "$YELLOW" "$OFF" "$name" "${DIM}install $tool$OFF"
+    JOBS+=("$name	$tool		skip")
     return
   fi
-  local out status
-  out=$("$@" 2>&1); status=$?
-  if [ $status -eq 0 ]; then
-    PASSED=$((PASSED + 1))
-    printf '%sPASS%s  %s\n' "$GREEN" "$OFF" "$name"
-  else
-    FAILED+=("$name")
-    printf '%sFAIL%s  %s\n' "$RED" "$OFF" "$name"
-    printf '%s\n' "$out" | tail -25 | sed 's/^/      /'
-  fi
+  # Throttle so a batch cannot oversubscribe the box.
+  while [ "$(jobs -rp | wc -l)" -ge "$LANES" ]; do wait -n 2>/dev/null || break; done
+  local out; out="$RUNDIR/$(printf '%03d' ${#JOBS[@]}).out"
+  # Each gate times itself, so the summary can report how much of the wall clock
+  # the batch actually saved rather than asserting that it saved any.
+  ( s=$SECONDS; "$@" >"$out" 2>&1; rc=$?; echo $((SECONDS - s)) >"$out.sec"; exit $rc ) &
+  JOBS+=("$name	$tool	$out	$!")
+}
+
+# collect waits for every queued gate and reports them in declaration order.
+collect() {
+  local line name tool out pid status
+  for line in "${JOBS[@]:-}"; do
+    [ -n "$line" ] || continue
+    IFS=$'\t' read -r name tool out pid <<<"$line"
+    if [ "$pid" = "skip" ]; then
+      SKIPPED+=("$name (missing: $tool)")
+      printf '%sSKIP%s  %-34s %s\n' "$YELLOW" "$OFF" "$name" "${DIM}install $tool$OFF"
+      continue
+    fi
+    if wait "$pid"; then status=0; else status=$?; fi
+    local secs; secs=$(cat "$out.sec" 2>/dev/null || echo 0)
+    GATE_SECONDS=$((GATE_SECONDS + secs))
+    if [ "$status" -eq 0 ]; then
+      PASSED=$((PASSED + 1))
+      printf '%sPASS%s  %-34s %s\n' "$GREEN" "$OFF" "$name" "${DIM}${secs}s${OFF}"
+    else
+      FAILED+=("$name")
+      printf '%sFAIL%s  %-34s %s\n' "$RED" "$OFF" "$name" "${DIM}${secs}s${OFF}"
+      tail -25 "$out" | sed 's/^/      /'
+    fi
+  done
+  JOBS=()
 }
 
 if [ "$LIST" -eq 1 ]; then
@@ -158,6 +198,8 @@ gate ".NET build + tests" dotnet bash -c '
 
 gate ".NET coverage floor" dotnet bash -c './scripts/dotnet-coverage.sh'
 
+collect
+
 if [ "$FAST" -eq 1 ]; then
   echo
   echo "${DIM}--fast: skipped the race suite and the coverage gate${OFF}"
@@ -166,10 +208,13 @@ else
   echo "== slow gates =="
   gate "Race suite"    go go test -race -count=1 ./...
   gate "Coverage gate" go bash -c './scripts/coverage.sh && ./scripts/release-check.sh --coverage-only'
+  collect
 fi
 
 echo
+WALL=$((SECONDS - WALL_START))
 echo "passed $PASSED, failed ${#FAILED[@]}, skipped ${#SKIPPED[@]}"
+echo "${DIM}${WALL}s wall, ${GATE_SECONDS}s of gate time across $LANES lanes${OFF}"
 for s in "${SKIPPED[@]:-}"; do [ -n "$s" ] && echo "  ${YELLOW}skipped${OFF} $s"; done
 for f in "${FAILED[@]:-}"; do [ -n "$f" ] && echo "  ${RED}failed${OFF}  $f"; done
 
