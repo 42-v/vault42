@@ -174,7 +174,7 @@ Retry-After: <window_seconds>
 {"error": "rate_limit_exceeded"}
 ```
 
-**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, registration, both password-reset endpoints, account deletion, `POST /client/token`, every 2FA verify and resend, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
+**Behaviour when the cache backend is unavailable depends on the endpoint.** An ordinary limiter falls back to a per-process in-memory counter, so the limit stays enforced per pod and authentication does not fail merely because the cache is down. The limiters guarding credentials and key material do not take that fallback -- login, registration, both password-reset endpoints, account deletion, `POST /client/token`, the TOTP, backup-code and email-OTP verify endpoints, `POST /auth/2fa/email-otp/resend`, `POST /kms/unwrap` and `POST /mint` -- because a per-pod counter would multiply the effective limit by the replica count. Those reject instead:
 
 ```http
 HTTP/1.1 503 Service Unavailable
@@ -185,7 +185,9 @@ Retry-After: <window_seconds>
 {"error": "rate_limiter_unavailable"}
 ```
 
-`spec.md` section 8.1 lists which limiter each endpoint carries.
+That list is the whole of the 2FA surface that is limited at all. `POST /auth/2fa/webauthn/verify/begin` and `POST /auth/2fa/webauthn/verify/finish` carry **no** rate limiter, fail-closed or otherwise, and a cache outage changes nothing for them. This page used to say every 2FA verify was fail-closed, which read as a stronger guarantee than the mux keeps. The asymmetry is deliberate and argued at `internal/server/server.go:641-656`: the other three cap a guessing budget over a six-digit code, while a WebAuthn assertion is a signature over a server-chosen challenge and has no budget to cap, and any per-IP bucket small enough to bound the work would sign a whole NAT out of its own second factor.
+
+`spec.md` section 8.1 lists which limiter each endpoint carries, and omits the WebAuthn verify pair for the same reason.
 
 ---
 
@@ -561,9 +563,12 @@ Both fields carry `omitempty`, so on a non-MFA login they are absent rather than
 | 403 | `account_locked` | The per-IP lockout tripped (IP-scoped; reveals nothing about any account). The per-user lockout answers 401 instead, so it cannot be used to enumerate. |
 | 403 | `account_banned` | The account is banned. Returned only after a successful password verification, so a caller without the password cannot distinguish it from an unknown address. |
 | 403 | `account_disabled` | The account is disabled. Returned only after a successful password verification, same anti-enumeration property as `account_banned`. |
+| 403 | `password_reset_required` | A password reset was required and has been mailed. Not a credential the caller can correct by retrying; the code says a reset was mailed and nothing else -- not the address, not whether the password was right, which this branch never checked |
 | 429 | `rate_limit_exceeded` | Login rate limit exceeded |
+| 429 | `too_many_sessions` | The concurrent-session cap is full. The password was correct; no session was issued. Clears by revoking a session, not by waiting |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
+| 503 | `rate_limiter_unavailable` | Cache backend down; the login limiter fails closed |
 
 **curl example:**
 
@@ -613,9 +618,19 @@ Sets a new `__Host-refresh_token` cookie (the old refresh token is invalidated).
 | 401 | `replay_detected` | Refresh token reuse detected; entire token family revoked |
 | 401 | `token_expired` | Refresh token has expired |
 | 401 | `invalid_token` | Token not found, revoked, or fingerprint mismatch |
+| 403 | `account_banned` | The account was banned since the token was issued |
+| 403 | `account_disabled` | The account was disabled since the token was issued |
+| 403 | `account_locked` | The account carries an operator lock |
 | 500 | `internal_error` | Server error |
 
 On any error, the `__Host-refresh_token` cookie is cleared.
+
+The three `403`s are refusals by policy, not token failures: the refresh token
+was valid and the account state rejected it. They are answered as `403` rather
+than `500` so that a bulk ban does not read as a service fault, and the cookie is
+cleared with them, because a refresh token belonging to a banned account is not
+one the browser should keep presenting. A client MUST NOT retry these; they clear
+only when an operator lifts the state.
 
 **curl example:**
 
@@ -651,6 +666,7 @@ Clears the `__Host-refresh_token` cookie.
 |--------|-------|-------------|
 | 401 | `missing_authorization` | No Authorization header |
 | 401 | `invalid_token` | Token invalid, expired, or device fingerprint mismatch |
+| 401 | `unauthorized` | No claims on the request. A defensive guard behind the auth middleware, which answers `missing_authorization` or `invalid_authorization` first |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -676,11 +692,20 @@ bucket is `user:<subject>`; the per-IP fallback in the key function is unreachab
 **The bucket is shared with five other routes.** `POST /auth/confirm`,
 `POST /user/password`, `DELETE /user/identity`, `DELETE /user/blobs/{id}`,
 `DELETE /user/blobs/named/{name}` and `DELETE /user/social/{id}` all draw on the same
-five-per-fifteen-minutes allowance. That is deliberate -- they are the operations a
-password confirmation gates, and one budget across them is what stops the confirmation
-window being spent elsewhere -- but it means a client that burns the budget changing a
-password cannot then delete a blob, and the 429 it gets back will name the blob route.
-Budget across the group rather than per endpoint.
+five-per-fifteen-minutes allowance. That is deliberate -- they are the operations that
+sit around a password confirmation, and one budget across them is what stops the
+confirmation window being spent elsewhere -- but it means a client that burns the budget
+changing a password cannot then delete a blob, and the 429 it gets back will name the
+blob route. Budget across the group rather than per endpoint.
+
+**Sharing the bucket is not the same as being confirmation-gated.** Only three of
+the six actually require a recent `POST /auth/confirm` and answer
+`403 requires_confirmation` without one: `DELETE /user/identity`,
+`DELETE /user/blobs/{id}` and `DELETE /user/blobs/named/{name}`. This endpoint is
+the confirmation itself. `POST /user/password` takes the current password in its
+own body instead. `DELETE /user/social/{id}` requires neither -- a valid access
+token is enough to unlink a federated identity. Do not read the shared bucket as
+evidence that a route re-checks the password.
 
 **Request body:**
 
@@ -706,6 +731,7 @@ Budget across the group rather than per endpoint.
 | 401 | `invalid_password` | Wrong password |
 | 401 | `invalid_token` | Device fingerprint mismatch |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 429 | `too_many_attempts` | Five wrong passwords against this endpoint locked the confirm counter for this user. Distinct from `rate_limit_exceeded`: that one is the shared six-route budget, this one is a per-account brute-force lock on confirmation itself, and it is checked before the password is read |
 | 500 | `internal_error` | Server error |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
 
@@ -794,9 +820,26 @@ All existing refresh tokens for the user are revoked after a successful reset.
 | 400 | `password_too_short` | New password below 15-character minimum |
 | 400 | `invalid_or_expired_token` | Token not found, expired, or already used |
 | 400 | `password_recently_used` | New password matches one of the last 5 passwords |
+| 400 | `password_breached` | New password found in the HIBP breach database |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Server error |
+| 500 | `import_claim_failed` | The password was set but the account's `import_pending` flag could not be cleared. Fails closed rather than reporting success: the flag stands, so the next login re-issues a claim link and the account is recoverable |
+| 500 | `forced_reset_clear_failed` | The password was set but the forced-reset flag could not be cleared. Same fail-closed reason: reporting success while the flag stands would tell the user they are finished when the next login will refuse them |
 | 503 | `server_busy` | Argon2id semaphore full (load shedding) |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
+
+**The reset token is spent before the new password is validated.** It is consumed
+by an atomic get-and-delete, deliberately, to close a reuse race -- so
+`password_breached` and `password_recently_used` reject the request *after* the
+token is already gone, and the same link cannot be retried with a better
+password. Only `invalid_request` and `password_too_short` are checked ahead of
+it. A client that lets the user pick a replacement password after one of those
+`400`s must send them through `POST /auth/password/reset` again for a fresh link;
+re-posting the old one returns `invalid_or_expired_token`.
+
+The two `500`s are not generic faults either. In both, the new password **is
+already in effect** and the token is likewise spent. The correct client response
+is to attempt a login with the new password, not to restart the reset.
 
 **curl example:**
 
@@ -839,6 +882,7 @@ All existing refresh tokens for the user are revoked.
 | 400 | `invalid_request` | Malformed JSON |
 | 400 | `password_too_short` | New password below 15-character minimum |
 | 400 | `password_recently_used` | New password matches one of the last 5 passwords |
+| 400 | `password_breached` | New password found in the HIBP breach database |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_current_password` | Wrong current password |
 | 401 | `invalid_token` | Device fingerprint mismatch |
@@ -1497,7 +1541,9 @@ strings are cut to length silently. `username`, `state`, `sex`, `country` and
 | 400 | `invalid_country` | Country code not ISO 3166-1 alpha-2 |
 | 400 | `invalid_date_of_birth` | Invalid date format or future date |
 | 400 | `invalid_billing_country` | Billing country code not ISO 3166-1 alpha-2 |
+| 400 | `invalid_profile` | The service-side profile validator rejected the document. Surfaced as a `400` rather than a `500` because that validator, not the handler, is the authoritative gate |
 | 401 | `unauthorized` | Not authenticated |
+| 409 | `concurrent_update` | The compare-and-set lost to a concurrent write -- typically `POST /user/marketing/unsubscribe` landing at the same moment. Nothing was written; re-read and retry |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1568,6 +1614,7 @@ this takes no body and has no confirmation step. Idempotent.
 | Status | Error | Description |
 |--------|-------|-------------|
 | 401 | `unauthorized` | Not authenticated |
+| 409 | `concurrent_update` | The compare-and-set lost to a concurrent profile write. The withdrawal was **not** recorded; retry. The compare-and-set is what stops a simultaneous `PUT /user/identity` from silently reverting it |
 | 500 | `internal_error` | Server error |
 
 **curl example:**
@@ -1598,6 +1645,13 @@ are never returned.
 }
 ```
 
+**Error responses:**
+
+| Status | Error | Description |
+|--------|-------|-------------|
+| 401 | `unauthorized` | Not authenticated |
+| 500 | `internal_error` | Server error |
+
 #### DELETE /user/social/{id}
 
 Unlink a federated identity. Removes the link and the encrypted provider tokens stored with it.
@@ -1615,12 +1669,19 @@ response must not become an oracle for whether an ID belongs to somebody else.
 {"status": "unlinked"}
 ```
 
-**curl example:**
+**Error responses:**
 
-```bash
-curl -X DELETE https://vault42.example.com/user/social/3f2b... \
-  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
-```
+| Status | Error | Description |
+|--------|-------|-------------|
+| 400 | `invalid_request` | Empty `{id}` path segment |
+| 401 | `unauthorized` | Not authenticated |
+| 429 | `rate_limit_exceeded` | The shared five-per-fifteen-minutes confirmation bucket described under `POST /auth/confirm` |
+| 500 | `internal_error` | Server error |
+
+There is no `404`. An ID that does not exist, or belongs to another user, returns
+`200 {"status": "unlinked"}` -- see the note above. This route draws on the
+password-confirmation rate-limit bucket but does **not** itself require a recent
+`POST /auth/confirm`.
 
 ---
 
@@ -1642,7 +1703,7 @@ Upload an encrypted blob. Accepts raw binary body or multipart form data.
 
 | Header | Description |
 |--------|-------------|
-| `X-Blob-Label` | Optional label for the blob (max 255 bytes) |
+| `X-Blob-Label` | Optional label for the blob. Whitespace-trimmed, then **truncated** to 255 characters. See the note below the size limits |
 
 Body: raw binary data
 
@@ -1651,7 +1712,7 @@ Body: raw binary data
 | Field | Description |
 |-------|-------------|
 | `file` | The file to upload (required) |
-| `label` | Optional label (max 255 bytes) |
+| `label` | Optional label. Whitespace-trimmed, then **truncated** to 255 characters. See the note below the size limits |
 
 **Size limits:**
 
@@ -1669,6 +1730,17 @@ and stores it encrypted, so there is no type for a policy to be about. Named
 blobs are addressed by a reference from the `[a-zA-Z0-9_-]+` charset, which
 excludes the dot, so a stored object has no extension either. Nothing is
 extracted or unpacked, so the unpacked size equals the stored size.
+
+**The label cap is 255 characters and it truncates.** It is counted in runes,
+not bytes (`utf8.RuneCountInString`, `internal/handler/blob.go:92`), so a label
+of 255 CJK characters is accepted at around 765 bytes on the wire. Over-length
+is **not** an error: the label is silently cut to its first 255 runes and the
+upload succeeds, so a client that does not read `label` back from the response
+will not know it was shortened. This page previously gave the cap as 255 bytes,
+which is wrong in both units and outcome. The only label input that is refused
+is one containing a C0 control character, which is `400 invalid_label`. The
+named-blob reference is a separate limit that does reject: over 255 characters
+there is `400 name_too_long`.
 
 **Success response (201 Created):**
 
@@ -1690,6 +1762,7 @@ extracted or unpacked, so the unpacked size equals the stored size.
 | 400 | `empty_blob` | No data provided |
 | 400 | `blob_too_small` | Below minimum size (`VAULT_BLOB_MIN_SIZE`, disabled by default) |
 | 400 | `missing_file` | Multipart upload missing `file` field |
+| 400 | `invalid_label` | The label contains a C0 control character (U+0000-U+001F). Over-long labels are not an error: a label is truncated to 255 runes rather than rejected |
 | 401 | `unauthorized` | Not authenticated |
 | 409 | `quota_exceeded` | File count or byte quota exceeded |
 | 413 | `blob_too_large` | Exceeds maximum size (`VAULT_BLOB_MAX_SIZE`) |
@@ -2035,6 +2108,39 @@ sign-out: re-authenticate straight away rather than waiting to discover it.
 Backup-code regeneration is the one people miss, because it reads like a
 read-only operation and is not.
 
+#### Errors shared by every 2FA verify endpoint
+
+The four verify endpoints -- TOTP, WebAuthn, backup code and email OTP -- each
+run two modes, and the second one has failures the first cannot produce. With an
+ordinary Bearer token the endpoint confirms the factor and stops. With a
+`2fa_challenge` token it goes on to complete the login through one shared code
+path (`completeMFAIfChallenge`, `internal/handler/mfa_helper.go`), and that path
+can refuse after the factor has already been proved.
+
+The tables below mark these rows **challenge mode only**. They cannot occur when
+verifying with an ordinary Bearer token:
+
+| Status | Error | Meaning |
+|--------|-------|---------|
+| 401 | `challenge_consumed` | The challenge token's `jti` was already spent. Challenge tokens are single-use for five minutes; a retried request gets this rather than a second session |
+| 401 | `invalid_token` | The fingerprint on the challenge does not match the presenting device, or the subject no longer resolves to a live account (deleted inside the challenge window) |
+| 403 | `account_banned` | The account was banned after the password step and before this call |
+| 403 | `account_disabled` | The account was disabled in the same window |
+| 403 | `account_locked` | The account carries an operator lock, or the MFA-failure lockout tripped, in the same window |
+| 429 | `too_many_sessions` | The concurrent-session cap is full. The factor was accepted; no session was issued |
+
+Account state is deliberately re-read at completion rather than trusted from the
+password step, because the challenge TTL is exactly the window in which an
+operator reacting to a compromise bans, disables or locks the account. A `403`
+here therefore means the second factor was correct and the platform refused the
+session anyway. Do not retry it as if it were a bad code: it will not clear.
+
+Note also what a `200` costs. The audit event for the verification is written
+before the login is completed and regardless of how it ends, so a banned account
+still records a successful second factor. That is intentional -- it is the trail
+an investigator needs -- and it means an audit log showing `2fa_verify` is not
+evidence a session was issued.
+
 ---
 
 #### GET /auth/2fa/status
@@ -2162,12 +2268,18 @@ Also sets the `__Host-refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | TOTP code is incorrect |
-| 401 | `invalid_token` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch; in challenge mode also a subject that no longer resolves |
+| 401 | `challenge_consumed` | Challenge mode only -- see the shared table above |
+| 403 | `account_banned` | Challenge mode only -- see the shared table above |
+| 403 | `account_disabled` | Challenge mode only -- see the shared table above |
+| 403 | `account_locked` | Challenge mode only. Account state refused the session after the code was accepted; distinct from the 429 of the same name below |
 | 404 | `totp_not_setup` | TOTP has not been configured |
-| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock |
+| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock. Checked before the code is read, so it does not consume an attempt |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 429 | `too_many_sessions` | Challenge mode only -- see the shared table above |
 | 429 | `totp_code_already_used` | Same code used within the same 30-second time step (replay prevention) |
 | 500 | `internal_error` | Server error |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
 
 **curl example:**
 
@@ -2398,10 +2510,21 @@ Also sets the `__Host-refresh_token` HttpOnly cookie.
 | 401 | `webauthn_verification_failed` | Authenticator assertion verification failed |
 | 401 | `user_verification_required` | The credential was enrolled with user verification; the assertion carried none. Retry with the authenticator's PIN or biometric |
 | 401 | `cloned_authenticator_detected` | The signature counter did not advance; every refresh-token family for the user is revoked |
-| 401 | `invalid_token` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch; in challenge mode also a subject that no longer resolves |
 | 401 | `unauthorized` | User not found |
+| 401 | `challenge_consumed` | Challenge mode only -- see the shared table above |
+| 403 | `account_banned` | Challenge mode only -- see the shared table above |
+| 403 | `account_disabled` | Challenge mode only -- see the shared table above |
+| 403 | `account_locked` | Challenge mode only -- see the shared table above |
+| 429 | `too_many_sessions` | Challenge mode only -- see the shared table above |
 | 501 | `webauthn_not_configured` | WebAuthn is not configured |
 | 500 | `internal_error` | Server error |
+| 500 | `webauthn_error` | The sign count or the stored authenticator flags could not be persisted. The assertion is refused rather than accepted, because a stale sign count is what the clone check reads |
+
+This endpoint carries **no rate limit**. Unlike the TOTP, backup-code and
+email-OTP verify endpoints it is not mounted behind a limiter at all, so it
+returns neither `429 rate_limit_exceeded` nor `503 rate_limiter_unavailable`.
+See the Rate Limiting section for why.
 
 **curl example:**
 
@@ -2590,17 +2713,25 @@ Sets the `__Host-refresh_token` cookie.
 | 400 | `code_required` | Malformed JSON, or `code` absent or empty |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_backup_code` | Code is wrong or already used; records an MFA failure |
-| 401 | `invalid_token` | Device fingerprint mismatch |
+| 401 | `invalid_token` | Device fingerprint mismatch; in challenge mode also a subject that no longer resolves |
+| 401 | `challenge_consumed` | Challenge mode only -- see the shared table above |
+| 403 | `account_banned` | Challenge mode only -- see the shared table above |
+| 403 | `account_disabled` | Challenge mode only -- see the shared table above |
+| 403 | `account_locked` | Challenge mode only. Account state refused the session after the code was spent; distinct from the 429 of the same name below |
+| 409 | `backup_code_already_used` | The compare-and-swap on `used` lost: another request spent this same code first. Only reachable when two requests race on one code -- a sequential retry of a spent code is `401 invalid_backup_code`, because a used code is no longer in the candidate set |
 | 429 | `account_locked` | Too many MFA failures on this account; shared with the TOTP and password counters |
 | 429 | `rate_limit_exceeded` | Verify rate limit exceeded |
+| 429 | `too_many_sessions` | Challenge mode only -- see the shared table above |
 | 500 | `internal_error` | Server error |
 | 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
 
-The two 429s mean different things and clear differently. `rate_limit_exceeded`
+The three 429s mean different things and clear differently. `rate_limit_exceeded`
 is per caller and expires on its own window. `account_locked` is the per-account
 MFA lockout that backup codes share with TOTP and password verification, so
 failures against any of the three count toward the same lock, and retrying a
-different factor does not escape it.
+different factor does not escape it. `too_many_sessions` is neither: the code was
+accepted and the concurrent-session cap refused the session, so it clears by
+revoking a session, not by waiting.
 
 **curl example:**
 
@@ -2660,10 +2791,16 @@ Also sets the `__Host-refresh_token` HttpOnly cookie.
 | 400 | `invalid_code` | Code is not exactly 6 digits |
 | 401 | `unauthorized` | Not authenticated |
 | 401 | `invalid_code` | Email OTP code is incorrect or expired |
-| 401 | `invalid_token` | Device fingerprint mismatch |
-| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock |
+| 401 | `invalid_token` | Device fingerprint mismatch; in challenge mode also a subject that no longer resolves |
+| 401 | `challenge_consumed` | Challenge mode only -- see the shared table above |
+| 403 | `account_banned` | Challenge mode only -- see the shared table above |
+| 403 | `account_disabled` | Challenge mode only -- see the shared table above |
+| 403 | `account_locked` | Challenge mode only. Account state refused the session after the code was accepted; distinct from the 429 of the same name below |
+| 429 | `account_locked` | Too many MFA failures on this account. Shared with the other MFA factors and with password verification, so failures against any of them count toward the same lock. Checked before the code is read, so it does not consume an attempt |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
+| 429 | `too_many_sessions` | Challenge mode only -- see the shared table above |
 | 500 | `internal_error` | Server error |
+| 503 | `rate_limiter_unavailable` | Cache backend down; this limiter fails closed |
 
 **curl example:**
 
@@ -2787,15 +2924,29 @@ Also sets the `__Host-refresh_token` HttpOnly cookie. The `code` is a one-time e
 | Status | Error | Description |
 |--------|-------|-------------|
 | 400 | `unknown_provider` | Provider not configured |
+| 400 | `provider_denied` | The provider redirected back with an `error` query parameter (RFC 6749 §4.1.2.1) -- typically the user declining consent. The provider's own code and description are logged, not returned |
 | 400 | `missing_state` | No state parameter in callback |
 | 400 | `invalid_state` | State signature validation failed |
 | 400 | `state_expired` | State parameter has expired (10-minute window) |
 | 400 | `invalid_or_reused_state` | PKCE verifier not found or already consumed |
 | 400 | `missing_code` | No authorization code in callback |
 | 400 | `unable_to_identify_user` | Could not determine user from provider response |
+| 403 | `account_unavailable` | The resolved account does not exist or is deleted |
+| 403 | `account_banned` | The resolved account is banned |
+| 403 | `account_disabled` | The resolved account is disabled |
+| 403 | `account_locked` | The account carries an operator lock, or the shared MFA-failure lockout is active. Refused before the account is claimed and before any challenge token is issued |
 | 409 | `email_already_registered` | A verified provider asserted an address held by an account whose own email is unverified; linking is refused to prevent takeover. Unverified providers are refused earlier via the `#error=verification_required` redirect. |
+| 429 | `session_limit_reached` | The concurrent-session cap is full. Raised either by the pre-check or by the capped insert, which is the one that holds under concurrent callbacks |
 | 502 | `provider_error` | Token exchange or user info request failed |
 | 500 | `internal_error` | Server error |
+
+The four `403`s are the same account-state gate `POST /auth/login` and
+`POST /auth/refresh` apply, enforced here so federated login cannot become a way
+round it: an attacker holding a linked social identity would otherwise complete a
+callback and collect a fresh refresh-token family after an operator had already
+locked the account. They are returned as a JSON error, not as a redirect, so a
+browser sitting on the provider's redirect sees the error envelope rather than
+landing back on `{origin}/oauth/callback`.
 
 **curl example:**
 
@@ -2837,6 +2988,7 @@ Exchange a one-time code from the OAuth2 callback redirect for the access token.
 |--------|-------|-------------|
 | 400 | `invalid_request` | Missing or malformed request body |
 | 400 | `invalid_or_expired_code` | Code not found, expired, or already used |
+| 500 | `internal_error` | The stored exchange payload could not be decoded. The code is already consumed at this point, so the callback must be repeated rather than the exchange retried |
 
 **curl example:**
 
@@ -2997,7 +3149,7 @@ curl -X POST https://vault42.example.com/kms/unwrap \
 
 Subject-assertion signing oracle. The caller names a subject, and vault42 signs a token asserting it with the same key that signs every real one. **vault42 does not authenticate the subject and does not look it up.** The endpoint exists because eleven legacy services hold foreign-key copies of the legacy platform's own user ids, so the token subject has to stay that id rather than a vault42-native one; the alternative was rewriting every one of those tables.
 
-Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:613-620`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
+Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not exist and `net/http.ServeMux` answers `404` in `text/plain`, not the JSON error envelope. `VAULT_MINT_AUDIENCE` is required alongside it and must differ from `VAULT_ORIGIN`, or the process refuses to start (`internal/config/config.go:771-775`). That check runs **ahead of the dev-profile short-circuit**, so it applies in every profile including dev: a dev deployment that teaches the wrong configuration gets copied.
 
 **Authentication:** Bearer access token from `POST /client/token`, carrying the `mint:token` scope. The handler additionally requires a non-empty `client_id` claim, which no user token carries.
 **Middleware chain (outermost first):** `authMw` -> rate limit -> `RequireScope("mint:token")` -> DPoP wrapper -> handler (`internal/server/server.go:832`). The limiter sits inside `authMw` because `ClientRateLimitKey` reads the client id from claims that do not exist until auth has run. No fingerprint verification: this is a machine endpoint.
