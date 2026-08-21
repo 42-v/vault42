@@ -3,6 +3,12 @@ name: Commit Lint
 on:
   pull_request:
     branches: [main]
+    # edited is not decoration. Without it the title check runs only on open,
+    # synchronize and reopen, so correcting a rejected title leaves the failed
+    # run standing and the only way to re-run it is to push a commit. That is
+    # what happened to the 1.0.4 release PR: the title was fixed within a minute
+    # and the check stayed red on a title that no longer existed.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   pull-requests: read
@@ -78,3 +84,4 @@ jobs:
             chore
             revert
             security
+            compliance

@@ -47,6 +47,22 @@
 
 ### Tooling
 
+* **The two lists of allowed commit types had drifted apart again, in the place a comment
+  warned they would.** `commitlint.config.js` checks every commit on a branch;
+  `.github/workflows/commitlint.yml` hands its own copy of the same list to the PR-title
+  action. The comment above the workflow's copy already records what happened the first time --
+  `security` was added to one and not the other, so a `security:` title passed the commit check
+  and failed the title check -- and then `compliance` was added to the config and not to the
+  workflow, and the same contradiction came back in the same two files. The workflow's list
+  gains `compliance`, and `TestCommitTypeListsAgree` now reads both and fails in either
+  direction, because a comment asking the next person to remember is not a gate.
+
+* **A rejected PR title could not be fixed by fixing it.** The Commit Lint workflow triggered
+  on `opened`, `synchronize` and `reopened` only, so editing a title left the failed run
+  standing against a title that no longer existed and the only way to re-run the check was to
+  push a commit. This release PR hit it within a minute of opening. `edited` is in the trigger
+  list now.
+
 * **`scripts/local-ci.sh` ran nineteen independent tools one after another.** Every gate is a
   separate binary reading the same read-only tree; none of them writes anything the next one
   reads. They now run concurrently, `nproc - 2` at a time, with each gate's output buffered and
