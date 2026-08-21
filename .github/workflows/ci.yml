@@ -333,6 +333,20 @@ jobs:
           # goinstall compiles it with setup-go's 1.26 toolchain, so build-Go and
           # target-Go match.
           install-mode: goinstall
+          # The action's config-verify step fetches its JSONSchema from
+          # golangci-lint.run at job time, and when that host is unreachable the
+          # lint job fails without having analysed a single line of Go:
+          #
+          #   compile schema: failing loading
+          #   "https://golangci-lint.run/jsonschema/golangci.v2.6.jsonschema.json"
+          #
+          # It failed that way twice in a row on the 1.0.3 release branch. The
+          # check is a nicety: golangci-lint run rejects an unknown key in
+          # .golangci.yml on its own, so a malformed config still fails here --
+          # just from the linter rather than from a schema nobody vendored.
+          # Trading it for a build that does not depend on a third-party host
+          # being up is the same call this release made about cosign.
+          verify: false
           args: --timeout 15m --new-from-merge-base=origin/${{ env.BASE_REF }}
 
       # This used to be `continue-on-error: true` with a summary table, which is
@@ -684,7 +698,8 @@ jobs:
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: '~> v2'
+          # Exact, not a range: see the note on the same action in release.yml.
+          version: v2.17.1
           args: check
 
   # Five suites were invoked by no workflow at all: tests/admin (admin-gateway

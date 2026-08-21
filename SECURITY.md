@@ -76,7 +76,7 @@ checked, so check it. Five artifact classes ship:
 | Helm chart `vault-auth` | `oci://ghcr.io/42-v/charts/vault-auth` | cosign keyless over the chart digest, plus a signed provenance attestation stored beside it |
 | Release archives | GitHub release assets | listed in the checksum file, plus a signed provenance attestation whose offline bundle ships as `vault42_<version>.intoto.jsonl` |
 | Per-archive SBOMs, SPDX and CycloneDX | GitHub release assets | each SPDX document carries its own attestation naming the archive it describes |
-| `vault42_<version>_SHA256SUMS` | GitHub release assets | detached cosign signature (`.sig`) plus its Fulcio certificate (`.pem`) |
+| `vault42_<version>_SHA256SUMS` | GitHub release assets | cosign keyless, as a Sigstore bundle (`.bundle`) carrying the signature, the certificate chain and the Rekor inclusion proof |
 
 ```bash
 VERSION=1.0.3
@@ -95,8 +95,7 @@ cosign verify --certificate-identity-regexp "$IDENTITY" \
 
 # Binaries: verify the checksum file's signature, then the binaries against it.
 cosign verify-blob "vault42_${VERSION}_SHA256SUMS" \
-  --signature   "vault42_${VERSION}_SHA256SUMS.sig" \
-  --certificate "vault42_${VERSION}_SHA256SUMS.pem" \
+  --bundle "vault42_${VERSION}_SHA256SUMS.bundle" \
   --certificate-identity-regexp "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER"
 sha256sum -c "vault42_${VERSION}_SHA256SUMS" --ignore-missing

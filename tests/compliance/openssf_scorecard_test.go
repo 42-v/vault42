@@ -452,3 +452,99 @@ func workflowFiles(t *testing.T) []string {
 	}
 	return names
 }
+
+// toolInstallingActions are actions whose job is to put a tool on PATH, and
+// which install the latest release when nothing says otherwise. The key is the
+// action path; the value is the input that pins the tool.
+//
+// Pinning the action by SHA does not pin what the action fetches. These two are
+// separate supply-chain surfaces and this repository had only closed one.
+var toolInstallingActions = map[string]string{
+	"sigstore/cosign-installer":         "cosign-release",
+	"goreleaser/goreleaser-action":      "version",
+	"anchore/sbom-action/download-syft": "syft-version",
+}
+
+// floatingVersion matches a version value that is resolved when the job runs
+// rather than written down: a range, a caret, a bare major, or "latest".
+//
+// Naming the input is not the same as pinning it. goreleaser-action carried
+// `version: '~> v2'`, which satisfies "the input is present" and still installs
+// whichever v2.x shipped most recently, which is the defect this file exists to
+// catch one layer down.
+var floatingVersion = regexp.MustCompile(`^\s*['"]?(latest|[~^><*]|v?\d+(\.x)?['"]?\s*$)`)
+
+// TestScorecard_ToolInstallingActionsPinTheirTool is the third part of
+// Pinned-Dependencies, and the one that broke a release rather than costing a
+// point.
+//
+// TestScorecard_EveryActionIsPinnedByCommit proves `uses:` names a commit.
+// TestScorecard_BuildToolsResolveThroughAHash proves a package manager resolves
+// through a digest. Neither says anything about an action that is pinned by SHA
+// and then downloads whatever the upstream project released this morning.
+//
+// That is not hypothetical. sigstore/cosign-installer was pinned by digest with
+// no cosign-release input, so the v1.0.3 release installed cosign v3.0.6 on the
+// day it happened to be current. cosign v3 removed --output-certificate and
+// --output-signature and defaults --new-bundle-format to true, so goreleaser's
+// signing step died with "create bundle file: open : no such file or directory"
+// after the images, the chart and the NuGet packages had already been published.
+// A half-published release is the expensive kind.
+func TestScorecard_ToolInstallingActionsPinTheirTool(t *testing.T) {
+	// The version input may sit several lines under the `uses:` that needs it,
+	// so each step is examined as a block rather than line by line.
+	step := regexp.MustCompile(`(?m)^\s*(?:-\s+)?uses:\s+([^\s#]+)`)
+
+	checked := 0
+	for _, wf := range workflowFiles(t) {
+		body := readWorkflow(t, wf)
+		locs := step.FindAllStringSubmatchIndex(body, -1)
+		for i, loc := range locs {
+			ref := body[loc[2]:loc[3]]
+			action := ref
+			if at := strings.LastIndex(action, "@"); at >= 0 {
+				action = action[:at]
+			}
+			input, watched := toolInstallingActions[action]
+			if !watched {
+				continue
+			}
+			checked++
+
+			// The step runs to the next `uses:` or the end of the file.
+			end := len(body)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			block := body[loc[0]:end]
+			idx := strings.Index(block, input+":")
+			if idx < 0 {
+				t.Errorf("Scorecard Pinned-Dependencies: .github/workflows/%s runs %q without a "+
+					"%s: input, so it installs whatever that project released most recently. "+
+					"The action is pinned and the tool it fetches is not, which is how the "+
+					"v1.0.3 release published its images and then failed to sign its archives.",
+					wf, ref, input)
+				continue
+			}
+
+			// Naming the input is not the same as pinning it.
+			value := block[idx+len(input)+1:]
+			if nl := strings.IndexByte(value, '\n'); nl >= 0 {
+				value = value[:nl]
+			}
+			if floatingVersion.MatchString(value) {
+				t.Errorf("Scorecard Pinned-Dependencies: .github/workflows/%s runs %q with "+
+					"%s:%s, which is resolved when the job starts rather than written down. "+
+					"A range installs whatever matched it this morning; write the exact "+
+					"version the change was tested against.", wf, ref, input, value)
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Fatalf("Scorecard Pinned-Dependencies: none of the %d watched tool-installing actions "+
+			"appear in any workflow. Either they were removed, or this gate is watching a name "+
+			"that no longer exists and is passing vacuously.", len(toolInstallingActions))
+	}
+	t.Logf("Scorecard Pinned-Dependencies: %d tool-installing action step(s), all pinning their tool", checked)
+}
