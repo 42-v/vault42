@@ -576,7 +576,7 @@ If `VAULT_ORIGIN` is unset or unparseable, RP ID falls back to `localhost`.
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `VAULT_IPINTEL_DATA` | string | *(none)* | No | Filesystem path to a replacement IP-intelligence blob. When set, readable and valid, that file is used instead of the blob compiled into the binary. An unreadable or structurally invalid override is ignored and the process falls back to the embedded table; it does not refuse to start. Empty uses the embedded blob. The table is what flags VPN, hosting and Tor addresses. Those addresses consume the login, register and password-reset buckets at triple weight so they meet the ordinary 429 sooner (`internal/server/server.go:420`). They are never answered 403. The OAuth callback is not weighted. A failed load of the embedded table leaves an empty one and the weight is inert. |
+| `VAULT_IPINTEL_DATA` | string | *(none)* | No | Filesystem path to a replacement IP-intelligence blob. When set, readable and valid, that file is used instead of the blob compiled into the binary. An unreadable or structurally invalid override is ignored and the process falls back to the embedded table; it does not refuse to start. Empty uses the embedded blob. The table is what flags VPN, hosting and Tor addresses. Those addresses consume the login, register and password-reset buckets at triple weight so they meet the ordinary 429 sooner (`internal/server/server.go:476`). They are never answered 403. The OAuth callback is not weighted. A failed load of the embedded table leaves an empty one and the weight is inert. |
 
 ---
 

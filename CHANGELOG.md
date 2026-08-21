@@ -93,6 +93,63 @@
   `cov_run` reproduces. The figure was right and the sentence introducing it was not.
   Corrected, and now unrepeatable.
 
+### Documentation
+
+* **The API reference understated the failure surface of 17 endpoints, and now a gate
+  holds it.** A fresh verification pass over `docs/api.md` found 49 error rows that the
+  handlers can answer with and the document did not list. Every omission ran the same
+  way -- the page described a narrower, tidier set of failures than the code has -- so a
+  client that handled every documented code still met undocumented ones in production.
+
+  The largest groups: the OAuth callback omitted all six codes it can answer beyond the
+  documented ten, including the four `403`s that stop federated login becoming a way
+  round an operator's ban, and `429 session_limit_reached`. The four 2FA verify
+  endpoints each omitted the shared refusal set they inherit from the MFA completion
+  path -- `401 challenge_consumed`, `403 account_banned`, `403 account_disabled`,
+  `403 account_locked`, `429 too_many_sessions` -- which are the codes that mean the
+  second factor was correct and the platform refused the session anyway. Backup-code
+  verify omitted the `409` a raced code returns; WebAuthn verify/finish omitted
+  `500 webauthn_error`; `POST /auth/refresh` omitted all three account-state `403`s;
+  password reset confirm omitted `400 password_breached` and the two `500`s that mean
+  the password was already changed and the reset link is spent. The two `/user/social`
+  endpoints had no error table at all.
+
+  `tests/spec/api_error_code_parity_test.go` now asserts that every literal
+  `WriteError` in a route-annotated handler has a row in that route's table, resolving
+  the shared MFA helper into its four callers. A companion test fails if a handler's
+  route comment stops naming a documented endpoint, and a third fails if the inlined
+  helper list stops resolving -- without it, renaming the helper would drop six rows
+  per endpoint from the gate's view while leaving it green.
+
+* **`POST /auth/2fa/webauthn/verify/begin` and `/finish` carry no rate limiter, and the
+  page said every 2FA verify was fail-closed.** They are not limited at all, so a cache
+  outage changes nothing for them; the claim read as a stronger guarantee than the mux
+  keeps. The asymmetry is deliberate -- an assertion is a signature over a server-chosen
+  challenge and has no guessing budget to cap -- and is now stated rather than papered
+  over. `spec.md` section 8.1 was already correct and omits the pair.
+
+* **Sharing the confirmation rate-limit bucket was described as being
+  confirmation-gated.** Only three of the six routes on that bucket require a recent
+  `POST /auth/confirm`. `DELETE /user/social/{id}` requires neither that nor a password
+  in the body: a valid access token is enough to unlink a federated identity.
+
+* **The blob label cap was given as 255 bytes; it is 255 characters and it truncates.**
+  Counted in runes, so 255 CJK characters are accepted at roughly 765 bytes on the wire,
+  and an over-length label is silently cut rather than refused -- a client that does not
+  read `label` back from the response is not told. Wrong in both units and outcome.
+
+* **The reset token is spent before the new password is validated.** `password_breached`
+  and `password_recently_used` reject after the link is already consumed, so it cannot
+  be retried with a better password. Documented, because a client that offers a retry
+  sends the user into `invalid_or_expired_token`.
+
+* **Nine source citations pointed at unrelated code.** `passwordMinLengthFloor`,
+  `SetMaxSessionLifetime`, `VAULT_MAX_SESSION_LIFETIME`, the refresh-rotation
+  `MarkUsed`/`Create` ordering, the `acr`/`amr`/`auth_time` write sites,
+  `VAULT_STRICT_SESSION_LIMIT`, `VAULT_MINT_AUDIENCE`'s start-up refusal and
+  `IPIntelWeight` had all drifted by between 28 and 175 lines as code was inserted
+  above them. Each was re-anchored to the line that carries the behaviour.
+
 ## 1.0.3 (2026-08-20)
 
 Three claims the project was making without having checked them, and a toolchain that

@@ -545,7 +545,7 @@ and are addressed by their key on `GET /auth/oauth2/callback/{provider}`.
 - **Single-use:** each use issues a new pair, old token marked `used = true`
 - **Family tracking:** each token belongs to a `family_id` (UUID). Replay of a used token revokes the entire family.
 - **Session limit:** new family creation is blocked when a user has `VAULT_MAX_SESSIONS_PER_USER` (default 10) active families. Returns `429 too_many_sessions`.
-  - **On a count-query error the behaviour is configurable and defaults to fail-open:** the login is allowed. `VAULT_STRICT_SESSION_LIMIT=true` (`internal/config/config.go:337`, `internal/service/auth.go:136-140`) makes it fail closed instead, rejecting the login and writing an audit event. Operators who treat the session cap as a control rather than a courtesy SHOULD set it; the default is the compatible one, because flipping it would turn a database blip into a service outage for an operator who set nothing.
+  - **On a count-query error the behaviour is configurable and defaults to fail-open:** the login is allowed. `VAULT_STRICT_SESSION_LIMIT=true` (`internal/config/config.go:482`, `internal/service/auth.go:2460-2468`) makes it fail closed instead, rejecting the login and writing an audit event. Operators who treat the session cap as a control rather than a courtesy SHOULD set it; the default is the compatible one, because flipping it would turn a database blip into a service outage for an operator who set nothing.
 - **Bound to device:** fingerprint hash stored alongside the token
 - **Cookie attributes:** `__Host-refresh_token`; `HttpOnly; Secure; SameSite=Strict; Path=/`
 - **Secure flag:** derived from `TLSEnabled` config, not profile name
@@ -1317,7 +1317,7 @@ state, `__Host-oauth_state`, single-use PKCE), so it no longer shares `loginRL`.
 sizing 429s or treating Redis down as "callbacks reject" is looking at the old limiter.
 
 `loginRL`, `registerRL` and `passwordResetRL` also carry a VPN/hosting/Tor weight of 3
-(`middleware.IPIntelWeight`, `internal/server/server.go:420-433`). A flagged address increments
+(`middleware.IPIntelWeight`, `internal/server/server.go:476`). A flagged address increments
 the shared bucket once but is compared at triple weight, so it meets the ordinary 429 sooner.
 It is never answered 403: this is scrutiny, not a VPN block. The OAuth callback is not weighted.
 The table is compiled into the binary (`VAULT_IPINTEL_DATA` can replace it). An unreadable
