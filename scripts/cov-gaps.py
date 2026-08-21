@@ -189,7 +189,7 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # run entirely and only the floor would notice, which is the one check a genuine
 # deletion is expected to move.
 #
-# Raised to 12856 by the adversarial campaign's two fixes, diffed by package
+# Raised to 12853 by the adversarial campaign's two fixes, diffed by package
 # against the 12783 profile so the whole change is accounted for and none of it
 # is a wider measurement:
 #
@@ -200,7 +200,46 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 #                              unreachable "did not advance" branch became one
 #                              always-advancing step
 #    +6  internal/outbound     ClientForIssuer's per-hop redirect check
-BASELINE_TOTAL_STATEMENTS = 12853
+#
+# (That headline read 12856 until this release. 12783 + 64 + 6 is 12853, which is
+# what the constant carried and what a cov_run reproduces, so the figure was
+# right and the sentence above it was not. It is corrected rather than annotated,
+# and BASELINE_PACKAGE_STATEMENTS below now makes the two impossible to separate.)
+#
+# Raised from 12853 to 12951 by the 1.0.1 and 1.0.3 releases: +98, none of it a
+# wider measurement. Both trees were instrumented over the same package set with
+# `go test -run '^$' -coverpkg=./internal/...,./cmd/...`, which counts statements
+# without running a test, and the 1.0.0 side reproduces 12853 exactly; the 1.0.4
+# cov_run reports 12951. All 37 packages that contributed statements at 1.0.0
+# still do, and no package joined them, so every statement below is code:
+#
+#   +30  internal/jwt          the NumericDate range refusal in UnmarshalJSON and
+#                              the same bound at both mapNumericDate arms, plus
+#                              refuseAmbiguousClaimNames and its two call sites
+#                              in ParseWithClaims and ParseUnverified
+#   +24  internal/config       the REDIS_TLS surface: loadRedisTLS, the
+#                              isLoopbackHost split behind isLoopbackRedisAddr,
+#                              and the cleartext-cache-link warning
+#   +20  internal/audit        recordPurge, the sweepBatches split that tells it
+#                              which replica was elected, and the replica label
+#   +13  internal/outbound     ValidateAllowedHosts and isASCIIHost, and hostOf
+#                              refusing a non-ASCII host before it lowercases one
+#    +5  internal/cache        the RedisTLS option and its arity check in
+#                              NewRedisCache
+#    +3  internal/handler      the OAuth callback's auth_time fallback
+#    +3  internal/oauth2       auth_time read off the id_token, bounded
+#    +1  internal/redis        the TLS dialer, which carries RootCAs and takes a
+#                              context where tls.DialWithDialer took neither
+#    -1  internal/email        the lowercased copy the autolink walk searched,
+#                              deleted when the walk moved to hasPrefixFold over
+#                              the document's own bytes
+#
+# Eight of those nine are 1.0.3 security fixes with a CHANGELOG entry each. The
+# ninth is REDIS_TLS (internal/config, internal/cache, internal/redis: 30 of the
+# 98), which shipped in 1.0.3 with docs/config.md, charts/vault/values.yaml and
+# the compliance register describing it and no release note -- worth knowing when
+# reading 1.0.3, and not a jump nobody asked for.
+BASELINE_TOTAL_STATEMENTS = 12951
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -290,8 +329,8 @@ BASELINE_MAX_ENTRIES = 51
 #
 # The four cmd/ binaries belong here and were missing. cov_run has measured cmd/
 # since the package set was widened (see scripts/lib/coverage-env.sh), and the
-# statement floor was raised to include it, but this tuple was left at the
-# internal/-only list it held beforehand. So cmd/recover could have fallen out of
+# statement floor was raised to include it, but this list was left at the
+# internal/-only one it held beforehand. So cmd/recover could have fallen out of
 # the run entirely and only the floor would have noticed, which is the one check
 # a genuine deletion is expected to move.
 #
@@ -299,45 +338,65 @@ BASELINE_MAX_ENTRIES = 51
 # and nothing else, so it contributes no instrumented statement and listing it
 # would fail the check on a correct run. Its implementations live in
 # internal/repository/postgres, which is listed.
-BASELINE_PACKAGES = (
-    "cmd/admin-gateway",
-    "cmd/bridge",
-    "cmd/recover",
-    "cmd/vault",
-    "internal/adminapi",
-    "internal/alert",
-    "internal/audit",
-    "internal/cache",
-    "internal/cli",
-    "internal/config",
-    "internal/crypto",
-    "internal/deferwork",
-    "internal/dpop",
-    "internal/email",
-    "internal/firstboot",
-    "internal/frontend",
-    "internal/handler",
-    "internal/honeypot",
-    "internal/httputil",
-    "internal/ipintel",
-    "internal/jwt",
-    "internal/keystore",
-    "internal/kms",
-    "internal/metrics",
-    "internal/middleware",
-    "internal/migrate",
-    "internal/model",
-    "internal/oauth2",
-    "internal/outbound",
-    "internal/rbac",
-    "internal/redis",
-    "internal/repository/postgres",
-    "internal/sanitize",
-    "internal/seed",
-    "internal/server",
-    "internal/service",
-    "internal/useragent",
-)
+#
+# It carries each package's share of BASELINE_TOTAL_STATEMENTS rather than the
+# names alone, and the reason is the comment block above: every raise of the
+# floor owes an accounting, and twice now the accounting has been the thing that
+# was skipped -- once for 270 statements, once for a headline that disagreed with
+# its own arithmetic by three. A total nobody can decompose is a total nobody
+# checks. With the shares here, check_canonical writes the first draft of that
+# accounting from the profile itself, and the numbers are checked against the
+# total by TestCoverageBaselineAccountsForEveryStatement in tests/spec, which
+# needs no profile and so fails in seconds rather than after a canonical run.
+#
+# The shares are measured, like the total, and the gate itself is where they come
+# from: when the floor is behind it prints every package whose count moved, with
+# the figure to write here. Nothing else in this script reports per-package
+# statements -- --json carries the totals and the uncovered blocks by file, not a
+# package breakdown -- so that table is the source rather than one of two.
+BASELINE_PACKAGE_STATEMENTS = {
+    "cmd/admin-gateway": 352,
+    "cmd/bridge": 673,
+    "cmd/recover": 162,
+    "cmd/vault": 311,
+    "internal/adminapi": 1153,
+    "internal/alert": 63,
+    "internal/audit": 200,
+    "internal/cache": 195,
+    "internal/cli": 259,
+    "internal/config": 445,
+    "internal/crypto": 489,
+    "internal/deferwork": 52,
+    "internal/dpop": 3,
+    "internal/email": 684,
+    "internal/firstboot": 64,
+    "internal/frontend": 15,
+    "internal/handler": 1919,
+    "internal/honeypot": 208,
+    "internal/httputil": 33,
+    "internal/ipintel": 172,
+    "internal/jwt": 285,
+    "internal/keystore": 266,
+    "internal/kms": 35,
+    "internal/metrics": 84,
+    "internal/middleware": 575,
+    "internal/migrate": 44,
+    "internal/model": 6,
+    "internal/oauth2": 385,
+    "internal/outbound": 82,
+    "internal/rbac": 18,
+    "internal/redis": 338,
+    "internal/repository/postgres": 1081,
+    "internal/sanitize": 53,
+    "internal/seed": 152,
+    "internal/server": 260,
+    "internal/service": 1794,
+    "internal/useragent": 41,
+}
+
+# Derived rather than written out a second time: two lists of the same packages
+# are two lists that can disagree about which ones exist.
+BASELINE_PACKAGES = tuple(BASELINE_PACKAGE_STATEMENTS)
 
 
 def load(path):
@@ -900,6 +959,52 @@ def resolve_exclusions(blocks, doc):
     return excluded, problems
 
 
+def package_statements(blocks, module):
+    """Statements per package in a profile, keyed as BASELINE_PACKAGE_STATEMENTS is.
+
+    A package with no instrumented statement is absent rather than zero, which is
+    what the shape guard tests for.
+    """
+    counts = defaultdict(int)
+    for path, blks in index_profile(blocks, module).items():
+        counts[os.path.dirname(path)] += sum(b[2] for b in blks)
+    return counts
+
+
+def baseline_delta(counts):
+    """The per-package accounting a floor raise owes, ready to paste.
+
+    The floor spends most of its life a little behind, because it moves by review
+    and the tree moves by commit. The note that says so used to be one line --
+    "raise BASELINE_TOTAL_STATEMENTS to N" -- printed identically on every run
+    from the moment the tree grew until somebody acted on it, which is the shape
+    a reader learns to skip. Thresholding it so it only speaks up past some gap
+    would make it rarer without making it worth reading, and it would hide
+    exactly the drift that has twice reached this file as an unaccounted number:
+    270 statements once, and a headline off by three the time after that.
+
+    So it says which packages moved instead. The comment above
+    BASELINE_TOTAL_STATEMENTS demands that accounting in this format, and the
+    profile is the only thing that can produce it; whoever raises the floor still
+    owes the "what moved them" column, which is the half a machine cannot write.
+
+    Ordered by descending delta, matching the tables already in that comment, so
+    the output is pasteable rather than merely correct.
+    """
+    lines = []
+    for pkg in set(counts) | set(BASELINE_PACKAGE_STATEMENTS):
+        was = BASELINE_PACKAGE_STATEMENTS.get(pkg, 0)
+        now = counts.get(pkg, 0)
+        if was == now:
+            continue
+        # A package the baseline does not name is either new or renamed. Neither
+        # is caught by the shape guard, which can only miss what it was told to
+        # expect, so the line says so rather than reading as ordinary growth.
+        new = "" if pkg in BASELINE_PACKAGE_STATEMENTS else "  (new to the baseline)"
+        lines.append((now - was, f"{now - was:+6d}  {pkg}   {was} -> {now}{new}"))
+    return [line for _, line in sorted(lines, key=lambda kv: (-kv[0], kv[1]))]
+
+
 def check_canonical(blocks, total, module):
     """Confirm the profile is the canonical run, not a slice of it.
 
@@ -912,6 +1017,7 @@ def check_canonical(blocks, total, module):
     an argued one.
     """
     problems, notes = [], []
+    counts = package_statements(blocks, module)
     if total < BASELINE_TOTAL_STATEMENTS:
         problems.append(f"profile holds {total} statements, the canonical run holds "
                         f"{BASELINE_TOTAL_STATEMENTS}. Almost always this is a subset run: "
@@ -922,10 +1028,12 @@ def check_canonical(blocks, total, module):
                         f"the same review as the deletion.")
     elif total > BASELINE_TOTAL_STATEMENTS:
         notes.append(f"profile holds {total} statements, {total - BASELINE_TOTAL_STATEMENTS} "
-                     f"over the floor; raise BASELINE_TOTAL_STATEMENTS to {total}")
+                     f"over the floor. Raise BASELINE_TOTAL_STATEMENTS to {total} and "
+                     f"BASELINE_PACKAGE_STATEMENTS with it, and account for the change in the "
+                     f"comment above them. The packages that moved:\n      "
+                     + "\n      ".join(baseline_delta(counts)))
 
-    measured = {os.path.dirname(f) for f in index_profile(blocks, module)}
-    missing = [p for p in BASELINE_PACKAGES if p not in measured]
+    missing = [p for p in BASELINE_PACKAGES if p not in counts]
     if missing:
         problems.append(f"{plural(len(missing), 'canonical package')} contribute no statement "
                         f"to this profile, so nothing in them was measured: "

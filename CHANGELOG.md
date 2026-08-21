@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.0.4 (2026-08-21)
+
+### Tooling
+
+* **The coverage floor was 98 statements behind, and the note asking for the raise had
+  become furniture.** `BASELINE_TOTAL_STATEMENTS` in `scripts/cov-gaps.py` still read
+  12853, the figure measured on the 1.0.0 tree, while the canonical run reports 12951.
+  Nothing was broken by that: the floor still caught a package falling out of `-coverpkg`
+  as a smaller denominator rather than as a higher percentage, just 98 statements looser
+  than it should have been. What was missing is the working. The constant's whole
+  convention is that the figure arrives itemized, and a bare number in the one file whose
+  rule is "no bare numbers" is how 270 statements once entered the floor unaccounted for.
+
+  The 98 are now itemized package by package above the constant. Both trees were
+  instrumented over the same package set with `go test -run '^$'
+  -coverpkg=./internal/...,./cmd/...`, which counts statements without running a test, so
+  the diff is code and not a wider measurement; the 1.0.0 side reproduces 12853 exactly.
+  Thirty statements are `internal/jwt`'s `NumericDate` range refusal and
+  `refuseAmbiguousClaimNames`, twenty-four the `REDIS_TLS` surface in `internal/config`,
+  twenty the audit-retention purge record, thirteen the outbound punycode refusal, and the
+  remaining eleven the OAuth `auth_time` propagation, the Redis TLS dialer and the cache
+  TLS option, less the one statement `internal/email` deleted when the autolink walk
+  stopped searching a lowercased copy of the document.
+
+  Eight of those nine packages are 1.0.3 security fixes with a release note each. The ninth
+  is `REDIS_TLS`, 30 of the 98, which shipped in 1.0.3 described in `docs/config.md`,
+  `charts/vault/values.yaml` and the compliance register, and mentioned in no release note.
+
+* **`raise BASELINE_TOTAL_STATEMENTS to N` is now a per-package delta.** That note fired
+  identically on every run from the moment the tree grew until somebody acted on it, and a
+  line that never changes is a line a reader learns to skip. It now names which packages
+  moved and by how much, ordered and formatted like the tables in the comment it is asking
+  someone to extend, so the accounting is half-written before the file is opened; the
+  column a machine cannot fill in, what moved them, is still owed. Firing only past some
+  threshold was the alternative, and it would have hidden exactly the drift this file has
+  twice recorded as an unaccounted number.
+
+  `BASELINE_PACKAGE_STATEMENTS` carries each package's share of the floor, and
+  `BASELINE_PACKAGES`, the shape guard that catches a package dropped from the run while
+  enough statements remain elsewhere to clear the count, is derived from it rather than
+  written out a second time. `TestCoverageBaselineAccountsForEveryStatement` fails when the
+  shares and the total disagree, when a package is named twice, or when the shape guard
+  stops reading the same list. It reads the source and not a profile, so a mistyped share
+  fails in the same test run as the edit instead of after a 20-minute canonical run.
+
+  One of those disagreements was already in the file: the previous entry's headline read
+  12856, and 12783 + 64 + 6 is 12853, which is what the constant carried and what a
+  `cov_run` reproduces. The figure was right and the sentence introducing it was not.
+  Corrected, and now unrepeatable.
+
 ## 1.0.3 (2026-08-20)
 
 Three claims the project was making without having checked them, and a toolchain that
