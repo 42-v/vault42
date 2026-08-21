@@ -2,6 +2,49 @@
 
 ## 1.0.4 (2026-08-21)
 
+### Dependencies
+
+* **The badge table published the flattering half of the dependency question.** The `Deps`
+  row counted direct dependencies only: Go 3, Vue 3, C# 6. Those are the ones the maintainer
+  chose and can drop. Nothing anywhere said what they resolve to, which is the number a
+  supply-chain question is actually about, and for the frontend it is not close: 3 declared
+  packages pull in 95 more. The table now carries a second `Transitive` row per language and a
+  project-wide total, and `docs/badges.json` gains `transitiveDeps` per language plus a
+  top-level `totalDeps`. The direct figure stays where it was, because it is the one a
+  maintainer is answerable for.
+
+  Each transitive figure comes from what the toolchain resolves rather than from a manifest:
+  `go list -deps ./...` for Go, `pnpm-lock.yaml` for the frontend, and
+  `dotnet list package --include-transitive` for the SDKs. `optionalDependencies` are excluded
+  from the frontend count, because they are the per-platform binaries and including them would
+  publish 159 on one machine and 95 on another.
+
+* **`docs/deps.md` listed three modules as "pulled by" dependencies that do not pull them.**
+  The transitive table came from go.mod's indirect block filtered through a hand-written list
+  of module prefixes to skip. The list had to be edited by hand whenever a test dependency
+  moved, and nothing failed when it was not, so `cespare/xxhash`, `go-logr/logr` and
+  `go-logr/stdr` -- reached only through testcontainers and OpenTelemetry -- were published as
+  part of what the release carries. The skip list is gone. Membership of `go list -deps ./...`
+  now decides, which is the same question asked once instead of maintained twice, and the
+  generator refuses to write anything if a linked module has no row.
+
+### Tests
+
+* **The badge parity gate could not fail for the thing it existed to catch.**
+  `TestBadgeTableCarriesEveryShippedLanguage` compared README.md against `docs/badges.json`.
+  One `scripts/readme-gen.sh` run writes both, so their agreement was a property of the
+  generator and not evidence about the tree: a regeneration that never happened left a pair
+  that still matched. The 1.0.3 badges published 48651 Go lines across 195 files for a tree
+  holding 48062 across 192, and the gate was green for the whole release.
+
+  `TestBadgeFiguresMatchTheRepository` recounts, from the checkout, every figure a checkout
+  can be counted for: the three line counts, the Go file and test-file counts, and the three
+  direct dependency counts. The Go dependency recount reaches its answer from import
+  statements rather than from the module graph the generator uses, so the two computations
+  share no code. Test counts, coverage and the transitive figures are deliberately left out:
+  they need a run or a resolver, and a second unverified implementation for the first one to
+  agree with is the defect being removed, not a fix for it.
+
 ### Tooling
 
 * **The coverage floor was 98 statements behind, and the note asking for the raise had

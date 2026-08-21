@@ -1,6 +1,8 @@
 # Dependencies
 
-3 direct dependencies. Everything else — TOTP, CORS, JWKS, config, migrations, password hashing — is stdlib or hand-written.
+3 direct dependencies, and 15 more reached through them: 18 third-party modules linked into the binaries. Everything else -- TOTP, CORS, JWKS, config, migrations, password hashing -- is stdlib or hand-written.
+
+Both figures come from `go list -deps ./...`, which is what the build links, rather than from go.mod's require blocks, which also carry the test-only tree.
 
 ## Direct
 
@@ -10,14 +12,11 @@
 | `github.com/jackc/pgx/v5` | v5.10.0 | PostgreSQL driver + connection pool | ![stars](https://img.shields.io/github/stars/jackc/pgx?style=flat&label=) | 2026-06-03 |
 | `golang.org/x/crypto` | v0.55.0 | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-08-11 |
 
-## Transitive (18 pulled by the above)
+## Transitive (15 pulled by the above)
 
 | Dependency | Version | Pulled by | Stars | Updated |
 |---|---|---|---|---|
-| `github.com/cespare/xxhash/v2` | v2.3.0 |  | ![stars](https://img.shields.io/github/stars/cespare/xxhash?style=flat&label=) | 2024-04-04 |
 | `github.com/fxamacker/cbor/v2` | v2.9.2 | webauthn (CBOR encoding) | ![stars](https://img.shields.io/github/stars/fxamacker/cbor?style=flat&label=) | 2026-08-18 |
-| `github.com/go-logr/logr` | v1.4.3 |  | ![stars](https://img.shields.io/github/stars/go-logr/logr?style=flat&label=) | 2026-07-20 |
-| `github.com/go-logr/stdr` | v1.2.2 |  | ![stars](https://img.shields.io/github/stars/go-logr/stdr?style=flat&label=) | 2021-12-14 |
 | `github.com/go-viper/mapstructure/v2` | v2.5.0 | webauthn | ![stars](https://img.shields.io/github/stars/go-viper/mapstructure?style=flat&label=) | 2026-01-12 |
 | `github.com/go-webauthn/x` | v0.2.6 | webauthn | ![stars](https://img.shields.io/github/stars/go-webauthn/x?style=flat&label=) | 2026-08-15 |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 |  | ![stars](https://img.shields.io/github/stars/golang-jwt/jwt?style=flat&label=) | 2026-01-28 |
@@ -77,15 +76,13 @@
 
 ## Maintainers
 
-12 maintainers behind Vault's dependency tree.
+10 maintainers behind Vault's dependency tree.
 
 | Creator | Type | Packages | Repos | Followers | Since |
 |---|---|---|---|---|---|
-| [cespare](https://github.com/cespare) | User | xxhash | 150 | ![followers](https://img.shields.io/github/followers/cespare?style=flat&label=) | 2010-06-30 |
 | [fxamacker](https://github.com/fxamacker) | User | cbor | 38 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
-| [go-logr](https://github.com/go-logr) | Org | logr, stdr | 7 | ![followers](https://img.shields.io/github/followers/go-logr?style=flat&label=) | 2017-01-17 |
 | [google](https://github.com/google) | Org | go-tpm, uuid | 2893 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |

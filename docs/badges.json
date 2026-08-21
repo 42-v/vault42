@@ -8,33 +8,37 @@
   "reachableCoverage": "100.00%",
   "reachableCoverageNum": 100.00,
   "packages": 44,
-  "goFiles": 195,
-  "goLines": 48651,
+  "goFiles": 192,
+  "goLines": 48062,
   "testFiles": 920,
   "directDeps": 3,
-  "transitiveDeps": 18,
+  "transitiveDeps": 15,
   "totalTests": 6467,
+  "totalDeps": 148,
   "languages": {
     "go": {
       "tests": 4898,
       "coverage": "100.00% of reachable",
       "coverageNum": 100.00,
-      "lines": 48651,
-      "deps": 3
+      "lines": 48062,
+      "deps": 3,
+      "transitiveDeps": 15
     },
     "vue": {
       "tests": 1305,
       "coverage": "99.76%",
       "coverageNum": 99.76,
       "lines": 6743,
-      "deps": 3
+      "deps": 3,
+      "transitiveDeps": 95
     },
     "csharp": {
       "tests": 264,
       "coverage": "100.00%",
       "coverageNum": 100.00,
       "lines": 2347,
-      "deps": 6
+      "deps": 6,
+      "transitiveDeps": 26
     }
   }
 }
