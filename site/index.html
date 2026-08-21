@@ -198,7 +198,7 @@ CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault</cod
         <pre id="code-helm"><code>microk8s helm3 upgrade --install vault42 charts/vault \
   -n vault42 \
   -f charts/vault/values-embedded.yaml \
-  --set image.tag=1.0.3 \
+  --set image.tag=1.0.4 \
   --set origin=https://vault.example.com \
   --set secrets.existingSecret=vault42-secrets</code></pre>
         <button class="v-btn v-btn--ghost copy-btn" data-copy-target="code-helm" type="button" aria-label="copy helm commands">COPY</button>
@@ -211,7 +211,7 @@ CGO_ENABLED=0 GOARCH=arm64 go build -ldflags="-s -w" -o vault42 ./cmd/vault</cod
   <!-- 6. FOOTER -->
   <footer class="footer container">
     <div>
-      <span class="ver">vault42 v1.0.3</span> <span style="margin:0 6px">·</span> MIT
+      <span class="ver">vault42 v1.0.4</span> <span style="margin:0 6px">·</span> MIT
     </div>
     <div class="links">
       <a href="#deploy" class="upper">DEPLOY</a>

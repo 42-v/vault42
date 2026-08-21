@@ -19,7 +19,7 @@ not apply.
 
 The requirement register is [`docs/compliance-register.json`](compliance-register.json):
 one row per requirement, carrying the verbatim requirement text, its status, the
-`file:line` implementing it and the name of the test that proves it. **CI fails
+an anchor naming the line that implements it and the name of the test that proves it. **CI fails
 if any requirement marked Met names a test that does not exist**, so the register
 cannot drift from the suite.
 
@@ -114,9 +114,9 @@ Through 1.0.0 this paragraph said 15 "is the minimum vault42 has enforced since
 any floor at all. The row was downgraded to an accepted risk, CR-31, rather than
 the claim being softened.
 
-The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:831`),
-a non-dev profile refuses to start below it (`:580`), and dev carries a lower
-floor of 8 (`:839`, selected by `passwordFloorFor` at `:843`) rather than none
+The floor is now 15 (`passwordMinLengthFloor`, `internal/config/config.go:1006`),
+a non-dev profile refuses to start below it (`:644`), and dev carries a lower
+floor of 8 (`:1014`, selected by `passwordFloorFor` at `:1018`) rather than none
 -- 8 being the figure §3.1.1.1 requires a verifier to accept, so no profile now
 takes a four-character password. The row is Met and CR-31 is closed.
 `TestNIST63B4_3_1_1_2_TheEnforcedPasswordFloorIsWhatTheDocsSay` reads both
@@ -164,7 +164,7 @@ versions should be able to see what changed and why.
 | Previous finding | Reality |
 |---|---|
 | **V6.2.2 Partial** -- "document the RFC 6238 SHA-1 constraint in the TOTP module" | The comment already existed, at `internal/crypto/totp.go:5`. The finding requested a remediation that had shipped. Now Met. |
-| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1257` precedes `Create` at `:1344`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
+| **OAUTH2-TOKEN-001 Partial** -- "verify that the prior refresh token is revoked on rotation" | The ordering was already correct and is the safe one: `MarkUsed` at `internal/service/auth.go:1399` precedes `Create` at `:1590`. An interrupted rotation loses the session rather than leaving two live tokens. Now Met and asserted by test. |
 | **SC-7 Partial** -- "provide network-policy examples in the deployment documentation" | `charts/vault/templates/networkpolicy.yaml` is 340 lines and `charts/vault/values.yaml:382` enables it **by default**. Now Met. |
 | **V6.4.1 Partial** -- "the runtime pepper and database password remain in memory" (2 fields) | There are **eight** string-typed configuration secrets, not 2: `DBMigPassword`, `DBAppPassword`, `Pepper`, `SendGridAPIKey` and the three OAuth client secrets on `config.Config`, plus a `ClientSecret` per configured OIDC provider. Only `MasterKey`, `KMSRootKey` and `HMACSecret` are `[]byte` and zeroed. `docs/security.md` AR-4 still lists the pepper among the `[]byte` values it zeroes, while `internal/config/config.go:71` declares it a `string`; that correction has not been made and is owed. |
 | **V8.3.2 Partial** -- "decrypted identity plaintext is not explicitly wiped" | That buffer **is** wiped, at `internal/service/identity.go:200`, with a comment naming the requirement. This row used to add that the decrypted **RSA private signing key PEM** was the buffer left unwiped, citing `internal/keystore/keystore.go:297`. That was itself wrong: `:297` is a comment line, and the PEM is wiped on both paths, at `:211` and `:442`, exactly as [`security.md`](security.md) already said. The decrypted blob plaintext and label were the buffers genuinely left unwiped; both are wiped now, at `internal/service/blob.go:378`, `:405` and `:447`, which is what closed CR-25. |
@@ -308,7 +308,7 @@ neither namespace.
 | **CR-14** | Low | No inactivity timeout exists, and the absolute session lifetime defaults to 720 hours where SP 800-63B-4 §2.2.3 recommends no more than 24 at AAL2. The mandatory requirement that *a* definite timeout be established is met. | ASVS V7.1.1, V7.3.1 · 800-63B-4 §2.2.3, §5.2 · 800-53 AC-12 |
 | **CR-15** | Medium | Security events are logged comprehensively but nothing alerts on them. `risk_score` is a severity tag the call site hardcodes; it is selected and returned by `GET /admin/audit` and colour-coded in the dashboard, but no filter narrows on it and no code path acts on its value. The only outbound channel is installed in the honeypot profile only. | Top 10 A09:2025 · 800-53 AU-6 · GDPR Arts. 33, 34 |
 | **CR-20** | Low | Authenticator loss is handled by operator escrow rather than repeated identity proofing. vault42 performs no identity proofing at enrollment, so there is no level to match. Backup codes exist but are opt-in behind a password confirmation, and email OTP is switched off for an account that has a strong factor, so a user who loses every factor without having generated codes has no recovery path. | ASVS V6.4.4 |
-| **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:166-168` writes all three onto every access token, and `internal/service/mfa.go:116,127` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
+| **CR-21** | Low | **Closed in the code, still open in the register.** The row says tokens carry no `acr`, `amr` or `auth_time` and that the AAL constants have no non-test caller. `internal/service/token.go:210-212` writes all three onto every access token, and `internal/service/mfa.go:129,162` derive them from the authenticator's own user-verification result. A resource server can require a specific authentication strength. The register row is the owning stream's to move. | ASVS V6.8.4, V10.3.4 |
 | **CR-22** | Low | The identity provider's own session lifetime is not tracked, so a federated session is bound to vault42's lifetime only. Termination is unhandled in both directions: an upstream logout does not end the vault42 session, and a vault42 logout does not end the upstream one. | ASVS V7.6.1 |
 | **CR-23** | Low | **Closed in the code, still open in the register.** The row says outbound SMTP negotiates STARTTLS opportunistically with no minimum version. `internal/email/smtp.go:112` sets `MinVersion: tls.VersionTLS12`, and `:115-117` refuses to send in the clear unless `VAULT_SMTP_ALLOW_PLAINTEXT` is set, which itself is refused outside dev and loopback. What remains is that a server advertising no STARTTLS is detected by its own EHLO response, so a downgrade needs an active attacker on the path. | ASVS V12.3.1 |
 | **CR-24** | Medium | The audit log is not cryptographically chained and is not mirrored off-system. An *unkeyed* chain would be recomputable by the adversary it targets; a keyed one would detect interior edits and prefix deletions and would still not detect truncation. V16.4.3 is a transport requirement a chain does not touch. | ASVS V16.4.3 · 800-53 AU-9 · GDPR Art. 5(2) |
@@ -422,7 +422,7 @@ Full text for each, including what was accepted while it was open, is in
 table above.
 
 **How each row was reached.** Every requirement was read in its published text,
-not in a paraphrase, and classified against source at a cited `file:line`. Where
+not in a paraphrase, and classified against source at a cited anchor. Where
 a previous version of this document and the code disagreed, the code won and the
 disagreement was recorded as a correction above.
 
@@ -499,8 +499,8 @@ the day they were written.
 **Correction.** This section previously said CR-14's mandatory half was
 unwired and that `TestNIST63B4_2_2_3_TheAbsoluteBoundIsStillUnwired` would fail
 when the wiring landed. Both halves were wrong. The wiring is present, at
-`cmd/vault/main.go:402` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
-fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:468`
+`cmd/vault/main.go:430` -- `tokenSvc.SetMaxSessionLifetime(cfg.MaxSessionLifetime)`,
+fed by the `VAULT_MAX_SESSION_LIFETIME` default at `internal/config/config.go:519`
 -- and no test of that name has ever existed. The tests that do exist are
 `TestNIST63B4_2_2_3_AbsoluteReauthenticationBoundIsImplemented`, which asserts
 the mandatory SHALL is satisfied, and

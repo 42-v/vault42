@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Vault42.AspNetCore</RootNamespace>
     <PackageId>Vault42.AspNetCore</PackageId>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
     <Authors>42-v</Authors>
     <Description>ASP.NET Core authentication middleware for Vault42 — a production-grade Go JWT auth service. Validates RS256 JWTs via JWKS with auto-refresh, claim mapping, fingerprint validation, and authorization policies.</Description>
     <PackageTags>vault42;jwt;authentication;authorization;aspnetcore;jwks</PackageTags>

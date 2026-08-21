@@ -1,5 +1,323 @@
 # Changelog
 
+## 1.0.4 (2026-08-21)
+
+### Dependencies
+
+* **The badge table published the flattering half of the dependency question.** The `Deps`
+  row counted direct dependencies only: Go 3, Vue 3, C# 6. Those are the ones the maintainer
+  chose and can drop. Nothing anywhere said what they resolve to, which is the number a
+  supply-chain question is actually about, and for the frontend it is not close: 3 declared
+  packages pull in 95 more. The table now carries a second `Transitive` row per language and a
+  project-wide total, and `docs/badges.json` gains `transitiveDeps` per language plus a
+  top-level `totalDeps`. The direct figure stays where it was, because it is the one a
+  maintainer is answerable for.
+
+  Each transitive figure comes from what the toolchain resolves rather than from a manifest:
+  `go list -deps ./...` for Go, `pnpm-lock.yaml` for the frontend, and
+  `dotnet list package --include-transitive` for the SDKs. `optionalDependencies` are excluded
+  from the frontend count, because they are the per-platform binaries and including them would
+  publish 159 on one machine and 95 on another.
+
+* **`docs/deps.md` listed three modules as "pulled by" dependencies that do not pull them.**
+  The transitive table came from go.mod's indirect block filtered through a hand-written list
+  of module prefixes to skip. The list had to be edited by hand whenever a test dependency
+  moved, and nothing failed when it was not, so `cespare/xxhash`, `go-logr/logr` and
+  `go-logr/stdr` -- reached only through testcontainers and OpenTelemetry -- were published as
+  part of what the release carries. The skip list is gone. Membership of `go list -deps ./...`
+  now decides, which is the same question asked once instead of maintained twice, and the
+  generator refuses to write anything if a linked module has no row.
+
+### Tests
+
+* **The badge parity gate could not fail for the thing it existed to catch.**
+  `TestBadgeTableCarriesEveryShippedLanguage` compared README.md against `docs/badges.json`.
+  One `scripts/readme-gen.sh` run writes both, so their agreement was a property of the
+  generator and not evidence about the tree: a regeneration that never happened left a pair
+  that still matched. The 1.0.3 badges published 48651 Go lines across 195 files for a tree
+  holding 48062 across 192, and the gate was green for the whole release.
+
+  `TestBadgeFiguresMatchTheRepository` recounts, from the checkout, every figure a checkout
+  can be counted for: the three line counts, the Go file and test-file counts, and the three
+  direct dependency counts. The Go dependency recount reaches its answer from import
+  statements rather than from the module graph the generator uses, so the two computations
+  share no code. Test counts, coverage and the transitive figures are deliberately left out:
+  they need a run or a resolver, and a second unverified implementation for the first one to
+  agree with is the defect being removed, not a fix for it.
+
+### Tooling
+
+* **`--at-tag` reported "passed 0, failed 0" and exited 0.** The mode was added earlier in this
+  release to run the history-reading gates the way a release sees them, and the concurrency
+  change landed after it: `gate()` queues now and `collect()` waits and scores, and the
+  `--at-tag` block called the first without the second. So the mode whose entire purpose is
+  catching a gate that has never run in the situation it guards spent its first release
+  reporting success for two suites that had not run. `collect` is called, and a run that scores
+  zero gates now fails rather than passing vacuously. Verified by removing `collect` again and
+  watching it refuse, and by reinstating the `UPGRADING.md` defect and watching the spec suite
+  fail at the tag.
+
+* **The two lists of allowed commit types had drifted apart again, in the place a comment
+  warned they would.** `commitlint.config.js` checks every commit on a branch;
+  `.github/workflows/commitlint.yml` hands its own copy of the same list to the PR-title
+  action. The comment above the workflow's copy already records what happened the first time --
+  `security` was added to one and not the other, so a `security:` title passed the commit check
+  and failed the title check -- and then `compliance` was added to the config and not to the
+  workflow, and the same contradiction came back in the same two files. The workflow's list
+  gains `compliance`, and `TestCommitTypeListsAgree` now reads both and fails in either
+  direction, because a comment asking the next person to remember is not a gate.
+
+* **A rejected PR title could not be fixed by fixing it.** The Commit Lint workflow triggered
+  on `opened`, `synchronize` and `reopened` only, so editing a title left the failed run
+  standing against a title that no longer existed and the only way to re-run the check was to
+  push a commit. This release PR hit it within a minute of opening. `edited` is in the trigger
+  list now.
+
+* **`scripts/local-ci.sh` ran nineteen independent tools one after another.** Every gate is a
+  separate binary reading the same read-only tree; none of them writes anything the next one
+  reads. They now run concurrently, `nproc - 2` at a time, with each gate's output buffered and
+  replayed in declaration order so a parallel run reads exactly like a serial one. The `--fast`
+  batch is 21 seconds of wall clock against 113 seconds of gate time. Each gate reports its own
+  duration and the summary prints both figures, so the claim is checkable rather than asserted,
+  and `LOCAL_CI_LANES=1` restores the serial behaviour for when a gate is suspected of being
+  order-dependent.
+
+* **The coverage run applied `-p 1` to all 44 packages to protect five of them.** Five packages
+  start a container per test -- `internal/cache`, `internal/repository/postgres`, and the attack,
+  integration and compliance suites -- and they contend for ports if run together. The other 39
+  were serialized by association, for years. `cov_run` now splits the run by what each package
+  imports rather than by a hand-kept list: the container-bound five keep `-p 1`, the rest get
+  `-p $(nproc)`, and the two profiles are merged under a single mode header copied from whichever
+  half produced one rather than hardcoded, so a later `-covermode=atomic` cannot leave the merged
+  profile claiming `set`. `-coverpkg` is identical across both halves, so attribution cannot
+  differ between them.
+
+* **The badge generator counted files that are not this module's, and the gate that
+  checks it agreed.** `scripts/readme-gen.sh` pruned `vendor/` and nothing else, so
+  `find . -name '*.go'` walked `tmp/` -- two scratch `main.go` files left by a 1.0.0 audit and
+  a hardening experiment -- and `node_modules/`, where the `flatted` npm package ships a Go
+  implementation of itself. The README published 195 non-test files and 48651 lines for a
+  module that has 192 and 48062. `TestBadgeFiguresMatchTheRepository` could not catch it
+  because it recounted the tree the same way the generator did, so both were wrong together
+  and consistent with each other. Both now prune the same four directories, and the badge row
+  is regenerated from what the module actually contains.
+
+* **A rate-limited creator lookup was published as a fact about the dependency.** The
+  maintainers table in `docs/deps.md` makes one `api.github.com` call per owner. That API
+  allows 60 an hour unauthenticated and answers `403` past it; `curl -f` reported that the
+  same way it reports a missing account, and the row was written as
+  `| tinylib | — | msgp | — | — | — |` for a three-repo organization that has been on GitHub
+  since 2015. Nothing failed, because a row of em-dashes is well-formed. The reader had no
+  way to tell "the generator could not reach GitHub" from "nobody maintains this", and the
+  second reading is the alarming one.
+
+  The generator now reads the status code instead of only the exit code. `404` still writes
+  the unknown row, because there the account really is absent. `403` and `429` stop the run
+  and name `GITHUB_TOKEN` as the fix. Transient failures -- a timeout, a `5xx`, a dropped
+  connection -- are retried three times before they are believed, so a single flaky call does
+  not block a commit. `TestDepsMaintainerTableHasNoUnreachedRows` is the offline half: it
+  fails if a placeholder reaches the tree by any route, against an `absentFromGitHub` set that
+  is empty and costs a written reason to add to. A second gate ties the "N maintainers behind"
+  headline to the number of rows beneath it.
+
+* **The coverage floor was 98 statements behind, and the note asking for the raise had
+  become furniture.** `BASELINE_TOTAL_STATEMENTS` in `scripts/cov-gaps.py` still read
+  12853, the figure measured on the 1.0.0 tree, while the canonical run reports 12951.
+  Nothing was broken by that: the floor still caught a package falling out of `-coverpkg`
+  as a smaller denominator rather than as a higher percentage, just 98 statements looser
+  than it should have been. What was missing is the working. The constant's whole
+  convention is that the figure arrives itemized, and a bare number in the one file whose
+  rule is "no bare numbers" is how 270 statements once entered the floor unaccounted for.
+
+  The 98 are now itemized package by package above the constant. Both trees were
+  instrumented over the same package set with `go test -run '^$'
+  -coverpkg=./internal/...,./cmd/...`, which counts statements without running a test, so
+  the diff is code and not a wider measurement; the 1.0.0 side reproduces 12853 exactly.
+  Thirty statements are `internal/jwt`'s `NumericDate` range refusal and
+  `refuseAmbiguousClaimNames`, twenty-four the `REDIS_TLS` surface in `internal/config`,
+  twenty the audit-retention purge record, thirteen the outbound punycode refusal, and the
+  remaining eleven the OAuth `auth_time` propagation, the Redis TLS dialer and the cache
+  TLS option, less the one statement `internal/email` deleted when the autolink walk
+  stopped searching a lowercased copy of the document.
+
+  Eight of those nine packages are 1.0.3 security fixes with a release note each. The ninth
+  is `REDIS_TLS`, 30 of the 98, which shipped in 1.0.3 described in `docs/config.md`,
+  `charts/vault/values.yaml` and the compliance register, and mentioned in no release note.
+
+* **`raise BASELINE_TOTAL_STATEMENTS to N` is now a per-package delta.** That note fired
+  identically on every run from the moment the tree grew until somebody acted on it, and a
+  line that never changes is a line a reader learns to skip. It now names which packages
+  moved and by how much, ordered and formatted like the tables in the comment it is asking
+  someone to extend, so the accounting is half-written before the file is opened; the
+  column a machine cannot fill in, what moved them, is still owed. Firing only past some
+  threshold was the alternative, and it would have hidden exactly the drift this file has
+  twice recorded as an unaccounted number.
+
+  `BASELINE_PACKAGE_STATEMENTS` carries each package's share of the floor, and
+  `BASELINE_PACKAGES`, the shape guard that catches a package dropped from the run while
+  enough statements remain elsewhere to clear the count, is derived from it rather than
+  written out a second time. `TestCoverageBaselineAccountsForEveryStatement` fails when the
+  shares and the total disagree, when a package is named twice, or when the shape guard
+  stops reading the same list. It reads the source and not a profile, so a mistyped share
+  fails in the same test run as the edit instead of after a 20-minute canonical run.
+
+  One of those disagreements was already in the file: the previous entry's headline read
+  12856, and 12783 + 64 + 6 is 12853, which is what the constant carried and what a
+  `cov_run` reproduces. The figure was right and the sentence introducing it was not.
+  Corrected, and now unrepeatable.
+
+* **`scripts/register-reanchor.py` converts a line number into an anchor, and stopped
+  reporting nonsense on its second run.** Write `path:line` if that is what you have and
+  `--apply` turns it into an anchor for the statement that was on it.
+
+  Its prose half -- the sentences in `notes` and in the risk bodies, which still carry
+  `path:line` because an anchor mid-sentence reads as a quotation of the code -- compared
+  the ref's text at the number *currently* in the register. Once a citation had been
+  re-anchored, that number addressed a different line at the ref, and the tool proposed
+  moving a correct citation onto whatever text used to live there. A prose field is now
+  remapped only when it is byte-identical to the same field at the ref: an edited field may
+  already carry the author's own fix, and guessing on top of that is what produced the drift
+  in the first place.
+
+### Documentation
+
+* **`docs/UPGRADING.md` still described the hop from v0.9.9.** It was written for 1.0.0 and
+  never touched again, so an operator on 1.0.3 opened it and read that their upgrade applies 27
+  migrations. It applies none. The gate that checks it -- `TestUpgradingDocMigrationCountsMatchTheTree` --
+  did not catch that for three releases because it compares against the most recent release tag
+  reachable from HEAD, and 1.0.0, 1.0.1 and 1.0.2 were all merged without one: v0.9.9 was
+  genuinely the last tag until v1.0.3 existed. The document now leads with the 1.0.3 to 1.0.4
+  hop, which changes no schema, no secret keys and no behaviour, and keeps the 0.9.x section
+  below it for anyone still making that jump, reworded so it describes 1.0.0 in the past tense
+  rather than claiming to be the current release.
+
+* **The README told you how to build Vault42 and never how to install it.** Three releases
+  have published signed images, a signed Helm chart on `oci://ghcr.io/42-v/charts` and two SDKs
+  on nuget.org, and the front page's first runnable command was `git clone` followed by
+  `go build`. A reader who wanted to try the thing had to read `release.yml` to find out that
+  the artifacts existed. There is now an `Install` section above the feature list with the four
+  ways to consume a release -- chart, three images, two SDKs -- and one paragraph saying plainly
+  that a default `helm install` renders but does not come up, because the Deployment mounts
+  eight keys out of a Secret the operator supplies and expects a PostgreSQL they already run.
+
+  Both new claim shapes are gated. `imageRefs` in `tests/spec/published_tags_test.go` only
+  matched `ghcr.io/42-v/vault42:`, so the admin-gateway and bridge tags in the new block would
+  have been published unchecked; it matches all three images now and the reference floor goes
+  from 3 to 6. `TestPublishedNonImageArtifactsNameThisVersion` is new and holds the chart pull
+  and the two `dotnet add package` lines to the VERSION file, which matters more than it does
+  for an image: a stale tag still resolves because `:latest` exists, while
+  `helm pull --version 1.0.3` against a 1.0.4 tree is either the wrong software or a 404.
+  `scripts/version-bump.sh` gains rules for all three so they propagate rather than needing a
+  gate to catch them.
+
+* **README.md claimed 80 endpoints for a document that lists 105.** Eight gates read the
+  README -- badges, published version strings, script invocations, cited test names -- and none
+  of them read the documentation table, so the one-line summary of `docs/api.md` kept the split
+  it had when the admin gateway carried 18 routes. It now carries 43. The line is corrected to
+  105 total, and `TestRouteInventoryHeadlineMatchesTheTable` was extended to read the README's
+  claim alongside the one in `docs/api.md`, so the summary can no longer drift from the page it
+  summarizes.
+
+* **The API reference understated the failure surface of 17 endpoints, and now a gate
+  holds it.** A fresh verification pass over `docs/api.md` found 49 error rows that the
+  handlers can answer with and the document did not list. Every omission ran the same
+  way -- the page described a narrower, tidier set of failures than the code has -- so a
+  client that handled every documented code still met undocumented ones in production.
+
+  The largest groups: the OAuth callback omitted all six codes it can answer beyond the
+  documented ten, including the four `403`s that stop federated login becoming a way
+  round an operator's ban, and `429 session_limit_reached`. The four 2FA verify
+  endpoints each omitted the shared refusal set they inherit from the MFA completion
+  path -- `401 challenge_consumed`, `403 account_banned`, `403 account_disabled`,
+  `403 account_locked`, `429 too_many_sessions` -- which are the codes that mean the
+  second factor was correct and the platform refused the session anyway. Backup-code
+  verify omitted the `409` a raced code returns; WebAuthn verify/finish omitted
+  `500 webauthn_error`; `POST /auth/refresh` omitted all three account-state `403`s;
+  password reset confirm omitted `400 password_breached` and the two `500`s that mean
+  the password was already changed and the reset link is spent. The two `/user/social`
+  endpoints had no error table at all.
+
+  `tests/spec/api_error_code_parity_test.go` now asserts that every literal
+  `WriteError` in a route-annotated handler has a row in that route's table, resolving
+  the shared MFA helper into its four callers. A companion test fails if a handler's
+  route comment stops naming a documented endpoint, and a third fails if the inlined
+  helper list stops resolving -- without it, renaming the helper would drop six rows
+  per endpoint from the gate's view while leaving it green.
+
+* **`POST /auth/2fa/webauthn/verify/begin` and `/finish` carry no rate limiter, and the
+  page said every 2FA verify was fail-closed.** They are not limited at all, so a cache
+  outage changes nothing for them; the claim read as a stronger guarantee than the mux
+  keeps. The asymmetry is deliberate -- an assertion is a signature over a server-chosen
+  challenge and has no guessing budget to cap -- and is now stated rather than papered
+  over. `spec.md` section 8.1 was already correct and omits the pair.
+
+* **Sharing the confirmation rate-limit bucket was described as being
+  confirmation-gated.** Only three of the six routes on that bucket require a recent
+  `POST /auth/confirm`. `DELETE /user/social/{id}` requires neither that nor a password
+  in the body: a valid access token is enough to unlink a federated identity.
+
+* **The blob label cap was given as 255 bytes; it is 255 characters and it truncates.**
+  Counted in runes, so 255 CJK characters are accepted at roughly 765 bytes on the wire,
+  and an over-length label is silently cut rather than refused -- a client that does not
+  read `label` back from the response is not told. Wrong in both units and outcome.
+
+* **The reset token is spent before the new password is validated.** `password_breached`
+  and `password_recently_used` reject after the link is already consumed, so it cannot
+  be retried with a better password. Documented, because a client that offers a retry
+  sends the user into `invalid_or_expired_token`.
+
+* **Nine source citations pointed at unrelated code.** `passwordMinLengthFloor`,
+  `SetMaxSessionLifetime`, `VAULT_MAX_SESSION_LIFETIME`, the refresh-rotation
+  `MarkUsed`/`Create` ordering, the `acr`/`amr`/`auth_time` write sites,
+  `VAULT_STRICT_SESSION_LIMIT`, `VAULT_MINT_AUDIENCE`'s start-up refusal and
+  `IPIntelWeight` had all drifted by between 28 and 175 lines as code was inserted
+  above them. Each was re-anchored to the line that carries the behaviour.
+
+### Compliance
+
+* **The register's code evidence is an anchor, not a line number.** All 460 `path:line`
+  citations in `docs/compliance-register.json` now name what they point at --
+  `internal/handler/oauth.go#data, err := h.cache.GetAndDelete(...)` -- in the grammar
+  `.github/workflows` evidence has used since 1.0.3, extended to the other 98 cited paths
+  and to an `in:<declaration>:<substring>` form that scopes a repeated statement to the Go
+  declaration holding it.
+
+  A line number is invalidated by any edit above it. Three citations broke that way in one
+  working session: V9.1.2 drifted onto a bare `}`, V10.3.4 and API1:2023 onto a `)` and a
+  comment, V5.1.1 onto a blank line after `docs/api.md` was edited. Each was re-derived by
+  hand, and the shape no gate could catch is the one that lands on a real line belonging to
+  something else -- which is what the same code movement does to the old citations for
+  V10.4.10: it repoints them at a struct field and an unrelated function, resolvable and
+  wrong.
+
+  Two rules make it a control rather than a convention, both copied from the workflow gate.
+  An anchor matching more than one line is an error, because an anchor that identifies four
+  lines identifies none of them. An anchor matching nothing names the requirement, the file
+  and the anchor, because the statement it named is gone and a person has to decide what
+  that means for the row. `path:line` is rejected outright: a gate that tolerates the old
+  form for a while is a migration that never finishes.
+
+  What the cited line must *be* is unchanged. The relevance gate resolves the anchor and
+  then applies the same checks it always did, so an anchor onto a closing brace fails
+  exactly as a drifted number did.
+
+* **Twenty-two citations that could not be anchored were re-derived.** An anchor needs the
+  cited line to identify itself, and twenty-two did not: five were a bare `//`, two a lone
+  `return`, and the rest a `{{- end }}`, a `spec:`, a `-- ====` divider and a curl example
+  repeated 35 times in `docs/api.md`. Each is the same defect as a blank line arriving a
+  few lines earlier, and none of the existing gates could see it. Each was replaced with
+  the line the row's own notes name as the mechanism: V2.4.1 now cites the `loginRL`
+  construction rather than a `KeyStore` branch 55 lines above it, V6.8.1 cites
+  `UNIQUE(provider, provider_user_id)` in migration 001 rather than a role-vocabulary
+  comment in a package that has no provider concept, and PSS-host-namespaces cites
+  `hostNetwork: false` rather than a CPU request.
+
+  A citation to line 1 of a file is now the bare path. Line 1 is `package x`, an H1 or an
+  `apiVersion`, and the register already has a form for "this whole file".
+
+  Three entries left `evidenceRelevanceExemptions` as a result and were deleted, which is
+  the only direction that list moves.
+
 ## 1.0.3 (2026-08-20)
 
 Three claims the project was making without having checked them, and a toolchain that

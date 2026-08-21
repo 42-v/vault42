@@ -79,7 +79,7 @@ checked, so check it. Five artifact classes ship:
 | `vault42_<version>_SHA256SUMS` | GitHub release assets | cosign keyless, as a Sigstore bundle (`.bundle`) carrying the signature, the certificate chain and the Rekor inclusion proof |
 
 ```bash
-VERSION=1.0.3
+VERSION=1.0.4
 IDENTITY='^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$'
 ISSUER=https://token.actions.githubusercontent.com
 

@@ -44,13 +44,29 @@ overwrite you.
 | `docs/deps.md` | `scripts/readme-gen.sh` |
 | `docs/test-coverage.md` | `scripts/coverage.sh` |
 
-### The compliance register cites code by line, and code moves
+### The compliance register names the lines it cites, and prose still counts them
 
-`docs/compliance-register.json` carries `path:line` citations in its `evidence`
-lists and inside its prose. Three gates reject a citation that lands somewhere
-dead -- a blank line, a closing brace, an anchor that no longer resolves -- and
-none of them can see the case where it lands on a real line that simply is not
-the one anybody meant. That case has arrived four times.
+`docs/compliance-register.json` cites code in its `evidence` lists by **anchor**,
+not by line number:
+
+```text
+path                        the whole file
+path#<substring>            the unique line containing <substring>
+path#^<prefix>              the unique line starting with <prefix>
+path#in:<decl>:<substring>  the same, scoped to a Go declaration
+```
+
+An anchor matching more than one line is an error rather than a first match, so
+a citation either names exactly one statement or fails loudly. Line numbers are
+rejected outright in `evidence`: they drifted five times in a single session,
+each time landing on a real line that simply was not the one anybody meant,
+which no gate could see.
+
+The prose fields -- `notes`, the risk bodies, the retired-risk paragraphs --
+still carry `path:line`, deliberately. An anchor mid-sentence reads as a
+quotation of the code, and the relevance gate matches identifiers against those
+notes, so pasting cited line text into them would make that gate pass
+trivially.
 
 After a change that moves code, run:
 
