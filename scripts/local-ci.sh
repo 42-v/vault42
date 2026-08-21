@@ -17,6 +17,7 @@
 #   scripts/local-ci.sh            everything, roughly 30 minutes
 #   scripts/local-ci.sh --fast     everything except the race suite and coverage
 #   scripts/local-ci.sh --list     the gates and whether their tool is installed
+#   scripts/local-ci.sh --at-tag   run the gates as the release workflow sees them
 #
 # Exit status is the number of failed gates, so `|| echo $?` counts them.
 
@@ -27,10 +28,12 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; DIM=$'\033[2m'; OF
 
 FAST=0
 LIST=0
+ATTAG=0
 for arg in "$@"; do
   case "$arg" in
     --fast) FAST=1 ;;
     --list) LIST=1 ;;
+    --at-tag) ATTAG=1 ;;
     -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
@@ -123,6 +126,69 @@ if [ "$LIST" -eq 1 ]; then
     printf '%-34s %-16s %b\n' "$n" "$t" "$s"
   done
   exit 0
+fi
+
+# --at-tag reproduces the one condition every other mode gets wrong.
+#
+# The release workflow checks out the tag it is building, so on a release HEAD
+# *is* v<VERSION>. Nothing else runs that way: a branch, a PR and every local
+# invocation above have the previous release as their most recent tag. A gate
+# that reads `git describe` therefore answers something different on a release
+# than it ever answers anywhere else.
+#
+# That is not hypothetical. TestUpgradingDocMigrationCountsMatchTheTree passed
+# on the branch, passed on the PR, and failed the moment v1.0.3 was pushed,
+# because `git describe --tags HEAD` returned the version being released and the
+# gate compared the release against itself. It had never run in the situation it
+# guards: it was written after v0.9.9, and 1.0.0, 1.0.1 and 1.0.2 were all
+# merged without tags.
+#
+# The work happens in a throwaway local clone rather than a worktree, because
+# tags are repository-global: creating v<VERSION> in a worktree would move the
+# real tag out from under whatever else is using it.
+if [ "$ATTAG" -eq 1 ]; then
+  VERSION=$(tr -d '[:space:]' < VERSION)
+  TAG="v${VERSION}"
+  WORK=$(mktemp -d)
+  # shellcheck disable=SC2064 # expand WORK now, not at trap time
+  trap "rm -rf '$WORK'" EXIT
+
+  echo "== gates at ${TAG} =="
+  echo "${DIM}cloning into a scratch repo so the real tags are untouched${OFF}"
+  # --no-hardlinks because the scratch directory and the repository are usually
+  # on different filesystems, and a hardlink clone dies with "Invalid
+  # cross-device link" when they are.
+  if ! git clone --local --no-hardlinks --quiet . "$WORK/repo"; then
+    echo "${RED}FAIL${OFF}  could not clone the repository into $WORK"
+    exit 1
+  fi
+
+  # The clone carries committed history, which is what makes `git describe`
+  # meaningful, and the committed *files*, which is not what we want to test:
+  # the first version of this mode passed against a tree where the release bug
+  # had been reinstated, because the change was still uncommitted. A mode that
+  # only sees committed state cannot catch the defect you are about to commit,
+  # which is the entire moment it exists for. So the working tree is copied over
+  # the checkout, keeping .git.
+  if ! rsync -a --delete --exclude '.git/' ./ "$WORK/repo/" 2>/dev/null; then
+    echo "${RED}FAIL${OFF}  could not copy the working tree into $WORK"
+    exit 1
+  fi
+
+  # Point the tag at what a release of this VERSION would actually build.
+  git -C "$WORK/repo" tag -f "$TAG" HEAD >/dev/null 2>&1
+
+  cd "$WORK/repo" || exit 1
+  gate "spec suite at ${TAG}"       go go test ./tests/spec/
+  gate "compliance suite at ${TAG}" go go test ./tests/compliance/
+
+  echo
+  echo "passed $PASSED, failed ${#FAILED[@]}"
+  for f in "${FAILED[@]:-}"; do [ -n "$f" ] && echo "  ${RED}failed${OFF}  $f"; done
+  echo
+  echo "${DIM}Only the gates that read git history are run here. Everything else"
+  echo "behaves the same at a tag as on a branch, so --fast covers it.${OFF}"
+  exit "${#FAILED[@]}"
 fi
 
 echo "== fast gates =="
