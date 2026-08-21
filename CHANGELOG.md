@@ -136,6 +136,14 @@
 
 ### Documentation
 
+* **README.md claimed 80 endpoints for a document that lists 105.** Eight gates read the
+  README -- badges, published version strings, script invocations, cited test names -- and none
+  of them read the documentation table, so the one-line summary of `docs/api.md` kept the split
+  it had when the admin gateway carried 18 routes. It now carries 43. The line is corrected to
+  105 total, and `TestRouteInventoryHeadlineMatchesTheTable` was extended to read the README's
+  claim alongside the one in `docs/api.md`, so the summary can no longer drift from the page it
+  summarizes.
+
 * **The API reference understated the failure surface of 17 endpoints, and now a gate
   holds it.** A fresh verification pass over `docs/api.md` found 49 error rows that the
   handlers can answer with and the document did not list. Every omission ran the same

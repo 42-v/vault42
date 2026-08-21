@@ -666,6 +666,16 @@ var inventoryHeadline = regexp.MustCompile(
 // docsWithRouteInventoryHeadline are the files that publish that sentence.
 var docsWithRouteInventoryHeadline = []string{"docs/api.md", "docs/spec.md"}
 
+// readmeRouteClaim is the README's own count, which is written as a table cell
+// rather than as the headline sentence and so was checked by nothing.
+//
+// It read "80 endpoints ... 62 on the main server, 18 on the admin gateway"
+// while the table held 105 split 62 and 43 -- the main-binary figure right and
+// the admin one short by 25. The front page is where most readers meet that
+// number, so it is the worst of the three places to have it wrong.
+var readmeRouteClaim = regexp.MustCompile(
+	`(\d+) endpoints[^|]*?(\d+) on the main server, (\d+) on the admin gateway`)
+
 // TestRouteInventoryHeadlineMatchesTheTable checks the three numbers in the
 // sentence, which nothing did.
 //
@@ -739,6 +749,37 @@ func TestRouteInventoryHeadlineMatchesTheTable(t *testing.T) {
 	if checked != len(docsWithRouteInventoryHeadline) {
 		t.Errorf("the headline was found in %d of %d inventories", checked,
 			len(docsWithRouteInventoryHeadline))
+	}
+
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	m := readmeRouteClaim.FindStringSubmatch(string(readme))
+	if m == nil {
+		t.Error("README.md no longer states how many endpoints the API reference documents. " +
+			"It is the count most readers see first, so it is checked here rather than left " +
+			"to drift the way it did at 80/62/18 against a table of 105/62/43.")
+		return
+	}
+	for _, want := range []struct {
+		label  string
+		stated string
+		actual int
+	}{
+		{"total", m[1], len(rows)},
+		{"main binary", m[2], main},
+		{"admin gateway", m[3], admin},
+	} {
+		stated, convErr := strconv.Atoi(want.stated)
+		if convErr != nil {
+			t.Errorf("README.md: %s count %q is not a number", want.label, want.stated)
+			continue
+		}
+		if stated != want.actual {
+			t.Errorf("README.md says %d routes on the %s and docs/api.md lists %d",
+				stated, want.label, want.actual)
+		}
 	}
 }
 
