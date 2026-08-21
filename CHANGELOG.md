@@ -47,6 +47,34 @@
 
 ### Tooling
 
+* **The badge generator counted files that are not this module's, and the gate that
+  checks it agreed.** `scripts/readme-gen.sh` pruned `vendor/` and nothing else, so
+  `find . -name '*.go'` walked `tmp/` -- two scratch `main.go` files left by a 1.0.0 audit and
+  a hardening experiment -- and `node_modules/`, where the `flatted` npm package ships a Go
+  implementation of itself. The README published 195 non-test files and 48651 lines for a
+  module that has 192 and 48062. `TestBadgeFiguresMatchTheRepository` could not catch it
+  because it recounted the tree the same way the generator did, so both were wrong together
+  and consistent with each other. Both now prune the same four directories, and the badge row
+  is regenerated from what the module actually contains.
+
+* **A rate-limited creator lookup was published as a fact about the dependency.** The
+  maintainers table in `docs/deps.md` makes one `api.github.com` call per owner. That API
+  allows 60 an hour unauthenticated and answers `403` past it; `curl -f` reported that the
+  same way it reports a missing account, and the row was written as
+  `| tinylib | — | msgp | — | — | — |` for a three-repo organization that has been on GitHub
+  since 2015. Nothing failed, because a row of em-dashes is well-formed. The reader had no
+  way to tell "the generator could not reach GitHub" from "nobody maintains this", and the
+  second reading is the alarming one.
+
+  The generator now reads the status code instead of only the exit code. `404` still writes
+  the unknown row, because there the account really is absent. `403` and `429` stop the run
+  and name `GITHUB_TOKEN` as the fix. Transient failures -- a timeout, a `5xx`, a dropped
+  connection -- are retried three times before they are believed, so a single flaky call does
+  not block a commit. `TestDepsMaintainerTableHasNoUnreachedRows` is the offline half: it
+  fails if a placeholder reaches the tree by any route, against an `absentFromGitHub` set that
+  is empty and costs a written reason to add to. A second gate ties the "N maintainers behind"
+  headline to the number of rows beneath it.
+
 * **The coverage floor was 98 statements behind, and the note asking for the raise had
   become furniture.** `BASELINE_TOTAL_STATEMENTS` in `scripts/cov-gaps.py` still read
   12853, the figure measured on the 1.0.0 tree, while the canonical run reports 12951.

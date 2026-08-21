@@ -1217,10 +1217,20 @@ var sourceSanitizers = map[string]struct{}{
 // rawSourceScanByDesign are the text scans allowed to run on an unsanitized
 // read, keyed by "<repo-relative file>:<enclosing function>", each with why.
 //
-// Empty on purpose: every one of the 22 found when this check was written was
-// fixed rather than exempted. The map and its ratchet exist so that the next one
-// has to be argued for in writing instead of merged in silence.
-var rawSourceScanByDesign = map[string]string{}
+// One entry. The 22 found when this check was written were all fixed rather
+// than exempted; the map and its ratchet exist so that any addition has to be
+// argued for in writing instead of merged in silence.
+var rawSourceScanByDesign = map[string]string{
+	"tests/spec/badge_language_parity_test.go:goDirectRequires": "reads go.mod, " +
+		"not Go source, and go.mod is the one file here where comment text carries " +
+		"meaning: `// indirect` is how the format marks a requirement the module " +
+		"graph pulled in rather than one this project asked for, and telling those " +
+		"apart is the whole job of this function. commentFreeSource would delete " +
+		"exactly the marker it needs to read. The function strips everything after " +
+		"// itself, immediately after testing the raw line for that one marker, so " +
+		"a module path appearing only in a comment still cannot be counted -- which " +
+		"is the property this gate is protecting.",
+}
 
 func TestGateLiveness_NoSpecGateScansProductionSourceWithItsCommentsIntact(t *testing.T) {
 	scans, sanitized := rawSourceScans(t)

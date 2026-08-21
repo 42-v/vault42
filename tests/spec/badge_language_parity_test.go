@@ -279,11 +279,11 @@ func TestBadgeFiguresMatchTheRepository(t *testing.T) {
 	}{
 		{
 			"goFiles", badges.GoFiles, len(goProd),
-			"non-test .go files outside vendor/",
+			"non-test .go files, excluding vendor/, tmp/ and node_modules/",
 		},
 		{
 			"testFiles", badges.TestFiles, len(goTests),
-			"_test.go files outside vendor/",
+			"_test.go files, excluding vendor/, tmp/ and node_modules/",
 		},
 		{
 			"goLines", badges.GoLines, goLines,
@@ -326,19 +326,33 @@ func TestBadgeFiguresMatchTheRepository(t *testing.T) {
 	}
 }
 
+// goSourceFilesSkip are directories whose Go files are not this module's source.
+//
+// vendor/ is the obvious one. tmp/ and node_modules/ are not obvious and are why
+// this list exists: both are gitignored, both contain .go files nobody here
+// wrote -- a scratch main.go from a 1.0.0 audit, another from a hardening
+// experiment, and a Go implementation shipped inside the `flatted` npm package
+// -- and counting them made this gate demand 195 non-test files where the
+// module has 192. A walk that counts ignored directories measures the machine
+// it runs on rather than the repository.
+var goSourceFilesSkip = map[string]bool{
+	"vendor":       true,
+	"tmp":          true,
+	"node_modules": true,
+	".git":         true,
+}
+
 // goSourceFiles splits the module's Go files into non-test and test files, using
-// the same set scripts/readme-gen.sh counts: everything under the repository
-// root except a top-level vendor directory.
+// the same set scripts/readme-gen.sh counts.
 func goSourceFiles(t *testing.T, root string) (prod, tests []string) {
 	t.Helper()
 
-	vendor := filepath.Join(root, "vendor")
 	walk := func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			if path == vendor {
+			if goSourceFilesSkip[entry.Name()] {
 				return fs.SkipDir
 			}
 			return nil
@@ -447,14 +461,22 @@ func goDirectRequires(t *testing.T, root string) []string {
 
 	var mods []string
 	inBlock := false
-	for _, line := range strings.Split(readFileString(t, filepath.Join(root, "go.mod")), "\n") {
+	for _, raw := range strings.Split(readFileString(t, filepath.Join(root, "go.mod")), "\n") {
+		// Everything after // is a comment, and a module path that appears only
+		// in one is not a requirement. The "// indirect" marker is read from the
+		// raw line below, before this strips it, because that marker is the one
+		// piece of comment text that carries meaning here.
+		line := raw
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(trimmed, "require ("):
 			inBlock = true
 		case inBlock && trimmed == ")":
 			inBlock = false
-		case strings.Contains(line, "// indirect"):
+		case strings.Contains(raw, "// indirect"):
 		case inBlock:
 			if m := goRequire.FindStringSubmatch(line); m != nil {
 				mods = append(mods, m[1])

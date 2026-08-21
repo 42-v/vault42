@@ -44,9 +44,16 @@ TOTAL_COV=$(cov_total "$COVER_FILE")
 # ═══════════════════════════════════════════════════════════════
 # 2. Code metrics (no tests needed — fast)
 # ═══════════════════════════════════════════════════════════════
-GO_FILES=$(find . -name '*.go' -not -path './vendor/*' | grep -cv '_test\.go$')
-GO_LINES=$(find . -name '*.go' -not -path './vendor/*' -not -name '*_test.go' -exec cat {} + | wc -l | tr -d ' ')
-TEST_FILES=$(find . -name '*_test.go' -not -path './vendor/*' | wc -l | tr -d ' ')
+# vendor/ was the only directory excluded, so tmp/ and node_modules/ were
+# counted as this module's source: a scratch main.go from a 1.0.0 audit, another
+# from a hardening experiment, and a Go implementation shipped inside the
+# `flatted` npm package. That published 195 non-test files and 48651 lines for a
+# module that has 192 and 48062, and the badge parity gate could not see it
+# because it compared the README against this file's own output.
+GO_FIND_PRUNE=( -path ./vendor -o -path ./tmp -o -path ./node_modules -o -path ./.git )
+GO_FILES=$(find . \( "${GO_FIND_PRUNE[@]}" \) -prune -o -name '*.go' -not -name '*_test.go' -print | wc -l | tr -d ' ')
+GO_LINES=$(find . \( "${GO_FIND_PRUNE[@]}" \) -prune -o -name '*.go' -not -name '*_test.go' -print0 | xargs -0 cat | wc -l | tr -d ' ')
+TEST_FILES=$(find . \( "${GO_FIND_PRUNE[@]}" \) -prune -o -name '*_test.go' -print | wc -l | tr -d ' ')
 
 # ═══════════════════════════════════════════════════════════════
 # 3. GitHub stars + latest version lookups
@@ -229,27 +236,64 @@ echo "Fetching creator stats..."
 CREATOR_ROWS=""
 CREATOR_COUNT=0
 
+# api.github.com allows 60 unauthenticated calls an hour per address, and this
+# loop makes one per owner. Past that it answers 403, curl -f treated that the
+# same as a missing account, and the run published a row of em-dashes for a
+# healthy project: docs/deps.md shipped "tinylib | — | msgp | — | — | —" for a
+# 3-repo org that has been on GitHub since 2015. A rate limit is this script
+# failing, not a fact about the dependency, so only 404 -- the owner really is
+# not there -- may be written as unknown. Everything else stops the run.
+#
+# GITHUB_TOKEN, when the environment has one, raises the limit to 5000/hour and
+# is the reason CI never hit this.
+gh_auth=()
+[ -n "${GITHUB_TOKEN:-}" ] && gh_auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+
 while IFS= read -r owner; do
   pkgs=$(grep "^${owner}	" "$CREATOR_TMP" | cut -f2 | sort -u | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
-  gh_json=$(curl -sf --max-time 5 "https://api.github.com/users/${owner}" 2>/dev/null) || gh_json=""
+  # Transient failures -- a dropped connection, a 5xx, a timeout -- are retried
+  # rather than treated as an answer, because this runs from precommit and a
+  # single flaky call should not stop a commit. A rate limit is not retried: it
+  # will still be a rate limit a second later.
+  for attempt in 1 2 3; do
+    gh_body=$(curl -s --max-time 10 -w '\n%{http_code}' "${gh_auth[@]}" \
+              "https://api.github.com/users/${owner}" 2>/dev/null) || gh_body=$'\n000'
+    gh_code=${gh_body##*$'\n'}
+    gh_json=${gh_body%$'\n'*}
+    case "$gh_code" in 000|5??) [ "$attempt" -lt 3 ] && sleep "$attempt" && continue ;; esac
+    break
+  done
 
-  if [ -n "$gh_json" ]; then
-    gh_type=$(echo "$gh_json" | grep -oP '"type"\s*:\s*"[^"]*"' | grep -oP '"[^"]*"$' | tr -d '"')
-    gh_repos=$(echo "$gh_json" | grep -oP '"public_repos"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
-    gh_created=$(echo "$gh_json" | grep -oP '"created_at"\s*:\s*"[^"]*"' | grep -oP '\d{4}-\d{2}-\d{2}')
-
-    if [ "$gh_type" = "Organization" ]; then
-      TYPE_LABEL="Org"
-    else
-      TYPE_LABEL="User"
-    fi
-
-    CREATOR_ROWS="${CREATOR_ROWS}| [${owner}](https://github.com/${owner}) | ${TYPE_LABEL} | ${pkgs} | ${gh_repos:-—} | ![followers](https://img.shields.io/github/followers/${owner}?style=flat&label=) | ${gh_created:-—} |
+  case "$gh_code" in
+    200)
+      gh_type=$(echo "$gh_json" | grep -oP '"type"\s*:\s*"[^"]*"' | grep -oP '"[^"]*"$' | tr -d '"')
+      gh_repos=$(echo "$gh_json" | grep -oP '"public_repos"\s*:\s*[0-9]+' | grep -oP '[0-9]+')
+      gh_created=$(echo "$gh_json" | grep -oP '"created_at"\s*:\s*"[^"]*"' | grep -oP '\d{4}-\d{2}-\d{2}')
+      if [ -z "$gh_repos" ] || [ -z "$gh_created" ]; then
+        echo "ERROR: GitHub answered 200 for ${owner} but without public_repos/created_at." >&2
+        exit 1
+      fi
+      if [ "$gh_type" = "Organization" ]; then TYPE_LABEL="Org"; else TYPE_LABEL="User"; fi
+      CREATOR_ROWS="${CREATOR_ROWS}| [${owner}](https://github.com/${owner}) | ${TYPE_LABEL} | ${pkgs} | ${gh_repos} | ![followers](https://img.shields.io/github/followers/${owner}?style=flat&label=) | ${gh_created} |
 "
-  else
-    CREATOR_ROWS="${CREATOR_ROWS}| [${owner}](https://github.com/${owner}) | — | ${pkgs} | — | — | — |
+      ;;
+    404)
+      # No such account. The dependency is still real; its owner is not on
+      # GitHub under this name, and that is what the row says.
+      CREATOR_ROWS="${CREATOR_ROWS}| [${owner}](https://github.com/${owner}) | — | ${pkgs} | — | — | — |
 "
-  fi
+      ;;
+    403|429)
+      echo "ERROR: GitHub rate-limited the creator lookup at ${owner} (HTTP ${gh_code})." >&2
+      echo "       Set GITHUB_TOKEN and re-run; writing docs/deps.md now would publish" >&2
+      echo "       this script's failure as a fact about the dependency." >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: GitHub lookup for ${owner} failed (HTTP ${gh_code:-none})." >&2
+      exit 1
+      ;;
+  esac
   CREATOR_COUNT=$((CREATOR_COUNT + 1))
 done < <(cut -f1 "$CREATOR_TMP" | sort -u)
 
