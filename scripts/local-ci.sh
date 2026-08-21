@@ -99,6 +99,12 @@ gate "yamllint"             yamllint      yamllint -c .yamllint.yml .
 gate "Helm chart"           helm          helm lint charts/vault
 
 # gofmt reports by printing names, so an empty result is the pass condition.
+#
+# This is the weaker of the two formatters in play: .golangci.yml enables
+# gofumpt, which is a superset, and a file can satisfy gofmt and still fail CI.
+# That happened on the 1.0.4 merge -- 19/19 locally, gofumpt failure on the
+# lint job -- so golangci-lint above is the authority and this gate only
+# catches the coarse case early.
 # shellcheck disable=SC2016 # the child shell expands these, not this one
 gate "gofmt" gofmt bash -c '
   out=$(gofmt -l . 2>/dev/null | grep -v "^web/")

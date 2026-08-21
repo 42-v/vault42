@@ -277,27 +277,45 @@ func TestBadgeFiguresMatchTheRepository(t *testing.T) {
 		counted   int
 		counting  string
 	}{
-		{"goFiles", badges.GoFiles, len(goProd),
-			"non-test .go files outside vendor/"},
-		{"testFiles", badges.TestFiles, len(goTests),
-			"_test.go files outside vendor/"},
-		{"goLines", badges.GoLines, goLines,
-			"lines in the non-test .go files"},
-		{"languages.go.lines", badges.Languages["go"].Lines, goLines,
-			"lines in the non-test .go files"},
-		{"languages.go.deps", badges.Languages["go"].Deps, len(goDeps),
+		{
+			"goFiles", badges.GoFiles, len(goProd),
+			"non-test .go files outside vendor/",
+		},
+		{
+			"testFiles", badges.TestFiles, len(goTests),
+			"_test.go files outside vendor/",
+		},
+		{
+			"goLines", badges.GoLines, goLines,
+			"lines in the non-test .go files",
+		},
+		{
+			"languages.go.lines", badges.Languages["go"].Lines, goLines,
+			"lines in the non-test .go files",
+		},
+		{
+			"languages.go.deps", badges.Languages["go"].Deps, len(goDeps),
 			"go.mod requires without an // indirect marker that non-test Go source imports: " +
-				strings.Join(goDeps, ", ")},
-		{"languages.vue.lines", badges.Languages["vue"].Lines, vueLines,
-			"lines in web/src and packages/vue/src, minus __tests__ and *.test.*"},
-		{"languages.vue.deps", badges.Languages["vue"].Deps, len(vueDeps),
+				strings.Join(goDeps, ", "),
+		},
+		{
+			"languages.vue.lines", badges.Languages["vue"].Lines, vueLines,
+			"lines in web/src and packages/vue/src, minus __tests__ and *.test.*",
+		},
+		{
+			"languages.vue.deps", badges.Languages["vue"].Deps, len(vueDeps),
 			"web's dependencies plus packages/vue's peerDependencies, minus the workspace " +
-				"package: " + strings.Join(vueDeps, ", ")},
-		{"languages.csharp.lines", badges.Languages["csharp"].Lines, csLines,
-			"lines in packages/dotnet/src, minus obj/ and bin/"},
-		{"languages.csharp.deps", badges.Languages["csharp"].Deps, len(csDeps),
+				"package: " + strings.Join(vueDeps, ", "),
+		},
+		{
+			"languages.csharp.lines", badges.Languages["csharp"].Lines, csLines,
+			"lines in packages/dotnet/src, minus obj/ and bin/",
+		},
+		{
+			"languages.csharp.deps", badges.Languages["csharp"].Deps, len(csDeps),
 			"PackageReference entries in packages/dotnet/src/*/*.csproj: " +
-				strings.Join(csDeps, ", ")},
+				strings.Join(csDeps, ", "),
+		},
 	} {
 		if figure.published != figure.counted {
 			t.Errorf("docs/badges.json %s is %d; counting the tree gives %d (%s).\n"+
@@ -376,7 +394,8 @@ func dotnetSourceFiles(t *testing.T, root string) []string {
 // filesUnder walks dir and returns the files keep accepts, descending into every
 // directory skipDir does not name.
 func filesUnder(t *testing.T, dir string, skipDir func(name string) bool,
-	keep func(path string, entry fs.DirEntry) bool) []string {
+	keep func(path string, entry fs.DirEntry) bool,
+) []string {
 	t.Helper()
 
 	var out []string
