@@ -365,8 +365,29 @@ jobs:
       # This does not replace --new-from-merge-base above, it covers the other
       # half: that gate requires the diff to be clean, this one requires the
       # rest of the tree to stay clean behind it.
+      #
+      # The clean is not hygiene, it is correctness. The action step above runs
+      # with --new-from-merge-base, which analyses part of the tree and leaves a
+      # partial cache behind. This step reuses it, and where a cached fact is
+      # missing staticcheck cannot see that (*testing.T).Fatal never returns, so
+      # every `if x == nil { t.Fatal(...) }` guard in the tree reads as an
+      # unprotected dereference. Measured on one runner, one commit, seconds
+      # apart: `run ./...` on that cache reported 29 SA5011 findings in 9s, and
+      # the same command after `cache clean` reported none in 23s.
+      #
+      # The same bug had already run the other way for longer. While a complete
+      # cache was being restored, this step answered "0 issues" in 1.5 seconds
+      # without analysing anything, which is a tree-wide gate that had quietly
+      # stopped being one. It only became visible when actions/setup-go v7
+      # changed its version spec from 1.26.0 to 1.26.6, changed the cache key
+      # with it, and left the partial cache as the only one present.
+      #
+      # 14 extra seconds buys a step that measures the tree instead of reading
+      # back what a different invocation decided about part of it.
       - name: Full run
-        run: golangci-lint run --timeout 15m ./...
+        run: |
+          golangci-lint cache clean
+          golangci-lint run --timeout 15m ./...
 
   # The same conditional-job problem the two coverage gates have, arriving a
   # third time. golangci-lint is skipped when no Go file changed, and branch
