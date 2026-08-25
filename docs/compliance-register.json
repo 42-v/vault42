@@ -7698,7 +7698,7 @@
       "status": "Met",
       "evidence": [
         ".golangci.yml#^linters:",
-        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@",
         "CONTRIBUTING.md"
       ],
       "tests": [
@@ -7747,7 +7747,7 @@
       "status": "Met",
       "evidence": [
         ".github/CODEOWNERS",
-        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8"
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@"
       ],
       "tests": [
         "TestSSDF_800_218_GovernanceArtifactsExist",
@@ -7848,7 +7848,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/nightly-security.yml#false on workflow_call, so no pull request ever scanned an image: a",
-        ".github/workflows/nightly-security.yml#run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0"
+        ".github/workflows/nightly-security.yml#run: go install github.com/securego/gosec/v2/cmd/gosec@"
       ],
       "tests": [
         "TestSSDF_800_218_EveryCitedPracticeIsAutomated"
@@ -8376,7 +8376,7 @@
       "status": "Met",
       "evidence": [
         ".github/workflows/nightly-security.yml#gosec:",
-        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8"
+        ".github/workflows/ci.yml#- uses: golangci/golangci-lint-action@"
       ],
       "tests": [
         "TestScorecard_StaticAnalysisAndFuzzingRun"
@@ -8393,7 +8393,7 @@
       "requirement": "This check tries to determine if the project maintains a Software Bill of Materials (SBOM) either as a file in the source or a release artifact.",
       "status": "Met",
       "evidence": [
-        ".github/workflows/release.yml#uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0",
+        ".github/workflows/release.yml#uses: anchore/sbom-action/download-syft@",
         ".goreleaser.yaml"
       ],
       "tests": [

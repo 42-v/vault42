@@ -62,6 +62,12 @@ rejected outright in `evidence`: they drifted five times in a single session,
 each time landing on a real line that simply was not the one anybody meant,
 which no gate could see.
 
+An anchor also never carries a version pin. `uses: owner/action@<sha>` and
+`go install tool@vN.N.N` name a line whose pin exists in order to move: the next
+Dependabot bump rewrites it, the step stays exactly where it was, and the gate
+reports a row as having lost evidence it still has. Cite the part that does not
+move -- `uses: owner/action@` -- so the bump lands without a register edit.
+
 The prose fields -- `notes`, the risk bodies, the retired-risk paragraphs --
 still carry `path:line`, deliberately. An anchor mid-sentence reads as a
 quotation of the code, and the relevance gate matches identifiers against those
