@@ -323,7 +323,7 @@ jobs:
           printf '%s' "$BASE_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
             || { echo "::error::refusing to pass base ref '$BASE_REF' to golangci-lint"; exit 1; }
 
-      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.6.2
           # Build golangci-lint from source with the runner's Go toolchain rather
