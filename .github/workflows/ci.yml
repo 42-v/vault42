@@ -499,6 +499,16 @@ jobs:
               - 'scripts/release-check.sh'
               - 'scripts/coverage.sh'
               - 'scripts/lib/coverage-env.sh'
+              # This workflow is an input to its own jobs, and the change that
+              # touches it most often is an action bump that touches nothing
+              # else. Every such pull request arrived with golangci-lint, the
+              # coverage gate, module hygiene, fuzz and the binary build all
+              # skipped, and a skipped job counts as green: the
+              # golangci-lint-action v8 to v9 bump was mergeable without
+              # golangci-lint having run under v9 once. That is the same shape
+              # as the three entries around this one, arriving on the one class
+              # of change guaranteed to keep arriving.
+              - '.github/workflows/ci.yml'
             # The release config is not a Go file, so an edit that touched only
             # it left goreleaser-config skipped and the first parse of the file
             # happened on the tag push, with the tag already published and the
@@ -506,6 +516,9 @@ jobs:
             goreleaser:
               - '.goreleaser.yaml'
               - '.goreleaser.yml'
+              # goreleaser-action is pinned in this file, so a bump to it
+              # skipped the one job that parses the config it runs.
+              - '.github/workflows/ci.yml'
             # The .NET SDKs are published to nuget.org and, until 1.0.1, were
             # built by nothing except the release workflow -- after the tag had
             # already been pushed. Two dependabot bumps to the test SDK merged
@@ -514,6 +527,10 @@ jobs:
               - 'packages/dotnet/**'
               - 'scripts/dotnet-coverage.sh'
               - 'scripts/dotnet-coverage.py'
+              # setup-dotnet is pinned in this file. Two SDK bumps already
+              # merged without either project being compiled; a bump to the
+              # action that installs the SDK would have done it a third way.
+              - '.github/workflows/ci.yml'
             # What can change the vulnerability surface of a built image: the
             # base image pin, the dependency manifests the image installs from,
             # and the script that builds it. Deliberately NOT '**/*.go': editing
@@ -528,6 +545,13 @@ jobs:
               - 'go.sum'
               - 'pnpm-lock.yaml'
               - 'scripts/ci-build-image.sh'
+              # And the two workflows that decide whether the scans run and
+              # then run them: this file passes image_scan, and
+              # nightly-security.yml pins trivy-action. A bump to trivy-action
+              # changes what every image scan is executed by and matched none
+              # of the entries above it.
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/nightly-security.yml'
 
   dotnet:
     name: .NET SDK coverage gate
