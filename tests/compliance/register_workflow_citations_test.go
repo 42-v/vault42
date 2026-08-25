@@ -198,3 +198,73 @@ func TestComplianceRegister_WorkflowCitationsResolveToExactlyOneLine(t *testing.
 	}
 	t.Logf("%d workflow anchors resolved to exactly one line each", resolved)
 }
+
+// =============================================================================
+// An anchor never carries a version pin.
+//
+// The grammar above says an anchor breaks only when the thing it names is
+// deleted. A pinned reference breaks that promise, because the pin is the one
+// part of a `uses:` line that exists in order to move. Dependabot rewrote
+//
+//	- uses: golangci/golangci-lint-action@4afd733a... # v8
+//
+// to the v9 sha, the step itself untouched, and three rows -- SSDF PW.5.1,
+// SSDF PW.7.1 and Scorecard SAST -- reported their evidence as gone. Nothing
+// was gone. The lint job still runs, still on the same line, still proving the
+// same three requirements, and the register needed an edit anyway to say so.
+// That is the failure this gate exists to prevent, arriving on the one class of
+// change that is guaranteed to keep arriving.
+//
+// So a pin is rejected in the anchor rather than tolerated until it moves. What
+// is left, `golangci/golangci-lint-action@`, names the step by the part that
+// does not move, and still fails if the step is deleted or renamed.
+//
+// This is scoped to .github/workflows because that is where every pinned
+// reference in the register's evidence lives: `uses:` steps and pinned `go
+// install` lines. A cited `FROM image@sha256:` in a Dockerfile would deserve
+// the same treatment, and none of the other 98 cited paths pins anything today.
+// =============================================================================
+
+// versionPin matches the pin on a dependency reference -- a commit sha, an image
+// digest, or a version tag -- introduced by `@` and running to whitespace or the
+// end of the anchor. Requiring that boundary is what keeps `evey@42-v.com` and
+// `${{ matrix.go }}@...` from reading as pins.
+var versionPin = regexp.MustCompile(`@(?:sha256:[0-9a-f]+|[0-9a-f]{7,40}|v?\d+(?:\.\d+)*)(?:\s|$)`)
+
+// TestComplianceRegister_WorkflowAnchorsCarryNoVersionPin is the gate.
+func TestComplianceRegister_WorkflowAnchorsCarryNoVersionPin(t *testing.T) {
+	reg := loadRegister(t)
+	checked := 0
+
+	for _, r := range reg.Requirements {
+		for _, ev := range r.Evidence {
+			m := workflowEvidence.FindStringSubmatch(ev)
+			if m == nil || m[2] != "#" {
+				continue
+			}
+			anchor := m[3]
+			checked++
+
+			loc := versionPin.FindStringIndex(anchor)
+			if loc == nil {
+				continue
+			}
+			// Keep the `@`, drop the pin and whatever trailed it, which for a
+			// pinned action is the `# vN` comment naming the same version again.
+			t.Errorf("%s %s cites %s, whose anchor carries the version pin %q. A pin is the "+
+				"part of that line meant to move: the next bump rewrites it, the step it names "+
+				"stays exactly where it was, and this row would be reported as having lost its "+
+				"evidence when it has lost nothing. Anchor the step by what does not move -- "+
+				"%s#%s@ -- so the bump lands without a register edit.",
+				r.Standard, r.RequirementID, ev,
+				strings.TrimSpace(anchor[loc[0]:loc[1]]),
+				m[1], strings.TrimSuffix(anchor[:loc[0]], "@"))
+		}
+	}
+
+	if checked < 20 {
+		t.Fatalf("only %d workflow anchors were checked for version pins; the scan is broken "+
+			"and this gate would pass over a register full of them", checked)
+	}
+	t.Logf("%d workflow anchors carry no version pin", checked)
+}
