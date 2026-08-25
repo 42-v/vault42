@@ -365,6 +365,23 @@ jobs:
       # This does not replace --new-from-merge-base above, it covers the other
       # half: that gate requires the diff to be clean, this one requires the
       # rest of the tree to stay clean behind it.
+      - name: DIAGNOSTIC (throwaway branch, do not merge)
+        run: |
+          set -x
+          golangci-lint version
+          go version
+          go env GOROOT GOFLAGS GOCACHE GOMAXPROCS GOEXPERIMENT GOTOOLCHAIN
+          echo "GOLANGCI_LINT_CACHE=${GOLANGCI_LINT_CACHE:-<unset>}"
+          golangci-lint cache status || true
+          nproc
+          echo "===== run A: as the Full run step sees it ====="
+          golangci-lint run --timeout 15m ./... 2>&1 | tail -40 || true
+          echo "===== run B: after cache clean ====="
+          golangci-lint cache clean || true
+          golangci-lint run --timeout 15m ./... 2>&1 | tail -40 || true
+          echo "===== run C: single package, verbose ====="
+          golangci-lint run --timeout 15m -v ./internal/server/... 2>&1 | tail -30 || true
+
       - name: Full run
         run: golangci-lint run --timeout 15m ./...
 
