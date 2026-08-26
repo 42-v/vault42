@@ -634,7 +634,7 @@ func TestMintHandler_AnInvalidEmailIsABadRequest(t *testing.T) {
 }
 
 // The response echoes the asserted address so a client can see what it actually
-// got. It is echoed normalised, which is the value that went into the claim.
+// got. It is echoed normalized, which is the value that went into the claim.
 func TestMintHandler_TheResponseEchoesTheAssertedEmail(t *testing.T) {
 	h := newMintTestHandler(t, func(c *service.MintConfig) { c.AllowEmail = true })
 	rec := httptest.NewRecorder()
