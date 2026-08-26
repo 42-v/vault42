@@ -44,6 +44,15 @@ overwrite you.
 | `docs/deps.md` | `scripts/readme-gen.sh` |
 | `docs/test-coverage.md` | `scripts/coverage.sh` |
 
+`scripts/readme-gen.sh` measures: it runs the Go suite against a container runtime, the
+Vue suites under a pnpm install, and a dotnet restore. Rebasing needs none of that. Every
+merge to `main` rewrites the file and line counters, which makes every other open branch
+wrong about them and fails the badge parity gate, while changing nothing a test measures.
+`scripts/readme-gen.sh --metrics-only` is that case: it recounts the figures that come
+from the tree, carries the measured ones forward from `docs/badges.json`, leaves
+`docs/deps.md` alone, and takes under a second. Use it after a rebase; use the full run
+when you changed what the tests do.
+
 ### The compliance register names the lines it cites, and prose still counts them
 
 `docs/compliance-register.json` cites code in its `evidence` lists by **anchor**,
