@@ -59,7 +59,23 @@ func CORS(allowedOrigin string, additionalOrigins []string, allowAll bool) func(
 			}
 			w.Header().Set("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, DPoP")
+			// X-Requested-With is on every SDK request; X-Blob-Checksum and
+			// X-Blob-Label are on the blob writes. None of the three is
+			// CORS-safelisted, so a cross-origin preflight that omits them fails
+			// the request before it is sent -- which made the documented
+			// cross-origin deployment mode unusable rather than merely awkward.
+			// X-Vault-App is deliberately absent: it is proxy-set, so no browser
+			// ever asks for it.
+			w.Header().Set("Access-Control-Allow-Headers",
+				"Content-Type, Authorization, DPoP, X-Requested-With, X-Blob-Checksum, X-Blob-Label")
+			// Without this the browser hands the SDK a response whose custom
+			// headers read as null. The blob helpers return the checksum and
+			// label to the caller, so same-origin they carry a value and
+			// cross-origin they silently do not. Retry-After is exposed because a
+			// client cannot honor a 429 it cannot read; the server already sets
+			// it on the rate-limited paths.
+			w.Header().Set("Access-Control-Expose-Headers",
+				"X-Blob-Checksum, X-Blob-Label, Retry-After")
 			if origin != "" && origin != "*" {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}

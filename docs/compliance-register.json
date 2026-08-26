@@ -1316,13 +1316,13 @@
       ],
       "status": "Met",
       "evidence": [
-        "internal/middleware/cors.go#w.Header().Set(\"Access-Control-Allow-Headers\", \"Content-Type, Authorization, DPoP\")",
+        "internal/middleware/cors.go#w.Header().Set(\"Access-Control-Allow-Headers\",",
         "internal/middleware/cors.go#if r.Method == http.MethodOptions {"
       ],
       "tests": [
         "TestASVS_V3_5_2_SensitiveFunctionalityAlwaysTriggersPreflight"
       ],
-      "notes": "Met: the preflight response names a closed header set, Content-Type, Authorization and DPoP (internal/middleware/cors.go:62), with no wildcard, and OPTIONS is answered 204 by the middleware (:68). Every authenticated route requires Authorization, which is not a CORS-safelisted request header, so a cross-origin call to sensitive functionality always preflights; a simple request that skips preflight arrives without it and is answered 401. TestASVS_V3_5_2_SensitiveFunctionalityAlwaysTriggersPreflight asserts both halves. Previously Not Applicable."
+      "notes": "Met: the preflight response names a closed header set -- Content-Type, Authorization, DPoP, X-Requested-With, X-Blob-Checksum and X-Blob-Label (internal/middleware/cors.go:69) -- with no wildcard, and OPTIONS is answered 204 by the middleware (:84). The list grew to cover the headers the SDK actually sends; that does not weaken this control, because every one of them is itself non-safelisted, so a request carrying one still preflights. Every authenticated route requires Authorization, which is not a CORS-safelisted request header, so a cross-origin call to sensitive functionality always preflights; a simple request that skips preflight arrives without it and is answered 401. TestASVS_V3_5_2_SensitiveFunctionalityAlwaysTriggersPreflight asserts both halves. Previously Not Applicable."
     },
     {
       "standard": "OWASP ASVS",
