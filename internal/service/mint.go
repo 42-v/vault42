@@ -459,7 +459,7 @@ func (s *MintService) checkEmail(email string) (string, error) {
 	return normalized, nil
 }
 
-// ValidateMintEmail normalises and validates a caller-asserted email.
+// ValidateMintEmail normalizes and validates a caller-asserted email.
 //
 // Exported for the same reason ValidateMintSubject is: FuzzMintRequestJSON
 // calls it directly, so the fuzzer exercises the validator rather than only the
