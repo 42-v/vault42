@@ -320,7 +320,12 @@ func TestBadgeFiguresMatchTheRepository(t *testing.T) {
 		if figure.published != figure.counted {
 			t.Errorf("docs/badges.json %s is %d; counting the tree gives %d (%s).\n"+
 				"The README badge carries the same figure, so the two can agree with each "+
-				"other and both be stale. Run scripts/readme-gen.sh.",
+				"other and both be stale.\n"+
+				"Every figure here is counted from the tree, so nothing has to be measured "+
+				"to fix it: run `scripts/readme-gen.sh --metrics-only`, which recounts these "+
+				"and carries the tests and coverage forward from the file. A plain "+
+				"scripts/readme-gen.sh re-measures everything and needs a container runtime, "+
+				"a pnpm install and a dotnet restore.",
 				figure.key, figure.published, figure.counted, figure.counting)
 		}
 	}
