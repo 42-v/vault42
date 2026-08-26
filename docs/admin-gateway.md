@@ -312,7 +312,7 @@ The UPDATE half is a real ceiling: it compares against `OLD.role`, which comes f
 - **TOTP secrets**: Encrypted at rest with AES-256 (master key)
 - **TOTP replay prevention**: Each accepted TOTP code's time-step counter is stored per admin. Replayed codes (same or earlier counter) are rejected within the ±1 period window
 - **Account lockout**: Configurable failed attempts threshold and lockout duration. Lockout counter is atomic (SQL `RETURNING` clause) -- immune to race conditions under concurrent login attempts
-- **Admin revocation**: Deleting an admin CASCADE deletes all sessions -- no race window between session revoke and admin revoke
+- **Admin revocation**: Deleting an admin CASCADE deletes all sessions -- no race window between session revoke and admin revoke. `created_by` is `ON DELETE SET NULL` (migration 042) so revoking an admin who opened other accounts succeeds and those accounts survive with their provenance moved into the audit row; before 042 it was `NO ACTION`, and revoking any admin who had created another failed with a 500 that left the account and its live sessions in place
 - **Audit trail**: All admin mutations logged with admin ID, timestamp, IP, user agent
 - **No external dependencies**: Uses stdlib HTTP only (no frameworks)
 - **RBAC hardcoded**: Permission maps defined in Go code, not database -- immune to SQL injection escalation
