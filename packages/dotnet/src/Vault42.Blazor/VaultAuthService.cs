@@ -24,6 +24,19 @@ public sealed class VaultAuthService : IAsyncDisposable
     private readonly NavigationManager _navigation;
     private readonly TokenStore _store;
     private readonly VaultAuthenticationStateProvider _authState;
+
+    // Refresh is called from two places that do not know about each other: the
+    // timer ScheduleRefresh arms, and the retry path of any request that gets a
+    // 401. Both firing at once sends the same refresh cookie twice, and the
+    // server is right to read that as replay -- RFC 9700 4.14, implemented here
+    // without a grace window -- so it revokes the whole family and the
+    // operator's token-theft alarm fires on a legitimate user.
+    //
+    // Serializing is the whole fix: the cookie rotates on each use, so the
+    // caller that waits then refreshes with the rotated value and succeeds.
+    // What the server refuses is two uses of the same value.
+    private readonly SemaphoreSlim _refreshGate = new SemaphoreSlim(1, 1);
+    private Task<bool>? _inFlightRefresh;
     private Timer? _refreshTimer;
 
     internal VaultAuthService(
@@ -135,6 +148,42 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// </remarks>
     public async Task<bool> RefreshAsync()
     {
+        // Join an in-flight refresh rather than starting a second one. The
+        // awaiters all get the same answer, which is what they wanted: whether
+        // there is a usable session now.
+        await _refreshGate.WaitAsync().ConfigureAwait(false);
+        Task<bool> inFlight;
+        try
+        {
+            _inFlightRefresh ??= RefreshOnceAsync();
+            inFlight = _inFlightRefresh;
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+
+        try
+        {
+            return await inFlight.ConfigureAwait(false);
+        }
+        finally
+        {
+            await _refreshGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (ReferenceEquals(_inFlightRefresh, inFlight))
+                    _inFlightRefresh = null;
+            }
+            finally
+            {
+                _refreshGate.Release();
+            }
+        }
+    }
+
+    private async Task<bool> RefreshOnceAsync()
+    {
         var refreshToken = await _store.GetRefreshTokenAsync();
 
         // CS-10/CS-11: under HttpOnlyCookieOnly, the SDK has no in-memory refresh
@@ -170,6 +219,17 @@ public sealed class VaultAuthService : IAsyncDisposable
         }
         catch
         {
+            // Deliberately does NOT clear. The network being down is not a
+            // logout: the access token in hand is valid until it expires, and
+            // signing the user out on a blip would be worse than the blip.
+            // Refresh_TransportFailure_ReturnsFalseWithoutClearing pins that.
+            //
+            // What it must not do is give up. ScheduleRefresh only ever ran
+            // from the success path, so a single thrown refresh left a one-shot
+            // timer that never re-armed: automatic refresh was off for the rest
+            // of the session, silently, while the UI still showed a session.
+            // Re-arm and try again before the token actually expires.
+            ScheduleRetryAfterFailure();
             return false;
         }
     }
@@ -283,6 +343,34 @@ public sealed class VaultAuthService : IAsyncDisposable
             await RefreshAsync();
         }, null, refreshInMs, Timeout.Infinite);
     }
+
+    /// <summary>
+    /// Re-arms the refresh timer after a failed attempt, so a transient network
+    /// failure costs one retry interval rather than the rest of the session.
+    /// </summary>
+    /// <remarks>
+    /// Bounded below by one second and above by the configured lead time, so it
+    /// retries inside the window where the access token is still valid and
+    /// cannot become a busy loop against a server that is down.
+    /// </remarks>
+    private void ScheduleRetryAfterFailure()
+        => ScheduleRefresh(_options.RefreshBeforeExpirySecs + RetryAfterFailureSecs);
+
+    /// <summary>
+    /// How long to wait before retrying a refresh that failed.
+    /// </summary>
+    /// <remarks>
+    /// Expressed as an offset above the configured lead time because
+    /// <see cref="ScheduleRefresh"/> schedules at <c>expiresIn - lead</c>, so passing
+    /// <c>lead + n</c> arms the timer n seconds out and reuses the one timer path
+    /// rather than growing a second one beside it.
+    ///
+    /// Thirty seconds rather than the one-second floor: the failure this retries
+    /// is a transport error, the access token in hand is still valid, and a
+    /// client that retries every second against a server that is down is a
+    /// worse citizen than one that waits.
+    /// </remarks>
+    private const int RetryAfterFailureSecs = 30;
 
     private void StopRefreshTimer()
     {

@@ -100,6 +100,93 @@ describe('VaultClient — Core', () => {
       expect(r1).toBe(r2)
       expect(mockFetch).toHaveBeenCalledOnce()
     })
+
+    // The guard above is per-instance, and the plugin builds one client per
+    // page. Two tabs are two instances, so it cannot see across them -- and the
+    // server treats two uses of one refresh token as replay and revokes the
+    // whole family. navigator.locks is origin-scoped, which is the axis that
+    // matters. These tests stub it because happy-dom does not implement it, so
+    // without a stub the lock arm is never executed at all.
+    describe('cross-tab serialization', () => {
+      afterEach(() => {
+        vi.unstubAllGlobals()
+        vi.stubGlobal('fetch', mockFetch)
+      })
+
+      it('takes the origin-scoped lock when navigator.locks is available', async () => {
+        const held: string[] = []
+        const request = vi.fn(async (name: string, fn: () => Promise<unknown>) => {
+          held.push(name)
+          return fn()
+        })
+        vi.stubGlobal('navigator', { locks: { request } })
+
+        mockFetch.mockResolvedValueOnce(
+          jsonResponse({ access_token: 'locked-tok', token_type: 'Bearer', expires_in: 900 }),
+        )
+        const result = await client.refresh()
+
+        expect(result.access_token).toBe('locked-tok')
+        expect(client.accessToken).toBe('locked-tok')
+        expect(request).toHaveBeenCalledOnce()
+        // The name is the serialization axis. Two builds using different names
+        // would each hold their own lock and neither would wait for the other.
+        expect(held).toEqual(['vault42-refresh'])
+      })
+
+      it('releases the in-flight slot after the lock resolves, so a later refresh runs again', async () => {
+        const request = vi.fn(async (_name: string, fn: () => Promise<unknown>) => fn())
+        vi.stubGlobal('navigator', { locks: { request } })
+
+        // Once each, not mockResolvedValue: a Response body reads only once, so
+        // handing back the same object twice fails on the second read rather
+        // than on the behaviour under test.
+        mockFetch.mockResolvedValueOnce(
+          jsonResponse({ access_token: 'tok-1', token_type: 'Bearer', expires_in: 900 }),
+        )
+        mockFetch.mockResolvedValueOnce(
+          jsonResponse({ access_token: 'tok-2', token_type: 'Bearer', expires_in: 900 }),
+        )
+        await client.refresh()
+        await client.refresh()
+
+        // Two sequential refreshes are two round trips. A slot left set would
+        // hand the second caller the first call's settled promise forever.
+        expect(request).toHaveBeenCalledTimes(2)
+        expect(mockFetch).toHaveBeenCalledTimes(2)
+      })
+
+      it('clears the in-flight slot when the locked refresh rejects', async () => {
+        const request = vi.fn(async (_name: string, fn: () => Promise<unknown>) => fn())
+        vi.stubGlobal('navigator', { locks: { request } })
+
+        mockFetch.mockResolvedValueOnce(errorResponse('invalid_token', 401))
+        await expect(client.refresh()).rejects.toBeInstanceOf(VaultAPIError)
+
+        // A failed refresh must not wedge the client: the next attempt has to
+        // reach the network rather than replay the rejected promise.
+        mockFetch.mockResolvedValueOnce(
+          jsonResponse({ access_token: 'after-failure', token_type: 'Bearer', expires_in: 900 }),
+        )
+        await expect(client.refresh()).resolves.toMatchObject({ access_token: 'after-failure' })
+      })
+
+      it('falls back to the per-instance guard when locks.request is not callable', async () => {
+        // A navigator that has a locks object without a usable request is the
+        // shape a partial polyfill leaves behind. Calling it would throw where
+        // the previous behaviour merely did not serialize.
+        vi.stubGlobal('navigator', { locks: {} })
+
+        mockFetch.mockResolvedValue(
+          jsonResponse({ access_token: 'fallback-tok', token_type: 'Bearer', expires_in: 900 }),
+        )
+        const [r1, r2] = await Promise.all([client.refresh(), client.refresh()])
+
+        expect(r1).toBe(r2)
+        expect(mockFetch).toHaveBeenCalledOnce()
+        expect(client.accessToken).toBe('fallback-tok')
+      })
+    })
   })
 
   describe('logout', () => {
