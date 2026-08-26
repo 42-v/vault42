@@ -49,8 +49,8 @@ type OIDCProvider struct {
 // that slash in every iss claim it mints, and p.issuer has had it trimmed by
 // NewOIDCProvider.
 //
-// Before this, the trim made discovery pass -- oidcDiscover compares both sides
-// trimmed -- and then failed every id_token, because internal/jwt compares iss
+// Before this, the trim made discovery pass -- discover compares both sides
+// trimmed (oidc.go:185) -- and then failed every id_token, because internal/jwt compares iss
 // byte for byte with no normalization. Discovery succeeding and login failing
 // on every attempt reads as a provider outage, and no configuration escapes it,
 // because TrimRight strips whatever the operator writes.
@@ -58,7 +58,7 @@ type OIDCProvider struct {
 // The published value is preferred and the configured one is the fallback for
 // the path where discovery has not run. Trimming stays where it is: it is the
 // right normalization for *comparing* two spellings of one identifier, which is
-// what oidcDiscover does. It is the wrong thing to hand a verifier that must
+// what discover does. It is the wrong thing to hand a verifier that must
 // match exactly.
 func (p *OIDCProvider) expectedIDTokenIssuer() string {
 	p.mu.RLock()

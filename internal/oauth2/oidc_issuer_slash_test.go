@@ -18,7 +18,7 @@ import (
 // identifier exactly, so a provider whose identifier carries a trailing slash
 // puts that slash in every token it mints.
 //
-// NewOIDCProvider trims it. That is right for oidcDiscover, which compares two
+// NewOIDCProvider trims it. That is right for discover, which compares two
 // spellings of one identifier and trims both sides -- so discovery passes. It
 // was wrong for verification, which is a byte-for-byte comparison in
 // internal/jwt with no normalization: every id_token failed
@@ -27,8 +27,9 @@ import (
 // and no configuration escapes it, because TrimRight strips whatever the
 // operator writes.
 //
-// Every other test in this package uses a bare httptest URL, which never has a
-// trailing slash -- which is why nothing caught it.
+// No issuer used anywhere else in this package's tests ends in a slash -- most
+// are a bare httptest URL and the five written as literals were all chosen
+// without one -- which is why nothing caught it.
 func TestVerifyIDToken_AcceptsAnIssuerIdentifierEndingInASlash(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -137,6 +138,62 @@ func TestVerifyIDToken_StillRefusesTheWrongIssuer(t *testing.T) {
 		if _, err := p.VerifyIDToken(ctx, signed, "the-nonce"); err == nil {
 			t.Errorf("an id_token claiming iss=%q was accepted against published issuer %q", bad, issuerID)
 		}
+	}
+}
+
+// The same provider, verified without anyone having called discover first.
+//
+// This is the arm that was latent. WithIssuer takes its value as an argument, so
+// expectedIDTokenIssuer is evaluated before ParseWithClaims runs the keyfunc,
+// and the keyfunc is the only thing that used to trigger discovery. A caller
+// reaching VerifyIDToken cold therefore compared against the trimmed configured
+// issuer and rejected a perfectly good token. It never bit in production only
+// because the single live caller runs Exchange first, which is correctness by
+// call order rather than by the function.
+func TestVerifyIDToken_DiscoversBeforeChoosingTheIssuer(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, e := rsaJWKParts(&key.PublicKey)
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	issuerID := srv.URL + "/"
+
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer":                 issuerID,
+			"authorization_endpoint": srv.URL + "/authorize",
+			"token_endpoint":         srv.URL + "/token",
+			"jwks_uri":               srv.URL + "/jwks",
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(jwksBody(jwkEntry{Kty: "RSA", Kid: "k1", N: n, E: e, Use: "sig"}))
+	})
+
+	p := NewOIDCProvider("generic", srv.URL, "cid", "secret", "https://app/cb", "")
+
+	now := time.Now()
+	signed, err := vjwt.SignRS256(vjwt.MapClaims{
+		"iss": issuerID, "aud": "cid", "sub": "user-1", "nonce": "the-nonce",
+		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(),
+	}, key, "k1")
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	// No p.discover(ctx) here, deliberately.
+	info, err := p.VerifyIDToken(context.Background(), signed, "the-nonce")
+	if err != nil {
+		t.Fatalf("a cold VerifyIDToken rejected a good token: %v. The issuer is chosen "+
+			"before the keyfunc runs, so discovery has to happen earlier than the "+
+			"signature check, not merely before it completes.", err)
+	}
+	if info.ID != "user-1" {
+		t.Fatalf("subject = %q", info.ID)
 	}
 }
 
