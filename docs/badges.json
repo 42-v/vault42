@@ -13,7 +13,7 @@
   "testFiles": 927,
   "directDeps": 3,
   "transitiveDeps": 15,
-  "totalTests": 6479,
+  "totalTests": 6483,
   "totalDeps": 148,
   "languages": {
     "go": {
@@ -33,10 +33,10 @@
       "transitiveDeps": 95
     },
     "csharp": {
-      "tests": 264,
+      "tests": 268,
       "coverage": "100.00%",
       "coverageNum": 100.00,
-      "lines": 2435,
+      "lines": 2445,
       "deps": 6,
       "transitiveDeps": 26
     }
