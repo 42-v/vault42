@@ -48,10 +48,12 @@ overwrite you.
 Vue suites under a pnpm install, and a dotnet restore. Rebasing needs none of that. Every
 merge to `main` rewrites the file and line counters, which makes every other open branch
 wrong about them and fails the badge parity gate, while changing nothing a test measures.
-`scripts/readme-gen.sh --metrics-only` is that case: it recounts the figures that come
-from the tree, carries the measured ones forward from `docs/badges.json`, leaves
-`docs/deps.md` alone, and takes under a second. Use it after a rebase; use the full run
-when you changed what the tests do.
+`scripts/readme-gen.sh --metrics-only` is that case: it recounts the file counts, the line
+counts and the frontend and C# dependency counts, carries the measured ones forward from
+`docs/badges.json`, leaves `docs/deps.md` alone, and takes under a second. Use it after a
+rebase; use the full run when you changed what the tests do, or when you added or dropped a
+direct **Go** dependency -- that one figure is carried rather than recounted, because it
+comes from `go list -deps ./...`, and `docs/deps.md` has to be regenerated for it anyway.
 
 ### The compliance register names the lines it cites, and prose still counts them
 

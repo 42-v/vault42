@@ -6,9 +6,16 @@
 # CI sets TEST_OUTPUT_FILE + COVERAGE_FILE to reuse test artifacts.
 #
 # --metrics-only recounts what is derived from the tree -- file counts, line
-# counts, dependency counts read out of manifests -- and carries every MEASURED
-# figure (tests, coverage, the NuGet restore graph) forward from the badges.json
+# counts, and the frontend and C# dependency counts, which come from
+# pnpm-lock.yaml and the csproj files -- and carries every MEASURED figure
+# (tests, coverage, the NuGet restore graph) forward from the badges.json
 # already in the tree.
+#
+# The Go dependency counts are carried, not recounted, and that is the one
+# asymmetry worth knowing: they come from intersecting go.mod's require block
+# with `go list -deps ./...`, which lives in the section this flag skips. Adding
+# or dropping a direct Go dependency therefore needs a full run -- which it
+# needs regardless, because docs/deps.md moves with it.
 #
 # It exists because a rebase changes the counters and changes nothing a test run
 # would measure. Every merge rewrites goFiles/goLines/testFiles, so every other
@@ -72,8 +79,13 @@ try:
 except KeyError as missing:
     sys.exit(f'docs/badges.json has no {missing} to carry forward')
 
+# Assigned only where the caller has not already set one. VUE_TESTS,
+# VUE_COVERAGE, DOTNET_TESTS, DOTNET_COVERAGE and DOTNET_TRANSITIVE_DEPS are the
+# script's documented overrides, and prefilling them unconditionally meant
+# --metrics-only silently ignored a figure the caller had actually measured --
+# so a corrected test count could not be handed to it at all.
 for key, value in carried.items():
-    print(f"{key}={json.dumps(str(value))}; export {key}")
+    print(f'{key}="${{{key}:-{value}}}"; export {key}')
 PREFILL
 )" || exit 1
 
@@ -515,7 +527,28 @@ else
   FE_OUT=$(mktemp)
   (cd web && npx vitest run 2>&1) > "$FE_OUT" || true
   (cd packages/vue && npx vitest run 2>&1) >> "$FE_OUT" || true
-  FE_TESTS=$({ grep -oP '\d+(?= passed)' "$FE_OUT" || true; } | awk '{s+=$1}END{print s+0}')
+  # Anchored to the "Tests" line. `\d+(?= passed)` alone also matches vitest's
+  # "Test Files  33 passed" summary, so the published figure was the number of
+  # tests PLUS the number of test files -- measured at 33 755 23 511 across the
+  # two packages, thirty-nine too many, and totalTests carried the error into
+  # the headline Total badge.
+  # shellcheck source=lib/vitest-count.sh
+  source "$(dirname "$0")/lib/vitest-count.sh"
+  read -r FE_TESTS _ FE_SUMMARIES <<<"$(vitest_counts "$FE_OUT")"
+  # Two suites run above, so two summary lines is the only correct answer. The
+  # pattern this replaced was unanchored and also matched vitest's "Test Files
+  # 33 passed" line, so the figure published was tests PLUS test files --
+  # measured at 33 755 23 511 across the two packages. Counting the matched
+  # lines is what tells a wrong sum from a right one, because four numbers add
+  # up to something plausible.
+  if [ "$FE_SUMMARIES" -ne 2 ]; then
+    echo "ERROR: the frontend runs two suites and produced ${FE_SUMMARIES} 'Tests <n> passed' summaries." >&2
+    echo "  Summing the wrong set of lines publishes a plausible number rather than failing, which" >&2
+    echo "  is how the Vue badge came to carry tests plus test files. Check the reporter output." >&2
+    sed -n '1,20p' "$FE_OUT" >&2
+    rm -f "$FE_OUT"
+    exit 1
+  fi
   # Both runs above are `|| true`, and awk turns "no matches" into 0, so a
   # frontend suite that cannot run at all -- no node_modules, no registry, a
   # renamed reporter -- used to publish a Vue_Tests badge reading 0 and a Total
