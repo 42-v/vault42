@@ -12,7 +12,7 @@
 // a mint response body asserts on the fields it names, and a field nobody names
 // is a field nobody checks.
 //
-// This gate reads the struct tags out of the source rather than marshalling a
+// This gate reads the struct tags out of the source rather than marshaling a
 // response, because omitempty means a runtime body proves only which fields were
 // populated by that one request. The question is which fields the type is
 // capable of emitting at all.
@@ -126,8 +126,8 @@ func TestTheMintResponseDocumentsEveryFieldItCanSend(t *testing.T) {
 	example := section[exampleStart:]
 	if fence := strings.Index(example, "```json"); fence >= 0 {
 		example = example[fence:]
-		if close := strings.Index(example[len("```json"):], "```"); close >= 0 {
-			example = example[:len("```json")+close]
+		if end := strings.Index(example[len("```json"):], "```"); end >= 0 {
+			example = example[:len("```json")+end]
 		}
 	}
 
