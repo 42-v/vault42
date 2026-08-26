@@ -321,11 +321,16 @@ func TestBadgeFiguresMatchTheRepository(t *testing.T) {
 			t.Errorf("docs/badges.json %s is %d; counting the tree gives %d (%s).\n"+
 				"The README badge carries the same figure, so the two can agree with each "+
 				"other and both be stale.\n"+
-				"Every figure here is counted from the tree, so nothing has to be measured "+
-				"to fix it: run `scripts/readme-gen.sh --metrics-only`, which recounts these "+
-				"and carries the tests and coverage forward from the file. A plain "+
-				"scripts/readme-gen.sh re-measures everything and needs a container runtime, "+
-				"a pnpm install and a dotnet restore.",
+				"Eight of these nine figures are counted from the tree, so nothing has to be "+
+				"measured to fix them: run `scripts/readme-gen.sh --metrics-only`, which "+
+				"recounts them and carries the tests and coverage forward from the file.\n"+
+				"languages.go.deps is the exception and needs a full `scripts/readme-gen.sh`. "+
+				"It comes from intersecting go.mod's require block with `go list -deps ./...`, "+
+				"which sits in the part --metrics-only skips, so that flag carries the old "+
+				"value forward and the figure survives the very command this message would "+
+				"otherwise be sending you to. A full run needs a container runtime, a pnpm "+
+				"install and a dotnet restore -- and it also regenerates docs/deps.md, which "+
+				"a changed direct dependency has to move anyway.",
 				figure.key, figure.published, figure.counted, figure.counting)
 		}
 	}
