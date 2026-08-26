@@ -139,7 +139,12 @@ func TestAuditRepo_RefusedCommitLosesTheBatchLoudly(t *testing.T) {
 	)
 
 	err := NewAuditRepo(db).InsertBatch(context.Background(), []*model.AuditEntry{
-		{ID: "a-1", Timestamp: time.Now(), EventType: "login_success", UserID: "u-1"},
+		// A real uuid, because this test is about a refused COMMIT and nothing
+		// else. With a non-uuid actor id, actorColumns moves the value into
+		// metadata, and this harness cannot encode a map -- so the batch would
+		// fail before reaching the commit and the test would pass for the wrong
+		// reason.
+		{ID: "a-1", Timestamp: time.Now(), EventType: "login_success", UserID: "7e2f9a10-2222-4000-8000-0000000000ab"},
 	})
 	if err == nil {
 		t.Fatal("InsertBatch reported the batch written after the commit was refused")

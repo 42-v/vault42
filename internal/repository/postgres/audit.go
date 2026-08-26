@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,15 +22,76 @@ func NewAuditRepo(db *DB) *AuditRepo {
 }
 
 // Insert writes a single entry to the audit.audit_log table.
+// actorUUID matches the canonical 8-4-4-4-12 form, which is what auth.users
+// ids are and what the audit actor columns accept. It is deliberately not a
+// full RFC 4122 validator: the only question here is whether pgx will encode
+// the value into a uuid column, which is a question about shape.
+var actorUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// Keys a rejected actor id is kept under. Prefixed so they cannot collide with
+// a key a call site already uses, and named for what they hold.
+const (
+	rawUserIDKey   = "actor_user_id_raw"
+	rawClientIDKey = "actor_client_id_raw"
+)
+
+// actorColumns returns the values the actor columns should carry, moving an id
+// the uuid type cannot hold into metadata instead of losing the whole row.
+//
+// user_id and client_id are UUID in the schema (001) and string in the model,
+// and three call sites pass a value the caller chose: the submitted client_id
+// on a failed client auth, and the asserted subject on /mint and on a service
+// document. A non-UUID there does not produce a row with an odd value in it --
+// pgx refuses the encode and there is no row at all. The caller then discards
+// the error, correctly, because auditing must never block authentication. So
+// the events most worth having are the ones most likely to vanish: a credential
+// spray sends client_id=admin, not a UUID, which is exactly the case the
+// comment above auditClientAuthFailure says the audit exists to catch.
+//
+// This belongs here rather than in audit.Logger. The constraint is the column's,
+// and only this package knows the column. Normalising in the logger would change
+// the shape of every AuditEntry in the process to satisfy a rule that applies at
+// one boundary, and every mock repository in the test suite would keep accepting
+// what the real one rejects -- which is how this survived in the first place.
+//
+// The claimed value is not discarded. It moves into metadata, which is JSONB and
+// takes any string, so the row still records who the caller said they were.
+func actorColumns(e *model.AuditEntry) (userID, clientID string, metadata map[string]interface{}) {
+	userID, clientID, metadata = e.UserID, e.ClientID, e.Metadata
+
+	userBad := userID != "" && !actorUUID.MatchString(userID)
+	clientBad := clientID != "" && !actorUUID.MatchString(clientID)
+	if !userBad && !clientBad {
+		return userID, clientID, metadata
+	}
+
+	// Copied, never mutated: the entry belongs to the caller, and a batch retry
+	// must not accumulate keys.
+	out := make(map[string]interface{}, len(metadata)+2)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	if userBad {
+		out[rawUserIDKey] = userID
+		userID = ""
+	}
+	if clientBad {
+		out[rawClientIDKey] = clientID
+		clientID = ""
+	}
+	return userID, clientID, out
+}
+
 func (r *AuditRepo) Insert(ctx context.Context, entry *model.AuditEntry) error {
+	auditUserID, auditClientID, auditMetadata := actorColumns(entry)
 	_, err := r.db.Pool.Exec(ctx, `
 		INSERT INTO audit.audit_log (id, timestamp, event_type, user_id, client_id, ip, user_agent, fingerprint_hash, device_id, metadata, risk_score)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		entry.ID, entry.Timestamp, entry.EventType,
-		nullStr(entry.UserID), nullStr(entry.ClientID),
+		nullStr(auditUserID), nullStr(auditClientID),
 		nullStr(entry.IP), nullStr(entry.UserAgent),
 		nullStr(entry.FingerprintHash), nullStr(entry.DeviceID),
-		entry.Metadata, entry.RiskScore,
+		auditMetadata, entry.RiskScore,
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit entry: %w", err)
@@ -46,14 +108,15 @@ func (r *AuditRepo) InsertBatch(ctx context.Context, entries []*model.AuditEntry
 	defer func() { _ = tx.Rollback(ctx) }() // rollback after commit is a no-op
 
 	for _, e := range entries {
+		batchUserID, batchClientID, batchMetadata := actorColumns(e)
 		_, err := tx.Exec(ctx, `
 			INSERT INTO audit.audit_log (id, timestamp, event_type, user_id, client_id, ip, user_agent, fingerprint_hash, device_id, metadata, risk_score)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			e.ID, e.Timestamp, e.EventType,
-			nullStr(e.UserID), nullStr(e.ClientID),
+			nullStr(batchUserID), nullStr(batchClientID),
 			nullStr(e.IP), nullStr(e.UserAgent),
 			nullStr(e.FingerprintHash), nullStr(e.DeviceID),
-			e.Metadata, e.RiskScore,
+			batchMetadata, e.RiskScore,
 		)
 		if err != nil {
 			return fmt.Errorf("insert audit batch entry: %w", err)
