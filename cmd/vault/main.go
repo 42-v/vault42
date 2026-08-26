@@ -235,13 +235,7 @@ func main() {
 		// success while nothing had been seeded, and the same held for every
 		// other subcommand.
 		if cliHandler.Failed() {
-			// Drained explicitly, because os.Exit runs no defers and the CLI
-			// writes audit rows -- add-client and rotate-admin-token among them.
-			// Exiting straight from here would drop the record of the very
-			// command being reported as failed. Same shape as the seed-file
-			// failure below.
-			_ = auditLogger.Close(ctx)
-			os.Exit(1) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+			os.Exit(1) //nolint:gocritic // exitAfterDefer is intentional; the CLI holds no buffered logger to drain
 		}
 		return
 	}
