@@ -78,6 +78,21 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 	if expectedNonce == "" {
 		return nil, fmt.Errorf("oidc id_token: no expected nonce for this login attempt")
 	}
+	// Discovery has to have run before the issuer is chosen, not merely before
+	// the signature is checked. WithIssuer takes its value as an argument, so
+	// expectedIDTokenIssuer is evaluated here; the keyfunc that would otherwise
+	// trigger discovery does not run until ParseWithClaims is already inside the
+	// call. Without this, the first verification against a provider whose
+	// identifier ends in a slash compares against the trimmed configured value
+	// and fails -- the exact defect expectedIDTokenIssuer exists to prevent.
+	//
+	// discover caches, so this is a no-op after the first call, and the only
+	// live caller reaches Exchange first anyway. That is why this was latent
+	// rather than broken, and it is not a reason to leave a function correct
+	// only by the order its caller happens to use.
+	if _, err := p.discover(ctx); err != nil {
+		return nil, err
+	}
 	claims := vjwt.MapClaims{}
 	_, err := vjwt.ParseWithClaims(idToken, &claims, func(t *vjwt.Token) (any, error) {
 		// Reject headers that point verification at attacker-controlled keys.
