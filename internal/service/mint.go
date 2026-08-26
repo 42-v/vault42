@@ -257,7 +257,7 @@ func NewMintService(signer SigningKeyProvider, cfg MintConfig, metrics MintMetri
 
 	roles := make(map[string]bool, len(cfg.AllowedRoles))
 	for _, r := range cfg.AllowedRoles {
-		if seed.ReservedAdminRoles[r] {
+		if seed.IsReservedAdminRole(r) {
 			return nil, fmt.Errorf("mint: role %q is admin-tier and cannot be minted", r)
 		}
 		roles[r] = true
@@ -382,7 +382,7 @@ func (s *MintService) checkRoles(requested []string) ([]string, error) {
 		return nil, nil
 	}
 	for _, r := range requested {
-		if seed.ReservedAdminRoles[r] || !s.allowedRoles[r] {
+		if seed.IsReservedAdminRole(r) || !s.allowedRoles[r] {
 			return nil, ErrMintRoleNotPermitted
 		}
 	}

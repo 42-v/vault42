@@ -252,6 +252,50 @@ func TestMint_RefusesAdminTierRolesEvenIfAllowListedLater(t *testing.T) {
 	}
 }
 
+// The admin-tier refusal is documented as unconditional, and the case that
+// matters is the one an operator can talk themselves into: putting the
+// consumer's own spelling of the role into VAULT_MINT_ROLES.
+//
+// BeOn3 gates ~40 controllers on [Authorize(Roles="Admin")]. Before the fold,
+// allow-listing "Admin" produced a signed token carrying it, because the
+// reserved check was a byte-for-byte map lookup and "Admin" is not "admin".
+// Nothing in vault42 escalated -- its admin plane never reads this claim -- and
+// everything in the relying party did, which is the only place the claim is
+// worth anything.
+//
+// The allow-list is deliberately hostile here: every casing is permitted by
+// configuration, so the only thing that can refuse the request is the reserved
+// check itself.
+func TestMint_RefusesAdminTierRolesInEveryCasingEvenWhenAllowListed(t *testing.T) {
+	variants := []string{"Admin", "ADMIN", "aDmIn", "Admin ", " admin", "Super_Admin", "SUPER_ADMIN", "super_admin "}
+
+	// Allow-listing any casing is refused at construction, so a deployment
+	// configured this way fails to boot rather than serving a signing oracle
+	// that will hand out the role on request.
+	for _, role := range variants {
+		cfg := mintTestConfig()
+		cfg.AllowedRoles = []string{"moderator", role}
+		if _, err := NewMintService(mintTestSigner(t), cfg, nil); err == nil {
+			t.Errorf("VAULT_MINT_ROLES containing %q was accepted; the service should refuse to start", role)
+		}
+	}
+
+	// And with a sane allow-list, every casing is refused per request.
+	cfg := mintTestConfig()
+	cfg.AllowedRoles = []string{"moderator"}
+	svc := newMintService(t, cfg)
+	for _, role := range variants {
+		if _, err := svc.Mint(MintRequest{Subject: "user-1", Roles: []string{role}}); !errors.Is(err, ErrMintRoleNotPermitted) {
+			t.Errorf("admin-tier casing %q was not refused: %v", role, err)
+		}
+	}
+	// Mixed with a legitimate role, the whole request still fails rather than
+	// dropping the admin name and signing the rest.
+	if _, err := svc.Mint(MintRequest{Subject: "user-1", Roles: []string{"moderator", "Admin"}}); !errors.Is(err, ErrMintRoleNotPermitted) {
+		t.Fatalf("mixed request with \"Admin\" was not refused whole: %v", err)
+	}
+}
+
 // A minted token that carried one of vault42's own capability scopes would let
 // the mint holder pivot into the endpoints those scopes gate.
 func TestMint_RefusesVaultCapabilityScopes(t *testing.T) {

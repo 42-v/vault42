@@ -239,7 +239,12 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # 98), which shipped in 1.0.3 with docs/config.md, charts/vault/values.yaml and
 # the compliance register describing it and no release note -- worth knowing when
 # reading 1.0.3, and not a jump nobody asked for.
-BASELINE_TOTAL_STATEMENTS = 12951
+#
+# +1 (12951 -> 12952), all of it internal/seed (152 -> 153): IsReservedAdminRole,
+# the one-line helper that folds case before the admin-tier role denylist is
+# read. It replaced six direct map lookups, none of which were statements of
+# their own, so the whole increase is the new function body.
+BASELINE_TOTAL_STATEMENTS = 12952
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -388,7 +393,7 @@ BASELINE_PACKAGE_STATEMENTS = {
     "internal/redis": 338,
     "internal/repository/postgres": 1081,
     "internal/sanitize": 53,
-    "internal/seed": 152,
+    "internal/seed": 153,
     "internal/server": 260,
     "internal/service": 1794,
     "internal/useragent": 41,

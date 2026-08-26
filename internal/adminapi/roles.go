@@ -62,7 +62,7 @@ func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Admin-tier names are AdminUser-only — never valid catalog (user) roles.
-	if seed.ReservedAdminRoles[req.Name] {
+	if seed.IsReservedAdminRole(req.Name) {
 		httputil.WriteError(w, http.StatusBadRequest, "reserved_role_name")
 		return
 	}
