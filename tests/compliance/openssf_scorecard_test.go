@@ -311,7 +311,8 @@ func TestScorecard_TheReleaseHistoryIsRecorded(t *testing.T) {
 // The check reads OSV, which needs the network, so what is asserted here is the
 // claim the register makes about the one advisory it accepts: GO-2026-5932
 // marks golang.org/x/crypto/openpgp unmaintained with no fix, x/crypto is a
-// direct dependency for argon2id and HKDF, and nothing in either module imports
+// direct dependency for argon2id alone -- HKDF moved to the standard library in
+// crypto/hkdf -- and nothing in either module imports
 // openpgp. The first two make the finding unavoidable; the third is what makes
 // it harmless, and it is the one a future import could quietly undo.
 // openpgpImportPath is the quoted import path the scan below compares against,
