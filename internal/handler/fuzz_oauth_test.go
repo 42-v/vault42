@@ -114,6 +114,36 @@ func FuzzMintRequestJSON(f *testing.F) {
 			}
 		}
 
+		// Same contract as the subject, and checked rather than discarded for
+		// the same reason. checkEmail skips the validator for an absent email,
+		// so the fuzzer skips it too: "" is the one decoded value the handler
+		// never hands over.
+		if parsed.Email != "" {
+			normalized, emailErr := service.ValidateMintEmail(parsed.Email)
+			if emailErr != nil {
+				if !errors.Is(emailErr, service.ErrMintEmailInvalid) {
+					t.Fatalf("ValidateMintEmail(%q) = %v, want ErrMintEmailInvalid", parsed.Email, emailErr)
+				}
+				if normalized != "" {
+					t.Fatalf("ValidateMintEmail(%q) rejected the address but still returned %q", parsed.Email, normalized)
+				}
+			} else {
+				// A relying party keys its own table on this string. If
+				// normalisation is not idempotent, two spellings of one address
+				// reach two callers as two different values, and that table
+				// grows two rows for one person -- which is the whole reason the
+				// validator normalises instead of only validating.
+				if normalized != strings.ToLower(strings.TrimSpace(normalized)) {
+					t.Fatalf("ValidateMintEmail(%q) = %q, which is not lower-cased and trimmed", parsed.Email, normalized)
+				}
+				again, againErr := service.ValidateMintEmail(normalized)
+				if againErr != nil || again != normalized {
+					t.Fatalf("ValidateMintEmail is not idempotent: %q -> %q -> (%q, %v)",
+						parsed.Email, normalized, again, againErr)
+				}
+			}
+		}
+
 		d, ttlErr := service.MintTTLFromSeconds(parsed.TTLSeconds)
 		if parsed.TTLSeconds < 0 || parsed.TTLSeconds > 900 {
 			if ttlErr == nil {

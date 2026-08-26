@@ -688,11 +688,19 @@ func TestMintHandler_TheAuditRowDoesNotCarryTheEmail(t *testing.T) {
 	if len(captured) == 0 {
 		t.Fatal("no audit entry recorded")
 	}
+	// Marshalled whole, not walked field by field. model.AuditEntry carries
+	// UserID, ClientID, IP, UserAgent, FingerprintHash and DeviceID outside
+	// Metadata, and Metadata itself holds interface{} -- so a loop over string
+	// values in one map cannot fail for the reason this test is named for. The
+	// address landing in UserID would have passed it. This is the idiom
+	// blob_audit_privacy_test.go uses for the same question.
 	for _, e := range captured {
-		for k, v := range e.Metadata {
-			if str, ok := v.(string); ok && strings.Contains(str, "alice@example.com") {
-				t.Errorf("audit metadata %q carries the asserted email", k)
-			}
+		serialized, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("marshal audit entry: %v", err)
+		}
+		if strings.Contains(string(serialized), "alice@example.com") {
+			t.Errorf("audit entry %q carries the asserted email: %s", e.EventType, serialized)
 		}
 	}
 }

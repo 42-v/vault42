@@ -3181,6 +3181,7 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
   "issuer": "https://vault42.example.com",
   "roles": ["rider"],
   "scopes": ["orders:read"],
+  "email": "legacy-user-8814@example.com",
   "kid": "4f1c9e60-2a77-4e0f-9a3e-9c2b7f0d51aa",
   "jti": "0f2b8c1d-6e4a-4c92-b8a1-2f7d3e5a90c4"
 }
@@ -3196,6 +3197,7 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
 | `issuer` | string | `VAULT_ORIGIN`, the `iss` claim on the token |
 | `roles` | string[] | Granted roles. Omitted when none were requested |
 | `scopes` | string[] | Granted scopes. Omitted when none were requested |
+| `email` | string | Echo of the asserted address as it was signed, lower-cased and trimmed. Omitted when the request carried none. Present so a caller can see what it actually asserted rather than what it meant to send |
 | `kid` | string | Key id the assertion was signed under, resolvable against `GET /.well-known/jwks.json` |
 | `jti` | string | The token's unique id, also recorded in the audit event so a downstream incident traces back to the exact assertion |
 

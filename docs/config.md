@@ -420,7 +420,7 @@ controls that bound it are in [`spec.md` section 6.5](spec.md#65-subject-asserti
 | `VAULT_MINT_SCOPES` | list | *(empty)* | No | Comma-separated allow-list of scopes a minted token may carry. Empty means no scope may be minted. Capability scopes such as `kms:unwrap` and `mint:token` are refused regardless. |
 | `VAULT_MINT_ALLOW_EMAIL` | bool | `false` | No | Permits an `email` claim on a minted token. Every other minted claim is a name vault42 issued or allow-listed; an email is a caller-supplied identifier for a subject vault42 has never heard of, so enabling this says the operator trusts this client to assert who its users are. A request carrying an email while this is off is **refused, not stripped**. The claim is never verified and a relying party must not read it as proof of address ownership. |
 
-The Helm chart exposes all six as the `mint.*` block, each at the default above, so an install that
+The Helm chart exposes all seven as the `mint.*` block, each at the default above, so an install that
 does not opt in renders the same environment it did before the block existed. They are exposed
 together because none of them works alone: `mint.enabled` without `mint.audience` refuses to start,
 and `mint.enabled` with empty allow-lists mounts an endpoint that grants nothing. The chart fails the
