@@ -32,12 +32,17 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
-There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 40, so an upgrade applies 1.
+042 changes `auth.admin_users.created_by` from `NO ACTION` to `ON DELETE SET NULL`. It moves
+no data and adds no column. Until it runs, `POST /admin/admins/{id}/revoke` answers 500 for
+any admin who has created another admin, and that account and its live sessions stay --
+revoke is the only containment lever the admin plane has. Take the backup anyway: the point
 of step 1 is that you have one when something else goes wrong.
 
-**Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
-them; no request path, token, database or configuration behaviour differs from 1.0.3. The
+**Behaviour.** One fix, no new surface: `POST /admin/admins/{id}/revoke` now succeeds
+against an admin who has created other admins, and those accounts survive with their
+`created_by` cleared -- the account that authorized them is recorded in the revoke's audit
+row instead. No route, token or configuration changes shape. The
 one thing an operator may notice is that `docs/deps.md` and the README badge figures now
 report numbers that differ slightly from 1.0.3's, because those were being counted wrongly --
 see the 1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).

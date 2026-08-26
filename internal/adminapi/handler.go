@@ -1121,17 +1121,41 @@ func (h *Handler) RevokeAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the row before deleting it. 042 makes created_by ON DELETE SET NULL,
+	// so revoking a creator nulls that column on every account it opened; this
+	// is where the answer to "who authorized this account" is preserved. A read
+	// failure is not fatal -- containment matters more than provenance -- so the
+	// revoke proceeds with the field absent rather than refusing.
+	var revokedCreatedBy string
+	if target, err := h.admins.GetByID(r.Context(), id); err == nil && target != nil {
+		revokedCreatedBy = target.CreatedBy
+	}
+
 	// Revoke admin first — sessions CASCADE delete via FK.
 	// This eliminates the race window where an in-flight request could
 	// pass SessionAuth between session revoke and admin revoke.
 	if err := h.admins.Revoke(r.Context(), id); err != nil {
+		// Audited on the way out. A failed revoke is the event an operator most
+		// needs to see: this route is the only containment lever there is, so a
+		// 500 here means a compromised account is still live and nothing else
+		// can stop it. Returning before the audit call left no trace at all.
+		_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+			"revoked_admin_id": id,
+			"outcome":          "failed",
+			"error":            err.Error(),
+		})
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	meta := map[string]interface{}{
 		"revoked_admin_id": id,
-	})
+		"outcome":          "revoked",
+	}
+	if revokedCreatedBy != "" {
+		meta["revoked_admin_created_by"] = revokedCreatedBy
+	}
+	_ = h.auditLog.Log(r.Context(), audit.AdminAccountRevoke, actor.ID, id, r.RemoteAddr, r.UserAgent(), "", "", meta)
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
