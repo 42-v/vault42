@@ -68,6 +68,13 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	// rbac.UsersReset says why.
 	mux.Handle("POST /admin/users/{id}/require-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.RequirePasswordReset))
 	mux.Handle("POST /admin/users/{id}/clear-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.ClearPasswordReset))
+	// The ban pair (migration 043). Same shape and the same asymmetry as the two
+	// above: banning terminates the account's live sessions because nothing on
+	// the refresh path reads banned, and unbanning deliberately does not. One
+	// permission covers both; rbac.UsersBan says why, and why it sits at
+	// operator rather than beside users:delete.
+	mux.Handle("POST /admin/users/{id}/ban", withPerm(sessionAuth, rbac.UsersBan, api.BanUser))
+	mux.Handle("POST /admin/users/{id}/unban", withPerm(sessionAuth, rbac.UsersBan, api.UnbanUser))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
 	// Session management.
