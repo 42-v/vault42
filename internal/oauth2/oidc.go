@@ -40,6 +40,35 @@ type OIDCProvider struct {
 	jwks       jwksCache
 }
 
+// expectedIDTokenIssuer is the value an id_token's iss claim must equal.
+//
+// OIDC Core 3.1.3.7 step 2 requires an exact match against the issuer
+// identifier -- as the provider publishes it, not as the operator typed it and
+// not as vault42 normalized it. Those three differ by exactly one character
+// often enough to matter: a provider whose identifier ends in "/" publishes
+// that slash in every iss claim it mints, and p.issuer has had it trimmed by
+// NewOIDCProvider.
+//
+// Before this, the trim made discovery pass -- oidcDiscover compares both sides
+// trimmed -- and then failed every id_token, because internal/jwt compares iss
+// byte for byte with no normalization. Discovery succeeding and login failing
+// on every attempt reads as a provider outage, and no configuration escapes it,
+// because TrimRight strips whatever the operator writes.
+//
+// The published value is preferred and the configured one is the fallback for
+// the path where discovery has not run. Trimming stays where it is: it is the
+// right normalization for *comparing* two spellings of one identifier, which is
+// what oidcDiscover does. It is the wrong thing to hand a verifier that must
+// match exactly.
+func (p *OIDCProvider) expectedIDTokenIssuer() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.discovered != nil && p.discovered.Issuer != "" {
+		return p.discovered.Issuer
+	}
+	return p.issuer
+}
+
 // oidcDiscovery is the subset of the discovery document vault42 consumes.
 type oidcDiscovery struct {
 	Issuer        string `json:"issuer"`
