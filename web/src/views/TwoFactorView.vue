@@ -33,10 +33,20 @@ const credentialLoading = ref(false)
 watch(totpSetup, async (setup) => {
   if (setup?.otp_url) {
     try {
+      // Dark modules on an opaque white quiet zone, which is the only
+      // combination every decoder accepts. This used to be the app's palette
+      // -- light modules on full transparency -- which reads correctly on the
+      // dark card behind it and is undecodable anywhere else: saved, exported
+      // or screenshotted onto white it becomes light grey on white, and an
+      // inverted code is outside what several scanners (iOS Camera among them)
+      // will read at all. The cantScan disclosure below hands over the secret to
+      // type, so this is not a dead end -- but a code that silently fails to
+      // scan pushes every enrolling user onto a 32-character manual entry, on
+      // the screen they are least likely to come back to.
       qrDataUrl.value = await QRCode.toDataURL(setup.otp_url, {
         width: 200,
         margin: 2,
-        color: { dark: '#e2e8f0', light: '#00000000' },
+        color: { dark: '#0a0a0f', light: '#ffffff' },
       })
     } catch {
       qrDataUrl.value = ''
@@ -304,7 +314,9 @@ async function copyBackupCodes() {
           </div>
 
           <div class="flex flex-col items-center gap-4">
-            <div v-if="qrDataUrl" class="bg-vault42-bg rounded-xl p-3">
+            <!-- The only white surface in the app, and it is white because a
+                 scanner needs the quiet zone to be white. -->
+            <div v-if="qrDataUrl" class="bg-white rounded-xl p-3">
               <img :src="qrDataUrl" alt="TOTP QR Code" width="200" height="200" class="block" />
             </div>
             <div v-else class="w-[200px] h-[200px] bg-vault42-bg rounded-xl flex items-center justify-center">

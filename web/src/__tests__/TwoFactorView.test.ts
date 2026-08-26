@@ -315,10 +315,16 @@ describe('TwoFactorView', () => {
     await buttonByText(wrapper, 'Begin Setup')!.trigger('click')
     await flushPromises()
 
+    // Dark modules on an opaque white quiet zone. This assertion previously
+    // pinned the opposite -- light modules on full transparency -- which is
+    // how the defect survived: the code renders correctly against the dark
+    // card behind it, and is undecodable the moment it leaves that card for a
+    // white backdrop. The colours are asserted rather than left free because
+    // they are the functional contract of a QR code, not styling.
     expect(mockToDataURL).toHaveBeenCalledWith(OTP_URL, {
       width: 200,
       margin: 2,
-      color: { dark: '#e2e8f0', light: '#00000000' },
+      color: { dark: '#0a0a0f', light: '#ffffff' },
     })
     expect(wrapper.find('img[alt="TOTP QR Code"]').attributes('src')).toBe(QR_DATA_URL)
   })
