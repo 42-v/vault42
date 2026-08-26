@@ -120,6 +120,7 @@ All endpoints are prefixed with `/admin/`.
 | `GET` | `/admin/users/{id}` | Session + RBAC | `users:read` | Get user details |
 | `POST` | `/admin/users/{id}/lock` | Session + RBAC | `users:lock` | Lock user account |
 | `POST` | `/admin/users/{id}/unlock` | Session + RBAC | `users:unlock` | Unlock user account |
+| `PUT` | `/admin/users/{id}/roles` | Session + RBAC | `users:roles` | Replace a user's role set; refuses admin-tier and off-catalog names |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session + RBAC | `users:reset` | Force a password reset and revoke the account's live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session + RBAC | `users:reset` | Withdraw a forced password reset |
 

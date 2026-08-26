@@ -61,13 +61,24 @@ func TestUpgradingDocMigrationCountsMatchTheTree(t *testing.T) {
 	root := repoRoot(t)
 	doc := readFileString(t, filepath.Join(root, "docs", upgradingDoc))
 
-	match := schemaCountSentence.FindStringSubmatch(doc)
-	if match == nil {
+	// All, not the first. FindStringSubmatch stops at the leading section, so a
+	// second copy of this sentence further down -- in an older section that has
+	// since gone stale -- was invisible to the gate that exists to catch exactly
+	// that. One sentence in this shape, checked; more than one, and the gate
+	// cannot tell which describes the release.
+	matches := schemaCountSentence.FindAllStringSubmatch(doc, -1)
+	if len(matches) == 0 {
 		t.Fatalf("docs/%s no longer carries the sentence this gate reads. It has to keep the "+
 			"shape `vX.Y.Z shipped N migrations; this release ships M, so an upgrade applies K`, "+
 			"because an upgrade document whose numbers have drifted is read as current.",
 			upgradingDoc)
 	}
+	if len(matches) > 1 {
+		t.Fatalf("docs/%s carries %d sentences in the machine-read shape. Exactly one describes "+
+			"this release; the others will drift silently because only the first was ever checked.",
+			upgradingDoc, len(matches))
+	}
+	match := matches[0]
 	statedTag, statedFrom := match[1], atoi(t, match[2])
 	statedTo, statedApplied := atoi(t, match[3]), atoi(t, match[4])
 
@@ -89,6 +100,54 @@ func TestUpgradingDocMigrationCountsMatchTheTree(t *testing.T) {
 	if got := len(migrationFilesAt(t, root, tag)); got != statedFrom {
 		t.Errorf("docs/%s says %s shipped %d migrations; it shipped %d",
 			upgradingDoc, tag, statedFrom, got)
+	}
+}
+
+// backCompatCountSentence is the document's other migration claim: the note
+// telling a reader coming from an older line which releases changed nothing.
+// It went stale the moment this release added a migration, and the gate above
+// could not see it -- different shape, and further down the document.
+var backCompatCountSentence = regexp.MustCompile(
+	`([0-9][0-9.]*) through ([0-9][0-9.]*) added no migrations, so the\s+count is the same (\d+)`)
+
+// TestUpgradingDocBackCompatCountMatchesTheTree holds the second count sentence
+// to the same standard as the first: the range it names must genuinely have
+// added nothing, and the figure must be what that tag shipped.
+func TestUpgradingDocBackCompatCountMatchesTheTree(t *testing.T) {
+	root := repoRoot(t)
+	doc := readFileString(t, filepath.Join(root, "docs", upgradingDoc))
+
+	match := backCompatCountSentence.FindStringSubmatch(doc)
+	if match == nil {
+		t.Fatalf("docs/%s no longer carries the back-compatibility count sentence. It has to "+
+			"keep the shape `X through Y added no migrations, so the count is the same N`: it "+
+			"tells a reader on an older line whether they can skip ahead, and it is the sentence "+
+			"that goes stale first when a release adds a migration.", upgradingDoc)
+	}
+	upperTag, stated := "v"+match[2], atoi(t, match[3])
+
+	// A checkout without tags cannot answer what that tag shipped, and CI does
+	// not always fetch them -- this failed there with exit status 128 while
+	// passing locally. Skipping is what lastReleaseTag does for the same reason
+	// and for the gate one function up, which reads the same history.
+	if err := exec.Command("git", "-C", root, "rev-parse", "-q", "--verify",
+		upperTag+"^{commit}").Run(); err != nil { // #nosec G204 -- tag comes from the document's own sentence
+		if runningInCI() {
+			// ci.yml sets fetch-tags: true on both jobs that run this suite, so
+			// on a runner an unreachable tag means a checkout stopped fetching
+			// them -- and this gate going quiet is exactly what that looks like.
+			t.Fatalf("%s is not reachable on a CI runner. Both jobs that run ./tests/spec/... "+
+				"fetch tags; if that changed, this gate stopped checking the count sentence "+
+				"and reported ok while doing it.", upperTag)
+		}
+		t.Skipf("%s is not reachable in this checkout, so what it shipped cannot be read. "+
+			"The count sentence is unverified here, not verified.", upperTag)
+	}
+
+	if got := len(migrationFilesAt(t, root, upperTag)); got != stated {
+		t.Errorf("docs/%s says the count through %s is %d; that tag shipped %d. A release that "+
+			"adds a migration has to move the upper bound of this sentence, not only the one "+
+			"above it.", upgradingDoc, upperTag, stated, got)
 	}
 }
 

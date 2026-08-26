@@ -32,15 +32,20 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
-There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
-of step 1 is that you have one when something else goes wrong.
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 40, so an upgrade applies 1.
+041 grants `UPDATE (roles)` on `auth.users` to `vault_admin`. It changes no data and no
+column: it is what lets `PUT /admin/users/{id}/roles` write at all, because PostgreSQL checks
+the column privilege on every target an UPDATE names, and 015 revoked the six columns 009 had
+lent that role. Until it runs the route answers 500 in any deployment running as the real
+role, and nothing else depends on it. Take the backup anyway: the point of step 1 is that you
+have one when something else goes wrong.
 
-**Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
-them; no request path, token, database or configuration behaviour differs from 1.0.3. The
-one thing an operator may notice is that `docs/deps.md` and the README badge figures now
-report numbers that differ slightly from 1.0.3's, because those were being counted wrongly --
-see the 1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).
+**Behaviour.** One new route: `PUT /admin/users/{id}/roles`, which is what migration 041
+grants the privilege for. Nothing existing changes shape -- no request path, token or
+configuration behaves differently than it did in 1.0.3, and the route is additive, so a
+deployment that never calls it is unaffected. An operator may also notice that `docs/deps.md`
+and the README badge figures report numbers that differ slightly from 1.0.3's, because those
+were being counted wrongly -- see [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
@@ -60,7 +65,8 @@ one go (033 is deliberately absent -- the runner sorts filenames and skips what 
 gaps are harmless). Take the backup first.
 
 Still current if you are coming from 0.9.x: 1.0.1 through 1.0.4 added no migrations, so the
-count is the same 39 whichever of them you land on.
+count is the same 39 whichever of them you land on. This release is the first since 1.0.0 to
+add one: 041 takes it to 40.
 
 **Every idle session is logged out once.** This release adds an inactivity timeout,
 `VAULT_INACTIVITY_TIMEOUT`, defaulting to `1h` — the figure NIST SP 800-63B-4 §2.2.3 gives

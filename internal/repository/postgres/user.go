@@ -165,6 +165,30 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 	return nil
 }
 
+// SetRoles replaces a user's role set, and names roles and nothing else.
+//
+// Same constraint as SetMustResetPassword above: vault_admin holds column-scoped
+// UPDATE on auth.users -- locked_until and failed_login_count from 001,
+// must_reset_password from 039, roles from 041 -- because 015 revoked the six
+// that 009 had lent it, updated_at among them. PostgreSQL checks the column
+// privilege against every target an UPDATE names, so stamping updated_at here
+// would fail the whole statement with 42501 under the real role while passing in
+// any test that drives the owner pool.
+//
+// A nil slice is normalized to an empty one, matching Create and CreateImported:
+// the column is NOT NULL DEFAULT '{}' (003), and pgx binds a nil []string as
+// NULL rather than as an empty array.
+func (r *UserRepo) SetRoles(ctx context.Context, id string, roles []string) error {
+	if roles == nil {
+		roles = []string{}
+	}
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET roles=$2 WHERE id=$1`, id, roles)
+	if err != nil {
+		return fmt.Errorf("set roles: %w", err)
+	}
+	return nil
+}
+
 // SoftDeleteScrub erases a user's PII in place: it overwrites the email with a
 // tombstone, clears every other personal column on the row — display_name,
 // avatar_url, password_hash, roles, ban_reason, last_login_at, imported_from,

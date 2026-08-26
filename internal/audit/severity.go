@@ -131,6 +131,7 @@ var severityByEvent = map[string]int{
 	FingerprintAnomaly:   SeveritySerious,
 	DPoPBindingMismatch:  SeveritySerious,
 	AdminUserDelete:      SeveritySerious,
+	AdminUserRolesSet:    SeveritySerious,
 	AdminKeyRotate:       SeveritySerious,
 	AdminKeyRevoke:       SeveritySerious,
 	AdminClientCreate:    SeveritySerious,

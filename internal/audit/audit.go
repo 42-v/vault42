@@ -140,6 +140,13 @@ const (
 	// admin_user_reset_ prefix with the event above so one filter reads the
 	// whole lifecycle of the flag.
 	AdminUserResetCleared = "admin_user_reset_cleared"
+	// AdminUserRolesSet records an admin replacing the role set on a user
+	// account. It is the only event in this vocabulary that changes what a
+	// relying party is told a person may do, which is why the metadata carries
+	// both the roles that were there and the roles that replaced them: the
+	// question asked of this row afterwards is never "what is it now", which
+	// the users table answers, but "who changed it and from what".
+	AdminUserRolesSet = "admin_user_roles_set"
 	// AdminKeyRotate records an admin rotating a signing key.
 	AdminKeyRotate = "admin_key_rotate"
 	// AdminKeyRevoke records an admin revoking a signing key.
