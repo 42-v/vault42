@@ -39,8 +39,10 @@ watch(totpSetup, async (setup) => {
       // dark card behind it and is undecodable anywhere else: saved, exported
       // or screenshotted onto white it becomes light grey on white, and an
       // inverted code is outside what several scanners (iOS Camera among them)
-      // will read at all. The one screen where a scan that does not work means
-      // two-factor authentication never gets turned on.
+      // will read at all. The cantScan disclosure below hands over the secret to
+      // type, so this is not a dead end -- but a code that silently fails to
+      // scan pushes every enrolling user onto a 32-character manual entry, on
+      // the screen they are least likely to come back to.
       qrDataUrl.value = await QRCode.toDataURL(setup.otp_url, {
         width: 200,
         margin: 2,
