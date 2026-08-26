@@ -28,6 +28,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          # tests/spec reads release history: the migration-count sentences in
+          # docs/UPGRADING.md are checked against what the previous tag actually
+          # shipped. A shallow checkout has no tags, git rev-parse fails, and
+          # those gates skip -- reporting the same ok as a run. They were only
+          # ever exercised on a developer's machine until this line.
+          fetch-tags: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -141,6 +147,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          # tests/spec reads release history: the migration-count sentences in
+          # docs/UPGRADING.md are checked against what the previous tag actually
+          # shipped. A shallow checkout has no tags, git rev-parse fails, and
+          # those gates skip -- reporting the same ok as a run. They were only
+          # ever exercised on a developer's machine until this line.
+          fetch-tags: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

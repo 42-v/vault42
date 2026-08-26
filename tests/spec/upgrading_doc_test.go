@@ -126,6 +126,24 @@ func TestUpgradingDocBackCompatCountMatchesTheTree(t *testing.T) {
 	}
 	upperTag, stated := "v"+match[2], atoi(t, match[3])
 
+	// A checkout without tags cannot answer what that tag shipped, and CI does
+	// not always fetch them -- this failed there with exit status 128 while
+	// passing locally. Skipping is what lastReleaseTag does for the same reason
+	// and for the gate one function up, which reads the same history.
+	if err := exec.Command("git", "-C", root, "rev-parse", "-q", "--verify",
+		upperTag+"^{commit}").Run(); err != nil { // #nosec G204 -- tag comes from the document's own sentence
+		if runningInCI() {
+			// ci.yml sets fetch-tags: true on both jobs that run this suite, so
+			// on a runner an unreachable tag means a checkout stopped fetching
+			// them -- and this gate going quiet is exactly what that looks like.
+			t.Fatalf("%s is not reachable on a CI runner. Both jobs that run ./tests/spec/... "+
+				"fetch tags; if that changed, this gate stopped checking the count sentence "+
+				"and reported ok while doing it.", upperTag)
+		}
+		t.Skipf("%s is not reachable in this checkout, so what it shipped cannot be read. "+
+			"The count sentence is unverified here, not verified.", upperTag)
+	}
+
 	if got := len(migrationFilesAt(t, root, upperTag)); got != stated {
 		t.Errorf("docs/%s says the count through %s is %d; that tag shipped %d. A release that "+
 			"adds a migration has to move the upper bound of this sentence, not only the one "+
