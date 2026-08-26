@@ -106,19 +106,73 @@ func TestCycleFilterUserRoles_Invariants(t *testing.T) {
 	}
 }
 
-// Cycle 3 — case sensitivity is INTENTIONAL. ReservedAdminRoles compares
-// strings byte-for-byte against the lowercase names that the JWT issuer
-// emits. If Hermod ever case-folds before role checks, this test will
-// remind us to also case-fold here. Until then, "Admin" (uppercase A) is
-// a distinct, harmless string — the attacker gains nothing because the
-// authorization policy only matches lowercase "admin".
+// Cycle 3 — the comparison folds case, and this test is the record of why it
+// did not always.
+//
+// It used to assert the opposite, and the reasoning was explicit: "Admin" is a
+// distinct string, an attacker gains nothing, *because the authorization policy
+// only matches lowercase "admin"*. It also named its own expiry -- if a
+// consumer ever case-folds before its role checks, fold here too.
+//
+// BeOn3 is that consumer. Its ~40 controllers gate on
+// [Authorize(Roles="Admin")], so under the old contract an operator who
+// allow-listed "Admin" in VAULT_MINT_ROLES received a signed token carrying a
+// name the docs promise is refused unconditionally, and an admin import of
+// roles ["Admin"] wrote a row this filter then declined to strip. The premise
+// stopped being true; the assertion follows it.
+//
+// Trailing whitespace folds too. "Admin " reaches the same tier in any consumer
+// that trims, and no legitimate role name survives a trim into "admin".
 func TestCycleFilterUserRoles_CaseSensitivity(t *testing.T) {
-	in := []string{"Admin", "ADMIN", "Admin ", "admin", "viewer"}
+	in := []string{"Admin", "ADMIN", "Admin ", " super_admin", "SUPER_ADMIN", "admin", "viewer", "operator"}
 	out := FilterUserRoles(in)
-	want := []string{"Admin", "ADMIN", "Admin ", "viewer"}
+	want := []string{"viewer", "operator"}
 	if !sliceEq(out, want) {
-		t.Fatalf("got %v, want %v (case-sensitive contract)", out, want)
+		t.Fatalf("got %v, want %v (case-folded contract)", out, want)
 	}
+}
+
+// Every casing of every reserved name is refused, rather than the handful a
+// hand-written table happens to list.
+func TestIsReservedAdminRole_FoldsEveryCasingOfEveryReservedName(t *testing.T) {
+	for reserved := range ReservedAdminRoles {
+		for _, variant := range casings(reserved) {
+			if !IsReservedAdminRole(variant) {
+				t.Errorf("IsReservedAdminRole(%q) = false, want true (%q is reserved)", variant, reserved)
+			}
+		}
+	}
+}
+
+// The fold must not swallow a legitimate name. Only strings that trim and
+// lowercase to exactly a reserved key are refused.
+func TestIsReservedAdminRole_KeepsNamesThatMerelyResembleATier(t *testing.T) {
+	keep := []string{
+		"viewer", "operator", "user",
+		"admins", "administrator", "admin_tools", "coadmin",
+		"super_admins", "superadmin", "super-admin",
+		"", " ",
+	}
+	for _, name := range keep {
+		if IsReservedAdminRole(name) {
+			t.Errorf("IsReservedAdminRole(%q) = true, want false", name)
+		}
+	}
+}
+
+// casings returns the variants worth checking for one reserved name: as-is,
+// upper, title-ish, and each wrapped in the whitespace a copy-paste leaves.
+func casings(name string) []string {
+	base := []string{
+		name,
+		strings.ToUpper(name),
+		strings.ToUpper(name[:1]) + name[1:],
+	}
+	out := make([]string, 0, len(base)*3)
+	for _, b := range base {
+		out = append(out, b, " "+b, b+" ")
+	}
+	return out
 }
 
 // Cycle 4 — bulk-validation perf sanity. A seed file with 1000 users +

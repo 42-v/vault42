@@ -99,9 +99,47 @@ type UserSeed struct {
 // TestReservedAdminRolesDecisionIsRevisitedWhenATierIsAdded holds the
 // relationship, so a new admin tier forces a decision here rather than silently
 // becoming grantable to users.
+//
+// The keys are lowercase and unspaced because IsReservedAdminRole is the only
+// thing that may read this map. Do not index it directly: a byte-for-byte
+// lookup is what let "Admin" through every one of the six enforcement points
+// for as long as it did.
 var ReservedAdminRoles = map[string]bool{
 	"admin":       true,
 	"super_admin": true,
+}
+
+// IsReservedAdminRole reports whether name is an admin-tier role name, folding
+// ASCII case and ignoring surrounding whitespace.
+//
+// This comparison used to be byte-for-byte, and TestCycleFilterUserRoles_
+// CaseSensitivity asserted that on purpose. The argument was sound at the time
+// and is worth keeping in view: "Admin" is a different string from "admin", an
+// attacker who obtains it gains nothing, *because the relying party's
+// authorization policy only matches lowercase*. That last clause is the whole
+// load-bearing part, and it is a statement about somebody else's code. The test
+// said so itself -- if a consumer ever case-folds before its role checks, fold
+// here too.
+//
+// That consumer arrived. BeOn3's role vocabulary is {Admin, Moderator,
+// Business, PremiumUser, User, InternalService} and its ~40 controllers gate on
+// [Authorize(Roles="Admin")], capital A. Under the old comparison, an operator
+// who allow-listed "Admin" in VAULT_MINT_ROLES got a signed token carrying it
+// -- past a check whose documented promise is that admin-tier names are refused
+// unconditionally -- and an admin import writing roles ["Admin"] persisted a
+// name that FilterUserRoles then declined to strip on the way into a user JWT.
+// Neither is escalation inside vault42, whose admin plane runs off
+// auth.admin_users and a session token and never off this claim. Both are
+// escalation inside the relying party, which is the only place the claim means
+// anything.
+//
+// Folding rather than asking every consumer to normalise is the choice that
+// vault42 can actually enforce. Whitespace is trimmed on the same reasoning:
+// "admin " is not a name anyone wants, and a denylist may be broader than its
+// entries as long as it refuses nothing legitimate. Only names that fold to
+// exactly "admin" or "super_admin" are affected.
+func IsReservedAdminRole(name string) bool {
+	return ReservedAdminRoles[strings.ToLower(strings.TrimSpace(name))]
 }
 
 // FilterUserRoles removes admin-tier role names from a user's role list.
@@ -113,7 +151,7 @@ func FilterUserRoles(roles []string) []string {
 	}
 	out := make([]string, 0, len(roles))
 	for _, r := range roles {
-		if !ReservedAdminRoles[r] {
+		if !IsReservedAdminRole(r) {
 			out = append(out, r)
 		}
 	}
@@ -191,7 +229,7 @@ func validate(sf *File) error {
 		// Reachability through the admins seed array (AdminUser) is the
 		// only path to those tiers.
 		for _, r := range u.Roles {
-			if ReservedAdminRoles[r] {
+			if IsReservedAdminRole(r) {
 				return fmt.Errorf("users[%d] (%s): role %q is reserved for the admins seed array",
 					i, u.Email, r)
 			}

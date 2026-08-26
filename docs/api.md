@@ -3232,7 +3232,7 @@ There is no refresh token and no stored session behind a minted token. It cannot
 | 401 | `unauthorized` | Defensive: claims absent behind the auth middleware. Not reachable through the mounted chain |
 | 403 | `insufficient_scope` | Token lacks the `mint:token` scope |
 | 403 | `client_credentials_required` | Token has the scope but no `client_id` claim, so it is not a service client |
-| 403 | `role_not_permitted` | A requested role is outside `VAULT_MINT_ROLES`, or is `admin` or `super_admin` |
+| 403 | `role_not_permitted` | A requested role is outside `VAULT_MINT_ROLES`, or is `admin` or `super_admin` in any casing |
 | 403 | `scope_not_permitted` | A requested scope is outside `VAULT_MINT_SCOPES`, or is one of the vault42 capability scopes |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Signing or UUID generation failed |
@@ -3273,14 +3273,14 @@ Content-Type: application/json
 {"error": "role_not_permitted"}
 ```
 
-`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time.
+`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time. The comparison folds ASCII case and ignores surrounding whitespace, so `Admin`, `ADMIN` and `super_admin ` are refused on the same terms -- a relying party that gates on its own spelling of the name, as BeOn3 does with `Admin`, is protected by the same rule that protects vault42.
 
 **What a caller must understand before integrating.**
 
 - **This signs an assertion for a subject the caller merely claims.** Every other token vault42 issues follows an authentication vault42 performed: a password, a second factor, a social callback, a client secret. A minted token follows nothing. A verifier cannot tell the difference from the signature, so whoever holds the mint credential can speak as any subject to every service that trusts vault42's JWKS. Treat the credential as equivalent to the signing key's blast radius, not as an API key.
 - **The audience must differ from the vault42 issuer, and startup enforces it.** A minted token carrying vault42's own audience would satisfy vault42's own audience validation, leaving `token_type` as the single control between a subject assertion and a session. `config.Validate()` refuses that configuration before the dev-profile short-circuit, and `service.NewMintService` refuses it again.
 - **Minted tokens are structurally rejected by vault42 itself.** The `token_type` claim is `mint`, which is not in the allow-list vault42's own auth middleware accepts (`Bearer`, plus `2fa_challenge` on the 2FA verify routes), and the audience is not vault42's. Either check alone stops a minted token at vault42's door; both are enforced. Without this, a mint credential would be full account takeover of every vault42 user: mint for any subject, then read the identity profile, download the blobs, delete the account.
-- **Admin-tier roles and vault42 capability scopes cannot be minted.** `admin` and `super_admin` are refused unconditionally. So are `mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read` and `admin:write` -- a minted token carrying one of those would let the holder pivot from "assert a subject downstream" into "operate vault42's privileged endpoints as that subject".
+- **Admin-tier roles and vault42 capability scopes cannot be minted.** `admin` and `super_admin` are refused unconditionally, in any casing. So are `mint:token`, `kms:unwrap`, `svcdoc:read`, `svcdoc:write`, `admin`, `admin:read` and `admin:write` -- a minted token carrying one of those would let the holder pivot from "assert a subject downstream" into "operate vault42's privileged endpoints as that subject".
 - **`client_id` is deliberately absent from the claims.** Setting it would make a minted token indistinguishable from a client-credentials token to any code that treats the claim's presence as proof of a service caller, including the service document store, which asserts exactly that. Attribution for the minting client lives in the audit event, where it cannot be replayed. A downstream verifier must therefore not use `client_id` to decide anything about a minted token, and must not assume its absence means "user token".
 - **Lifetimes are the only revocation.** A minted token cannot be revoked before it expires. The hard ceiling is 15 minutes regardless of configuration, enforced in the service constructor rather than left to the operator, and the default is 5.
 - **Downstream verifiers should pin all three.** Check `iss` against `VAULT_ORIGIN`, `aud` against your own resource identifier, and `token_type == "mint"` if you accept both minted and self-authenticated tokens. Accepting a token on signature and `iss` alone re-opens the confusion the separate audience and type exist to prevent.
