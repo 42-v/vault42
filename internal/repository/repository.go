@@ -126,6 +126,18 @@ var ErrFamilyRevoked = errors.New("refresh token family is revoked")
 // caller-facing "too many sessions" outcome rather than a replay.
 var ErrSessionLimitReached = errors.New("concurrent session limit reached")
 
+// ErrUserNotUpdatable is returned by UserRepository.Update when the statement
+// matched no row: either the id is gone, or the account has been erased.
+//
+// It exists because the alternative is worse than an error. UPDATE ... WHERE
+// affects zero rows without failing, so a repository that ignores the row count
+// reports a successful write to a caller that then answers 200, and the user is
+// told their profile was saved onto a row that refused it. The erasure case is
+// the one that matters: an access token outlives the erasure that invalidated
+// it, so this is the last thing standing between a live token and a tombstoned
+// row.
+var ErrUserNotUpdatable = errors.New("user row is absent or erased")
+
 // RefreshTokenRepository manages refresh token persistence.
 type RefreshTokenRepository interface {
 	// Create inserts a new refresh token record. Returns ErrFamilyRevoked, and
