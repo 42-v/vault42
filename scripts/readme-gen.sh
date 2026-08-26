@@ -4,11 +4,108 @@
 # (no raw.githubusercontent.com access needed).
 #
 # CI sets TEST_OUTPUT_FILE + COVERAGE_FILE to reuse test artifacts.
+#
+# --metrics-only recounts what is derived from the tree -- file counts, line
+# counts, dependency counts read out of manifests -- and carries every MEASURED
+# figure (tests, coverage, the NuGet restore graph) forward from the badges.json
+# already in the tree.
+#
+# It exists because a rebase changes the counters and changes nothing a test run
+# would measure. Every merge rewrites goFiles/goLines/testFiles, so every other
+# open branch is instantly wrong about them and the badge parity gate fails on
+# the difference -- while a full run needs a container runtime, a pnpm install
+# and a dotnet restore. That gap is why the recount was being done by hand,
+# differently each time, against README.md and docs/badges.json separately.
+# There is one counting expression per figure and it is the one below.
 set -eo pipefail
 cd "$(dirname "$0")/.."
 
 # shellcheck source=lib/coverage-env.sh
 source "$(dirname "$0")/lib/coverage-env.sh"
+
+METRICS_ONLY=""
+if [ "${1:-}" = "--metrics-only" ]; then
+  METRICS_ONLY=yes
+  if [ ! -f docs/badges.json ]; then
+    echo "ERROR: --metrics-only carries the measured figures forward from" >&2
+    echo "  docs/badges.json, and there is no docs/badges.json to carry them from." >&2
+    echo "  Run this script with no arguments once to produce one." >&2
+    exit 1
+  fi
+  # Refuses rather than defaults on a missing key: a prefill that silently
+  # produced 0 would publish a badge claiming no tests ran.
+  #
+  # Every percentage is carried from the STRING field, never from the *Num one.
+  # A full run formats these with %.2f and JSON stores the result as a number,
+  # so 100.00 comes back out of json.load as 100.0 and the carried badge reads
+  # "100.0% reachable" where the measured one read "100.00%". That is a figure
+  # no run produced, on a file whose whole purpose is that the numbers are not
+  # hand-written. The string keeps the digits the measurement had.
+  eval "$(python3 - <<'PREFILL'
+import json
+import sys
+
+with open('docs/badges.json') as fh:
+    b = json.load(fh)
+
+
+def pct(value):
+    return str(value).rstrip('%')
+
+
+try:
+    lang = b['languages']
+    carried = {
+        'PASSED': b['tests'],
+        'PKGS': b['packages'],
+        'TOTAL_COV': b['coverage'],
+        'COV_NUM': pct(b['coverage']),
+        'REACHABLE_COV': pct(b['reachableCoverage']),
+        'DIRECT_COUNT': b['directDeps'],
+        'INDIRECT_COUNT': b['transitiveDeps'],
+        'VUE_TESTS': lang['vue']['tests'],
+        'VUE_COVERAGE': pct(lang['vue']['coverage']),
+        'DOTNET_TESTS': lang['csharp']['tests'],
+        'DOTNET_COVERAGE': pct(lang['csharp']['coverage']),
+        'DOTNET_TRANSITIVE_DEPS': lang['csharp']['transitiveDeps'],
+    }
+except KeyError as missing:
+    sys.exit(f'docs/badges.json has no {missing} to carry forward')
+
+for key, value in carried.items():
+    print(f"{key}={json.dumps(str(value))}; export {key}")
+PREFILL
+)" || exit 1
+
+  # The guards below decide what --metrics-only skips, and a guard that stops
+  # covering something fails silently in the worst possible way: the run starts
+  # measuring, so it needs a container runtime it was invoked precisely because
+  # the caller has not got, and either hangs for forty minutes or publishes a
+  # figure from a half-run suite. Shadow the measuring entry points instead, so
+  # a gap is a refusal on the first call with the name of the thing that broke.
+  # Shell functions take precedence over PATH lookups, so this covers npx,
+  # dotnet and curl as well as the two sourced helpers.
+  #
+  # The message goes to fd 3, not to stderr. Every measuring call site already
+  # silences its own: `dotnet list ... 2>/dev/null || true` is the shape, and
+  # against a plain `>&2` refusal it produced a script that stopped dead with no
+  # output at all -- correct behaviour, indistinguishable from a crash. fd 3 is
+  # duped from the shell's stderr before any of that applies, so a per-command
+  # redirection cannot reach it.
+  exec 3>&2
+  _metrics_only_refuses() {
+    echo "ERROR: --metrics-only reached '$1', which measures." >&3
+    echo "  Nothing on this path is allowed to: the flag exists so the counters can be" >&3
+    echo "  recounted without a container runtime, a pnpm install or a dotnet restore." >&3
+    echo "  A guard stopped covering it. Fix the guard rather than dropping this check." >&3
+    exit 1
+  }
+  cov_run()             { _metrics_only_refuses "cov_run"; }
+  cov_require_runtime() { _metrics_only_refuses "cov_require_runtime"; }
+  npx()                 { _metrics_only_refuses "npx $*"; }
+  dotnet()              { _metrics_only_refuses "dotnet $*"; }
+  curl()                { _metrics_only_refuses "curl"; }
+fi
 
 COVER_FILE=$(mktemp)
 TEST_OUT=$(mktemp)
@@ -22,7 +119,9 @@ trap 'rm -f "$COVER_FILE" "$TEST_OUT" "$CREATOR_TMP" "$CS_PKG_TMP"' EXIT
 #    The package set and the number come from scripts/lib/coverage-env.sh, so
 #    the README badge always matches docs/test-coverage.md.
 # ═══════════════════════════════════════════════════════════════
-if [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
+if [ -n "$METRICS_ONLY" ]; then
+  echo "Metrics only: carrying ${PASSED} Go tests / ${TOTAL_COV} coverage forward from docs/badges.json"
+elif [ -n "${TEST_OUTPUT_FILE:-}" ] && [ -f "${TEST_OUTPUT_FILE}" ] && \
    [ -n "${COVERAGE_FILE:-}" ] && [ -f "${COVERAGE_FILE}" ]; then
   echo "Using pre-computed test artifacts"
   cp "$TEST_OUTPUT_FILE" "$TEST_OUT"
@@ -37,9 +136,11 @@ else
   cov_check_failures "$TEST_OUT"
 fi
 
-PASSED=$(grep -c '^--- PASS' "$TEST_OUT" || true)
-PKGS=$(grep -c '^ok\s' "$TEST_OUT" || true)
-TOTAL_COV=$(cov_total "$COVER_FILE")
+if [ -z "$METRICS_ONLY" ]; then
+  PASSED=$(grep -c '^--- PASS' "$TEST_OUT" || true)
+  PKGS=$(grep -c '^ok\s' "$TEST_OUT" || true)
+  TOTAL_COV=$(cov_total "$COVER_FILE")
+fi
 
 # ═══════════════════════════════════════════════════════════════
 # 2. Code metrics (no tests needed — fast)
@@ -103,6 +204,13 @@ dep_note() {
     *)                      echo "" ;;
   esac
 }
+
+# Sections 4 through 7 are guarded rather than reindented: the block is two
+# hundred lines and indenting it would bury the change that matters. Everything
+# inside reads the coverage profile or the network -- go.mod's linked closure,
+# proxy.golang.org, the GitHub maintainer lookups, per-package coverage -- and
+# --metrics-only has none of those. It carries their figures forward instead.
+if [ -z "$METRICS_ONLY" ]; then
 
 # ═══════════════════════════════════════════════════════════════
 # 4. Parse go.mod for dependencies
@@ -323,13 +431,20 @@ if reach <= 0:
 print("%.2f" % (100.0 * d["covered_statements"] / reach))
 ')
 
+fi  # end of the measured-figures block
+
 VERSION_STR=$(cat VERSION 2>/dev/null || echo "0.0.0")
 
 mkdir -p docs
 
 # ═══════════════════════════════════════════════════════════════
 # 8. Generate docs/deps.md
+#
+# Guarded for the same reason: its rows carry stars and release dates that only
+# the network can supply, and nothing in a rebase changes them. --metrics-only
+# leaves the file exactly as the last full run wrote it.
 # ═══════════════════════════════════════════════════════════════
+if [ -z "$METRICS_ONLY" ]; then
 # Every row set is normalised to carry no trailing newline, and every blank
 # line in the document comes from the template below rather than from whichever
 # variable happened to end in one.
@@ -388,6 +503,8 @@ ${DIRECT_ROWS}
 |---|---|---|---|---|
 ${INDIRECT_ROWS}${COVERAGE_BLOCK}${CREATORS_BLOCK}
 EOF
+
+fi  # end of the docs/deps.md block
 
 # ═══════════════════════════════════════════════════════════════
 # 9. Collect Vue frontend stats
@@ -776,7 +893,9 @@ with open('README.md', 'w') as f:
   echo "README.md badges updated"
 fi
 
-echo "docs/badges.json + docs/deps.md updated: ${PASSED} Go (${REACHABLE_COV}% reachable) + "\
+WROTE="docs/badges.json + docs/deps.md"
+[ -n "$METRICS_ONLY" ] && WROTE="docs/badges.json (metrics only; docs/deps.md untouched)"
+echo "${WROTE} updated: ${PASSED} Go (${REACHABLE_COV}% reachable) + "\
      "${FE_TESTS} Vue (${FE_COV}%) + ${CS_TESTS} C# (${CS_COV}%) tests; deps "\
      "${DIRECT_COUNT}+${INDIRECT_COUNT} Go, ${FE_DEPS}+${FE_TRANSITIVE_DEPS} Vue, "\
      "${CS_DEPS}+${CS_TRANSITIVE_DEPS} C# (${TOTAL_DEPS} total)"
