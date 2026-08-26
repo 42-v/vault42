@@ -244,7 +244,13 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # the one-line helper that folds case before the admin-tier role denylist is
 # read. It replaced six direct map lookups, none of which were statements of
 # their own, so the whole increase is the new function body.
-BASELINE_TOTAL_STATEMENTS = 12952
+#
+# +18 again (12952 -> 12970) for the minted email claim. internal/service 1794
+# -> 1810 is checkEmail and ValidateMintEmail, the opt-in gate and the
+# normalise-then-validate helper; internal/handler 1919 -> 1921 is the two new
+# arms of mintErrorCode. The two changes are disjoint by package, which is why
+# the totals add rather than one superseding the other.
+BASELINE_TOTAL_STATEMENTS = 12970
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -317,7 +323,7 @@ BASELINE_TOTAL_STATEMENTS = 12952
 # existed when 50 was measured, so it is a like-for-like move rather than a
 # loosened bar, and the pair is named in the set with the argument that fstat
 # fails only with EBADF or EFAULT and this call site can produce neither.
-# Lowered from 52 to 51 by covering internal/crypto/jwt.go:131, the modulus
+# Lowered from 52 to 51 by covering internal/crypto/jwt.go:147, the modulus
 # fallback in KIDFromPublicKey. Its exclusion argued that reaching it "would need
 # the standard library to stop understanding RSA public keys", and that is not
 # so: x509.MarshalPKIXPublicKey understands *rsa.PublicKey perfectly well and
@@ -376,7 +382,7 @@ BASELINE_PACKAGE_STATEMENTS = {
     "internal/email": 684,
     "internal/firstboot": 64,
     "internal/frontend": 15,
-    "internal/handler": 1919,
+    "internal/handler": 1921,
     "internal/honeypot": 208,
     "internal/httputil": 33,
     "internal/ipintel": 172,
@@ -395,7 +401,7 @@ BASELINE_PACKAGE_STATEMENTS = {
     "internal/sanitize": 53,
     "internal/seed": 153,
     "internal/server": 260,
-    "internal/service": 1794,
+    "internal/service": 1810,
     "internal/useragent": 41,
 }
 
