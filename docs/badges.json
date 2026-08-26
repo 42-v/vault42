@@ -10,7 +10,7 @@
   "packages": 43,
   "goFiles": 192,
   "goLines": 48153,
-  "testFiles": 928,
+  "testFiles": 929,
   "directDeps": 3,
   "transitiveDeps": 15,
   "totalTests": 6479,
