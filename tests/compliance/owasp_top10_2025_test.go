@@ -109,7 +109,10 @@ var publicRoutePrefixes = []string{
 // reviewer has to confirm the closure really authenticates before the route
 // scan will accept it. TestOWASP_A01_2025_GuardClosuresReallyAuthenticate keeps
 // that confirmation executable rather than trusting this list.
-var authGuards = []string{"authed(", "authMw(", "authedChallenge(", "confirmed(", "docRead(", "docWrite("}
+var authGuards = []string{
+	"authed(", "authMw(", "authedChallenge(", "confirmed(", "docRead(", "docWrite(",
+	"authedLive(", "confirmedLive(",
+}
 
 // guardComposes names, per guard, the authentication middleware that guard is
 // entitled to compose — and only that one.
@@ -132,6 +135,14 @@ var guardComposes = map[string]string{
 	"authedChallenge": "challengeMw(",
 	"docRead":         "authMw(",
 	"docWrite":        "authMw(",
+	// The -Live pair are the plain guards plus a lookup that refuses a subject
+	// whose account has been erased. They compose the same authentication
+	// middleware, which is what this map is asserting; the extra check is held
+	// separately by tests/spec/live_account_routes_test.go, because "is it
+	// authenticated" and "is the account still live" are different questions and
+	// a gate that conflated them would pass a route that had lost either.
+	"authedLive":    "authMw(",
+	"confirmedLive": "authMw(",
 }
 
 func isDeclaredPublic(path string) bool {

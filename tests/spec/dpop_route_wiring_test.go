@@ -44,11 +44,19 @@ var dpopWrapperIdents = []string{
 	"confirmed",
 	"docRead",
 	"docWrite",
+	// The -Live pair are the plain guards plus a lookup refusing an erased
+	// subject. They apply dpopWrap exactly as their counterparts do, and the
+	// closure check below is what holds them to it.
+	"authedLive",
+	"confirmedLive",
 }
 
 // routeBuilderClosures are the local helpers whose whole job is to build a
 // middleware chain for a family of routes. Each must apply dpopWrap.
-var routeBuilderClosures = []string{"authed", "authedChallenge", "confirmed", "docRead", "docWrite"}
+var routeBuilderClosures = []string{
+	"authed", "authedChallenge", "confirmed", "docRead", "docWrite",
+	"authedLive", "confirmedLive",
+}
 
 // dpopExemptRoutes are the registrations that legitimately run no DPoP
 // middleware. Each needs a reason, because adding a route here is how the gate

@@ -465,6 +465,19 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	confirmed := func(h http.HandlerFunc) http.Handler {
 		return authMw(fingerprintMw(dpopWrap(confirmMw(h))))
 	}
+	// Routes that persist subject-owned data and cannot state the erasure rule
+	// in SQL. PUT /user/profile is deliberately absent: auth.users carries
+	// AND deleted = FALSE on its own UPDATE, so the database refuses it without
+	// being asked. identity.profiles is keyed by an unlinkable pseudonym with no
+	// user_id, blobs the same, and the MFA setup routes never load the user at
+	// all -- for those a lookup is the only thing that can know.
+	liveMw := middleware.RequireLiveAccount(d.Users)
+	authedLive := func(h http.HandlerFunc) http.Handler {
+		return authMw(fingerprintMw(dpopWrap(liveMw(h))))
+	}
+	confirmedLive := func(h http.HandlerFunc) http.Handler {
+		return authMw(fingerprintMw(dpopWrap(confirmMw(liveMw(h)))))
+	}
 
 	// Rate limiting middleware factories
 	rlEnabled := cfg.RateLimitEnabled
@@ -631,7 +644,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.Handle("GET /auth/2fa/status", authed(mfaHandler.Status))
 
 	// 2FA — TOTP (sensitive ops require confirmation)
-	mux.Handle("POST /auth/2fa/totp/setup", confirmed(totpHandler.Setup))
+	mux.Handle("POST /auth/2fa/totp/setup", confirmedLive(totpHandler.Setup))
 	mux.Handle("POST /auth/2fa/totp/verify", totpRL(authedChallenge(totpHandler.Verify)))
 	mux.Handle("DELETE /auth/2fa/totp", confirmed(totpHandler.Disable))
 
@@ -660,7 +673,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.Handle("DELETE /auth/2fa/webauthn/credentials/{id}", confirmed(webauthnHandler.DeleteCredential))
 
 	// 2FA — Backup codes (sensitive)
-	mux.Handle("POST /auth/2fa/backup-codes", confirmed(backupCodeHandler.Generate))
+	mux.Handle("POST /auth/2fa/backup-codes", confirmedLive(backupCodeHandler.Generate))
 	mux.Handle("POST /auth/2fa/backup-code/verify", totpRL(authedChallenge(backupCodeHandler.Verify)))
 
 	// 2FA — Email OTP (fallback when no TOTP/WebAuthn configured)
@@ -684,7 +697,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 			Name: "identitywrite", Limit: 10, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
 		mux.Handle("GET /user/identity", identityReadRL(authed(identityHandler.Get)))
-		mux.Handle("PUT /user/identity", identityWriteRL(authed(identityHandler.Put)))
+		mux.Handle("PUT /user/identity", identityWriteRL(authedLive(identityHandler.Put)))
 		mux.Handle("DELETE /user/identity", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(identityHandler.Delete)))))))
 		// Withdrawal must be no harder than granting (Art. 7(3)), so this carries
 		// the read rate limit and no confirmation step — unlike identity deletion.
@@ -706,11 +719,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		blobReadRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 			Name: "blobread", Limit: 30, Window: time.Minute, KeyFunc: middleware.IPRateLimitKey,
 		}, rlEnabled)
-		mux.Handle("POST /user/blobs", blobUploadRL(authed(blobHandler.Upload)))
+		mux.Handle("POST /user/blobs", blobUploadRL(authedLive(blobHandler.Upload)))
 		mux.Handle("GET /user/blobs", blobReadRL(authed(blobHandler.List)))
 		mux.Handle("GET /user/blobs/{id}", blobReadRL(authed(blobHandler.Download)))
 		mux.Handle("DELETE /user/blobs/{id}", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(blobHandler.Delete)))))))
-		mux.Handle("PUT /user/blobs/named/{name}", blobUploadRL(authed(blobHandler.UploadNamed)))
+		mux.Handle("PUT /user/blobs/named/{name}", blobUploadRL(authedLive(blobHandler.UploadNamed)))
 		mux.Handle("GET /user/blobs/named/{name}", blobReadRL(authed(blobHandler.DownloadNamed)))
 		mux.Handle("DELETE /user/blobs/named/{name}", authMw(fingerprintMw(dpopWrap(confirmMw(confirmRL(http.HandlerFunc(blobHandler.DeleteNamed)))))))
 	}
