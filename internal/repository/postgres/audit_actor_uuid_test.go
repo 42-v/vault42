@@ -104,7 +104,7 @@ func TestAuditRepo_ANonUUIDActorIsRejectedByTheColumn(t *testing.T) {
 	}
 }
 
-// actorColumns is pure, so it is tested without a container. The behaviour that
+// actorColumns is pure, so it is tested without a container. The behavior that
 // matters is that a legitimate row is untouched and a poisoned one survives.
 func TestActorColumns(t *testing.T) {
 	const ok = "7e2f9a10-2222-4000-8000-0000000000ab"

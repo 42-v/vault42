@@ -21,7 +21,6 @@ func NewAuditRepo(db *DB) *AuditRepo {
 	return &AuditRepo{db: db}
 }
 
-// Insert writes a single entry to the audit.audit_log table.
 // actorUUID matches the canonical 8-4-4-4-12 form, which is what auth.users
 // ids are and what the audit actor columns accept. It is deliberately not a
 // full RFC 4122 validator: the only question here is whether pgx will encode
@@ -82,6 +81,7 @@ func actorColumns(e *model.AuditEntry) (userID, clientID string, metadata map[st
 	return userID, clientID, out
 }
 
+// Insert writes a single entry to the audit.audit_log table.
 func (r *AuditRepo) Insert(ctx context.Context, entry *model.AuditEntry) error {
 	auditUserID, auditClientID, auditMetadata := actorColumns(entry)
 	_, err := r.db.Pool.Exec(ctx, `
