@@ -148,11 +148,6 @@
            max-w-md w-full mx-4 shadow-lg;
 }
 
-@utility vault42-spinner-sm {
-  /* Small spinner variant */
-  @apply w-4 h-4;
-}
-
 @layer base {
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -291,6 +286,15 @@
 .vault42-spinner {
   @apply inline-block w-5 h-5 border-2 border-vault42-control border-t-vault42-accent rounded-full;
   animation: vault42-spin 0.6s linear infinite;
+}
+/* Both size modifiers sit here rather than in an @utility, and that placement is
+   the point. Tailwind puts @utility definitions in @layer utilities, and an
+   unlayered rule beats a layered one whatever its specificity -- so while
+   vault42-spinner-sm was an @utility, the unlayered .vault42-spinner above
+   simply overrode it and every "small" spinner rendered at 20px. The -lg
+   variant was never affected only because it happened to be written here. */
+.vault42-spinner-sm {
+  @apply w-4 h-4;
 }
 .vault42-spinner-lg {
   @apply w-8 h-8;
