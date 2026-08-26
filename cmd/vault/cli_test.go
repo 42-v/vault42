@@ -183,10 +183,16 @@ func TestCLIDoesNotApplySeedFile(t *testing.T) {
 
 // TestAuthenticatedCommandWithMissingArgumentsPrintsUsage covers the argument
 // handling one level down. A subcommand missing a required flag is still
-// "handled": it prints its usage and the process returns zero. That is the
-// deliberate shape, and it is worth pinning because the alternative reading of
-// the same code, treating an incomplete command as unhandled, would silently
-// start a server instead of telling the operator what they typed wrong.
+// "handled" -- it prints its usage and does not fall through to booting the
+// server -- and that is the half worth pinning, because the alternative reading
+// of the same code would start a server instead of telling the operator what
+// they typed wrong.
+//
+// It now exits 1 rather than 0. Handled is not the same as succeeded, and the
+// two were conflated: `vault seed` with no --file printed its usage and returned
+// success, so an init container gating on the status saw a seeded database that
+// did not exist. The status assertion below changed direction for that reason;
+// the one that matters, that nothing started listening, did not.
 func TestAuthenticatedCommandWithMissingArgumentsPrintsUsage(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -213,8 +219,10 @@ func TestAuthenticatedCommandWithMissingArgumentsPrintsUsage(t *testing.T) {
 				env:  bootEnv(t, stub, addr),
 			})
 
-			if res.code != 0 {
-				t.Fatalf("exit code = %d, want 0\nstderr:\n%s", res.code, res.stderr)
+			if res.code != 1 {
+				t.Fatalf("exit code = %d, want 1: a command invoked without a required flag "+
+					"failed, and a caller gating on the status has to be able to see that"+
+					"\nstderr:\n%s", res.code, res.stderr)
 			}
 			if !strings.Contains(res.stderr, tc.usage) {
 				t.Fatalf("stderr does not show the usage line\nwant: %s\nstderr:\n%s", tc.usage, res.stderr)
