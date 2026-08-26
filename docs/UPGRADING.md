@@ -32,13 +32,23 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
-There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
-of step 1 is that you have one when something else goes wrong.
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 40, so an upgrade applies 1.
+043 grants `UPDATE (banned, ban_reason)` on `auth.users` to `vault_admin`. It moves no data
+and adds no column: 004 created both columns and 024 revoked them from `vault_app`, leaving
+`ban_reason` with no writer at all, so this is what lets the two new ban routes write. Until
+it runs they answer 500 in any deployment running as the real role, and nothing existing
+depends on it. Take the backup anyway: the point of step 1 is that you have one when
+something else goes wrong.
 
-**Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
-them; no request path, token, database or configuration behaviour differs from 1.0.3. The
-one thing an operator may notice is that `docs/deps.md` and the README badge figures now
+**Behaviour.** Two new routes, `POST /admin/users/{id}/ban` and `POST /admin/users/{id}/unban`,
+which is what migration 043 grants the privilege for. Nothing existing changes shape. The ban
+state itself is not new -- login has answered `403 account_banned` since 004 and the frontend
+has rendered it in every locale it ships -- so an account already banned by an import behaves
+exactly as it did; what changes is that an operator can now set and lift the state, and read
+it back on `GET /admin/users/{id}`, which now carries `banned` and `ban_reason`. Banning
+revokes the account's live sessions; unbanning deliberately does not.
+
+The other operator-visible difference is that `docs/deps.md` and the README badge figures
 report numbers that differ slightly from 1.0.3's, because those were being counted wrongly --
 see the 1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).
 
