@@ -82,6 +82,18 @@ func blankComments(t *testing.T, path, src string) string {
 		return blankHelmTemplateComments(src)
 	case syntaxMarkdown:
 		return blankBlockComments(src, "<!--", "-->")
+	case syntaxCSharp:
+		// Block comments first, then line comments anywhere on the line, which
+		// is what catches the `///` doc comments this SDK is written in.
+		//
+		// The known limit is a `//` inside a string literal: this blanks from
+		// there to end of line as though it opened a comment. It is the same
+		// limit syntaxSQL carries for `--`, and it is why the two .cs files
+		// this reads were checked for one before the case was added -- neither
+		// has a URL in a literal, only in prose. A file that grows one will
+		// lose the tail of that line, which fails the gate reading it rather
+		// than passing it, so the failure mode is loud.
+		return blankLineComments(t, path, blankBlockComments(src, "/*", "*/"), "//", anywhere)
 	case syntaxHashAtLineStart:
 		// A # only opens a comment at the start of a line in a Dockerfile, and
 		// mid-line in a shell script it is far more often part of a value than
@@ -101,6 +113,7 @@ const (
 	syntaxHelmYAML        = "helm-yaml"
 	syntaxHelmPartial     = "helm-partial"
 	syntaxHelmNotes       = "helm-notes"
+	syntaxCSharp          = "csharp"
 	syntaxMarkdown        = "markdown"
 	syntaxHashAtLineStart = "hash-at-line-start"
 )
@@ -114,6 +127,12 @@ func commentSyntaxFor(path string) (string, bool) {
 	switch {
 	case ext == ".go":
 		return syntaxGo, true
+	// C# is not syntaxGo. It comments the same way -- `//` to end of line,
+	// `/* */` in the middle, and `///` doc comments which are `//` with a third
+	// slash -- but syntaxGo means "hand it to go/parser", which refuses a file
+	// that opens with `namespace`. It needs its own entry.
+	case ext == ".cs":
+		return syntaxCSharp, true
 	case ext == ".sql":
 		return syntaxSQL, true
 	case (ext == ".yaml" || ext == ".yml") && strings.Contains(slash, "/templates/"):
