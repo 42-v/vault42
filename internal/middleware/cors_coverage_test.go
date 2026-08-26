@@ -109,9 +109,13 @@ func TestCORS_Preflight_AllHeaders(t *testing.T) {
 	})
 
 	t.Run("allow-headers includes Authorization", func(t *testing.T) {
+		// Containment, not equality. Both subtests are named "includes X" and
+		// both compared the whole string, so every legitimate addition to the
+		// list broke them while proving nothing the name claimed. The list has
+		// since had to grow for the SDK's own headers.
 		got := rec.Header().Get("Access-Control-Allow-Headers")
-		if got != "Content-Type, Authorization, DPoP" {
-			t.Errorf("allow-headers = %q", got)
+		if !strings.Contains(got, "Authorization") {
+			t.Errorf("allow-headers = %q, should include Authorization", got)
 		}
 	})
 
@@ -285,7 +289,7 @@ func TestCORS_AllowAll_DPoPHeaderIncluded(t *testing.T) {
 
 	t.Run("allow-headers includes DPoP", func(t *testing.T) {
 		got := rec.Header().Get("Access-Control-Allow-Headers")
-		if got != "Content-Type, Authorization, DPoP" {
+		if !strings.Contains(got, "DPoP") {
 			t.Errorf("allow-headers = %q, should include DPoP", got)
 		}
 	})
