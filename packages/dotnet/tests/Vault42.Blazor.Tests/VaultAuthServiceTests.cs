@@ -272,6 +272,55 @@ public class VaultAuthServiceTests
         Assert.Null(h.Service.AccessToken);
     }
 
+    // RefreshAsync is called from two places that do not know about each other:
+    // the timer ScheduleRefresh arms, and the retry path of any request that
+    // gets a 401. Both firing at once sent the same refresh cookie twice, and
+    // the server reads that as replay -- correctly, per RFC 9700 4.14 and with
+    // no grace window here -- so it revokes the whole family and the operator's
+    // token-theft alarm fires on a legitimate user.
+    //
+    // One request must leave the client, and both callers must get its answer.
+    [Fact]
+    public async Task Refresh_ConcurrentCallers_SendOneRequestAndShareItsAnswer()
+    {
+        var h = new Harness(RefreshTokenStorage.InMemoryOnly);
+        await h.Store.SetRefreshTokenAsync("refresh-held");
+        var gate = new TaskCompletionSource();
+        h.Http.EnqueueGated(HttpStatusCode.OK, TokenJson("access-1", null, 900), gate.Task);
+        // A second response is queued so that a client which wrongly sends two
+        // requests succeeds twice rather than failing on an empty queue -- the
+        // assertion has to be about the count, not about an exhausted stub.
+        h.Http.Enqueue(HttpStatusCode.OK, TokenJson("access-2", null, 900));
+
+        var first = h.Service.RefreshAsync();
+        var second = h.Service.RefreshAsync();
+        gate.SetResult();
+        var results = await Task.WhenAll(first, second);
+
+        Assert.True(results[0]);
+        Assert.True(results[1]);
+        Assert.Single(h.Http.Requests);
+        Assert.Equal("access-1", h.Service.AccessToken);
+    }
+
+    // A refresh that follows a completed one is a new refresh, not a joined
+    // one: the in-flight task is cleared when it settles, or the second call
+    // would hand back a stale answer forever.
+    [Fact]
+    public async Task Refresh_SequentialCallers_EachSendTheirOwnRequest()
+    {
+        var h = new Harness(RefreshTokenStorage.InMemoryOnly);
+        await h.Store.SetRefreshTokenAsync("refresh-held");
+        h.Http.Enqueue(HttpStatusCode.OK, TokenJson("access-1", null, 900));
+        h.Http.Enqueue(HttpStatusCode.OK, TokenJson("access-2", null, 900));
+
+        Assert.True(await h.Service.RefreshAsync());
+        Assert.True(await h.Service.RefreshAsync());
+
+        Assert.Equal(2, h.Http.Requests.Count);
+        Assert.Equal("access-2", h.Service.AccessToken);
+    }
+
     // The network being down is not a logout: the token in hand is still valid
     // until it expires, so a transport failure returns false without clearing.
     [Fact]

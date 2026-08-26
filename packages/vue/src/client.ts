@@ -151,7 +151,57 @@ export class VaultClient {
     // Deduplicate concurrent refresh calls
     if (this._refreshing) return this._refreshing
 
-    this._refreshing = this.request<RefreshResult>('POST', '/auth/refresh', undefined, false)
+    // ...and deduplicate them across tabs, which is the half that matters.
+    //
+    // _refreshing is per instance and createVaultPlugin builds one instance per
+    // page, so two open tabs hold two independent guards and refresh at the
+    // same moment with the same refresh cookie. The server is right to treat
+    // that as replay -- RFC 9700 4.14, and vault42 implements it without a
+    // grace window -- so the whole family is revoked and the operator's
+    // token-theft alarm fires. On a legitimate user with two tabs open.
+    //
+    // It is not a race that needs bad luck either: the OAuth callback sets the
+    // cookie and the app then calls init() -> refresh(), so a social login with
+    // one other tab already open hits it every time.
+    //
+    // Serializing is enough on its own. The refresh cookie is shared by the
+    // browser and rotates on each use, so a tab that waits its turn then
+    // refreshes with the rotated value and succeeds -- what the server refuses
+    // is two uses of the SAME value, not two refreshes.
+    //
+    // navigator.locks is origin-scoped and released automatically if the tab
+    // holding it dies, which is the property a hand-rolled localStorage mutex
+    // never gets right. Where it is missing -- older browsers, SSR, a test
+    // environment -- the per-instance guard above is what there was before, so
+    // the fallback is the previous behaviour rather than a broken one.
+    // Structurally typed rather than via the DOM LockManager type, so this
+    // compiles whatever lib the consuming project targets.
+    type RefreshLocks = { request: <T>(name: string, fn: () => Promise<T>) => Promise<T> }
+    const locks = (globalThis as { navigator?: { locks?: RefreshLocks } }).navigator?.locks
+    if (locks && typeof locks.request === 'function') {
+      this._refreshing = locks
+        .request(VaultClient.refreshLockName, () => this.refreshOnce())
+        .finally(() => {
+          this._refreshing = null
+        })
+      return this._refreshing
+    }
+
+    this._refreshing = this.refreshOnce().finally(() => {
+      this._refreshing = null
+    })
+    return this._refreshing
+  }
+
+  /** The origin-scoped lock name serializing refresh across tabs. */
+  private static readonly refreshLockName = 'vault42-refresh'
+
+  /**
+   * refreshOnce is one refresh round-trip with no deduplication of its own.
+   * Both arms of refresh() call it; only the wrapper differs.
+   */
+  private refreshOnce(): Promise<RefreshResult> {
+    return this.request<RefreshResult>('POST', '/auth/refresh', undefined, false)
       .then((result) => {
         // A 200 without a usable token is not a successful refresh. Assigning it
         // would put undefined behind a `string | null` getter and break every
@@ -163,11 +213,6 @@ export class VaultClient {
         this._accessToken = result.access_token
         return result
       })
-      .finally(() => {
-        this._refreshing = null
-      })
-
-    return this._refreshing
   }
 
   async logout(): Promise<void> {
