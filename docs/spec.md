@@ -44,8 +44,9 @@ vault42 serves its endpoints at the root. `POST /auth/login` is the path; there 
 
 That is a decision, not an oversight:
 
-- BeOn3 has been live against the root paths since the 2026-08-10 GA. A prefix breaks every
-  deployed caller and buys a string.
+- Every published 1.x artifact already speaks the root paths: the three images, the Helm chart,
+  both NuGet SDKs and the release archives. A prefix breaks every installed consumer and buys a
+  string.
 - Root-mounted authentication endpoints are the OAuth2 and OIDC convention, and RFC 8615 fixes
   `/.well-known/*` at the root regardless -- a prefix would split one surface across two namespaces.
 - A path prefix only earns its keep when two incompatible versions are served at once. That is a
