@@ -662,21 +662,28 @@ input.input-error {
 @media (max-width: 768px) {
     .sidebar-toggle { display: block; }
 
+    /* Closed by default, and closed by CSS rather than by script.
+       .sidebar is position:fixed at z-index 100, and 100% wide below 480px, so
+       a default of translateX(0) lands the panel on top of the page: the admin
+       UI opened on a phone showed a sidebar and nothing else. Defaulting to
+       open and letting JS close it is no better -- it covers the page until the
+       script runs, which is a flash on a fast connection and the whole session
+       on a failed one. The closed state is now the one that needs no
+       JavaScript at all. */
     .sidebar {
+        transform: translateX(-100%);
+    }
+
+    .sidebar.sidebar-open {
         transform: translateX(0);
     }
 
-    .sidebar.sidebar-collapsed {
-        transform: translateX(-220px);
-    }
-
-    .sidebar.sidebar-collapsed + .content,
-    .sidebar-collapsed ~ .content {
-        margin-left: 0;
-    }
-
+    /* The sidebar overlays at this width rather than sitting beside the
+       content, so the content is never offset by it. It used to carry the
+       desktop 220px offset here as well, which pushed the page right AND left
+       it covered. */
     .content {
-        margin-left: 220px;
+        margin-left: 0;
         padding: 1rem;
     }
 
@@ -733,10 +740,6 @@ input.input-error {
 @media (max-width: 480px) {
     .sidebar {
         width: 100%;
-    }
-
-    .sidebar.sidebar-collapsed {
-        transform: translateX(-100%);
     }
 
     .content {
