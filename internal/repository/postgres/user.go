@@ -175,7 +175,7 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 // would fail the whole statement with 42501 under the real role while passing in
 // any test that drives the owner pool.
 //
-// A nil slice is normalised to an empty one, matching Create and CreateImported:
+// A nil slice is normalized to an empty one, matching Create and CreateImported:
 // the column is NOT NULL DEFAULT '{}' (003), and pgx binds a nil []string as
 // NULL rather than as an empty array.
 func (r *UserRepo) SetRoles(ctx context.Context, id string, roles []string) error {
