@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/42-v/vault42/internal/model"
+	"github.com/42-v/vault42/internal/repository"
 )
 
 // UserRepo implements repository.UserRepository.
@@ -151,16 +152,30 @@ func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, e
 // a standing UPDATE(email) grant on vault_app, and with it the ability to point
 // any account at any address. The address is immutable to this role by design;
 // migration 015 is what makes the database agree.
+//
+// The WHERE also refuses a tombstoned row. The handler checks Deleted too, and
+// that check is the one that produces a 401 rather than a 500 -- but a handler
+// check is a decision made from a row read a moment earlier, and this is the
+// statement that actually writes. auth.refresh_tokens states the same invariant
+// in the same place, in insertRefreshRowSQL, under a comment headed "SECURITY
+// INVARIANT (erasure completeness)"; auth.users is the other table the erasure
+// scrubs, and it did not.
 func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
-	_, err := r.db.Pool.Exec(ctx, `
+	tag, err := r.db.Pool.Exec(ctx, `
 		UPDATE auth.users SET display_name=$2, avatar_url=$3, locale=$4,
 		       mfa_required=$5, updated_at=$6
-		WHERE id = $1`,
+		WHERE id = $1 AND deleted = FALSE`,
 		user.ID, nullStr(user.DisplayName), nullStr(user.AvatarURL),
 		user.Locale, user.MFARequired, time.Now(),
 	)
 	if err != nil {
 		return fmt.Errorf("update user: %w", err)
+	}
+	// No row means the id is gone or the account is erased. Returning nil here
+	// would report a write that did not happen, and the caller answers 200 on
+	// the strength of it.
+	if tag.RowsAffected() == 0 {
+		return repository.ErrUserNotUpdatable
 	}
 	return nil
 }

@@ -115,8 +115,14 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deleted is checked here, not only at login and refresh. An access token
+	// outlives the erasure that invalidated it -- the middleware validates
+	// signature, issuer, audience and type and never touches the database -- so
+	// an erased user holding a live token could write display_name and
+	// avatar_url straight back onto the tombstoned row. Article 17 erasure has
+	// to survive the token that was valid when it ran.
 	user, err := h.users.GetByID(r.Context(), claims.Subject)
-	if err != nil || user == nil {
+	if err != nil || user == nil || user.Deleted {
 		WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
