@@ -73,10 +73,28 @@ async function buildCSS(): Promise<string> {
   return compiler.build([...candidates])
 }
 
-/** Offset of a class's own rule in the emitted CSS, or -1. */
+/**
+ * Offset of a class's own rule in the emitted CSS, or -1.
+ *
+ * Plain string scanning rather than a regex built from the class name. The
+ * first version escaped the name with cls.replace(/[-]/g, ...), which handles
+ * exactly one metacharacter and is the shape CodeQL calls incomplete
+ * sanitization -- correctly, even though every name here is a literal from the
+ * table above. Not building a pattern from a value is simpler than escaping one.
+ *
+ * The delimiter check is what stops `.vault42-spinner` matching inside
+ * `.vault42-spinner-sm`: a class name ends where the selector does.
+ */
 function ruleOffset(css: string, cls: string): number {
-  const m = new RegExp(`\\.${cls.replace(/[-]/g, '\\-')}(?=[\\s,{])[^{]*\\{`).exec(css)
-  return m ? m.index : -1
+  const needle = `.${cls}`
+  for (let i = css.indexOf(needle); i !== -1; i = css.indexOf(needle, i + 1)) {
+    const after = css[i + needle.length]
+    if (after === undefined) continue
+    if (after === '{' || after === ',' || after === ' ' || after === '\n' || after === ':') {
+      return i
+    }
+  }
+  return -1
 }
 
 describe('utility cascade', () => {
