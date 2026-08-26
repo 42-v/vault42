@@ -881,8 +881,16 @@
         const toggle = document.getElementById('sidebarToggle');
         const sidebar = document.getElementById('sidebar');
         if (toggle && sidebar) {
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.setAttribute('aria-controls', 'sidebar');
             toggle.addEventListener('click', function() {
-                sidebar.classList.toggle('sidebar-collapsed');
+                // sidebar-open, not sidebar-collapsed: the stylesheet defaults
+                // the panel closed at mobile widths, so the class this adds is
+                // the one that opens it. Naming them the same way round is the
+                // point -- the previous pair disagreed about which state was
+                // the default, and the CSS won.
+                const open = sidebar.classList.toggle('sidebar-open');
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             });
         }
     }
