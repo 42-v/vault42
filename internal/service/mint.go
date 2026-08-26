@@ -461,9 +461,18 @@ func (s *MintService) checkEmail(email string) (string, error) {
 
 // ValidateMintEmail normalizes and validates a caller-asserted email.
 //
-// Exported for the same reason ValidateMintSubject is: FuzzMintRequestJSON
-// calls it directly, so the fuzzer exercises the validator rather than only the
-// handler that wraps it.
+// Exported so FuzzMintRequestJSON can call it directly and assert the contract
+// -- a rejection is ErrMintEmailInvalid and returns nothing, an acceptance is
+// lower-cased, trimmed and idempotent -- rather than exercising only the handler
+// that wraps it.
+//
+// Not quite the parity with ValidateMintSubject an earlier version of this
+// comment claimed, and the difference is worth knowing. The subject has a
+// dedicated target under tests/fuzz, which is the only directory CI runs with
+// -fuzz. FuzzMintRequestJSON runs there as an ordinary test, so in CI this
+// validator is exercised by its seeds rather than by mutation. The seeds are
+// what make that worth anything: before they existed no seed carried an email
+// key, so the branch executed zero times.
 //
 // Normalisation is lower-case and trimmed, which is what every other email
 // entry point in the tree does before it stores or looks up an address
