@@ -84,8 +84,9 @@ function goToLogin() {
 
         <form class="space-y-5" @submit.prevent="handleSubmit">
           <div>
-            <label class="vault42-label">{{ t('resetPassword.newPassword') }}</label>
+            <label for="reset-password-new" class="vault42-label">{{ t('resetPassword.newPassword') }}</label>
             <input
+              id="reset-password-new"
               v-model="password"
               type="password"
               autocomplete="new-password"
@@ -110,8 +111,9 @@ function goToLogin() {
           </div>
 
           <div>
-            <label class="vault42-label">{{ t('resetPassword.confirmPassword') }}</label>
+            <label for="reset-password-confirm" class="vault42-label">{{ t('resetPassword.confirmPassword') }}</label>
             <input
+              id="reset-password-confirm"
               v-model="confirmPassword"
               type="password"
               autocomplete="new-password"

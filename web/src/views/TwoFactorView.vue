@@ -338,6 +338,7 @@ async function copyBackupCodes() {
             <div class="flex gap-3">
               <input
                 v-model="code"
+                :aria-label="t('login.2fa.authenticationCode')"
                 type="text"
                 inputmode="numeric"
                 pattern="[0-9]{6}"

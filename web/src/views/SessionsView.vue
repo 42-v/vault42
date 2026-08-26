@@ -120,6 +120,7 @@ onMounted(() => {
                   <div class="flex items-center gap-2">
                     <input
                       v-model="editName"
+                      :aria-label="t('devices.deviceName')"
                       maxlength="100"
                       class="vault42-input !py-1.5 text-sm flex-1"
                       :placeholder="t('devices.deviceName')"
