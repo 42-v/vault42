@@ -8468,7 +8468,7 @@
       "tests": [
         "TestScorecard_TheOnlyOpenAdvisoryIsTheOneTheRegisterNames"
       ],
-      "notes": "Accepted as CR-37, reduced not closed. Scored 6 on the 2026-08-20 run with four open advisories; 1.0.1 clears three of them. GHSA-hfg8-hc9c-6c3h in moby/go-archive is fixed by 0.3.3, and two more resolve with the testcontainers and x/crypto upgrades. The fourth cannot be fixed: GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained and unsafe by design with no patched version, and x/crypto is a direct dependency for argon2 and hkdf. Nothing in this tree imports openpgp, and govulncheck confirms it at symbol level on both modules, but OSV reports per-module rather than per-symbol so the finding stands as long as the dependency does.",
+      "notes": "Accepted as CR-37, reduced not closed. Scored 6 on the 2026-08-20 run with four open advisories; 1.0.1 clears three of them. GHSA-hfg8-hc9c-6c3h in moby/go-archive is fixed by 0.3.3, and two more resolve with the testcontainers and x/crypto upgrades. The fourth cannot be fixed: GO-2026-5932 marks golang.org/x/crypto/openpgp unmaintained and unsafe by design with no patched version, and x/crypto is a direct dependency for argon2. HKDF was the other reason and no longer is: it moved to the standard library in crypto/hkdf. Nothing in this tree imports openpgp, and govulncheck confirms it at symbol level on both modules, but OSV reports per-module rather than per-symbol so the finding stands as long as the dependency does.",
       "accepted_risk": "CR-37"
     },
     {

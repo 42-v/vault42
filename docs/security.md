@@ -253,7 +253,7 @@ govulncheck flags `golang.org/x/crypto@v0.53.0` because the module contains `gol
 
 **Why this is accepted:**
 
-- **Never called:** Vault42 imports only `argon2` and `hkdf` from `x/crypto`. govulncheck symbol analysis confirms 0 vulnerabilities in called code; the advisory is module-level only.
+- **Never called:** Vault42 imports only `argon2` from `x/crypto`; HKDF moved to the standard library in `crypto/hkdf`. govulncheck symbol analysis confirms 0 vulnerabilities in called code; the advisory is module-level only.
 - **Unfixable by upgrade:** No `x/crypto` release removes the package, so bumping the dependency can never clear the finding.
 - **Guarded against regression:** `openpgp` would have to be imported deliberately for the risk to materialize; the minimal-dependency rule (three direct deps, reviewed in every PR) is the control.
 
