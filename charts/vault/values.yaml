@@ -337,7 +337,7 @@ outboundAllowPrivate: false
 # decision about the caller, not a feature toggle -- see docs/security.md.
 #
 # Every value below is the binary's own default, so a release that does not set
-# mint.enabled is unchanged by this block existing. The four settings beside the
+# mint.enabled is unchanged by this block existing. The six settings beside the
 # switch are rendered with it because none of them works alone: without an
 # audience the process refuses to start, and with empty allow-lists the endpoint
 # mounts and grants nothing.

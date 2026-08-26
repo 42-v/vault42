@@ -156,10 +156,10 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		Roles:   req.Roles,
 		Scopes:  req.Scopes,
 		TTL:     ttl,
+		Email:   req.Email,
 		// The authenticated client, never anything from the body. MintRequestBody
 		// has no field for this, so a caller cannot name a different tenant's
 		// client as the one that spoke.
-		Email:    req.Email,
 		MintedBy: claims.ClientID,
 	})
 	if err != nil {

@@ -693,7 +693,8 @@ func TestMint_RefusesAnAddressTheValidatorRejects(t *testing.T) {
 
 	// Each of these is rejected by sanitize.Email for a different reason: no
 	// domain, a display-name wrapper (the caller would store a string that is
-	// not the address), a trailing comment, and the erasure tombstone domain.
+	// not the address), a trailing comment, the erasure tombstone domain, and a
+	// local part past the length limit.
 	for _, bad := range []string{
 		"not-an-address",
 		"Alice <alice@example.com>",
