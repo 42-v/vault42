@@ -103,7 +103,7 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 		return key, nil
 	},
 		vjwt.WithValidMethods(idTokenAlgs),
-		vjwt.WithIssuer(p.issuer),
+		vjwt.WithIssuer(p.expectedIDTokenIssuer()),
 		vjwt.WithAudience(p.clientID),
 		vjwt.WithExpirationRequired(),
 	)
