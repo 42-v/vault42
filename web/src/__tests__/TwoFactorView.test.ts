@@ -4,10 +4,10 @@ import { ref, defineComponent, h, nextTick } from 'vue'
 import TwoFactorView from '../views/TwoFactorView.vue'
 import en from '../locales/en.json'
 
-const mockToDataURL = vi.fn()
+const mockRenderQR = vi.fn()
 
-vi.mock('qrcode', () => ({
-  default: { toDataURL: (...args: unknown[]) => mockToDataURL(...args) },
+vi.mock('../qr', () => ({
+  qrDataUrl: (...args: unknown[]) => mockRenderQR(...args),
 }))
 
 // use2FA
@@ -145,7 +145,7 @@ describe('TwoFactorView', () => {
 
     mockAuthLoading.value = false
 
-    mockToDataURL.mockResolvedValue(QR_DATA_URL)
+    mockRenderQR.mockReturnValue(QR_DATA_URL)
     mockFetchMFAStatus.mockResolvedValue(undefined)
     mockListCredentials.mockResolvedValue([])
     mockSetupTOTP.mockImplementation(async () => {
@@ -321,10 +321,11 @@ describe('TwoFactorView', () => {
     // card behind it, and is undecodable the moment it leaves that card for a
     // white backdrop. The colours are asserted rather than left free because
     // they are the functional contract of a QR code, not styling.
-    expect(mockToDataURL).toHaveBeenCalledWith(OTP_URL, {
+    expect(mockRenderQR).toHaveBeenCalledWith(OTP_URL, {
       width: 200,
       margin: 2,
-      color: { dark: '#0a0a0f', light: '#ffffff' },
+      dark: '#0a0a0f',
+      light: '#ffffff',
     })
     expect(wrapper.find('img[alt="TOTP QR Code"]').attributes('src')).toBe(QR_DATA_URL)
   })
@@ -339,7 +340,12 @@ describe('TwoFactorView', () => {
   })
 
   it('falls back to the manual secret without an error when QR rendering fails', async () => {
-    mockToDataURL.mockRejectedValue(new Error('qr boom'))
+    // Synchronous now, so the failure this has to survive is a throw rather
+    // than a rejected promise. The encoder throws when the payload fits no QR
+    // version, which is the real shape of the failure the view catches.
+    mockRenderQR.mockImplementation(() => {
+      throw new Error('qr boom')
+    })
     mockTotpSetup.value = { secret: SECRET, otp_url: OTP_URL }
     const wrapper = mountView()
     await flushPromises()
