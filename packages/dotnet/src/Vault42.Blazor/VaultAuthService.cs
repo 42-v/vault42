@@ -228,8 +228,14 @@ public sealed class VaultAuthService : IAsyncDisposable
             // from the success path, so a single thrown refresh left a one-shot
             // timer that never re-armed: automatic refresh was off for the rest
             // of the session, silently, while the UI still showed a session.
-            // Re-arm and try again before the token actually expires.
-            ScheduleRetryAfterFailure();
+            // Re-arm and try again -- but only for an app that asked for
+            // automatic refresh at all. The success path has always been gated
+            // on AutoRefresh; this one was not, so opting out stopped meaning
+            // anything the moment a refresh threw: every failed retry re-entered
+            // this catch and re-armed, and an app that had switched the feature
+            // off was making a request roughly every thirty seconds.
+            if (_options.AutoRefresh)
+                ScheduleRetryAfterFailure();
             return false;
         }
     }
@@ -349,9 +355,13 @@ public sealed class VaultAuthService : IAsyncDisposable
     /// failure costs one retry interval rather than the rest of the session.
     /// </summary>
     /// <remarks>
-    /// Bounded below by one second and above by the configured lead time, so it
-    /// retries inside the window where the access token is still valid and
-    /// cannot become a busy loop against a server that is down.
+    /// A flat thirty seconds, whatever the configured lead time: ScheduleRefresh
+    /// arms at <c>expiresIn - lead</c>, so passing <c>lead + 30</c> always
+    /// resolves to 30s. It is not bounded by the lead time and does not
+    /// guarantee the retry lands while the access token is still valid -- for a
+    /// lead of thirty seconds or less it will not. What it does guarantee is
+    /// that a server that is down is retried on a fixed interval rather than in
+    /// a busy loop.
     /// </remarks>
     private void ScheduleRetryAfterFailure()
         => ScheduleRefresh(_options.RefreshBeforeExpirySecs + RetryAfterFailureSecs);
