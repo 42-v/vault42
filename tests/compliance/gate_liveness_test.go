@@ -1221,6 +1221,13 @@ var sourceSanitizers = map[string]struct{}{
 // than exempted; the map and its ratchet exist so that any addition has to be
 // argued for in writing instead of merged in silence.
 var rawSourceScanByDesign = map[string]string{
+	"tests/spec/dpop_route_wiring_test.go:TestAR10DoesNotForbidRecordingAControlThatExists": "reads " +
+		"docs/security.md, which is Markdown and has no Go comments for commentFreeSource " +
+		"to strip. The string it looks for is published prose addressed to an operator -- " +
+		"an instruction not to record VAULT_DPOP_ENABLED as a mitigation -- and prose is " +
+		"exactly what this gate has to read, because the defect it holds was four " +
+		"documents describing a shipped control as absent. There is nowhere for the " +
+		"phrase to hide either: a Markdown comment is still text an auditor reads.",
 	"tests/spec/badge_language_parity_test.go:goDirectRequires": "reads go.mod, " +
 		"not Go source, and go.mod is the one file here where comment text carries " +
 		"meaning: `// indirect` is how the format marks a requirement the module " +

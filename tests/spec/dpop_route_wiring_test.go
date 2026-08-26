@@ -6,8 +6,10 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -210,4 +212,120 @@ func parseServerRegistrations(t *testing.T, path string) map[string]registration
 		return true
 	})
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// The documentation half
+// ---------------------------------------------------------------------------
+//
+// The two gates above hold the wiring. Nothing held what the documents say
+// about the wiring, and that is where it went wrong: POST /client/token was
+// wrapped, refresh families gained a dpop_jkt binding that survives rotation,
+// and four documents went on describing the state before all of it. docs/spec.md
+// said the route "is not wrapped in the DPoP middleware" and that "refresh
+// tokens are not sender-bound"; docs/security.md AR-10 told operators in as many
+// words not to record VAULT_DPOP_ENABLED as a mitigation. An auditor reading
+// those would have recorded the product's strongest sender-constraint as absent,
+// which is a worse outcome than not having written it down.
+//
+// It survived because the machine-checked documentation surfaces are the
+// compliance register, the route inventories and the badge figures. Ordinary
+// prose is read by nobody in CI. These two do not fix that in general -- they
+// hold the claims that turned out to be worth holding, and only in one
+// direction: silence is fine, describing a wrap that exists is fine, and only
+// the contradiction fails.
+
+// docsThatDescribeDPoP are the documents that make wiring claims. api.md is
+// included because it is the one an integrator reads.
+var docsThatDescribeDPoP = []string{
+	filepath.Join("docs", "spec.md"),
+	filepath.Join("docs", "security.md"),
+	filepath.Join("docs", "api.md"),
+	filepath.Join("docs", "architecture.md"),
+}
+
+// notWrappedClaim matches a sentence asserting a route sits outside the DPoP
+// middleware, capturing the route so the claim can be checked against the
+// router rather than merely counted.
+var notWrappedClaim = regexp.MustCompile(
+	"`(?:POST|GET|PUT|DELETE|PATCH) (/[^`]*)`[^.\n]{0,120}?is not wrapped in the DPoP middleware")
+
+func TestNoDocumentSaysARouteIsUnwrappedWhileTheRouterWrapsIt(t *testing.T) {
+	root := repoRoot(t)
+	regs := parseServerRegistrations(t, filepath.Join(root, serverRouteSource))
+	if len(regs) == 0 {
+		t.Fatal("no registrations parsed, so this gate reads nothing and would pass anything")
+	}
+
+	wrapped := map[string]bool{}
+	for pattern, reg := range regs {
+		for _, ident := range dpopWrapperIdents {
+			if mentionsIdent(reg.handler, ident) {
+				if fields := strings.Fields(pattern); len(fields) == 2 {
+					wrapped[fields[1]] = true
+				}
+				break
+			}
+		}
+	}
+	if len(wrapped) == 0 {
+		t.Fatal("no route resolves as DPoP-wrapped; the middleware was renamed or the " +
+			"detection broke, and a gate that finds nothing passes everything")
+	}
+
+	for _, doc := range docsThatDescribeDPoP {
+		body := readFileString(t, filepath.Join(root, doc))
+		for _, m := range notWrappedClaim.FindAllStringSubmatch(body, -1) {
+			route := strings.TrimSpace(m[1])
+			if wrapped[route] {
+				t.Errorf("%s says %s is not wrapped in the DPoP middleware, and server.go "+
+					"mounts it inside dpopWrap. One of the two is wrong and it is not the "+
+					"router.", doc, route)
+			}
+		}
+	}
+}
+
+// AR-10's instruction is the sharpest sentence in the risk register, and it was
+// false for as long as POST /client/token was wrapped: an operator following it
+// records a working control as no control. The flag is a mitigation for a client
+// that presents proofs, and is not one for the endpoint in general -- the
+// difference is the whole point, so the blanket form cannot come back.
+func TestAR10DoesNotForbidRecordingAControlThatExists(t *testing.T) {
+	root := repoRoot(t)
+	body := readFileString(t, filepath.Join(root, "docs", "security.md"))
+	if !strings.Contains(body, "AR-10") {
+		// Fail rather than skip. A skipped test prints the same ok as one that
+		// ran, and this gate exists because a sentence in AR-10 was false for a
+		// release. If the risk is genuinely retired, retiring this with it is a
+		// decision somebody should have to make on purpose.
+		t.Fatal("docs/security.md no longer contains AR-10. If the risk was retired, " +
+			"retire this gate in the same change and say so; do not leave a control " +
+			"that reports ok because it found nothing to check.")
+	}
+
+	regs := parseServerRegistrations(t, filepath.Join(root, serverRouteSource))
+	reg, ok := regs["POST /client/token"]
+	if !ok {
+		return
+	}
+	var clientTokenWrapped bool
+	for _, ident := range dpopWrapperIdents {
+		if mentionsIdent(reg.handler, ident) {
+			clientTokenWrapped = true
+			break
+		}
+	}
+	if !clientTokenWrapped {
+		// Unwrapped again, so the blanket instruction is true again.
+		return
+	}
+
+	flat := strings.Join(strings.Fields(body), " ")
+	if strings.Contains(flat, "Do not record `VAULT_DPOP_ENABLED` as a mitigation for this risk") {
+		t.Error("security.md tells operators not to record VAULT_DPOP_ENABLED as a mitigation " +
+			"for AR-10, while server.go wraps POST /client/token in dpopWrap. Say what is true " +
+			"of a client that presents proofs and what is true of one that does not, rather " +
+			"than the blanket form, which was written when the route was unwrapped.")
+	}
 }
