@@ -688,12 +688,19 @@ func TestMintHandler_TheAuditRowDoesNotCarryTheEmail(t *testing.T) {
 	if len(captured) == 0 {
 		t.Fatal("no audit entry recorded")
 	}
-	// Marshalled whole, not walked field by field. model.AuditEntry carries
-	// UserID, ClientID, IP, UserAgent, FingerprintHash and DeviceID outside
-	// Metadata, and Metadata itself holds interface{} -- so a loop over string
-	// values in one map cannot fail for the reason this test is named for. The
-	// address landing in UserID would have passed it. This is the idiom
+	// Marshaled whole, not walked field by field. model.AuditEntry carries
+	// UserID, ClientID, IP, UserAgent and DeviceID outside Metadata, and
+	// Metadata itself holds interface{} -- so a loop over string values in one
+	// map cannot fail for the reason this test is named for. The address landing
+	// in UserID would have passed it. This is the idiom
 	// blob_audit_privacy_test.go uses for the same question.
+	//
+	// Marshaling alone is not enough either, and the earlier version of this
+	// test said FingerprintHash was covered by it when it is exactly the field
+	// that is not: it is tagged json:"-", so json.Marshal never emits it.
+	// Passing the address as the fpHash argument left this green while writing
+	// it to audit.audit_log. Anything hidden from the encoder has to be asserted
+	// by hand, so it is, below.
 	for _, e := range captured {
 		serialized, err := json.Marshal(e)
 		if err != nil {
@@ -701,6 +708,11 @@ func TestMintHandler_TheAuditRowDoesNotCarryTheEmail(t *testing.T) {
 		}
 		if strings.Contains(string(serialized), "alice@example.com") {
 			t.Errorf("audit entry %q carries the asserted email: %s", e.EventType, serialized)
+		}
+		// The json:"-" fields, which the marshal above cannot see.
+		if strings.Contains(e.FingerprintHash, "alice@example.com") {
+			t.Errorf("audit entry %q carries the asserted email in FingerprintHash, which is "+
+				"tagged json:\"-\" and so is invisible to the check above", e.EventType)
 		}
 	}
 }

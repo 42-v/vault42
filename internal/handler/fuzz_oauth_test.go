@@ -54,6 +54,13 @@ func FuzzMintRequestJSON(f *testing.F) {
 	f.Add([]byte(`[]`))
 	f.Add([]byte(`null`))
 	f.Add([]byte(``))
+	// Seeds carrying an email. Without one the email property below never runs:
+	// the fuzzer mutates from the corpus, no seed had the key, and there is no
+	// testdata corpus for this target, so the whole branch executed zero times
+	// while the subject branch beside it executed thousands. A property nothing
+	// enters is not a property.
+	f.Add([]byte(`{"subject":"user-1","email":"  Alice@Example.COM "}`))
+	f.Add([]byte(`{"subject":"user-1","email":"not-an-address"}`))
 	f.Add([]byte(`{"subject":"u","extra":true}`))
 	f.Add([]byte(`{"suBjeCt":"user-1"}`))
 	f.Add([]byte(`{"SUBJECT":"user-1"}`))
