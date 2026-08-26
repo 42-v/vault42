@@ -75,6 +75,29 @@ func TestClampUserAgent_DoesNotSplitARune(t *testing.T) {
 	}
 }
 
+// The gap between the two limits: more than 1024 BYTES but fewer than 1024
+// characters. A byte-length check alone would truncate this, and the column
+// would have accepted it whole -- so the fast path has to fall through to the
+// rune count rather than deciding on len().
+func TestClampUserAgent_LongInBytesButShortInRunes(t *testing.T) {
+	// 600 three-byte runes: 1800 bytes, 600 characters. Comfortably over the
+	// byte limit and comfortably under the character limit.
+	ua := strings.Repeat("日", 600)
+	if len(ua) <= userAgentColumn {
+		t.Fatalf("byte length %d is not over the limit, so this test is not exercising "+
+			"the case it describes", len(ua))
+	}
+	if n := utf8.RuneCountInString(ua); n >= userAgentColumn {
+		t.Fatalf("rune count %d is not under the limit", n)
+	}
+
+	got := clampUserAgent(ua)
+	if got != ua {
+		t.Fatalf("a value the column accepts whole was truncated: %d runes in, %d out",
+			utf8.RuneCountInString(ua), utf8.RuneCountInString(got))
+	}
+}
+
 // The end of it: a row with an over-long agent now lands, against a real
 // PostgreSQL with the real column.
 func TestAuditRepo_AnOverLongUserAgentStillLands(t *testing.T) {
