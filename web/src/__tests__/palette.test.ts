@@ -192,3 +192,72 @@ describe('the source tree keeps `primary` off text', () => {
     expect(offenders).toEqual([])
   })
 })
+
+/**
+ * The stylesheet's own literals.
+ *
+ * Everything above reads the `@theme` block and then checks the templates. That
+ * left the rest of style.css unchecked by anything, and it is the one file that
+ * can paint without naming a token at all -- a bare `background:` in a `@layer
+ * base` rule reaches the screen with nothing to compare it against.
+ *
+ * What was sitting there: `::selection` painted `rgba(0, 255, 66, 0.2)`, neon
+ * green, in an app whose palette is entirely indigo. It had been there since
+ * 0.4.2. The contrast rework that split `primary` from `accent`, moved `error`
+ * and wrote the essay at the top of the stylesheet enumerated every colour
+ * decision in the file and never mentioned it -- because nothing pointed at it,
+ * and selecting text is not something a screenshot review catches.
+ *
+ * So: no colour literal outside the theme block, except the ones that provably
+ * cannot be a token. The exemptions are listed with a reason and checked in
+ * both directions, so an entry that stops matching has to be removed rather
+ * than quietly describing a tree that has moved on.
+ *
+ * Deliberately separate from paletteEscapes.test.ts, which holds the same rule
+ * for `.vue` and `.ts`: that gate walks source templates and this one parses a
+ * stylesheet, and the exemption a stylesheet earns (a scrim is black) is not
+ * the exemption a template earns (a trademark is its own colour).
+ */
+describe('style.css paints only from the palette', () => {
+  /** Hex, rgb()/rgba(), hsl()/hsla(). */
+  const RAW_COLOUR = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g
+
+  const ALLOWED = new Map<string, string>([
+    ['rgba(0, 0, 0, 0.7)', 'the modal scrim: a dimmed backdrop is black at every theme, and tinting it with an accent would put a hue over the whole page'],
+  ])
+
+  /**
+   * The stylesheet minus the parts a literal legitimately lives in: the `@theme`
+   * block, which is where the tokens are *defined*, and comments, where the
+   * header quotes the values the old palette used and must go on doing so.
+   */
+  function paintingRules(): string {
+    const source = readFileSync(stylesheetPath, 'utf8')
+    return source
+      .replace(/@theme\s*\{[^}]*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+  }
+
+  it('names a token, or an exempt literal, everywhere it paints', () => {
+    const offenders: string[] = []
+    for (const [literal] of paintingRules().matchAll(RAW_COLOUR)) {
+      if (!ALLOWED.has(literal)) offenders.push(literal)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('still contains every literal it exempts', () => {
+    // An exemption for something that is no longer there stops being a record
+    // of a decision and starts being a hole nobody can see the shape of.
+    const present = new Set(Array.from(paintingRules().matchAll(RAW_COLOUR), (m) => m[0]))
+    for (const literal of ALLOWED.keys()) {
+      expect(present.has(literal), `${literal} is exempted and no longer in style.css`).toBe(true)
+    }
+  })
+
+  it('reads a stylesheet with rules left in it after the stripping', () => {
+    // A regex that ate the whole file would make both assertions above pass.
+    expect(paintingRules()).toContain('::selection')
+    expect(paintingRules()).not.toContain('--color-vault42-bg:')
+  })
+})
