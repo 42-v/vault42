@@ -28,7 +28,7 @@
       "tests": 1305,
       "coverage": "99.76%",
       "coverageNum": 99.76,
-      "lines": 6753,
+      "lines": 6755,
       "deps": 3,
       "transitiveDeps": 95
     },
