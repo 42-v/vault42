@@ -21,11 +21,38 @@ func NewAuditRepo(db *DB) *AuditRepo {
 	return &AuditRepo{db: db}
 }
 
-// actorUUID matches the canonical 8-4-4-4-12 form, which is what auth.users
-// ids are and what the audit actor columns accept. It is deliberately not a
-// full RFC 4122 validator: the only question here is whether pgx will encode
-// the value into a uuid column, which is a question about shape.
-var actorUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+// actorHex matches a uuid with its punctuation already removed. The columns
+// render canonically -- 8-4-4-4-12, lower case -- but that is not what the type
+// accepts on input, and the difference is the whole point of this file.
+//
+// PostgreSQL 8.12 accepts upper case, the canonical form wrapped in braces, and
+// hyphens omitted or added after any group of four digits, and normalises every
+// one of them to the same sixteen bytes. So `Guid.ToString("N")` -- .NET's
+// dashless rendering, and therefore the one a .NET relying party is most likely
+// to send -- is a uuid the column already holds, indexes and returns dashed.
+// Testing the caller's *shape* would refuse a value the database accepts.
+var actorHex = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
+
+// canonicalActorUUID renders an id the uuid type would accept in the form the
+// column returns, and reports false for one it would not.
+//
+// It accepts a little more than PostgreSQL does, because it emits the canonical
+// form rather than the caller's string: a hyphen in a place the server would
+// refuse still leaves 32 hex digits naming a uuid, and what reaches the column
+// is the canonical rendering of it either way. Over-acceptance here cannot
+// produce a value the column rejects, whereas under-acceptance silently detaches
+// a row from its subject, which is the defect this file exists to fix.
+func canonicalActorUUID(id string) (string, bool) {
+	t := strings.TrimSpace(id)
+	if len(t) > 1 && t[0] == '{' && t[len(t)-1] == '}' {
+		t = t[1 : len(t)-1]
+	}
+	t = strings.ToLower(strings.ReplaceAll(t, "-", ""))
+	if !actorHex.MatchString(t) {
+		return "", false
+	}
+	return t[0:8] + "-" + t[8:12] + "-" + t[12:16] + "-" + t[16:20] + "-" + t[20:32], true
+}
 
 // Keys a rejected actor id is kept under. Prefixed so they cannot collide with
 // a key a call site already uses, and named for what they hold.
@@ -41,8 +68,11 @@ const (
 // and three call sites pass a value the caller chose: the submitted client_id
 // on a failed client auth, and the asserted subject on /mint and on a service
 // document. A non-UUID there does not produce a row with an odd value in it --
-// pgx refuses the encode and there is no row at all. The caller then discards
-// the error, correctly, because auditing must never block authentication. So
+// there is no row at all. pgx is not what refuses it: chooseParameterFormatCode
+// returns TextFormatCode for any string before the oid is consulted, so the
+// value goes out as text and the server's parser is the acceptor. The caller
+// then discards the error, correctly, because auditing must never block
+// authentication. So
 // the events most worth having are the ones most likely to vanish: a credential
 // spray sends client_id=admin, not a UUID, which is exactly the case the
 // comment above auditClientAuthFailure says the audit exists to catch.
@@ -58,9 +88,14 @@ const (
 func actorColumns(e *model.AuditEntry) (userID, clientID string, metadata map[string]interface{}) {
 	userID, clientID, metadata = e.UserID, e.ClientID, e.Metadata
 
-	userBad := userID != "" && !actorUUID.MatchString(userID)
-	clientBad := clientID != "" && !actorUUID.MatchString(clientID)
-	if !userBad && !clientBad {
+	userOK, clientOK := true, true
+	if userID != "" {
+		userID, userOK = canonicalActorUUID(userID)
+	}
+	if clientID != "" {
+		clientID, clientOK = canonicalActorUUID(clientID)
+	}
+	if userOK && clientOK {
 		return userID, clientID, metadata
 	}
 
@@ -70,12 +105,14 @@ func actorColumns(e *model.AuditEntry) (userID, clientID string, metadata map[st
 	for k, v := range metadata {
 		out[k] = v
 	}
-	if userBad {
-		out[rawUserIDKey] = userID
+	// The claim is kept as the caller wrote it, not as anything normalised it:
+	// the point of the key is to record what was asserted.
+	if !userOK {
+		out[rawUserIDKey] = e.UserID
 		userID = ""
 	}
-	if clientBad {
-		out[rawClientIDKey] = clientID
+	if !clientOK {
+		out[rawClientIDKey] = e.ClientID
 		clientID = ""
 	}
 	return userID, clientID, out

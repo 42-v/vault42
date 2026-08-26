@@ -23,9 +23,14 @@ import (
 // client_id=admin, not a UUID. That is precisely the case the comment above
 // auditClientAuthFailure says the audit exists to catch.
 //
-// audit.Logger.normalizeActors is what keeps the row: it blanks the column and
-// moves the claimed value into metadata. The second half of this test is that
-// the shape it produces is one the database accepts.
+// actorColumns is what keeps the row: it blanks the column and moves the
+// claimed value into metadata. It lives in this package, not in audit.Logger,
+// for the reason audit.go gives -- the constraint is the column's.
+//
+// The second half is the other direction, and it is the half only a real
+// PostgreSQL can settle: an id the uuid type accepts must reach the column
+// unblanked, in every rendering the type accepts, and stay findable by the
+// canonical one. That is what makes a shape test the wrong instrument.
 func TestAuditRepo_ANonUUIDActorIsRejectedByTheColumn(t *testing.T) {
 	svcDocRequireContainerRuntime(t)
 	db := svcDocPostgres(t)
@@ -72,42 +77,59 @@ func TestAuditRepo_ANonUUIDActorIsRejectedByTheColumn(t *testing.T) {
 		t.Fatalf("metadata actor_client_id_raw = %q, want the value the caller claimed", rescued)
 	}
 
-	// What normalizeActors produces instead: the column blank, the claimed value
-	// kept in metadata, everything else unchanged.
+	// The other direction: a dashless uuid is what .NET's Guid.ToString("N")
+	// produces, mintSubjectRe admits it, and PostgreSQL's uuid parser accepts it
+	// and stores the same sixteen bytes as the dashed form. So the row must keep
+	// its actor, and must still be found by the canonical spelling -- which is
+	// what CountByUser and the Art. 15 export both search by.
 	id2, err := vaultcrypto.RandomUUID()
 	if err != nil {
 		t.Fatalf("uuid: %v", err)
 	}
-	normalized := &model.AuditEntry{
+	if err := repo.Insert(ctx, &model.AuditEntry{
 		ID:        id2,
 		Timestamp: time.Now(),
-		EventType: "client_auth",
-		ClientID:  "",
+		EventType: "mint",
+		UserID:    "7e2f9a102222400080000000000000ab",
 		IP:        "203.0.113.9",
-		Metadata: map[string]interface{}{
-			"result": "failure", "reason": "unknown_client",
-			"actor_client_id_raw": "admin",
-		},
-	}
-	if err := repo.Insert(ctx, normalized); err != nil {
-		t.Fatalf("the normalized row was refused too, so the fix does not fix it: %v", err)
+		Metadata:  map[string]interface{}{"result": "success"},
+	}); err != nil {
+		t.Fatalf("a dashless uuid was refused: %v", err)
 	}
 
-	var raw string
-	row := db.Pool.QueryRow(ctx,
-		`SELECT metadata->>'actor_client_id_raw' FROM audit.audit_log WHERE id = $1`, id2)
-	if err := row.Scan(&raw); err != nil {
-		t.Fatalf("read back: %v", err)
+	var stored string
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT user_id::text FROM audit.audit_log WHERE id = $1`, id2).Scan(&stored); err != nil {
+		t.Fatalf("read back the dashless row: %v", err)
 	}
-	if raw != "admin" {
-		t.Fatalf("metadata actor_client_id_raw = %q, want the value the caller claimed", raw)
+	if stored != "7e2f9a10-2222-4000-8000-0000000000ab" {
+		t.Fatalf("user_id = %q, want the canonical rendering of the same uuid. A blank "+
+			"here is the regression: the row is in the table but no longer attributed, "+
+			"and an append-only table cannot be repaired.", stored)
+	}
+
+	n, err := repo.CountByUser(ctx, "7e2f9a10-2222-4000-8000-0000000000ab")
+	if err != nil {
+		t.Fatalf("CountByUser: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("CountByUser found nothing for the canonical spelling of an id that was " +
+			"written dashless, so the subject's own export would miss the row")
 	}
 }
 
 // actorColumns is pure, so it is tested without a container. The behavior that
-// matters is that a legitimate row is untouched and a poisoned one survives.
+// matters is that every rendering the uuid type accepts reaches the column, and
+// that a value it does not accept still leaves a row behind.
 func TestActorColumns(t *testing.T) {
-	const ok = "7e2f9a10-2222-4000-8000-0000000000ab"
+	const (
+		ok       = "7e2f9a10-2222-4000-8000-0000000000ab"
+		upper    = "7E2F9A10-2222-4000-8000-0000000000AB"
+		dashless = "7e2f9a102222400080000000000000ab"
+		braced   = "{7e2f9a10-2222-4000-8000-0000000000ab}"
+		spaced   = "7e2f9a10-2222-4000-8000-0000000000 ab"
+		short    = "7e2f9a10-2222-4000-8000-0000000000a"
+	)
 	cases := []struct {
 		name, user, client   string
 		wantUser, wantClient string
@@ -119,9 +141,20 @@ func TestActorColumns(t *testing.T) {
 		{"a spray's client id", "", "admin", "", "", false, true},
 		{"a legacy mint subject", "legacy-user-77", "", "", "", true, false},
 		{"both bad", "u", "c", "", "", true, true},
-		{"uppercase uuid is still a uuid", "7E2F9A10-2222-4000-8000-0000000000AB", "", "7E2F9A10-2222-4000-8000-0000000000AB", "", false, false},
-		{"no dashes", "7e2f9a1022224000800000000000 00ab", "", "", "", true, false},
-		{"one char short", "7e2f9a10-2222-4000-8000-0000000000a", "", "", "", true, false},
+
+		// Every one of these is a uuid the column already holds, indexes, and
+		// returns dashed. A shape test blanked them into metadata, which
+		// detached existing rows from their subject -- and the dashless case is
+		// what .NET writes by default, on the platform this release is for.
+		{"uppercase is canonicalised", upper, "", ok, "", false, false},
+		{"dashless, as Guid.ToString N writes it", dashless, "", ok, "", false, false},
+		{"braced", braced, "", ok, "", false, false},
+		{"either column is canonicalised", dashless, upper, ok, ok, false, false},
+
+		// Acceptance stops at 32 hex digits: a space is not punctuation the
+		// parser skips, and a digit short is not a uuid.
+		{"a space is not punctuation", spaced, "", "", "", true, false},
+		{"one digit short", short, "", "", "", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,6 +171,14 @@ func TestActorColumns(t *testing.T) {
 			}
 			if _, ok := md[rawClientIDKey]; ok != tc.wantClientRaw {
 				t.Errorf("%s present = %v, want %v", rawClientIDKey, ok, tc.wantClientRaw)
+			}
+			// A rejected id is kept as the caller wrote it, not as anything
+			// normalised it: the key records what was asserted.
+			if tc.wantUserRaw && md[rawUserIDKey] != tc.user {
+				t.Errorf("%s = %v, want the claimed value %q", rawUserIDKey, md[rawUserIDKey], tc.user)
+			}
+			if tc.wantClientRaw && md[rawClientIDKey] != tc.client {
+				t.Errorf("%s = %v, want the claimed value %q", rawClientIDKey, md[rawClientIDKey], tc.client)
 			}
 			if md["reason"] != "unknown_client" {
 				t.Errorf("the caller's metadata was lost: %v", md)
