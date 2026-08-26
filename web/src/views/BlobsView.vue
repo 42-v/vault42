@@ -110,7 +110,7 @@ async function handleDelete(id: string) {
                 <label for="blob-label" class="vault42-label">{{ t('blobs.labelOptional') }}</label>
                 <input id="blob-label" v-model="label" type="text" class="vault42-input" placeholder="my-document.pdf" maxlength="255" />
               </div>
-              <button type="submit" :disabled="isUploading" class="vault42-btn-primary">
+              <button type="submit" :disabled="isUploading" class="vault42-btn">
                 <span v-if="isUploading" class="vault42-spinner vault42-spinner-sm mr-2"></span>
                 {{ t('common.upload') }}
               </button>
@@ -134,7 +134,7 @@ async function handleDelete(id: string) {
                   </p>
                 </div>
                 <div class="flex gap-2 shrink-0">
-                  <button class="vault42-btn-secondary vault42-btn-sm" @click="handleDownload(blob.id, blob.label)">
+                  <button class="vault42-btn-outline vault42-btn-sm" @click="handleDownload(blob.id, blob.label)">
                     {{ t('common.download') }}
                   </button>
                   <button class="vault42-btn-danger vault42-btn-sm" @click="deleteConfirmId = blob.id">
@@ -154,7 +154,7 @@ async function handleDelete(id: string) {
               <p class="text-sm text-vault42-muted mb-4">{{ t('blobs.deleteConfirm') }}</p>
               <div class="flex gap-3">
                 <button class="vault42-btn-danger" @click="handleDelete(deleteConfirmId!)">{{ t('common.delete') }}</button>
-                <button class="vault42-btn-secondary" @click="deleteConfirmId = null">{{ t('common.cancel') }}</button>
+                <button class="vault42-btn-outline" @click="deleteConfirmId = null">{{ t('common.cancel') }}</button>
               </div>
             </div>
           </div>

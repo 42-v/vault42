@@ -169,7 +169,7 @@ async function handleDelete() {
             </div>
 
             <div class="flex items-center gap-3">
-              <button type="submit" :disabled="isSaving" class="vault42-btn-primary">
+              <button type="submit" :disabled="isSaving" class="vault42-btn">
                 <span v-if="isSaving" class="vault42-spinner vault42-spinner-sm mr-2"></span>
                 {{ t('identity.saveIdentity') }}
               </button>
@@ -187,7 +187,7 @@ async function handleDelete() {
                 <p class="text-sm text-vault42-muted mb-4">{{ t('identity.deleteConfirm') }}</p>
                 <div class="flex gap-3">
                   <button class="vault42-btn-danger" @click="handleDelete">{{ t('common.delete') }}</button>
-                  <button class="vault42-btn-secondary" @click="showDeleteConfirm = false">{{ t('common.cancel') }}</button>
+                  <button class="vault42-btn-outline" @click="showDeleteConfirm = false">{{ t('common.cancel') }}</button>
                 </div>
               </div>
             </div>
