@@ -201,20 +201,31 @@ When the allowlist is unset, any certificate this CA has ever signed still reach
 
 `POST /kms/unwrap` is a key-release endpoint. It authorizes on a client-credential
 token carrying the `kms:unwrap` scope. Those tokens are issued by `POST /client/token`,
-which is not wrapped in the DPoP middleware (`internal/server/server.go`), so they never
-carry `cnf.jkt` and a captured token can be replayed within its (short) TTL to re-release
-the plaintext.
+which **is** wrapped in the DPoP middleware (`internal/server/server.go`), so a caller that
+presents a proof receives a token carrying `cnf.jkt`, and the binding is enforced when that
+token is used here. A caller that presents no proof receives an unbound token, and a
+captured one can be replayed within its (short) TTL to re-release the plaintext. The risk
+is therefore narrower than it was and has not gone: it is now a property of how the client
+is written rather than of what the server offers.
 
-**DPoP is a working control on password login, refresh and 2FA verify, and does not close this.**
-`VAULT_DPOP_ENABLED=true` stamps `cnf.jkt` on access and challenge tokens issued from
-`POST /auth/login`, `POST /auth/refresh` and the 2FA challenge path
-(`internal/service/token.go`) and enforces that binding under the `DPoP` authorization
-scheme (`internal/middleware/dpop.go`). Two limits of that control are also real:
-refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. Neither of those, nor
-the missing DPoP wrap on `POST /client/token`, nor the missing wrap on
-`GET /auth/oauth2/callback/{provider}` (a browser GET, so federated login never stamps
-`cnf.jkt`), is closed by turning the flag on. Do not record `VAULT_DPOP_ENABLED` as a
-mitigation for this risk.
+**`VAULT_DPOP_ENABLED` narrows this risk and does not close it, and the reason is worth
+stating precisely.** The flag stamps `cnf.jkt` on access and challenge tokens issued from
+`POST /auth/login`, `POST /auth/refresh`, the 2FA challenge path and `POST /client/token`
+(`internal/service/token.go`, `internal/server/server.go`), enforces that binding under the
+`DPoP` authorization scheme (`internal/middleware/dpop.go`), and binds a refresh family to
+the presenting key so the constraint survives rotation (`dpop_jkt`, migration 038,
+`internal/service/auth.go`).
+
+What it does not do is make any of that mandatory. The middleware serves a request that
+carries no proof and refuses only the mismatch, so a client that never presents one holds
+exactly the replayable bearer token this risk describes. Two further limits are real: there
+is no `DPoP-Nonce`, and `GET /auth/oauth2/callback/{provider}` is not wrapped -- it is a
+browser GET, so federated login never stamps `cnf.jkt`.
+
+So `VAULT_DPOP_ENABLED` may be recorded as a mitigation **for a client that presents
+proofs**, and must not be recorded as one for the endpoint in general. An earlier revision
+of this section said the flag was no mitigation at all, which was true when
+`POST /client/token` was unwrapped and stopped being true when it was wrapped.
 
 **Why this is accepted:**
 

@@ -812,8 +812,11 @@ The JWKS endpoint sets `Cache-Control: public, max-age=300` (5 minutes). During
 a DB-backed rotation, both the old and new keys are available, so tokens signed
 with the old key remain valid until they expire naturally.
 
-The `WellKnownHandler` uses a `sync.RWMutex` to safely update the key map while
-serving concurrent JWKS requests.
+The `WellKnownHandler` holds no lock. Its key map is written once by
+`NewWellKnownHandler` and never again: rotation reaches the handler through
+`keyProvider`, not by mutating the map, and the `UpdateKeys` method that once wrote it had
+no caller. The comment at `internal/handler/wellknown.go` says why the lock went -- a lock
+over a field with no writer reads as evidence of concurrent mutation that does not happen.
 
 ### File-Based Keys (Default)
 

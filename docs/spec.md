@@ -138,7 +138,7 @@ release, including a patch.
 | Surface | Why it is excluded |
 |---------|--------------------|
 | `risk_score` on `GET /admin/audit` | A severity band, not a measurement. Section 0.6.1. |
-| `VAULT_DPOP_ENABLED` remaining limits | Refresh tokens are not sender-bound, and there is no `DPoP-Nonce`. Section 0.6.2. |
+| `VAULT_DPOP_ENABLED` remaining limits | There is no `DPoP-Nonce`, and a caller that presents no proof still receives an unbound token. Section 0.6.2. |
 | Admin gateway HTML pages (`GET /admin/`, `/admin/login`, `/admin/ui/*`, `/admin/static/*`) | A user interface, not an API. |
 | The `GET /metrics` exposition body | The endpoint, its gate and its content type are stable; the metric names, labels and cardinality track the code. |
 | `GET /admin/metrics` | Mounted and permission-gated with nothing behind it; answers `501 not_implemented`. Section 21.10. |
@@ -182,18 +182,23 @@ the flag does not break existing clients.
 
 At 1.0.0, two limits are real and are not covered by sections 0.3 or 0.4:
 
-- **refresh tokens are not sender-bound.** They are opaque random values stored as a SHA-256
-  hash. Rotation with a DPoP proof binds the *next* access token; the refresh token itself
-  can still be presented by anyone who holds it.
 - **there is no `DPoP-Nonce`.** Proof freshness is `iat` plus single-use `jti` only.
+- **the binding is opt-in per request.** A caller that presents no proof is served
+  (`internal/middleware/dpop.go`), and receives a token with no `cnf.jkt`. The middleware
+  refuses only the mismatch: a token that already carries a binding, presented without a
+  proof or with the wrong one. So the flag makes sender-constraint *available*; it does not
+  make it mandatory, and a client that never sends a proof is exactly as replayable as before.
 
 Two more facts about what the flag does not do, so they are not mistaken for bugs:
 
 - the discovery document does not advertise DPoP support (`internal/handler/wellknown.go`);
-- `POST /client/token` is not wrapped in the DPoP middleware, so client-credential tokens
-  (including those that carry `kms:unwrap` or `mint:token`) never receive `cnf.jkt`. A
-  statement that the flag adds a required proof to `POST /kms/unwrap` or `POST /mint` is a
-  defect: both accept a bare `Bearer` request from those tokens with the flag on.
+- `POST /client/token` **is** wrapped in the DPoP middleware (`internal/server/server.go`),
+  so a client-credential token issued to a caller that presented a proof carries `cnf.jkt`,
+  and the binding is then enforced wherever that token is used -- including
+  `POST /kms/unwrap` and `POST /mint`. A caller that presents no proof still receives an
+  unbound token, and those endpoints still accept it, so a statement that the flag adds a
+  *required* proof to either is still a defect. What changed is that the proof is now
+  possible there at all.
 - `GET /auth/oauth2/callback/{provider}` is not wrapped either (`internal/server/server.go`).
   The identity provider redirects the browser with a GET, which cannot carry a `DPoP`
   proof, so federated login never stamps `cnf.jkt` on the access or challenge token it
