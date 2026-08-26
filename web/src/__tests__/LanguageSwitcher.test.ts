@@ -199,6 +199,111 @@ describe('LanguageSwitcher', () => {
     }
   })
 
+  /**
+   * The disclosure contract, and the keyboard.
+   *
+   * The trigger opened a panel and said nothing about it: no `aria-expanded`,
+   * so a screen reader announced the same thing whether the list was open or
+   * shut, and no `aria-controls`, so nothing tied the button to the region it
+   * governs. Escape did nothing at all -- the only way to dismiss it was a
+   * mouse click somewhere else -- and because `v-if` removes the panel, closing
+   * it dropped focus to `<body>`, which puts a keyboard user back at the top of
+   * the document with no announcement.
+   *
+   * Naming the filter box is still out of scope and still blocked: it needs a
+   * new string in thirty-eight locales (#297). None of what is asserted here
+   * needs one.
+   */
+  it('tells assistive technology whether the list is open', async () => {
+    const wrapper = mountSwitcher()
+    expect(trigger(wrapper).attributes('aria-expanded')).toBe('false')
+
+    await trigger(wrapper).trigger('click')
+    expect(trigger(wrapper).attributes('aria-expanded')).toBe('true')
+
+    await trigger(wrapper).trigger('click')
+    expect(trigger(wrapper).attributes('aria-expanded')).toBe('false')
+  })
+
+  it('points the trigger at the region it controls', async () => {
+    const wrapper = mountSwitcher()
+    await trigger(wrapper).trigger('click')
+
+    const controls = trigger(wrapper).attributes('aria-controls')
+    expect(controls).toBeTruthy()
+    // The relationship, not merely the presence of two attributes: an
+    // aria-controls naming an element that is not there is worse than none.
+    expect(wrapper.find(`#${controls}`).exists()).toBe(true)
+  })
+
+  it('does not claim to be a menu or a listbox', () => {
+    // A listbox may not contain a textbox, and this panel holds the filter
+    // field. Promising either shape changes what keys a screen-reader user is
+    // told to expect, so the disclosure pattern is the honest one.
+    const wrapper = mountSwitcher()
+    expect(trigger(wrapper).attributes('aria-haspopup')).toBeUndefined()
+  })
+
+  it('closes on Escape and puts focus back on the trigger', async () => {
+    const wrapper = mountSwitcher(true)
+    await trigger(wrapper).trigger('click')
+    expect(optionButtons(wrapper).length).toBeGreaterThan(0)
+
+    await wrapper.find('input').trigger('keydown', { key: 'Escape' })
+
+    expect(optionButtons(wrapper).length).toBe(0)
+    expect(document.activeElement).toBe(trigger(wrapper).element)
+    wrapper.unmount()
+  })
+
+  it('puts focus back on the trigger after a selection', async () => {
+    // The chosen button is removed with the panel, so without this the browser
+    // drops focus to <body> at the exact moment the user has committed to an
+    // action -- the worst time to lose your place.
+    const wrapper = mountSwitcher(true)
+    await trigger(wrapper).trigger('click')
+    await pick(wrapper, 'Slovencina')
+
+    expect(document.activeElement).toBe(trigger(wrapper).element)
+    wrapper.unmount()
+  })
+
+  it('ignores Escape when the list is already closed', async () => {
+    // Without the guard in `close`, Escape anywhere in this component would
+    // yank focus to the trigger even with nothing open -- a control stealing
+    // focus from wherever the user actually was, on a key that means "get out
+    // of my way".
+    const wrapper = mountSwitcher(true)
+    const elsewhere = document.createElement('button')
+    document.body.appendChild(elsewhere)
+    elsewhere.focus()
+
+    await trigger(wrapper).trigger('keydown', { key: 'Escape' })
+
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+    wrapper.unmount()
+  })
+
+  it('leaves focus alone when the list is dismissed by clicking elsewhere', async () => {
+    // Clicking outside is the user moving focus deliberately. Dragging it back
+    // to the trigger would fight them, so the restore is scoped to the two
+    // paths that destroy the focused element.
+    const wrapper = mountSwitcher(true)
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+
+    await trigger(wrapper).trigger('click')
+    outside.focus()
+    document.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(optionButtons(wrapper).length).toBe(0)
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+    wrapper.unmount()
+  })
+
   it('closes the list and relabels the trigger after a selection', async () => {
     const wrapper = mountSwitcher()
     await trigger(wrapper).trigger('click')
