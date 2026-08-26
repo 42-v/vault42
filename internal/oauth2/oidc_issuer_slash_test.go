@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,6 +195,33 @@ func TestVerifyIDToken_DiscoversBeforeChoosingTheIssuer(t *testing.T) {
 	}
 	if info.ID != "user-1" {
 		t.Fatalf("subject = %q", info.ID)
+	}
+}
+
+// And when discovery cannot run, VerifyIDToken says so rather than falling back
+// to the configured issuer and reporting the failure as a bad token.
+//
+// The distinction matters for whoever reads the log: "provider unreachable" and
+// "this token is not for us" are different incidents, and the second one is the
+// shape a security alert is written against.
+func TestVerifyIDToken_ReportsADiscoveryFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream is down", http.StatusBadGateway)
+	})
+
+	p := NewOIDCProvider("generic", srv.URL, "cid", "secret", "https://app/cb", "")
+
+	// The token itself is never parsed: discovery fails first, which is the
+	// whole point of running it before the issuer is chosen.
+	_, err := p.VerifyIDToken(context.Background(), "not.a.token", "the-nonce")
+	if err == nil {
+		t.Fatal("a provider whose discovery document is unreachable was treated as verified")
+	}
+	if strings.Contains(err.Error(), "id_token") {
+		t.Fatalf("a discovery failure was reported as an id_token problem: %v", err)
 	}
 }
 
