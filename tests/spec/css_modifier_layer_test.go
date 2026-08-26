@@ -25,8 +25,17 @@ import (
 // plain rule next to the base.
 //
 // This gate holds the pairing rather than the sizes: a modifier and its base
-// must be declared the same way, so whichever wins is decided by source order
-// rather than by a cascade rule nobody was thinking about.
+// must be declared the same way.
+//
+// That is a necessary condition and not a sufficient one, and the difference is
+// worth stating here so nobody reads a pass as proof. Order inside @layer
+// utilities is Tailwind's property-set sort, not source order, so two utilities
+// declared identically can still emit in the wrong order -- measured, adding
+// w-full to vault42-btn-sm moves it ahead of vault42-btn and makes it inert at
+// every one of its nine call sites, and this gate passes throughout. The gate
+// that settles it compiles the stylesheet and reads the emitted offsets:
+// web/src/__tests__/spinnerCascade.test.ts. This one is the cheap early signal
+// that runs with the Go suite.
 //
 // The tests are read-only. They never write to the source tree.
 
