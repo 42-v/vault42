@@ -35,7 +35,7 @@ public sealed class VaultAuthService : IAsyncDisposable
     // Serializing is the whole fix: the cookie rotates on each use, so the
     // caller that waits then refreshes with the rotated value and succeeds.
     // What the server refuses is two uses of the same value.
-    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemaphoreSlim _refreshGate = new SemaphoreSlim(1, 1);
     private Task<bool>? _inFlightRefresh;
     private Timer? _refreshTimer;
 

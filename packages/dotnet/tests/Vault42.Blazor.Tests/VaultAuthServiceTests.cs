@@ -287,6 +287,7 @@ public class VaultAuthServiceTests
         await h.Store.SetRefreshTokenAsync("refresh-held");
         var gate = new TaskCompletionSource();
         h.Http.EnqueueGated(HttpStatusCode.OK, TokenJson("access-1", null, 900), gate.Task);
+
         // A second response is queued so that a client which wrongly sends two
         // requests succeeds twice rather than failing on an empty queue -- the
         // assertion has to be about the count, not about an exhausted stub.
