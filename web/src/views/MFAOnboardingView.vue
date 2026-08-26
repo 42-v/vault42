@@ -27,17 +27,11 @@ function skip() {
       </p>
 
       <div class="space-y-3">
-        <button
-          class="w-full px-4 py-3 rounded-lg bg-vault42-primary text-white font-semibold hover:bg-vault42-primary-hover transition-colors"
-          @click="setupAuthenticator"
-        >
+        <button class="vault42-btn w-full" @click="setupAuthenticator">
           {{ t('mfaOnboarding.setupAuthenticator') }}
         </button>
 
-        <button
-          class="w-full px-4 py-3 rounded-lg border border-vault42-primary/30 text-vault42-accent font-semibold hover:bg-vault42-primary/10 transition-colors"
-          @click="setupWebAuthn"
-        >
+        <button class="vault42-btn-outline w-full" @click="setupWebAuthn">
           {{ t('mfaOnboarding.setupSecurityKey') }}
         </button>
       </div>
