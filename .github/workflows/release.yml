@@ -720,6 +720,72 @@ jobs:
           name: release-artifacts
           path: dist
 
+      # The seam between the download above and the publish below carried no
+      # assertion, and it is the last one before the only irreversible step in
+      # the file. The producer has if-no-files-found: error; the consumer had
+      # nothing, and `files: dist/*` fails open -- it attaches whatever it
+      # matches, including nothing.
+      #
+      # What that costs is specific. By the time this job runs, the images, the
+      # chart and the NuGet packages are already published. If the download
+      # lands the files anywhere other than flat in dist/ -- a nested
+      # dist/release-artifacts/, say -- then `dist/*` matches one directory,
+      # the release is created and marked latest with no assets, and its body
+      # goes on printing `cosign verify-blob ... --bundle` and
+      # `gh attestation verify ... --bundle` recipes for files nobody can
+      # download. The version number is spent at that point.
+      #
+      # That is not hypothetical here: actions/download-artifact was moved from
+      # v4 to v8 in a pull request, and release.yml has no pull_request trigger
+      # and appears in no paths filter, so the bump has never once executed.
+      # The same shape has already cost this project three releases -- 0.8.6
+      # lost to a skipped subject edit, 1.0.0 merged and never tagged, 1.0.3
+      # half-published when an unpinned cosign floated to v3.
+      #
+      # So: name what must be there, count it, and fail before publishing
+      # rather than after. Four archives, the checksum file and its signature
+      # bundle, plus the provenance. Globs stay narrow enough that a nested
+      # extraction cannot satisfy them.
+      - name: The downloaded artifacts are where the release expects them
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in \
+            "dist/vault42_${VERSION}_linux_amd64.tar.gz" \
+            "dist/vault42_${VERSION}_linux_arm64.tar.gz" \
+            "dist/vault42_${VERSION}_darwin_amd64.tar.gz" \
+            "dist/vault42_${VERSION}_darwin_arm64.tar.gz" \
+            "dist/vault42_${VERSION}_SHA256SUMS" \
+            "dist/vault42_${VERSION}_SHA256SUMS.bundle" \
+            "dist/vault42_${VERSION}.intoto.jsonl"
+          do
+            if [ ! -s "$f" ]; then
+              echo "::error::missing or empty release asset: $f"
+              missing=1
+            fi
+          done
+          # Every archive must carry both SBOMs, because the four attest steps
+          # above name them individually rather than by glob.
+          for arch in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            for kind in spdx cdx; do
+              f="dist/vault42_${VERSION}_${arch}.tar.gz.${kind}.sbom.json"
+              if [ ! -s "$f" ]; then
+                echo "::error::missing or empty SBOM: $f"
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::release-artifacts did not land flat in dist/." \
+                 "Refusing to publish a release whose notes describe assets it does not have."
+            echo "what is actually in dist/:"
+            find dist -maxdepth 2 -printf '%y %p\n' 2>/dev/null | sort || ls -laR dist || true
+            exit 1
+          fi
+          echo "all release assets present at dist/ top level"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
