@@ -38,6 +38,6 @@ export default async function globalSetup(): Promise<void> {
           'Invoking Playwright directly against a missing server is a failure, not a pass.',
       );
     }
-    throw new Error(`e2e-browser: vault not reachable at ${url}: ${why}`);
+    throw new Error(`e2e-browser: vault not reachable at ${url}: ${why}`, { cause: err });
   }
 }
