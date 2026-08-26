@@ -9,7 +9,7 @@
   "reachableCoverageNum": 100.00,
   "packages": 43,
   "goFiles": 192,
-  "goLines": 48062,
+  "goLines": 48100,
   "testFiles": 925,
   "directDeps": 3,
   "transitiveDeps": 15,
@@ -20,7 +20,7 @@
       "tests": 4910,
       "coverage": "100.00% of reachable",
       "coverageNum": 100.00,
-      "lines": 48062,
+      "lines": 48100,
       "deps": 3,
       "transitiveDeps": 15
     },

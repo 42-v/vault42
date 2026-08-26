@@ -3273,7 +3273,7 @@ Content-Type: application/json
 {"error": "role_not_permitted"}
 ```
 
-`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time. The comparison folds ASCII case and ignores surrounding whitespace, so `Admin`, `ADMIN` and `super_admin ` are refused on the same terms -- a relying party that gates on its own spelling of the name, as BeOn3 does with `Admin`, is protected by the same rule that protects vault42.
+`admin` and `super_admin` are refused whatever `VAULT_MINT_ROLES` contains, and listing either one makes the process fail to start rather than fail at request time. The comparison folds ASCII case and ignores surrounding whitespace, so `Admin`, `ADMIN` and a trailing-space `super_admin` are refused on the same terms -- a relying party that gates on its own spelling of the name, as BeOn3 does with `Admin`, is protected by the same rule that protects vault42.
 
 **What a caller must understand before integrating.**
 
