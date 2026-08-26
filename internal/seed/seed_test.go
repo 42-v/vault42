@@ -57,6 +57,7 @@ func (m *mockUserRepo) CreateImported(context.Context, *model.User) error       
 func (m *mockUserRepo) ClearImportPending(context.Context, string) error         { return nil }
 func (m *mockUserRepo) ClearMustResetPassword(context.Context, string) error     { return nil }
 func (m *mockUserRepo) SetMustResetPassword(context.Context, string, bool) error { return nil }
+func (m *mockUserRepo) SetRoles(context.Context, string, []string) error         { return nil }
 func (m *mockUserRepo) SoftDeleteScrub(context.Context, string, string) error    { return nil }
 
 type mockClientRepo struct {

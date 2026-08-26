@@ -32,9 +32,13 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
-There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
-of step 1 is that you have one when something else goes wrong.
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 40, so an upgrade applies 1.
+041 grants `UPDATE (roles)` on `auth.users` to `vault_admin`. It changes no data and no
+column: it is what lets `PUT /admin/users/{id}/roles` write at all, because PostgreSQL checks
+the column privilege on every target an UPDATE names, and 015 revoked the six columns 009 had
+lent that role. Until it runs the route answers 500 in any deployment running as the real
+role, and nothing else depends on it. Take the backup anyway: the point of step 1 is that you
+have one when something else goes wrong.
 
 **Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
 them; no request path, token, database or configuration behaviour differs from 1.0.3. The

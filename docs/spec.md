@@ -2079,7 +2079,7 @@ Threat observation deployment. Extends production with auto-migration, embedded 
 
 ## 16. Endpoint Inventory
 
-**105 API routes: 62 on the main binary, 43 on the admin gateway.** This inventory is the complete
+**106 API routes: 62 on the main binary, 44 on the admin gateway.** This inventory is the complete
 set. `tests/spec/route_drift_test.go` parses `internal/server/server.go` and
 `internal/adminapi/router.go` with `go/ast` and fails the build if a route here does not exist, or
 if a route exists that is not here. Adding an endpoint without a row is not possible.
@@ -2215,6 +2215,7 @@ role must hold. Section 21 describes the behaviour.
 | `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
 | `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
 | `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `PUT` | `/admin/users/{id}/roles` | Session | `users:roles` | Always | Replace a user's role set; refuses names outside the catalog |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |

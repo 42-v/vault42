@@ -91,8 +91,8 @@ func TestPermissionsForRole_Counts(t *testing.T) {
 	if len(operatorPerms) != 16 {
 		t.Errorf("operator should have 16 permissions, got %d", len(operatorPerms))
 	}
-	if len(superAdminPerms) != 30 {
-		t.Errorf("super_admin should have 30 permissions, got %d", len(superAdminPerms))
+	if len(superAdminPerms) != 31 {
+		t.Errorf("super_admin should have 31 permissions, got %d", len(superAdminPerms))
 	}
 
 	// Hierarchy: each higher role has strictly more permissions

@@ -68,6 +68,7 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	// rbac.UsersReset says why.
 	mux.Handle("POST /admin/users/{id}/require-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.RequirePasswordReset))
 	mux.Handle("POST /admin/users/{id}/clear-password-reset", withPerm(sessionAuth, rbac.UsersReset, api.ClearPasswordReset))
+	mux.Handle("PUT /admin/users/{id}/roles", withPerm(sessionAuth, rbac.UsersRoles, api.SetUserRoles))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
 	// Session management.

@@ -227,7 +227,7 @@ Full index with one line on each document: [docs/README.md](docs/README.md).
 | [Specification](docs/spec.md) | Authoritative spec (verified against implementation) |
 | [Architecture](docs/architecture.md) | Auth flows, middleware chain, token architecture |
 | [Configuration](docs/config.md) | Every env var, profiles, `_FILE` convention, fail-closed overrides |
-| [API Reference](docs/api.md) | 105 endpoints, schemas, curl examples: 62 on the main server, 43 on the admin gateway |
+| [API Reference](docs/api.md) | 106 endpoints, schemas, curl examples: 62 on the main server, 44 on the admin gateway |
 | [Deployment Guide](docs/deployment-guide.md) | Kubernetes install, KMS root key, upgrades, backup |
 | [Admin Gateway](docs/admin-gateway.md) | mTLS admin plane, RBAC model, admin endpoints |
 | [Bridge Deployment](docs/bridge.md) | Honeypot bridge proxy |

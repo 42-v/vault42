@@ -22,7 +22,7 @@ var (
 		"clients:list", "clients:read",
 	}
 	superAdminAdds = []string{
-		"keys:revoke", "users:delete", "users:import",
+		"keys:revoke", "users:delete", "users:import", "users:roles",
 		"clients:create", "clients:revoke", "clients:rotate",
 		"config:write", "admins:manage", "admins:create", "admins:revoke",
 		"roles:create", "roles:delete", "email:write", "email:delete",
@@ -268,7 +268,8 @@ func TestEveryPermissionConstantCarriesItsDocumentedValue(t *testing.T) {
 		ConfigRead: "config:read", ConfigWrite: "config:write", MetricsRead: "metrics:read",
 		AdminsManage: "admins:manage", AdminsCreate: "admins:create", AdminsRevoke: "admins:revoke",
 		RolesList: "roles:list", RolesCreate: "roles:create", RolesDelete: "roles:delete",
-		EmailRead: "email:read", EmailWrite: "email:write", EmailDelete: "email:delete",
+		UsersRoles: "users:roles",
+		EmailRead:  "email:read", EmailWrite: "email:write", EmailDelete: "email:delete",
 	}
 	if len(want) != len(vocabulary()) {
 		t.Fatalf("pinned %d constants against a vocabulary of %d", len(want), len(vocabulary()))

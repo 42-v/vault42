@@ -6087,7 +6087,7 @@
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
       ],
-      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:373) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
+      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:380) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
     },
     {
       "standard": "NIST SP 800-53",
