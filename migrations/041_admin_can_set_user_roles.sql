@@ -37,13 +37,20 @@
 -- messages are. A CHECK here would answer 23514 to a caller that deserves a
 -- 400 naming the role.
 --
--- Idempotent: GRANT is idempotent by definition, and the DO block only guards
--- against the role being absent, which is the shape 009, 015 and 040 use.
+-- Written bare rather than wrapped in a pg_roles guard, which is what 039 does
+-- for the nearest precedent there is: a column grant on auth.users to
+-- vault_admin, two lines at column zero (039:140-141). GRANT is idempotent by
+-- definition and 001 creates both roles unconditionally, so the guard buys
+-- nothing.
+--
+-- It also costs something, and 015:52-57 is where that is written down.
+-- applyRealGrants -- the fixture that re-applies these statements and connects
+-- as the real role -- splits each file on ';' and keeps a statement only when it
+-- starts with GRANT or REVOKE. A grant inside a DO block yields a first
+-- statement beginning with DO, so it is skipped: the privilege suite would go on
+-- exercising a model that never received this grant, and PUT /admin/users/{id}
+-- /roles would answer 42501 in a real deployment while the suite stayed green.
+-- That is the same shape as the erasure bug the fixture was built for, and it is
+-- why 040's DO block is worth revisiting separately.
 
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vault_admin') THEN
-        GRANT UPDATE (roles) ON auth.users TO vault_admin;
-    END IF;
-END
-$$;
+GRANT UPDATE (roles) ON auth.users TO vault_admin;

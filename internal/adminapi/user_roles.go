@@ -81,7 +81,13 @@ func (h *Handler) SetUserRoles(w http.ResponseWriter, r *http.Request) {
 		// these at issuance anyway; refusing here means the operator learns the
 		// grant did not happen instead of reading it back from the users table
 		// and believing it did.
-		if seed.ReservedAdminRoles[name] {
+		//
+		// IsReservedAdminRole, not the bare map index the map's own doc comment
+		// bans: it case-folds and trims. Unreachable today, because roleNameRe
+		// above is ^[a-z][a-z0-9_]{1,63}$ and refuses "Admin" eight lines
+		// earlier -- but the ordering of those two checks is the only thing
+		// making it unreachable, and nothing states that it has to stay.
+		if seed.IsReservedAdminRole(name) {
 			httputil.WriteError(w, http.StatusBadRequest, "reserved_role_name")
 			return
 		}
