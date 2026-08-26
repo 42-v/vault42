@@ -229,6 +229,20 @@ func main() {
 
 	// Check if this is a CLI invocation
 	if cliHandler.Run(ctx, os.Args) {
+		// Run's bool says the command was recognized, not that it worked. This
+		// returned unconditionally, so every CLI failure printed its message and
+		// exited 0 -- an init container gating on the status of `vault seed` saw
+		// success while nothing had been seeded, and the same held for every
+		// other subcommand.
+		if cliHandler.Failed() {
+			// Drained explicitly, because os.Exit runs no defers and the CLI
+			// writes audit rows -- add-client and rotate-admin-token among them.
+			// Exiting straight from here would drop the record of the very
+			// command being reported as failed. Same shape as the seed-file
+			// failure below.
+			_ = auditLogger.Close(ctx)
+			os.Exit(1) //nolint:gocritic // exitAfterDefer is intentional; we drained on the line above
+		}
 		return
 	}
 

@@ -47,6 +47,19 @@ type CLI struct {
 	// pepper is forwarded to seed.Run so CLI-driven seeding produces hashes
 	// that match the runtime auth-service's pepper. Empty = no pepper.
 	pepper string
+	// failed records that a recognized command reported an error.
+	//
+	// Run returns whether a command was RECOGNIZED, which is not whether it
+	// worked, and cmd/vault turned that single bool straight into a bare return
+	// -- so every failure the CLI printed exited 0. An init container gating on
+	// the exit status of `vault seed` saw success while nothing had been seeded,
+	// and the same was true of every other subcommand.
+	//
+	// Kept here rather than exiting inside each command: exitProcess must not
+	// return, so calling it from thirty-three sites would turn every test that
+	// drives an error path into a panic. Recording it leaves the bool contract
+	// alone and lets one caller decide the process's fate.
+	failed bool
 	// provisionedAdminToken is the admin credential the operator mounted at
 	// ADMIN_TOKEN_FILE, either an Argon2id hash or the plaintext token. It seeds
 	// admin_token_hash on first boot so the credential never has to be minted
@@ -190,25 +203,21 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 	scopes := getFlag(args, "--scopes")
 
 	if name == "" || role == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault add-client --admin-token <token> --name <name> --role <role> --scopes <scopes>")
-		return true
+		return c.fail("Usage: vault add-client --admin-token <token> --name <name> --role <role> --scopes <scopes>\n")
 	}
 
 	// Generate client ID and secret
 	clientID, err := vaultcrypto.RandomUUID()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	secret, err := vaultcrypto.RandomHex(32)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	secretHash, err := hashPassword(secret)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	scopeList := strings.Split(scopes, ",")
@@ -230,13 +239,11 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 	// authenticate as and no command can repair.
 	dest, err := firstboot.Deliver("VAULT_CLIENT_SECRET_"+name, secret)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	if err := c.clients.Create(ctx, client); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	fmt.Printf("Client created:\n  ID: %s\n  Secret written to: %s (not shown here, and not shown again)\n", clientID, dest)
@@ -246,8 +253,7 @@ func (c *CLI) addClient(ctx context.Context, args []string) bool {
 func (c *CLI) listClients(ctx context.Context) bool {
 	clients, err := c.clients.List(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	for _, cl := range clients {
 		status := "active"
@@ -270,8 +276,7 @@ func (c *CLI) listClients(ctx context.Context) bool {
 // an unknown argument and fall through to booting the server. It issues no
 // database write.
 func (c *CLI) revokeClient(_ context.Context, _ []string) bool {
-	fmt.Fprintln(os.Stderr, "ERROR: revoke-client is retired. Revoke a client on the admin gateway: POST /admin/clients/{id}/revoke (operator role, mTLS loopback). The vault CLI no longer writes client state.")
-	return true
+	return c.fail("ERROR: revoke-client is retired. Revoke a client on the admin gateway: POST /admin/clients/{id}/revoke (operator role, mTLS loopback). The vault CLI no longer writes client state.\n")
 }
 
 // rotateClientSecret is retired for the same reason as revokeClient: rotating a
@@ -283,8 +288,7 @@ func (c *CLI) revokeClient(_ context.Context, _ []string) bool {
 // The command stays recognized (returns true) so cmd/vault does not fall through
 // to booting the server. It issues no database write.
 func (c *CLI) rotateClientSecret(_ context.Context, _ []string) bool {
-	fmt.Fprintln(os.Stderr, "ERROR: rotate-client-secret is retired. Rotate a client secret on the admin gateway: POST /admin/clients/{id}/rotate (operator role, mTLS loopback). The vault CLI no longer writes client state.")
-	return true
+	return c.fail("ERROR: rotate-client-secret is retired. Rotate a client secret on the admin gateway: POST /admin/clients/{id}/rotate (operator role, mTLS loopback). The vault CLI no longer writes client state.\n")
 }
 
 // lockUser is retired. Locking an account from cmd/vault ran as the vault_app
@@ -298,16 +302,14 @@ func (c *CLI) rotateClientSecret(_ context.Context, _ []string) bool {
 // an unknown argument and fall through to booting the server. It issues no
 // database write.
 func (c *CLI) lockUser(_ context.Context, _ []string) bool {
-	fmt.Fprintln(os.Stderr, "ERROR: lock-user is retired. Lock accounts on the admin gateway: POST /admin/users/{id}/lock (operator role, mTLS loopback). The vault CLI no longer writes account locks.")
-	return true
+	return c.fail("ERROR: lock-user is retired. Lock accounts on the admin gateway: POST /admin/users/{id}/lock (operator role, mTLS loopback). The vault CLI no longer writes account locks.\n")
 }
 
 // unlockUser is retired for the same reason as lockUser: a vault_app Unlock here
 // could release a lock the admin plane set, with no audit trail. Use the admin
 // gateway's unlock route instead.
 func (c *CLI) unlockUser(_ context.Context, _ []string) bool {
-	fmt.Fprintln(os.Stderr, "ERROR: unlock-user is retired. Unlock accounts on the admin gateway: POST /admin/users/{id}/unlock (operator role, mTLS loopback). The vault CLI no longer writes account unlocks.")
-	return true
+	return c.fail("ERROR: unlock-user is retired. Unlock accounts on the admin gateway: POST /admin/users/{id}/unlock (operator role, mTLS loopback). The vault CLI no longer writes account unlocks.\n")
 }
 
 func (c *CLI) revokeAllSessions(ctx context.Context) bool {
@@ -321,8 +323,7 @@ func (c *CLI) revokeAllSessions(ctx context.Context) bool {
 	}
 	// Revoke all active tokens system-wide
 	if err := c.tokens.RevokeAll(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	fmt.Println("All sessions revoked.")
 	return true
@@ -331,25 +332,21 @@ func (c *CLI) revokeAllSessions(ctx context.Context) bool {
 func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 	newToken, err := vaultcrypto.RandomHex(32) // 256-bit
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	hash, err := hashPassword(newToken)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	// Delivered before the hash is installed, for the same reason as
 	// InitAdminToken: a rotation the operator cannot receive locks every
 	// administrative subcommand out of the deployment.
 	dest, err := firstboot.Deliver("VAULT_ADMIN_TOKEN", newToken)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	if err := c.adminConfig.Set(ctx, "admin_token_hash", hash); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	fmt.Printf("Admin token rotated; the new token was written to %s and is not shown here.\n", dest)
 	return true
@@ -365,22 +362,19 @@ func (c *CLI) rotateAdminToken(ctx context.Context) bool {
 func (c *CLI) rotateJWKS(args []string) bool {
 	output := getFlag(args, "--output")
 	if output == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: rotate-jwks requires --output <path>: the private key is written to that file at mode 0600 and is never printed.")
-		return true
+		return c.fail("ERROR: rotate-jwks requires --output <path>: the private key is written to that file at mode 0600 and is never printed.\n")
 	}
 
 	// Generate new RSA-2048 key pair
 	privateKey, err := vaultcrypto.GenerateRSAKeyPair()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: generate RSA key pair: %v\n", err)
-		return true
+		return c.fail("ERROR: generate RSA key pair: %v\n", err)
 	}
 
 	// Generate new UUID kid
 	kid, err := vaultcrypto.RandomUUID()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: generate key ID: %v\n", err)
-		return true
+		return c.fail("ERROR: generate key ID: %v\n", err)
 	}
 
 	// Encode private key to PEM
@@ -392,14 +386,12 @@ func (c *CLI) rotateJWKS(args []string) bool {
 	pemBytes := pem.EncodeToMemory(pemBlock)
 
 	if err := writeKeyFileExclusive(output, pemBytes); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: write key file: %v\n", err)
-		return true
+		return c.fail("ERROR: write key file: %v\n", err)
 	}
 	fmt.Printf("kid: %s\nPrivate key written to: %s\n", kid, output)
 
 	fmt.Fprintln(os.Stderr, "NOTE: Vault generates JWKS keys in memory at startup. To use this key,")
-	fmt.Fprintln(os.Stderr, "configure the key file path and restart the service.")
-	return true
+	return c.fail("configure the key file path and restart the service.\n")
 }
 
 // writeKeyFileExclusive writes a private key to a path the process must create
@@ -572,19 +564,16 @@ func (c *CLI) provisionedTokenMatches(storedHash string) bool {
 func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 	file := getFlag(args, "--file")
 	if file == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault seed --admin-token <token> --file <path>")
-		return true
+		return c.fail("Usage: vault seed --admin-token <token> --file <path>\n")
 	}
 
 	sf, err := seed.Load(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	if err := seed.Run(ctx, sf, seed.Deps{Users: c.users, Clients: c.clients}, c.pepper); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	fmt.Println("Seeding complete.")
@@ -619,8 +608,7 @@ func (c *CLI) runSeed(ctx context.Context, args []string) bool {
 // an unknown argument and fall through to booting the server. It issues no
 // database write.
 func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
-	fmt.Fprintln(os.Stderr, "ERROR: cleanup-audit is retired. Audit retention is set with VAULT_AUDIT_RETENTION_DAYS, which the server sweeps at startup and every 6h. No admin tier holds an audit-delete permission, and the vault CLI no longer deletes audit entries on demand.")
-	return true
+	return c.fail("ERROR: cleanup-audit is retired. Audit retention is set with VAULT_AUDIT_RETENTION_DAYS, which the server sweeps at startup and every 6h. No admin tier holds an audit-delete permission, and the vault CLI no longer deletes audit entries on demand.\n")
 }
 
 // cleanupRecovery purges account-recovery escrow records past a horizon. It is
@@ -631,23 +619,19 @@ func (c *CLI) cleanupAudit(_ context.Context, _ []string) bool {
 func (c *CLI) cleanupRecovery(ctx context.Context, args []string) bool {
 	daysStr := getFlag(args, "--retention-days")
 	if daysStr == "" {
-		fmt.Fprintln(os.Stderr, "Usage: vault cleanup-recovery --admin-token <token> --retention-days <N>")
-		return true
+		return c.fail("Usage: vault cleanup-recovery --admin-token <token> --retention-days <N>\n")
 	}
 	days, err := strconv.Atoi(daysStr)
 	if err != nil || days < 1 {
-		fmt.Fprintln(os.Stderr, "ERROR: --retention-days must be a positive integer")
-		return true
+		return c.fail("ERROR: --retention-days must be a positive integer\n")
 	}
 	if c.recovery == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: account recovery repository not available")
-		return true
+		return c.fail("ERROR: account recovery repository not available\n")
 	}
 	olderThan := time.Now().AddDate(0, 0, -days)
 	deleted, err := c.recovery.Prune(ctx, olderThan)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 	fmt.Printf("Deleted %d recovery escrow records older than %d days.\n", deleted, days)
 	return true
@@ -655,8 +639,7 @@ func (c *CLI) cleanupRecovery(ctx context.Context, args []string) bool {
 
 func (c *CLI) exportAudit(ctx context.Context, args []string) bool {
 	if c.audit == nil {
-		fmt.Fprintln(os.Stderr, "ERROR: audit repository not available")
-		return true
+		return c.fail("ERROR: audit repository not available\n")
 	}
 
 	filter := repository.AuditFilter{
@@ -668,32 +651,28 @@ func (c *CLI) exportAudit(ctx context.Context, args []string) bool {
 	if s := getFlag(args, "--since"); s != "" {
 		t, err := time.Parse("2006-01-02", s)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: invalid --since date (use YYYY-MM-DD): %v\n", err)
-			return true
+			return c.fail("ERROR: invalid --since date (use YYYY-MM-DD): %v\n", err)
 		}
 		filter.Since = &t
 	}
 	if s := getFlag(args, "--until"); s != "" {
 		t, err := time.Parse("2006-01-02", s)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: invalid --until date (use YYYY-MM-DD): %v\n", err)
-			return true
+			return c.fail("ERROR: invalid --until date (use YYYY-MM-DD): %v\n", err)
 		}
 		filter.Until = &t
 	}
 	if s := getFlag(args, "--limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 1 {
-			fmt.Fprintln(os.Stderr, "ERROR: --limit must be a positive integer")
-			return true
+			return c.fail("ERROR: --limit must be a positive integer\n")
 		}
 		filter.Limit = n
 	}
 
 	entries, err := c.audit.Query(ctx, filter)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		return true
+		return c.fail("ERROR: %v\n", err)
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -711,6 +690,21 @@ func getFlag(args []string, flag string) string {
 	}
 	return ""
 }
+
+// fail prints a message to stderr and marks the command failed, returning true
+// because the command was still recognized -- that is what Run's bool means.
+//
+// Every error path in this file went through a bare Fprintf and return true, so
+// the message reached the operator and the exit status did not.
+func (c *CLI) fail(format string, a ...any) bool {
+	fmt.Fprintf(os.Stderr, format, a...)
+	c.failed = true
+	return true
+}
+
+// Failed reports whether the command Run handled reported an error. Meaningful
+// only when Run returned true.
+func (c *CLI) Failed() bool { return c.failed }
 
 // exitProcess terminates the process when admin authentication fails. It is a
 // variable so tests can observe the denial without killing the test binary;
