@@ -152,3 +152,25 @@ func TestValidateMintAudience(t *testing.T) {
 		}
 	})
 }
+
+// The email opt-in defaults off, and the default is the whole point: it is the
+// one minted claim that asserts who a subject is rather than what they may do.
+func TestLoadMintAllowEmailDefaultsOff(t *testing.T) {
+	t.Setenv("VAULT_MINT_ALLOW_EMAIL", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MintAllowEmail {
+		t.Fatal("MintAllowEmail defaulted on")
+	}
+
+	t.Setenv("VAULT_MINT_ALLOW_EMAIL", "true")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.MintAllowEmail {
+		t.Fatal("VAULT_MINT_ALLOW_EMAIL=true did not take")
+	}
+}

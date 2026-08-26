@@ -418,6 +418,7 @@ controls that bound it are in [`spec.md` section 6.5](spec.md#65-subject-asserti
 | `VAULT_MINT_MAX_TTL` | duration | `5m` | No | Ceiling on a caller-requested lifetime, itself capped at 15m in code. A request above the ceiling is **refused, not clamped**, so a misconfigured caller is visible rather than silently downgraded. Minted tokens cannot be revoked, so the lifetime is the only bound on a leaked one. |
 | `VAULT_MINT_ROLES` | list | *(empty)* | No | Comma-separated allow-list of roles a minted token may carry. Empty means no role may be minted. The admin-reserved names are refused at startup regardless of what is listed here. |
 | `VAULT_MINT_SCOPES` | list | *(empty)* | No | Comma-separated allow-list of scopes a minted token may carry. Empty means no scope may be minted. Capability scopes such as `kms:unwrap` and `mint:token` are refused regardless. |
+| `VAULT_MINT_ALLOW_EMAIL` | bool | `false` | No | Permits an `email` claim on a minted token. Every other minted claim is a name vault42 issued or allow-listed; an email is a caller-supplied identifier for a subject vault42 has never heard of, so enabling this says the operator trusts this client to assert who its users are. A request carrying an email while this is off is **refused, not stripped**. The claim is never verified and a relying party must not read it as proof of address ownership. |
 
 The Helm chart exposes all six as the `mint.*` block, each at the default above, so an install that
 does not opt in renders the same environment it did before the block existed. They are exposed
@@ -888,6 +889,7 @@ Key Helm values and their corresponding env vars:
 | `mint.maxTTL` | `VAULT_MINT_MAX_TTL` |
 | `mint.allowedRoles` | `VAULT_MINT_ROLES` (comma-joined) |
 | `mint.allowedScopes` | `VAULT_MINT_SCOPES` (comma-joined) |
+| `mint.allowEmail` | `VAULT_MINT_ALLOW_EMAIL` |
 | `sessions.maxPerUser` | `VAULT_MAX_SESSIONS_PER_USER` |
 | `sessions.maxLifetime` | `VAULT_MAX_SESSION_LIFETIME` |
 | `sessions.inactivityTimeout` | `VAULT_INACTIVITY_TIMEOUT` |

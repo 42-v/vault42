@@ -354,6 +354,19 @@ type Config struct {
 	// as kms:unwrap and mint:token are refused regardless of configuration.
 	MintAllowedScopes []string
 
+	// MintAllowEmail lets a mint request carry an email claim
+	// (VAULT_MINT_ALLOW_EMAIL). Off by default, and off is the right default:
+	// every other minted claim is a name vault42 either issued or allow-listed,
+	// whereas an email is a caller-supplied identifier for a subject vault42 has
+	// never heard of. Turning it on says the operator trusts this client to
+	// assert who its users are, which is a larger statement than trusting it to
+	// name a subject id, and it should be made deliberately rather than
+	// inherited from a default. Requests carrying an email while this is off are
+	// refused, not silently stripped -- the same reasoning as the role
+	// allow-list: a signing oracle that quietly issues something other than what
+	// was asked for hides the misconfiguration that produced the request.
+	MintAllowEmail bool
+
 	// SvcDocEnabled mounts the service-scoped JSON document store (VAULT_SVCDOC_ENABLED).
 	// Off by default: it is new surface reachable by every existing client-credentials
 	// holder, so enabling it is an explicit operator decision.
@@ -523,6 +536,8 @@ func Load() (*Config, error) {
 		MintAudience: strings.TrimSpace(os.Getenv("VAULT_MINT_AUDIENCE")),
 		MintTokenTTL: envDuration("VAULT_MINT_TOKEN_TTL", 5*time.Minute),
 		MintMaxTTL:   envDuration("VAULT_MINT_MAX_TTL", 5*time.Minute),
+
+		MintAllowEmail: envBool("VAULT_MINT_ALLOW_EMAIL"),
 
 		SvcDocEnabled:       envBool("VAULT_SVCDOC_ENABLED"),
 		SvcDocSharedEnabled: envBool("VAULT_SVCDOC_SHARED_ENABLED"),

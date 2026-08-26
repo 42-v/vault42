@@ -46,6 +46,11 @@ type MintRequestBody struct {
 	// misconfigured caller finds out now rather than when tokens expire
 	// mid-flight.
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
+
+	// Email is optional and refused unless VAULT_MINT_ALLOW_EMAIL is set. It is
+	// an assertion about a subject vault42 has never heard of, exactly like
+	// Subject, and it is not verified against anything.
+	Email string `json:"email,omitempty"`
 }
 
 // MintResponse is the POST /mint response.
@@ -76,6 +81,9 @@ type MintResponse struct {
 	Roles []string `json:"roles,omitempty"`
 	// Scopes is the granted set. Omitted when none were requested.
 	Scopes []string `json:"scopes,omitempty"`
+	// Email echoes the assertion the caller made, so a client can see what it
+	// actually got rather than what it meant to send.
+	Email string `json:"email,omitempty"`
 	// KID is the signing-key id, resolvable against GET /.well-known/jwks.json.
 	KID string `json:"kid"`
 	// JTI is the token's unique id. It is also written on the token_minted
@@ -151,6 +159,7 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		// The authenticated client, never anything from the body. MintRequestBody
 		// has no field for this, so a caller cannot name a different tenant's
 		// client as the one that spoke.
+		Email:    req.Email,
 		MintedBy: claims.ClientID,
 	})
 	if err != nil {
@@ -171,6 +180,7 @@ func (h *MintHandler) Mint(w http.ResponseWriter, r *http.Request) {
 		Issuer:      result.Issuer,
 		Roles:       result.Roles,
 		Scopes:      result.Scopes,
+		Email:       result.Email,
 		KID:         result.KID,
 		JTI:         result.JTI,
 	})
@@ -234,6 +244,10 @@ func mintErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "scope_not_permitted"
 	case errors.Is(err, service.ErrMintTTLInvalid):
 		return http.StatusBadRequest, "invalid_ttl"
+	case errors.Is(err, service.ErrMintEmailNotPermitted):
+		return http.StatusForbidden, "email_not_permitted"
+	case errors.Is(err, service.ErrMintEmailInvalid):
+		return http.StatusBadRequest, "invalid_email"
 	case errors.Is(err, service.ErrMintUnavailable):
 		return http.StatusServiceUnavailable, "server_busy"
 	default:

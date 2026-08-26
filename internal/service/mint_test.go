@@ -620,3 +620,104 @@ func TestMint_RecordsMetrics(t *testing.T) {
 		t.Fatalf("metrics: issued=%d rejected=%d", m.issued, m.rejected)
 	}
 }
+
+// The email claim is the one minted value that is not a name vault42 issued or
+// allow-listed: it is a caller-supplied identifier for a subject vault42 has
+// never heard of. So it is off unless an operator turned it on, and the request
+// is refused rather than quietly stripped -- the same call the role allow-list
+// makes, for the same reason.
+func TestMint_EmailRequiresTheOptIn(t *testing.T) {
+	cfg := mintTestConfig()
+	cfg.AllowEmail = false
+	svc := newMintService(t, cfg)
+
+	if _, err := svc.Mint(MintRequest{Subject: "user-1", Email: "alice@example.com"}); !errors.Is(err, ErrMintEmailNotPermitted) {
+		t.Fatalf("email accepted with AllowEmail off: %v", err)
+	}
+	// Without an email the same configuration mints normally, so the refusal is
+	// about the claim and not about the request.
+	if _, err := svc.Mint(MintRequest{Subject: "user-1"}); err != nil {
+		t.Fatalf("plain mint refused: %v", err)
+	}
+}
+
+func TestMint_EmailIsCarriedAndNormalisedWhenAllowed(t *testing.T) {
+	cfg := mintTestConfig()
+	cfg.AllowEmail = true
+	svc := newMintService(t, cfg)
+
+	res, err := svc.Mint(MintRequest{Subject: "user-1", Email: "  Alice@Example.COM  "})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if res.Email != "alice@example.com" {
+		t.Fatalf("result email = %q, want the trimmed lower-cased address", res.Email)
+	}
+	claims, err := parseMinted(t, res.Token, cfg.Audience)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims.Email != "alice@example.com" {
+		t.Fatalf("claim email = %q", claims.Email)
+	}
+}
+
+// omitempty has to actually hold: a relying party that reads the claim's
+// presence as "vault42 asserted an address" must not see one on a token whose
+// caller never sent it.
+func TestMint_NoEmailClaimWhenNoneWasAsked(t *testing.T) {
+	cfg := mintTestConfig()
+	cfg.AllowEmail = true
+	svc := newMintService(t, cfg)
+
+	res, err := svc.Mint(MintRequest{Subject: "user-1"})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	if res.Email != "" {
+		t.Fatalf("result email = %q, want empty", res.Email)
+	}
+	claims, err := parseMinted(t, res.Token, cfg.Audience)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if claims.Email != "" {
+		t.Fatalf("claim email = %q, want absent", claims.Email)
+	}
+}
+
+func TestMint_RefusesAnAddressTheValidatorRejects(t *testing.T) {
+	cfg := mintTestConfig()
+	cfg.AllowEmail = true
+	svc := newMintService(t, cfg)
+
+	// Each of these is rejected by sanitize.Email for a different reason: no
+	// domain, a display-name wrapper (the caller would store a string that is
+	// not the address), a trailing comment, and the erasure tombstone domain.
+	for _, bad := range []string{
+		"not-an-address",
+		"Alice <alice@example.com>",
+		"alice@example.com (alice)",
+		"alice@deleted.invalid",
+		strings.Repeat("a", 250) + "@example.com",
+	} {
+		if _, err := svc.Mint(MintRequest{Subject: "user-1", Email: bad}); !errors.Is(err, ErrMintEmailInvalid) {
+			t.Errorf("Mint(email=%q) error = %v, want ErrMintEmailInvalid", bad, err)
+		}
+	}
+}
+
+// ValidateMintEmail is exported so the fuzzer reaches the validator rather than
+// only the handler wrapping it, the same reason ValidateMintSubject is.
+func TestValidateMintEmail(t *testing.T) {
+	got, err := ValidateMintEmail("\t Bob@Example.Com \n")
+	if err != nil {
+		t.Fatalf("ValidateMintEmail: %v", err)
+	}
+	if got != "bob@example.com" {
+		t.Fatalf("got %q", got)
+	}
+	if _, err := ValidateMintEmail("@"); !errors.Is(err, ErrMintEmailInvalid) {
+		t.Fatalf("err = %v, want ErrMintEmailInvalid", err)
+	}
+}

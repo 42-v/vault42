@@ -576,6 +576,7 @@ func main() {
 			MaxTTL:        cfg.MintMaxTTL,
 			AllowedRoles:  cfg.MintAllowedRoles,
 			AllowedScopes: cfg.MintAllowedScopes,
+			AllowEmail:    cfg.MintAllowEmail,
 		}, mintMetrics)
 		if err != nil {
 			log.Fatalf("Failed to initialize mint service: %v", err)

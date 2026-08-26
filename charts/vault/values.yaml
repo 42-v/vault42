@@ -366,6 +366,13 @@ mint:
   # comma-joined. Empty means no scope may be minted. Capability scopes such as
   # kms:unwrap and mint:token are refused regardless of what is listed here.
   allowedScopes: []
+  # -- Permit an email claim on a minted token (VAULT_MINT_ALLOW_EMAIL). Off by
+  # default. Every other minted claim is a name vault42 issued or allow-listed;
+  # an email is a caller-supplied identifier for a subject vault42 has never
+  # heard of, so turning this on says the operator trusts this client to assert
+  # who its users are. A request carrying an email while this is off is refused
+  # rather than stripped, so the misconfiguration is visible.
+  allowEmail: false
 
 # -- Hosts an issuer's discovery document may name beyond the issuer's own
 # domain (VAULT_OUTBOUND_ALLOWED_HOSTS), rendered comma-joined. Empty is the
