@@ -291,3 +291,39 @@ func nullStr(s string) any {
 	}
 	return s
 }
+
+// userAgentColumn is the width of every user_agent column in the schema:
+// audit.audit_log (001:159), auth.devices (001:84) and auth.admin_sessions
+// (001:260) are each VARCHAR(1024).
+const userAgentColumn = 1024
+
+// clampUserAgent cuts a User-Agent to what the column can hold.
+//
+// Nothing did, anywhere. The header arrived verbatim from the request and went
+// straight into the statement, so a caller sending more than 1024 characters got
+// 22001 -- value too long -- and, on the audit path, that is the end of the row:
+// the insert is synchronous by default, every call site discards the error as
+// best-effort, and no metric counts it. An unauthenticated caller could delete
+// their own audit trail by setting a long header, which is a strange thing to
+// have to say about an append-only log.
+//
+// The loss is forensic rather than detective: audit.Logger runs its observers on
+// the entry before the insert, so alerting and the anomaly detector still fire.
+// What disappears is the record afterwards -- a credential-stuffing run leaves
+// no login_failure rows behind it.
+//
+// Truncated by runes, not bytes. PostgreSQL counts VARCHAR(n) in characters, so
+// a byte slice would both cut in the wrong place and, worse, split a multi-byte
+// rune and hand the driver invalid UTF-8 -- turning a value-too-long into an
+// encoding error, which is the same lost row with a more confusing reason.
+func clampUserAgent(ua string) string {
+	if len(ua) <= userAgentColumn {
+		// Fast path: a byte length within the limit means the rune count is too.
+		return ua
+	}
+	runes := []rune(ua)
+	if len(runes) <= userAgentColumn {
+		return ua
+	}
+	return string(runes[:userAgentColumn])
+}
