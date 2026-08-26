@@ -107,6 +107,7 @@ const errorKeys: Record<string, string> = {
   insufficient_scope: 'error.forbidden',
   scope_not_permitted: 'error.forbidden',
   role_not_permitted: 'error.forbidden',
+  email_not_permitted: 'error.forbidden',
   client_credentials_required: 'error.forbidden',
   shared_visibility_disabled: 'error.forbidden',
   rate_limited: 'error.rate_limited',

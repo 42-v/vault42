@@ -81,6 +81,7 @@ data:
   VAULT_MINT_MAX_TTL: {{ .Values.mint.maxTTL | quote }}
   VAULT_MINT_ROLES: {{ join "," .Values.mint.allowedRoles | quote }}
   VAULT_MINT_SCOPES: {{ join "," .Values.mint.allowedScopes | quote }}
+  VAULT_MINT_ALLOW_EMAIL: {{ .Values.mint.allowEmail | quote }}
   VAULT_EMAIL_FROM: {{ .Values.emailFrom | quote }}
   {{- if and (eq .Values.email.provider "sendgrid") (not .Values.secrets.keys.sendgridApiKey) }}
   {{- fail "email.provider is sendgrid and secrets.keys.sendgridApiKey is empty. cmd/vault selects the SendGrid sender only when the provider name AND the API key are both present; with the key missing it falls through to SMTP, or to no sender at all when smtp.host is empty, and every verification, reset and one-time-code mail is silently dropped by a deployment that reports healthy. Name the key in the release Secret, or leave the provider on smtp." }}

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	vjwt "github.com/42-v/vault42/internal/jwt"
+	"github.com/42-v/vault42/internal/sanitize"
 	"github.com/42-v/vault42/internal/seed"
 )
 
@@ -148,6 +150,14 @@ var (
 	ErrMintTTLInvalid = errors.New("invalid mint ttl")
 	// ErrMintUnavailable is returned when no signing key is available.
 	ErrMintUnavailable = errors.New("mint signing key unavailable")
+	// ErrMintEmailNotPermitted is returned when a request carries an email and
+	// VAULT_MINT_ALLOW_EMAIL is off. Refused rather than stripped, for the same
+	// reason a disallowed role is: the caller asked for it in a request that
+	// would otherwise be granted.
+	ErrMintEmailNotPermitted = errors.New("mint email not permitted")
+	// ErrMintEmailInvalid is returned when a request carries an email that
+	// sanitize.Email rejects.
+	ErrMintEmailInvalid = errors.New("invalid mint email")
 )
 
 // SigningKeyProvider returns the currently active signing key and its kid. It
@@ -180,6 +190,9 @@ type MintConfig struct {
 	// AllowedScopes is the exhaustive set of scopes that may be minted. Empty
 	// means no scope may be minted.
 	AllowedScopes []string
+	// AllowEmail permits an email claim on a minted token. Off by default; a
+	// request carrying an email while this is off is refused.
+	AllowEmail bool
 }
 
 // MintService issues subject-assertion tokens on behalf of a trusted service.
@@ -200,6 +213,9 @@ type MintRequest struct {
 	// allow-lists.
 	Roles  []string
 	Scopes []string
+	// Email is optional and requires MintConfig.AllowEmail. Like Subject it is
+	// asserted by the caller and never looked up.
+	Email string
 	// TTL is optional; zero means MintConfig.DefaultTTL.
 	TTL time.Duration
 	// MintedBy is the authenticated client asking for the assertion. It reaches
@@ -217,6 +233,7 @@ type MintResult struct {
 	Subject   string
 	Roles     []string
 	Scopes    []string
+	Email     string
 	Audience  string
 	Issuer    string
 	JTI       string
@@ -299,6 +316,11 @@ func (s *MintService) Mint(req MintRequest) (*MintResult, error) {
 		s.rejected()
 		return nil, err
 	}
+	email, err := s.checkEmail(req.Email)
+	if err != nil {
+		s.rejected()
+		return nil, err
+	}
 
 	ttl := req.TTL
 	if ttl == 0 {
@@ -344,6 +366,9 @@ func (s *MintService) Mint(req MintRequest) (*MintResult, error) {
 		// the two meanings stay apart.
 		MintedBy:  req.MintedBy,
 		TokenType: MintedTokenType,
+		// Empty unless the operator turned AllowEmail on and the caller sent
+		// one; omitempty keeps the claim off every other minted token.
+		Email: email,
 	}
 
 	token, err := vaultcrypto.SignToken(claims, key, kid)
@@ -359,6 +384,7 @@ func (s *MintService) Mint(req MintRequest) (*MintResult, error) {
 		Subject:   req.Subject,
 		Roles:     roles,
 		Scopes:    scopes,
+		Email:     email,
 		Audience:  s.cfg.Audience,
 		Issuer:    s.cfg.Issuer,
 		JTI:       jti,
@@ -408,6 +434,64 @@ func (s *MintService) checkScopes(requested []string) ([]string, error) {
 		out = append(out, sc)
 	}
 	return out, nil
+}
+
+// checkEmail enforces the email opt-in and the address format.
+//
+// Two separate refusals, because they are two different operator mistakes. An
+// email sent to an instance with AllowEmail off is a client configured against
+// the wrong deployment, or an operator who has not yet decided to trust this
+// client with the assertion. A malformed address is a bug in the caller. Both
+// refuse the whole request rather than dropping the claim, so neither one
+// reaches a relying party as a token that quietly says less than it was asked
+// to.
+func (s *MintService) checkEmail(email string) (string, error) {
+	if email == "" {
+		return "", nil
+	}
+	if !s.cfg.AllowEmail {
+		return "", ErrMintEmailNotPermitted
+	}
+	normalized, err := ValidateMintEmail(email)
+	if err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+// ValidateMintEmail normalizes and validates a caller-asserted email.
+//
+// Exported so FuzzMintRequestJSON can call it directly and assert the contract
+// -- a rejection is ErrMintEmailInvalid and returns nothing, an acceptance is
+// lower-cased, trimmed and idempotent -- rather than exercising only the handler
+// that wraps it.
+//
+// Not quite the parity with ValidateMintSubject an earlier version of this
+// comment claimed, and the difference is worth knowing. The subject has a
+// dedicated target under tests/fuzz, which is the only directory CI runs with
+// -fuzz. FuzzMintRequestJSON runs there as an ordinary test, so in CI this
+// validator is exercised by its seeds rather than by mutation. The seeds are
+// what make that worth anything: before they existed no seed carried an email
+// key, so the branch executed zero times.
+//
+// Normalisation is lower-case and trimmed, which is what every other email
+// entry point in the tree does before it stores or looks up an address
+// (internal/service/auth.go, internal/handler/oauth.go,
+// internal/adminapi/import.go all hand-roll the same two calls). A minted email
+// is never looked up here, but a relying party will look it up in its own
+// table, and handing two spellings of one address to two callers is how that
+// table grows two rows for one person.
+//
+// sanitize.Email is deliberately a validator and not a normalizer: it accepts
+// homoglyphs and bidi controls as distinct byte strings rather than folding
+// them together. That contract is pinned by tests/attack/unicode_email_test.go
+// and is not weakened here.
+func ValidateMintEmail(email string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if !sanitize.Email(normalized) {
+		return "", ErrMintEmailInvalid
+	}
+	return normalized, nil
 }
 
 func (s *MintService) rejected() {

@@ -113,6 +113,7 @@ const MAPPED_CODES = [
   'insufficient_scope',
   'scope_not_permitted',
   'role_not_permitted',
+  'email_not_permitted',
   'client_credentials_required',
   'shared_visibility_disabled',
   'rate_limited',

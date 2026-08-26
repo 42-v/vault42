@@ -59,6 +59,22 @@ type VaultClaims struct {
 	// began with a password or with an upstream identity provider. It is not an
 	// authorization claim and no access token carries it.
 	Factors []string `json:"factors,omitempty"`
+
+	// Email is an assertion the caller made, not a fact vault42 established.
+	//
+	// It exists for one reason: a relying party that already has its own user
+	// table keyed by email cannot use a token that names only an opaque
+	// subject. BeOn3's storage worker derives every avatar's owner key as
+	// GUID(SHA256(userId+email)), so a missing email there does not fail, it
+	// silently detaches the object from its owner.
+	//
+	// It is set only on the /mint path, only when VAULT_MINT_ALLOW_EMAIL is on,
+	// and vault42 never looks the address up: /mint asserts subjects it has
+	// never heard of by design, and an email is the same kind of claim about
+	// the same unknown subject. A reader must not treat it as verified. The
+	// email on a *login* token would be a different thing entirely, and there
+	// is not one -- no vault42-issued access token carries this claim.
+	Email string `json:"email,omitempty"`
 }
 
 // Confirmation holds DPoP proof-of-possession binding (RFC 9449).
