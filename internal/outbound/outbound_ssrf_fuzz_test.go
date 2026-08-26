@@ -304,9 +304,16 @@ var oracleSeeds = []struct {
 	{"https://okta.test", "https://xn--okta.test/jwks", ""},
 	{"https://\u00F6kta.test", "https://sub.\u00D6KTA.test/jwks", ""},
 	{"https://xn--kta-sna.test", "https://\u00F6kta.test/jwks", ""},
-	// The four below currently FAIL, and they are the finding rather than a
-	// corpus entry waiting for a bug. hostOf compares strings.ToLower(host)
-	// while net/http connects to the host UTS-46 produced, and those two
+	// The four below WERE the finding. They pass now, and are kept as
+	// regression seeds: each is a spelling that reached the wire as a
+	// different host than the one the domain rule read. Closed by refusing a
+	// non-ASCII host outright (hostOf / isASCIIHost in outbound.go) rather
+	// than trying to agree with UTS-46 about what it folds to -- two
+	// normalisations that are nearly the same map is the bug, having only one
+	// is the fix.
+	//
+	// What they were: hostOf compared strings.ToLower(host)
+	// while net/http connected to the host UTS-46 produced, and those two
 	// normalisations are not the same map. U+1E9E lowercases to U+00DF but
 	// reaches the wire as "ss", so an endpoint spelled with it is admitted as
 	// the issuer's own host and dialed at another domain. U+0130 lowercases to

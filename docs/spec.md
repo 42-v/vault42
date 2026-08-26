@@ -669,7 +669,7 @@ Implemented via the `go-webauthn/webauthn` library.
 
 **Verify:** `POST /auth/2fa/backup-code/verify` (authenticated or challenge)
 
-- 6-digit backup code submitted
+- One unused 16-hex backup code submitted
 - Constant-time HMAC comparison against stored hashes
 - Single-use: atomically marked as used (CAS)
 - If challenge token: completes MFA login (issues real tokens)
