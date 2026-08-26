@@ -27,7 +27,7 @@ func (r *DeviceRepo) Create(ctx context.Context, device *model.Device) error {
 		INSERT INTO auth.devices (id, user_id, fingerprint_hash, friendly_name, trusted, ip, user_agent, first_seen_at, last_seen_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		device.ID, device.UserID, device.FingerprintHash, nullStr(device.FriendlyName),
-		device.Trusted, nullStr(device.IP), nullStr(device.UserAgent),
+		device.Trusted, nullStr(device.IP), nullStr(clampUserAgent(device.UserAgent)),
 		device.FirstSeenAt, device.LastSeenAt, device.CreatedAt,
 	)
 	if err != nil {
