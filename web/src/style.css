@@ -148,11 +148,6 @@
            max-w-md w-full mx-4 shadow-lg;
 }
 
-@utility vault42-spinner-sm {
-  /* Small spinner variant */
-  @apply w-4 h-4;
-}
-
 @layer base {
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -288,11 +283,29 @@
 @keyframes vault42-spin {
   to { transform: rotate(360deg); }
 }
-.vault42-spinner {
+/* All three are @utility, and that is the point rather than a formality.
+   Tailwind compiles @utility into @layer utilities; a plain rule written outside
+   any @layer is unlayered, and unlayered beats layered whatever the specificity.
+   With the base plain and vault42-spinner-sm an @utility, the base simply
+   overrode it and every "small" spinner rendered at 20px. vault42-spinner-lg
+   escaped only because somebody happened to write it plain beside the base.
+
+   Making all three layered fixes that and one more thing: while .vault42-spinner
+   was unlayered it silently beat 45 of the utilities present in the bundle, so
+   an ordinary h-4 or w-4 on a spinner did nothing either. Moving the modifier
+   out instead would have restored the 16px and left that hazard in place.
+
+   Order within the layer is Tailwind's property-set sort, not source order, so
+   this is measured rather than assumed -- see the compile-time gate in
+   web/src/__tests__/spinnerCascade.test.ts. */
+@utility vault42-spinner {
   @apply inline-block w-5 h-5 border-2 border-vault42-control border-t-vault42-accent rounded-full;
   animation: vault42-spin 0.6s linear infinite;
 }
-.vault42-spinner-lg {
+@utility vault42-spinner-sm {
+  @apply w-4 h-4;
+}
+@utility vault42-spinner-lg {
   @apply w-8 h-8;
 }
 
