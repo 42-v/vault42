@@ -134,7 +134,8 @@ func mintRequestJSONField(k string) bool {
 	case strings.EqualFold(k, "subject"),
 		strings.EqualFold(k, "roles"),
 		strings.EqualFold(k, "scopes"),
-		strings.EqualFold(k, "ttl_seconds"):
+		strings.EqualFold(k, "ttl_seconds"),
+		strings.EqualFold(k, "email"):
 		return true
 	default:
 		return false
