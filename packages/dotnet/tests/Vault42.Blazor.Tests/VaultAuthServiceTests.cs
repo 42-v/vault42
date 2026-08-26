@@ -459,6 +459,47 @@ public class VaultAuthServiceTests
         Assert.Null(RefreshTimer(h.Service));
     }
 
+    // The FAILURE path has to respect AutoRefresh too, and it did not.
+    //
+    // The success path has always been gated on the option; the re-arm added to
+    // the catch was not. So an app that had switched automatic refresh off
+    // stayed off only until the first refresh threw, after which every failed
+    // retry re-entered the same catch and re-armed the timer. Measured against
+    // the unfixed build: three requests to /auth/refresh in seventy seconds,
+    // from an app that opted out.
+    //
+    // Deleting the re-arm entirely also leaves the suite green, so this asserts
+    // both directions rather than only the one that was broken.
+    [Fact]
+    public async Task AFailedRefresh_WithAutoRefreshOff_ArmsNoTimer()
+    {
+        var h = new Harness(configure: o => o.AutoRefresh = false);
+        await h.Store.SetRefreshTokenAsync("refresh-1");
+        h.Http.EnqueueThrow(new HttpRequestException("network down"));
+
+        Assert.False(await h.Service.RefreshAsync());
+        Assert.Null(RefreshTimer(h.Service));
+
+        await h.Service.DisposeAsync();
+    }
+
+    // And with the option on, a failure must still re-arm: that is the defect
+    // the re-arm was added for -- one thrown refresh used to leave a one-shot
+    // timer that never fired again, silently, while the UI still showed a
+    // session.
+    [Fact]
+    public async Task AFailedRefresh_WithAutoRefreshOn_ReArmsTheTimer()
+    {
+        var h = new Harness();
+        await h.Store.SetRefreshTokenAsync("refresh-1");
+        h.Http.EnqueueThrow(new HttpRequestException("network down"));
+
+        Assert.False(await h.Service.RefreshAsync());
+        Assert.NotNull(RefreshTimer(h.Service));
+
+        await h.Service.DisposeAsync();
+    }
+
     [Fact]
     public async Task ApplyingATokenResponse_WithAutoRefreshOn_ArmsTheTimer()
     {
