@@ -889,7 +889,7 @@
                 // the one that opens it. Naming them the same way round is the
                 // point -- the previous pair disagreed about which state was
                 // the default, and the CSS won.
-                var open = sidebar.classList.toggle('sidebar-open');
+                const open = sidebar.classList.toggle('sidebar-open');
                 toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             });
         }
