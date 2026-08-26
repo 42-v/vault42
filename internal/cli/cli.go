@@ -118,6 +118,15 @@ func (c *CLI) Run(ctx context.Context, args []string) bool {
 		exitProcess(1)
 	}
 
+	// Deliberately NOT exiting here on c.failed, though that would be the
+	// coverable place: exitProcess is a stubbable seam and cmd/vault's os.Exit
+	// is not, so a test can observe one and not the other.
+	//
+	// It does not work. Every test that drives a failing command through Run --
+	// TestRun_RoutesRetiredCleanupAudit among them, since the retired stubs are
+	// failures -- would reach the real os.Exit and take the test binary with it.
+	// The seam only helps a test that knows to stub it, and these do not have to.
+	// So the failure is recorded here and read once by cmd/vault.
 	switch args[1] {
 	case "add-client":
 		return c.addClient(ctx, args)

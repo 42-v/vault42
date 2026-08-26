@@ -1,6 +1,6 @@
 # Test Coverage Report
 
-Generated: 2026-08-21 | Tests: 4910 | Total: 99.61% statement coverage
+Generated: 2026-08-26 | Tests: 4933 | Total: 99.61% statement coverage
 
 Measured across the full suite (unit + attack + fuzz + integration +
 compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
@@ -42,7 +42,7 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | `cmd/bridge` | 99.55% |
 | `internal/jwt` | 99.30% |
 | `internal/service` | 99.28% |
-| `cmd/vault` | 98.39% |
+| `cmd/vault` | 98.41% |
 | `internal/crypto` | 98.36% |
 | `cmd/recover` | 98.15% |
 | `internal/firstboot` | 96.88% |
@@ -52,6 +52,11 @@ compliance) against `./internal/...`. Regenerate with `scripts/coverage.sh`.
 | Function | File |
 |----------|------|
 | `main` | cmd/recover/main.go:134 |
+| `revokeClient` | internal/cli/cli.go:296 |
+| `rotateClientSecret` | internal/cli/cli.go:308 |
+| `runSeed` | internal/cli/cli.go:582 |
+| `fail` | internal/cli/cli.go:717 |
+| `Failed` | internal/cli/cli.go:725 |
 
 ## Low Coverage (1-74%)
 
