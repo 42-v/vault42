@@ -287,6 +287,49 @@ func TestNewCollector_AndHandler_Edge(t *testing.T) {
 // It is the wrong answer for these three. A fabricated vault_argon2_active 0 is
 // indistinguishable from an idle hasher, so a collector built without them has
 // to fail the scrape rather than publish a number that means nothing.
+// A refresh token presented after it was already spent has to have a number of
+// its own. Folding it into vault_tokens_refreshed_total would bury a stolen
+// session inside the counter that rises with ordinary traffic, and there is no
+// scrape-side way back out of that sum. The exposition is checked with a value,
+// not a name: a counter that increments and never reaches /metrics is invisible
+// to every scrape.
+func TestCollectorRefreshTokenReplayCounter(t *testing.T) {
+	c := NewCollector(
+		func() int64 { return 0 },
+		func() int64 { return 0 },
+		func() int { return 4 },
+	)
+
+	// One ordinary rotation and two replays, so a Record wired to the wrong
+	// field cannot pass by coincidence.
+	c.RecordTokenRefreshed()
+	c.RecordRefreshTokenReplayed()
+	c.RecordRefreshTokenReplayed()
+
+	if got := c.refreshReplays.Load(); got != 2 {
+		t.Errorf("refreshReplays = %d, want 2", got)
+	}
+	if got := c.tokensRefreshed.Load(); got != 1 {
+		t.Errorf("tokensRefreshed = %d, want 1; a replay is a refusal, not a refresh", got)
+	}
+
+	rec := httptest.NewRecorder()
+	c.Handler()(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"# TYPE vault_refresh_token_replays_total counter",
+		"vault_refresh_token_replays_total 2",
+		"vault_tokens_refreshed_total 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing from /metrics output: %q", want)
+		}
+	}
+}
+
 func TestCollector_NilAccessors_Recovered(t *testing.T) {
 	c := NewCollector(nil, nil, nil)
 	defer func() {

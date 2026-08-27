@@ -41,6 +41,32 @@ const (
 	TokenRefresh = "token_refresh"
 	// TokenRevoke records an explicit refresh token revocation (logout).
 	TokenRevoke = "token_revoke"
+	// RefreshTokenReplayed records a refresh token presented after it had
+	// already been spent. Single-use rotation exists to catch exactly that, and
+	// the containment path revokes every row of the family the token belongs to
+	// and refuses the caller. It is emitted by the two reuse-detection arms of
+	// AuthService.Refresh -- a stored row that already carries used = TRUE, and
+	// a mark-used compare-and-set lost to a request that reached the row first
+	// -- which are the same fact caught a moment apart.
+	//
+	// It is its own class rather than a token_revoke carrying
+	// reason: "replay_detected", which is what it used to be, for the reason
+	// authenticator_cloned below stopped being one. Severity is a property of
+	// the class, so filed as token_revoke this scored routine: the same 0 an
+	// ordinary logout and a session-lifetime expiry carry, below the 25 a
+	// failed login carries. An operator filtering on risk_score never saw
+	// refresh-token theft at all, and no alert rule could watch the class
+	// without paging on every logout, so the two heuristic signals sitting
+	// beside it on the same code path -- fingerprint_anomaly and
+	// dpop_binding_mismatch, both of which only suspect what this one
+	// demonstrates -- raised alerts that this one could not.
+	//
+	// It scores critical because a token presented twice has no benign version.
+	// That is the same distinction issueRotatedPair draws when it explains why
+	// reuse burns a family and a DPoP binding mismatch does not: reuse is a
+	// fact about the credential, and a mismatch is a fact about the caller,
+	// who may be a legitimate client whose key store was cleared.
+	RefreshTokenReplayed = "refresh_token_replayed"
 	// TokenMinted records a token signed for a caller-asserted subject via
 	// POST /mint. vault42 never authenticated that subject. The signature is
 	// indistinguishable from any other issued token, so this event is the only
@@ -290,12 +316,26 @@ func (l *Logger) QuarantinedTotal() int64 {
 // the containment path used to file it as. It is the only durable record that a
 // credential private key answered from two places, and the process log beside
 // it is not evidence.
+//
+// RefreshTokenReplayed inherits it from token_revoke for the same reason: it is
+// the only durable record that a stolen refresh cookie was used, and losing it
+// under buffer pressure leaves a burned family with nothing in the trail saying
+// why. Unlike the two heuristic signals on the same code path it is not a lever
+// the caller can pull, which is what makes a synchronous write per occurrence
+// safe here and not there. Refresh refuses a revoked row before it reaches reuse
+// detection, so once the revocation this event records has landed, the family
+// that produced it can never produce another: a second synchronous write costs
+// the caller a second stolen family, not a second request. The bound degrades to
+// one write per request only while the store is refusing the revoke, which is
+// also when it is refusing the audit insert. DPoPBindingMismatch deliberately
+// leaves the family intact, so one cookie regenerates it as often as it is
+// presented, and that is why it stays buffered.
 func isCriticalEvent(eventType string) bool {
 	if strings.HasPrefix(eventType, svcDocEventPrefix) {
 		return true
 	}
 	switch eventType {
-	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger, AdminAuthzDenied, AdminSessionRejected, AuthenticatorCloned:
+	case LoginFailure, PasswordChange, PasswordReset, TokenRevoke, AdminAction, KMSUnwrap, TokenMinted, HoneypotTrigger, AdminAuthzDenied, AdminSessionRejected, AuthenticatorCloned, RefreshTokenReplayed:
 		return true
 	}
 	return false

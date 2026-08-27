@@ -1382,7 +1382,8 @@ an outage that multiplies the brute-force budget by the replica count is a secur
 | `login_failure` | `LoginFailure` | Failed login attempt |
 | `registration` | `Registration` | New user account creation |
 | `token_refresh` | `TokenRefresh` | Refresh token exchange |
-| `token_revoke` | `TokenRevoke` | Token revocation (logout, replay) |
+| `token_revoke` | `TokenRevoke` | Token revocation (logout, session-lifetime expiry, a rotation refused because the family died under it) |
+| `refresh_token_replayed` | `RefreshTokenReplayed` | A refresh token presented after it was already spent. The family is revoked and the caller refused. Its own class, not a `token_revoke` with a reason: the severity and the alert rule are properties of the class, and a logout is neither |
 | `password_change` | `PasswordChange` | User-initiated password change |
 | `password_reset` | `PasswordReset` | Password reset via email |
 | `2fa_setup` | `TwoFASetup` | TOTP or WebAuthn enrollment |

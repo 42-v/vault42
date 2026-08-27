@@ -345,6 +345,7 @@ vault_audit_events_dropped_total 0
 | `vault_login_failed_total` | Counter | Total failed logins |
 | `vault_tokens_issued_total` | Counter | Total access tokens issued (login + MFA completion) |
 | `vault_tokens_refreshed_total` | Counter | Total token refresh operations |
+| `vault_refresh_token_replays_total` | Counter | Refresh tokens presented after they were already spent. Each one burned a rotation family; any non-zero rate is a session credential in more than one pair of hands |
 | `vault_audit_buffer_full_total` | Counter | Audit events that arrived to a full in-memory buffer. Non-critical events were discarded; critical event types were written straight to the store instead |
 | `vault_audit_events_dropped_total` | Counter | Buffered audit entries discarded because the store rejected the batch and the retry would not fit back into the buffer |
 

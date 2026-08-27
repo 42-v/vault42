@@ -143,11 +143,21 @@ var severityByEvent = map[string]int{
 	AdminAuthzDenied:     SeveritySerious,
 	AdminSessionRejected: SeveritySerious,
 
-	// No legitimate traffic reaches these. A trap credential has no user, and a
-	// non-loopback connection to the admin gateway is not a misconfiguration
-	// anybody has to guess about.
+	// No legitimate traffic reaches these. A trap credential has no user, a
+	// single-use token cannot be spent twice by the client it was issued to,
+	// and a non-loopback connection to the admin gateway is not a
+	// misconfiguration anybody has to guess about.
+	//
+	// RefreshTokenReplayed is the one that was missing. It was written as a
+	// token_revoke carrying reason: "replay_detected", so it took that class's
+	// score and landed in the routine band at the top of this table, beside the
+	// logout it is nothing like. The strongest evidence of session theft this
+	// service can produce sorted below a mistyped password, while the two
+	// weaker signals on the same code path -- which only suspect what this one
+	// demonstrates -- scored serious.
 	AuthenticatorCloned:      SeverityCritical,
 	HoneypotTrigger:          SeverityCritical,
+	RefreshTokenReplayed:     SeverityCritical,
 	AdminKillswitchTriggered: SeverityCritical,
 }
 

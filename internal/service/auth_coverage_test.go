@@ -197,6 +197,7 @@ func newMockAuthService(t *testing.T, opts ...func(*mockAuthOpts)) (*AuthService
 		pwHistory:   &mocks.MockPasswordHistoryRepo{},
 		cache:       &mocks.MockCache{},
 		emailSender: &mocks.MockEmailSender{},
+		auditRepo:   &mocks.MockAuditRepo{},
 	}
 	for _, fn := range opts {
 		fn(o)
@@ -212,7 +213,7 @@ func newMockAuthService(t *testing.T, opts ...func(*mockAuthOpts)) (*AuthService
 	kid, _ := vaultcrypto.RandomUUID()
 	tokenSvc := NewTokenService(key, kid, "https://vault.test", "https://vault.test",
 		15*time.Minute, 24*time.Hour, 30*24*time.Hour)
-	auditLogger := audit.NewLogger(&mocks.MockAuditRepo{}, 0)
+	auditLogger := audit.NewLogger(o.auditRepo, 0)
 
 	svc := NewAuthService(
 		o.userRepo, o.tokenRepo, o.deviceRepo, o.pwHistory,
@@ -230,6 +231,11 @@ type mockAuthOpts struct {
 	pwHistory   *mocks.MockPasswordHistoryRepo
 	cache       *mocks.MockCache
 	emailSender *mocks.MockEmailSender
+	// auditRepo backs the service's audit logger. It is on the options struct so
+	// a test can hook InsertFn and read the rows the path under test actually
+	// wrote: the event class and the score it carries are what every reader of
+	// the audit log selects on, and neither is observable from a return value.
+	auditRepo   *mocks.MockAuditRepo
 	mfaSvc      *MFAService
 	hibpEnabled bool
 }
