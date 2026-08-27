@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 028: seen login countries — the new-location (AR-18) notice
+-- Migration 028: seen login countries — the new-location (P13) notice
 -- ============================================================================
 --
 -- The new-location notice tells a user when their account is accessed from a
