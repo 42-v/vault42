@@ -107,7 +107,24 @@ func hasDotSegment(path string) bool {
 	return false
 }
 
-// AvatarURL validates and sanitizes an HTTPS-only URL.
+// avatarURLColumn is the width of auth.users.avatar_url, declared VARCHAR(1024)
+// by migration 001.
+//
+// The bound here was 2048, so a URL between 1025 and 2048 characters passed
+// every check this package makes and was then refused by PostgreSQL with 22001,
+// "value too long for type character varying(1024)". That fails the whole
+// UPDATE: the user is told their profile could not be saved, with a 500 and no
+// indication which field is at fault, and the display name they changed in the
+// same request is lost with it.
+//
+// A sanitizer bounded wider than the column it feeds is not a sanitizer. It is
+// a check that moves the failure from a place with a message to a place without
+// one. Bytes rather than runes is the conservative direction: VARCHAR counts
+// characters, so a byte length within the bound cannot exceed it in characters.
+const avatarURLColumn = 1024
+
+// AvatarURL validates and sanitizes an HTTPS-only URL, refusing anything the
+// column it lands in could not hold.
 func AvatarURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -116,7 +133,7 @@ func AvatarURL(rawURL string) string {
 	if !strings.HasPrefix(rawURL, "https://") {
 		return ""
 	}
-	if len(rawURL) > 2048 {
+	if len(rawURL) > avatarURLColumn {
 		return ""
 	}
 	return rawURL
