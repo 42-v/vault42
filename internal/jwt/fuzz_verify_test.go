@@ -134,7 +134,7 @@ const (
 	// fuzzSignRSATrusted is the shape vault42 mints: RS256 over the trusted
 	// signing key.
 	fuzzSignRSATrusted = iota
-	// fuzzSignECTrustedRaw is the RFC 7515 3.4 raw R‖S form.
+	// fuzzSignECTrustedRaw is the RFC 7518 3.4 raw R‖S form.
 	fuzzSignECTrustedRaw
 	// fuzzSignECTrustedDER is the ASN.1 form VerifyES256 also accepts, because
 	// the ES256 tokens it must verify include proofs from HSMs that return DER.
@@ -278,7 +278,7 @@ func rsaSegment(key *rsa.PrivateKey, signingString string) (string, bool) {
 	return encodeSegment(sig), true
 }
 
-// ecRawSegment produces the RFC 7515 3.4 raw R‖S form, with both halves padded
+// ecRawSegment produces the RFC 7518 3.4 raw R‖S form, with both halves padded
 // to the curve's coordinate size. The padding is not cosmetic: isRawRS
 // discriminates the raw form from DER on length alone, so a short R would make
 // an honest signature look like DER and be rejected, and the target would then
