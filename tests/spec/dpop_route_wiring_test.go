@@ -41,6 +41,7 @@ var dpopWrapperIdents = []string{
 	"dpopWrap",
 	"authed",
 	"authedChallenge",
+	"challengeLimited",
 	"confirmed",
 	"docRead",
 	"docWrite",
@@ -48,7 +49,9 @@ var dpopWrapperIdents = []string{
 
 // routeBuilderClosures are the local helpers whose whole job is to build a
 // middleware chain for a family of routes. Each must apply dpopWrap.
-var routeBuilderClosures = []string{"authed", "authedChallenge", "confirmed", "docRead", "docWrite"}
+var routeBuilderClosures = []string{
+	"authed", "authedChallenge", "challengeLimited", "confirmed", "docRead", "docWrite",
+}
 
 // dpopExemptRoutes are the registrations that legitimately run no DPoP
 // middleware. Each needs a reason, because adding a route here is how the gate

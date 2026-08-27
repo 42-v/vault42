@@ -572,6 +572,10 @@ var chainLimiterBudgets = map[string]struct{ limit, window string }{
 	"refreshRL":       {"30", "time.Minute"},
 	"passwordResetRL": {"3", "time.Hour"},
 	"totpRL":          {"5", "5 * time.Minute"},
+	// The subject-keyed half of the same guessing bound. Same numbers as the
+	// IP-keyed one deliberately: they measure one surface from two sides, and a
+	// reader comparing them should see one budget rather than two.
+	"totpSubjectRL":   {"5", "5 * time.Minute"},
 	"verifyEmailRL":   {"10", "time.Hour"},
 	"confirmRL":       {"5", "15 * time.Minute"},
 	"clientTokenRL":   {"10", "time.Minute"},
