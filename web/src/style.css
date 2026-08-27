@@ -168,7 +168,18 @@
     cursor: pointer;
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar.
+
+     Both states are tokens rather than literals. The thumb was #1e1e2e, which
+     is the value `border` holds -- the same colour written twice, in the one
+     file whose header says every value here is fixed by a contrast requirement
+     and re-derived by palette.test.ts. A copy is not covered by that, so the
+     next contrast pass would move the token and leave the scrollbar behind.
+
+     The hover was #2e2e3e, a one-off with no token at all. It is `control`
+     now, which is the token defined as "the boundary of an interactive
+     control" -- and a scrollbar thumb is one. It is a more visible hover than
+     the old value on a 6px target, which is the direction to err in. */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -177,15 +188,24 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #1e1e2e;
+    background: var(--color-vault42-border);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #2e2e3e;
+    background: var(--color-vault42-control);
   }
 
+  /* Selected text takes the interactive ink, at the same 20% the tinted fills
+     use.
+
+     It was rgba(0, 255, 66, 0.2) -- neon green, in an app whose entire palette
+     is indigo. It has been there since 0.4.2 and is the only occurrence of that
+     hue anywhere in the frontend; the contrast rework that split `primary` from
+     `accent` and moved `error` enumerated every colour decision in this file
+     and never mentioned it, because nothing pointed at it. Selecting text is
+     the one place a user sees a colour the design system never chose. */
   ::selection {
-    background: rgba(0, 255, 66, 0.2);
+    background: color-mix(in srgb, var(--color-vault42-accent) 20%, transparent);
   }
 }
 
