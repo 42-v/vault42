@@ -117,6 +117,7 @@ var severityByEvent = map[string]int{
 	// else's account or on the deployment itself.
 	AdminLogin:             SeverityElevated,
 	AdminLoginFailure:      SeverityElevated,
+	AdminTwoFASetup:        SeverityElevated,
 	AdminSessionRevoke:     SeverityElevated,
 	AdminUserLock:          SeverityElevated,
 	AdminUserUnlock:        SeverityElevated,

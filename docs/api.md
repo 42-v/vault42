@@ -4129,7 +4129,7 @@ Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md`
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
 | `GET` | `/admin/sessions` | Session | `admins:manage` | Always | List active **admin** sessions |
 | `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
-| `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log |
+| `GET` | `/admin/audit` | Session | `audit:read` | Always | Query the audit log; admin-plane rows need `admins:manage` |
 | `GET` | `/admin/clients` | Session | `clients:list` | Always | List service clients |
 | `GET` | `/admin/clients/{id}` | Session | `clients:read` | Always | Client detail |
 | `POST` | `/admin/clients` | Session | `clients:create` | Always | Create a client, secret shown once |
