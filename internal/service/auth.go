@@ -1491,13 +1491,31 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 //
 // Both writes are best-effort and neither may decide whether a stolen token is
 // accepted: the caller is refused with ErrReplayDetected either way.
+//
+// Both run on a context DETACHED from the request. The request context is
+// cancelled the instant the client goes away, and the client here is whoever
+// presented the stolen token -- so on the plain request context an attacker
+// contains their own replay by hanging up, and the containment this function
+// exists to perform is the first thing cancelled. The detached context carries
+// its own deadline (replayRevokeTimeout) so a wedged store cannot hold the
+// goroutine open.
+//
+// family_revoked records which of the two happened, because a contained replay
+// and a merely detected one are not the same incident and an operator reading
+// the trail has no other way to tell them apart.
 func (s *AuthService) containRefreshReuse(ctx context.Context, stored *model.RefreshToken, ip, ua, reason string) {
-	s.tokens.RevokeFamily(ctx, stored.FamilyID) // #nosec G104 -- best-effort revocation; the caller returns ErrReplayDetected regardless
+	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayRevokeTimeout)
+	defer cancel()
+
+	revoked := s.tokens.RevokeFamily(revokeCtx, stored.FamilyID) == nil
 	if s.metrics != nil {
 		s.metrics.RecordRefreshTokenReplayed()
 	}
-	s.auditLog.Log(ctx, audit.RefreshTokenReplayed, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-		map[string]interface{}{"reason": reason, "family_id": stored.FamilyID})
+	s.auditLog.Log(revokeCtx, audit.RefreshTokenReplayed, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"reason": reason, "family_id": stored.FamilyID,
+			"family_revoked": revoked,
+		})
 }
 
 // accountStillHoldsSessions re-reads the account behind a rotation and returns
