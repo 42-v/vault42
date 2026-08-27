@@ -230,10 +230,50 @@ func (p *Policy) Client(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: p.Transport()}
 }
 
-// ClientForIssuer is Client with CheckRedirect re-applying CheckDerived to
-// every hop under issuer. Without it, an in-domain token_endpoint that 302s
-// to an arbitrary public host would bypass the trust boundary DialContext
-// cannot see: dial-time only judges address class, not whose host it is.
+// FetchableEndpoint reports whether raw may be fetched at all: https anywhere,
+// or plaintext http to the loopback interface.
+//
+// The loopback exception is where a developer's own issuer and this package's
+// tests run, and where there is no path for anyone to sit on. It is
+// deliberately narrow -- a hostname that merely RESOLVES to a loopback address
+// does not qualify, because that resolution is not this process's to trust.
+//
+// It lives here rather than in internal/oauth2, which is where it was written,
+// because two call sites need it and only one had it. oauth2 checks every
+// endpoint a discovery document names; the redirect hop that follows was
+// checked for its destination host and not for its scheme, so a token_endpoint
+// answering 307 with `Location: http://…` on the same domain was followed with
+// method and body intact, POSTing the client secret in cleartext. The same hop
+// on a jwks_uri hands whoever is on that path the key set an id_token is
+// verified against.
+//
+// One definition, because the alternative is two that agree until they do not.
+func FetchableEndpoint(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	default:
+		return false
+	}
+}
+
+// ClientForIssuer is Client with CheckRedirect re-applying both endpoint rules
+// to every hop under issuer: the scheme, and the destination host. Without it,
+// an in-domain token_endpoint that 302s to an arbitrary public host would
+// bypass the trust boundary DialContext cannot see -- dial-time only judges
+// address class, not whose host it is -- and one that 307s to plaintext on the
+// same host would downgrade the connection carrying the client secret.
 func (p *Policy) ClientForIssuer(issuer string, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
@@ -241,6 +281,16 @@ func (p *Policy) ClientForIssuer(issuer string, timeout time.Duration) *http.Cli
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("outbound: stopped after 10 redirects")
+			}
+			// Scheme first. CheckDerived compares hosts and returns early for
+			// loopback, so it cannot see a downgrade to cleartext on a host it
+			// is about to approve.
+			// Scheme first. CheckDerived compares hosts and returns early for
+			// loopback, so it cannot see a downgrade to cleartext on a host it
+			// is about to approve.
+			if !FetchableEndpoint(req.URL.String()) {
+				return fmt.Errorf("outbound: refusing redirect to %s: not an https endpoint",
+					req.URL.Scheme)
 			}
 			if err := p.CheckDerived(issuer, "redirect", req.URL.String()); err != nil {
 				return fmt.Errorf("outbound: refusing redirect: %w", err)
