@@ -180,8 +180,13 @@ func TestAvatarURL(t *testing.T) {
 		{"no protocol", "example.com/avatar.png", ""},
 		{"javascript rejected", "javascript:alert(1)", ""},
 		{"data rejected", "data:image/png;base64,abc", ""},
-		{"too long", "https://" + string(make([]byte, 2048)), ""},
-		{"max valid length", "https://x" + string(make([]byte, 2038)), "https://x" + string(make([]byte, 2038))},
+		// The bound is the column's, not a round number. These were 2048 and
+		// 2038, so a URL between 1025 and 2048 characters passed here and was
+		// then refused by PostgreSQL with 22001 -- failing the whole profile
+		// UPDATE, including whatever else the user changed in the same request.
+		{"too long for the column", "https://" + strings.Repeat("a", 1024), ""},
+		{"exactly the column width", "https://" + strings.Repeat("a", 1016), "https://" + strings.Repeat("a", 1016)},
+		{"one over the column width", "https://" + strings.Repeat("a", 1017), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
