@@ -241,10 +241,25 @@ func (r *UserRepo) SoftDeleteScrub(ctx context.Context, id, tombstoneEmail strin
 }
 
 // UpdatePassword replaces the user's password hash and updates the timestamp.
+//
+// The WHERE refuses a tombstoned row, for the reason Update gives twelve lines
+// above: a handler check is a decision made from a row read a moment earlier,
+// and this is the statement that actually writes. Update carried that clause
+// and this one did not, which is how a password-reset link minted before an
+// erasure could write a fresh Argon2id hash onto a tombstone -- undoing the one
+// thing migration 031 calls "the worst item here" and NULLs on purpose.
+//
+// ErrUserNotUpdatable rather than a silent success, on the same grounds: a
+// caller told the write landed will not look for the row it did not touch.
 func (r *UserRepo) UpdatePassword(ctx context.Context, id, passwordHash string) error {
-	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET password_hash=$2, updated_at=NOW() WHERE id=$1`, id, passwordHash)
+	tag, err := r.db.Pool.Exec(ctx,
+		`UPDATE auth.users SET password_hash=$2, updated_at=NOW() WHERE id=$1 AND deleted = FALSE`,
+		id, passwordHash)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return repository.ErrUserNotUpdatable
 	}
 	return nil
 }
