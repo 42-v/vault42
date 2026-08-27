@@ -11,8 +11,11 @@ import (
 
 // VerifyES256 verifies an ES256 signature. Returns nil on success.
 //
-// RFC 7515 §3.4 mandates the raw R‖S form for JWS, and that is what vault42
-// emits. This function additionally accepts ASN.1 DER because the ES256 tokens
+// RFC 7518 §3.4 mandates the raw R‖S form for JWS -- "Concatenate the two octet
+// sequences in the order R and then S", 64 octets for P-256 -- and that is what
+// vault42 emits. (Not RFC 7515, which this used to cite: 7515 has no §3.4, its
+// section 3 stops at 3.3, and it specifies no ECDSA encoding at all. The pin
+// thirteen lines below already cited 7518 §3.4 correctly.) This function additionally accepts ASN.1 DER because the ES256 tokens
 // it must verify include DPoP proofs and third-party OIDC ID tokens produced by
 // libraries and HSMs that hand back the DER form their signing API returns.
 // Rejecting those would fail interoperability, not close an attack.

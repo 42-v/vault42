@@ -49,10 +49,26 @@ import (
 // blob's first four bytes are a big-endian RSA-OAEP ciphertext length, which is
 // the modulus size in bytes: 0x00000100 for RSA-2048, 0x00000200 for RSA-4096.
 // The leading byte is 0x00 for every RSA key up to 4 194 304 bits, and 'V' is
-// 0x56, so the two framings cannot be confused in either direction. In
-// particular a bound blob cannot be downgraded by stripping its header: the
-// remaining bytes read as a legacy blob whose declared wrapped-key length runs
-// past the end of the buffer, which openRecovery refuses.
+// 0x56, so the two framings cannot be confused in either direction.
+//
+// A bound blob also cannot be downgraded by stripping its header, but not for
+// the reason this note used to give. It claimed the remaining bytes read as a
+// legacy blob whose declared wrapped-key length runs past the end of the
+// buffer. They do not. recoveryHeaderLen is the magic plus the version byte,
+// five bytes, and what follows it IS the legacy framing: strip them and the
+// length prefix is intact, wrappedLen+4 <= len(body) still holds, and
+// openRecovery's length guard passes.
+//
+// The refusal comes one step later and is the stronger one. The label is
+// derived from the binding, so a blob wrapped under recoveryLabel(binding) and
+// then handed to the legacy path is unwrapped with the legacy label, and
+// RSA-OAEP refuses it: "recovery: unwrap aes key". Stripping the four magic
+// bytes alone -- leaving the version byte in front of the length prefix -- is
+// what produces the length refusal the old note described.
+//
+// Both are pinned by TestBoundBlobCannotBeDowngraded, because a security note
+// that names the wrong mechanism is one refactor away from being a note about
+// a guard nobody kept.
 
 const recoveryAESKeySize = 32
 
