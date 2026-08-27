@@ -263,7 +263,7 @@ async function copyBackupCodes() {
                     </div>
                     <button
                       :disabled="credentialLoading"
-                      class="text-xs text-vault42-error hover:text-red-300 transition-colors"
+                      class="text-xs text-vault42-error hover:text-vault42-text transition-colors"
                       @click="handleDeleteCredential(cred.id)"
                     >
                       {{ t('common.remove') }}
@@ -373,7 +373,7 @@ async function copyBackupCodes() {
               </div>
             </div>
             <button
-              class="text-xs text-vault42-error hover:text-red-300 transition-colors"
+              class="text-xs text-vault42-error hover:text-vault42-text transition-colors"
               @click="handleDisableTOTP"
             >
               {{ t('twoFactor.totp.disable') }}
@@ -408,9 +408,9 @@ async function copyBackupCodes() {
           </div>
 
           <div v-if="backupCodes.length > 0" class="mt-5 pt-5 border-t border-vault42-border">
-            <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-3 py-2.5 mb-3">
-              <p class="text-xs text-yellow-500 font-semibold">{{ t('twoFactor.backup.saveWarning') }}</p>
-              <p class="text-xs text-yellow-500/80 mt-0.5">{{ t('twoFactor.backup.storeOffline') }}</p>
+            <div class="bg-vault42-warning/10 border border-vault42-warning/30 rounded-lg px-3 py-2.5 mb-3">
+              <p class="text-xs text-vault42-warning font-semibold">{{ t('twoFactor.backup.saveWarning') }}</p>
+              <p class="text-xs text-vault42-warning/80 mt-0.5">{{ t('twoFactor.backup.storeOffline') }}</p>
             </div>
             <div class="flex justify-end mb-2">
               <button

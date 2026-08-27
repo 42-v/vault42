@@ -31,6 +31,19 @@
  * `error` moved from `#ef4444` to red-400 because it is almost always rendered
  * on its own 10-20% tint, where the old value fell to 4.00-4.53:1.
  *
+ * `warning` is the newest, and it changes nothing on screen. There was no
+ * caution colour here, so the backup-code banner and the password-strength
+ * meter reached for Tailwind's stock `yellow-500` -- outside the set this file
+ * audits and outside what `palette.test.ts` re-derives. Naming it is what
+ * brings it inside.
+ *
+ * The value is #edb200, which is what Tailwind 4 renders `yellow-500` as: the
+ * palette moved to OKLCH in 4, so the familiar #eab308 is the *3* value and
+ * writing it here would have been a quiet re-hue on the way to a token. Read
+ * off the compiled stylesheet rather than remembered. Both clear 4.5:1 on
+ * `bg`, on `surface` and on their own 10/15/30% washes, so contrast did not
+ * decide it; keeping the pixels identical did.
+ *
  * These lived in `tailwind.config.js` until Tailwind 4, which reads its theme
  * from CSS. The file they live in changed; nothing about the values did.
  */
@@ -45,6 +58,7 @@
   --color-vault42-text: #e2e8f0;
   --color-vault42-muted: #94a3b8;
   --color-vault42-success: #22c55e;
+  --color-vault42-warning: #edb200;
   --color-vault42-error: #f87171;
 }
 
