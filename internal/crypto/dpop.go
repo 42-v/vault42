@@ -188,13 +188,16 @@ func parseJWKHeader(jwkRaw interface{}) (crypto.PublicKey, error) {
 			return nil, fmt.Errorf("decode e: %w", err)
 		}
 		n := new(big.Int).SetBytes(nBytes)
-		if n.BitLen() < 2048 {
-			return nil, errors.New("RSA key too small: minimum 2048 bits required")
+		if n.BitLen() < vjwt.MinRSAModulusBits {
+			return nil, fmt.Errorf("RSA key too small: minimum %d bits required", vjwt.MinRSAModulusBits)
 		}
 		// Upper bound: a self-signed DPoP proof carries an attacker-chosen
 		// modulus; cap it to avoid an algorithmic-complexity DoS on verify (L2).
-		if n.BitLen() > 4096 {
-			return nil, errors.New("RSA key too large: maximum 4096 bits allowed")
+		// The bound moved to internal/jwt when the OIDC JWKS importer was found
+		// applying the floor and not the ceiling to the same class of input;
+		// both sites now read one range so neither can drift again.
+		if n.BitLen() > vjwt.MaxRSAModulusBits {
+			return nil, fmt.Errorf("RSA key too large: maximum %d bits allowed", vjwt.MaxRSAModulusBits)
 		}
 		eBig := new(big.Int).SetBytes(eBytes)
 		if !eBig.IsInt64() || eBig.Int64() < 3 || eBig.Int64() > 1<<31-1 {
