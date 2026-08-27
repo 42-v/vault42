@@ -161,3 +161,42 @@ func commandNames(t *testing.T, root string) []string {
 	}
 	return names
 }
+
+// TestNoFrontendBuildSitsInTheRepositoryRoot is the same property for the half
+// that is not a `go build`, and it is deliberately shaped the other way round.
+//
+// The two tests above end in "add it to .gitignore", because a binary in the
+// root is what `go build ./cmd/vault` writes when run without -o: expected
+// output of an ordinary command, and naming it in .gitignore is the right
+// answer. A built frontend in the root is not that. Nothing in this repository
+// is configured to put one there -- web/vite.config.ts sets no outDir, so
+// `pnpm -C web build` writes web/dist, and .gitignore:50 already covers it with
+// `dist/`. A copy at the root is a mistake, not routine output.
+//
+// It happened, and it stayed invisible for a while: 59 files and 1.2 MB, every
+// byte identical to web/dist, sitting where the `dist/` rule cannot see them.
+// What that costs is a release. scripts/release-check.sh gate 12 runs
+// `git status --porcelain` and refuses to tag a dirty tree, so the release dies
+// reporting "uncommitted changes" with nothing saying which, and the obvious
+// way out -- `git add -A` -- commits 1.2 MB of build output instead.
+//
+// So this one refuses rather than ignores. Ignoring it would make the next
+// occurrence silent, and the whole reason it is worth a gate is that a silent
+// one is expensive.
+func TestNoFrontendBuildSitsInTheRepositoryRoot(t *testing.T) {
+	root := repoRoot(t)
+
+	// What a Vite build emits at whatever directory it is pointed at. index.html
+	// is the give-away: web/index.html is the source template and the built copy
+	// carries hashed asset links, but at the repository root there is no source
+	// template to confuse it with -- a root index.html is only ever output.
+	for _, name := range []string{"index.html", "assets"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			t.Errorf("./%s exists in the repository root. A Vite build belongs in web/dist, "+
+				"which .gitignore already covers; a copy here is not covered by anything, so "+
+				"scripts/release-check.sh refuses to tag the tree and says only that it is "+
+				"dirty. Delete it -- web/dist holds the same bytes and `pnpm -C web build` "+
+				"rebuilds them.", name)
+		}
+	}
+}
