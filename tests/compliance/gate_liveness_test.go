@@ -1237,6 +1237,18 @@ var rawSourceScanByDesign = map[string]string{
 		"// itself, immediately after testing the raw line for that one marker, so " +
 		"a module path appearing only in a comment still cannot be counted -- which " +
 		"is the property this gate is protecting.",
+	"tests/spec/migration_prose_citations_test.go:TestMigrationProseCitationsLandOnWhatTheyName": "resolves " +
+		"a `file.go:NNN` citation written in a migration header, so it needs the file exactly " +
+		"as an author counting lines in an editor sees it. commentFreeSource replaces comment " +
+		"text, which moves nothing -- but the defect this gate holds is a citation that lands " +
+		"ON a comment line (024 pointed at user.go:202, a line inside another method's doc " +
+		"block, while VerifyEmail is at :268). Reading a sanitized copy would blank exactly " +
+		"the line whose content is the evidence, and the gate could no longer tell a citation " +
+		"that resolves to a declaration from one that resolves to prose about a declaration. " +
+		"The two scans are a Contains for `func (r *Recv) Method(` used to pick which of " +
+		"several same-named files is meant, and a Split into lines to address one by number; " +
+		"neither can be satisfied by comment text, because a comment line does not begin " +
+		"with func and line numbering is not a claim about content.",
 }
 
 func TestGateLiveness_NoSpecGateScansProductionSourceWithItsCommentsIntact(t *testing.T) {
