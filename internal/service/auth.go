@@ -154,6 +154,12 @@ type familyOriginReader interface {
 // of the window, behind the same masked error a wrong password gets. A completed
 // reset now calls ClearAccountLockout, which retires all of them at once by
 // advancing the generation the source key is namespaced under.
+// replayRevokeTimeout bounds the detached family revocation that runs when a
+// replayed refresh token is detected. The request's own deadline no longer
+// applies to it -- that is the point -- so it needs one of its own, or a wedged
+// database turns a containment action into a hung request.
+const replayRevokeTimeout = 5 * time.Second
+
 const (
 	lockoutThreshold            = 5
 	distributedLockoutThreshold = 50
@@ -1351,11 +1357,42 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		return nil, ErrTokenInvalid
 	}
 
-	// Replay detection: if already used → revoke entire family
+	// Replay detection: if already used → revoke entire family.
+	//
+	// The revocation runs on a context detached from the request, and its
+	// outcome is recorded rather than discarded. Both halves were wrong.
+	//
+	// It rode the request context, so the party being contained could cancel
+	// the containment: replay a used token, drop the connection before the
+	// UPDATE commits, and RevokeFamily returns context.Canceled with the family
+	// still live. Its error went to `#nosec G104 -- best-effort revocation`,
+	// and the function returned ErrReplayDetected and audited
+	// reason=replay_detected unconditionally -- so the trail asserted a
+	// containment that had not happened, on the one event where the trail is
+	// how anyone finds out. This is the single containment the whole rotation
+	// design rests on: detecting the replay is worth nothing if the family
+	// survives it.
+	//
+	// context.WithoutCancel keeps the values (tracing, request id) and drops
+	// the cancellation, with a bound of its own so a wedged database cannot
+	// hold the request open now that the caller's deadline no longer applies.
+	// internal/audit/retention.go uses the same construction for the same
+	// reason.
+	//
+	// The audit write is detached with it. A replay is the security event this
+	// log exists for, and losing the record because the attacker hung up is the
+	// same defect one layer along.
 	if stored.Used {
-		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
-		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID})
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayRevokeTimeout)
+		revoked := s.tokens.RevokeFamily(revokeCtx, stored.FamilyID) == nil
+		s.auditLog.Log(revokeCtx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+			map[string]interface{}{
+				"reason": "replay_detected", "family_id": stored.FamilyID,
+				// So an operator reading the trail can tell a contained replay
+				// from a detected one. They are not the same incident.
+				"family_revoked": revoked,
+			})
+		cancel()
 		return nil, ErrReplayDetected
 	}
 
