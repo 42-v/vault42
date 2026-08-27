@@ -28,8 +28,13 @@ import type { TOTPSetupResult, MFAStatus, VaultError } from '../types'
  *   lifetime. It is local bookkeeping, reset by `setupTOTP()` and
  *   `disableTOTP()`, and is not a reading of server state; use `mfaStatus`.
  * - `setupTOTP`, `verifyTOTP`, `disableTOTP`, `generateBackupCodes`,
- *   `fetchMFAStatus`: the actions. Each of the first four refreshes
- *   `mfaStatus` on success.
+ *   `fetchMFAStatus`: the actions. `verifyTOTP`, `disableTOTP` and
+ *   `generateBackupCodes` refresh `mfaStatus` on success. `setupTOTP` does
+ *   NOT: it only hands back the secret and the otpauth URL, and nothing on the
+ *   server has changed yet -- enrolment is not complete until `verifyTOTP`.
+ *   An enrolment screen that renders from `mfaStatus` after `setupTOTP` is
+ *   reading the status from before setup began, which is correct and is not
+ *   the same as stale.
  *
  * Only `verifyTOTP` rethrows, so an enrolment form can await it and keep the
  * user on the step when the code is wrong. The others record the failure in
