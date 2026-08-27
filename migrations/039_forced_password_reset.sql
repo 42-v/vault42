@@ -171,9 +171,11 @@ $$ LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp;
 -- one transition that needs a role test pays for one. The column is NOT NULL, so
 -- there is no third state for the comparison to fall through.
 --
--- The name sorts after 024's users_account_state_transitions, which is the only
--- other row trigger on this table. Same-event triggers fire in name order; both
--- of these raise, so the order decides only which message a write refused by both
+-- The name sorts after 024's users_account_state_transitions, the only other
+-- BEFORE UPDATE row trigger on this table -- 025 added a third, but it is a
+-- BEFORE INSERT and so never shares an event with either of these, which is what
+-- 025's own header says. Same-event triggers fire in name order; 024's and this
+-- one both raise, so the order decides only which message a write refused by both
 -- reports, and 024's is the more specific of the two in that case. The name
 -- follows the <table>_<purpose> shape 017 and 020 established.
 --
