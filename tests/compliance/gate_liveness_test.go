@@ -1338,6 +1338,33 @@ func rawSourceScans(t *testing.T) ([]rawSourceScan, int) {
 				if !ok || len(assign.Rhs) == 0 || len(assign.Lhs) == 0 {
 					return true
 				}
+				// Taint propagates through an intermediate. Both of the gates
+				// this missed were written as
+				//
+				//     src  := readFileString(t, path)
+				//     text := src[start:end]
+				//     strings.Contains(text, "FailClosed: true")
+				//
+				// and the scan below unwraps a slice written AT the call site
+				// but had no way to know `text` was one. So a security gate --
+				// every credential limiter must fail closed -- was satisfiable
+				// by a comment inside the literal it read, and this check said
+				// nothing. Measured: commenting out the login limiter's
+				// FailClosed left both green.
+				if len(assign.Lhs) == 1 {
+					source := assign.Rhs[0]
+					if slice, ok := source.(*ast.SliceExpr); ok {
+						source = slice.X
+					}
+					if id, ok := source.(*ast.Ident); ok {
+						if _, tainted := raw[id.Name]; tainted {
+							if lhs, ok := assign.Lhs[0].(*ast.Ident); ok && lhs.Name != "_" {
+								raw[lhs.Name] = struct{}{}
+							}
+						}
+					}
+				}
+
 				call, ok := assign.Rhs[0].(*ast.CallExpr)
 				if !ok {
 					return true
