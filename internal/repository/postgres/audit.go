@@ -126,7 +126,7 @@ func (r *AuditRepo) Insert(ctx context.Context, entry *model.AuditEntry) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		entry.ID, entry.Timestamp, entry.EventType,
 		nullStr(auditUserID), nullStr(auditClientID),
-		nullStr(entry.IP), nullStr(entry.UserAgent),
+		nullStr(entry.IP), nullStr(clampUserAgent(entry.UserAgent)),
 		nullStr(entry.FingerprintHash), nullStr(entry.DeviceID),
 		auditMetadata, entry.RiskScore,
 	)
@@ -151,7 +151,7 @@ func (r *AuditRepo) InsertBatch(ctx context.Context, entries []*model.AuditEntry
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			e.ID, e.Timestamp, e.EventType,
 			nullStr(batchUserID), nullStr(batchClientID),
-			nullStr(e.IP), nullStr(e.UserAgent),
+			nullStr(e.IP), nullStr(clampUserAgent(e.UserAgent)),
 			nullStr(e.FingerprintHash), nullStr(e.DeviceID),
 			batchMetadata, e.RiskScore,
 		)
