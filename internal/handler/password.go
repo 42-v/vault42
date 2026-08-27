@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -140,7 +141,26 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	_, _ = vaultcrypto.VerifyPassword("dummy", vaultcrypto.DummyHash, h.pepper)
 	token, tokenErr := vaultcrypto.RandomHex(32)
 
-	user, err := h.users.GetByEmail(r.Context(), input.Email)
+	// Folded, because the column only ever holds a folded address and the query
+	// is an exact match.
+	//
+	// This was the one email lookup that passed its input through raw. Register
+	// folds at auth.go:447, Login at :780, the OAuth callback and admin import
+	// do the same, so auth.users.email cannot contain a capital -- and
+	// "Alice@example.com" from a phone keyboard, or a pasted address with a
+	// trailing space, simply missed the row.
+	//
+	// Nothing said so. The deferred response above answers "if that email
+	// exists, a reset link has been sent" either way, which is the right
+	// anti-enumeration behavior and is exactly what hid this: no mail was
+	// queued, no audit row was written, and the user saw success. The person it
+	// happens to is the one locked out by the failed-login counter, for whom
+	// this route is the documented way back in.
+	//
+	// Named addr, not email: this file imports a package called email.
+	addr := strings.ToLower(strings.TrimSpace(input.Email))
+
+	user, err := h.users.GetByEmail(r.Context(), addr)
 	if err != nil || user == nil || user.Deleted || user.Banned || user.Disabled || tokenErr != nil {
 		return
 	}
