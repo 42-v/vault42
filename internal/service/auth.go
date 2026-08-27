@@ -1493,10 +1493,10 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 // accepted: the caller is refused with ErrReplayDetected either way.
 //
 // Both run on a context DETACHED from the request. The request context is
-// cancelled the instant the client goes away, and the client here is whoever
+// canceled the instant the client goes away, and the client here is whoever
 // presented the stolen token -- so on the plain request context an attacker
 // contains their own replay by hanging up, and the containment this function
-// exists to perform is the first thing cancelled. The detached context carries
+// exists to perform is the first thing canceled. The detached context carries
 // its own deadline (replayRevokeTimeout) so a wedged store cannot hold the
 // goroutine open.
 //
