@@ -130,7 +130,7 @@ a version-prefixed commit subject as a release mechanism.
 
 ## What CI runs on your pull request
 
-`.github/workflows/ci.yml`, which also runs on every push to `main`. All nineteen jobs, named as
+`.github/workflows/ci.yml`, which also runs on every push to `main`. All twenty jobs, named as
 they appear in the checks list:
 
 | Job | What it does |
@@ -150,6 +150,7 @@ they appear in the checks list:
 | Build All Binaries | `vault`, `bridge`, `admin-gateway`. Conditional |
 | GoReleaser config | validates `.goreleaser.yaml`. Conditional |
 | Suites CI cannot run | compiles `tests/admin`, `tests/honeypot`, `tests/stress` and `tests/browser` under their build tags and collects the Playwright suite, then fails if any of them neither ran nor printed its skip notice |
+| Release artifact round-trip | uploads a stand-in set of release assets and downloads them again with the exact actions `release.yml` uses, then asserts they land flat in `dist/` -- because `release.yml` has no `pull_request` trigger, so a change to it otherwise first executes during a release |
 | Hadolint | the six root Dockerfiles and `web/Dockerfile` |
 | Lint (non-Go) | shellcheck over every tracked `*.sh`, `ruff check`, markdownlint and `yamllint --strict`. The four configurations these read were tuned to zero by hand and ran in no workflow until 1.0.1; two had already drifted back by then |
 | .NET SDK coverage gate | builds `packages/dotnet` with `-warnaserror` and runs `scripts/dotnet-coverage.sh` at a floor of 100.00 with no exclusions file. Conditional |
