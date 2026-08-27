@@ -117,8 +117,8 @@ Two consequences are accepted:
   imply.
 
 **Not covered by this risk: the admin plane.** The admin gateway does not use JWT roles. Its
-authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 30
-`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 38 admin endpoints
+authorization model is `internal/rbac`: three strictly hierarchical `Role` constants and 31
+`Permission` constants, hardcoded in Go so a SQL injection cannot mint one. 40 admin endpoints
 are permission-gated in `adminapi.NewRouter` (`internal/adminapi/router.go`), including a
 role-catalog management API (`GET`/`POST`/`DELETE /admin/roles`), admin user management
 (`/admin/admins`) and an HTML dashboard. Every check re-reads the admin row from the database
@@ -478,9 +478,12 @@ the application role could ban or disable any account or every account, lift a b
 recorded ban reason, un-confirm a verified address, and put a claimed account back into
 `import_pending`. None of those is a statement any code path issues.
 
-Migration 024 splits them by whether a writer exists. `banned`, `ban_reason` and `disabled` have
-none -- they are set once at INSERT by the import path, under `vault_admin` -- so the privilege is
-revoked outright. `email_verified` and `import_pending` keep theirs, because `UserRepo.VerifyEmail`
+Migration 024 splits them by whether a writer exists. `disabled` has none -- it is set once at
+INSERT by the import path, under `vault_admin` -- so the privilege is revoked outright. `banned`
+and `ban_reason` had none either until 043, which granted the pair to `vault_admin` for the two
+operator routes `POST /admin/users/{id}/ban` and `.../unban`: the writer is on the plane that runs
+behind mTLS on loopback, authorizes on `users:ban` and audits the acting admin, which is the
+placement 024 argued for and not the one it revoked. `email_verified` and `import_pending` keep theirs, because `UserRepo.VerifyEmail`
 and `UserRepo.ClearImportPending` are `vault_app`'s own statements, and
 `users_account_state_transitions` narrows each to the direction its writer moves in.
 

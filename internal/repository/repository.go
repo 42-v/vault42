@@ -98,6 +98,18 @@ type UserRepository interface {
 	// migration 039's trigger refuses the FALSE->TRUE transition from any other
 	// role, so a web-server caller compiles and is then refused by the database.
 	SetMustResetPassword(ctx context.Context, id string, required bool) error
+	// SetBanned moves the operator ban in either direction. It is the admin
+	// plane's statement and the only writer of these two columns on an account
+	// that already exists: 004 granted them to vault_app, 024 revoked them, and
+	// the import path carries the flag in its INSERT rather than through here.
+	//
+	// reason is stored only when banned is true; lifting a ban clears it, so the
+	// record never carries an explanation for a sanction that is not in force.
+	// It is bounded and sanitized by the caller, not here, for the reason the
+	// column is VARCHAR(500): an over-long value fails the whole statement
+	// rather than truncating, and the route is where the operator's text is
+	// known to be operator text.
+	SetBanned(ctx context.Context, id string, banned bool, reason string) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential

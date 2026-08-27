@@ -122,6 +122,8 @@ var severityByEvent = map[string]int{
 	AdminUserUnlock:        SeverityElevated,
 	AdminUserResetRequired: SeverityElevated,
 	AdminUserResetCleared:  SeverityElevated,
+	AdminUserBan:           SeverityElevated,
+	AdminUserUnban:         SeverityElevated,
 
 	// A privilege, key or identity boundary exercised or probed.
 	KMSUnwrap:            SeveritySerious,
