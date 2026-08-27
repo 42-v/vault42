@@ -95,6 +95,8 @@ export interface UserProfile {
 export interface Session {
   /** Session identifier, for `revokeSession`. */
   id: string
+  /** The device this session belongs to, matching `Device.id`. */
+  device_id: string
   /** Device label, when the session is tied to a named device. */
   friendly_name?: string
   /** Client IP recorded for the session. */
@@ -105,30 +107,48 @@ export interface Session {
   trusted: boolean
   /** RFC 3339 timestamp. Absent until the session is used a second time. */
   last_seen_at?: string
-  /** RFC 3339 timestamp of first use. */
+  /**
+   * RFC 3339 timestamp. When the device was first bound to the account, or the
+   * session's own start when it carries no device.
+   */
   first_seen_at: string
+  /**
+   * RFC 3339 timestamp of when this session began. The family's birth date,
+   * which a rotation cannot move, so it is the age the absolute session
+   * lifetime is measured against.
+   */
+  created_at: string
+  /**
+   * RFC 3339 timestamp of when this session's current refresh token stops
+   * being accepted.
+   */
+  expires_at: string
 }
 
-/** A recognised device, from `GET /user/devices`. */
+/**
+ * A recognised device, from `GET /user/devices`.
+ *
+ * These are the six fields the endpoint sends, and no more. It used to declare
+ * `trusted_until`, `first_seen_at` and `created_at` as well; the server has
+ * never sent any of them. The first is on the underlying row and deliberately
+ * not projected into the response, and the other two do not exist on it at all.
+ * Two of the three were declared non-optional, so `device.created_at` type-checked
+ * and was `undefined` at runtime -- the one combination TypeScript cannot warn
+ * about. tests/spec holds this interface against the wire type now.
+ */
 export interface Device {
   /** Device identifier, for `renameDevice` and `removeDevice`. */
   id: string
   /** User-editable label. */
   friendly_name: string
-  /** Whether the device is trusted. */
+  /** Whether the device is trusted. Current issuance never sets it. */
   trusted: boolean
-  /** RFC 3339 timestamp at which trust lapses. Absent when trust does not expire. */
-  trusted_until?: string
   /** Most recent IP seen for the device. */
   ip: string
   /** Most recent user agent seen for the device. */
   user_agent: string
   /** RFC 3339 timestamp. Absent until the device is used a second time. */
   last_seen_at?: string
-  /** RFC 3339 timestamp of first use. */
-  first_seen_at: string
-  /** RFC 3339 timestamp of enrolment. */
-  created_at: string
 }
 
 /**
