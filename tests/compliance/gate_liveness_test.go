@@ -1228,6 +1228,17 @@ var rawSourceScanByDesign = map[string]string{
 		"exactly what this gate has to read, because the defect it holds was four " +
 		"documents describing a shipped control as absent. There is nowhere for the " +
 		"phrase to hide either: a Markdown comment is still text an auditor reads.",
+	"tests/spec/mint_response_doc_parity_test.go:mintDocSection": "reads docs/api.md, " +
+		"which is Markdown. commentFreeSource cannot be used on it and says so: " +
+		"commentSyntaxFor knows .go, .sql, .yaml, .tpl and .txt, and t.Fatals on " +
+		"anything else rather than guessing -- so the alternative this check offers " +
+		"does not exist for this file. What the function extracts is the published " +
+		"POST /mint section, and published prose is exactly what it has to read: the " +
+		"defect it holds was api.md describing a response object while omitting a " +
+		"field the server sends, and spec.md makes api.md authoritative for response " +
+		"bodies. There is nowhere for a match to hide, either. The section is bounded " +
+		"by Markdown headings and the strings it looks for are a fenced json block " +
+		"and a table header, none of which is comment syntax in any language.",
 	"tests/spec/badge_language_parity_test.go:goDirectRequires": "reads go.mod, " +
 		"not Go source, and go.mod is the one file here where comment text carries " +
 		"meaning: `// indirect` is how the format marks a requirement the module " +

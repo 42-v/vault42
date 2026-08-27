@@ -483,12 +483,12 @@
     {
       "package": "internal/service",
       "file": "internal/service/mint.go",
-      "line": 393,
+      "line": 419,
       "occurrence": 1,
       "source": "\t\treturn nil, ErrMintRoleNotPermitted",
       "bucket": "C",
       "confirmed": true,
-      "justification": "checkRoles' second, defence-in-depth role filter. Reaching it needs a role that the loop above accepted, meaning !seed.IsReservedAdminRole(r), and that seed.FilterUserRoles then dropped. FilterUserRoles (internal/seed/seed.go:148) drops exactly the roles for which IsReservedAdminRole(r) is true, so the two predicates are the same case-folded lookup on the same slice and the lengths cannot differ. The early return at internal/service/mint.go:382 means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
+      "justification": "checkRoles' second, defence-in-depth role filter. Reaching it needs a role that the loop above accepted, meaning !seed.IsReservedAdminRole(r), and that seed.FilterUserRoles then dropped. FilterUserRoles (internal/seed/seed.go:148) drops exactly the roles for which IsReservedAdminRole(r) is true, so the two predicates are the same case-folded lookup on the same slice and the lengths cannot differ. The early return at internal/service/mint.go:407 means requested is never empty, which is FilterUserRoles' only other way to shorten the result."
     },
     {
       "package": "internal/service",

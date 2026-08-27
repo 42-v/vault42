@@ -598,3 +598,121 @@ func TestMintHandler_AuditsASigningFailure(t *testing.T) {
 		t.Errorf("user id = %q, want the asserted subject", captured[0].UserID)
 	}
 }
+
+// The opt-in is refused at the HTTP edge with a code of its own, so a caller
+// pointed at an instance that does not allow the claim learns that, rather than
+// receiving a token that silently says less than it asked for and failing later
+// inside the relying party.
+func TestMintHandler_EmailWithoutTheOptInIsRefused(t *testing.T) {
+	h := newMintTestHandler(t, nil) // AllowEmail defaults off
+	rec := httptest.NewRecorder()
+	h.Mint(rec, withServiceClaims(mintRequest(t, MintRequestBody{
+		Subject: "user-1", Email: "alice@example.com",
+	}), "client-1", []string{MintScope}))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "email_not_permitted") {
+		t.Fatalf("body = %s, want email_not_permitted", rec.Body.String())
+	}
+}
+
+func TestMintHandler_AnInvalidEmailIsABadRequest(t *testing.T) {
+	h := newMintTestHandler(t, func(c *service.MintConfig) { c.AllowEmail = true })
+	rec := httptest.NewRecorder()
+	h.Mint(rec, withServiceClaims(mintRequest(t, MintRequestBody{
+		Subject: "user-1", Email: "Alice <alice@example.com>",
+	}), "client-1", []string{MintScope}))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_email") {
+		t.Fatalf("body = %s, want invalid_email", rec.Body.String())
+	}
+}
+
+// The response echoes the asserted address so a client can see what it actually
+// got. It is echoed normalized, which is the value that went into the claim.
+func TestMintHandler_TheResponseEchoesTheAssertedEmail(t *testing.T) {
+	h := newMintTestHandler(t, func(c *service.MintConfig) { c.AllowEmail = true })
+	rec := httptest.NewRecorder()
+	h.Mint(rec, withServiceClaims(mintRequest(t, MintRequestBody{
+		Subject: "user-1", Email: "  Alice@Example.COM ",
+	}), "client-1", []string{MintScope}))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp MintResponse
+	decodeResponse(t, rec, &resp)
+	if resp.Email != "alice@example.com" {
+		t.Fatalf("response email = %q", resp.Email)
+	}
+	payload := mintedTokenPayload(t, resp.AccessToken)
+	if payload["email"] != "alice@example.com" {
+		t.Fatalf("claim email = %v", payload["email"])
+	}
+}
+
+// The audit row deliberately does not carry the address. Audit entries outlive
+// an erasure, and this is caller-asserted personal data that vault42 never
+// verified and holds no other record of -- writing it here would create one,
+// in the one table designed to survive the subject asking to be forgotten.
+func TestMintHandler_TheAuditRowDoesNotCarryTheEmail(t *testing.T) {
+	var captured []*model.AuditEntry
+	auditRepo := &mocks.MockAuditRepo{
+		InsertFn: func(_ context.Context, entry *model.AuditEntry) error {
+			captured = append(captured, entry)
+			return nil
+		},
+	}
+	svc, err := service.NewMintService(mintHandlerSigner(t), service.MintConfig{
+		Issuer: mintHandlerIssuer, Audience: mintHandlerAudience,
+		DefaultTTL: time.Minute, MaxTTL: time.Minute, AllowEmail: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMintService: %v", err)
+	}
+	h := NewMintHandler(svc, audit.NewLogger(auditRepo, 0))
+
+	rec := httptest.NewRecorder()
+	h.Mint(rec, withServiceClaims(mintRequest(t, MintRequestBody{
+		Subject: "user-1", Email: "alice@example.com",
+	}), mintHandlerClient, []string{MintScope}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if len(captured) == 0 {
+		t.Fatal("no audit entry recorded")
+	}
+	// Marshaled whole, not walked field by field. model.AuditEntry carries
+	// UserID, ClientID, IP, UserAgent and DeviceID outside Metadata, and
+	// Metadata itself holds interface{} -- so a loop over string values in one
+	// map cannot fail for the reason this test is named for. The address landing
+	// in UserID would have passed it. This is the idiom
+	// blob_audit_privacy_test.go uses for the same question.
+	//
+	// Marshaling alone is not enough either, and the earlier version of this
+	// test said FingerprintHash was covered by it when it is exactly the field
+	// that is not: it is tagged json:"-", so json.Marshal never emits it.
+	// Passing the address as the fpHash argument left this green while writing
+	// it to audit.audit_log. Anything hidden from the encoder has to be asserted
+	// by hand, so it is, below.
+	for _, e := range captured {
+		serialized, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("marshal audit entry: %v", err)
+		}
+		if strings.Contains(string(serialized), "alice@example.com") {
+			t.Errorf("audit entry %q carries the asserted email: %s", e.EventType, serialized)
+		}
+		// The json:"-" fields, which the marshal above cannot see.
+		if strings.Contains(e.FingerprintHash, "alice@example.com") {
+			t.Errorf("audit entry %q carries the asserted email in FingerprintHash, which is "+
+				"tagged json:\"-\" and so is invisible to the check above", e.EventType)
+		}
+	}
+}
