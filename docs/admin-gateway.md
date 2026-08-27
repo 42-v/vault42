@@ -48,10 +48,10 @@ Three roles with strict hierarchy (hardcoded in `internal/rbac/`):
 | Role | Inherits | Additional Permissions |
 |------|----------|----------------------|
 | `viewer` | -- | List/read keys, audit, users, sessions, clients, config, metrics |
-| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, force/withdraw a password reset, revoke sessions, create/revoke/rotate clients, write config |
+| `operator` | `viewer` | Rotate/revoke keys, lock/unlock users, ban/unban users, force/withdraw a password reset, revoke sessions, create/revoke/rotate clients, write config |
 | `super_admin` | `operator` | Manage/create/revoke admin accounts |
 
-22 permissions total. Permission checks are Go code -- not database queries -- so SQL injection cannot escalate privileges.
+31 permissions total. Permission checks are Go code -- not database queries -- so SQL injection cannot escalate privileges.
 
 ---
 
@@ -122,6 +122,8 @@ All endpoints are prefixed with `/admin/`.
 | `POST` | `/admin/users/{id}/unlock` | Session + RBAC | `users:unlock` | Unlock user account |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session + RBAC | `users:reset` | Force a password reset and revoke the account's live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session + RBAC | `users:reset` | Withdraw a forced password reset |
+| `POST` | `/admin/users/{id}/ban` | Session + RBAC | `users:ban` | Ban an account with a reason and revoke its live sessions |
+| `POST` | `/admin/users/{id}/unban` | Session + RBAC | `users:ban` | Lift a ban |
 
 ### Session Management
 
@@ -229,7 +231,7 @@ The admin gateway uses its own database role (`vault_admin`) with different priv
 
 | Table | `vault_app` | `vault_admin` |
 |-------|-------------|---------------|
-| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`, `banned`, `ban_reason`, `disabled`; `email_verified` and `import_pending` narrowed by trigger, below) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` only |
+| `auth.users` | SELECT, INSERT, DELETE + column-level UPDATE (excludes `id`, `email`, `created_at`, `deleted`, `deleted_at`, `banned`, `ban_reason`, `disabled`; `email_verified` and `import_pending` narrowed by trigger, below) | SELECT, INSERT (import) + column-level UPDATE on `locked_until` and `failed_login_count` (001), `must_reset_password` (039), `banned` and `ban_reason` (043) only |
 | `auth.clients` | SELECT, INSERT (narrowed by trigger, below) | SELECT, INSERT, UPDATE |
 | `auth.admin_config` | SELECT, INSERT, UPDATE | SELECT, INSERT, UPDATE, DELETE |
 | `auth.admin_users` | none (revoked in 002) | Full CRUD |
@@ -284,9 +286,11 @@ capability scope now fails, loudly, naming the scope. Ordinary client seeding is
 unchanged.
 
 The account-state columns of `auth.users` are split the same way, by migration
-024. `banned`, `ban_reason` and `disabled` have no UPDATE writer anywhere in the
-tree -- they are set once at INSERT by the import path -- so the grant 004 made to
-`vault_app` is revoked outright rather than guarded. `email_verified` and
+024. `disabled` has no UPDATE writer anywhere in the tree -- it is set once at
+INSERT by the import path -- so the grant 004 made to `vault_app` is revoked
+outright rather than guarded. `banned` and `ban_reason` were in the same position
+until 043 granted them to `vault_admin`, which is the admin plane's ban lever and
+not a return of the privilege 024 took off `vault_app`. `email_verified` and
 `import_pending` keep theirs, because email confirmation and import claiming are
 `vault_app`'s own work, and `users_account_state_transitions` narrows each to the
 one direction its writer moves in: an address that is confirmed stays confirmed,

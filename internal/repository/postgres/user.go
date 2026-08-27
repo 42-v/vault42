@@ -121,6 +121,36 @@ func (r *UserRepo) SetMustResetPassword(ctx context.Context, id string, required
 	return nil
 }
 
+// SetBanned moves the operator ban in either direction on an existing account.
+// The admin routes POST /admin/users/{id}/ban and .../unban are its only
+// callers; migration 043 is the grant that lets them run it.
+//
+// The statement names banned and ban_reason and nothing else, for the reason
+// SetMustResetPassword gives above: PostgreSQL checks the column privilege
+// against every target an UPDATE names, whether or not the value differs, so
+// stamping updated_at here would fail the whole statement with 42501 under
+// vault_admin and the operator's ban would never land. The three admin-plane
+// writes on this table -- LockUntil, Unlock, SetMustResetPassword -- are all
+// written this way and all for this reason.
+//
+// Lifting a ban clears the reason rather than leaving it: the column is the
+// explanation for a sanction in force, and a row reading banned=false with a
+// reason still attached says an account is sanctioned when it is not. It goes to
+// NULL rather than the empty string because 004 made it nullable precisely so
+// that "no ban" and "a ban nobody explained" stay distinguishable, and
+// GetByID's COALESCE renders either as "" in Go.
+func (r *UserRepo) SetBanned(ctx context.Context, id string, banned bool, reason string) error {
+	if !banned {
+		reason = ""
+	}
+	_, err := r.db.Pool.Exec(ctx,
+		`UPDATE auth.users SET banned=$2, ban_reason=$3 WHERE id=$1`, id, banned, nullStr(reason))
+	if err != nil {
+		return fmt.Errorf("set banned: %w", err)
+	}
+	return nil
+}
+
 // GetByID retrieves a user by primary key. Returns nil, nil if not found.
 func (r *UserRepo) GetByID(ctx context.Context, id string) (*model.User, error) {
 	return r.scanUser(r.db.Pool.QueryRow(ctx, `

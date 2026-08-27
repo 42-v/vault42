@@ -1,0 +1,66 @@
+-- ============================================================================
+-- 043: the admin plane can set the ban it has always been able to read
+-- ============================================================================
+--
+-- auth.users has carried banned and ban_reason since 004, and every gate that
+-- reads them works: Login answers 403 account_banned, so do the OAuth2 authorize
+-- path, the MFA continuation and the password-reset confirm, and the frontend
+-- renders error.account_banned in thirty-eight locales. What has never existed
+-- is a way to set them on an account that already exists.
+--
+-- 004 granted the columns to vault_app. 024 took them back, and said why: the
+-- privilege had no direction to it, so one UPDATE with no WHERE from the web
+-- server's role would sanction every account in the deployment. Its note on
+-- ban_reason -- "it has no writer either, and leaving it behind" -- is the state
+-- this migration ends. The only writer since has been POST /admin/users/import,
+-- which carries the flag in the INSERT and needs no UPDATE at all, so an account
+-- could arrive banned from a legacy platform and never be banned or unbanned
+-- afterwards.
+--
+-- vault_admin gains UPDATE (banned, ban_reason), joining
+-- UPDATE (locked_until, failed_login_count) from 001 and
+-- UPDATE (must_reset_password) from 039. That is the pairing 024 named and 039
+-- restated: an account-state flag that contains an account belongs to the plane
+-- that runs behind mTLS on loopback, authorizes on a permission, and writes an
+-- audit row naming the acting admin.
+--
+-- ----------------------------------------------------------------------------
+-- Why this is a grant and not a trigger
+-- ----------------------------------------------------------------------------
+--
+-- 039 needed a trigger because its column moves in both directions and the two
+-- directions belong to different roles: vault_app completes a reset, only the
+-- admin plane may impose one. A ban has no such split. Both directions are the
+-- operator's, no application code path writes either column, and 024 already
+-- revoked the privilege from the only other role that had it. A column grant
+-- says exactly that, so there is nothing here for a WHEN clause to decide.
+--
+-- ----------------------------------------------------------------------------
+-- Written bare, at column zero
+-- ----------------------------------------------------------------------------
+--
+-- Not inside a pg_roles guard, following 024's own REVOKE and 039's grant. 001
+-- creates both roles unconditionally, so the guard has nothing to protect here,
+-- and the form decides which of the integration fixture's two mechanisms applies
+-- the statement.
+--
+-- Both mechanisms match at column zero and only there. containers_test.go's
+-- stripRoleGrants() removes lines beginning GRANT/REVOKE/ALTER DEFAULT before
+-- the schema is built, and postgres_role_privileges_test.go's applyRealGrants()
+-- re-applies them afterwards as the privilege model under test. Written bare, a
+-- grant goes through both: stripped from the build, re-applied by the function
+-- whose job is to model what the roles really hold, which is what the ban test
+-- in tests/integration exercises.
+--
+-- Indented inside a DO block it goes through neither, and is instead applied by
+-- the owner during the schema build because stripRoleGrants did not recognise
+-- it. That was measured, not assumed: wrapping this grant in the guard 040 uses
+-- left the integration test passing. The end state is the same privilege either
+-- way -- so a guarded grant is not the silent hole it looks like -- but it
+-- reaches the suite by not matching a prefix rather than by being part of the
+-- model, and the one file that is supposed to enumerate the privilege set never
+-- names it.
+--
+-- Idempotent: GRANT is idempotent by definition.
+
+GRANT UPDATE (banned, ban_reason) ON auth.users TO vault_admin;

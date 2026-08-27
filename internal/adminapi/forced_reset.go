@@ -29,15 +29,21 @@ import (
 // POST /admin/users/{id}/lock and /unlock: the same reversible pair on the same
 // resource, the same operator tier, the same audit-and-report conventions.
 
-// maxResetReasonLen bounds the operator's free-text reason in runes.
+// maxAdminReasonLen bounds an operator's free-text reason in runes.
 //
 // The value lands in a JSONB metadata column on a row that outlives the account
 // under Art. 17(3)(b)/(e), so it is bounded rather than trusted: a caller
-// holding users:reset should not be able to push an arbitrary payload into the
-// audit store one request at a time. Two hundred runes is a sentence, which is
-// what a reason is; anything longer belongs in the incident ticket the reason
-// should be naming.
-const maxResetReasonLen = 200
+// holding an operator permission should not be able to push an arbitrary payload
+// into the audit store one request at a time. Two hundred runes is a sentence,
+// which is what a reason is; anything longer belongs in the incident ticket the
+// reason should be naming.
+//
+// The ban routes share it. Their reason is also persisted, to
+// auth.users.ban_reason, which is VARCHAR(500) -- so the column is not what
+// sets this bound and would not be the thing to raise it to. sanitize.String
+// escapes before it truncates, so 200 runes out is 200 characters in the
+// column however many the operator typed.
+const maxAdminReasonLen = 200
 
 // The reasons recorded when the caller supplies none. They name the action
 // rather than leaving the field absent, so a query over the trail filtering on
@@ -57,27 +63,30 @@ type forcedResetRequest struct {
 	Reason string `json:"reason"`
 }
 
-// resetReason reads the operator's reason out of the request body, falling back
+// adminReason reads the operator's reason out of the request body, falling back
 // to the given default for an absent, unparseable or blank one.
 //
 // The value is passed through sanitize.String, the tree's one free-text
 // sanitizer: it trims, neutralizes the markup characters that make an audit row
 // render as something other than text, and truncates on a rune boundary.
-func resetReason(r *http.Request, fallback string) string {
+func adminReason(r *http.Request, fallback string) string {
 	var req forcedResetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return fallback
 	}
-	if reason := sanitize.String(req.Reason, maxResetReasonLen); reason != "" {
+	if reason := sanitize.String(req.Reason, maxAdminReasonLen); reason != "" {
 		return reason
 	}
 	return fallback
 }
 
-// liveUser resolves {id} to an account a forced password reset can mean
-// something on, writing the refusal itself and reporting false when it cannot.
+// liveUser resolves {id} to an account an operator verb can mean something on,
+// writing the refusal itself and reporting false when it cannot.
 //
-// Both routes read before they write, which LockUser does not: LockUser hands an
+// It lives in this file because the forced-reset pair was the first to need it;
+// the ban pair in ban.go is the other caller, and the reasoning below holds for
+// both. Every route that goes through it reads before it writes, which LockUser
+// does not: LockUser hands an
 // unknown id straight to the repository, the UPDATE matches no row, and the
 // operator is told the account is locked. The two routes that do look --
 // GET /admin/users/{id} and DELETE /admin/users/{id} -- answer 404
@@ -87,9 +96,9 @@ func resetReason(r *http.Request, fallback string) string {
 //
 // An erased account takes the same answer. Its row survives as a tombstone
 // carrying a deleted-<id>@<domain>.invalid address; Login refuses it on
-// account_deleted well before the forced-reset branch, and there is no mailbox
-// left for the reset link. Setting the flag there would write a column that can
-// never be read and report success for it.
+// account_deleted well before either branch, and there is no mailbox left for a
+// reset link nor a person left to sanction. Writing to it would move a column
+// that can never be read and report success for it.
 func (h *Handler) liveUser(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -134,7 +143,7 @@ func (h *Handler) RequirePasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason := resetReason(r, defaultRequireResetReason)
+	reason := adminReason(r, defaultRequireResetReason)
 
 	if err := h.users.SetMustResetPassword(r.Context(), user.ID, true); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
@@ -190,7 +199,7 @@ func (h *Handler) ClearPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reason := resetReason(r, defaultClearResetReason)
+	reason := adminReason(r, defaultClearResetReason)
 
 	if err := h.users.SetMustResetPassword(r.Context(), user.ID, false); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error")
