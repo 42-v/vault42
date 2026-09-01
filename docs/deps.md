@@ -8,7 +8,7 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 
 | Dependency | Version | Purpose | Stars | Updated |
 |---|---|---|---|---|
-| `github.com/go-webauthn/webauthn` | v0.17.4 | WebAuthn/FIDO2 passkey support | ![stars](https://img.shields.io/github/stars/go-webauthn/webauthn?style=flat&label=) | 2026-05-22 |
+| `github.com/go-webauthn/webauthn` | v0.17.4 (latest: v0.18.0) | WebAuthn/FIDO2 passkey support | ![stars](https://img.shields.io/github/stars/go-webauthn/webauthn?style=flat&label=) | 2026-08-27 |
 | `github.com/jackc/pgx/v5` | v5.10.0 | PostgreSQL driver + connection pool | ![stars](https://img.shields.io/github/stars/jackc/pgx?style=flat&label=) | 2026-06-03 |
 | `golang.org/x/crypto` | v0.55.0 | Argon2id password hashing | ![stars](https://img.shields.io/github/stars/golang/crypto?style=flat&label=) | 2026-08-11 |
 
@@ -83,10 +83,10 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | [fxamacker](https://github.com/fxamacker) | User | cbor | 38 | ![followers](https://img.shields.io/github/followers/fxamacker?style=flat&label=) | 2017-10-29 |
 | [golang](https://github.com/golang) | Org | crypto, sync, sys, text | 61 | ![followers](https://img.shields.io/github/followers/golang?style=flat&label=) | 2013-05-01 |
 | [golang-jwt](https://github.com/golang-jwt) | Org | jwt | 3 | ![followers](https://img.shields.io/github/followers/golang-jwt?style=flat&label=) | 2021-05-14 |
-| [google](https://github.com/google) | Org | go-tpm, uuid | 2893 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
+| [google](https://github.com/google) | Org | go-tpm, uuid | 2899 | ![followers](https://img.shields.io/github/followers/google?style=flat&label=) | 2012-01-18 |
 | [go-viper](https://github.com/go-viper) | Org | mapstructure | 2 | ![followers](https://img.shields.io/github/followers/go-viper?style=flat&label=) | 2020-09-30 |
 | [go-webauthn](https://github.com/go-webauthn) | Org | webauthn, x | 4 | ![followers](https://img.shields.io/github/followers/go-webauthn?style=flat&label=) | 2021-12-09 |
-| [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 190 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
+| [jackc](https://github.com/jackc) | User | pgpassfile, pgservicefile, pgx, puddle | 191 | ![followers](https://img.shields.io/github/followers/jackc?style=flat&label=) | 2009-06-10 |
 | [philhofer](https://github.com/philhofer) | User | fwd | 47 | ![followers](https://img.shields.io/github/followers/philhofer?style=flat&label=) | 2012-12-01 |
 | [tinylib](https://github.com/tinylib) | Org | msgp | 3 | ![followers](https://img.shields.io/github/followers/tinylib?style=flat&label=) | 2015-01-12 |
 | [x448](https://github.com/x448) | User | float16 | 54 | ![followers](https://img.shields.io/github/followers/x448?style=flat&label=) | 2019-10-27 |
