@@ -388,6 +388,13 @@ re-confirmation of credentials (step-up). Rights exercises are recorded in the a
   therefore leaves an account that has already stopped authenticating and still holds some data
   pending deletion — not a live, loginable account whose second factors have already been
   destroyed. Every step is idempotent, so an interrupted erasure is completed by re-running it.
+- **Erasure survives the token that was valid when it ran.** Access tokens are validated
+  without a database read, so one issued moments before the erasure stays cryptographically
+  valid until it expires. It cannot be used to undo the erasure: every endpoint that writes
+  personal data — the identity profile, encrypted blobs, the marketing-consent record, the
+  password, and enrolment of a TOTP secret, a WebAuthn credential or backup codes — re-reads the
+  account state and refuses a tombstoned account with `401`. Reading and deleting are unaffected,
+  and re-running the erasure itself stays possible so an interrupted one can be completed.
 - **The recovery escrow is a second exception to immediate erasure.** Where the Operator has
   configured a recovery key, full account erasure **first writes one encrypted record** to
   `auth.account_recovery` holding the user's email, account creation date, roles and display

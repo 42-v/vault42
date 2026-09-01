@@ -178,7 +178,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "internal/server/server.go:546 mounts GET /auth/verify-email, and internal/handler/auth.go:298 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation.\n\nThis entry previously said no Sec-Fetch-* header is read anywhere in the tree, and that was false: cmd/bridge/proxy.go:373 reads all three. docs/COMPLIANCE.md recorded the correction and it never propagated back here, which is how a register sentence outlives the fact it rests on. The accurate statement is narrower and still decides the row: no route served by the vault itself validates fetch metadata, and adding it here would not help, because the rule only has teeth if it rejects requests that carry no fetch metadata at all -- which is every non-browser client, including the curl in docs/api.md and both shipped SDKs.\n\nThe method flip is the honest remedy and is a breaking change to a published API: @vault42/vue ships the GET in its built output, and a pinned older SDK would start receiving 405. It is timed with an SDK major rather than dropped into a patch release.",
+      "rationale": "internal/server/server.go:569 mounts GET /auth/verify-email, and internal/handler/auth.go:298 mutates state on it by marking the address verified. ASVS V3.5.3 requires either a non-safe method or strict Sec-Fetch-* validation.\n\nThis entry previously said no Sec-Fetch-* header is read anywhere in the tree, and that was false: cmd/bridge/proxy.go:373 reads all three. docs/COMPLIANCE.md recorded the correction and it never propagated back here, which is how a register sentence outlives the fact it rests on. The accurate statement is narrower and still decides the row: no route served by the vault itself validates fetch metadata, and adding it here would not help, because the rule only has teeth if it rejects requests that carry no fetch metadata at all -- which is every non-browser client, including the curl in docs/api.md and both shipped SDKs.\n\nThe method flip is the honest remedy and is a breaking change to a published API: @vault42/vue ships the GET in its built output, and a pinned older SDK would start receiving 405. It is timed with an SDK major rather than dropped into a patch release.",
       "compensating_control": "The token is single-use and consumed atomically by a get-and-delete -- Redis GETDEL, Postgres DELETE ... RETURNING, or the in-memory equivalent -- so a replayed or prefetched link verifies at most once, proven across replicas by the multi-replica end-to-end suite. The token is 256 bits from crypto/rand, stored hashed, and expires in 24 hours. The effect is bounded to marking an address the operator already sent mail to as verified: it confers no session and issues no token. The route is rate limited to 10 per hour per source address, and Referrer-Policy: no-referrer is set globally.",
       "residual_risk": "A security scanner that executes JavaScript performs the verification without the user acting. The precision matters and the earlier wording did not have it: the link in the email is the SPA route /verify-email, not the API route, so a plain prefetcher or link scanner that follows the URL receives index.html and changes nothing. The mutation happens only when the page's script runs and calls the API itself, which a headless renderer of the SafeLinks class does. Anything fetching /auth/verify-email directly also mutates, and that URL is published as a copyable curl in docs/api.md.\n\nThe consequence is not cosmetic. email_verified gates password login and is one half of the test deciding whether a federated identity may attach to an existing local account, so the realistic harm is an attacker registering with somebody else's address and that person's mail scanner completing the verification. A user whose token a scanner consumed also sees \"link expired\" while being, in fact, verified. Nothing else is reachable through the route.",
       "revisit_when": "Any additional state change is added behind a GET route, or the verification link starts conferring a session rather than only marking an address verified.",
@@ -190,7 +190,7 @@
       "accepted_by": "Project maintainer (vault42)",
       "accepted_on": "2026-08-18",
       "security_md": "Register-scoped. docs/security.md owns the AR-nn namespace and defines a different risk under this number; the two lists are deliberately disjoint.",
-      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:847 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
+      "rationale": "ASVS V3.5.4 wants separate applications on separate hostnames so the same-origin policy separates them. When VAULT_SERVE_FRONTEND is on, internal/server/server.go:870 mounts the embedded SPA at the catch-all route of the same server that answers /auth, /user and /client, so the two share an origin by construction and the policy separates nothing.",
       "compensating_control": "VAULT_SERVE_FRONTEND is off by default (internal/config/config.go:505) and the chart ships serveFrontend: false, so the single-origin topology is opt-in; the honeypot profile is the one place that forces it on. The Content-Security-Policy applied when the frontend is served names script-src 'self' with no unsafe-inline, so even in the shared-origin shape a script the SPA did not author does not execute.\n\nThe chart offers the separated topology rather than shipping it, and the earlier wording did not make that distinction: charts/vault/templates/frontend.yaml deploys the SPA as its own nginx workload, but frontend.enabled is false by default and the template carries no hostname of its own. The separate hostname comes from ingress.hosts, which the operator supplies. So the preferred topology is available and configured, not default.",
       "residual_risk": "An operator who enables the embedded frontend gives up the origin boundary between the SPA and the API, so an XSS in the SPA runs on the API's origin.",
       "revisit_when": "The embedded frontend becomes the default, or the SPA gains a surface that renders content it did not author.",
@@ -1032,7 +1032,7 @@
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed",
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded"
       ],
-      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:479); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
+      "notes": "Per-user and per-IP rate limiting plus account lockout, fail-closed on the credential surface. The login limiter is 5 attempts in 15 minutes keyed by account with FailClosed set (internal/server/server.go:502); RateLimit (internal/middleware/ratelimit.go:266) is the middleware that enforces it, and every limiter is namespaced so two routes cannot share a bucket by accident."
     },
     {
       "standard": "OWASP ASVS",
@@ -1361,7 +1361,7 @@
         "charts/vault/templates/frontend.yaml"
       ],
       "tests": [],
-      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:667 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
+      "notes": "Accepted risk CR-29. When VAULT_SERVE_FRONTEND is on, the SPA and the API answer on one origin by construction (internal/server/server.go:690 mounts the SPA at the catch-all route), so the same-origin policy separates neither from the other. That is a deployment choice with a residual, not an inapplicable requirement: the chart also ships a separate frontend deployment, which is the topology the requirement prefers, and the default is VAULT_SERVE_FRONTEND=false. Previously Not Applicable.",
       "accepted_risk": "CR-29"
     },
     {
@@ -1802,7 +1802,7 @@
       "tests": [
         "TestOWASP_A06_2025_CredentialEndpointsRateLimitFailClosed"
       ],
-      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:479)."
+      "notes": "Rate limiting, lockout and breach-corpus checking are specified in docs/spec.md and wired at the route table: loginRL, registerRL and passwordResetRL are constructed with FailClosed and a VPN-scrutiny weight (internal/server/server.go:502)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2104,7 +2104,7 @@
         "TestNIST80053_AC_7_UnsuccessfulLogonAttemptsAreBounded",
         "TestNIST63B4_3_2_2_ConsecutiveFailuresAreLimitedBelowTheCeiling"
       ],
-      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:479 constructs loginRL at Limit 5 over a 15-minute window)."
+      "notes": "Per-user lockout at 5 in 15 minutes, per-IP at 20, fail-closed limiters on the credential surface (internal/server/server.go:502 constructs loginRL at Limit 5 over a 15-minute window)."
     },
     {
       "standard": "OWASP ASVS",
@@ -2170,7 +2170,7 @@
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build. The unauthenticated entries are deliberate and few -- GET /auth/verify-email at internal/server/server.go:504 is one, reached from an emailed link and carrying its own rate limiter."
+      "notes": "Every route is enumerated by the structural route scan against a declared public allowlist, so an undocumented pathway fails the build. The unauthenticated entries are deliberate and few -- GET /auth/verify-email at internal/server/server.go:527 is one, reached from an emailed link and carrying its own rate limiter."
     },
     {
       "standard": "OWASP ASVS",
@@ -3459,7 +3459,7 @@
       "tests": [
         "TestASVS_V10_3_4_RecentnessIsVerifiedAgainstThePresentedAccessToken"
       ],
-      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:271 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:686) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
+      "notes": "Met. vault42 is the resource server for its own access tokens, and it does require authentication recentness for specific functions: the destructive account operations sit behind middleware.Confirmed, which refuses unless POST /auth/confirm re-verified the password within the last five minutes. The constraint is checked against the presented token rather than against session state -- the confirmation record holds the jti of the access token that performed it, and internal/middleware/auth.go:271 refuses any other one -- so a confirmation cannot be carried across a rotation. That is a tighter binding than the auth_time comparison the requirement offers as its example, which survives rotation and is asserted by the issuer rather than checked. The guarded routes are DELETE /user/identity (internal/server/server.go:709) and both blob deletes. No route requires a specific authentication strength or method, so those two limbs have no antecedent; strength is nevertheless expressible from the token alone, because VaultClaims now carries acr, amr and auth_time (internal/crypto/jwt.go:47) populated from the observed authentication event, which is how a downstream resource server would apply the same constraint. Previously an accepted risk, CR-21, on the claim that no acr, amr or aal claim is issued."
     },
     {
       "standard": "OWASP ASVS",
@@ -4894,7 +4894,7 @@
       "tests": [
         "TestOWASP_A01_2025_EveryNonPublicRouteIsAuthenticated"
       ],
-      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:889), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
+      "notes": "Optional surfaces are each mounted only when configured: the embedded frontend behind cfg.ServeFrontend (internal/server/server.go:912), metrics on its own listener, and the OAuth, registration, blob and KMS routes each behind their own switch. A surface that is not mounted is not attack surface."
     },
     {
       "standard": "OWASP ASVS",

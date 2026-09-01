@@ -109,7 +109,16 @@ var publicRoutePrefixes = []string{
 // reviewer has to confirm the closure really authenticates before the route
 // scan will accept it. TestOWASP_A01_2025_GuardClosuresReallyAuthenticate keeps
 // that confirmation executable rather than trusting this list.
-var authGuards = []string{"authed(", "authMw(", "authedChallenge(", "confirmed(", "docRead(", "docWrite("}
+var authGuards = []string{
+	"authed(", "authMw(", "authedChallenge(", "confirmed(",
+	// authedWrite and confirmedWrite are authed and confirmed with the
+	// erased-account guard in front of the handler. They compose the same
+	// authentication middleware as the pair they extend, and guardComposes below
+	// pins that, so accepting them here does not widen what counts as
+	// authenticated.
+	"authedWrite(", "confirmedWrite(",
+	"docRead(", "docWrite(",
+}
 
 // guardComposes names, per guard, the authentication middleware that guard is
 // entitled to compose — and only that one.
@@ -129,6 +138,8 @@ var authGuards = []string{"authed(", "authMw(", "authedChallenge(", "confirmed("
 var guardComposes = map[string]string{
 	"authed":          "authMw(",
 	"confirmed":       "authMw(",
+	"authedWrite":     "authMw(",
+	"confirmedWrite":  "authMw(",
 	"authedChallenge": "challengeMw(",
 	"docRead":         "authMw(",
 	"docWrite":        "authMw(",

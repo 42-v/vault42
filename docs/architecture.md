@@ -97,6 +97,14 @@ internal/
     maxbody.go               Request body size limit (8KB)
     auth.go                  JWT Bearer validation, challenge token support, RequireScope,
                              Confirmed (recent-password-confirmation gate)
+    liveaccount.go           LiveAccount: refuses a write whose subject has been
+                             erased. Auth never reads the database, so a token
+                             minted before DELETE /user/account keeps verifying
+                             until it expires; this is what stops it putting
+                             personal data back onto a tombstoned row. Wired as
+                             the authedWrite/confirmedWrite route builders, on
+                             writes only -- re-running an interrupted erasure has
+                             to stay possible
     fingerprint.go           Device fingerprint verification against JWT claim
     ratelimit.go             Sliding window rate limiting via cache, trusted proxies
     dpop.go                  DPoP proof validation (RFC 9449). When VAULT_DPOP_ENABLED,
