@@ -32,7 +32,7 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 39, so an upgrade applies 0.
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 40, so an upgrade applies 1.
 There is no schema change in 1.0.4 and nothing to migrate. Take the backup anyway: the point
 of step 1 is that you have one when something else goes wrong.
 
