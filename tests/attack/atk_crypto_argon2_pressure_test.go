@@ -421,16 +421,16 @@ func TestArgon2Attack_MeasureUserExistsTimingGap(t *testing.T) {
 		}
 	}
 
-	medExisting := median(existing)
-	medMissing := median(missing)
-	gap := medExisting - medMissing
+	costExisting := fastestQuartileMean(existing)
+	costMissing := fastestQuartileMean(missing)
+	gap := costExisting - costMissing
 	if gap < 0 {
 		gap = -gap
 	}
-	ratio := float64(gap) / float64(medExisting)
+	ratio := float64(gap) / float64(costExisting)
 
-	t.Logf("existing user: median %v over %d runs", medExisting, len(existing))
-	t.Logf("missing  user: median %v over %d runs", medMissing, len(missing))
+	t.Logf("existing user: %v over %d runs", costExisting, len(existing))
+	t.Logf("missing  user: %v over %d runs", costMissing, len(missing))
 	t.Logf("gap: %v (%.2f%% of the operation)", gap, ratio*100)
 
 	// A gap worth exploiting over a network would have to survive jitter. Five
@@ -447,4 +447,41 @@ func median(d []time.Duration) time.Duration {
 	c := append([]time.Duration(nil), d...)
 	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
 	return c[len(c)/2]
+}
+
+// fastestQuartileMean averages the fastest quarter of the samples.
+//
+// It exists because a median cannot measure this. Contention noise on an
+// Argon2id verification is one-sided: a busy scheduler only ever adds time to
+// an operation, never removes it. So under load every sample drifts upward by
+// an independent random amount, the median drifts with them, and the two arms'
+// medians end up separated by noise rather than by cost. Measured on this
+// machine over eight trials per condition, the median's arm gap ran 0.87% idle
+// but 3.38% under 48 CPU burners on 24 cores, breaching the 5% threshold twice
+// -- with the two operations provably equal-cost, both hashes carrying
+// m=47104,t=1,p=1. That is a security regression test going red for a reason
+// that has nothing to do with the security property, which is the kind of
+// failure that teaches a reader to rerun rather than to look.
+//
+// The fast tail is where the noise is smallest, so it is the cleanest estimate
+// of what the operation actually costs -- and it is the estimate an attacker
+// would use, since they too would take their fastest responses to see past
+// network jitter. Averaging the whole quartile rather than taking the single
+// minimum is what makes it stable: the bare minimum is one sample and swings
+// hardest of all four estimators tried (13.10% worst case idle, 3/8 breaches).
+// The quartile mean breached zero times in sixteen trials across both
+// conditions, worst case 4.10%, and still reports a 46-56% gap when the burn is
+// deliberately broken by halving the dummy hash's memory parameter.
+func fastestQuartileMean(d []time.Duration) time.Duration {
+	c := append([]time.Duration(nil), d...)
+	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
+	n := len(c) / 4
+	if n < 1 {
+		n = 1
+	}
+	var sum time.Duration
+	for _, v := range c[:n] {
+		sum += v
+	}
+	return sum / time.Duration(n)
 }
