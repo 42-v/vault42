@@ -78,11 +78,15 @@ token, which is what keeps non-DPoP clients working with the flag on. The bindin
 the proof checking worth anything: a proof never compared against a key the token committed to
 only demonstrates that the caller can sign something.
 
-Two limits are real. Refresh tokens are not sender-bound: only the access token and the 2FA
-challenge token carry `cnf.jkt`, so a stolen refresh token can still be redeemed on its own, and
-the constraint on the pair it returns is whatever key that redemption presents. And there is no
-`DPoP-Nonce`, so a proof's freshness rests on its own `iat` inside a five-minute window plus the
-single-use JTI cache; the server cannot require a proof minted after a value it chose.
+Two limits are real, and one of them narrowed. Refresh families are sender-bound as of migration
+038: a family opened with a proof records that key's thumbprint in `auth.refresh_tokens.dpop_jkt`
+and every rotation inherits it, so `enforceDPoPBinding` refuses a redemption presenting the wrong
+key or no key, and the successor pair is bound to the *stored* thumbprint rather than to whatever
+the redemption happened to present. What is still unbound is a family that opened without a
+proof: `dpop_jkt` is NULL there, which means an ordinary bearer family, and there is deliberately
+no backfill, so a session predating DPoP keeps working and keeps its old exposure. And there is
+no `DPoP-Nonce`, so a proof's freshness rests on its own `iat` inside a five-minute window plus
+the single-use JTI cache; the server cannot require a proof minted after a value it chose.
 
 ## Architecture
 

@@ -167,8 +167,11 @@ not contract.
 `VAULT_DPOP_ENABLED` is covered by the environment-variable row above rather than carved out of
 it: issuance stamps `cnf.jkt` and every authenticated route enforces it, so a deployment can
 depend on the flag meaning what it says. What it does not reach is worth knowing before you
-report it. Refresh tokens are not sender-bound, so redeeming a stolen one is not a DPoP bypass;
-and there is no `DPoP-Nonce`, so proof freshness comes from the proof's own `iat` and the
+report it. A refresh family opened with a proof IS sender-bound (migration 038): the thumbprint
+is stored on the family and inherited across rotation, so redeeming a stolen refresh token
+without the key is refused, and reporting that as a bypass will not land. A family opened without
+a proof carries a NULL binding and stays bearer, which is the residual worth reporting against.
+There is also no `DPoP-Nonce`, so proof freshness comes from the proof's own `iat` and the
 single-use JTI cache, not from a value the server chose. Both are stated in
 [README.md](README.md).
 

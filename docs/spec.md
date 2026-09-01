@@ -725,7 +725,7 @@ When `VAULT_MFA_REQUIRED=true` but a user has no configured 2FA methods (no TOTP
 **Verify:** `POST /auth/2fa/email-otp/verify` (authenticated or challenge)
 
 - 6-digit numeric code sent to user's verified email address
-- Code cached with 10-minute TTL, single-use (`GetAndDelete`)
+- Code cached with 5-minute TTL, single-use (`GetAndDelete`)
 - Shares the TOTP rate limiter (5 attempts / 5 min / IP)
 
 **Resend:** `POST /auth/2fa/email-otp/resend` (authenticated or challenge)
