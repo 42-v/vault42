@@ -42,13 +42,23 @@ var dpopWrapperIdents = []string{
 	"authed",
 	"authedChallenge",
 	"confirmed",
+	"authedWrite",
+	"confirmedWrite",
 	"docRead",
 	"docWrite",
 }
 
 // routeBuilderClosures are the local helpers whose whole job is to build a
 // middleware chain for a family of routes. Each must apply dpopWrap.
-var routeBuilderClosures = []string{"authed", "authedChallenge", "confirmed", "docRead", "docWrite"}
+var routeBuilderClosures = []string{
+	"authed", "authedChallenge", "confirmed",
+	// authedWrite and confirmedWrite are authed and confirmed with the erased-account
+	// guard in front of the handler. They are listed here rather than exempted so the
+	// same assertion applies: a wrapper that stops applying dpopWrap fails the build,
+	// which is what stops the guard being added at the cost of the binding.
+	"authedWrite", "confirmedWrite",
+	"docRead", "docWrite",
+}
 
 // dpopExemptRoutes are the registrations that legitimately run no DPoP
 // middleware. Each needs a reason, because adding a route here is how the gate
@@ -128,28 +138,7 @@ func TestEveryVaultRouteIsBehindDPoPOrExempt(t *testing.T) {
 // route it builds passing the check above on the strength of the name alone.
 func TestTheRouteBuilderClosuresAllApplyDPoP(t *testing.T) {
 	root := repoRoot(t)
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filepath.Join(root, serverRouteSource), nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", serverRouteSource, err)
-	}
-
-	bodies := map[string]ast.Expr{}
-	ast.Inspect(file, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
-		}
-		id, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if _, ok := assign.Rhs[0].(*ast.FuncLit); !ok {
-			return true
-		}
-		bodies[id.Name] = assign.Rhs[0]
-		return true
-	})
+	bodies := parseServerClosures(t, filepath.Join(root, serverRouteSource))
 
 	for _, name := range routeBuilderClosures {
 		body, ok := bodies[name]
