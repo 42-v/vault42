@@ -6,15 +6,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-webauthn/webauthn/webauthn"
+
 	"github.com/42-v/vault42/internal/email"
 )
 
 // guardCall invokes a claims-gated handler with no authenticated claims in
-// context and asserts it rejects the request (>= 400) rather than proceeding
-// into nil service dependencies. This exercises the unauthorized-guard branch
-// that every authenticated endpoint shares.
-func guardCall(t *testing.T, name string, fn http.HandlerFunc, method, target, body string) {
+// context and asserts it answers 401 unauthorized.
+//
+// It asserted `>= 400` until it was measured. That is not the claim the test
+// name makes, and it is not a claim about authentication at all: any error the
+// fixture happens to provoke satisfies it. Deleting the claims check from
+// PasswordHandler.ChangePassword left this test green, because the body below
+// said "old_password" where production reads "current_password" and decodeJSON
+// sets DisallowUnknownFields, so the request died at 400 before reaching the
+// branch under test. Deleting it from WebAuthnHandler.RegisterBegin left it
+// green too, because an unconfigured handler answers 501 first. Five more rows
+// passed only because a path value the handler needs was never set, so an empty
+// id produced 400.
+//
+// Asserting the exact status and the exact error code is what makes those
+// fixtures fail loudly instead of passing quietly, and every one of them is
+// fixed below. pathValues carries the {id} segments the router would have
+// populated, because a handler that never reaches its claims check is not
+// evidence of anything.
+func guardCall(t *testing.T, name string, fn http.HandlerFunc, method, target, body string, pathValues ...string) {
 	t.Helper()
+	if len(pathValues)%2 != 0 {
+		t.Fatalf("%s: pathValues must be key/value pairs, got %d", name, len(pathValues))
+	}
 	t.Run(name, func(t *testing.T) {
 		var r *http.Request
 		if body != "" {
@@ -22,10 +42,19 @@ func guardCall(t *testing.T, name string, fn http.HandlerFunc, method, target, b
 		} else {
 			r = httptest.NewRequest(method, target, nil)
 		}
+		for i := 0; i < len(pathValues); i += 2 {
+			r.SetPathValue(pathValues[i], pathValues[i+1])
+		}
 		rec := httptest.NewRecorder()
 		fn(rec, r)
-		if rec.Code < 400 {
-			t.Fatalf("%s without claims = %d, want a client/server error", name, rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without claims = %d %s, want %d unauthorized. A handler that refuses "+
+				"for some other reason is not evidence that it checks authentication.",
+				name, rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusUnauthorized)
+		}
+		if got := rec.Body.String(); !strings.Contains(got, `"unauthorized"`) {
+			t.Fatalf("%s without claims returned 401 with body %s, want the unauthorized error code",
+				name, strings.TrimSpace(got))
 		}
 	})
 }
@@ -58,25 +87,28 @@ func TestAuthenticatedHandlers_RejectWithoutClaims(t *testing.T) {
 	blob := &BlobHandler{}
 	guardCall(t, "BlobHandler.List", blob.List, http.MethodGet, "/user/blobs", "")
 	guardCall(t, "BlobHandler.Upload", blob.Upload, http.MethodPost, "/user/blobs", `{}`)
-	guardCall(t, "BlobHandler.Download", blob.Download, http.MethodGet, "/user/blobs/x", "")
-	guardCall(t, "BlobHandler.Delete", blob.Delete, http.MethodDelete, "/user/blobs/x", "")
+	guardCall(t, "BlobHandler.Download", blob.Download, http.MethodGet, "/user/blobs/x", "", "id", "x")
+	guardCall(t, "BlobHandler.Delete", blob.Delete, http.MethodDelete, "/user/blobs/x", "", "id", "x")
 
 	user := &UserHandler{}
 	guardCall(t, "UserHandler.Devices", user.Devices, http.MethodGet, "/user/devices", "")
 	guardCall(t, "UserHandler.Sessions", user.Sessions, http.MethodGet, "/user/sessions", "")
 	guardCall(t, "UserHandler.RevokeAllSessions", user.RevokeAllSessions, http.MethodDelete, "/user/sessions", "")
-	guardCall(t, "UserHandler.RevokeSession", user.RevokeSession, http.MethodDelete, "/user/sessions/x", "")
-	guardCall(t, "UserHandler.DeleteDevice", user.DeleteDevice, http.MethodDelete, "/user/devices/x", "")
+	guardCall(t, "UserHandler.RevokeSession", user.RevokeSession, http.MethodDelete, "/user/sessions/x", "", "id", "x")
+	guardCall(t, "UserHandler.DeleteDevice", user.DeleteDevice, http.MethodDelete, "/user/devices/x", "", "id", "x")
 
 	mfa := &MFAHandler{}
 	guardCall(t, "MFAHandler.Status", mfa.Status, http.MethodGet, "/auth/2fa/status", "")
 
 	pw := &PasswordHandler{}
-	guardCall(t, "PasswordHandler.ChangePassword", pw.ChangePassword, http.MethodPost, "/user/password", `{"old_password":"x","new_password":"y"}`)
+	guardCall(t, "PasswordHandler.ChangePassword", pw.ChangePassword, http.MethodPost, "/user/password", `{"current_password":"x","new_password":"y"}`)
 
-	webauthn := &WebAuthnHandler{}
-	guardCall(t, "WebAuthnHandler.ListCredentials", webauthn.ListCredentials, http.MethodGet, "/auth/2fa/webauthn/credentials", "")
-	guardCall(t, "WebAuthnHandler.RegisterBegin", webauthn.RegisterBegin, http.MethodPost, "/auth/2fa/webauthn/register/begin", "")
+	// Named wa, not webauthn: the package of that name is imported here now, and
+	// a local shadowing it would make the next line that needs the package fail
+	// to compile for a reason that reads like nonsense.
+	wa := &WebAuthnHandler{wan: guardTestWebAuthn(t)}
+	guardCall(t, "WebAuthnHandler.ListCredentials", wa.ListCredentials, http.MethodGet, "/auth/2fa/webauthn/credentials", "")
+	guardCall(t, "WebAuthnHandler.RegisterBegin", wa.RegisterBegin, http.MethodPost, "/auth/2fa/webauthn/register/begin", "")
 }
 
 func TestPasswordHandler_SetMailer(t *testing.T) {
@@ -90,4 +122,21 @@ func TestPasswordHandler_SetMailer(t *testing.T) {
 	if h.mailer != m {
 		t.Error("non-nil mailer should be stored")
 	}
+}
+
+// guardTestWebAuthn builds a configured WebAuthn so RegisterBegin reaches its
+// claims check. With h.wan nil it answers 501 webauthn_not_configured first,
+// which is a real refusal of a real misconfiguration and no evidence at all
+// that the handler authenticates.
+func guardTestWebAuthn(t *testing.T) *webauthn.WebAuthn {
+	t.Helper()
+	wan, err := webauthn.New(&webauthn.Config{
+		RPDisplayName: "Vault",
+		RPID:          "localhost",
+		RPOrigins:     []string{"https://localhost"},
+	})
+	if err != nil {
+		t.Fatalf("webauthn config: %v", err)
+	}
+	return wan
 }
