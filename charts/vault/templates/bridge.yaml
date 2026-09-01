@@ -109,6 +109,19 @@ spec:
         - name: secrets
           secret:
             secretName: {{ include "vault.secretName" . }}
+            # Project the one key the bridge reads, not the whole Secret.
+            # cmd/bridge reads exactly one secret file, BRIDGE_ADMIN_TOKEN_FILE;
+            # everything else it needs arrives through the ConfigMap above. A
+            # bare secretName mounts every key in that Secret -- the signing key,
+            # the master key, the HMAC secret, the database password and the
+            # pepper -- into the one workload in this chart that is deliberately
+            # exposed to attackers. The bridge is the deception proxy: being
+            # reached by hostile traffic is its job, so it is the last container
+            # that should be able to read the rest of the deployment's crypto
+            # material.
+            items:
+              - key: {{ .Values.bridge.adminTokenKey }}
+                path: {{ .Values.bridge.adminTokenKey }}
       {{- end }}
 ---
 # Bridge Service
