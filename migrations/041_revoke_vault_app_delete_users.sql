@@ -1,0 +1,50 @@
+-- ============================================================================
+-- 041: the application role stops being able to destroy an account outright
+-- ============================================================================
+--
+-- 001 granted `SELECT, INSERT, DELETE ON auth.users TO vault_app` and nothing
+-- has narrowed it since. The DELETE half has never had a caller. UserRepo has no
+-- Delete method at all (internal/repository/postgres/user.go); erasure is a
+-- soft delete by construction, and says so in its own comment: "The user row is
+-- never deleted." ErasureService.DeleteAccount escrows, then calls
+-- SoftDeleteScrub, which is an UPDATE, then deletes from every table that hangs
+-- off user_id one at a time. The single `DELETE FROM auth.users` in the tree is
+-- a truncation loop in tests/e2e/multireplica cleanup, which runs on the owner
+-- pool and discards its error.
+--
+-- So this is surplus privilege of the kind 015, 024 and 029 each removed, and
+-- the blast radius is larger than any of theirs. The threat model is unchanged
+-- from 037 and 038: SQL injection reaching the database as vault_app, or the
+-- application credentials themselves. With DELETE on auth.users, that attacker
+-- can do in one statement what the erasure path spends nine careful steps
+-- avoiding:
+--
+--   * No escrow. ErasureService writes the encrypted recovery record BEFORE it
+--     scrubs, and refuses to continue if that write fails, so a deletion is
+--     always reversible by the operator holding the offline key. A raw DELETE
+--     writes nothing, and the account is gone with no recoverable copy.
+--   * No tombstone. The scrub leaves a row whose deleted flag the login and
+--     refresh paths check. A deleted row leaves nothing to check, and nothing
+--     recording that the account ever existed.
+--   * No audit entry. AccountErased is logged by the service, not by a trigger.
+--   * The ON DELETE CASCADE finally fires. Erasure's comments note repeatedly
+--     that the cascades on totp_secrets, webauthn_credentials, backup_codes and
+--     login_countries never run, because the row is updated rather than deleted,
+--     which is why each one is deleted explicitly. A real DELETE runs all of
+--     them, so the MFA material goes too -- silently, and in one round trip.
+--
+-- That is an unaudited, unrecoverable account destruction primitive handed to
+-- the web-facing role for no working feature. INSERT and SELECT stay; only
+-- DELETE comes off.
+--
+-- Written bare rather than inside a pg_roles guard, the way 015, 024 and 029
+-- argue: 001 creates both roles unconditionally, and a statement nested in a DO
+-- block is skipped by the integration fixture's applyRealGrants(), which would
+-- leave that suite exercising the pre-041 privilege model.
+--
+-- vault_admin is untouched. It holds its own grants from 001 and the admin plane
+-- has no delete-user route either; if one is ever added it will need a grant
+-- written for it deliberately, which is the point.
+-- ============================================================================
+
+REVOKE DELETE ON auth.users FROM vault_app;
