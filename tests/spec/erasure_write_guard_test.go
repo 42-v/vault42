@@ -21,7 +21,7 @@ import (
 // reachable the same way ... so they are filed separately rather than
 // half-done here."
 //
-// The behavioural half of this gate is TestAnErasedSubjectIsRefusedAtEveryGuardedWrite
+// The behavioral half of this gate is TestAnErasedSubjectIsRefusedAtEveryGuardedWrite
 // in internal/server, which drives the real wired chain.
 // That test can only cover the routes someone remembered to list. This one reads
 // the wiring, so the route added next year cannot be forgotten: every

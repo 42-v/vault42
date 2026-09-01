@@ -12,7 +12,7 @@ import (
 	"github.com/42-v/vault42/tests/mocks"
 )
 
-// The behavioural half of tests/spec/erasure_write_guard_test.go.
+// The behavioral half of tests/spec/erasure_write_guard_test.go.
 //
 // That gate reads the wiring and proves every create-or-update route under
 // /user/ and /auth/2fa/ names a guarded wrapper. It cannot prove the wrapper
