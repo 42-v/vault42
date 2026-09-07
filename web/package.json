@@ -14,8 +14,8 @@
   "dependencies": {
     "@vault42/vue": "workspace:*",
     "qrcode": "^1.5.4",
-    "vue": "^3.5.41",
-    "vue-router": "^5.2.0"
+    "vue": "^3.5.42",
+    "vue-router": "^5.3.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
