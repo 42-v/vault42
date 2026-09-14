@@ -3,7 +3,7 @@
   <!-- Code-quality analyzers applied to every project under packages/dotnet/.
        PrivateAssets="all" so the analyzer doesn't leak into the published nupkg. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.400" PrivateAssets="all">
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.401" PrivateAssets="all">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="StyleCop.Analyzers" Version="1.1.118" PrivateAssets="all">
@@ -12,7 +12,7 @@
     <PackageReference Include="Roslynator.Analyzers" Version="5.0.0" PrivateAssets="all">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="SonarAnalyzer.CSharp" Version="10.33.0.1635" PrivateAssets="all">
+    <PackageReference Include="SonarAnalyzer.CSharp" Version="10.34.0.3385" PrivateAssets="all">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
