@@ -2189,9 +2189,9 @@
         "internal/ipintel/ipintel.go"
       ],
       "tests": [
-        "TestASVS_AR18_NewLocationNoticeAndVPNScrutiny"
+        "TestP13_NewLocationNoticeAndVPNScrutiny"
       ],
-      "notes": "Met: a login from a new country for the account triggers an out-of-band, throttled notification (internal/service/auth.go notifyNewCountry), with country derived locally from the embedded IP-intelligence table (internal/ipintel), country granularity only and the IP never stored, logged or emailed. VPN/hosting/Tor origins are additionally given heavier rate-limit scrutiny without being blocked. Asserted by TestASVS_AR18_NewLocationNoticeAndVPNScrutiny."
+      "notes": "Met: a login from a new country for the account triggers an out-of-band, throttled notification (internal/service/auth.go notifyNewCountry), with country derived locally from the embedded IP-intelligence table (internal/ipintel), country granularity only and the IP never stored, logged or emailed. VPN/hosting/Tor origins are additionally given heavier rate-limit scrutiny without being blocked. Asserted by TestP13_NewLocationNoticeAndVPNScrutiny."
     },
     {
       "standard": "OWASP ASVS",
