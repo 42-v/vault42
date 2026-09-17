@@ -45,7 +45,12 @@ func serviceCallsReturningAccountState(t *testing.T, root string) map[string]boo
 	if err != nil {
 		t.Fatalf("parsing internal/service/auth.go: %v", err)
 	}
-	src := readFileString(t, path)
+	// Comment-free: the body is sliced out of this and searched for the error
+	// identifiers, so a refusal mentioned only in a comment would be read as one
+	// the code returns. internal/service/auth.go names these errors in prose
+	// throughout, because explaining which state produces which refusal is what
+	// the comments around them are for.
+	src := commentFreeSource(t, path)
 
 	out := map[string]bool{}
 	for _, decl := range file.Decls {
@@ -99,7 +104,10 @@ func TestEveryTransportMapsAccountStateRefusals(t *testing.T) {
 	var checked int
 	for _, pkg := range pkgs {
 		for name, file := range pkg.Files {
-			src := readFileString(t, filepath.Join(dir, filepath.Base(name)))
+			// Comment-free, for the reason above: a transport that stopped
+			// mapping a refusal would keep passing on the paragraph explaining
+			// why it must map it.
+			src := commentFreeSource(t, filepath.Join(dir, filepath.Base(name)))
 
 			for _, decl := range file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)

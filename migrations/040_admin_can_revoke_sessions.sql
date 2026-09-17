@@ -32,7 +32,13 @@
 -- family_id, expires_at or used through this.
 --
 -- Idempotent: GRANT is idempotent by definition, and the DO block only guards
--- against the role being absent, which is the shape 009 and 015 already use.
+-- against the role being absent, which is the shape 009 uses.
+--
+-- Not 015, which this line used to cite as well. 015 contains no DO block at
+-- all and spends six lines rejecting the pg_roles guard; every GRANT and REVOKE
+-- in it is bare at column zero. Citing it as precedent for the guarded form
+-- inverted what that file decided. See 015's own header for the corrected
+-- account of what the guard costs, which is less than it claimed.
 
 DO $$
 BEGIN

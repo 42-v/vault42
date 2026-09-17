@@ -747,7 +747,7 @@
       "tests": [
         "TestNIST80053_SI_10_InputIsValidatedBeforeUse"
       ],
-      "notes": "Numeric request values are parsed with strconv and range-clamped before use. Handler.DeleteUser (internal/adminapi/handler.go:420) is the admin-plane entry point, writing the escrow record before the cascade."
+      "notes": "Numeric request values are parsed with strconv and range-clamped before use. Handler.DeleteUser (internal/adminapi/handler.go:429) is the admin-plane entry point, writing the escrow record before the cascade."
     },
     {
       "standard": "OWASP ASVS",
@@ -5979,7 +5979,7 @@
       "tests": [
         "TestASVS_V4_1_1_MutatingAdminRoutesDenyViewer"
       ],
-      "notes": "Account Management. The admin gateway is the only surface that manages accounts and it is a separate binary behind mutual TLS: Handler.ListUsers (internal/adminapi/handler.go:216), GetUser, LockUser, UnlockUser and DeleteUser cover enumeration, inspection, disabling and removal, each one gated by an RBAC permission and each one writing an audit entry naming the acting admin."
+      "notes": "Account Management. The admin gateway is the only surface that manages accounts and it is a separate binary behind mutual TLS: Handler.ListUsers (internal/adminapi/handler.go:233), GetUser, LockUser, UnlockUser, BanUser, UnbanUser and DeleteUser cover enumeration, inspection, containment, sanction and removal, each one gated by an RBAC permission and each one writing an audit entry naming the acting admin."
     },
     {
       "standard": "NIST SP 800-53",
@@ -6087,7 +6087,7 @@
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
       ],
-      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:373) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
+      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:380) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
     },
     {
       "standard": "NIST SP 800-53",

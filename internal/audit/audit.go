@@ -131,6 +131,13 @@ const (
 	AdminUserUnlock = "admin_user_unlock"
 	// AdminUserDelete records an admin deleting a user account.
 	AdminUserDelete = "admin_user_delete"
+	// AdminUserBan records an admin banning a user account, with the reason the
+	// operator gave and whether the account's live sessions were revoked.
+	AdminUserBan = "admin_user_ban"
+	// AdminUserUnban records an admin lifting a ban. The reason on this row is
+	// why the ban was lifted, not why it was imposed: the imposing row carries
+	// that, and auth.users.ban_reason is cleared when the sanction ends.
+	AdminUserUnban = "admin_user_unban"
 	// AdminUserResetRequired records an admin imposing a forced password reset
 	// on a user account: the stored password stops signing that account in and
 	// the account holder is mailed a reset link on the next attempt.

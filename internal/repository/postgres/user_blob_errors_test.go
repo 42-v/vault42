@@ -41,6 +41,15 @@ func TestUserRepo_SurfacesDatabaseFailures(t *testing.T) {
 		t.Error("SetMustResetPassword reported success — the admin route would answer 200 and audit a " +
 			"forced reset that was never imposed, and the operator would stop looking")
 	}
+	if err := repo.SetBanned(ctx, "u-1", true, "payment fraud"); err == nil {
+		t.Error("SetBanned reported success on a ban — the admin route would answer 200, revoke the " +
+			"account's sessions and audit a sanction the table never received, so the account signs " +
+			"straight back in and the trail says it cannot")
+	}
+	if err := repo.SetBanned(ctx, "u-1", false, ""); err == nil {
+		t.Error("SetBanned reported success on an unban — the operator would be told a ban was lifted " +
+			"while every login still answers 403 account_banned")
+	}
 	if _, err := repo.GetByID(ctx, "u-1"); err == nil {
 		t.Error("GetByID returned no error against an unreachable database")
 	}

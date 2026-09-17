@@ -21,7 +21,7 @@
 --   * import_pending: UserRepo.ClearImportPending (user.go:73), reached from the
 --     password-reset handler and the OAuth callback when an imported account is
 --     claimed.
---   * email_verified: UserRepo.VerifyEmail (user.go:202), the whole of email
+--   * email_verified: UserRepo.VerifyEmail (user.go:313), the whole of email
 --     confirmation.
 --
 -- Both move in one direction only, and nothing anywhere moves either back. So the
