@@ -179,10 +179,13 @@ describe('router guard', () => {
     })
 
     it('asks init for capabilities even when auth is already initialized', async () => {
-      // `initialized` flips as soon as the refresh call settles, which says
-      // nothing about whether GET /auth/capabilities has answered. Gating the
-      // init() call on it reads the optimistic default and lets the visitor
-      // through on a server that has registration switched off.
+      // This file mocks getAuthState, so `initialized` and `registrationEnabled`
+      // move independently here in a way the real composable does not allow:
+      // runInit awaits the capabilities fetch before it flips `initialized`, and
+      // that fetch carries its own catch so it always settles. What this pins is
+      // the guard's behavior GIVEN that state -- it asks init() rather than
+      // trusting the flag -- and not a race the shipped composable can produce.
+      // The comment here used to assert that race as fact; it is not one.
       mockInitialized.value = true
       mockInit.mockImplementation(async () => {
         mockRegistrationEnabled.value = false
@@ -204,10 +207,16 @@ describe('router guard', () => {
     })
 
     it('evicts a visitor from /register when capabilities land after the guard ran', async () => {
-      // The race the guard cannot win on its own: init() resolves on the refresh
-      // call while the capabilities fetch is still in flight, so the guard reads
-      // the default `true` and admits the visitor. When the real answer arrives
-      // they must not be left sitting on a form the server will reject.
+      // The case the guard cannot cover on its own: a visitor already sitting on
+      // /register when the answer arrives was never guarded at all, because no
+      // navigation happens. Whatever admitted them, they must not be left on a
+      // form the server will reject.
+      //
+      // Driven here through the mock by moving the two flags independently. The
+      // real composable settles capabilities before it reports initialized, so
+      // it does not produce this ordering by itself -- which is why the watch is
+      // the second line of defence for the no-navigation case rather than for a
+      // race inside init().
       mockInitialized.value = false
       mockInit.mockImplementation(async () => {
         mockInitialized.value = true

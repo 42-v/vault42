@@ -22,8 +22,13 @@ import type { Session, Device, VaultError } from '../types'
  * - `revokeSession`: revokes one session by id, then refetches **both** lists,
  *   because revoking a session also revokes that device's tokens.
  * - `revokeAllSessions`: revokes every session and empties both lists locally.
- *   This includes the caller's own session, so the current token stops working
- *   and the app must send the user back to sign-in.
+ *   This includes the caller's own -- but the access token in hand keeps
+ *   working until it expires. DELETE /user/sessions revokes refresh families
+ *   and deletes device rows; vault42 access tokens are stateless and the auth
+ *   middleware consults no store per request (see docs/relying-parties.md).
+ *   So RENEWAL stops immediately and the session dies at the end of the
+ *   access-token TTL (15 minutes by default). An app that wants the user back
+ *   at sign-in now has to send them there itself.
  * - `renameDevice`: renames a device and patches the local list in place
  *   without refetching.
  * - `removeDevice`: removes a device, then refetches both lists.

@@ -541,3 +541,71 @@ func TestRecoveryBinding_GoldenVector(t *testing.T) {
 		})
 	}
 }
+
+// A bound blob cannot be downgraded to the legacy path. The framing note above
+// the constants used to say why, and named the wrong guard.
+//
+// recoveryHeaderLen is the magic plus the version byte, and what sits behind it
+// IS the legacy framing. Strip the header and the wrapped-key length prefix is
+// still the first four bytes, still describes the same wrapped key, and
+// openRecovery's length check passes. What refuses the blob is the OAEP label:
+// the payload was wrapped under recoveryLabel(binding) and the legacy path
+// unwraps with the legacy label.
+//
+// That distinction is worth a test rather than a sentence. The length guard and
+// the label are not interchangeable -- one is arithmetic on attacker-supplied
+// bytes and the other is the binding itself -- and a note that credits the wrong
+// one is a note that survives the removal of the guard actually doing the work.
+func TestBoundBlobCannotBeDowngraded(t *testing.T) {
+	binding := []byte("row-1|2026-08-27T00:00:00Z|admin-9")
+	blob, err := EncryptRecovery(&bindingKey.PublicKey, []byte("the payload"), binding)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if RecoveryBlobFormat(blob) != RecoveryFormatBound {
+		t.Fatal("the fixture is not a bound blob")
+	}
+
+	t.Run("stripping the whole header leaves a well-formed legacy blob", func(t *testing.T) {
+		stripped := blob[recoveryHeaderLen:]
+
+		if got := RecoveryBlobFormat(stripped); got != RecoveryFormatLegacy {
+			t.Fatalf("format = %v, want legacy: the point is that the downgrade is not caught "+
+				"by the framing either", got)
+		}
+		// The length prefix survives the strip intact, so the arithmetic guard
+		// has nothing to complain about. If this ever starts failing with the
+		// length error, the framing changed and the note above the constants
+		// needs rewriting again.
+		wrappedLen := binary.BigEndian.Uint32(stripped[:4])
+		if uint64(wrappedLen)+4 > uint64(len(stripped)) {
+			t.Fatalf("declared wrapped-key length %d runs past the %d-byte body; the old note "+
+				"would have been right and this test is now the wrong shape", wrappedLen, len(stripped))
+		}
+
+		_, err := DecryptRecoveryLegacy(bindingKey, stripped)
+		if err == nil {
+			t.Fatal("a bound blob was decrypted through the legacy path with its binding stripped")
+		}
+		if !strings.Contains(err.Error(), "unwrap aes key") {
+			t.Fatalf("refused with %q; the refusal must come from the OAEP label, which is the "+
+				"binding. Any other error means something else is doing this job and the "+
+				"binding is no longer what stops the downgrade.", err)
+		}
+	})
+
+	t.Run("stripping only the magic is what the length guard catches", func(t *testing.T) {
+		// The version byte is left in front of the length prefix, so the four
+		// bytes read as a length are shifted by one and describe a wrapped key
+		// far longer than the body. This is the case the old note described.
+		stripped := blob[len(recoveryMagic):]
+
+		_, err := DecryptRecoveryLegacy(bindingKey, stripped)
+		if err == nil {
+			t.Fatal("a shifted blob was accepted")
+		}
+		if !strings.Contains(err.Error(), "wrapped key length") {
+			t.Fatalf("refused with %q, want the length guard", err)
+		}
+	})
+}

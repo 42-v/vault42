@@ -170,8 +170,12 @@ func (h *UserHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 // It lists refresh-token FAMILIES, not devices. A device is a fingerprint, and
 // the two are not the same thing in either direction. findOrCreateDevice is
 // explicitly non-critical — its errors are logged and do not fail the auth flow —
-// and it returns "" when the lookup and the insert both fail, so both the
-// password path and the OAuth path can store a family with an empty device_id.
+// so both the password path and the OAuth path can store a family whose
+// device_id names no device row. This used to say the function returns "" when
+// the lookup and the insert both fail. It does not, and the truth is worse: a
+// failed Create that is not a unique violation is logged and the freshly
+// generated UUID is returned anyway, so the family carries a dangling id rather
+// than an empty one. The only "" it can return is on a RandomUUID failure.
 // Listing devices made such a family invisible here and unreachable by the
 // per-session revoke: a live, refreshable session that only "sign out everywhere"
 // could end. The inverse held too — two families sharing one fingerprint showed

@@ -32,7 +32,7 @@ describe('usePasswordStrength', () => {
     })
     expect(withPassword('a'.repeat(15)).passwordStrength.value).toEqual({
       labelKey: 'password.acceptable',
-      color: 'text-yellow-500',
+      color: 'text-vault42-warning',
       width: 'w-2/4',
     })
   })
@@ -64,8 +64,8 @@ describe('usePasswordStrength', () => {
 
   it('drives the progress bar colour from the same thresholds as the label', () => {
     expect(withPassword('a'.repeat(14)).strengthBarColor.value).toBe('bg-vault42-error')
-    expect(withPassword('a'.repeat(15)).strengthBarColor.value).toBe('bg-yellow-500')
-    expect(withPassword('a'.repeat(19)).strengthBarColor.value).toBe('bg-yellow-500')
+    expect(withPassword('a'.repeat(15)).strengthBarColor.value).toBe('bg-vault42-warning')
+    expect(withPassword('a'.repeat(19)).strengthBarColor.value).toBe('bg-vault42-warning')
     expect(withPassword('a'.repeat(20)).strengthBarColor.value).toBe('bg-vault42-success')
     expect(withPassword('a'.repeat(60)).strengthBarColor.value).toBe('bg-vault42-success')
   })

@@ -55,7 +55,7 @@ function goToLogin() {
       <!-- No token -->
       <div v-if="!token" class="vault42-card text-center py-10" role="alert">
         <div class="w-14 h-14 rounded-full bg-vault42-error/15 flex items-center justify-center mx-auto mb-4">
-          <svg class="w-7 h-7 text-vault42-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg aria-hidden="true" class="w-7 h-7 text-vault42-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </div>
@@ -67,7 +67,7 @@ function goToLogin() {
       <!-- Success -->
       <div v-else-if="confirmed" class="vault42-card text-center py-10" role="status">
         <div class="w-14 h-14 rounded-full bg-vault42-success/15 flex items-center justify-center mx-auto mb-4">
-          <svg class="w-7 h-7 text-vault42-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg aria-hidden="true" class="w-7 h-7 text-vault42-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
           </svg>
         </div>

@@ -1,0 +1,23 @@
+{
+  // Declarations only, and only for what ships.
+  //
+  // tsconfig.json is the type-CHECKING config: its `include` is `src/**/*`,
+  // which is what makes `vue-tsc --noEmit` check the test suites too, and that
+  // is worth keeping. Emitting from it is a different question, and the answer
+  // was wrong: `dist` carried a `.d.ts` for all twenty-two files under
+  // `src/__tests__`, published to npm, describing this package's own tests to
+  // people who install it.
+  //
+  // So the emit gets its own config and the check keeps the wide one.
+  //
+  // `rootDir` is explicit because excluding the tests changes what TypeScript
+  // infers the common source directory to be: with them in it is the package
+  // root, without them it is `src`, and tsc refuses to guess (TS5011). Pinning
+  // it to `src` is what keeps the entry at `dist/index.d.ts`, which is the path
+  // package.json publishes as `types`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src"
+  },
+  "exclude": ["node_modules", "dist", "src/**/__tests__/**", "src/**/*.test.ts"]
+}

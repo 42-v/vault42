@@ -66,7 +66,7 @@ function tint(fg: string, alpha: number, bg: string): string {
     .join('')
 }
 
-const { bg, surface, border, control, primary, accent, text, muted, success, error } = palette
+const { bg, surface, border, control, primary, accent, text, muted, success, warning, error } = palette
 const primaryHover = palette['primary-hover']
 const BACKDROPS: Array<[string, string]> = [['bg', bg], ['surface', surface]]
 
@@ -76,7 +76,7 @@ describe('the palette this suite reads', () => {
     // against `undefined`.
     expect(Object.keys(palette).sort()).toEqual([
       'accent', 'bg', 'border', 'control', 'error', 'muted',
-      'primary', 'primary-hover', 'success', 'surface', 'text',
+      'primary', 'primary-hover', 'success', 'surface', 'text', 'warning',
     ])
   })
 })
@@ -103,9 +103,10 @@ describe('text meets WCAG AA (4.5:1)', () => {
     expect(contrast(accent, backdrop)).toBeGreaterThanOrEqual(4.5)
   })
 
-  it.each(BACKDROPS)('renders `error` and `success` on %s', (_name, backdrop) => {
+  it.each(BACKDROPS)('renders `error`, `success` and `warning` on %s', (_name, backdrop) => {
     expect(contrast(error, backdrop)).toBeGreaterThanOrEqual(4.5)
     expect(contrast(success, backdrop)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(warning, backdrop)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('keeps `muted` readable on the badge and hover fills built from `border`', () => {
@@ -123,6 +124,13 @@ describe('tinted banners keep their own text readable', () => {
 
   it.each([0.1, 0.15])('holds `success` on a success/%s wash', (alpha) => {
     expect(contrast(success, tint(success, alpha, surface))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  // The backup-code banner in TwoFactorView is warning text on a warning/10
+  // fill inside a warning/30 border, which is the shape `error` was measured
+  // against when it moved off #ef4444.
+  it.each([0.1, 0.15, 0.3])('holds `warning` on a warning/%s wash', (alpha) => {
+    expect(contrast(warning, tint(warning, alpha, surface))).toBeGreaterThanOrEqual(4.5)
   })
 
   it.each([0.1, 0.15])('holds `accent` on a primary/%s wash', (alpha) => {
@@ -159,16 +167,25 @@ describe('control boundaries meet WCAG 1.4.11 (3:1)', () => {
   })
 })
 
-describe('the source tree keeps `primary` off text', () => {
+describe('the source tree paints only from the palette', () => {
   const srcDir = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 
+  // `.ts` is in scope, and it was not. The walker read `.vue` and `.css` only,
+  // so `usePasswordStrength.ts` -- which returns Tailwind class names as data,
+  // two of them stock-palette yellows -- was outside every colour gate in this
+  // file. A composable that hands a class string to a template is styling.
+  //
+  // `__tests__` is out, for the reason paletteEscapes.test.ts gives: a test
+  // asserting on a colour name has to be able to write it down.
   function sources(dir: string): string[] {
     const out: string[] = []
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name)
       if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules') out.push(...sources(full))
-      } else if (/\.(vue|css)$/.test(entry.name)) {
+        if (entry.name !== 'node_modules' && entry.name !== '__tests__') {
+          out.push(...sources(full))
+        }
+      } else if (/\.(vue|css|ts)$/.test(entry.name)) {
         out.push(full)
       }
     }
@@ -190,5 +207,126 @@ describe('the source tree keeps `primary` off text', () => {
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  /**
+   * Tailwind ships a stock palette -- `text-green-400`, `bg-yellow-500` -- and
+   * every one of those names resolves to a colour this file has never audited.
+   *
+   * Eleven had accumulated, in four files, and they were invisible to
+   * everything: the essay at the top of style.css governs the tokens, the gate
+   * in it reads CSS literals, and paletteEscapes.test.ts reads hex and rgb() in
+   * templates. A class name is none of those.
+   *
+   * The shape they took is worth naming, because it is the one that looks
+   * harmless. Nine of the eleven were hover states written beside a correct
+   * token -- `text-vault42-error hover:text-red-300` -- so the resting colour
+   * was audited and the interactive one was not. That is the same defect the
+   * palette rework was done for: the old primary button carried white at
+   * 4.47:1 and *lightened* on hover to 2.98:1. Here the tree is dark, so
+   * lightening happened to help; on any backdrop that changes, it would not,
+   * and nothing would have said so.
+   *
+   * The remaining two were a caution colour with no token behind it, which is
+   * what `warning` now is.
+   */
+  it('uses no colour from Tailwind\'s stock palette', () => {
+    const STOCK = new RegExp(
+      String.raw`(?<![\w-])(?:[a-z-]+:)*(?:text|bg|border|ring|from|to|via|fill|stroke|` +
+        String.raw`decoration|outline|shadow|accent|caret|divide|placeholder)-` +
+        `(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|` +
+        `cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\\d{2,3}(?![\\w-])`,
+      'g',
+    )
+    const offenders: string[] = []
+    for (const file of sources(srcDir)) {
+      const source = readFileSync(file, 'utf8')
+      for (const match of source.matchAll(STOCK)) {
+        offenders.push(`${relative(srcDir, file)}: ${match[0]}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('would notice a stock colour if one came back', () => {
+    // The regex above is the whole gate, so it is worth proving it matches the
+    // things it is written for rather than trusting it to.
+    const STOCK = /(?<![\w-])(?:[a-z-]+:)*(?:text|bg|border)-(?:red|green|yellow)-\d{2,3}(?![\w-])/g
+    for (const sample of ['text-red-300', 'hover:text-green-400', 'bg-yellow-500', 'md:hover:bg-red-500']) {
+      expect(sample.match(STOCK), sample).not.toBeNull()
+    }
+    // And not the tokens, which share the prefix.
+    for (const ok of ['text-vault42-error', 'hover:text-vault42-text', 'bg-vault42-warning/10']) {
+      expect(ok.match(STOCK), ok).toBeNull()
+    }
+  })
+})
+
+/**
+ * The stylesheet's own literals.
+ *
+ * Everything above reads the `@theme` block and then checks the templates. That
+ * left the rest of style.css unchecked by anything, and it is the one file that
+ * can paint without naming a token at all -- a bare `background:` in a `@layer
+ * base` rule reaches the screen with nothing to compare it against.
+ *
+ * What was sitting there: `::selection` painted `rgba(0, 255, 66, 0.2)`, neon
+ * green, in an app whose palette is entirely indigo. It had been there since
+ * 0.4.2. The contrast rework that split `primary` from `accent`, moved `error`
+ * and wrote the essay at the top of the stylesheet enumerated every colour
+ * decision in the file and never mentioned it -- because nothing pointed at it,
+ * and selecting text is not something a screenshot review catches.
+ *
+ * So: no colour literal outside the theme block, except the ones that provably
+ * cannot be a token. The exemptions are listed with a reason and checked in
+ * both directions, so an entry that stops matching has to be removed rather
+ * than quietly describing a tree that has moved on.
+ *
+ * Deliberately separate from paletteEscapes.test.ts, which holds the same rule
+ * for `.vue` and `.ts`: that gate walks source templates and this one parses a
+ * stylesheet, and the exemption a stylesheet earns (a scrim is black) is not
+ * the exemption a template earns (a trademark is its own colour).
+ */
+describe('style.css paints only from the palette', () => {
+  /** Hex, rgb()/rgba(), hsl()/hsla(). */
+  const RAW_COLOUR = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g
+
+  const ALLOWED = new Map<string, string>([
+    ['rgba(0, 0, 0, 0.7)', 'the modal scrim: a dimmed backdrop is black at every theme, and tinting it with an accent would put a hue over the whole page'],
+  ])
+
+  /**
+   * The stylesheet minus the parts a literal legitimately lives in: the `@theme`
+   * block, which is where the tokens are *defined*, and comments, where the
+   * header quotes the values the old palette used and must go on doing so.
+   */
+  function paintingRules(): string {
+    const source = readFileSync(stylesheetPath, 'utf8')
+    return source
+      .replace(/@theme\s*\{[^}]*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+  }
+
+  it('names a token, or an exempt literal, everywhere it paints', () => {
+    const offenders: string[] = []
+    for (const [literal] of paintingRules().matchAll(RAW_COLOUR)) {
+      if (!ALLOWED.has(literal)) offenders.push(literal)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('still contains every literal it exempts', () => {
+    // An exemption for something that is no longer there stops being a record
+    // of a decision and starts being a hole nobody can see the shape of.
+    const present = new Set(Array.from(paintingRules().matchAll(RAW_COLOUR), (m) => m[0]))
+    for (const literal of ALLOWED.keys()) {
+      expect(present.has(literal), `${literal} is exempted and no longer in style.css`).toBe(true)
+    }
+  })
+
+  it('reads a stylesheet with rules left in it after the stripping', () => {
+    // A regex that ate the whole file would make both assertions above pass.
+    expect(paintingRules()).toContain('::selection')
+    expect(paintingRules()).not.toContain('--color-vault42-bg:')
   })
 })
