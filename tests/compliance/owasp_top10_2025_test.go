@@ -110,7 +110,7 @@ var publicRoutePrefixes = []string{
 // scan will accept it. TestOWASP_A01_2025_GuardClosuresReallyAuthenticate keeps
 // that confirmation executable rather than trusting this list.
 var authGuards = []string{
-	"authed(", "authMw(", "authedChallenge(", "confirmed(",
+	"authed(", "authMw(", "authedChallenge(", "confirmed(", "challengeLimited(",
 	// authedWrite and confirmedWrite are authed and confirmed with the
 	// erased-account guard in front of the handler. They compose the same
 	// authentication middleware as the pair they extend, and guardComposes below
@@ -141,8 +141,12 @@ var guardComposes = map[string]string{
 	"authedWrite":     "authMw(",
 	"confirmedWrite":  "authMw(",
 	"authedChallenge": "challengeMw(",
-	"docRead":         "authMw(",
-	"docWrite":        "authMw(",
+	// The same credential as authedChallenge -- it is that chain with the
+	// subject-keyed guessing limiter mounted inside it, so the limiter can key
+	// on the challenge's subject.
+	"challengeLimited": "challengeMw(",
+	"docRead":          "authMw(",
+	"docWrite":         "authMw(",
 }
 
 func isDeclaredPublic(path string) bool {

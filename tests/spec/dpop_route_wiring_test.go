@@ -41,6 +41,7 @@ var dpopWrapperIdents = []string{
 	"dpopWrap",
 	"authed",
 	"authedChallenge",
+	"challengeLimited",
 	"confirmed",
 	"authedWrite",
 	"confirmedWrite",
@@ -51,7 +52,7 @@ var dpopWrapperIdents = []string{
 // routeBuilderClosures are the local helpers whose whole job is to build a
 // middleware chain for a family of routes. Each must apply dpopWrap.
 var routeBuilderClosures = []string{
-	"authed", "authedChallenge", "confirmed",
+	"authed", "authedChallenge", "confirmed", "challengeLimited",
 	// authedWrite and confirmedWrite are authed and confirmed with the erased-account
 	// guard in front of the handler. They are listed here rather than exempted so the
 	// same assertion applies: a wrapper that stops applying dpopWrap fails the build,
