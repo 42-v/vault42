@@ -263,7 +263,7 @@
     {
       "package": "internal/crypto",
       "file": "internal/crypto/recovery.go",
-      "line": 211,
+      "line": 227,
       "occurrence": 1,
       "source": "\t\treturn nil, errors.New(\"recovery: wrapped key too large\")",
       "bucket": "C",
@@ -363,7 +363,7 @@
     {
       "package": "internal/jwt",
       "file": "internal/jwt/es256.go",
-      "line": 54,
+      "line": 57,
       "occurrence": 1,
       "source": "\t\t\treturn fmt.Errorf(\"%w: %w\", ErrTokenSignatureInvalid, err)",
       "bucket": "C",
