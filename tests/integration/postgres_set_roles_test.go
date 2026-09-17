@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/42-v/vault42/internal/repository/postgres"
@@ -12,8 +13,8 @@ import (
 // PUT /admin/users/{id}/roles runs as vault_admin, and PostgreSQL checks the
 // column privilege against every target an UPDATE names. vault_admin holds
 // column-scoped UPDATE on auth.users -- locked_until and failed_login_count from
-// 001, must_reset_password from 039, roles from 041 -- because 015 revoked the
-// six columns 009 had lent it. Without the 041 grant the route answers 500 with
+// 001, must_reset_password from 039, roles from 044 -- because 015 revoked the
+// six columns 009 had lent it. Without the 044 grant the route answers 500 with
 // 42501 in any deployment running as the real role, and passes in every test
 // that drives the owner pool, which is the shape 040 was written to fix for
 // refresh_tokens one table over.
@@ -69,6 +70,33 @@ func TestSetRolesRunsUnderTheRealAdminRole(t *testing.T) {
 		}
 		if len(roles) != 0 {
 			t.Fatalf("roles = %v, want empty", roles)
+		}
+	})
+
+	t.Run("the application role cannot set roles", func(t *testing.T) {
+		// The other half of the same privilege statement, and the reason this
+		// method returns an error at all. 015 revoked from vault_app the six
+		// columns 009 had lent it, and 044 grants roles to vault_admin only, so
+		// the application role has no writer for the column an admin uses to
+		// grant privileges. A deployment where it did would let anything with the
+		// app credential promote a user.
+		//
+		// Driven under the real role deliberately: through the owner pool this
+		// write succeeds, which is exactly what makes the privilege model
+		// invisible to the rest of the suite.
+		appRepo := postgres.NewUserRepo(&postgres.DB{Pool: appRolePool(t, adminPool)})
+		err := appRepo.SetRoles(ctx, id, []string{"super_admin"})
+		if err == nil {
+			t.Fatal("SetRoles succeeded as vault_app. The roles column is how the admin " +
+				"plane grants privilege, so the application role must not be able to write " +
+				"it: check that 015's revoke still stands and that no later migration " +
+				"re-granted roles to vault_app.")
+		}
+		if !strings.Contains(err.Error(), "set roles") {
+			t.Errorf("error = %v, want it wrapped by SetRoles (\"set roles: ...\")", err)
+		}
+		if !strings.Contains(err.Error(), "42501") && !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("error = %v, want a 42501 permission denial rather than some other failure", err)
 		}
 	})
 

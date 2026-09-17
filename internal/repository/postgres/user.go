@@ -214,7 +214,7 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 //
 // Same constraint as SetMustResetPassword above: vault_admin holds column-scoped
 // UPDATE on auth.users -- locked_until and failed_login_count from 001,
-// must_reset_password from 039, roles from 041 -- because 015 revoked the six
+// must_reset_password from 039, roles from 044 -- because 015 revoked the six
 // that 009 had lent it, updated_at among them. PostgreSQL checks the column
 // privilege against every target an UPDATE names, so stamping updated_at here
 // would fail the whole statement with 42501 under the real role while passing in
