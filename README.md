@@ -8,9 +8,9 @@ Vault42 issues its own tokens and is an OAuth2 *client* of other providers. It i
 | Go | Vue | C# | |
 |---|---|---|---|
 | ![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?style=flat&logo=go&logoColor=white) | ![Vue](https://img.shields.io/badge/Vue-3.5.41-4FC08D?style=flat&logo=vuedotjs&logoColor=white) | ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat&logo=dotnet&logoColor=white) | ![License](https://img.shields.io/badge/License-MIT-155724?style=flat&labelColor=000) |
-| ![Go Tests](https://img.shields.io/badge/Tests-4910-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Tests-1305-155724?style=flat&labelColor=000) | ![C# Tests](https://img.shields.io/badge/Tests-264-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6479_tests-155724?style=flat&labelColor=000) |
+| ![Go Tests](https://img.shields.io/badge/Tests-4946-155724?style=flat&labelColor=000) | ![Vue Tests](https://img.shields.io/badge/Tests-1321-155724?style=flat&labelColor=000) | ![C# Tests](https://img.shields.io/badge/Tests-266-155724?style=flat&labelColor=000) | ![Total](https://img.shields.io/badge/Total-6533_tests-155724?style=flat&labelColor=000) |
 | ![Go Coverage](https://img.shields.io/badge/Coverage-100.00%25_reachable-155724?style=flat&labelColor=000) | ![Vue Coverage](https://img.shields.io/badge/Coverage-99.76%25-155724?style=flat&labelColor=000) | ![C# Coverage](https://img.shields.io/badge/Coverage-100.00%25-155724?style=flat&labelColor=000) | ![Locales](https://img.shields.io/badge/Locales-38-555?style=flat&labelColor=000) |
-| ![Go Lines](https://img.shields.io/badge/Lines-48278-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6798-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2435-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-11-555?style=flat&labelColor=000) |
+| ![Go Lines](https://img.shields.io/badge/Lines-48365-555?style=flat&labelColor=000) | ![Vue Lines](https://img.shields.io/badge/Lines-6798-555?style=flat&labelColor=000) | ![C# Lines](https://img.shields.io/badge/Lines-2435-555?style=flat&labelColor=000) | ![Standards](https://img.shields.io/badge/Standards-11-555?style=flat&labelColor=000) |
 | ![Go Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![Vue Deps](https://img.shields.io/badge/Deps-3-555?style=flat&labelColor=000) | ![C# Deps](https://img.shields.io/badge/Deps-6-555?style=flat&labelColor=000) | ![Requirements](https://img.shields.io/badge/Requirements-456-555?style=flat&labelColor=000) |
 | ![Go Transitive Deps](https://img.shields.io/badge/Transitive-15-555?style=flat&labelColor=000) | ![Vue Transitive Deps](https://img.shields.io/badge/Transitive-95-555?style=flat&labelColor=000) | ![C# Transitive Deps](https://img.shields.io/badge/Transitive-26-555?style=flat&labelColor=000) | ![Total Deps](https://img.shields.io/badge/Deps-148_total-555?style=flat&labelColor=000) |
 <!-- /badges -->
@@ -78,11 +78,15 @@ token, which is what keeps non-DPoP clients working with the flag on. The bindin
 the proof checking worth anything: a proof never compared against a key the token committed to
 only demonstrates that the caller can sign something.
 
-Two limits are real. Refresh tokens are not sender-bound: only the access token and the 2FA
-challenge token carry `cnf.jkt`, so a stolen refresh token can still be redeemed on its own, and
-the constraint on the pair it returns is whatever key that redemption presents. And there is no
-`DPoP-Nonce`, so a proof's freshness rests on its own `iat` inside a five-minute window plus the
-single-use JTI cache; the server cannot require a proof minted after a value it chose.
+Two limits are real, and one of them narrowed. Refresh families are sender-bound as of migration
+038: a family opened with a proof records that key's thumbprint in `auth.refresh_tokens.dpop_jkt`
+and every rotation inherits it, so `enforceDPoPBinding` refuses a redemption presenting the wrong
+key or no key, and the successor pair is bound to the *stored* thumbprint rather than to whatever
+the redemption happened to present. What is still unbound is a family that opened without a
+proof: `dpop_jkt` is NULL there, which means an ordinary bearer family, and there is deliberately
+no backfill, so a session predating DPoP keeps working and keeps its old exposure. And there is
+no `DPoP-Nonce`, so a proof's freshness rests on its own `iat` inside a five-minute window plus
+the single-use JTI cache; the server cannot require a proof minted after a value it chose.
 
 ## Architecture
 

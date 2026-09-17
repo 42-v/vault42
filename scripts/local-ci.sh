@@ -281,7 +281,39 @@ if [ "$FAST" -eq 1 ]; then
 else
   echo
   echo "== slow gates =="
-  gate "Race suite"    go go test -race -count=1 ./...
+  # Split into a fast half and a container-backed half, because the two need
+  # different flags and running them as one `go test -race ./...` gets both
+  # wrong. This is not a copy of ci.yml's step list: the fast half keeps every
+  # package ci.yml does not name, so the gate stays a superset, and tests/e2e
+  # joins the serialised half rather than getting the separate step it has in
+  # CI, which serialises it against the other two container suites instead of
+  # alongside them. Both differences are in the direction of running more and
+  # contending less.
+  #
+  # ci.yml gives the container-backed packages `-p 1 -race -timeout 1800s` and
+  # says why: "integration and compliance each start their own Postgres, and in
+  # parallel they contend for ports". One combined invocation cannot honour that
+  # -- `-p` is per-invocation, so serialising the two that need it would
+  # serialise all 30-odd packages that do not.
+  #
+  # The timeout is the half that actually bit. No -timeout means `go test`
+  # applies its 10-minute default, while CI allows 1800s, and ci.yml records
+  # integration at 458s under the detector on an idle runner: 76% of the budget
+  # this script was handing it. On a machine doing anything else the package
+  # passed 600s and reported a hard failure -- observed here at 600.582s, the
+  # default to the millisecond -- from a suite CI runs green. A local gate that
+  # invents a red teaches its reader to stop believing it.
+  #
+  # The fast half keeps every other package rather than narrowing to the list
+  # ci.yml names, so this stays a superset of CI and not a copy of it.
+  # shellcheck disable=SC2016 # the child shell expands these, not this one
+  gate "Race suite" go bash -c '
+    containerised="tests/integration|tests/compliance|tests/e2e"
+    fast=$(go list ./... | grep -Ev "/($containerised)") || exit 1
+    # shellcheck disable=SC2086 # deliberate word splitting: a package list
+    go test $fast -count=1 -race -timeout 600s || exit 1
+    go test ./tests/integration/... ./tests/compliance/... ./tests/e2e/... \
+      -count=1 -p 1 -race -timeout 1800s'
   gate "Coverage gate" go bash -c './scripts/coverage.sh && ./scripts/release-check.sh --coverage-only'
   collect
 fi

@@ -323,7 +323,11 @@ func TestNIST80053_IA_11_SensitiveChangesRequireRecentConfirmation(t *testing.T)
 			t.Errorf("IA-11: route %q is no longer registered; re-derive this assertion", route)
 			continue
 		}
-		if !strings.Contains(wiring, "confirmed(") {
+		// confirmedWrite is confirmed plus the erased-account guard; it composes
+		// the same confirmMw, so it satisfies IA-11 exactly as confirmed does.
+		// Matching only "confirmed(" would not match it, because the name
+		// continues into "Write".
+		if !strings.Contains(wiring, "confirmed(") && !strings.Contains(wiring, "confirmedWrite(") {
 			t.Errorf("IA-11: %s changes an authentication factor without requiring recent re-authentication; it is wired as %s", route, wiring)
 		}
 	}
