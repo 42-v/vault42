@@ -842,6 +842,7 @@ var chainAdminRoutePerms = map[string]string{ // #nosec G101 -- route to RBAC pe
 	"POST /admin/users/{id}/clear-password-reset":   "rbac.UsersReset",
 	"POST /admin/users/{id}/ban":                    "rbac.UsersBan",
 	"POST /admin/users/{id}/unban":                  "rbac.UsersBan",
+	"PUT /admin/users/{id}/roles":                   "rbac.UsersRoles",
 	"DELETE /admin/users/{id}":                      "rbac.UsersDelete",
 	"GET /admin/sessions":                           "rbac.AdminsManage",
 	"POST /admin/sessions/revoke-all":               "rbac.SessionsRevoke",

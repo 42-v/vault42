@@ -75,6 +75,7 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	// operator rather than beside users:delete.
 	mux.Handle("POST /admin/users/{id}/ban", withPerm(sessionAuth, rbac.UsersBan, api.BanUser))
 	mux.Handle("POST /admin/users/{id}/unban", withPerm(sessionAuth, rbac.UsersBan, api.UnbanUser))
+	mux.Handle("PUT /admin/users/{id}/roles", withPerm(sessionAuth, rbac.UsersRoles, api.SetUserRoles))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
 	// Session management.

@@ -1002,11 +1002,22 @@ var skipsByDesign = map[string]skipRule{
 	},
 	"tests/spec/chart_immutable_selector_test.go:lastReleaseTag": {
 		reason: "the previously released chart is rendered from the last reachable tag, and a " +
-			"clone with no tags cannot produce one. NOT ci-strict, and that is a known gap rather " +
-			"than an argument: ci.yml's Tests job checks out at the default depth, which fetches " +
-			"no tags, so this gate does not run on a pull request. Making it fatal would turn a " +
-			"silent skip into a red CI on work that did not cause it; the fix is fetch-depth: 0 " +
-			"on that checkout, which is a workflow change with its own owner",
+			"clone with no tags cannot produce one. The gap this entry used to describe is " +
+			"closed: it said the fix was fetching tags on the checkout and that this was a " +
+			"workflow change with its own owner, and ci.yml now sets fetch-tags: true on both " +
+			"jobs that run ./tests/spec/... -- test and coverage-gate, which are the only two. " +
+			"Still not ci-strict, but for a smaller reason than before: making it fatal means " +
+			"teaching this shared helper to consult runningInCI, and it is read by the chart " +
+			"gates too, so that is their change to make rather than a side effect of this one",
+	},
+	"tests/spec/upgrading_doc_test.go:TestUpgradingDocBackCompatCountMatchesTheTree": {
+		reason: "reads what a named tag shipped, so a checkout without tags cannot answer it. " +
+			"Locally that skips, which keeps `go test ./...` runnable in a shallow clone; on a " +
+			"runner it is fatal, because ci.yml fetches tags on both jobs that run this suite " +
+			"and a skip there would mean the back-compatibility count sentence -- the one that " +
+			"tells an operator on an older line whether they can skip ahead -- is unchecked " +
+			"while CI reports ok",
+		ciStrictPredicate: "runningInCI",
 	},
 	"tests/attack/atk_crypto_argon2_pressure_test.go:TestArgon2Attack_MeasureQueueingUnderFlood": {
 		reason: "a latency measurement. Under -race every duration is instrumentation, and -short " +

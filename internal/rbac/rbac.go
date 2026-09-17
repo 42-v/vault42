@@ -222,6 +222,15 @@ const (
 	// every subsequent token. Catalog entries marked reserved refuse deletion.
 	// Route: DELETE /admin/roles/{name}. Tier: super_admin.
 	RolesDelete Permission = "roles:delete"
+	// UsersRoles grants replacing the role set on an existing user, which is
+	// the assignment the catalog permissions above only make possible. Holding
+	// it means deciding what a relying party is told about a specific person,
+	// so it sits beside RolesCreate at super_admin rather than with the
+	// operator tier's reversible containment verbs. It is one permission
+	// because the route replaces the whole set: there is no narrower grant that
+	// adds a role without also being able to remove one.
+	// Route: PUT /admin/users/{id}/roles. Tier: super_admin.
+	UsersRoles Permission = "users:roles"
 
 	// EmailRead grants reading email branding and the transactional email
 	// templates.
@@ -373,6 +382,7 @@ var superAdminPerms = map[Permission]bool{
 	RolesCreate:   true,
 	RolesDelete:   true,
 	UsersImport:   true,
+	UsersRoles:    true,
 	EmailWrite:    true,
 	EmailDelete:   true,
 }
@@ -425,7 +435,7 @@ func PermissionsForRole(role Role) []Permission {
 	var perms []Permission
 	all := []Permission{
 		KeysList, KeysRotate, KeysRevoke, AuditRead,
-		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersBan, UsersDelete, UsersImport,
+		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersBan, UsersDelete, UsersImport, UsersRoles,
 		SessionsList, SessionsRevoke,
 		ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigRead, ConfigWrite, MetricsRead,

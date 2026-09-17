@@ -4025,7 +4025,7 @@ curl https://vault42.example.com/.well-known/openid-configuration
 
 ## Endpoint Summary
 
-**107 API routes: 62 on the main binary, 45 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
+**108 API routes: 62 on the main binary, 46 on the admin gateway.** This table is the complete set. `tests/spec/route_drift_test.go` parses the route registrations in `internal/server/server.go` and `internal/adminapi/router.go` with `go/ast` and fails the build if a row here has no route behind it, or if a route exists with no row. Adding an endpoint without a row is not possible.
 
 The **Mounted when** column is the answer to "why does this endpoint 404 in production". A route in a group that is not mounted does not exist, and `net/http.ServeMux` answers `404` in `text/plain` -- not the JSON error envelope.
 
@@ -4131,6 +4131,7 @@ Served by `cmd/admin-gateway` only, never by the main binary. `admin-gateway.md`
 | `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
 | `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
 | `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `PUT` | `/admin/users/{id}/roles` | Session | `users:roles` | Always | Replace a user's role set; refuses names outside the catalog |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `POST` | `/admin/users/{id}/ban` | Session | `users:ban` | Always | Ban an account with a reason, revoking live sessions |

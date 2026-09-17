@@ -110,6 +110,19 @@ type UserRepository interface {
 	// rather than truncating, and the route is where the operator's text is
 	// known to be operator text.
 	SetBanned(ctx context.Context, id string, banned bool, reason string) error
+	// SetRoles replaces a user's role set. It is the admin plane's only writer
+	// for the column: before it, roles reached auth.users solely through the
+	// INSERT in POST /admin/users/import and could not be changed afterwards.
+	//
+	// It replaces rather than adding or removing one name, because the column is
+	// a TEXT[] the statement overwrites whole. A grant-one/revoke-one pair over
+	// the same column would be a read-modify-write from the handler, and two
+	// admins editing one user would silently lose an edit.
+	//
+	// What may be in the set is not this method's business: the name shape, the
+	// catalog membership and the admin-tier refusal are enforced in the handler,
+	// where the caller gets a 400 naming the role rather than a 23514.
+	SetRoles(ctx context.Context, id string, roles []string) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential

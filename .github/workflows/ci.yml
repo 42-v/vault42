@@ -28,10 +28,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-          # Full history: this job runs tests/spec, and several of those gates
-          # read git. Without it chart_immutable_selector_test.go SKIPS with "no
-          # release tag other than <self> is reachable from HEAD", and a skipped
-          # assertion reports as a pass.
+          # Full history AND tags: this job runs tests/spec, and several of those
+          # gates read git. Without it chart_immutable_selector_test.go SKIPS with
+          # "no release tag other than <self> is reachable from HEAD", and the
+          # migration-count sentences in docs/UPGRADING.md are checked against what
+          # the previous tag actually shipped -- git rev-parse fails on a shallow
+          # checkout and those gates skip, reporting the same ok as a run.
+          # fetch-depth: 0 fetches tags too, so it covers both.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -146,10 +149,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-          # Full history: this job runs tests/spec, and several of those gates
-          # read git. Without it chart_immutable_selector_test.go SKIPS with "no
-          # release tag other than <self> is reachable from HEAD", and a skipped
-          # assertion reports as a pass.
+          # Full history AND tags: this job runs tests/spec, and several of those
+          # gates read git. Without it chart_immutable_selector_test.go SKIPS with
+          # "no release tag other than <self> is reachable from HEAD", and the
+          # migration-count sentences in docs/UPGRADING.md are checked against what
+          # the previous tag actually shipped -- git rev-parse fails on a shallow
+          # checkout and those gates skip, reporting the same ok as a run.
+          # fetch-depth: 0 fetches tags too, so it covers both.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

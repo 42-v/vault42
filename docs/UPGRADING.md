@@ -32,7 +32,7 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 42, so an upgrade applies 3. 041
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 43, so an upgrade applies 4. 041
 revokes `DELETE` on `auth.users` from `vault_app`; 001 granted it and nothing has ever called
 it, so no request path changes. 042 changes `auth.admin_users.created_by` from `NO ACTION` to
 `ON DELETE SET NULL`; until it runs, `POST /admin/admins/{id}/revoke` answers 500 for any
@@ -40,12 +40,18 @@ admin who has created another admin, and that account and its live sessions stay
 the only containment lever the admin plane has. 043 grants `UPDATE (banned, ban_reason)` on
 `auth.users` to `vault_admin`: 004 created both columns and 024 revoked them from `vault_app`,
 leaving `ban_reason` with no writer at all, so this is what lets the two new ban routes write,
-and until it runs they answer 500 in any deployment running as the real role. None of the
-three moves data or adds a column, and nothing existing depends on them. Take the backup
+and until it runs they answer 500 in any deployment running as the real role. 044 grants
+`UPDATE (roles)` on the same table to the same role, which is what lets
+`PUT /admin/users/{id}/roles` write at all: PostgreSQL checks the column privilege on
+every target an UPDATE names, and 015 revoked the six columns 009 had lent that role.
+None of the four moves data or adds a column, and nothing existing depends on them. Take
+the backup
 anyway: the point of step 1 is that you have one when something else goes wrong.
 
-**Behaviour.** Two new routes, `POST /admin/users/{id}/ban` and `POST /admin/users/{id}/unban`,
-which is what migration 043 grants the privilege for, and one fix with no new surface:
+**Behaviour.** Three new routes: `POST /admin/users/{id}/ban` and
+`POST /admin/users/{id}/unban`, which is what migration 043 grants the privilege for, and
+`PUT /admin/users/{id}/roles`, which is what 044 grants it for. All three are additive, so a
+deployment that never calls them is unaffected. There is also one fix with no new surface:
 `POST /admin/admins/{id}/revoke` now succeeds against an admin who has created other admins,
 and those accounts survive with their `created_by` cleared -- the account that authorized them
 is recorded in the revoke's audit row instead. Nothing existing changes shape. The ban state
@@ -77,7 +83,8 @@ one go (033 is deliberately absent -- the runner sorts filenames and skips what 
 gaps are harmless). Take the backup first.
 
 Still current if you are coming from 0.9.x: 1.0.1 through 1.0.4 added no migrations, so the
-count is the same 39 whichever of them you land on.
+count is the same 39 whichever of them you land on. This release is the first since 1.0.0 to
+add one: 041 takes it to 40.
 
 **Every idle session is logged out once.** This release adds an inactivity timeout,
 `VAULT_INACTIVITY_TIMEOUT`, defaulting to `1h` — the figure NIST SP 800-63B-4 §2.2.3 gives
