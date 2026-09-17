@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -102,24 +101,14 @@ func NewOIDCProvider(name, issuer, clientID, clientSecret, redirectURI, scopes s
 // there is no path for anyone to sit on. The exception is deliberately narrow:
 // a hostname that merely resolves to a loopback address does not qualify, since
 // that resolution is not this process's to trust.
+//
+// The rule now lives in internal/outbound, which is where the other caller is:
+// ClientForIssuer's CheckRedirect judged a redirect hop by its destination host
+// and never by its scheme, so an endpoint answering 307 with a plaintext
+// Location on the same domain was followed with method and body intact. Two
+// copies of this would have agreed until they did not.
 func fetchableEndpoint(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	switch u.Scheme {
-	case "https":
-		return true
-	case "http":
-		host := u.Hostname()
-		if host == "localhost" {
-			return true
-		}
-		ip := net.ParseIP(host)
-		return ip != nil && ip.IsLoopback()
-	default:
-		return false
-	}
+	return outbound.FetchableEndpoint(raw)
 }
 
 // SetGuard installs the deployment's outbound destination policy on this
