@@ -31,7 +31,7 @@
 -- able to rewrite or erase them."
 --
 -- That restriction is load-bearing, not tidiness. This table is the baseline the
--- new-location notice (AR-18) compares against: an actor who can delete rows from
+-- new-location notice (P13) compares against: an actor who can delete rows from
 -- it can silence the notice for any account by clearing its history first, then
 -- signing in from anywhere as a "first-ever" login. A standing table-level DELETE
 -- would put that primitive behind anything that reaches the database as
@@ -50,12 +50,22 @@
 -- outlive a hard-deleted user, so there is nothing left to clear and the function
 -- returns 0 rather than failing an erasure that has already succeeded.
 --
--- The grants are written bare rather than inside a DO block, per 015: the
--- integration fixture's applyRealGrants() only re-applies a statement whose first
--- word is GRANT or REVOKE, so anything nested in a DO block is skipped there and
--- that suite would go on exercising the pre-030 privilege model. Each is kept on
--- one line for stripRoleGrants(), which drops a line starting with GRANT/REVOKE
--- and would otherwise leave a wrapped statement's tail behind as a syntax error.
+-- The grants are written bare rather than inside a DO block, per 015, and each
+-- is kept on one line for stripRoleGrants(), which drops a line starting with
+-- GRANT/REVOKE and would otherwise leave a wrapped statement's tail behind as a
+-- syntax error.
+--
+-- This used to add that a DO block would make the integration suite exercise the
+-- pre-030 privilege model. That is not true here, and it was worth measuring
+-- rather than inheriting from 015. Both fixture functions match GRANT/REVOKE only
+-- at column zero, so an indented statement inside a DO block is neither stripped
+-- by stripRoleGrants() nor re-applied by applyRealGrants(): it survives into the
+-- migration setupPostgres runs and is executed verbatim as the owner. Nothing
+-- later in the tree re-grants or re-revokes EXECUTE on auth.erase_login_countries
+-- -- 030 is the only migration that names it -- so the resulting ACL would be the
+-- same either way. The bare form is still the right shape, for the one-line
+-- reason above and for reading like every other grant in the tree; it is simply
+-- not load-bearing for what the suite tests.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION auth.erase_login_countries(p_user_id UUID)

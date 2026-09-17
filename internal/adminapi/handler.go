@@ -209,6 +209,23 @@ type userSummary struct {
 	// build does not report it" indistinguishable -- which is the gap this closes,
 	// not a smaller version of it.
 	MustResetPassword bool `json:"must_reset_password"`
+	// Banned is the state POST /admin/users/{id}/ban imposes and .../unban
+	// withdraws, and BanReason is the operator's explanation for it. They are on
+	// the record for the reason must_reset_password is: an operator must not be
+	// able to impose a state they cannot read back. Until the ban routes existed
+	// the columns had no writer, so there was nothing to read; now there is.
+	//
+	// No omitempty on Banned, for the reason mfa_required and
+	// must_reset_password carry none: on a bool it would erase the false state
+	// and leave "not banned" and "this build does not report it"
+	// indistinguishable.
+	//
+	// BanReason keeps omitempty, because it is a string whose empty value means
+	// exactly one thing -- there is no ban, or nobody explained it -- and the
+	// repository clears it when a ban is lifted, so it cannot linger past the
+	// sanction it describes.
+	Banned    bool   `json:"banned"`
+	BanReason string `json:"ban_reason,omitempty"`
 }
 
 // ListUsers handles GET /admin/users.
@@ -244,6 +261,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 				LockedUntil:       user.LockedUntil,
 				CreatedAt:         user.CreatedAt,
 				MustResetPassword: user.MustResetPassword,
+				Banned:            user.Banned,
+				BanReason:         user.BanReason,
 			})
 		}
 	} else if strings.Contains(q, "@") {
@@ -262,6 +281,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 				LockedUntil:       user.LockedUntil,
 				CreatedAt:         user.CreatedAt,
 				MustResetPassword: user.MustResetPassword,
+				Banned:            user.Banned,
+				BanReason:         user.BanReason,
 			})
 		}
 	}
@@ -306,6 +327,8 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		LockedUntil:       user.LockedUntil,
 		CreatedAt:         user.CreatedAt,
 		MustResetPassword: user.MustResetPassword,
+		Banned:            user.Banned,
+		BanReason:         user.BanReason,
 	})
 }
 

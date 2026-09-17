@@ -1140,14 +1140,19 @@ func TestSanitizeDisplayName_Quotes(t *testing.T) {
 }
 
 func TestSanitizeAvatarURL_ExactLimit(t *testing.T) {
-	// URL of exactly 2048 bytes should be accepted
-	url := "https://example.com/" + strings.Repeat("a", 2028)
-	if len(url) != 2048 {
-		t.Fatalf("test URL length should be 2048, got %d", len(url))
+	// The limit is auth.users.avatar_url's width, VARCHAR(1024), not a round
+	// number. This asserted 2048, which is what the sanitizer used to admit --
+	// so a URL between 1025 and 2048 characters passed here and was refused by
+	// PostgreSQL with 22001, failing the whole profile UPDATE.
+	url := "https://example.com/" + strings.Repeat("a", 1004)
+	if len(url) != 1024 {
+		t.Fatalf("test URL length should be 1024, got %d", len(url))
 	}
-	got := sanitize.AvatarURL(url)
-	if got != url {
-		t.Fatalf("expected URL to be accepted at exactly 2048 bytes")
+	if got := sanitize.AvatarURL(url); got != url {
+		t.Fatalf("a URL exactly the width of the column was refused")
+	}
+	if got := sanitize.AvatarURL(url + "a"); got != "" {
+		t.Fatalf("a URL one character past the column was accepted: %q", got)
 	}
 }
 

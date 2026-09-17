@@ -95,6 +95,24 @@ const (
 	// Routes: POST /admin/users/{id}/password-reset-required,
 	// DELETE /admin/users/{id}/password-reset-required. Tier: operator.
 	UsersReset Permission = "users:reset"
+	// UsersBan grants sanctioning an account: auth.users.banned and the
+	// operator's ban_reason (004, writable by this plane since 043). It is
+	// stronger than UsersLock in what it says rather than in what it does --
+	// a lock expires, a ban holds until an operator lifts it, and the login
+	// path answers a distinct 403 account_banned for it.
+	//
+	// One permission covers both directions, the way UsersReset does and for
+	// its reason: the pair is one lever with one blast radius, and an admin
+	// meant to impose a sanction they cannot lift is the opposite of what a
+	// reversible control is for.
+	//
+	// Operator rather than super_admin, by the line this file already draws:
+	// the tier above is for permissions that are irreversible or
+	// privilege-granting, and a ban is neither. Nothing is destroyed, the
+	// account's data is untouched, and .../unban restores it exactly.
+	// Routes: POST /admin/users/{id}/ban, POST /admin/users/{id}/unban.
+	// Tier: operator.
+	UsersBan Permission = "users:ban"
 	// UsersDelete grants erasure of an account and the identity, blob and
 	// session records that hang off it. This is the GDPR erasure path, it is
 	// not reversible, and it is why the role that holds it is the highest one.
@@ -333,6 +351,7 @@ var operatorPerms = map[Permission]bool{
 	UsersLock:      true,
 	UsersUnlock:    true,
 	UsersReset:     true,
+	UsersBan:       true,
 	SessionsRevoke: true,
 	ClientsList:    true,
 	ClientsRead:    true,
@@ -406,7 +425,7 @@ func PermissionsForRole(role Role) []Permission {
 	var perms []Permission
 	all := []Permission{
 		KeysList, KeysRotate, KeysRevoke, AuditRead,
-		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersDelete, UsersImport,
+		UsersList, UsersRead, UsersLock, UsersUnlock, UsersReset, UsersBan, UsersDelete, UsersImport,
 		SessionsList, SessionsRevoke,
 		ClientsList, ClientsRead, ClientsCreate, ClientsRevoke, ClientsRotate,
 		ConfigRead, ConfigWrite, MetricsRead,

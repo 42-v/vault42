@@ -107,6 +107,20 @@ func (h *PasswordHandler) SetMailer(m *email.Mailer) {
 	}
 }
 
+// refusedByAccountState reports whether the password-reset flow must decline to
+// act on this account at all.
+//
+// One definition, because the two halves of the flow have to agree and they did
+// not. ResetRequest declined to mail a link to a deleted, banned or disabled
+// account; ResetConfirm, which is the half that writes a password, checked only
+// that a row came back. Two copies of a predicate are two chances to update one
+// of them, and the copy that was missing was the one guarding the write.
+//
+// A nil user is included so the callers cannot forget it separately.
+func refusedByAccountState(u *model.User) bool {
+	return u == nil || u.Deleted || u.Banned || u.Disabled
+}
+
 // ResetRequest handles POST /auth/password/reset.
 func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	var input PasswordResetRequestInput
@@ -141,7 +155,7 @@ func (h *PasswordHandler) ResetRequest(w http.ResponseWriter, r *http.Request) {
 	token, tokenErr := vaultcrypto.RandomHex(32)
 
 	user, err := h.users.GetByEmail(r.Context(), input.Email)
-	if err != nil || user == nil || user.Deleted || user.Banned || user.Disabled || tokenErr != nil {
+	if err != nil || refusedByAccountState(user) || tokenErr != nil {
 		return
 	}
 
@@ -193,9 +207,32 @@ func (h *PasswordHandler) ResetConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch user
+	// Fetch user, and refuse the same states ResetRequest refuses.
+	//
+	// This half had no gate. ResetRequest declines to mail a link to a deleted,
+	// banned or disabled account (the predicate above), and this route -- the
+	// one that actually writes a password -- accepted any token that resolved.
+	// The token lives in the cache for an hour and erasure never deletes it, so
+	// the window is real rather than theoretical: request a reset, erase the
+	// account, and the mailed link still worked for the rest of the hour.
+	//
+	// What it wrote is the part that matters. updatePassword stores a fresh
+	// Argon2id hash and inserts a password_history row for a user id whose
+	// history the erasure cascade had just deleted -- onto a tombstone, after
+	// the account_erased audit row was written. Migration 031 NULLs that hash
+	// while writing the tombstone and calls it "the worst item here ... still
+	// crackable offline and still tells an attacker what to try elsewhere".
+	// This route put a live one back.
+	//
+	// A banned or disabled account fared no better: the same request clears
+	// must_reset_password and import_pending and retires every lockout counter
+	// for an account the platform has refused.
+	//
+	// The response is the invalid_or_expired_token the missing-token path
+	// gives, deliberately. A distinct code here would make this route an oracle
+	// for which addresses have been erased or banned.
 	user, err := h.users.GetByID(r.Context(), userID)
-	if err != nil || user == nil {
+	if err != nil || refusedByAccountState(user) {
 		WriteError(w, http.StatusBadRequest, "invalid_or_expired_token")
 		return
 	}

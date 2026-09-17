@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	vaultcrypto "github.com/42-v/vault42/internal/crypto"
 	"github.com/42-v/vault42/internal/httputil"
@@ -15,6 +16,23 @@ import (
 )
 
 const maxImportBatch = 1000
+
+// The columns this endpoint writes into, by width.
+//
+// auth.users.imported_from is VARCHAR(64) (migrations/006_account_import.sql)
+// and auth.users.ban_reason is VARCHAR(500) (migrations/004_user_account_flags.sql).
+// locale is VARCHAR(10) (001) and is bounded by sanitize.Locale, which already
+// owns that number for the two other write paths.
+//
+// Nothing checked any of them. A 100-character `source` is written to every row,
+// so CreateImported fails with 22001 for every record; the loop catches each
+// failure on its own, so the endpoint answers 200 OK with "imported": 0 and a
+// thousand rows of "create_failed", and nothing in the response names the one
+// field that caused it. An operator reads that as a thousand bad records.
+const (
+	maxImportSourceLen    = 64
+	maxImportBanReasonLen = 500
+)
 
 type importUser struct {
 	Email     string   `json:"email"`
@@ -79,6 +97,24 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = "import"
 	}
+	// Rejected, not truncated, and rejected before the loop.
+	//
+	// `source` is batch-wide: it is written to every row, so an over-long one is
+	// not a bad record among good ones, it is a bad request. Truncating it would
+	// silently file a thousand accounts under a tag the operator did not choose
+	// and cannot search for later, and the import is idempotent on
+	// (imported_from, legacy_id) -- so a truncated tag also makes the re-run that
+	// was supposed to be a no-op create every account a second time.
+	//
+	// Runes, not bytes, because VARCHAR(64) counts characters. The sibling clamp
+	// in internal/sanitize measures bytes on purpose, which is conservative in
+	// the direction that cannot fail when the answer is to TRUNCATE. Here the
+	// answer is to refuse, and being conservative would refuse a tag PostgreSQL
+	// would have accepted.
+	if utf8.RuneCountInString(source) > maxImportSourceLen {
+		httputil.WriteError(w, http.StatusBadRequest, "source_too_long")
+		return
+	}
 
 	results := make([]importResult, 0, len(req.Users))
 	var imported, consentFailed, forcedReset int
@@ -98,17 +134,19 @@ func (h *Handler) ImportUsers(w http.ResponseWriter, r *http.Request) {
 			results = append(results, importResult{Email: email, Status: "error", Error: "internal_error"})
 			continue
 		}
-		locale := u.Locale
-		if locale == "" {
-			locale = "en"
-		}
+		// The same clamp the other two write paths apply (internal/service/auth.go
+		// on register, internal/handler/user.go on profile update): it bounds the
+		// tag to the column's ten characters, refuses anything that is not a
+		// language tag, and falls back to "en" -- which is also the empty case
+		// this used to handle on its own.
+		locale := sanitize.Locale(u.Locale)
 		now := time.Now()
 		user := &model.User{
 			ID: id, Email: email, Locale: locale,
 			Roles:        seed.FilterUserRoles(u.Roles), // strip admin-tier names
 			Disabled:     u.Disabled,
 			Banned:       u.Banned,
-			BanReason:    u.BanReason,
+			BanReason:    sanitize.String(u.BanReason, maxImportBanReasonLen),
 			ImportedFrom: source,
 			LegacyID:     u.LegacyID,
 			CreatedAt:    now,

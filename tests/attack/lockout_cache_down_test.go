@@ -99,6 +99,10 @@ func (r *stubUserRepo) ClearMustResetPassword(_ context.Context, _ string) error
 func (r *stubUserRepo) SetMustResetPassword(_ context.Context, _ string, _ bool) error {
 	return nil
 }
+
+func (r *stubUserRepo) SetBanned(_ context.Context, _ string, _ bool, _ string) error {
+	return nil
+}
 func (r *stubUserRepo) SoftDeleteScrub(_ context.Context, _, _ string) error { return nil }
 
 // Verify interface compliance at compile time.
