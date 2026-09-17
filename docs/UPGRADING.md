@@ -32,19 +32,25 @@ chart.
 
 **Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 41, so an upgrade applies 2. 041
+**Schema.** v1.0.3 shipped 39 migrations; this release ships 42, so an upgrade applies 3. 041
 revokes `DELETE` on `auth.users` from `vault_app`; 001 granted it and nothing has ever called
-it, so no request path changes. 043 grants `UPDATE (banned, ban_reason)` on `auth.users` to
-`vault_admin`. It moves no data and adds no column: 004 created both columns and 024 revoked
-them from `vault_app`, leaving `ban_reason` with no writer at all, so this is what lets the
-two new ban routes write. Until it runs they answer 500 in any deployment running as the real
-role, and nothing existing depends on it. Take the backup anyway: the point of step 1 is that
-you have one when something else goes wrong.
+it, so no request path changes. 042 changes `auth.admin_users.created_by` from `NO ACTION` to
+`ON DELETE SET NULL`; until it runs, `POST /admin/admins/{id}/revoke` answers 500 for any
+admin who has created another admin, and that account and its live sessions stay -- revoke is
+the only containment lever the admin plane has. 043 grants `UPDATE (banned, ban_reason)` on
+`auth.users` to `vault_admin`: 004 created both columns and 024 revoked them from `vault_app`,
+leaving `ban_reason` with no writer at all, so this is what lets the two new ban routes write,
+and until it runs they answer 500 in any deployment running as the real role. None of the
+three moves data or adds a column, and nothing existing depends on them. Take the backup
+anyway: the point of step 1 is that you have one when something else goes wrong.
 
 **Behaviour.** Two new routes, `POST /admin/users/{id}/ban` and `POST /admin/users/{id}/unban`,
-which is what migration 043 grants the privilege for. Nothing existing changes shape. The ban
-state itself is not new -- login has answered `403 account_banned` since 004 and the frontend
-has rendered it in every locale it ships -- so an account already banned by an import behaves
+which is what migration 043 grants the privilege for, and one fix with no new surface:
+`POST /admin/admins/{id}/revoke` now succeeds against an admin who has created other admins,
+and those accounts survive with their `created_by` cleared -- the account that authorized them
+is recorded in the revoke's audit row instead. Nothing existing changes shape. The ban state
+itself is not new -- login has answered `403 account_banned` since 004 and the frontend has
+rendered it in every locale it ships -- so an account already banned by an import behaves
 exactly as it did; what changes is that an operator can now set and lift the state, and read
 it back on `GET /admin/users/{id}`, which now carries `banned` and `ban_reason`. Banning
 revokes the account's live sessions; unbanning deliberately does not.
