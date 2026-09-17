@@ -514,10 +514,10 @@ the user id or asserted subject, the **masked** source network (last octet or lo
 zeroed, `httputil.ObfuscatedIP`), the event class, the count and the window -- never the full
 address, never an email, never metadata.
 
-Eight event classes are marked as ones whose alert would start an Art. 33 assessment:
-`honeypot_trigger`, `fingerprint_anomaly`, `dpop_binding_mismatch`, `kms_unwrap`, `token_minted`,
-`data_export`, `svcdoc_get` and `account_erased`. Each is unauthorised access to, disclosure of,
-or destruction of personal data. `login_failure` is deliberately not among them: a login that
+Ten event classes are marked as ones whose alert would start an Art. 33 assessment:
+`honeypot_trigger`, `authenticator_cloned`, `refresh_token_replayed`, `fingerprint_anomaly`,
+`dpop_binding_mismatch`, `kms_unwrap`, `token_minted`, `data_export`, `svcdoc_get` and
+`account_erased`. Each is unauthorised access to, disclosure of, or destruction of personal data. `login_failure` is deliberately not among them: a login that
 failed disclosed nothing.
 
 The audit query filter (`repository.AuditFilter`) supports user, event type, time range and a

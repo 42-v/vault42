@@ -213,17 +213,24 @@ func assertFamilyIsBurned(t *testing.T, pool *pgxpool.Pool, familyID string, win
 
 // assertReplayAudited checks the operator-visible half. Whatever happens to the
 // race winner, the caller that lost must still be recorded as a replay.
+//
+// The class it looks for is audit.RefreshTokenReplayed rather than the
+// token_revoke this used to read. Reuse detection wrote a revoke carrying
+// reason: "replay_detected", which is the row a logout writes, so a query for
+// the revocation could not tell the two apart and the row it found scored
+// routine. It is its own class now, and this assertion is about the replay
+// being reported, not about a revocation having happened.
 func assertReplayAudited(t *testing.T, pool *pgxpool.Pool, familyID string) {
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit.audit_log WHERE event_type = $1 AND metadata->>'family_id' = $2`,
-		audit.TokenRevoke, familyID).Scan(&n); err != nil {
+		audit.RefreshTokenReplayed, familyID).Scan(&n); err != nil {
 		t.Fatalf("count audit rows: %v", err)
 	}
 	if n == 0 {
 		t.Errorf("no %s audit entry for family %s; the replay was neither stopped nor reported",
-			audit.TokenRevoke, familyID)
+			audit.RefreshTokenReplayed, familyID)
 	}
 }
 
