@@ -78,6 +78,21 @@ func (p *OIDCProvider) VerifyIDToken(ctx context.Context, idToken, expectedNonce
 	if expectedNonce == "" {
 		return nil, fmt.Errorf("oidc id_token: no expected nonce for this login attempt")
 	}
+	// Discovery has to have run before the issuer is chosen, not merely before
+	// the signature is checked. WithIssuer takes its value as an argument, so
+	// expectedIDTokenIssuer is evaluated here; the keyfunc that would otherwise
+	// trigger discovery does not run until ParseWithClaims is already inside the
+	// call. Without this, the first verification against a provider whose
+	// identifier ends in a slash compares against the trimmed configured value
+	// and fails -- the exact defect expectedIDTokenIssuer exists to prevent.
+	//
+	// discover caches, so this is a no-op after the first call, and the only
+	// live caller reaches Exchange first anyway. That is why this was latent
+	// rather than broken, and it is not a reason to leave a function correct
+	// only by the order its caller happens to use.
+	if _, err := p.discover(ctx); err != nil {
+		return nil, err
+	}
 	claims := vjwt.MapClaims{}
 	_, err := vjwt.ParseWithClaims(idToken, &claims, func(t *vjwt.Token) (any, error) {
 		// Reject headers that point verification at attacker-controlled keys.
@@ -221,7 +236,15 @@ func (p *OIDCProvider) refreshJWKS(ctx context.Context) error {
 		}
 		pub, err := rsaPublicKeyFromJWK(k.N, k.E)
 		if err != nil {
-			continue // skip malformed keys rather than fail the whole set
+			// One refused key does not poison the set. An issuer mid-rotation,
+			// or one publishing a key this loop has no use for, is the ordinary
+			// case, and failing the whole refresh over it would leave the cache
+			// serving the previous key set until the issuer tidied up. A key
+			// refused for its size takes the same exit, which is what makes the
+			// cap cheap to add: it costs that key and nothing else. When every
+			// entry is refused, the len(keys) == 0 check below fails the
+			// refresh and the cached set is left as it was.
+			continue
 		}
 		keys[k.Kid] = pub
 	}
@@ -235,7 +258,7 @@ func (p *OIDCProvider) refreshJWKS(ctx context.Context) error {
 }
 
 // rsaPublicKeyFromJWK decodes the base64url modulus/exponent of an RSA JWK,
-// enforcing a 2048-bit minimum modulus.
+// enforcing the shared modulus bounds and a usable public exponent.
 func rsaPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) {
 	nBytes, err := base64.RawURLEncoding.DecodeString(nB64)
 	if err != nil {
@@ -246,8 +269,18 @@ func rsaPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("decode e: %w", err)
 	}
 	n := new(big.Int).SetBytes(nBytes)
-	if n.BitLen() < 2048 {
+	if n.BitLen() < vjwt.MinRSAModulusBits {
 		return nil, fmt.Errorf("RSA key too small: %d bits", n.BitLen())
+	}
+	// The ceiling is the half that was missing. The modulus arrives from the
+	// issuer's jwks_uri, refreshJWKS installs whatever decodes as the id_token
+	// verification cache, and every later id_token with that kid is verified
+	// against it, so an absurd modulus is not one expensive parse but an
+	// unbounded cost per token. The sibling importer in internal/crypto had
+	// capped a DPoP proof's jwk header at this bit length since it was written;
+	// this path took the same attacker-chosen input and applied only the floor.
+	if n.BitLen() > vjwt.MaxRSAModulusBits {
+		return nil, fmt.Errorf("RSA key too large: %d bits", n.BitLen())
 	}
 	e := new(big.Int).SetBytes(eBytes)
 	if !e.IsInt64() || e.Int64() < 3 || e.Int64() > 1<<31-1 {

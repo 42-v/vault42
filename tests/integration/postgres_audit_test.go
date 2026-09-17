@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/42-v/vault42/internal/audit"
 	"github.com/42-v/vault42/internal/model"
 	"github.com/42-v/vault42/internal/repository"
 	"github.com/42-v/vault42/internal/repository/postgres"
@@ -360,5 +361,67 @@ func TestPostgresAuditRepo(t *testing.T) {
 		}
 		// Just verify it didn't error with limit=0 (default applies)
 		_ = entries
+	})
+
+	// The exclusion GET /admin/audit serves a viewer-tier admin through. Three
+	// properties, and each one is a way the fix could have been wrong.
+	t.Run("Query excludes the admin plane in SQL, before the limit", func(t *testing.T) {
+		excludedUser := randomID()
+		rows := []*model.AuditEntry{
+			// Both namespaces the admin plane is written in.
+			{ID: randomID(), Timestamp: baseTime.Add(40 * time.Second), EventType: audit.AdminLogin, UserID: excludedUser},
+			{ID: randomID(), Timestamp: baseTime.Add(41 * time.Second), EventType: "admin:role_create", UserID: excludedUser},
+			{ID: randomID(), Timestamp: baseTime.Add(42 * time.Second), EventType: audit.AdminAccountCreate, UserID: excludedUser},
+			// A user-plane class whose name starts with the letters of the
+			// admin prefix but is not in that namespace. LIKE 'admin_%' would
+			// have taken this one too, because LIKE reads the underscore as a
+			// single-character wildcard; starts_with does not.
+			{ID: randomID(), Timestamp: baseTime.Add(43 * time.Second), EventType: "administrator_login", UserID: excludedUser},
+			{ID: randomID(), Timestamp: baseTime.Add(44 * time.Second), EventType: audit.LoginSuccess, UserID: excludedUser},
+		}
+		if err := repo.InsertBatch(ctx, rows); err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+
+		filter := repository.AuditFilter{
+			UserID:                   excludedUser,
+			ExcludeEventTypePrefixes: audit.AdminPlaneEventPrefixes(),
+		}
+		entries, err := repo.Query(ctx, filter)
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want the 2 that are not admin-plane", len(entries))
+		}
+		var sawNearMiss bool
+		for _, e := range entries {
+			if audit.IsAdminPlaneEvent(e.EventType) {
+				t.Errorf("%q came back through an admin-plane exclusion", e.EventType)
+			}
+			if e.EventType == "administrator_login" {
+				sawNearMiss = true
+			}
+		}
+		if !sawNearMiss {
+			t.Error("administrator_login was excluded. The predicate is matching more than the " +
+				"namespace, which withholds user-plane rows from the auditor the tier exists for.")
+		}
+
+		// The limit counts what the caller receives. Three of the five newest
+		// rows for this user are admin-plane, so a filter applied to the answer
+		// instead of to the query would return an empty page here.
+		limited, err := repo.Query(ctx, repository.AuditFilter{
+			UserID:                   excludedUser,
+			ExcludeEventTypePrefixes: audit.AdminPlaneEventPrefixes(),
+			Limit:                    2,
+		})
+		if err != nil {
+			t.Fatalf("Query with limit: %v", err)
+		}
+		if len(limited) != 2 {
+			t.Errorf("a page of 2 came back holding %d; the exclusion is being applied after LIMIT, "+
+				"so pages shrink and consecutive offsets skip rows the caller never saw", len(limited))
+		}
 	})
 }

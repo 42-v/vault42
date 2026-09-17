@@ -83,6 +83,16 @@ var alertRules = map[string]alert.Rule{
 		Name: "dpop-binding-probe", Threshold: 3, Window: shortWindow,
 		Cooldown: alertCooldown, Severity: SeveritySerious, Breach: true,
 	},
+	// A refresh token presented after it was already spent. Rotation exists to
+	// catch this and nothing else produces it: the family is burned by the time
+	// the row is written, so there is no second one to wait for, and waiting
+	// would mean waiting for a second stolen session rather than for a second
+	// request. The threshold sits at one for the reason the two rules above it
+	// sit at three -- those two suspect a stolen cookie and this one has proof.
+	RefreshTokenReplayed: {
+		Name: "refresh-token-replay", Threshold: 1, Window: shortWindow,
+		Cooldown: alertCooldown, Severity: SeverityCritical, Breach: true,
+	},
 	// A trap credential has no legitimate user, so one use is the alert. The
 	// cooldown is what keeps a login loop against the trap from becoming an
 	// amplifier pointed at the operator.

@@ -880,13 +880,20 @@ jobs:
             an SPDX attestation. Those are unsigned and are not what the claim
             above rests on; `gh attestation verify` is.
 
-            **No SLSA level is claimed.** What is described above is the
-            mechanism, and the commands check it. A level describes the build
-            platform rather than this repository, so naming one here would be
-            vault42 repeating GitHub's assessment as though it were its own —
-            and this project publishes no claim it cannot evidence itself.
-            `docs/compliance-register.json` carries no SLSA row and
-            `docs/COMPLIANCE.md` lists a SLSA build level under what is
-            deliberately not claimed. This paragraph says the same thing, and
+            **No SLSA level is claimed in this release body.** What is
+            described above is the mechanism, and the commands check it. A level
+            describes the build platform rather than this repository, so naming
+            one here would be vault42 repeating GitHub's assessment as though it
+            were its own.
+
+            The assessment lives where it can be evidenced row by row:
+            `docs/compliance-register.json` carries the SLSA 1.1 Build Track as
+            a standard of its own — six requirements Met and one Accepted Risk,
+            the L3 clause requiring provenance to be strongly resistant to
+            forgery by tenants. `docs/COMPLIANCE.md` summarises it. This
+            paragraph used to say the register carried no SLSA row at all; that
+            was true when it was written and stopped being true when the Build
+            Track was assessed, which is the drift
             `TestSupplyChain_TheReleaseNotesClaimNoStandardTheRegisterOmits`
-            fails the build if the three ever disagree again.
+            exists to catch and could not, because it can only fail on a claim
+            the register omits — never on a claim the register has since gained.

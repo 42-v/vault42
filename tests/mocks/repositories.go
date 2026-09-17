@@ -52,6 +52,7 @@ type MockUserRepo struct {
 	ClearMustResetPwFn     func(ctx context.Context, id string) error
 	SetMustResetPwFn       func(ctx context.Context, id string, required bool) error
 	SetBannedFn            func(ctx context.Context, id string, banned bool, reason string) error
+	SetRolesFn             func(ctx context.Context, id string, roles []string) error
 	SoftDeleteScrubFn      func(ctx context.Context, id, tombstoneEmail string) error
 }
 
@@ -100,6 +101,13 @@ func (m *MockUserRepo) SetMustResetPassword(ctx context.Context, id string, requ
 func (m *MockUserRepo) SetBanned(ctx context.Context, id string, banned bool, reason string) error {
 	if m.SetBannedFn != nil {
 		return m.SetBannedFn(ctx, id, banned, reason)
+	}
+	return nil
+}
+
+func (m *MockUserRepo) SetRoles(ctx context.Context, id string, roles []string) error {
+	if m.SetRolesFn != nil {
+		return m.SetRolesFn(ctx, id, roles)
 	}
 	return nil
 }

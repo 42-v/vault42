@@ -75,6 +75,7 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	// operator rather than beside users:delete.
 	mux.Handle("POST /admin/users/{id}/ban", withPerm(sessionAuth, rbac.UsersBan, api.BanUser))
 	mux.Handle("POST /admin/users/{id}/unban", withPerm(sessionAuth, rbac.UsersBan, api.UnbanUser))
+	mux.Handle("PUT /admin/users/{id}/roles", withPerm(sessionAuth, rbac.UsersRoles, api.SetUserRoles))
 	mux.Handle("DELETE /admin/users/{id}", withPerm(sessionAuth, rbac.UsersDelete, api.DeleteUser))
 
 	// Session management.
@@ -93,7 +94,16 @@ func NewRouter(auth *AuthHandler, api *Handler, opts ...RouterOpts) http.Handler
 	mux.Handle("GET /admin/sessions", withPerm(sessionAuth, rbac.AdminsManage, api.ListSessions))
 	mux.Handle("POST /admin/sessions/revoke-all", withPerm(sessionAuth, rbac.SessionsRevoke, api.RevokeAllSessions))
 
-	// Audit log
+	// Audit log.
+	//
+	// audit:read and not admins:manage, unlike GET /admin/sessions above, and
+	// the difference is deliberate rather than the same oversight in a second
+	// place. The trail is what a viewer-tier auditor exists to read, so the
+	// route stays at the tier that reads it. What it used to hand over is the
+	// admin-plane rows inside the trail, which are that roster again with the
+	// username and the role attached, and those are excluded per caller in
+	// QueryAudit. Raising the whole route would have closed the leak by taking
+	// the endpoint away from the people it is for.
 	mux.Handle("GET /admin/audit", withPerm(sessionAuth, rbac.AuditRead, api.QueryAudit))
 
 	// Client management

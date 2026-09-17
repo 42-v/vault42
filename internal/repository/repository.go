@@ -110,6 +110,19 @@ type UserRepository interface {
 	// rather than truncating, and the route is where the operator's text is
 	// known to be operator text.
 	SetBanned(ctx context.Context, id string, banned bool, reason string) error
+	// SetRoles replaces a user's role set. It is the admin plane's only writer
+	// for the column: before it, roles reached auth.users solely through the
+	// INSERT in POST /admin/users/import and could not be changed afterwards.
+	//
+	// It replaces rather than adding or removing one name, because the column is
+	// a TEXT[] the statement overwrites whole. A grant-one/revoke-one pair over
+	// the same column would be a read-modify-write from the handler, and two
+	// admins editing one user would silently lose an edit.
+	//
+	// What may be in the set is not this method's business: the name shape, the
+	// catalog membership and the admin-tier refusal are enforced in the handler,
+	// where the caller gets a 400 naming the role rather than a 23514.
+	SetRoles(ctx context.Context, id string, roles []string) error
 	// SoftDeleteScrub erases a user's PII in place: it sets a tombstone email,
 	// clears display_name and avatar_url, and marks the row deleted=true with
 	// deleted_at=now. The row is retained (not removed) to preserve referential
@@ -392,8 +405,27 @@ type AuditFilter struct {
 	// Zero means absent rather than a floor of zero, because a floor of zero
 	// selects everything and would make an unset filter look set.
 	MinRiskScore int
-	Limit        int
-	Offset       int
+	// ExcludeEventTypePrefixes drops every entry whose event type begins with
+	// one of these. Nil means no exclusion.
+	//
+	// The store applies it, before LIMIT and OFFSET, and that is the point of
+	// it living here rather than in the caller. adminapi.QueryAudit serves the
+	// audit trail to a viewer-tier admin who may not read the admin roster, so
+	// the admin-plane rows have to come out of the answer; dropping them from
+	// the returned slice instead would have been fewer lines and a broken
+	// endpoint. LIMIT is counted by the store, so a page of 50 that lost 30
+	// admin rows would come back holding 20, and the next request's OFFSET
+	// would skip the 50 rows that were read rather than the 20 that were
+	// returned. Pages would shrink, the reported total would describe a window
+	// the caller was not given, and rows would fall between consecutive pages.
+	//
+	// An empty string in the slice excludes every entry, because every string
+	// has it as a prefix. That is the safe direction for a filter whose only
+	// job is to withhold, so it is left meaning what it says rather than
+	// quietly ignored.
+	ExcludeEventTypePrefixes []string
+	Limit                    int
+	Offset                   int
 }
 
 // SocialAccountRepository manages social login persistence.

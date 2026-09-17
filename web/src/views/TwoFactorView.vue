@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, useTemplateRef } from 'vue'
 import { use2FA, useWebAuthn, useConfirm, VaultAuthGuard, useT } from '@vault42/vue'
-import QRCode from 'qrcode'
+import { qrDataUrl as renderQR } from '../qr'
 import { friendlyError } from '../errorMessages'
 import { useModalFocus } from '../composables/useModalFocus'
 
@@ -43,10 +43,11 @@ watch(totpSetup, async (setup) => {
       // type, so this is not a dead end -- but a code that silently fails to
       // scan pushes every enrolling user onto a 32-character manual entry, on
       // the screen they are least likely to come back to.
-      qrDataUrl.value = await QRCode.toDataURL(setup.otp_url, {
+      qrDataUrl.value = renderQR(setup.otp_url, {
         width: 200,
         margin: 2,
-        color: { dark: '#0a0a0f', light: '#ffffff' },
+        dark: '#0a0a0f',
+        light: '#ffffff',
       })
     } catch {
       qrDataUrl.value = ''

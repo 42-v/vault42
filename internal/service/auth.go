@@ -154,6 +154,12 @@ type familyOriginReader interface {
 // of the window, behind the same masked error a wrong password gets. A completed
 // reset now calls ClearAccountLockout, which retires all of them at once by
 // advancing the generation the source key is namespaced under.
+// replayRevokeTimeout bounds the detached family revocation that runs when a
+// replayed refresh token is detected. The request's own deadline no longer
+// applies to it -- that is the point -- so it needs one of its own, or a wedged
+// database turns a containment action into a hung request.
+const replayRevokeTimeout = 5 * time.Second
+
 const (
 	lockoutThreshold            = 5
 	distributedLockoutThreshold = 50
@@ -1351,11 +1357,33 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		return nil, ErrTokenInvalid
 	}
 
-	// Replay detection: if already used → revoke entire family
+	// Replay detection: if already used → revoke entire family.
+	//
+	// The revocation runs on a context detached from the request, and its
+	// outcome is recorded rather than discarded. Both halves were wrong.
+	//
+	// It rode the request context, so the party being contained could cancel
+	// the containment: replay a used token, drop the connection before the
+	// UPDATE commits, and RevokeFamily returns context.Canceled with the family
+	// still live. Its error went to `#nosec G104 -- best-effort revocation`,
+	// and the function returned ErrReplayDetected and audited
+	// reason=replay_detected unconditionally -- so the trail asserted a
+	// containment that had not happened, on the one event where the trail is
+	// how anyone finds out. This is the single containment the whole rotation
+	// design rests on: detecting the replay is worth nothing if the family
+	// survives it.
+	//
+	// context.WithoutCancel keeps the values (tracing, request id) and drops
+	// the cancellation, with a bound of its own so a wedged database cannot
+	// hold the request open now that the caller's deadline no longer applies.
+	// internal/audit/retention.go uses the same construction for the same
+	// reason.
+	//
+	// The audit write is detached with it. A replay is the security event this
+	// log exists for, and losing the record because the attacker hung up is the
+	// same defect one layer along.
 	if stored.Used {
-		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
-		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "replay_detected", "family_id": stored.FamilyID})
+		s.containRefreshReuse(ctx, stored, ip, ua, "replay_detected")
 		return nil, ErrReplayDetected
 	}
 
@@ -1402,9 +1430,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 	}
 	if !updated {
 		// Concurrent request already consumed this token — treat as replay
-		s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
-		s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
-			map[string]interface{}{"reason": "concurrent_replay_detected", "family_id": stored.FamilyID})
+		s.containRefreshReuse(ctx, stored, ip, ua, "concurrent_replay_detected")
 		return nil, ErrReplayDetected
 	}
 
@@ -1433,6 +1459,63 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken, ip, ua string, 
 		RefreshToken: pair.RefreshToken,
 		CookieMaxAge: int(time.Until(pair.RefreshExpAt).Seconds()),
 	}, nil
+}
+
+// containRefreshReuse burns the family a reused refresh token belongs to and
+// records the reuse as what it is.
+//
+// Its two callers are the two moments one token can be caught in two hands: a
+// stored row that already carries used = TRUE, and a mark-used compare-and-set
+// lost to a request that reached the row first. Neither is a variety of logout.
+//
+// It used to be audit.TokenRevoke carrying reason: "replay_detected", and the
+// reason was the only thing separating it from a logout. Once severity became a
+// property of the event class that stopped being enough: the class scores
+// routine, so the strongest evidence of session theft this service can produce
+// was written with risk_score 0, below the 25 a mistyped password carries, and
+// an operator filtering on risk_score >= SeverityElevated never saw a stolen
+// refresh cookie at all. Alerting could not reach it either, because a rule keyed
+// on token_revoke pages on every logout -- so fingerprint_anomaly and
+// dpop_binding_mismatch, which suspect on this same code path what this one
+// proves, raised alerts that confirmed reuse could not.
+//
+// The audit row REPLACES the token_revoke rather than accompanying it, which is
+// the trade audit.AuthenticatorCloned already made when it was split out of the
+// same class. Nothing is lost from the trail: the revocation is what this event
+// means, the family it burned is named in the metadata, and the rows themselves
+// carry revoked = TRUE. Writing both would put two rows on one action, count
+// every replay twice in any rate the detector keeps, and leave the row an
+// operator is likelier to filter for scored as a logout. The one caller that
+// reads a token_revoke back out of the store is a race test in tests/integration,
+// and it is asserting on this event, not on a revocation.
+//
+// Both writes are best-effort and neither may decide whether a stolen token is
+// accepted: the caller is refused with ErrReplayDetected either way.
+//
+// Both run on a context DETACHED from the request. The request context is
+// canceled the instant the client goes away, and the client here is whoever
+// presented the stolen token -- so on the plain request context an attacker
+// contains their own replay by hanging up, and the containment this function
+// exists to perform is the first thing canceled. The detached context carries
+// its own deadline (replayRevokeTimeout) so a wedged store cannot hold the
+// goroutine open.
+//
+// family_revoked records which of the two happened, because a contained replay
+// and a merely detected one are not the same incident and an operator reading
+// the trail has no other way to tell them apart.
+func (s *AuthService) containRefreshReuse(ctx context.Context, stored *model.RefreshToken, ip, ua, reason string) {
+	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayRevokeTimeout)
+	defer cancel()
+
+	revoked := s.tokens.RevokeFamily(revokeCtx, stored.FamilyID) == nil
+	if s.metrics != nil {
+		s.metrics.RecordRefreshTokenReplayed()
+	}
+	s.auditLog.Log(revokeCtx, audit.RefreshTokenReplayed, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow
+		map[string]interface{}{
+			"reason": reason, "family_id": stored.FamilyID,
+			"family_revoked": revoked,
+		})
 }
 
 // accountStillHoldsSessions re-reads the account behind a rotation and returns
@@ -1593,6 +1676,20 @@ func (s *AuthService) issueRotatedPair(ctx context.Context, stored *model.Refres
 		DeviceID: stored.DeviceID, FingerprintHash: fp, DPoPJKT: stored.DPoPJKT,
 		ExpiresAt: pair.RefreshExpAt, CreatedAt: time.Now(),
 	}); err != nil {
+		// Still a token_revoke, and deliberately not audit.RefreshTokenReplayed.
+		// The two reuse-detection arms in Refresh have a token in front of them
+		// that was demonstrably spent twice; this one has only the fact that the
+		// family stopped accepting rows between the CAS and the insert. A
+		// concurrent replay is the interesting way to reach it and not the only
+		// one: a logout in another tab, an administrative revocation and an
+		// erasure that emptied the family all land here too, and the erasure arm
+		// is a condition the insert carries on purpose
+		// (internal/repository/postgres/refresh_token.go, Create). The caller is
+		// still told replay_detected, because any other answer distinguishes a
+		// live family from a dead one and turns a refusal into a 500 the caller
+		// retries -- but the audit log is not visible to the caller and must not
+		// claim a replay it cannot demonstrate. Filing a logout race as the
+		// critical class would page an operator for a second browser tab.
 		if errors.Is(err, repository.ErrFamilyRevoked) {
 			s.tokens.RevokeFamily(ctx, stored.FamilyID)                                            // #nosec G104 -- best-effort revocation; returning ErrReplayDetected regardless
 			s.auditLog.Log(ctx, audit.TokenRevoke, stored.UserID, stored.ClientID, ip, ua, "", "", // #nosec G104 -- audit is best-effort, never blocks auth flow

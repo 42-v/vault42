@@ -21,9 +21,9 @@ import (
 )
 
 // =============================================================================
-// AR-18 — new-location login notice, and VPN/anonymiser rate-limit scrutiny.
+// P13 — new-location login notice, and VPN/anonymiser rate-limit scrutiny.
 //
-// docs/security.md AR-18 (and docs/PRIVACY.md P13) commit vault42 to two
+// docs/PRIVACY.md P13 commits vault42 to two
 // behaviors derived from a LOCAL IP-intelligence table (no third-party lookup):
 //
 //  1. Notify a user when their account is accessed from a country they have not
@@ -69,9 +69,15 @@ func ar18IPIntel(t *testing.T) *ipintel.DB {
 
 type ar18Email struct{ to, subject, html, text string }
 
-// TestASVS_AR18_NewLocationNoticeAndVPNScrutiny is the compliance-register entry
-// for AR-18. It proves both halves of the control in one test.
-func TestASVS_AR18_NewLocationNoticeAndVPNScrutiny(t *testing.T) {
+// TestP13_NewLocationNoticeAndVPNScrutiny is the compliance-register entry for
+// this control. It proves both halves in one test.
+//
+// It was named for AR-18 until this release, and AR-18 is a different risk
+// entirely: docs/security.md defines the AR-nn namespace and AR-18 there is
+// about vault_app owning every password hash. The new-location notice is P13 in
+// docs/PRIVACY.md and carries no AR number at all. Migrations 028 and 030 made
+// the same substitution in their headers and are corrected in the same change.
+func TestP13_NewLocationNoticeAndVPNScrutiny(t *testing.T) {
 	t.Run("NewCountryNoticeCarriesCountryNeverIP", func(t *testing.T) {
 		ctx := context.Background()
 

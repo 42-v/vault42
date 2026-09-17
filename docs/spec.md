@@ -1382,10 +1382,11 @@ an outage that multiplies the brute-force budget by the replica count is a secur
 | `login_failure` | `LoginFailure` | Failed login attempt |
 | `registration` | `Registration` | New user account creation |
 | `token_refresh` | `TokenRefresh` | Refresh token exchange |
-| `token_revoke` | `TokenRevoke` | Token revocation (logout, replay) |
+| `token_revoke` | `TokenRevoke` | Token revocation (logout, session-lifetime expiry, a rotation refused because the family died under it) |
+| `refresh_token_replayed` | `RefreshTokenReplayed` | A refresh token presented after it was already spent. The family is revoked and the caller refused. Its own class, not a `token_revoke` with a reason: the severity and the alert rule are properties of the class, and a logout is neither |
 | `password_change` | `PasswordChange` | User-initiated password change |
 | `password_reset` | `PasswordReset` | Password reset via email |
-| `2fa_setup` | `TwoFASetup` | TOTP or WebAuthn enrollment |
+| `2fa_setup` | `TwoFASetup` | TOTP or WebAuthn enrollment by a user |
 | `2fa_verify` | `TwoFAVerify` | 2FA verification attempt |
 | `device_trust` | `DeviceTrust` | Device trust change |
 | `session_revoke` | `SessionRevoke` | Session revocation |
@@ -1405,6 +1406,7 @@ an outage that multiplies the brute-force budget by the replica count is a secur
 | `admin_login` | `AdminLogin` | Admin gateway login success |
 | `admin_login_failure` | `AdminLoginFailure` | Admin gateway login failure |
 | `admin_logout` | `AdminLogout` | Admin gateway logout |
+| `admin_2fa_setup` | `AdminTwoFASetup` | Admin enrolled their own second factor on the admin gateway |
 | `admin_session_revoke` | `AdminSessionRevoke` | Admin session revoked |
 | `admin_user_lock` | `AdminUserLock` | User locked by admin |
 | `admin_user_unlock` | `AdminUserUnlock` | User unlocked by admin |
@@ -2081,7 +2083,7 @@ Threat observation deployment. Extends production with auto-migration, embedded 
 
 ## 16. Endpoint Inventory
 
-**107 API routes: 62 on the main binary, 45 on the admin gateway.** This inventory is the complete
+**108 API routes: 62 on the main binary, 46 on the admin gateway.** This inventory is the complete
 set. `tests/spec/route_drift_test.go` parses `internal/server/server.go` and
 `internal/adminapi/router.go` with `go/ast` and fails the build if a route here does not exist, or
 if a route exists that is not here. Adding an endpoint without a row is not possible.
@@ -2217,6 +2219,7 @@ role must hold. Section 21 describes the behaviour.
 | `POST` | `/admin/users/import` | Session | `users:import` | Always | Batch import, passwordless + `import_pending` |
 | `POST` | `/admin/users/{id}/lock` | Session | `users:lock` | Always | Lock an account |
 | `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
+| `PUT` | `/admin/users/{id}/roles` | Session | `users:roles` | Always | Replace a user's role set; refuses names outside the catalog |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
 | `POST` | `/admin/users/{id}/ban` | Session | `users:ban` | Always | Ban an account with a reason, revoking live sessions |
@@ -2465,6 +2468,14 @@ so `?min_risk_score=75` returns everything serious or worse. A value that does n
 positive integer leaves the predicate off rather than landing on a different threshold, which is
 the same behaviour `since` and `until` have for an unparseable timestamp: a filter that silently
 becomes a different filter gives a wrong answer rather than no answer.
+
+Admin-plane rows are served only to a caller holding `admins:manage`. Every event type in the
+`admin_` and `admin:` namespaces names the acting admin -- `admin_login` carries their id, source
+address, user agent, username and role -- so the trail is the admin roster in historical form, and
+`GET /admin/sessions` is at `admins:manage` for exactly that reason. The route itself stays at
+`audit:read`, because a viewer-tier auditor is who the trail is for; the admin-plane rows are
+excluded from the query for a caller without the higher permission, in the store and before `limit`
+is applied, so pages stay the size that was asked for.
 
 The response projects each row explicitly (`auditEntryView`) rather than serialising the model, and
 the projection is part of the contract:

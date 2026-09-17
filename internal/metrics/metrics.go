@@ -36,6 +36,15 @@ type Collector struct {
 	tokensIssued    atomic.Int64
 	tokensRefreshed atomic.Int64
 
+	// refreshReplays counts refresh tokens presented after they were already
+	// spent. It is kept apart from tokensRefreshed for the reason the mint
+	// counters below are kept apart from tokensIssued: a rotation that
+	// succeeded and a rotation refused because the credential turned up in two
+	// hands are opposite outcomes, and summing them would put the signal an
+	// operator wants to page on inside the number that rises with ordinary
+	// traffic. There is no scrape-side way back out of that sum.
+	refreshReplays atomic.Int64
+
 	// Mint counters are kept apart from the token counters above on purpose: a
 	// minted token asserts a subject vault42 never authenticated, so folding it
 	// into vault_tokens_issued_total would hide the one number an operator most
@@ -168,6 +177,14 @@ func (c *Collector) RecordTokenIssued() { c.tokensIssued.Add(1) }
 // RecordTokenRefreshed increments the token refresh counter.
 func (c *Collector) RecordTokenRefreshed() { c.tokensRefreshed.Add(1) }
 
+// RecordRefreshTokenReplayed counts a refresh token presented after it was
+// already spent, which is single-use rotation catching a stolen family. Any
+// non-zero rate is a session credential in more than one pair of hands: the
+// audit row beside it (audit.RefreshTokenReplayed) names the family and raises
+// an alert on the first occurrence, and this is the figure a deployment's own
+// monitoring can page on without parsing the audit log.
+func (c *Collector) RecordRefreshTokenReplayed() { c.refreshReplays.Add(1) }
+
 // RecordMintIssued counts a token signed for a caller-asserted subject.
 func (c *Collector) RecordMintIssued() { c.mintIssued.Add(1) }
 
@@ -267,5 +284,9 @@ func (c *Collector) Handler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP vault_tokens_refreshed_total Total token refresh operations.\n")
 		fmt.Fprintf(w, "# TYPE vault_tokens_refreshed_total counter\n")
 		fmt.Fprintf(w, "vault_tokens_refreshed_total %d\n", c.tokensRefreshed.Load())
+
+		fmt.Fprintf(w, "# HELP vault_refresh_token_replays_total Refresh tokens presented after they were already spent. Each one burned a rotation family, and any non-zero rate is a session credential in more than one pair of hands.\n")
+		fmt.Fprintf(w, "# TYPE vault_refresh_token_replays_total counter\n")
+		fmt.Fprintf(w, "vault_refresh_token_replays_total %d\n", c.refreshReplays.Load())
 	}
 }

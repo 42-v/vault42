@@ -26,7 +26,7 @@ func (r *AdminSessionRepo) Create(ctx context.Context, session *model.AdminSessi
 		INSERT INTO auth.admin_sessions (id, admin_id, token_hash, ip, user_agent, created_at, expires_at, revoked)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		session.ID, session.AdminID, session.TokenHash,
-		session.IP, nullStr(session.UserAgent),
+		session.IP, nullStr(clampUserAgent(session.UserAgent)),
 		session.CreatedAt, session.ExpiresAt, session.Revoked,
 	)
 	if err != nil {

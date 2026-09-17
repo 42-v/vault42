@@ -210,6 +210,30 @@ func (r *UserRepo) Update(ctx context.Context, user *model.User) error {
 	return nil
 }
 
+// SetRoles replaces a user's role set, and names roles and nothing else.
+//
+// Same constraint as SetMustResetPassword above: vault_admin holds column-scoped
+// UPDATE on auth.users -- locked_until and failed_login_count from 001,
+// must_reset_password from 039, roles from 044 -- because 015 revoked the six
+// that 009 had lent it, updated_at among them. PostgreSQL checks the column
+// privilege against every target an UPDATE names, so stamping updated_at here
+// would fail the whole statement with 42501 under the real role while passing in
+// any test that drives the owner pool.
+//
+// A nil slice is normalized to an empty one, matching Create and CreateImported:
+// the column is NOT NULL DEFAULT '{}' (003), and pgx binds a nil []string as
+// NULL rather than as an empty array.
+func (r *UserRepo) SetRoles(ctx context.Context, id string, roles []string) error {
+	if roles == nil {
+		roles = []string{}
+	}
+	_, err := r.db.Pool.Exec(ctx, `UPDATE auth.users SET roles=$2 WHERE id=$1`, id, roles)
+	if err != nil {
+		return fmt.Errorf("set roles: %w", err)
+	}
+	return nil
+}
+
 // SoftDeleteScrub erases a user's PII in place: it overwrites the email with a
 // tombstone, clears every other personal column on the row — display_name,
 // avatar_url, password_hash, roles, ban_reason, last_login_at, imported_from,
@@ -350,4 +374,40 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+// userAgentColumn is the width of every user_agent column in the schema:
+// audit.audit_log (001:159), auth.devices (001:84) and auth.admin_sessions
+// (001:260) are each VARCHAR(1024).
+const userAgentColumn = 1024
+
+// clampUserAgent cuts a User-Agent to what the column can hold.
+//
+// Nothing did, anywhere. The header arrived verbatim from the request and went
+// straight into the statement, so a caller sending more than 1024 characters got
+// 22001 -- value too long -- and, on the audit path, that is the end of the row:
+// the insert is synchronous by default, every call site discards the error as
+// best-effort, and no metric counts it. An unauthenticated caller could delete
+// their own audit trail by setting a long header, which is a strange thing to
+// have to say about an append-only log.
+//
+// The loss is forensic rather than detective: audit.Logger runs its observers on
+// the entry before the insert, so alerting and the anomaly detector still fire.
+// What disappears is the record afterwards -- a credential-stuffing run leaves
+// no login_failure rows behind it.
+//
+// Truncated by runes, not bytes. PostgreSQL counts VARCHAR(n) in characters, so
+// a byte slice would both cut in the wrong place and, worse, split a multi-byte
+// rune and hand the driver invalid UTF-8 -- turning a value-too-long into an
+// encoding error, which is the same lost row with a more confusing reason.
+func clampUserAgent(ua string) string {
+	if len(ua) <= userAgentColumn {
+		// Fast path: a byte length within the limit means the rune count is too.
+		return ua
+	}
+	runes := []rune(ua)
+	if len(runes) <= userAgentColumn {
+		return ua
+	}
+	return string(runes[:userAgentColumn])
 }

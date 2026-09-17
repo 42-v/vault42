@@ -48,14 +48,24 @@ func TestIsCriticalEvent(t *testing.T) {
 		t.Error("any svcdoc_ event must be critical, including ones added later")
 	}
 
-	// handler.AuditTokenMinted / AuditSvcDoc* are string literals in another
-	// package. A rename here that does not keep those values would silently
-	// un-protect the events we just classified.
+	// These constants are the whole vocabulary: internal/handler and
+	// internal/server reference them by name (mint.go, servicedoc.go,
+	// server.go's mint refusal wrapper), and isCriticalEvent matches on their
+	// VALUES. So a rename that keeps the identifier and changes the string
+	// compiles everywhere and silently un-protects the events just classified
+	// above -- the row still gets written, under a class nothing considers
+	// critical.
+	//
+	// This comment used to say the values were held against string literals in
+	// package handler, naming handler.AuditTokenMinted and handler.AuditSvcDoc*.
+	// No such identifiers exist anywhere in the tree; handler calls
+	// audit.TokenMinted directly. The assertion below was right and its stated
+	// reason was not.
 	if TokenMinted != "token_minted" {
-		t.Fatalf("TokenMinted = %q, want token_minted (handler.AuditTokenMinted)", TokenMinted)
+		t.Fatalf("TokenMinted = %q, want token_minted: isCriticalEvent matches the value, not the identifier", TokenMinted)
 	}
 	if SvcDocPut != "svcdoc_put" || SvcDocGet != "svcdoc_get" || SvcDocDelete != "svcdoc_delete" {
-		t.Fatalf("svcdoc constants drifted from handler.AuditSvcDoc*: put=%q get=%q delete=%q",
+		t.Fatalf("svcdoc constants drifted from the values isCriticalEvent matches: put=%q get=%q delete=%q",
 			SvcDocPut, SvcDocGet, SvcDocDelete)
 	}
 }

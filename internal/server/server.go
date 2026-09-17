@@ -511,9 +511,40 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	passwordResetRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Name: "pwreset", Limit: 3, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey, FailClosed: true, Weight: vpnScrutiny,
 	}, rlEnabled)
+	// Two limiters guard the second-factor verify routes, because they bound two
+	// different things and one key cannot do both.
+	//
+	// totpRL is the outer, IP-keyed bound. It stays outside the challenge auth
+	// so an unauthenticated flood is refused before it costs a signature
+	// verification per request, which is what an inner-only limiter would leave
+	// unbounded.
 	totpRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Name: "totp", Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.IPRateLimitKey, FailClosed: true,
 	}, rlEnabled)
+	// totpSubjectRL is the inner, subject-keyed bound, and it is the one that
+	// was missing.
+	//
+	// One IP-keyed instance was shared by all four 2FA-completion routes, so
+	// every caller behind one address shared a single bucket of five per five
+	// minutes -- an office NAT, a CGNAT pool, a VPN exit. Six requests from any
+	// one of them locked out everybody else on that address for the rest of the
+	// window, and the people locked out are the ones already holding a valid
+	// challenge, mid-login. Worse, an attacker guessing against their OWN
+	// challenge spent a budget shared with strangers, so the bound never
+	// measured the thing it is named for.
+	//
+	// The guessing surface is "how many codes can be tried against one
+	// challenge", and only a subject key measures that. confirmRL is built the
+	// same way and for the same reason: GeneralRateLimitKey, mounted inside
+	// authMw where the claims exist.
+	totpSubjectRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
+		Name: "totpsubject", Limit: 5, Window: 5 * time.Minute, KeyFunc: middleware.GeneralRateLimitKey, FailClosed: true,
+	}, rlEnabled)
+	// The challenge chain with the subject-keyed limiter inside it. Declared
+	// here rather than beside authedChallenge because it closes over both.
+	challengeLimited := func(h http.HandlerFunc) http.Handler {
+		return totpRL(challengeMw(fingerprintMw(dpopWrap(totpSubjectRL(h)))))
+	}
 	verifyEmailRL := middleware.RateLimit(d.Cache, middleware.RateLimitConfig{
 		Name: "verifyemail", Limit: 10, Window: time.Hour, KeyFunc: middleware.IPRateLimitKey,
 	}, rlEnabled)
@@ -655,7 +686,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// 2FA — TOTP (sensitive ops require confirmation)
 	mux.Handle("POST /auth/2fa/totp/setup", confirmedWrite(totpHandler.Setup))
-	mux.Handle("POST /auth/2fa/totp/verify", totpRL(authedChallenge(totpHandler.Verify)))
+	mux.Handle("POST /auth/2fa/totp/verify", challengeLimited(totpHandler.Verify))
 	mux.Handle("DELETE /auth/2fa/totp", confirmed(totpHandler.Disable))
 
 	// 2FA — WebAuthn (sensitive ops require confirmation)
@@ -684,11 +715,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// 2FA — Backup codes (sensitive)
 	mux.Handle("POST /auth/2fa/backup-codes", confirmedWrite(backupCodeHandler.Generate))
-	mux.Handle("POST /auth/2fa/backup-code/verify", totpRL(authedChallenge(backupCodeHandler.Verify)))
+	mux.Handle("POST /auth/2fa/backup-code/verify", challengeLimited(backupCodeHandler.Verify))
 
 	// 2FA — Email OTP (fallback when no TOTP/WebAuthn configured)
-	mux.Handle("POST /auth/2fa/email-otp/verify", totpRL(authedChallenge(emailOTPHandler.Verify)))
-	mux.Handle("POST /auth/2fa/email-otp/resend", totpRL(authedChallenge(emailOTPHandler.Resend)))
+	mux.Handle("POST /auth/2fa/email-otp/verify", challengeLimited(emailOTPHandler.Verify))
+	mux.Handle("POST /auth/2fa/email-otp/resend", challengeLimited(emailOTPHandler.Resend))
 
 	// Identity & blob services are built once here so both their own endpoints
 	// and the data-export aggregate can share a single instance. Either may

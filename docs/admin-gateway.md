@@ -120,6 +120,7 @@ All endpoints are prefixed with `/admin/`.
 | `GET` | `/admin/users/{id}` | Session + RBAC | `users:read` | Get user details |
 | `POST` | `/admin/users/{id}/lock` | Session + RBAC | `users:lock` | Lock user account |
 | `POST` | `/admin/users/{id}/unlock` | Session + RBAC | `users:unlock` | Unlock user account |
+| `PUT` | `/admin/users/{id}/roles` | Session + RBAC | `users:roles` | Replace a user's role set; refuses admin-tier and off-catalog names |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session + RBAC | `users:reset` | Force a password reset and revoke the account's live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session + RBAC | `users:reset` | Withdraw a forced password reset |
 | `POST` | `/admin/users/{id}/ban` | Session + RBAC | `users:ban` | Ban an account with a reason and revoke its live sessions |
@@ -136,7 +137,7 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score) |
+| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score). Admin-plane rows need `admins:manage` |
 
 ### Client Management
 
@@ -316,7 +317,7 @@ The UPDATE half is a real ceiling: it compares against `OLD.role`, which comes f
 - **TOTP secrets**: Encrypted at rest with AES-256 (master key)
 - **TOTP replay prevention**: Each accepted TOTP code's time-step counter is stored per admin. Replayed codes (same or earlier counter) are rejected within the ±1 period window
 - **Account lockout**: Configurable failed attempts threshold and lockout duration. Lockout counter is atomic (SQL `RETURNING` clause) -- immune to race conditions under concurrent login attempts
-- **Admin revocation**: Deleting an admin CASCADE deletes all sessions -- no race window between session revoke and admin revoke
+- **Admin revocation**: Deleting an admin CASCADE deletes all sessions -- no race window between session revoke and admin revoke. `created_by` is `ON DELETE SET NULL` (migration 042) so revoking an admin who opened other accounts succeeds and those accounts survive with their provenance moved into the audit row; before 042 it was `NO ACTION`, and revoking any admin who had created another failed with a 500 that left the account and its live sessions in place
 - **Audit trail**: All admin mutations logged with admin ID, timestamp, IP, user agent
 - **No external dependencies**: Uses stdlib HTTP only (no frameworks)
 - **RBAC hardcoded**: Permission maps defined in Go code, not database -- immune to SQL injection escalation

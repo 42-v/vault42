@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick, useTemplateRef, watch } from 'vue'
 import { useAuth, useT } from '@vault42/vue'
 import { useRouter, useRoute } from 'vue-router'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
@@ -37,6 +37,35 @@ function closeMobile() {
 function isActive(path: string): boolean {
   return route.path === path
 }
+
+const mainRef = useTemplateRef('main')
+
+// Move focus into the page content after a routed navigation.
+//
+// A single-page app replaces the page without changing the document, so nothing
+// tells assistive technology that anything happened. The URL changes, the title
+// changes, the DOM under <main> is swapped -- and focus stays exactly where the
+// click left it: on the nav link, or on <body> when the control that was
+// activated is itself one of the things that got replaced. A screen-reader
+// user's virtual cursor is still in the page they just left and hears nothing
+// about the one they asked for; a keyboard user's next Tab resumes in the
+// header instead of in the content.
+//
+// This is the other half of the work useModalFocus describes. That composable
+// says the app contained no .focus() call at all; the dialogs were three of the
+// places that cost, and every navigation was the fourth.
+//
+// Not `immediate`: the first run of this watcher is the page load, where the
+// browser's own focus is already right and moving it would jump a visitor past
+// a header they have not seen.
+//
+// `route.path`, not `fullPath`: a query or hash change leaves the view mounted,
+// so pulling focus out of whatever the user was operating -- a filter, a tab --
+// would be an interruption with nothing new to read.
+watch(() => route.path, async () => {
+  await nextTick()
+  mainRef.value?.focus()
+})
 </script>
 
 <template>
@@ -58,6 +87,7 @@ function isActive(path: string): boolean {
                 v-for="link in navLinks"
                 :key="link.to"
                 :to="link.to"
+                :aria-current="isActive(link.to) ? 'page' : undefined"
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
                   isActive(link.to)
@@ -81,6 +111,7 @@ function isActive(path: string): boolean {
             <template v-else>
               <router-link
                 to="/login"
+                :aria-current="isActive('/login') ? 'page' : undefined"
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
                   isActive('/login') ? 'text-vault42-accent' : 'text-vault42-muted hover:text-vault42-text'
@@ -124,6 +155,7 @@ function isActive(path: string): boolean {
               v-for="link in navLinks"
               :key="link.to"
               :to="link.to"
+              :aria-current="isActive(link.to) ? 'page' : undefined"
               :class="[
                 'block px-3 py-2 rounded-lg text-sm transition-colors',
                 isActive(link.to) ? 'bg-vault42-primary/15 text-vault42-accent' : 'text-vault42-text hover:bg-vault42-border/50'
@@ -148,7 +180,14 @@ function isActive(path: string): boolean {
     </nav>
 
     <!-- Page content -->
-    <main class="flex-1">
+    <!--
+      tabindex="-1" makes this a target for the scripted focus above without
+      putting a whole page region into the tab order. The ring is suppressed
+      because the element is not operable: it is never reached by Tab, so an
+      outline around the entire viewport would announce a stop that does not
+      exist.
+    -->
+    <main id="main-content" ref="main" tabindex="-1" class="flex-1 focus:outline-none">
       <router-view />
     </main>
 

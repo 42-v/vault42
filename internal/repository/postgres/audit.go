@@ -126,7 +126,7 @@ func (r *AuditRepo) Insert(ctx context.Context, entry *model.AuditEntry) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		entry.ID, entry.Timestamp, entry.EventType,
 		nullStr(auditUserID), nullStr(auditClientID),
-		nullStr(entry.IP), nullStr(entry.UserAgent),
+		nullStr(entry.IP), nullStr(clampUserAgent(entry.UserAgent)),
 		nullStr(entry.FingerprintHash), nullStr(entry.DeviceID),
 		auditMetadata, entry.RiskScore,
 	)
@@ -151,7 +151,7 @@ func (r *AuditRepo) InsertBatch(ctx context.Context, entries []*model.AuditEntry
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			e.ID, e.Timestamp, e.EventType,
 			nullStr(batchUserID), nullStr(batchClientID),
-			nullStr(e.IP), nullStr(e.UserAgent),
+			nullStr(e.IP), nullStr(clampUserAgent(e.UserAgent)),
 			nullStr(e.FingerprintHash), nullStr(e.DeviceID),
 			batchMetadata, e.RiskScore,
 		)
@@ -199,6 +199,29 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 	if filter.MinRiskScore > 0 {
 		conditions = append(conditions, fmt.Sprintf("risk_score >= $%d", argIdx))
 		args = append(args, filter.MinRiskScore)
+		argIdx++
+	}
+	// The exclusion goes in the WHERE rather than over the returned rows, so
+	// that the LIMIT below counts entries the caller is actually given. The
+	// field's contract in repository.AuditFilter says why that distinction is
+	// the whole feature.
+	//
+	// One clause carrying the whole set rather than one clause per prefix: the
+	// predicate then has a single shape whatever the caller passes, and the
+	// prefixes stay a single bound parameter instead of becoming part of the
+	// query text's length.
+	//
+	// starts_with rather than LIKE 'prefix%': every prefix a caller has reason
+	// to pass here contains an underscore, and LIKE would read that underscore
+	// as a single-character wildcard. 'admin_%' would then also exclude
+	// administrator_login, and a pattern that over-matches in a withholding
+	// filter is the kind of bug that hides for a release because it errs quiet.
+	// The array is cast rather than left to inference, because the argument is
+	// consumed by a function here rather than compared to a column that would
+	// have fixed its type.
+	if len(filter.ExcludeEventTypePrefixes) > 0 {
+		conditions = append(conditions, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM unnest($%d::text[]) AS blocked(prefix) WHERE starts_with(event_type, blocked.prefix))", argIdx))
+		args = append(args, filter.ExcludeEventTypePrefixes)
 		argIdx++
 	}
 

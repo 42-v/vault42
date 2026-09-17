@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -49,8 +48,8 @@ type OIDCProvider struct {
 // that slash in every iss claim it mints, and p.issuer has had it trimmed by
 // NewOIDCProvider.
 //
-// Before this, the trim made discovery pass -- oidcDiscover compares both sides
-// trimmed -- and then failed every id_token, because internal/jwt compares iss
+// Before this, the trim made discovery pass -- discover compares both sides
+// trimmed (oidc.go:185) -- and then failed every id_token, because internal/jwt compares iss
 // byte for byte with no normalization. Discovery succeeding and login failing
 // on every attempt reads as a provider outage, and no configuration escapes it,
 // because TrimRight strips whatever the operator writes.
@@ -58,7 +57,7 @@ type OIDCProvider struct {
 // The published value is preferred and the configured one is the fallback for
 // the path where discovery has not run. Trimming stays where it is: it is the
 // right normalization for *comparing* two spellings of one identifier, which is
-// what oidcDiscover does. It is the wrong thing to hand a verifier that must
+// what discover does. It is the wrong thing to hand a verifier that must
 // match exactly.
 func (p *OIDCProvider) expectedIDTokenIssuer() string {
 	p.mu.RLock()
@@ -102,24 +101,14 @@ func NewOIDCProvider(name, issuer, clientID, clientSecret, redirectURI, scopes s
 // there is no path for anyone to sit on. The exception is deliberately narrow:
 // a hostname that merely resolves to a loopback address does not qualify, since
 // that resolution is not this process's to trust.
+//
+// The rule now lives in internal/outbound, which is where the other caller is:
+// ClientForIssuer's CheckRedirect judged a redirect hop by its destination host
+// and never by its scheme, so an endpoint answering 307 with a plaintext
+// Location on the same domain was followed with method and body intact. Two
+// copies of this would have agreed until they did not.
 func fetchableEndpoint(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	switch u.Scheme {
-	case "https":
-		return true
-	case "http":
-		host := u.Hostname()
-		if host == "localhost" {
-			return true
-		}
-		ip := net.ParseIP(host)
-		return ip != nil && ip.IsLoopback()
-	default:
-		return false
-	}
+	return outbound.FetchableEndpoint(raw)
 }
 
 // SetGuard installs the deployment's outbound destination policy on this

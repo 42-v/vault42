@@ -244,7 +244,36 @@ ENTRY_FIELDS = ("package", "file", "line", "occurrence", "source", "bucket",
 # the one-line helper that folds case before the admin-tier role denylist is
 # read. It replaced six direct map lookups, none of which were statements of
 # their own, so the whole increase is the new function body.
-BASELINE_TOTAL_STATEMENTS = 12952
+#
+# +18 again (12952 -> 12970) for the minted email claim. internal/service 1794
+# -> 1810 is checkEmail and ValidateMintEmail, the opt-in gate and the
+# normalise-then-validate helper; internal/handler 1919 -> 1921 is the two new
+# arms of mintErrorCode. The two changes are disjoint by package, which is why
+# the totals add rather than one superseding the other.
+#
+# +162 (12970 -> 13132) for landing the outstanding queue in one PR. The twelve
+# packages that moved, each from the profile rather than from arithmetic on the
+# diffs:
+#
+#   +88  internal/adminapi             1153 -> 1241  the roles route, the ban pair
+#                                                    and the audit roster gate
+#   +53  internal/repository/postgres  1081 -> 1134   SetRoles, SetBanned and the
+#                                                    folded reset lookup
+#   +13  internal/outbound               82 -> 95    the redirect hop now judged
+#                                                    by the endpoint policy
+#   +10  internal/middleware            575 -> 585
+#   +10  internal/server                260 -> 270   the per-challenge limiter
+#    +7  internal/audit                 200 -> 207   refresh_token_replayed
+#    +4  internal/metrics                84 -> 88    its counter
+#    +4  internal/service              1810 -> 1814  containRefreshReuse
+#    +2  cmd/vault                        311 -> 313
+#    +2  internal/handler              1921 -> 1923
+#    -1  internal/oauth2                385 -> 384
+#   -30  internal/cli                   259 -> 229   the exit-code fix collapsed
+#                                                    twelve duplicated error arms
+#
+# Net +162, and the two decreases are real reductions rather than lost coverage.
+BASELINE_TOTAL_STATEMENTS = 13132
 
 # BASELINE_MAX_ENTRIES is a ratchet: the exclusion set may only shrink, so a new
 # entry has to be paid for by covering a statement somewhere else or by an
@@ -317,7 +346,7 @@ BASELINE_TOTAL_STATEMENTS = 12952
 # existed when 50 was measured, so it is a like-for-like move rather than a
 # loosened bar, and the pair is named in the set with the argument that fstat
 # fails only with EBADF or EFAULT and this call site can produce neither.
-# Lowered from 52 to 51 by covering internal/crypto/jwt.go:131, the modulus
+# Lowered from 52 to 51 by covering internal/crypto/jwt.go:147, the modulus
 # fallback in KIDFromPublicKey. Its exclusion argued that reaching it "would need
 # the standard library to stop understanding RSA public keys", and that is not
 # so: x509.MarshalPKIXPublicKey understands *rsa.PublicKey perfectly well and
@@ -363,12 +392,12 @@ BASELINE_PACKAGE_STATEMENTS = {
     "cmd/admin-gateway": 352,
     "cmd/bridge": 673,
     "cmd/recover": 162,
-    "cmd/vault": 311,
-    "internal/adminapi": 1153,
+    "cmd/vault": 313,
+    "internal/adminapi": 1241,
     "internal/alert": 63,
-    "internal/audit": 200,
+    "internal/audit": 207,
     "internal/cache": 195,
-    "internal/cli": 259,
+    "internal/cli": 229,
     "internal/config": 445,
     "internal/crypto": 489,
     "internal/deferwork": 52,
@@ -376,26 +405,26 @@ BASELINE_PACKAGE_STATEMENTS = {
     "internal/email": 684,
     "internal/firstboot": 64,
     "internal/frontend": 15,
-    "internal/handler": 1919,
+    "internal/handler": 1923,
     "internal/honeypot": 208,
     "internal/httputil": 33,
     "internal/ipintel": 172,
     "internal/jwt": 285,
     "internal/keystore": 266,
     "internal/kms": 35,
-    "internal/metrics": 84,
-    "internal/middleware": 575,
+    "internal/metrics": 88,
+    "internal/middleware": 585,
     "internal/migrate": 44,
     "internal/model": 6,
-    "internal/oauth2": 385,
-    "internal/outbound": 82,
+    "internal/oauth2": 384,
+    "internal/outbound": 95,
     "internal/rbac": 18,
     "internal/redis": 338,
-    "internal/repository/postgres": 1081,
+    "internal/repository/postgres": 1134,
     "internal/sanitize": 53,
     "internal/seed": 153,
-    "internal/server": 260,
-    "internal/service": 1794,
+    "internal/server": 270,
+    "internal/service": 1814,
     "internal/useragent": 41,
 }
 

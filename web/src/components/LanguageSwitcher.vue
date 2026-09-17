@@ -49,6 +49,25 @@ const localeNames: Record<string, string> = {
 const open = ref(false)
 const search = ref('')
 const dropdownRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+
+// The id the trigger points `aria-controls` at. A constant rather than a
+// generated one: there is a single language switcher on the page, and a stable
+// id is what lets the test assert the relationship rather than assert that two
+// generated strings happen to match.
+const MENU_ID = 'language-switcher-menu'
+
+// This is a disclosure, and deliberately not a menu or a listbox.
+//
+// `aria-haspopup` was the obvious thing to add and it would have been wrong.
+// Its values promise a specific shape -- menu, listbox, tree, grid, dialog --
+// and what opens here is a container holding a text filter and forty buttons.
+// It is none of those, and a listbox may not contain a textbox at all. Claiming
+// one changes how a screen reader announces the control and what keys the user
+// is then entitled to expect from it.
+//
+// `aria-expanded` plus `aria-controls` is the whole disclosure pattern, and it
+// is what this actually is: a button that shows and hides a region.
 
 const currentName = computed(() => localeNames[locale.value] || locale.value)
 
@@ -62,8 +81,7 @@ const filtered = computed(() => {
 })
 
 async function select(loc: string) {
-  open.value = false
-  search.value = ''
+  close()
 
   // Catalogues are fetched one chunk at a time, so the copy has to be in hand
   // before the locale ref flips; switching first would render bare keys until a
@@ -82,6 +100,27 @@ function toggle() {
   if (!open.value) search.value = ''
 }
 
+/**
+ * Closes the list and puts focus back on the trigger.
+ *
+ * The focus half is the part that was missing rather than merely absent. The
+ * popup is removed from the DOM by `v-if`, so whatever was focused inside it --
+ * the filter box, or one of the forty locale buttons -- goes with it, and the
+ * browser drops focus to `<body>`. A keyboard user is then at the top of the
+ * document with no announcement, which is the same defect useModalFocus was
+ * written for on the three dialogs.
+ *
+ * It is deliberately not called from the click-outside handler: clicking
+ * somewhere else is the user moving focus on purpose, and dragging it back to
+ * the trigger would fight them.
+ */
+function close() {
+  if (!open.value) return
+  open.value = false
+  search.value = ''
+  triggerRef.value?.focus()
+}
+
 function onClickOutside(e: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
     open.value = false
@@ -94,10 +133,13 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 </script>
 
 <template>
-  <div ref="dropdownRef" class="relative">
+  <div ref="dropdownRef" class="relative" @keydown.escape="close">
     <button
+      ref="triggerRef"
       class="text-xs text-vault42-muted hover:text-vault42-text transition-colors flex items-center gap-1"
       type="button"
+      :aria-expanded="open"
+      :aria-controls="MENU_ID"
       @click.stop="toggle"
     >
       {{ currentName }}
@@ -108,6 +150,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
     <div
       v-if="open"
+      :id="MENU_ID"
       class="absolute bottom-full mb-2 right-0 w-52 bg-vault42-surface border border-vault42-border rounded-lg shadow-lg overflow-hidden z-50"
     >
       <div class="p-2">
