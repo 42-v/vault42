@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "version": "1.0.4",
-  "tests": 4945,
-  "passed": "4945 passed",
+  "tests": 4946,
+  "passed": "4946 passed",
   "coverage": "99.61%",
   "coverageNum": 99.61,
   "reachableCoverage": "100.00%",
@@ -13,11 +13,11 @@
   "testFiles": 936,
   "directDeps": 3,
   "transitiveDeps": 15,
-  "totalTests": 6532,
+  "totalTests": 6533,
   "totalDeps": 148,
   "languages": {
     "go": {
-      "tests": 4945,
+      "tests": 4946,
       "coverage": "100.00% of reachable",
       "coverageNum": 100.00,
       "lines": 48365,
