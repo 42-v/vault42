@@ -287,7 +287,7 @@ func TestRequirePasswordReset_TheReasonIsBoundedAndSanitized(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	// The bound is a literal here, not maxResetReasonLen. Comparing the constant
+	// The bound is a literal here, not maxAdminReasonLen. Comparing the constant
 	// against itself passes for any value it holds, including one large enough to
 	// be no bound at all, which is exactly the mutation this assertion has to see.
 	const wantAtMost = 200

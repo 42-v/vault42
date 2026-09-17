@@ -212,7 +212,14 @@ func TestVaultAppCannotFlipThePrivilegedAccountStateColumns(t *testing.T) {
 
 	// The admin plane keeps the lock/unlock pair 001 documents as its only write
 	// to this table outside erasure, and gains nothing else here.
-	t.Run("the admin plane keeps lock and unlock and no more", func(t *testing.T) {
+	// The admin plane holds the containment set and nothing wider. `banned` and
+	// `ban_reason` joined it in 043, which is what the two operator ban routes
+	// write through; `disabled` did not, and stays here as the negative control.
+	//
+	// Keeping a column that is still ungranted in this subtest is the point. An
+	// assertion set that only ever says "yes" stops distinguishing a role that
+	// holds the right columns from one that holds the table.
+	t.Run("the admin plane keeps the containment set and nothing wider", func(t *testing.T) {
 		u := seedAccountStateUser(t, ctx, ownerDB, "state-gateway-lock@test.com")
 		gatewayPool := adminRolePool(t, adminPool)
 		if _, err := gatewayPool.Exec(ctx,
@@ -223,8 +230,14 @@ func TestVaultAppCannotFlipThePrivilegedAccountStateColumns(t *testing.T) {
 			`UPDATE auth.users SET locked_until = NULL, failed_login_count = 0 WHERE id = $1`, u.ID); err != nil {
 			t.Fatalf("POST /admin/users/{id}/unlock is broken in every deployment: %v", err)
 		}
-		if _, err := gatewayPool.Exec(ctx, `UPDATE auth.users SET banned = TRUE WHERE id = $1`, u.ID); !permissionDenied(err) {
-			t.Fatalf("vault_admin banned an account: 004 granted the column to vault_app only: err = %v", err)
+		if _, err := gatewayPool.Exec(ctx,
+			`UPDATE auth.users SET banned = TRUE, ban_reason = 'x' WHERE id = $1`, u.ID); err != nil {
+			t.Fatalf("POST /admin/users/{id}/ban is broken in every deployment: migration 043 "+
+				"grants this pair and nothing else writes them: %v", err)
+		}
+		if _, err := gatewayPool.Exec(ctx, `UPDATE auth.users SET disabled = TRUE WHERE id = $1`, u.ID); !permissionDenied(err) {
+			t.Fatalf("vault_admin disabled an account: 004 granted the column to vault_app, 024 "+
+				"revoked it there, and 043 widened the grant to banned and ban_reason only: err = %v", err)
 		}
 	})
 }

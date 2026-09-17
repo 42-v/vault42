@@ -64,7 +64,14 @@ func TestEveryCredentialLimiterFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing server.go: %v", err)
 	}
-	src := readFileString(t, path)
+	// Comment-free, and this file is the reason the helper exists. The check
+	// below is a substring search over the byte span of the RateLimitConfig
+	// literal, so a comment INSIDE that span mentioning FailClosed satisfies it
+	// -- and the header above explains that FailClosed has a usable zero value,
+	// which is exactly what makes an omission invisible at compile time. A gate
+	// a comment can satisfy is not protecting a security control; it is
+	// protecting the habit of writing about one.
+	src := commentFreeSource(t, path)
 
 	var checked int
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -149,7 +156,9 @@ func TestRateLimitersAreNamespaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing server.go: %v", err)
 	}
-	src := readFileString(t, path)
+	// Comment-free for the same reason: the Name is read out of the literal's
+	// byte span, and a commented-out Name would be read as a claimed one.
+	src := commentFreeSource(t, path)
 
 	names := map[string]string{} // limiter name -> variable that claimed it
 	var checked int

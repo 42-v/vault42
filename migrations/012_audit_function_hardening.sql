@@ -39,9 +39,21 @@
 --
 -- The function is also given an explicit search_path. Without one it resolved
 -- unqualified names through the caller's search_path while running as the
--- definer, which is CVE-2018-1058. It is the only SECURITY DEFINER function in
--- the schema; audit.deny_modify, objects.deny_update and
+-- definer, which is CVE-2018-1058. audit.deny_modify, objects.deny_update and
 -- auth.deny_role_escalation are all SECURITY INVOKER.
+--
+-- This paragraph used to add that audit.cleanup_old_entries was therefore the
+-- only SECURITY DEFINER function in the schema. That was false on the day it
+-- was written: 011 shipped in the same commit and creates
+-- auth.cleanup_old_recovery() as SECURITY DEFINER.
+--
+-- The error was load-bearing rather than cosmetic. The exclusivity claim is
+-- what justified pinning search_path on this one function and looking no
+-- further, and 034 later had to fix exactly that defect in the function this
+-- inventory overlooked -- with a reproduced exploit: a decoy now() returning
+-- 2999 made a legitimate 365-day sweep destroy escrow written an hour earlier.
+-- An inventory that says "only" is a claim about everything else, and this one
+-- had not looked.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION audit.cleanup_old_entries(retention_interval INTERVAL)

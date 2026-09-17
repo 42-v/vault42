@@ -1409,6 +1409,8 @@ an outage that multiplies the brute-force budget by the replica count is a secur
 | `admin_user_lock` | `AdminUserLock` | User locked by admin |
 | `admin_user_unlock` | `AdminUserUnlock` | User unlocked by admin |
 | `admin_user_delete` | `AdminUserDelete` | User deleted by admin |
+| `admin_user_ban` | `AdminUserBan` | User banned by admin, with the reason and whether live sessions were revoked |
+| `admin_user_unban` | `AdminUserUnban` | Ban lifted by admin, with the reason it was lifted |
 | `admin_key_rotate` | `AdminKeyRotate` | Signing key rotated |
 | `admin_key_revoke` | `AdminKeyRevoke` | Signing key revoked |
 | `admin_client_create` | `AdminClientCreate` | Service client created |
@@ -2079,7 +2081,7 @@ Threat observation deployment. Extends production with auto-migration, embedded 
 
 ## 16. Endpoint Inventory
 
-**105 API routes: 62 on the main binary, 43 on the admin gateway.** This inventory is the complete
+**107 API routes: 62 on the main binary, 45 on the admin gateway.** This inventory is the complete
 set. `tests/spec/route_drift_test.go` parses `internal/server/server.go` and
 `internal/adminapi/router.go` with `go/ast` and fails the build if a route here does not exist, or
 if a route exists that is not here. Adding an endpoint without a row is not possible.
@@ -2217,6 +2219,8 @@ role must hold. Section 21 describes the behaviour.
 | `POST` | `/admin/users/{id}/unlock` | Session | `users:unlock` | Always | Unlock an account |
 | `POST` | `/admin/users/{id}/require-password-reset` | Session | `users:reset` | Always | Force a password reset, revoking live sessions |
 | `POST` | `/admin/users/{id}/clear-password-reset` | Session | `users:reset` | Always | Withdraw a forced password reset |
+| `POST` | `/admin/users/{id}/ban` | Session | `users:ban` | Always | Ban an account with a reason, revoking live sessions |
+| `POST` | `/admin/users/{id}/unban` | Session | `users:ban` | Always | Lift a ban |
 | `DELETE` | `/admin/users/{id}` | Session | `users:delete` | Always | Operator-initiated erasure |
 | `GET` | `/admin/sessions` | Session | `admins:manage` | Always | Active **admin** sessions |
 | `POST` | `/admin/sessions/revoke-all` | Session | `sessions:revoke` | Always | Revoke every session service-wide |
@@ -2404,7 +2408,7 @@ directly; this document exists to point at it.
 
 ## 21. Admin Gateway API
 
-`cmd/admin-gateway` serves the 41 administrative routes in section 16 plus the HTML console. It runs
+`cmd/admin-gateway` serves the 45 administrative routes in section 16 plus the HTML console. It runs
 as a separate binary against the `vault_admin` database role, behind mTLS and six layers of
 loopback-only enforcement, and is never mounted on the main binary. `admin-gateway.md` covers
 deployment, the killswitch, certificate generation and the full RBAC matrix; this section covers the

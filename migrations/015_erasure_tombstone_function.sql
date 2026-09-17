@@ -51,10 +51,33 @@
 --
 -- The grants below are written bare rather than wrapped in a pg_roles guard, the
 -- way 012 writes its grants. 001 creates both roles unconditionally, so the
--- guard buys nothing, and it costs something: the integration fixture's
--- applyRealGrants() re-applies a statement only when its first word is GRANT or
--- REVOKE, so anything nested inside a DO block is skipped there and that suite
--- would go on exercising the pre-015 privilege model.
+-- guard buys nothing.
+--
+-- This paragraph used to add that a guarded statement would be skipped by the
+-- integration fixture's applyRealGrants(), leaving that suite on the pre-015
+-- privilege model. The premise is right and the conclusion is not, and the
+-- correction is worth keeping because two later migrations repeated it.
+--
+-- applyRealGrants() does keep only statements whose first word is GRANT or
+-- REVOKE. But it is the second half of the fixture, not the first.
+-- containers_test.go builds the schema by running every migration through
+-- stripRoleGrants(), which also matches only at column zero -- so an INDENTED
+-- grant is not stripped, and the container owner executes it during setup, in
+-- migration order. tests/spec/grant_line_shape_test.go says so directly: grants
+-- inside a DO block "survive stripping on purpose, which is how migration 009
+-- gets its grants into the integration database at all."
+--
+-- So a DO-wrapped 015 would still have reached that database. It would have
+-- reached it worse: running in order it would revoke 004's and 009's DO-wrapped
+-- grants, and nothing replayed afterwards puts them back, because no top-level
+-- GRANT in the tree re-grants email, deleted or deleted_at to vault_app or the
+-- six columns to vault_admin. The suite would have exercised the post-015 model
+-- either way.
+--
+-- Bare is still right, and for a reason that survives the correction: it puts
+-- the statement in applyRealGrants(), which is the function that enumerates the
+-- privilege model under test, rather than leaving it to arrive by not matching
+-- a prefix.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION auth.erase_user_identity(p_user_id UUID, p_tombstone_email TEXT)

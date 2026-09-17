@@ -261,7 +261,12 @@ func TestARefusedRotationIsReportedAsAReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse internal/service/auth.go: %v", err)
 	}
-	src := readFileString(t, path)
+	// Comment-free: the assertion is a substring search over each method body,
+	// and internal/service/auth.go discusses ErrReplayDetected in prose near the
+	// rotation tail. A method that stopped classifying a revoked family as a
+	// replay would keep passing on the strength of the paragraph explaining why
+	// it must not.
+	src := commentFreeSource(t, path)
 
 	var handlers int
 	for _, decl := range file.Decls {

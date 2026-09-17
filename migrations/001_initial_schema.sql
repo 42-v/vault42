@@ -470,7 +470,19 @@ GRANT SELECT, INSERT ON audit.audit_log TO vault_admin;
 -- ============================================================================
 -- The audit log is append-only (deny_modify triggers block DELETE/UPDATE).
 -- This function temporarily disables the delete trigger, removes old entries,
--- then re-enables it. Only callable via CLI with admin token.
+-- then re-enables it.
+--
+-- It is NOT restricted to a CLI or to an admin token, and this line used to say
+-- it was. Nothing in the database ever enforced that: PostgreSQL grants EXECUTE
+-- on a function to PUBLIC by default, which 012 records as the finding it had to
+-- fix. After 012, 018 and 032 the function is callable by vault_app -- the role
+-- the running server connects as -- and vault_app is who calls it: an in-process
+-- sweeper on a six-hour interval (cmd/vault/main.go wires audit.NewRetention,
+-- internal/audit/retention.go sets SweepInterval, and the repository issues
+-- SELECT audit.cleanup_old_entries(...)). There is no CLI entry point at all.
+--
+-- What actually bounds it is 012's EXECUTE grant and the argument checks inside
+-- the function, not an operator holding a token.
 CREATE OR REPLACE FUNCTION audit.cleanup_old_entries(retention_interval INTERVAL)
 RETURNS BIGINT AS $$
 DECLARE deleted BIGINT;
