@@ -236,7 +236,15 @@ func (p *OIDCProvider) refreshJWKS(ctx context.Context) error {
 		}
 		pub, err := rsaPublicKeyFromJWK(k.N, k.E)
 		if err != nil {
-			continue // skip malformed keys rather than fail the whole set
+			// One refused key does not poison the set. An issuer mid-rotation,
+			// or one publishing a key this loop has no use for, is the ordinary
+			// case, and failing the whole refresh over it would leave the cache
+			// serving the previous key set until the issuer tidied up. A key
+			// refused for its size takes the same exit, which is what makes the
+			// cap cheap to add: it costs that key and nothing else. When every
+			// entry is refused, the len(keys) == 0 check below fails the
+			// refresh and the cached set is left as it was.
+			continue
 		}
 		keys[k.Kid] = pub
 	}
@@ -250,7 +258,7 @@ func (p *OIDCProvider) refreshJWKS(ctx context.Context) error {
 }
 
 // rsaPublicKeyFromJWK decodes the base64url modulus/exponent of an RSA JWK,
-// enforcing a 2048-bit minimum modulus.
+// enforcing the shared modulus bounds and a usable public exponent.
 func rsaPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) {
 	nBytes, err := base64.RawURLEncoding.DecodeString(nB64)
 	if err != nil {
@@ -261,8 +269,18 @@ func rsaPublicKeyFromJWK(nB64, eB64 string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("decode e: %w", err)
 	}
 	n := new(big.Int).SetBytes(nBytes)
-	if n.BitLen() < 2048 {
+	if n.BitLen() < vjwt.MinRSAModulusBits {
 		return nil, fmt.Errorf("RSA key too small: %d bits", n.BitLen())
+	}
+	// The ceiling is the half that was missing. The modulus arrives from the
+	// issuer's jwks_uri, refreshJWKS installs whatever decodes as the id_token
+	// verification cache, and every later id_token with that kid is verified
+	// against it, so an absurd modulus is not one expensive parse but an
+	// unbounded cost per token. The sibling importer in internal/crypto had
+	// capped a DPoP proof's jwk header at this bit length since it was written;
+	// this path took the same attacker-chosen input and applied only the floor.
+	if n.BitLen() > vjwt.MaxRSAModulusBits {
+		return nil, fmt.Errorf("RSA key too large: %d bits", n.BitLen())
 	}
 	e := new(big.Int).SetBytes(eBytes)
 	if !e.IsInt64() || e.Int64() < 3 || e.Int64() > 1<<31-1 {
