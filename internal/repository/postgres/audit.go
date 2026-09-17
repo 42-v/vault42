@@ -201,6 +201,29 @@ func (r *AuditRepo) Query(ctx context.Context, filter repository.AuditFilter) ([
 		args = append(args, filter.MinRiskScore)
 		argIdx++
 	}
+	// The exclusion goes in the WHERE rather than over the returned rows, so
+	// that the LIMIT below counts entries the caller is actually given. The
+	// field's contract in repository.AuditFilter says why that distinction is
+	// the whole feature.
+	//
+	// One clause carrying the whole set rather than one clause per prefix: the
+	// predicate then has a single shape whatever the caller passes, and the
+	// prefixes stay a single bound parameter instead of becoming part of the
+	// query text's length.
+	//
+	// starts_with rather than LIKE 'prefix%': every prefix a caller has reason
+	// to pass here contains an underscore, and LIKE would read that underscore
+	// as a single-character wildcard. 'admin_%' would then also exclude
+	// administrator_login, and a pattern that over-matches in a withholding
+	// filter is the kind of bug that hides for a release because it errs quiet.
+	// The array is cast rather than left to inference, because the argument is
+	// consumed by a function here rather than compared to a column that would
+	// have fixed its type.
+	if len(filter.ExcludeEventTypePrefixes) > 0 {
+		conditions = append(conditions, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM unnest($%d::text[]) AS blocked(prefix) WHERE starts_with(event_type, blocked.prefix))", argIdx))
+		args = append(args, filter.ExcludeEventTypePrefixes)
+		argIdx++
+	}
 
 	query := "SELECT id, timestamp, event_type, COALESCE(user_id::text,''), COALESCE(client_id::text,''), COALESCE(ip,''), COALESCE(user_agent,''), COALESCE(fingerprint_hash,''), COALESCE(device_id::text,''), metadata, risk_score FROM audit.audit_log"
 	if len(conditions) > 0 {

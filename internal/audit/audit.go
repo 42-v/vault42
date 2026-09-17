@@ -123,6 +123,19 @@ const (
 	AdminLoginFailure = "admin_login_failure"
 	// AdminLogout records an admin gateway session logout.
 	AdminLogout = "admin_logout"
+	// AdminTwoFASetup records an admin enrolling their own second factor on the
+	// admin gateway.
+	//
+	// It is its own class rather than a 2fa_setup carrying "admin": true, which
+	// is what it used to be, for the reason AuthenticatorCloned gives above and
+	// for one more that is specific to this row. A discriminator in the metadata
+	// cannot be selected on without reading the metadata, so the only way to
+	// withhold the operator's enrollment from a caller who may not see the admin
+	// roster was to withhold every user's enrollment with it. The row named the
+	// acting admin's id and source address under an event type nothing treats as
+	// admin-plane, which made GET /admin/audit?event_type=2fa_setup an admin
+	// enumeration for anyone holding audit:read.
+	AdminTwoFASetup = "admin_2fa_setup"
 	// AdminSessionRevoke records an admin revoking sessions.
 	AdminSessionRevoke = "admin_session_revoke"
 	// AdminUserLock records an admin locking a user account.

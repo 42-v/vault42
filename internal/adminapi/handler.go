@@ -623,10 +623,29 @@ type auditEntryView struct {
 	RiskScore int                    `json:"risk_score"`
 }
 
+// callerMayReadTheAdminRoster reports whether the request's admin holds the
+// permission that governs the admin plane.
+//
+// No admin on the context means no, not yes. A handler reached without the
+// session middleware has no caller to check, and the only two ways that
+// happens are a wiring mistake and a test driving the handler directly;
+// neither is an argument for handing over the roster.
+func callerMayReadTheAdminRoster(r *http.Request) bool {
+	admin := GetAdmin(r.Context())
+	if admin == nil {
+		return false
+	}
+	return rbac.HasPermission(rbac.Role(admin.Role), rbac.AdminsManage)
+}
+
 // QueryAudit handles GET /admin/audit.
 //
 // Pagination shares parsePagination with the other admin list endpoints, so one
 // default (50) and one cap (maxListLimit) apply across the whole gateway.
+//
+// A caller without admins:manage is served the user-plane trail only; the
+// admin-plane rows are excluded in the store, and the comment on the exclusion
+// below says why they are roster material.
 //
 // total is the number of entries in the returned window: repository.AuditFilter
 // has no counterpart that counts matches without returning them. The key is
@@ -662,6 +681,32 @@ func (h *Handler) QueryAudit(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			filter.MinRiskScore = n
 		}
+	}
+	// The admin plane is roster material here too, so a caller who may not read
+	// the roster does not get it back out of the trail.
+	//
+	// GET /admin/sessions is gated on admins:manage, not on the viewer-tier
+	// sessions:list it used to take, because the live roster of who administers
+	// the deployment is reconnaissance for an attacker holding a lower-tier
+	// admin session. This route is gated on audit:read, which viewer holds, and
+	// the admin-plane rows in the trail are a superset of what that other gate
+	// denies: admin_login carries every admin's id, source address, user agent,
+	// username and role, admin_account_create carries the created admin's
+	// username and role, admin_authz_denied carries the refused admin's role,
+	// and admin_session_rejected enumerates admin ids against the paths they
+	// were refused. Historical rather than live, and with the role attached.
+	//
+	// Withholding the rows rather than refusing the request, because an auditor
+	// or an on-call responder is exactly who the viewer tier is for and the
+	// user-plane trail is what they are there to read. Refusing on the event
+	// type would also have covered only the request that names one: an
+	// unfiltered GET /admin/audit returns the same rows mixed into the page.
+	//
+	// The exclusion goes into the filter and not over the result, so that the
+	// limit still counts rows the caller receives; repository.AuditFilter
+	// carries the arithmetic.
+	if !callerMayReadTheAdminRoster(r) {
+		filter.ExcludeEventTypePrefixes = audit.AdminPlaneEventPrefixes()
 	}
 
 	entries, err := h.auditRepo.Query(r.Context(), filter)

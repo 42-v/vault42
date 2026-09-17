@@ -368,9 +368,11 @@ func (h *AuthHandler) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.auditLog.Log(r.Context(), audit.TwoFASetup, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
+	// admin_2fa_setup, not 2fa_setup with "admin": true. The class carries what
+	// the flag used to, and it carries it in the one field a query can select on
+	// without reading the row; audit.AdminTwoFASetup says why that matters.
+	_ = h.auditLog.Log(r.Context(), audit.AdminTwoFASetup, admin.ID, "", r.RemoteAddr, r.UserAgent(), "", "", map[string]interface{}{
 		"method": "totp",
-		"admin":  true,
 	})
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "totp_verified"})

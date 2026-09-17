@@ -136,7 +136,7 @@ All endpoints are prefixed with `/admin/`.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score) |
+| `GET` | `/admin/audit` | Session + RBAC | `audit:read` | Query audit logs (filters: user_id, event_type, since, until, min_risk_score). Admin-plane rows need `admins:manage` |
 
 ### Client Management
 

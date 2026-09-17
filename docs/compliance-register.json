@@ -2126,7 +2126,7 @@
       "tests": [
         "TestOWASP_A02_2025_ProductionProfileRefusesInsecureDefaults"
       ],
-      "notes": "No default account exists. EnsureFirstAdmin (internal/adminapi/auth.go:412) creates the first-boot super admin with a 32-byte CSPRNG password (:452), delivered through firstboot.Deliver rather than the process log, and the dev seed file is loaded only when VAULT_SEED_FILE names it explicitly."
+      "notes": "No default account exists. EnsureFirstAdmin (internal/adminapi/auth.go:414) creates the first-boot super admin with a 32-byte CSPRNG password (:454), delivered through firstboot.Deliver rather than the process log, and the dev seed file is loaded only when VAULT_SEED_FILE names it explicitly."
     },
     {
       "standard": "OWASP ASVS",
@@ -2274,7 +2274,7 @@
         "TestNIST_PasswordResetSingleUse",
         "TestASVS_V2_5_6_ResetTokenSingleUse"
       ],
-      "notes": "System-generated credentials are CSPRNG-derived, single-use and short-lived; the first-boot admin password is 32 bytes from vaultcrypto.RandomBytes (internal/adminapi/auth.go:452)."
+      "notes": "System-generated credentials are CSPRNG-derived, single-use and short-lived; the first-boot admin password is 32 bytes from vaultcrypto.RandomBytes (internal/adminapi/auth.go:454)."
     },
     {
       "standard": "OWASP ASVS",
@@ -6087,7 +6087,7 @@
       "tests": [
         "TestASVS_V16_2_1_EntriesCarryWhenWhereWhoWhat"
       ],
-      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:380) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
+      "notes": "Every audit record carries the content AU-3 enumerates, and the shape is the struct rather than a convention: model.AuditEntry (internal/model/model.go:446) declares what happened (EventType), when (Timestamp, RFC3339 UTC), the source (IP, UserAgent), the outcome and the subject or actor (UserID, ClientID, DeviceID), plus a metadata map for the event-specific detail. Logger.Log (internal/audit/audit.go:393) takes each of those as a separate parameter, so a caller cannot record an event without supplying them. This row previously carried an empty justification."
     },
     {
       "standard": "NIST SP 800-53",
