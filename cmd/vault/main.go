@@ -229,6 +229,14 @@ func main() {
 
 	// Check if this is a CLI invocation
 	if cliHandler.Run(ctx, os.Args) {
+		// Run's bool says the command was recognized, not that it worked. This
+		// returned unconditionally, so every CLI failure printed its message and
+		// exited 0 -- an init container gating on the status of `vault seed` saw
+		// success while nothing had been seeded, and the same held for every
+		// other subcommand.
+		if cliHandler.Failed() {
+			os.Exit(1) //nolint:gocritic // exitAfterDefer is intentional; the CLI holds no buffered logger to drain
+		}
 		return
 	}
 
@@ -576,6 +584,7 @@ func main() {
 			MaxTTL:        cfg.MintMaxTTL,
 			AllowedRoles:  cfg.MintAllowedRoles,
 			AllowedScopes: cfg.MintAllowedScopes,
+			AllowEmail:    cfg.MintAllowEmail,
 		}, mintMetrics)
 		if err != nil {
 			log.Fatalf("Failed to initialize mint service: %v", err)

@@ -3165,6 +3165,7 @@ Mounted **only** when `VAULT_MINT_ENABLED=true`; otherwise the route does not ex
 | `roles` | string[] | No | Every member must appear in `VAULT_MINT_ROLES` | Omit or send `[]` for no roles. The allow-list is empty by default, so a freshly enabled mint issues bare subject assertions |
 | `scopes` | string[] | No | Every member must appear in `VAULT_MINT_SCOPES` | Same deny-by-default rule as `roles` |
 | `ttl_seconds` | int | No | `0` or absent means `VAULT_MINT_TOKEN_TTL`; otherwise `0 < ttl <= VAULT_MINT_MAX_TTL`, itself capped at 900 in code | A value above the ceiling is **refused, not clamped**. Silently issuing something other than what was asked for hides a misconfigured caller until the day its tokens expire mid-flight |
+| `email` | string | No | Requires `VAULT_MINT_ALLOW_EMAIL`; must pass the same validator as a registered address, at most 254 bytes | Lower-cased and trimmed before signing. Refused with `403 email_not_permitted` when the setting is off, rather than stripped. vault42 does not verify it and cannot: `/mint` asserts subjects it has never heard of, and the email is a claim about the same unknown subject |
 
 Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name fails the whole request with `400 invalid_request`.
 
@@ -3180,6 +3181,7 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
   "issuer": "https://vault42.example.com",
   "roles": ["rider"],
   "scopes": ["orders:read"],
+  "email": "legacy-user-8814@example.com",
   "kid": "4f1c9e60-2a77-4e0f-9a3e-9c2b7f0d51aa",
   "jti": "0f2b8c1d-6e4a-4c92-b8a1-2f7d3e5a90c4"
 }
@@ -3195,6 +3197,7 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
 | `issuer` | string | `VAULT_ORIGIN`, the `iss` claim on the token |
 | `roles` | string[] | Granted roles. Omitted when none were requested |
 | `scopes` | string[] | Granted scopes. Omitted when none were requested |
+| `email` | string | Echo of the asserted address as it was signed, lower-cased and trimmed. Omitted when the request carried none. Present so a caller can see what it actually asserted rather than what it meant to send |
 | `kid` | string | Key id the assertion was signed under, resolvable against `GET /.well-known/jwks.json` |
 | `jti` | string | The token's unique id, also recorded in the audit event so a downstream incident traces back to the exact assertion |
 
@@ -3212,6 +3215,7 @@ Unknown keys are rejected (`DisallowUnknownFields`), so a typo in a field name f
 | `token_type` | `mint` |
 | `minted_by` | The `client_id` of the client that requested the mint. This is the attribution a relying party can act on: the `token_minted` audit event names the same client, but that row lives in vault42's database and an RP cannot read it |
 | `client_id` | **Absent, deliberately.** A minted token must not look like an authenticated service caller. The service document store treats the presence of this claim as proof of one and uses it as the ownership axis, so a minted token carrying it would be admitted as the minting client. That is why the attribution claim is spelled `minted_by`. See the security notes below |
+| `email` | The address the caller asserted, present only when `VAULT_MINT_ALLOW_EMAIL` is on and the request carried one. **Not verified.** vault42 never looked this subject up, so the claim is the caller's statement rather than vault42's. A relying party must not treat it as proof of address ownership, and no vault42-issued login token carries this claim at all |
 | `fingerprint`, `cnf` | Absent. A minted token is not device-bound and not sender-constrained |
 
 There is no refresh token and no stored session behind a minted token. It cannot be exchanged, rotated, extended or revoked; vault42 keeps no record of it beyond the audit event.
@@ -3233,6 +3237,8 @@ There is no refresh token and no stored session behind a minted token. It cannot
 | 403 | `insufficient_scope` | Token lacks the `mint:token` scope |
 | 403 | `client_credentials_required` | Token has the scope but no `client_id` claim, so it is not a service client |
 | 403 | `role_not_permitted` | A requested role is outside `VAULT_MINT_ROLES`, or is `admin` or `super_admin` in any casing |
+| 403 | `email_not_permitted` | The request carried `email` and `VAULT_MINT_ALLOW_EMAIL` is off |
+| 400 | `invalid_email` | The request carried an `email` the address validator rejected |
 | 403 | `scope_not_permitted` | A requested scope is outside `VAULT_MINT_SCOPES`, or is one of the vault42 capability scopes |
 | 429 | `rate_limit_exceeded` | Rate limit exceeded |
 | 500 | `internal_error` | Signing or UUID generation failed |

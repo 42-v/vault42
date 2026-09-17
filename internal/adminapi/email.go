@@ -15,9 +15,33 @@ import (
 const maxSubjectLen = 255
 
 // actor returns the username of the authenticated admin, or "" if absent.
+//
+// For display columns only. audit.audit_log.user_id is UUID, so a username
+// there is not a value that column can hold -- see actorID.
 func (h *Handler) actor(r *http.Request) string {
 	if a := GetAdmin(r.Context()); a != nil {
 		return a.Username
+	}
+	return ""
+}
+
+// actorID returns the UUID of the authenticated admin, or "" if absent.
+//
+// The audit call sites in this file passed actor() -- a username. The bootstrap
+// admin's username is literally "admin", audit.audit_log.user_id is UUID, and
+// the insert failed 22P02 on every one of them. The logger runs synchronously
+// here (the admin gateway wires a zero flush interval) and every call site
+// discards the error under #nosec G104, so the handler answered 200 and the row
+// simply did not exist.
+//
+// Of the audit call sites in this package these four were the only ones not
+// passing an id, which is why nothing else in the admin plane showed the
+// symptom. It matters most here: email:write rewrites the body of password-reset
+// and verification mail for every user of an app, which makes it the one route
+// in this API a phisher would want, and the one whose trail was empty.
+func (h *Handler) actorID(r *http.Request) string {
+	if a := GetAdmin(r.Context()); a != nil {
+		return a.ID
 	}
 	return ""
 }
@@ -137,7 +161,7 @@ func (h *Handler) PutEmailBranding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:email_branding_set", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
+		h.auditLog.Log(r.Context(), "admin:email_branding_set", h.actorID(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"app": app})
 	}
 	if stored, err := h.emailBranding.Get(r.Context(), app); err == nil && stored != nil {
@@ -162,7 +186,7 @@ func (h *Handler) DeleteEmailBranding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:email_branding_delete", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
+		h.auditLog.Log(r.Context(), "admin:email_branding_delete", h.actorID(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"app": app})
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
@@ -297,7 +321,7 @@ func (h *Handler) PutEmailTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:email_template_set", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
+		h.auditLog.Log(r.Context(), "admin:email_template_set", h.actorID(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"app": app, "template": name, "enabled": enabled})
 	}
 	if stored, err := h.emailTemplates.Get(r.Context(), app, name); err == nil && stored != nil {
@@ -322,7 +346,7 @@ func (h *Handler) DeleteEmailTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.auditLog != nil {
-		h.auditLog.Log(r.Context(), "admin:email_template_delete", h.actor(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
+		h.auditLog.Log(r.Context(), "admin:email_template_delete", h.actorID(r), "", r.RemoteAddr, r.UserAgent(), "", "", // #nosec G104 -- audit is best-effort
 			map[string]any{"app": app, "template": name})
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
