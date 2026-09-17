@@ -59,8 +59,8 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | `internal/cache` | 100.00% |
 | `internal/audit` | 100.00% |
 | `internal/alert` | 100.00% |
-| `internal/repository/postgres` | 99.91% |
-| `internal/adminapi` | 99.83% |
+| `internal/adminapi` | 99.84% |
+| `internal/repository/postgres` | 99.82% |
 | `internal/oauth2` | 99.74% |
 | `cmd/admin-gateway` | 99.72% |
 | `internal/handler` | 99.69% |
@@ -69,7 +69,7 @@ Both figures come from `go list -deps ./...`, which is what the build links, rat
 | `cmd/bridge` | 99.55% |
 | `internal/jwt` | 99.30% |
 | `internal/service` | 99.28% |
-| `cmd/vault` | 98.39% |
+| `cmd/vault` | 98.40% |
 | `internal/crypto` | 98.36% |
 | `cmd/recover` | 98.15% |
 | `internal/firstboot` | 96.88% |
