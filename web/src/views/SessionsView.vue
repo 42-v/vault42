@@ -89,7 +89,7 @@ onMounted(() => {
                 </div>
               </div>
               <button
-                class="text-xs text-vault42-error hover:text-red-300 transition-colors shrink-0"
+                class="text-xs text-vault42-error hover:text-vault42-text transition-colors shrink-0"
                 @click="revokeSession(s.id)"
               >
                 {{ t('common.revoke') }}
@@ -128,7 +128,7 @@ onMounted(() => {
                       @keyup.enter="saveEdit(d.id)"
                       @keyup.escape="cancelEdit"
                     />
-                    <button class="text-xs text-vault42-success hover:text-green-400 transition-colors" @click="saveEdit(d.id)">{{ t('common.save') }}</button>
+                    <button class="text-xs text-vault42-success hover:text-vault42-text transition-colors" @click="saveEdit(d.id)">{{ t('common.save') }}</button>
                     <button class="text-xs text-vault42-muted hover:text-vault42-text transition-colors" @click="cancelEdit">{{ t('common.cancel') }}</button>
                   </div>
                 </template>
@@ -159,7 +159,7 @@ onMounted(() => {
               </div>
 
               <button
-                class="text-xs text-vault42-error hover:text-red-300 transition-colors shrink-0"
+                class="text-xs text-vault42-error hover:text-vault42-text transition-colors shrink-0"
                 @click="removeDevice(d.id)"
               >
                 {{ t('common.remove') }}

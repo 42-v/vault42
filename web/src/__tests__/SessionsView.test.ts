@@ -21,6 +21,10 @@ type Session = {
   first_seen_at: string
 }
 
+// Mirrors what GET /user/devices actually sends -- see the Device interface in
+// packages/vue/src/types.ts and the gate in tests/spec that holds it against
+// the wire type. A fixture with fields the server never sends is a fixture that
+// proves the view works on data it will never be given.
 type Device = {
   id: string
   friendly_name: string
@@ -28,8 +32,6 @@ type Device = {
   ip: string
   user_agent: string
   last_seen_at?: string
-  first_seen_at: string
-  created_at: string
 }
 
 const mockSessions = ref<Session[]>([])
@@ -91,8 +93,6 @@ function makeDevice(overrides: Partial<Device> = {}): Device {
     ip: '10.0.0.1',
     user_agent: 'Mozilla/5.0',
     last_seen_at: '2026-02-24T10:00:00Z',
-    first_seen_at: '2026-02-01T10:00:00Z',
-    created_at: '2026-02-01T10:00:00Z',
     ...overrides,
   }
 }

@@ -80,9 +80,14 @@ const SLASH = 0x2f
  *
  * A 401 on an authenticated request triggers one refresh and one replay of the
  * original request. Concurrent calls share a single in-flight refresh rather
- * than each starting their own. If the refresh fails, or the replay is refused
- * again, the token is dropped and the call rejects with `session_expired`, so a
- * dead session cannot spin.
+ * than each starting their own. Either way the token is dropped, so a dead
+ * session cannot spin -- but the two failures do not reject alike, and a caller
+ * following "Branch on code" above needs both:
+ *
+ * - the REFRESH fails: rejects with `session_expired`.
+ * - the refresh succeeds and the REPLAY is refused: rethrows the server's own
+ *   error unchanged, so the code is whatever it put in the `error` field
+ *   (`token_expired` in the case the tests pin).
  */
 export class VaultClient {
   private baseURL: string

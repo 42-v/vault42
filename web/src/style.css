@@ -31,6 +31,19 @@
  * `error` moved from `#ef4444` to red-400 because it is almost always rendered
  * on its own 10-20% tint, where the old value fell to 4.00-4.53:1.
  *
+ * `warning` is the newest, and it changes nothing on screen. There was no
+ * caution colour here, so the backup-code banner and the password-strength
+ * meter reached for Tailwind's stock `yellow-500` -- outside the set this file
+ * audits and outside what `palette.test.ts` re-derives. Naming it is what
+ * brings it inside.
+ *
+ * The value is #edb200, which is what Tailwind 4 renders `yellow-500` as: the
+ * palette moved to OKLCH in 4, so the familiar #eab308 is the *3* value and
+ * writing it here would have been a quiet re-hue on the way to a token. Read
+ * off the compiled stylesheet rather than remembered. Both clear 4.5:1 on
+ * `bg`, on `surface` and on their own 10/15/30% washes, so contrast did not
+ * decide it; keeping the pixels identical did.
+ *
  * These lived in `tailwind.config.js` until Tailwind 4, which reads its theme
  * from CSS. The file they live in changed; nothing about the values did.
  */
@@ -45,6 +58,7 @@
   --color-vault42-text: #e2e8f0;
   --color-vault42-muted: #94a3b8;
   --color-vault42-success: #22c55e;
+  --color-vault42-warning: #edb200;
   --color-vault42-error: #f87171;
 }
 
@@ -168,7 +182,18 @@
     cursor: pointer;
   }
 
-  /* Custom scrollbar */
+  /* Custom scrollbar.
+
+     Both states are tokens rather than literals. The thumb was #1e1e2e, which
+     is the value `border` holds -- the same colour written twice, in the one
+     file whose header says every value here is fixed by a contrast requirement
+     and re-derived by palette.test.ts. A copy is not covered by that, so the
+     next contrast pass would move the token and leave the scrollbar behind.
+
+     The hover was #2e2e3e, a one-off with no token at all. It is `control`
+     now, which is the token defined as "the boundary of an interactive
+     control" -- and a scrollbar thumb is one. It is a more visible hover than
+     the old value on a 6px target, which is the direction to err in. */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -177,15 +202,24 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #1e1e2e;
+    background: var(--color-vault42-border);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #2e2e3e;
+    background: var(--color-vault42-control);
   }
 
+  /* Selected text takes the interactive ink, at the same 20% the tinted fills
+     use.
+
+     It was rgba(0, 255, 66, 0.2) -- neon green, in an app whose entire palette
+     is indigo. It has been there since 0.4.2 and is the only occurrence of that
+     hue anywhere in the frontend; the contrast rework that split `primary` from
+     `accent` and moved `error` enumerated every colour decision in this file
+     and never mentioned it, because nothing pointed at it. Selecting text is
+     the one place a user sees a colour the design system never chose. */
   ::selection {
-    background: rgba(0, 255, 66, 0.2);
+    background: color-mix(in srgb, var(--color-vault42-accent) 20%, transparent);
   }
 }
 

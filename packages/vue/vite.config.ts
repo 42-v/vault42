@@ -1,14 +1,16 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import dts from 'vite-plugin-dts'
 import { resolve } from 'path'
 
 export default defineConfig({
-  plugins: [
-    vue(),
-    dts({ insertTypesEntry: true }),
-  ],
+  // No dts plugin. `vue-tsc --emitDeclarationOnly` produces the same
+  // declarations from the same tsconfig, and it was already installed and
+  // already running in this package's build script -- so the plugin was a
+  // second implementation of a step the build performed anyway, and it brought
+  // thirty-eight packages of Rushstack tooling with it to emit files tsc emits
+  // for free. See the build script in package.json for why it runs second.
+  plugins: [vue()],
   build: {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),

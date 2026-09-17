@@ -130,9 +130,17 @@ router.beforeEach(async (to) => {
   if (to.name === 'register') {
     const { registrationEnabled, init } = getAuthState()
     // init() is idempotent and returns the in-flight promise, so this is safe to
-    // await unconditionally. Doing it unconditionally matters: `initialized` can
-    // already be true from an earlier navigation whose capabilities fetch had not
-    // landed yet, and gating on it would read the optimistic default instead.
+    // await unconditionally, and awaiting it unconditionally is simply cheaper
+    // to read than a guard that has to be re-argued every time this file moves.
+    //
+    // It is NOT load-bearing. `initialized` cannot be true before the
+    // capabilities fetch has settled: runInit awaits it in its finally block
+    // before flipping the flag, and the fetch carries its own catch so it always
+    // settles rather than rejecting (useAuth.ts). This comment used to claim the
+    // opposite -- that `initialized` could be true while capabilities was still
+    // in flight -- which would have made the unconditional await the only thing
+    // standing between a visitor and a /register page the server has disabled.
+    // It is not; the watch below is.
     try { await init() } catch { /* offline: fall through, the server still enforces */ }
     if (!registrationEnabled.value) {
       return { path: '/login' }

@@ -28,6 +28,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          # Full history: this job runs tests/spec, and several of those gates
+          # read git. Without it chart_immutable_selector_test.go SKIPS with "no
+          # release tag other than <self> is reachable from HEAD", and a skipped
+          # assertion reports as a pass.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -141,6 +146,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          # Full history: this job runs tests/spec, and several of those gates
+          # read git. Without it chart_immutable_selector_test.go SKIPS with "no
+          # release tag other than <self> is reachable from HEAD", and a skipped
+          # assertion reports as a pass.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -966,3 +976,114 @@ jobs:
 
       - name: yamllint
         run: yamllint --strict .
+
+  # ---------------------------------------------------------------------------
+  # The upload/download pair the release depends on, exercised where a failure
+  # is free.
+  #
+  # release.yml has no pull_request trigger and is in no paths filter, so every
+  # change to it first executes during a release. actions/download-artifact was
+  # moved from v4 to v8 in a pull request and has never once run: four major
+  # versions of path-handling behaviour sit between the version that was tested
+  # and the version that will publish, and the github-release job's whole
+  # assertion is that the files land FLAT in dist/.
+  #
+  # That assertion is good and it is not enough. It runs in the last job, after
+  # the images, the chart and the NuGet packages have already published, so what
+  # it buys is a release that fails loudly instead of one that publishes empty
+  # notes -- with the version number spent either way. This job asks the same
+  # question before the tag exists.
+  #
+  # It is a rehearsal, so it has to stay in step with what it rehearses:
+  # tests/spec/release_rehearsal_parity_test.go fails the build if the pinned
+  # action SHAs or the path globs here stop matching release.yml. A rehearsal of
+  # a different pair tests nothing and reads as though it tests everything.
+  release-artifact-roundtrip:
+    name: Release artifact round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+
+      # The names the release publishes, with a stand-in version. Content is
+      # irrelevant; the shapes and the extraction layout are the whole point.
+      - name: Stage artifacts with the release's own names
+        env:
+          VERSION: 0.0.0-rehearsal
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            echo "rehearsal" > "dist/vault42_${VERSION}_${arch}.tar.gz"
+            for kind in spdx cdx; do
+              echo '{}' > "dist/vault42_${VERSION}_${arch}.tar.gz.${kind}.sbom.json"
+            done
+          done
+          echo "rehearsal" > "dist/vault42_${VERSION}_SHA256SUMS"
+          echo "rehearsal" > "dist/vault42_${VERSION}_SHA256SUMS.bundle"
+          echo "rehearsal" > "dist/vault42_${VERSION}.intoto.jsonl"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts-rehearsal
+          path: |
+            dist/*.tar.gz
+            dist/*SHA256SUMS*
+            dist/*.sbom.json
+            dist/*.intoto.jsonl
+          if-no-files-found: error
+
+      # Everything the producer wrote is removed, so a download that lands
+      # nothing, or lands it nested, cannot be satisfied by what is still on
+      # disk. Without this the assertion below would pass on the staged copies.
+      - name: Discard the staged copies
+        run: rm -rf dist
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts-rehearsal
+          path: dist
+
+      # Byte-for-byte the check github-release runs, against the same layout.
+      - name: The downloaded artifacts are where the release expects them
+        env:
+          VERSION: 0.0.0-rehearsal
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in \
+            "dist/vault42_${VERSION}_linux_amd64.tar.gz" \
+            "dist/vault42_${VERSION}_linux_arm64.tar.gz" \
+            "dist/vault42_${VERSION}_darwin_amd64.tar.gz" \
+            "dist/vault42_${VERSION}_darwin_arm64.tar.gz" \
+            "dist/vault42_${VERSION}_SHA256SUMS" \
+            "dist/vault42_${VERSION}_SHA256SUMS.bundle" \
+            "dist/vault42_${VERSION}.intoto.jsonl"
+          do
+            if [ ! -s "$f" ]; then
+              echo "::error::missing or empty release asset: $f"
+              missing=1
+            fi
+          done
+          for arch in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            for kind in spdx cdx; do
+              f="dist/vault42_${VERSION}_${arch}.tar.gz.${kind}.sbom.json"
+              if [ ! -s "$f" ]; then
+                echo "::error::missing or empty SBOM: $f"
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::release-artifacts did not land flat in dist/ on this runner." \
+                 "release.yml would publish images, the chart and NuGet before discovering this."
+            find dist -maxdepth 3 -printf '%y %p\n' 2>/dev/null | sort || ls -laR dist || true
+            exit 1
+          fi
+          echo "the upload/download pair lands every release asset flat in dist/"

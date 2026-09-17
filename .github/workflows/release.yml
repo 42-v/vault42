@@ -161,6 +161,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          # Full history, because this job runs tests/spec and several of those
+          # gates read git. The default checkout is depth 1 with no tags, and
+          # what they do without one is SKIP: chart_immutable_selector_test.go
+          # bails with "no release tag other than <self> is reachable from
+          # HEAD", and that is the gate holding the chart's spec.selector
+          # immutable -- the failure docs/UPGRADING.md warns about in every
+          # section. A skipped assertion reports as a pass, so the release gate
+          # was green on a check it never ran.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
