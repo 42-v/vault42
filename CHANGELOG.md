@@ -1,5 +1,123 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+The first minor since 1.0.0, and a minor because it adds routes and schema
+rather than because enough had accumulated. Three new admin routes, four
+migrations, and a security pass that had been sitting on unmerged branches since
+2026-08-26: the merge queue stopped after #85 and nothing landed for three
+weeks.
+
+### Added
+
+* **`PUT /admin/users/{id}/roles`** (migration 044). Roles reached `auth.users`
+  only through the import's INSERT and could not be changed afterwards. The
+  method replaces the set rather than granting or revoking one name, because the
+  column is a `TEXT[]` the statement overwrites whole and a grant-one/revoke-one
+  pair would be a read-modify-write from the handler -- two admins editing one
+  user would silently lose an edit. `vault_admin` holds the column, and an
+  integration test drives the refusal under `vault_app` to prove the application
+  role cannot promote a user.
+
+* **`POST /admin/users/{id}/ban` and `/unban`** (migration 043). The ban state
+  itself is not new: login has answered `403 account_banned` since migration 004
+  and the frontend has rendered it in every locale it ships. What is new is that
+  an operator can set and lift it, and read it back on `GET /admin/users/{id}`.
+  Banning revokes the account's live sessions; unbanning deliberately does not.
+
+### Fixed -- security
+
+* **An erased account can no longer write itself back.** `middleware.Auth` never
+  reads the database, so an access token minted a moment before
+  `DELETE /user/account` kept verifying for the rest of its TTL. Within that
+  window the holder could put an identity profile back under the same pseudonym,
+  upload blobs, set a password on the tombstoned row, or re-enrol TOTP, WebAuthn
+  and backup codes behind a confirm window opened before the erasure ran -- after
+  the erasure had reported success. Closed as `middleware.LiveAccount` in the
+  route builders rather than as a check per handler, because the failure mode was
+  omission: four handlers never had one and a route added next year would not
+  either. A spec gate now fails the build for a new write route under `/user/` or
+  `/auth/2fa/` that does not use a guarded builder.
+
+* **A replayed refresh token is no longer filed as a logout.** Reuse detection
+  emitted `token_revoke` at severity 0, the same class and score an ordinary
+  logout writes, so the strongest evidence of session theft the service can
+  produce ranked below a mistyped password and no alert rule could watch it
+  without paging on every sign-out. It is now `refresh_token_replayed`, critical,
+  alerting on the first occurrence, with a counter. The containment runs on a
+  context detached from the request, because the request belongs to whoever
+  presented the stolen token: on the plain request context an attacker contained
+  their own replay by hanging up.
+
+* **A redirect could downgrade the connection carrying a client secret.** The
+  OIDC redirect hop is now held to the same destination policy as the first
+  request, judged on the address actually dialled.
+
+* **An issuer's JWKS could install an unbounded RSA modulus**, where its sibling
+  import capped at 4096 bits.
+
+* **One user behind a NAT could lock every other one out of 2FA.** The limiter is
+  keyed per challenge rather than per source address.
+
+* **`GET /admin/audit` served the admin roster out of the audit table.** The
+  admin plane is excluded in SQL, before the limit.
+
+* **A password-reset link outlived the account it was mailed for**, and could
+  write a live hash onto an erased or banned row.
+
+* **A mixed-case or space-padded address got no reset mail** while the
+  anti-enumeration `200` said one had been sent. `auth.users.email` only ever
+  holds a folded address; this was the one lookup that passed its input through
+  raw.
+
+* **`X-Request-ID` published the server's nanosecond clock** when `crypto/rand`
+  failed.
+
+* **The admin import width-checked nothing**, so one over-long batch tag failed
+  all 1000 records under a `200 OK`.
+
+* **`DELETE` on `auth.users` is off the application role.** Migration 001 granted
+  it and nothing ever called it; erasure scrubs the row with an `UPDATE`.
+
+* **The bridge Deployment mounted every key in the vault Secret** -- signing key,
+  master key, HMAC secret, database password and pepper -- to read one file. It
+  now projects only the admin token it consumes.
+
+* **Six high-severity npm advisories** (four in `fast-uri`, one each in `js-yaml`
+  and `smol-toml`) are cleared by raising the override floors. All three are
+  build-time only and reach nothing in the shipped frontend.
+
+* **The frontend base image** moves to the digest carrying `libcrypto3-3.5.8-r0`,
+  `libexpat-2.8.4-r0` and `libuuid-2.42.3-r1`, which clears every HIGH finding
+  Trivy reported against it. That scan had been failing since 2026-08-26.
+
+### Fixed -- tests and gates
+
+* **A gate asserted what a variable was named.** `EmailVerified: emailVerified`
+  satisfied a check for the verified-email flag because the identifier contains
+  the word, whatever the value was.
+
+* **An unauthenticated-guard table could not fail**: its assertion was
+  `code < 400`, so any error at all satisfied a claim about authentication.
+
+* **The non-API route bound exempted every admin route it was meant to cover.**
+
+* **The enumeration timing assertion went red on a loaded machine.** It is
+  measured on the fastest quartile, which is the quantity the claim is about.
+
+### Changed
+
+* `@vault42/vue` emits its declarations with the compiler already in the build,
+  dropping `vite-plugin-dts` and about 38 packages with it. The TOTP QR is
+  encoded without a command-line argument parser in a browser bundle. The images
+  build with the Go version the project says it uses.
+
+* Accessibility: the current page is announced and not only coloured, focus moves
+  into the page after a routed navigation, decorative icons are hidden from
+  assistive technology rather than announced as unlabelled graphics, the language
+  switcher closes on a keypress, and a gate holds the palette against new raw
+  colours.
+
 ## 1.0.4 (2026-08-21)
 
 ### Dependencies
