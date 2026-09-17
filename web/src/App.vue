@@ -58,6 +58,7 @@ function isActive(path: string): boolean {
                 v-for="link in navLinks"
                 :key="link.to"
                 :to="link.to"
+                :aria-current="isActive(link.to) ? 'page' : undefined"
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
                   isActive(link.to)
@@ -81,6 +82,7 @@ function isActive(path: string): boolean {
             <template v-else>
               <router-link
                 to="/login"
+                :aria-current="isActive('/login') ? 'page' : undefined"
                 :class="[
                   'px-3 py-1.5 rounded-lg text-sm transition-all duration-200',
                   isActive('/login') ? 'text-vault42-accent' : 'text-vault42-muted hover:text-vault42-text'
@@ -124,6 +126,7 @@ function isActive(path: string): boolean {
               v-for="link in navLinks"
               :key="link.to"
               :to="link.to"
+              :aria-current="isActive(link.to) ? 'page' : undefined"
               :class="[
                 'block px-3 py-2 rounded-lg text-sm transition-colors',
                 isActive(link.to) ? 'bg-vault42-primary/15 text-vault42-accent' : 'text-vault42-text hover:bg-vault42-border/50'
