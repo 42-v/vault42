@@ -43,7 +43,7 @@
 # line, requires a digest, and fails on any HIGH or CRITICAL, so a repeat of the
 # rot above is a red build rather than a quiet one. Dependabot's docker ecosystem
 # raises the digest.
-FROM nginxinc/nginx-unprivileged:alpine@sha256:d9083fe47768377ef55dedafd67d4da7c2f2bc2bece7554954f29359deb0dce9
+FROM nginxinc/nginx-unprivileged:alpine@sha256:b54ac358b83fc6c965793fd271839b4ea4cdb6e99895bb19618cbc2ca152d972
 
 COPY dist/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
