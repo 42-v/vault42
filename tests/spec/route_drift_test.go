@@ -47,11 +47,26 @@ var routeSources = []string{
 // anyone remembering to update this test.
 const frontendIdent = "frontend"
 
-// nonAPIPrefixes bounds what the frontendIdent rule is allowed to exclude. A
-// route served through the frontend handler but living outside these prefixes is
-// a misclassification, not an HTML page, and must fail rather than silently
-// vanish from the documented surface.
-var nonAPIPrefixes = []string{"/", "/admin/", "/admin/login", "/admin/ui/", "/admin/static/"}
+// nonAPIExact and nonAPIPrefixes bound what the frontendIdent rule is allowed to
+// exclude. A route served through the frontend handler but matching neither is a
+// misclassification, not an HTML page, and must fail rather than silently vanish
+// from the documented surface.
+//
+// The split is the point. Both lists used to be one, matched by prefix with "/"
+// special-cased to match only itself -- and "/admin/" sat in it as a bare
+// prefix, which is a prefix of every one of the admin gateway's API routes.
+// /admin/users, /admin/keys/rotate, /admin/clients: all of them satisfied the
+// bound. So the check that exists to stop an API route being deleted from the
+// contract by wiring it through a variable called "frontend" was, for the entire
+// admin plane, satisfied by every route it was meant to catch.
+//
+// Only two paths need to be exempt in their own right -- the console root and
+// its login page -- and neither has children. Making that explicit costs one
+// list and removes the special case for "/" at the same time.
+var (
+	nonAPIExact    = []string{"/", "/admin/", "/admin/login"}
+	nonAPIPrefixes = []string{"/admin/ui/", "/admin/static/"}
+)
 
 // docInventories are the machine-checked route tables. Each is delimited by HTML
 // comment sentinels so the surrounding prose can be rewritten freely without
@@ -170,18 +185,27 @@ func TestNonAPIRoutesStayOutsideTheAPISurface(t *testing.T) {
 	}
 	for _, r := range sorted(nonAPI) {
 		var ok bool
-		for _, p := range nonAPIPrefixes {
-			// "/" is the SPA catch-all and matches only itself; every other entry
-			// is a prefix, so that a new console page under /admin/ui/ is covered
-			// without editing this list.
-			if r.path == p || (p != "/" && strings.HasPrefix(r.path, p)) {
+		for _, p := range nonAPIExact {
+			if r.path == p {
 				ok = true
 				break
 			}
 		}
 		if !ok {
-			t.Errorf("%s (%s) is served through the %q handler but sits outside the known HTML/asset prefixes %v; "+
-				"if it is an API route it must be documented, not excluded", r, pos[r], frontendIdent, nonAPIPrefixes)
+			// A prefix here covers a whole subtree, so that a new console page
+			// under /admin/ui/ needs no edit to this list. Nothing that serves
+			// API routes may appear as one.
+			for _, p := range nonAPIPrefixes {
+				if strings.HasPrefix(r.path, p) {
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			t.Errorf("%s (%s) is served through the %q handler but is neither one of the known "+
+				"HTML paths %v nor under an asset prefix %v; if it is an API route it must be "+
+				"documented, not excluded", r, pos[r], frontendIdent, nonAPIExact, nonAPIPrefixes)
 		}
 	}
 }
