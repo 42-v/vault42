@@ -25,14 +25,16 @@ executed, it says so.
 
 ---
 
-## 1.0.3 to 1.0.4
+## 1.0.4 to 1.1.0
 
 **Chart.** Nothing to do. `spec.selector` is unchanged, as it has been in every released
 chart.
 
-**Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
+**Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.4 -- but the
+bridge, if you run it, now mounts one key rather than all of them. Nothing to change on the
+Secret itself; the Deployment projects only `BRIDGE_ADMIN_TOKEN_FILE`.
 
-**Schema.** v1.0.3 shipped 39 migrations; this release ships 43, so an upgrade applies 4. 041
+**Schema.** v1.0.4 shipped 39 migrations; this release ships 43, so an upgrade applies 4. 041
 revokes `DELETE` on `auth.users` from `vault_app`; 001 granted it and nothing has ever called
 it, so no request path changes. 042 changes `auth.admin_users.created_by` from `NO ACTION` to
 `ON DELETE SET NULL`; until it runs, `POST /admin/admins/{id}/revoke` answers 500 for any
@@ -41,12 +43,12 @@ the only containment lever the admin plane has. 043 grants `UPDATE (banned, ban_
 `auth.users` to `vault_admin`: 004 created both columns and 024 revoked them from `vault_app`,
 leaving `ban_reason` with no writer at all, so this is what lets the two new ban routes write,
 and until it runs they answer 500 in any deployment running as the real role. 044 grants
-`UPDATE (roles)` on the same table to the same role, which is what lets
-`PUT /admin/users/{id}/roles` write at all: PostgreSQL checks the column privilege on
-every target an UPDATE names, and 015 revoked the six columns 009 had lent that role.
-None of the four moves data or adds a column, and nothing existing depends on them. Take
-the backup
-anyway: the point of step 1 is that you have one when something else goes wrong.
+`UPDATE (roles)` on the same table to the same role, for the same reason:
+`PUT /admin/users/{id}/roles` cannot write without it, because PostgreSQL checks the column
+privilege against every target an UPDATE names and 015 revoked the six columns 009 had lent
+that role. None of the four moves data or adds a column, and nothing existing depends on
+them. Take the backup anyway: the point of step 1 is that you have one when something else
+goes wrong.
 
 **Behaviour.** Three new routes: `POST /admin/users/{id}/ban` and
 `POST /admin/users/{id}/unban`, which is what migration 043 grants the privilege for, and
@@ -54,16 +56,42 @@ anyway: the point of step 1 is that you have one when something else goes wrong.
 deployment that never calls them is unaffected. There is also one fix with no new surface:
 `POST /admin/admins/{id}/revoke` now succeeds against an admin who has created other admins,
 and those accounts survive with their `created_by` cleared -- the account that authorized them
-is recorded in the revoke's audit row instead. Nothing existing changes shape. The ban state
-itself is not new -- login has answered `403 account_banned` since 004 and the frontend has
-rendered it in every locale it ships -- so an account already banned by an import behaves
-exactly as it did; what changes is that an operator can now set and lift the state, and read
-it back on `GET /admin/users/{id}`, which now carries `banned` and `ban_reason`. Banning
-revokes the account's live sessions; unbanning deliberately does not.
+is recorded in the revoke's audit row instead. The ban state itself is not new -- login has
+answered `403 account_banned` since 004 and the frontend has rendered it in every locale it
+ships -- so an account already banned by an import behaves exactly as it did; what changes is
+that an operator can now set and lift the state, and read it back on
+`GET /admin/users/{id}`, which now carries `banned` and `ban_reason`. Banning revokes the
+account's live sessions; unbanning deliberately does not.
 
-The other operator-visible difference is that `docs/deps.md` and the README badge figures
-report numbers that differ slightly from 1.0.3's, because those were being counted wrongly --
-see the 1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).
+**What an erased account can no longer do.** An access token minted just before
+`DELETE /user/account` used to keep verifying for the rest of its TTL and could write personal
+data back onto the tombstoned row. Every write route under `/user/` and `/auth/2fa/` now
+checks the account is live. A deployment sees this only as `401` on a token whose subject has
+been erased, which is what it should always have been.
+
+**Frontend image.** The base image moves to the digest carrying `libcrypto3-3.5.8-r0`,
+`libexpat-2.8.4-r0` and `libuuid-2.42.3-r1`. No configuration changes; re-pull the image.
+
+---
+
+## 1.0.3 to 1.0.4
+
+**Chart.** Nothing to do. `spec.selector` is unchanged, as it has been in every released
+chart.
+
+**Secret.** No new keys. The Deployment mounts the same eight it did in 1.0.3.
+
+**Schema.** 1.0.4 carried the same 39 migrations 1.0.3 did. There was no schema change and
+nothing to migrate. (Deliberately not in the machine-read shape the 1.1.0 section above uses:
+that gate reads exactly one such sentence, the one describing the current release, so a
+historical section repeating the shape is how an old number drifts unnoticed.) Take the backup
+anyway: the point of step 1 is that you have one when something else goes wrong.
+
+**Behaviour.** None. 1.0.4 is documentation, three generator fixes and the gates that hold
+them; no request path, token, database or configuration behaviour differs from 1.0.3. The one
+thing an operator may notice is that `docs/deps.md` and the README badge figures report
+numbers that differ slightly from 1.0.3's, because those were being counted wrongly -- see the
+1.0.4 entry in [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 

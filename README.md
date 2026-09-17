@@ -22,16 +22,16 @@ The commands below need no clone.
 
 ```bash
 # Helm chart, from the OCI registry the release pushes it to
-helm pull oci://ghcr.io/42-v/charts/vault-auth --version 1.0.4
+helm pull oci://ghcr.io/42-v/charts/vault-auth --version 1.1.0
 
 # Images: the server, the mTLS admin gateway, the honeypot bridge
-docker pull ghcr.io/42-v/vault42:1.0.4
-docker pull ghcr.io/42-v/vault42-admin-gateway:1.0.4
-docker pull ghcr.io/42-v/vault42-bridge:1.0.4
+docker pull ghcr.io/42-v/vault42:1.1.0
+docker pull ghcr.io/42-v/vault42-admin-gateway:1.1.0
+docker pull ghcr.io/42-v/vault42-bridge:1.1.0
 
 # Client SDKs
-dotnet add package Vault42.AspNetCore --version 1.0.4
-dotnet add package Vault42.Blazor --version 1.0.4
+dotnet add package Vault42.AspNetCore --version 1.1.0
+dotnet add package Vault42.Blazor --version 1.1.0
 ```
 
 A default `helm install` renders, but it will not come up on its own: the Deployment mounts
@@ -265,7 +265,7 @@ the images carry SBOM and SLSA provenance attestations:
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/42-v/vault42/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/42-v/vault42:1.0.4
+  ghcr.io/42-v/vault42:1.1.0
 ```
 
 Full instructions, covering all four artifact classes, are in
