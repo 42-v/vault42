@@ -930,8 +930,15 @@ jobs:
     # whatever bytes the registry serves for it, which is what Scorecard's
     # Pinned-Dependencies check was reporting against these two lines. Both now
     # resolve through a committed hash: pip via --require-hashes against
-    # .github/requirements-lint.txt, markdownlint-cli2 as a root devDependency
-    # that pnpm-lock.yaml pins by integrity, the same treatment commitlint got.
+    # .github/requirements-lint.txt, markdownlint as a root devDependency that
+    # pnpm-lock.yaml pins by integrity, the same treatment commitlint got.
+    #
+    # The markdownlint front end is markdownlint-cli, not markdownlint-cli2.
+    # Both run the same markdownlint engine, but cli2 globs through micromatch,
+    # which pulls in braces, and braces carries an advisory with no patched
+    # release (GHSA-vfj7-8cjw-p6xm). cli globs through tinyglobby and has no
+    # path to it, so the advisory left the lockfile instead of being accepted.
+    # Its rules are .markdownlint.jsonc and its skips .markdownlintignore.
     name: Lint (non-Go)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -982,7 +989,7 @@ jobs:
         run: ruff check --no-cache .
 
       - name: markdownlint
-        run: pnpm exec markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'
+        run: pnpm exec markdownlint '**/*.md'
 
       - name: yamllint
         run: yamllint --strict .

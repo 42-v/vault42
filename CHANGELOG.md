@@ -15,9 +15,12 @@ blocked on. No routes, configuration keys or migrations change. See
   1.31.6 on Alpine 3.24.2, which Trivy reports clean.
 * **`pnpm audit --audit-level high` was failing on main**, which fails the
   required Frontend check for every pull request. brace-expansion's override
-  floor rises to 5.0.12. braces has no patched release and is reached only
-  through the Markdown linter; it is ignored by GHSA and recorded as AR-19 in
-  `docs/security.md`.
+  floor rises to 5.0.12. braces has no patched release and was reached only
+  through the Markdown linter, so the linter front end moves from
+  markdownlint-cli2 to markdownlint-cli: the same markdownlint engine over the
+  same 26 files, globbing through tinyglobby, with neither micromatch nor
+  braces left in the lockfile. `pnpm audit` now reports no known
+  vulnerabilities at any severity (AR-19, recorded as resolved).
 
 ### Fixed
 

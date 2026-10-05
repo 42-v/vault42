@@ -1,0 +1,24 @@
+# Paths markdownlint-cli skips (gitignore syntax). The rules are in .markdownlint.jsonc.
+node_modules/
+dist/
+/tmp/
+/.fleet/
+/coverage/
+/web/dist/
+/internal/frontend/dist/
+
+# Untracked in every case, so a CI checkout does not have these and a working
+# tree does. Without the entry a local run reports findings CI cannot see, which
+# is the same as having no local run at all: the output is noise you learn to
+# scroll past. .claude/ is the agent's own scratch directory; the rest is what
+# .gitignore lists under "Internal-only".
+/.claude/
+/CLAUDE.md
+/GROK_OUTPUT.md
+/.review.md
+/.task.md
+/docs/TODO.md
+/docs/spec-draft.md
+/docs/security-audit-*.md
+/docs/security-review.md
+/docs/localhost-profile.md
