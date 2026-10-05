@@ -2,9 +2,10 @@ package honeypot
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,11 +120,22 @@ func rewindAlertBudget(a *Alerter, d time.Duration) {
 	a.budget.mu.Unlock()
 }
 
+// suppressedLogLine matches the line a dispatch writes when it carries a count.
+var suppressedLogLine = regexp.MustCompile(`honeypot: (\d+) webhook alerts were suppressed since the last dispatch`)
+
 // What was dropped has to be recoverable, or the rate limit becomes a way for an
 // attacker to hide the size of what they did: the operator would see twenty
 // alerts and no indication that twenty thousand attempts sat behind them. The
 // count goes out with the next alert that gets through, in the log and in the
 // durable audit entry.
+//
+// "Next" is decided by the order goroutines reach the counter, not the order
+// they reached the budget. A flood goroutine that won a slot and was descheduled
+// before collecting the count can carry part of it on its own dispatch, so the
+// total is split across alerts. That loses nothing, and it is what this checks:
+// every suppressed alert is reported exactly once, summed over the log and over
+// the audit trail. Pinning the whole count to the recovery alert failed on CI
+// whenever the scheduler interleaved that way (177 of 180).
 func TestTheNumberOfSuppressedAlertsIsReportedWhenTheChannelRecovers(t *testing.T) {
 	buf := captureLog(t)
 
@@ -139,17 +151,29 @@ func TestTheNumberOfSuppressedAlertsIsReportedWhenTheChannelRecovers(t *testing.
 	a := NewAlerter(srv.URL, nil, apAuditSpyLocked(&mu, &entries))
 
 	floodAlerter(a)
-	wantSuppressed := trapFloodSize - posts.Load()
-	if wantSuppressed < 1 {
+	if posts.Load() >= trapFloodSize {
 		t.Fatalf("the flood was not rationed at all (%d posts), so there is nothing to report", posts.Load())
 	}
+
+	// One more once the flood has drained. The budget is spent and no dispatch
+	// is in flight to collect it, so the recovery alert below is certain to
+	// carry a count of its own.
+	a.Alert(context.Background(), Event{EventType: "trap_login", IP: "203.0.113.9"})
+	wantSuppressed := trapFloodSize + 1 - posts.Load()
 
 	rewindAlertBudget(a, time.Minute)
 	a.Alert(context.Background(), Event{EventType: "trap_login", IP: "203.0.113.9"})
 
-	want := fmt.Sprintf("honeypot: %d webhook alerts were suppressed since the last dispatch", wantSuppressed)
-	if !strings.Contains(buf.String(), want) {
-		t.Errorf("no log line reporting the suppressed count, want %q", want)
+	var logged int64
+	for _, m := range suppressedLogLine.FindAllStringSubmatch(buf.String(), -1) {
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatalf("unparseable count in %q: %v", m[0], err)
+		}
+		logged += n
+	}
+	if logged != wantSuppressed {
+		t.Errorf("the log reports %d suppressed alerts in total, want %d", logged, wantSuppressed)
 	}
 
 	mu.Lock()
@@ -158,8 +182,20 @@ func TestTheNumberOfSuppressedAlertsIsReportedWhenTheChannelRecovers(t *testing.
 	if last.EventType != "honeypot_alert" {
 		t.Fatalf("last audit entry is %q, want the alert dispatch", last.EventType)
 	}
-	if got := last.Metadata["suppressed_since_last"]; got != wantSuppressed {
-		t.Errorf("audit entry records suppressed_since_last = %v, want %d", got, wantSuppressed)
+	if got, _ := last.Metadata["suppressed_since_last"].(int64); got < 1 {
+		t.Errorf("the recovery alert's audit entry records suppressed_since_last = %v, want the backlog", last.Metadata["suppressed_since_last"])
+	}
+	var audited int64
+	for _, e := range entries {
+		if e.EventType != "honeypot_alert" {
+			continue
+		}
+		if n, ok := e.Metadata["suppressed_since_last"].(int64); ok {
+			audited += n
+		}
+	}
+	if audited != wantSuppressed {
+		t.Errorf("the audit trail records %d suppressed alerts in total, want %d", audited, wantSuppressed)
 	}
 }
 
