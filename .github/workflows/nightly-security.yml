@@ -68,8 +68,12 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # Built with setup-go's toolchain, so the scanner's x/tools has to know
+      # that toolchain's language. v1.1.4 bundles x/tools v0.29, whose SSA
+      # builder panics on Go 1.27's standard library (it has generic methods);
+      # keep this in step with GOVULNCHECK_VERSION in scripts/release-check.sh.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: Run govulncheck
         run: govulncheck ./...

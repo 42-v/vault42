@@ -35,7 +35,7 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 # Keep these in step with .github/workflows/nightly-security.yml, or a clean run
 # here stops predicting a clean run there.
-GOVULNCHECK_VERSION=v1.1.4
+GOVULNCHECK_VERSION=v1.8.0
 GOSEC_VERSION=v2.28.0
 
 # Zero, and it stays zero. This was a ratchet set to 112 while the tree was being
