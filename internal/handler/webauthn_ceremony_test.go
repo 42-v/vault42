@@ -75,11 +75,16 @@ func wanfidoCBORText(s string) []byte {
 // coseKey encodes the public key in the COSE_Key form an authenticator reports:
 // kty=EC2(2), alg=ES256(-7), crv=P-256(1), x, y.
 func (a *wanfidoAuthenticator) coseKey() []byte {
-	pub := &a.priv.PublicKey
-	x := pub.X.FillBytes(make([]byte, 32))
-	y := pub.Y.FillBytes(make([]byte, 32))
+	// SEC1 uncompressed, 0x04 || x || y, each coordinate already 32 bytes. It
+	// cannot fail for a key ecdsa.GenerateKey made on P-256.
+	pub, err := a.priv.PublicKey.Bytes()
+	if err != nil {
+		panic(err)
+	}
+	x, y := pub[1:33], pub[33:65]
 
-	out := []byte{0xa5}
+	out := make([]byte, 0, 77) // map head, three 2-byte pairs, two keyed 34-byte strings
+	out = append(out, 0xa5)
 	out = append(out, 0x01, 0x02)
 	out = append(out, 0x03, 0x26)
 	out = append(out, 0x20, 0x01)
@@ -145,7 +150,8 @@ func (a *wanfidoAuthenticator) attestationRequestWithFlags(t *testing.T, challen
 	clientData := wanfidoClientData(t, "webauthn.create", challenge, wanfidoOrigin)
 	authData := a.authData(wanfidoRPID, flags, counter, true)
 
-	att := []byte{0xa3}
+	att := make([]byte, 0, 32+len(authData)) // 32 covers the keys, "none", attStmt and the authData head
+	att = append(att, 0xa3)
 	att = append(att, wanfidoCBORText("fmt")...)
 	att = append(att, wanfidoCBORText("none")...)
 	att = append(att, wanfidoCBORText("attStmt")...)

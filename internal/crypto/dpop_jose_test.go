@@ -104,6 +104,10 @@ func TestValidateDPoPProofRejectsAJWKCarryingPrivateKeyMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+	d, err := key.Bytes()
+	if err != nil {
+		t.Fatalf("encode private scalar: %v", err)
+	}
 
 	proof := createDPoPProof(t, key, "GET", "https://vault.test/user/profile",
 		func(header map[string]any, _ *DPoPClaims) {
@@ -111,7 +115,7 @@ func TestValidateDPoPProofRejectsAJWKCarryingPrivateKeyMaterial(t *testing.T) {
 			if !ok {
 				t.Fatalf("jwk header is %T, want a map", header["jwk"])
 			}
-			jwk["d"] = base64.RawURLEncoding.EncodeToString(key.D.Bytes())
+			jwk["d"] = base64.RawURLEncoding.EncodeToString(d)
 		})
 
 	thumbprint, jti, err := ValidateDPoPProof(proof, "GET", "https://vault.test/user/profile", "")
