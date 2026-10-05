@@ -158,7 +158,7 @@ they appear in the checks list:
 
 `.github/workflows/commitlint.yml` lints the commits and the pull request title.
 
-`.markdownlint-cli2.jsonc`, `.shellcheckrc`, `.yamllint.yml` and `ruff.toml` are read by the
+`.markdownlint.jsonc` (with `.markdownlintignore`), `.shellcheckrc`, `.yamllint.yml` and `ruff.toml` are read by the
 Lint (non-Go) job. Until 1.0.1 they were read by nothing: each had been driven to zero by hand,
 which described a moment rather than a property, and two of the four had drifted back before
 anyone noticed.

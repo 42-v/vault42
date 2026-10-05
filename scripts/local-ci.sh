@@ -232,7 +232,7 @@ gate "Hadolint" hadolint bash -c '
   exit $rc'
 
 # The lockfile-pinned binary, invoked as CI invokes it, so the two cannot drift.
-gate "markdownlint" pnpm bash -c "pnpm exec markdownlint-cli2 '**/*.md' '#node_modules' '#web/node_modules'"
+gate "markdownlint" pnpm bash -c "pnpm exec markdownlint '**/*.md'"
 
 # Every commit the PR would carry, which is what CI lints. A type outside the
 # enum on any of them fails the check, including commits that predate the PR.

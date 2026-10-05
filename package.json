@@ -22,11 +22,6 @@
       "js-yaml": ">=4.3.2 <5",
       "fast-uri": ">=3.1.6 <4",
       "smol-toml": ">=1.7.1 <2"
-    },
-    "auditConfig": {
-      "ignoreGhsas": [
-        "GHSA-vfj7-8cjw-p6xm"
-      ]
     }
   },
   "devDependencies": {
@@ -36,7 +31,7 @@
     "eslint": "^10.11.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.12.0",
-    "markdownlint-cli2": "0.23.3",
+    "markdownlint-cli": "0.49.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",
     "vue-eslint-parser": "^10.4.1"
