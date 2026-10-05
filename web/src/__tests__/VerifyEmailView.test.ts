@@ -248,4 +248,23 @@ describe('VerifyEmailView', () => {
     expect(mockPush).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  // The user can leave while the request is still in flight. The countdown must
+  // not start on a page nobody is looking at, or three seconds later it pulls
+  // them to /login from wherever they went.
+  it('does not redirect when the view is left before verification returns', async () => {
+    let resolve!: () => void
+    mockVerifyEmail.mockReturnValue(new Promise<void>(r => { resolve = r }))
+
+    const wrapper = mountView()
+    wrapper.unmount()
+
+    resolve()
+    await flushPromises()
+    vi.advanceTimersByTime(10_000)
+    await flushPromises()
+
+    expect(mockPush).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

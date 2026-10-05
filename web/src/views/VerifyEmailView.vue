@@ -12,14 +12,17 @@ const { t } = useT()
 
 const status = ref<'loading' | 'success' | 'error'>('loading')
 const errorCode = ref('')
-const redirecting = ref(false)
 const countdown = ref(3)
-const intervalId = ref<ReturnType<typeof setInterval> | null>(null)
+let intervalId: ReturnType<typeof setInterval> | null = null
+// Set on unmount, so a verification that returns after the user has left does
+// not start a countdown that would navigate them away from wherever they went.
+let closed = false
 
 onUnmounted(() => {
-  if (intervalId.value) {
-    clearInterval(intervalId.value)
-    intervalId.value = null
+  closed = true
+  if (intervalId) {
+    clearInterval(intervalId)
+    intervalId = null
   }
 })
 
@@ -33,20 +36,21 @@ onMounted(async () => {
 
   try {
     await client.verifyEmail(token)
+    if (closed) return
     status.value = 'success'
 
     // Auto-redirect after success
     const redirectTo = safeRedirect(route.query.redirect as string | null, '/login')
-    redirecting.value = true
 
-    intervalId.value = setInterval(() => {
+    const id = setInterval(() => {
       countdown.value--
       if (countdown.value <= 0) {
-        if (intervalId.value) clearInterval(intervalId.value)
-        intervalId.value = null
+        clearInterval(id)
+        intervalId = null
         router.push(redirectTo)
       }
     }, 1000)
+    intervalId = id
   } catch (e: unknown) {
     status.value = 'error'
     errorCode.value = (e && typeof e === 'object' && 'code' in e ? (e as { code: string }).code : null) || 'verification_failed'
@@ -72,7 +76,7 @@ onMounted(async () => {
         </div>
         <h2 class="text-xl font-semibold mb-2">{{ t('verifyEmail.verified') }}</h2>
         <p class="text-sm text-vault42-muted mb-6">{{ t('verifyEmail.verifiedDesc') }}</p>
-        <p v-if="redirecting" class="text-xs text-vault42-muted mb-4">
+        <p class="text-xs text-vault42-muted mb-4">
           {{ t('verifyEmail.redirecting', { count: countdown }) }}
         </p>
         <router-link to="/login" class="vault42-btn inline-block">{{ t('verifyEmail.signInNow') }}</router-link>
