@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // adminapiFailingRows is a pgx.Rows that yields one row and then fails to decode
@@ -24,6 +25,7 @@ func (r *adminapiFailingRows) FieldDescriptions() []pgconn.FieldDescription { re
 func (r *adminapiFailingRows) Values() ([]any, error)                       { return nil, nil }
 func (r *adminapiFailingRows) RawValues() [][]byte                          { return nil }
 func (r *adminapiFailingRows) Conn() *pgx.Conn                              { return nil }
+func (r *adminapiFailingRows) TypeMap() *pgtype.Map                         { return nil }
 
 func (r *adminapiFailingRows) Next() bool {
 	if r.served {
