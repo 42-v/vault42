@@ -1,6 +1,78 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.1 (unreleased)
+
+A patch release: the Dependabot queue, landed in one go, and what it was
+blocked on. No routes, configuration keys or migrations change. See
+`docs/UPGRADING.md` for the one operator-visible WebAuthn difference.
+
+### Fixed -- security
+
+* **The frontend image's base had two HIGH CVEs.** The pinned
+  nginx-unprivileged digest (1.31.3, Alpine 3.24.1) carried CVE-2026-93990 in
+  libexpat and CVE-2026-103111 in pcre2, and the nightly Trivy Frontend Base
+  Image job had failed on it every night since 2026-09-24. It is repinned to
+  1.31.6 on Alpine 3.24.2, which Trivy reports clean.
+* **`pnpm audit --audit-level high` was failing on main**, which fails the
+  required Frontend check for every pull request. brace-expansion's override
+  floor rises to 5.0.12. braces has no patched release and is reached only
+  through the Markdown linter; it is ignored by GHSA and recorded as AR-19 in
+  `docs/security.md`.
+
+### Fixed
+
+* **The verify-email page could navigate a user who had already left it.** If
+  the user moved on while verification was still in flight, the success path
+  started its three-second countdown on the unmounted view and then pushed them
+  to `/login` from wherever they had gone.
+
+### Changed
+
+* **Go 1.27.1.** go.mod's toolchain, both modules and all three Dockerfiles move
+  together, as the toolchain parity gate requires.
+* **Go dependencies:** pgx 5.11.0, go-webauthn 0.18.2, x/crypto 0.57.0. go-webauthn
+  0.18 rejects an IP address as a relying-party ID, so a deployment whose
+  `VAULT_ORIGIN` host is an IP now starts with the WebAuthn endpoints disabled
+  and says so in the log. Browsers already refused such an ID.
+* **WebAuthn reads a ceremony's user verification from its own assertion.**
+  go-webauthn 0.18 changed the credential `ValidateLogin` returns: its
+  `UserVerified` is now the record's latched value, not this ceremony's UV bit.
+  Taken as-is, the upgrade would have let a PIN-protected key assert without its
+  PIN (the downgrade gate compared the record with itself) and reported AAL1
+  for a key enrolled without UV that did verify the user. The handler now takes
+  the bit from the parsed authenticator data; the existing downgrade tests
+  caught the first half and a new token-level test pins both. This never
+  shipped.
+* **Frontend toolchain:** vitest and @vitest/coverage-v8 5, Vue 3.5.43,
+  vue-router 5.3.1, @types/node 26, and the npm-dev group (eslint, vite,
+  happy-dom, @vue/test-utils, typescript-eslint, Playwright and others).
+* **.NET SDK and CI:** the nuget-minor-patch group (10 updates) and the
+  actions-minor-patch group (7 updates).
+* **golangci-lint v2.14.0.** v2.6.2 cannot read Go 1.27's export data and
+  failed typecheck on every package; v2.13.0 is the floor. The 38 findings the
+  newer linters raise are fixed, two of them in shipped code:
+  * The honeypot bridge routes through `ReverseProxy.Rewrite` instead of the
+    deprecated `Director`. Rewrite differs from the Director it replaces in
+    `Host`, query re-encoding and forwarding headers, so six tests pin what both
+    upstreams receive. They passed against the Director before the change.
+  * DPoP decodes a JWK's EC point with `ecdsa.ParseUncompressedPublicKey`
+    instead of the deprecated coordinate fields. It accepts exactly the same
+    JWKs: 1.3M comparisons against the old parser found no difference.
+
+### Tests
+
+* The `@vault42/vue` SDK now covers every branch, and its branch threshold rises
+  from 99 to 100. The web app's rises from 98 to 99.
+* A honeypot test that pinned the whole suppressed-alert count to the recovery
+  alert failed intermittently, because a dispatch already in flight can carry
+  part of the count. It now asserts that every suppressed alert is reported
+  exactly once.
+* `TestEveryRegisteredBooleanIsReadSomewhere` could not fail: the registry it
+  checks was itself counted as a reader of every key it lists.
+* The scripted Postgres backend in the repository tests answers a portal
+  Describe, which pgx 5.11 now sends on the Exec path.
+
+## 1.1.0 (2026-09-17)
 
 The first minor since 1.0.0, and a minor because it adds routes and schema
 rather than because enough had accumulated. Three new admin routes, four
