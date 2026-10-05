@@ -518,6 +518,30 @@ and `UserRepo.ClearImportPending` are `vault_app`'s own statements, and
 
 ---
 
+### AR-19: `braces` Stack Exhaustion in the Markdown Linter's Glob Matcher
+
+**Severity:** Informational | **Source:** `pnpm audit` GHSA-vfj7-8cjw-p6xm / CVE-2026-93687 (1.1.1 dependency sweep)
+
+`braces` through 3.0.3 recurses without a depth guard, so a deeply nested brace pattern can
+exhaust the Node.js call stack. The advisory has no patched version (`first_patched_version:
+null`), and 3.0.3 is the latest release, so no override floor can clear it. It is listed in
+`pnpm.auditConfig.ignoreGhsas` in `package.json`, which is what keeps the `pnpm audit
+--audit-level high` step of the required Frontend check passing.
+
+**Why this is accepted:**
+
+- **Build-time only:** the single path is `markdownlint-cli2` → `micromatch` / `fast-glob` →
+  `braces`, a root devDependency (`pnpm why braces -r`). Nothing from `vue`, `vue-router` or
+  `qrcode` reaches it, so it is absent from `web/dist`, the frontend image and the SDK package.
+- **No attacker-supplied pattern:** the only glob strings it expands are the repository's own,
+  from the `Lint (non-Go)` CI step and `.markdownlint-cli2.jsonc`. The worst outcome is a lint
+  run that crashes on a pattern a contributor committed.
+- **Scoped to the one advisory:** the ignore names the GHSA, not the package, so any further
+  advisory against `braces` still fails the audit. Remove the entry once upstream publishes a fix
+  or `markdownlint-cli2` drops `micromatch`.
+
+---
+
 ## Resolved Risks
 
 ### AR-2: GitHub OAuth2 Without PKCE (S256) -- RESOLVED

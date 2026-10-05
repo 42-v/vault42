@@ -14,20 +14,20 @@
   "dependencies": {
     "@vault42/vue": "workspace:*",
     "qrcode-generator": "2.0.4",
-    "vue": "^3.5.41",
-    "vue-router": "^5.2.0"
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "25.9.3",
-    "@vitejs/plugin-vue": "^6.0.8",
-    "@vitest/coverage-v8": "^4.1.11",
-    "@vue/test-utils": "^2.4.11",
-    "happy-dom": "^20.11.6",
+    "@types/node": "26.6.1",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vitest/coverage-v8": "^5.0.1",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^20.14.5",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2",
-    "vitest": "^4.1.11",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.1",
     "vue-tsc": "^3.3.11"
   }
 }
